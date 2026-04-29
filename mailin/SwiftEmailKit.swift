@@ -125,7 +125,8 @@ fileprivate func parseMIMEParams(_ headerValue: String) -> [String: String] {
         }
     }
     for (key, pieces) in continuation {
-        let merged = (0...pieces.keys.max()!).compactMap { pieces[$0] }.joined()
+        guard let maxKey = pieces.keys.max() else { continue }
+        let merged = (0...maxKey).compactMap { pieces[$0] }.joined()
         params[key] = merged
     }
     return params
@@ -757,7 +758,8 @@ public enum SwiftEmailFuzzTest {
             "From: Foo <foo@example.com>\r\nTo: Bar <bar@example.com>\r\n\r\nBody"
         ]
         for input in testCases {
-            let msg = SwiftEmailMessage(rawSource: input.data(using: .utf8)!)
+            guard let data = input.data(using: .utf8) else { continue }
+            let msg = SwiftEmailMessage(rawSource: data)
             print("Decoded Subject:", msg.getHeader("Subject") ?? "<none>")
             print("Defects:", msg.defects)
         }

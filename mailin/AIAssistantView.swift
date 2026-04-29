@@ -1,326 +1,402 @@
-//
-//  AIAssistantView.swift
-//  mailin
-//
-//  AI Assistant for email analysis
-//
-
 import SwiftUI
 
 struct AIAssistantView: View {
     let emails: [MBOXParser.RawEmail]
-    
+
     @State private var prompt = ""
-    @State private var response = ""
     @State private var isProcessing = false
     @State private var conversationHistory: [(query: String, answer: String)] = []
-    
+    @State private var useFoundationModel = true
+
     @Environment(\.dismiss) private var dismiss
-    
+
+    private var foundationModelAvailable: Bool {
+        #if canImport(FoundationModels)
+        if #available(macOS 26, *) {
+            return FoundationModelEngine.isAvailable
+        }
+        #endif
+        return false
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            // Header
             headerView
-            
             Divider()
-            
-            // Conversation History
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        if conversationHistory.isEmpty {
-                            emptyStateView
-                        } else {
-                            ForEach(Array(conversationHistory.enumerated()), id: \.offset) { index, item in
-                                conversationBubble(query: item.query, answer: item.answer, index: index)
-                            }
-                        }
-                    }
-                    .padding()
-                    .id("bottom")
-                }
-                .background(Color(nsColor: .textBackgroundColor))
-                .onChange(of: conversationHistory.count) { _, _ in
-                    withAnimation {
-                        proxy.scrollTo("bottom", anchor: .bottom)
-                    }
-                }
-            }
-            
+            chatArea
             Divider()
-            
-            // Input Area
             inputArea
         }
         .frame(minWidth: 600, minHeight: 500)
+        .background(AppColors.backgroundTertiary)
     }
-    
-    // MARK: - Header View
-    
+
+    // MARK: - Header
+
     private var headerView: some View {
         HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("🤖 AI Email Assistant")
+            HStack(spacing: Spacing.xSmall) {
+                Image(systemName: "brain.head.profile")
                     .font(.title2)
-                    .bold()
-                
-                Text("Analyzing \(emails.count) email\(emails.count == 1 ? "" : "s")")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            
-            Spacer()
-            
-            Button("Clear History") {
-                conversationHistory.removeAll()
-                response = ""
-            }
-            .buttonStyle(.bordered)
-            .disabled(conversationHistory.isEmpty)
-            
-            Button("Close") {
-                dismiss()
-            }
-            .buttonStyle(.borderedProminent)
-            .keyboardShortcut(.cancelAction)
-        }
-        .padding()
-        .background(Color(nsColor: .windowBackgroundColor))
-    }
-    
-    // MARK: - Empty State
-    
-    private var emptyStateView: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "brain.head.profile")
-                .font(.system(size: 50))
-                .foregroundColor(.secondary)
-            
-            Text("Ask me anything about your emails")
-                .font(.headline)
-            
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Try asking:")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                
-                ForEach(sampleQuestions, id: \.self) { question in
-                    Button(action: {
-                        prompt = question
-                        askAI()
-                    }) {
-                        HStack {
-                            Image(systemName: "lightbulb")
-                                .foregroundColor(.blue)
-                            Text(question)
-                                .foregroundColor(.primary)
-                            Spacer()
-                        }
-                        .padding(8)
-                        .background(Color(nsColor: .controlBackgroundColor))
-                        .cornerRadius(8)
-                    }
-                    .buttonStyle(.plain)
+                    .foregroundStyle(
+                        .linearGradient(colors: [.blue, .purple], startPoint: .topLeading, endPoint: .bottomTrailing)
+                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("AI Email Assistant")
+                        .font(Typography.headline)
+                    Text(aiEngineLabel)
+                        .font(Typography.caption1)
+                        .foregroundColor(AppColors.secondary)
                 }
             }
-            .frame(maxWidth: 400)
+
+            Spacer()
+
+            if foundationModelAvailable {
+                Picker("", selection: $useFoundationModel) {
+                    Text("Apple AI").tag(true)
+                    Text("NLP").tag(false)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 150)
+            }
+
+            Button {
+                conversationHistory.removeAll()
+            } label: {
+                Label("Clear", systemImage: "trash")
+                    .font(Typography.callout)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(conversationHistory.isEmpty)
+
+            Button("Done") { dismiss() }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .keyboardShortcut(.cancelAction)
         }
-        .frame(maxHeight: .infinity)
+        .padding(.horizontal, Spacing.medium)
+        .padding(.vertical, Spacing.small)
+        .background(AppColors.backgroundPrimary)
     }
-    
+
+    // MARK: - Chat Area
+
+    private var chatArea: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: Spacing.medium) {
+                    if conversationHistory.isEmpty {
+                        emptyStateView
+                    } else {
+                        ForEach(Array(conversationHistory.enumerated()), id: \.offset) { index, item in
+                            chatBubble(query: item.query, answer: item.answer)
+                                .id(index)
+                        }
+                    }
+                }
+                .padding(Spacing.medium)
+            }
+            .onChange(of: conversationHistory.count) { _, _ in
+                if let last = conversationHistory.indices.last {
+                    withAnimation(AnimationTiming.normal) {
+                        proxy.scrollTo(last, anchor: .bottom)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Empty State
+
+    private var emptyStateView: some View {
+        VStack(spacing: Spacing.large) {
+            Spacer(minLength: Spacing.xxLarge)
+
+            Image(systemName: "brain.head.profile")
+                .font(.system(size: 48))
+                .foregroundStyle(
+                    .linearGradient(colors: [.blue, .purple], startPoint: .topLeading, endPoint: .bottomTrailing)
+                )
+
+            VStack(spacing: Spacing.xSmall) {
+                Text("Ask anything about your emails")
+                    .font(Typography.title3)
+                Text(useFoundationModel && foundationModelAvailable
+                     ? "Powered by Apple Intelligence — 100% on-device"
+                     : "Powered by on-device Natural Language Processing")
+                    .font(Typography.subheadline)
+                    .foregroundColor(AppColors.secondary)
+            }
+
+            VStack(spacing: Spacing.xSmall) {
+                ForEach(sampleQuestions, id: \.self) { question in
+                    Button {
+                        prompt = question
+                        askAI()
+                    } label: {
+                        HStack(spacing: Spacing.xSmall) {
+                            Image(systemName: "sparkle")
+                                .font(Typography.caption1)
+                                .foregroundStyle(.blue)
+                            Text(question)
+                                .font(Typography.callout)
+                                .foregroundColor(.primary)
+                            Spacer()
+                            Image(systemName: "arrow.up.circle.fill")
+                                .foregroundStyle(AppColors.primary.opacity(0.4))
+                        }
+                        .padding(.horizontal, Spacing.small)
+                        .padding(.vertical, Spacing.xSmall)
+                        .background(AppColors.backgroundSecondary)
+                        .cornerRadius(CornerRadius.medium)
+                    }
+                    .buttonStyle(.plain)
+                    .hoverEffect(scale: 1.01)
+                }
+            }
+            .frame(maxWidth: 420)
+
+            Spacer(minLength: Spacing.xxLarge)
+        }
+    }
+
     private var sampleQuestions: [String] {
         [
-            "How many emails did I send?",
-            "Who did I email the most?",
             "What's the sentiment of my emails?",
             "What topics are discussed?",
             "Who are the key people mentioned?",
+            "Give me a full summary",
+            "How many emails did I send?",
+            "Who did I email the most?",
             "What languages are used?",
             "Show me contact insights",
-            "What's the date range of these emails?"
         ]
     }
-    
-    // MARK: - Conversation Bubble
-    
-    private func conversationBubble(query: String, answer: String, index: Int) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // User Query
+
+    // MARK: - Chat Bubble
+
+    private func chatBubble(query: String, answer: String) -> some View {
+        VStack(spacing: Spacing.small) {
+            // User message
             HStack {
-                Spacer()
-                VStack(alignment: .trailing, spacing: 4) {
+                Spacer(minLength: Spacing.xxLarge)
+                VStack(alignment: .trailing, spacing: Spacing.xxSmall) {
                     Text(query)
-                        .padding(10)
-                        .background(Color.blue)
+                        .font(Typography.body)
+                        .padding(.horizontal, Spacing.small)
+                        .padding(.vertical, Spacing.xSmall)
                         .foregroundColor(.white)
-                        .cornerRadius(12)
-                        .frame(maxWidth: 400, alignment: .trailing)
-                    
-                    Text("You")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .background(
+                            LinearGradient(colors: [.blue, .blue.opacity(0.85)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                        )
+                        .cornerRadius(CornerRadius.large)
                 }
             }
-            
-            // AI Response
+
+            // AI response
             HStack {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: Spacing.xxSmall) {
+                    HStack(spacing: Spacing.xxSmall) {
+                        Image(systemName: "brain.head.profile")
+                            .font(Typography.caption1)
+                            .foregroundStyle(.purple)
+                        Text("AI")
+                            .font(Typography.caption1)
+                            .foregroundColor(AppColors.secondary)
+                    }
                     Text(answer)
-                        .padding(10)
-                        .background(Color(nsColor: .controlBackgroundColor))
-                        .foregroundColor(.primary)
-                        .cornerRadius(12)
-                        .frame(maxWidth: 400, alignment: .leading)
-                    
-                    Text("AI Assistant")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .font(Typography.body)
+                        .textSelection(.enabled)
+                        .padding(.horizontal, Spacing.small)
+                        .padding(.vertical, Spacing.xSmall)
+                        .background(AppColors.backgroundSecondary)
+                        .cornerRadius(CornerRadius.large)
                 }
-                Spacer()
+                Spacer(minLength: Spacing.xxLarge)
             }
         }
     }
-    
+
     // MARK: - Input Area
-    
+
     private var inputArea: some View {
-        HStack(spacing: 12) {
-            TextField("Ask a question about your emails...", text: $prompt)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit {
-                    askAI()
-                }
-            
+        HStack(spacing: Spacing.small) {
+            TextField("Ask about your emails...", text: $prompt)
+                .textFieldStyle(.plain)
+                .font(Typography.body)
+                .padding(.horizontal, Spacing.small)
+                .padding(.vertical, Spacing.xSmall)
+                .background(AppColors.backgroundSecondary)
+                .cornerRadius(CornerRadius.medium)
+                .onSubmit { askAI() }
+
             Button(action: askAI) {
-                if isProcessing {
-                    ProgressView()
-                        .scaleEffect(0.7)
-                        .frame(width: 16, height: 16)
-                } else {
-                    Image(systemName: "paperplane.fill")
+                Group {
+                    if isProcessing {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                            .frame(width: 16, height: 16)
+                    } else {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.title2)
+                    }
                 }
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isProcessing)
+            .buttonStyle(.plain)
+            .foregroundStyle(canSend ? AppColors.primary : AppColors.secondary.opacity(0.5))
+            .disabled(!canSend)
             .keyboardShortcut(.return, modifiers: [])
         }
-        .padding()
-        .background(Color(nsColor: .windowBackgroundColor))
+        .padding(.horizontal, Spacing.medium)
+        .padding(.vertical, Spacing.small)
+        .background(AppColors.backgroundPrimary)
     }
-    
+
+    private var canSend: Bool {
+        !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isProcessing
+    }
+
+    // MARK: - AI Engine Label
+
+    private var aiEngineLabel: String {
+        let count = emails.count
+        let suffix = count == 1 ? "" : "s"
+        if useFoundationModel && foundationModelAvailable {
+            return "Analyzing \(count) email\(suffix) with Apple Intelligence (on-device)"
+        }
+        return "Analyzing \(count) email\(suffix) with on-device NLP"
+    }
+
     // MARK: - AI Logic
-    
+
     private func askAI() {
         let query = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
-        
+
         isProcessing = true
         let currentQuery = query
         prompt = ""
-        
-        // Simulate processing delay
-        DispatchQueue.global(qos: .userInitiated).async {
-            let answer = processQuery(currentQuery)
-            
-            DispatchQueue.main.async {
-                conversationHistory.append((query: currentQuery, answer: answer))
+
+        if useFoundationModel && foundationModelAvailable && shouldUseFoundationModel(for: currentQuery) {
+            Task {
+                let answer = await askFoundationModel(currentQuery)
+                withAnimation(AnimationTiming.normal) {
+                    conversationHistory.append((query: currentQuery, answer: answer))
+                }
                 isProcessing = false
+            }
+        } else {
+            DispatchQueue.global(qos: .userInitiated).async {
+                let answer = processQuery(currentQuery)
+                DispatchQueue.main.async {
+                    withAnimation(AnimationTiming.normal) {
+                        conversationHistory.append((query: currentQuery, answer: answer))
+                    }
+                    isProcessing = false
+                }
             }
         }
     }
-    
+
+    private func shouldUseFoundationModel(for query: String) -> Bool {
+        let lower = query.lowercased()
+        let dataOnlyKeywords = ["how many", "date range", "attachment count"]
+        return !dataOnlyKeywords.contains(where: { lower.contains($0) })
+    }
+
+    private func askFoundationModel(_ query: String) async -> String {
+        #if canImport(FoundationModels)
+        if #available(macOS 26, *) {
+            do {
+                return try await FoundationModelEngine.respond(to: query, emails: emails)
+            } catch {
+                return "Apple Intelligence error: \(error.localizedDescription)\n\nFalling back to NLP analysis:\n\n\(processQuery(query))"
+            }
+        }
+        #endif
+        return processQuery(query)
+    }
+
     private func processQuery(_ query: String) -> String {
         let lower = query.lowercased()
 
-        // MARK: - NLP-Powered Queries
+        // MARK: NLP Queries
 
-        // Sentiment analysis
         if lower.contains("sentiment") || lower.contains("tone") || lower.contains("mood") || lower.contains("feeling") {
             let result = EmailNLPEngine.averageSentiment(of: emails)
             return """
-            🧠 **Sentiment Analysis** (NLP)
+            Sentiment Analysis (NLP)
 
             Overall tone: \(result.label)
-            Average score: \(String(format: "%.2f", result.average)) (-1.0 negative to +1.0 positive)
+            Score: \(String(format: "%.2f", result.average)) (range: -1.0 to +1.0)
 
-            ✅ Positive emails: \(result.positive)
-            😐 Neutral emails: \(result.neutral)
-            ❌ Negative emails: \(result.negative)
+            Positive: \(result.positive)
+            Neutral: \(result.neutral)
+            Negative: \(result.negative)
             """
         }
 
-        // Named entity recognition
         if lower.contains("people") || lower.contains("person") || lower.contains("entities") || lower.contains("names") || (lower.contains("who") && lower.contains("mention")) {
             let entities = EmailNLPEngine.extractEntities(from: emails, limit: 10)
-            if entities.isEmpty { return "❓ No named entities found in email bodies." }
-            var result = "🏷 **Key Entities Mentioned** (NLP)\n\n"
+            if entities.isEmpty { return "No named entities found in email bodies." }
+            var result = "Key Entities (NLP)\n\n"
             for (i, entity) in entities.enumerated() {
                 let icon: String
                 switch entity.type {
-                case "Person": icon = "👤"
-                case "Organization": icon = "🏢"
-                case "Place": icon = "📍"
-                default: icon = "•"
+                case "Person": icon = "Person"
+                case "Organization": icon = "Org"
+                case "Place": icon = "Place"
+                default: icon = entity.type
                 }
-                result += "\(i + 1). \(icon) \(entity.name) (\(entity.type)) — \(entity.count) mention\(entity.count == 1 ? "" : "s")\n"
+                result += "\(i + 1). \(entity.name) [\(icon)] — \(entity.count) mention\(entity.count == 1 ? "" : "s")\n"
             }
             return result
         }
 
-        // Topic extraction
         if lower.contains("topic") || lower.contains("keyword") || lower.contains("discuss") || lower.contains("talk about") || lower.contains("about what") {
             let topics = EmailNLPEngine.extractTopics(from: emails, limit: 12)
-            if topics.isEmpty { return "❓ Not enough text content to extract topics." }
-            var result = "📝 **Top Topics & Keywords** (NLP)\n\n"
+            if topics.isEmpty { return "Not enough text content to extract topics." }
+            var result = "Top Topics & Keywords (NLP)\n\n"
             for (i, topic) in topics.enumerated() {
                 result += "\(i + 1). \(topic.word) — \(topic.count) occurrence\(topic.count == 1 ? "" : "s")\n"
             }
             return result
         }
 
-        // Language detection
         if lower.contains("language") || lower.contains("translate") || lower.contains("foreign") {
             let languages = EmailNLPEngine.detectLanguages(in: emails)
-            if languages.isEmpty { return "❓ Could not detect languages in emails." }
-            var result = "🌍 **Languages Detected** (NLP)\n\n"
+            if languages.isEmpty { return "Could not detect languages in emails." }
+            var result = "Languages Detected (NLP)\n\n"
             for lang in languages {
-                result += "• \(lang.language): \(lang.count) email\(lang.count == 1 ? "" : "s") (\(String(format: "%.0f", lang.percentage))%)\n"
+                result += "\(lang.language): \(lang.count) email\(lang.count == 1 ? "" : "s") (\(String(format: "%.0f", lang.percentage))%)\n"
             }
             return result
         }
 
-        // Contact insights (volume + sentiment)
         if lower.contains("contact insight") || lower.contains("contact analysis") || (lower.contains("who") && lower.contains("positive")) || (lower.contains("who") && lower.contains("negative")) {
             let insights = EmailNLPEngine.contactInsights(from: emails, limit: 8)
-            if insights.isEmpty { return "❓ No contact data to analyze." }
-            var result = "👥 **Contact Insights** (NLP)\n\n"
+            if insights.isEmpty { return "No contact data to analyze." }
+            var result = "Contact Insights (NLP)\n\n"
             for (i, c) in insights.enumerated() {
-                let emoji: String
-                switch c.sentimentLabel {
-                case "Positive": emoji = "😊"
-                case "Negative": emoji = "😟"
-                default: emoji = "😐"
-                }
-                result += "\(i + 1). \(c.address)\n   \(c.emailCount) emails • Tone: \(emoji) \(c.sentimentLabel) (\(String(format: "%.2f", c.avgSentiment)))\n\n"
+                result += "\(i + 1). \(c.address)\n   \(c.emailCount) emails — Tone: \(c.sentimentLabel) (\(String(format: "%.2f", c.avgSentiment)))\n\n"
             }
             return result
         }
 
-        // MARK: - Data Queries
+        // MARK: Data Queries
 
-        // Sent emails count
         if lower.contains("how many") && (lower.contains("sent") || lower.contains("send")) {
             let count = emails.filter { $0.messageType == "sent" }.count
-            return "📤 You sent \(count) email\(count == 1 ? "" : "s") out of \(emails.count) total."
+            return "You sent \(count) email\(count == 1 ? "" : "s") out of \(emails.count) total."
         }
 
-        // Received emails count
         if lower.contains("how many") && lower.contains("received") {
             let count = emails.filter { $0.messageType == "received" }.count
-            return "📥 You received \(count) email\(count == 1 ? "" : "s") out of \(emails.count) total."
+            return "You received \(count) email\(count == 1 ? "" : "s") out of \(emails.count) total."
         }
 
-        // Most emailed person
         if lower.contains("who") && (lower.contains("most") || lower.contains("frequent")) {
             let recipients = emails
                 .filter { $0.messageType == "sent" }
@@ -329,52 +405,47 @@ struct AIAssistantView: View {
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             let counts = Dictionary(grouping: recipients, by: { $0 }).mapValues { $0.count }
             if let top = counts.max(by: { $0.value < $1.value }) {
-                return "📧 You emailed \(top.key) the most with \(top.value) email\(top.value == 1 ? "" : "s")."
+                return "You emailed \(top.key) the most with \(top.value) email\(top.value == 1 ? "" : "s")."
             }
-            return "❓ No recipient data found in your emails."
+            return "No recipient data found."
         }
 
-        // Common subjects
         if lower.contains("subject") && lower.contains("common") {
             let subjects = Dictionary(grouping: emails.compactMap { $0.headers["Subject"] }, by: { $0 })
                 .mapValues { $0.count }
                 .sorted { $0.value > $1.value }
                 .prefix(5)
-            if subjects.isEmpty { return "❓ No subject data found." }
-            var result = "🏷 **Top subjects:**\n\n"
-            for (index, subject) in subjects.enumerated() {
-                result += "\(index + 1). \(subject.key) (\(subject.value) email\(subject.value == 1 ? "" : "s"))\n"
+            if subjects.isEmpty { return "No subject data found." }
+            var result = "Top Subjects\n\n"
+            for (i, subject) in subjects.enumerated() {
+                result += "\(i + 1). \(subject.key) (\(subject.value))\n"
             }
             return result
         }
 
-        // Date range
         if lower.contains("date") && (lower.contains("range") || lower.contains("when")) {
             let dates = emails.compactMap { MBOXParser.parseDate($0.headers["Date"]) }.sorted()
             if let first = dates.first, let last = dates.last {
                 let formatter = DateFormatter()
                 formatter.dateStyle = .long
-                return "📅 Date range: \(formatter.string(from: first)) to \(formatter.string(from: last))"
+                return "Date range: \(formatter.string(from: first)) to \(formatter.string(from: last))"
             }
-            return "❓ No date information found."
+            return "No date information found."
         }
 
-        // Reply statistics
         if lower.contains("reply") || lower.contains("statistic") {
             let sent = emails.filter { $0.messageType == "sent" }.count
             let received = emails.filter { $0.messageType == "received" }.count
             let ratio = received > 0 ? Double(sent) / Double(received) : 0
-            return "📊 **Reply Statistics:**\n\nSent: \(sent)\nReceived: \(received)\nReply Ratio: \(String(format: "%.2f", ratio))"
+            return "Reply Statistics\n\nSent: \(sent)\nReceived: \(received)\nRatio: \(String(format: "%.2f", ratio))"
         }
 
-        // Attachment count
         if lower.contains("attachment") {
             let total = emails.reduce(0) { $0 + $1.attachments.count }
             let withAttachments = emails.filter { !$0.attachments.isEmpty }.count
-            return "📎 **Attachments:** \(total) total across \(withAttachments) email\(withAttachments == 1 ? "" : "s")."
+            return "Attachments: \(total) total across \(withAttachments) email\(withAttachments == 1 ? "" : "s")."
         }
 
-        // Summary / overview
         if lower.contains("summary") || lower.contains("overview") || lower.contains("analyze") {
             let sent = emails.filter { $0.messageType == "sent" }.count
             let received = emails.filter { $0.messageType == "received" }.count
@@ -383,39 +454,36 @@ struct AIAssistantView: View {
             let languages = EmailNLPEngine.detectLanguages(in: emails)
             let topLang = languages.first?.language ?? "Unknown"
 
-            var result = "📊 **Email Archive Summary** (NLP)\n\n"
+            var result = "Email Archive Summary (NLP)\n\n"
             result += "Total: \(emails.count) emails (\(sent) sent, \(received) received)\n"
             result += "Tone: \(sentiment.label) (score: \(String(format: "%.2f", sentiment.average)))\n"
-            result += "Primary language: \(topLang)\n\n"
+            result += "Language: \(topLang)\n"
             if !topics.isEmpty {
-                result += "Top topics: \(topics.map(\.word).joined(separator: ", "))\n"
+                result += "Topics: \(topics.map(\.word).joined(separator: ", "))\n"
             }
             return result
         }
 
-        // Default response
         return """
-        🤔 I can help with these queries:
+        I can help with these queries:
 
-        📊 **Data Analysis:**
-        • "How many emails did I send/receive?"
-        • "Who did I email the most?"
-        • "What are the most common subjects?"
-        • "What's the date range?"
-        • "Show me reply statistics"
+        Data Analysis:
+        • How many emails did I send/receive?
+        • Who did I email the most?
+        • What are the most common subjects?
+        • What's the date range?
+        • Show me reply statistics
 
-        🧠 **NLP Analysis (on-device AI):**
-        • "What's the sentiment of my emails?"
-        • "What topics are discussed?"
-        • "Who are the key people mentioned?"
-        • "What languages are used?"
-        • "Show me contact insights"
-        • "Give me a summary"
+        NLP Analysis (on-device):
+        • What's the sentiment of my emails?
+        • What topics are discussed?
+        • Who are the key people mentioned?
+        • What languages are used?
+        • Show me contact insights
+        • Give me a summary
         """
     }
 }
-
-// MARK: - Preview
 
 #Preview {
     AIAssistantView(emails: [])

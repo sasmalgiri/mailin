@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ParsedEmailListView: View {
     @ObservedObject var model: ParsedEmailListViewModel
+    @EnvironmentObject var storeManager: StoreManager
  
     private enum ActiveSheet: Identifiable {
         case stats
@@ -24,47 +25,49 @@ struct ParsedEmailListView: View {
 
     // MARK: - UI
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: Spacing.small) {
             headerView
             Divider()
             contentView
             Spacer(minLength: 0)
 
-            // --- Bottom row of actions: Download/Export/AI ---
             if totalAttachments > 0 || !model.filteredEmails.isEmpty {
-                HStack(spacing: 16) {
+                HStack(spacing: Spacing.medium) {
                     if totalAttachments > 0 {
                         Button {
-                            downloadAllAttachments()
+                            if storeManager.requirePremium() {
+                                downloadAllAttachments()
+                            }
                         } label: {
-                            Label("⬇️ Download All Attachments", systemImage: "arrow.down.circle.fill")
+                            Label(storeManager.isPremium ? "Download All" : "Download All (Pro)", systemImage: "arrow.down.circle.fill")
                                 .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(PrimaryButtonStyle())
                         .help("Download all attachments from filtered emails")
                     }
 
                     if !model.filteredEmails.isEmpty {
                         Button {
-                            exportFilteredJSON()
+                            if storeManager.requirePremium() {
+                                exportFilteredJSON()
+                            }
                         } label: {
-                            Label("Export JSON", systemImage: "square.and.arrow.up")
+                            Label(storeManager.isPremium ? "Export JSON" : "Export JSON (Pro)", systemImage: "square.and.arrow.up")
                                 .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(SecondaryButtonStyle())
                         .help("Export the currently filtered emails as JSON")
                     }
 
-                    // --- AI BUTTON ---
                     AIWindowButton(model: model)
-
+                        .environmentObject(storeManager)
                 }
-                .padding(.vertical, 12)
-                .padding(.horizontal, 8)
+                .padding(.vertical, Spacing.small)
+                .padding(.horizontal, Spacing.xSmall)
             }
         }
         .padding()
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(AppColors.backgroundPrimary)
         .onChange(of: model.isParsed) { _, newValue in
             if newValue { model.applyFilters() }
         }
@@ -81,10 +84,16 @@ struct ParsedEmailListView: View {
 
         // --- AI Window Sheet ---
         
+        .sheet(isPresented: $storeManager.showPaywall) {
+            PaywallView()
+                .environmentObject(storeManager)
+        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    activeSheet = .stats
+                    if storeManager.requirePremium() {
+                        activeSheet = .stats
+                    }
                 } label: {
                     Label("Reply Stats", systemImage: "chart.bar")
                 }
@@ -95,10 +104,9 @@ struct ParsedEmailListView: View {
 
     // MARK: - Header
     private var headerView: some View {
-        HStack(spacing: 16) {
-            Text("📨 Parsed Emails")
-                .font(.title2)
-                .bold()
+        HStack(spacing: Spacing.medium) {
+            Label("Parsed Emails", systemImage: "envelope.open.fill")
+                .font(Typography.title2)
             Spacer()
             Picker("Sort by", selection: $model.sortBy) {
                 ForEach(ParsedEmailListViewModel.SortOption.allCases, id: \.self) {
@@ -116,36 +124,34 @@ struct ParsedEmailListView: View {
     @ViewBuilder
     private var contentView: some View {
         if model.filteredEmails.isEmpty {
-            VStack {
-                Spacer()
-                Text("😕 No matching emails found.")
-                    .foregroundColor(.secondary)
-                    .padding()
-                Spacer()
-            }
+            EmptyStateView(
+                icon: "magnifyingglass",
+                title: "No matching emails",
+                message: "Try adjusting your filters to see more results."
+            )
         } else {
             List(model.filteredEmails, id: \.id) { email in
-                HStack(spacing: 6) {
+                HStack(spacing: Spacing.xSmall) {
                     Button {
                         EmailDetailView(email: email)
-                            .openInWindow(title: decodeMIMEHeader(email.headers["Subject"] ?? "Email"))
+                            .openInWindow(title: decodeMIMEHeader(email.headers["Subject"] ?? "Email"), storeManager: storeManager)
                     } label: {
                         EmailRowView(email: email)
                     }
-
                     .buttonStyle(.plain)
                     .contentShape(Rectangle())
                     .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill((hoveringEmailID == email.id) ? Color.accentColor.opacity(0.14) : Color.clear)
+                        RoundedRectangle(cornerRadius: CornerRadius.medium)
+                            .fill((hoveringEmailID == email.id) ? AppColors.primary.opacity(0.08) : Color.clear)
                     )
                     .onHover { isHovering in
-                        hoveringEmailID = isHovering ? email.id : nil
+                        withAnimation(AnimationTiming.fast) {
+                            hoveringEmailID = isHovering ? email.id : nil
+                        }
                     }
 
-                    Spacer(minLength: 8)
+                    Spacer(minLength: Spacing.xSmall)
 
-                    // RAW RFC822 BUTTON
                     Button {
                         let rawData = email.rawSource.data(using: .utf8) ?? Data()
                         let kit = SwiftEmailMessage(rawSource: rawData)
@@ -155,16 +161,15 @@ struct ParsedEmailListView: View {
                         activeSheet = .rawSource(rawRFC822)
                     } label: {
                         Image(systemName: "doc.plaintext")
-                            .foregroundColor(.secondary)
+                            .foregroundColor(AppColors.secondary)
                     }
                     .help("Show Raw RFC822 Source")
 
-                    // Attachments popover icon
                     if !email.attachments.isEmpty {
                         AttachmentsPopoverButton(attachments: email.attachments)
                     }
                 }
-                .padding(.vertical, 2)
+                .padding(.vertical, Spacing.xxxSmall)
             }
         }
     }
@@ -188,7 +193,7 @@ struct ParsedEmailListView: View {
                         do {
                             try FileUtils.copyFile(from: sourceURL, to: destinationURL)
                         } catch {
-                            print("❌ Failed to copy \(att.filename): \(error)")
+                            print("Failed to copy \(att.filename): \(error)")
                         }
                     }
                 }
@@ -221,10 +226,10 @@ struct ParsedEmailListView: View {
 
                 if panel.runModal() == .OK, let url = panel.url {
                     try FileUtils.writeData(data, to: url.path)
-                    print("✅ Exported to \(url.path)")
+                    print("Exported to \(url.path)")
                 }
             } catch {
-                print("❌ Failed to export JSON: \(error)")
+                print("Failed to export JSON: \(error)")
             }
         }
     }
@@ -233,34 +238,36 @@ struct EmailRowView: View {
     let email: MBOXParser.RawEmail
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            // Subject line
+        VStack(alignment: .leading, spacing: Spacing.xSmall) {
             Text(email.headers["Subject"] ?? "(No Subject)")
-                .font(.headline)
-                .fontWeight(.semibold)
+                .font(Typography.headline)
                 .lineLimit(2)
                 .truncationMode(.tail)
 
-            HStack(spacing: 14) {
+            HStack(spacing: Spacing.small) {
                 Label(email.headers["From"] ?? "-", systemImage: "arrow.up.forward")
-                    .font(.subheadline.bold())
-                    .foregroundColor(.blue)
+                    .font(Typography.subheadline)
+                    .fontWeight(.medium)
+                    .foregroundColor(AppColors.sentEmail)
+                    .lineLimit(1)
                 Label(email.headers["To"] ?? "-", systemImage: "arrow.down.backward")
-                    .font(.subheadline.bold())
-                    .foregroundColor(.green)
+                    .font(Typography.subheadline)
+                    .fontWeight(.medium)
+                    .foregroundColor(AppColors.receivedEmail)
+                    .lineLimit(1)
                 Spacer()
                 if !email.attachments.isEmpty {
-                    Label("\(email.attachments.count) attachment(s)", systemImage: "paperclip")
-                        .font(.callout)
-                        .foregroundColor(.secondary)
+                    Label("\(email.attachments.count)", systemImage: "paperclip")
+                        .font(Typography.caption1)
+                        .foregroundColor(AppColors.secondary)
                 }
             }
 
             Text(parseDate(email.headers["Date"]))
-                .font(.footnote)
-                .foregroundColor(.gray)
+                .font(Typography.footnote)
+                .foregroundColor(AppColors.secondary)
         }
-        .padding(.vertical, 7)
+        .padding(.vertical, Spacing.xSmall)
     }
 
     private func parseDate(_ raw: String?) -> String {
@@ -275,7 +282,7 @@ struct EmailRowView: View {
     }
 }
 
-// MARK: - Attachments Popover (filename preview on hover)
+// MARK: - Attachments Popover
 struct AttachmentsPopoverButton: View {
     let attachments: [AttachmentMetadata]
     @State private var showPopover = false
@@ -285,26 +292,27 @@ struct AttachmentsPopoverButton: View {
             showPopover.toggle()
         } label: {
             Image(systemName: "paperclip")
-                .foregroundColor(.secondary)
+                .foregroundColor(AppColors.secondary)
         }
         .popover(isPresented: $showPopover) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Attachments:").bold()
+            VStack(alignment: .leading, spacing: Spacing.xxSmall) {
+                Text("Attachments")
+                    .font(Typography.headline)
                 ForEach(attachments, id: \.filename) { att in
                     Text(att.filename)
-                        .font(.caption)
+                        .font(Typography.caption1)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
             }
-            .padding()
+            .padding(Spacing.small)
             .frame(width: 220)
         }
         .help("\(attachments.count) attachment(s)")
     }
 }
 
-// MARK: - Raw Source View (unchanged)
+// MARK: - Raw Source View
 struct RawSourceView: View {
     let rawText: String
     @Environment(\.dismiss) private var dismiss
@@ -312,86 +320,93 @@ struct RawSourceView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("📄 Raw RFC822 Source")
-                    .font(.title2)
-                    .bold()
+                Label("Raw RFC822 Source", systemImage: "doc.plaintext")
+                    .font(Typography.title2)
                 Spacer()
                 Button(action: { dismiss() }) {
-                    Label("Close", systemImage: "xmark.circle.fill")
-                        .labelStyle(.iconOnly)
-                        .foregroundColor(.gray)
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(AppColors.secondary)
+                        .imageScale(.large)
                 }
+                .buttonStyle(.plain)
                 .help("Close")
             }
-            .padding()
+            .padding(Spacing.medium)
 
             Divider()
             ScrollView([.vertical, .horizontal]) {
                 Text(rawText)
-                    .font(.system(.body, design: .monospaced))
-                    .padding()
+                    .font(Typography.monoBody)
+                    .padding(Spacing.medium)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .background(Color(nsColor: .textBackgroundColor))
+        .background(AppColors.backgroundTertiary)
     }
 }
 
-// MARK: - Reply Stats View (unchanged)
+// MARK: - Reply Stats View
 struct ReplyStatsView: View {
     let replyData: [String: Int]
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: Spacing.xSmall) {
             HStack {
-                Text("📊 Reply Frequency")
-                    .font(.title2)
-                    .bold()
+                Label("Reply Frequency", systemImage: "chart.bar.fill")
+                    .font(Typography.title2)
                 Spacer()
                 Button { dismiss() } label: {
-                    Label("Close", systemImage: "xmark.circle.fill")
-                        .labelStyle(.iconOnly)
-                        .foregroundColor(.gray)
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(AppColors.secondary)
+                        .imageScale(.large)
                 }
+                .buttonStyle(.plain)
                 .help("Close this stats view")
             }
 
             Divider()
             if replyData.isEmpty {
-                Text("No reply data found.")
-                    .foregroundColor(.secondary)
-                    .padding()
+                EmptyStateView(
+                    icon: "chart.bar",
+                    title: "No reply data",
+                    message: "Reply frequency data will appear after parsing emails."
+                )
             } else {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: Spacing.xSmall) {
                         ForEach(replyData.sorted { $0.value > $1.value }, id: \.key) { email, count in
                             HStack {
                                 Text(email)
-                                    .font(.system(size: 12, design: .monospaced))
+                                    .font(Typography.monoSmall)
                                     .frame(width: 220, alignment: .leading)
                                     .lineLimit(1)
                                     .truncationMode(.middle)
                                 GeometryReader { geo in
-                                    Rectangle()
-                                        .fill(Color.accentColor)
+                                    RoundedRectangle(cornerRadius: CornerRadius.small)
+                                        .fill(
+                                            LinearGradient(
+                                                colors: [AppColors.primary, AppColors.primary.opacity(0.6)],
+                                                startPoint: .leading,
+                                                endPoint: .trailing
+                                            )
+                                        )
                                         .frame(
                                             width: min(CGFloat(count) * 10, geo.size.width),
                                             height: 10
                                         )
-                                        .cornerRadius(2)
                                 }
                                 .frame(height: 10)
                                 Text("\(count)")
-                                    .font(.caption)
+                                    .font(Typography.caption1)
                                     .frame(width: 30, alignment: .trailing)
                             }
                         }
                     }
-                    .padding(.vertical)
+                    .padding(.vertical, Spacing.small)
                 }
             }
         }
-        .padding()
+        .padding(Spacing.medium)
     }
 }

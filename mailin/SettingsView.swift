@@ -8,6 +8,7 @@
 import SwiftUI
 
 struct SettingsView: View {
+    @EnvironmentObject var storeManager: StoreManager
     @AppStorage("defaultSenderEmail") private var defaultSenderEmail = ""
     @AppStorage("autoDetectSender") private var autoDetectSender = true
     @AppStorage("showInlineImages") private var showInlineImages = true
@@ -38,7 +39,11 @@ struct SettingsView: View {
                     Label("Advanced", systemImage: "slider.horizontal.3")
                 }
         }
-        .frame(width: 500, height: 400)
+        .frame(width: 500, height: 450)
+        .sheet(isPresented: $storeManager.showPaywall) {
+            PaywallView()
+                .environmentObject(storeManager)
+        }
     }
     
     // MARK: - General Settings
@@ -156,6 +161,34 @@ struct SettingsView: View {
     // MARK: - Advanced Settings
     private var advancedSettings: some View {
         Form {
+            Section {
+                HStack {
+                    Text("Status")
+                    Spacer()
+                    if storeManager.isPremium {
+                        Label("Pro", systemImage: "crown.fill")
+                            .foregroundColor(.orange)
+                            .fontWeight(.semibold)
+                    } else {
+                        Text("Free")
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                if !storeManager.isPremium {
+                    Button("Upgrade to Pro") {
+                        storeManager.showPaywall = true
+                    }
+                }
+
+                Button("Restore Purchases") {
+                    Task { await storeManager.restorePurchases() }
+                }
+            } header: {
+                Text("Subscription")
+                    .font(.headline)
+            }
+
             Section {
                 Toggle("Enable AI features", isOn: $enableAIFeatures)
                     .help("Show AI assistant and analysis features")

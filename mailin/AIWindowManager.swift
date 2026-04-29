@@ -11,25 +11,42 @@ enum AIMode: String, CaseIterable, Identifiable {
 // MARK: - AI Window Launcher
 struct AIWindowButton: View {
     @ObservedObject var model: ParsedEmailListViewModel
+    @EnvironmentObject var storeManager: StoreManager
     @State private var aiMode: AIMode = .filteredEmails
     @State private var aiWindow: NSWindow?
 
     var body: some View {
         Menu {
-            Button("Ask AI (All Emails)") {
-                aiMode = .allEmails
-                openAIWindow()
+            Button {
+                if storeManager.requirePremium() {
+                    aiMode = .allEmails
+                    openAIWindow()
+                }
+            } label: {
+                Label("All Emails", systemImage: "tray.full")
             }
-            Button("Ask AI (Filtered Emails)") {
-                aiMode = .filteredEmails
-                openAIWindow()
+            Button {
+                if storeManager.requirePremium() {
+                    aiMode = .filteredEmails
+                    openAIWindow()
+                }
+            } label: {
+                Label("Filtered Emails", systemImage: "line.3.horizontal.decrease.circle")
             }
         } label: {
             Label("Ask AI", systemImage: "brain.head.profile")
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .background(Color.accentColor.opacity(0.13))
-                .cornerRadius(8)
+                .font(Typography.headline)
+                .foregroundColor(.white)
+                .padding(.horizontal, Spacing.medium)
+                .padding(.vertical, Spacing.xSmall)
+                .background(
+                    LinearGradient(
+                        colors: [.blue, .purple],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .cornerRadius(CornerRadius.medium)
         }
         .help("Open AI assistant to ask about emails")
     }
@@ -37,17 +54,17 @@ struct AIWindowButton: View {
     private func openAIWindow() {
         if let existing = aiWindow, existing.isVisible {
             existing.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            NSApp.activate()
             return
         }
 
         let newWindow = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 680, height: 480),
+            contentRect: NSRect(x: 0, y: 0, width: 680, height: 520),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
-        newWindow.title = "Ask AI"
+        newWindow.title = "AI Assistant"
         newWindow.isReleasedWhenClosed = false
 
         let selectedEmails = aiMode == .allEmails ? model.viewModel.parsedEmails : model.filteredEmails
@@ -67,7 +84,7 @@ struct AIWindowButton: View {
 
         aiWindow = newWindow
         newWindow.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
     }
 }
 
@@ -82,76 +99,101 @@ struct AskAIView: View {
     @State private var loading: Bool = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            // Header
+        VStack(alignment: .leading, spacing: Spacing.medium) {
             HStack {
-                Label("Ask AI (\(mode.rawValue))", systemImage: "brain.head.profile")
-                    .font(.title2.bold())
+                HStack(spacing: Spacing.xSmall) {
+                    Image(systemName: "brain.head.profile")
+                        .font(Typography.title2)
+                        .foregroundStyle(
+                            .linearGradient(colors: [.blue, .purple], startPoint: .topLeading, endPoint: .bottomTrailing)
+                        )
+                    VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
+                        Text("AI Assistant")
+                            .font(Typography.title3)
+                        Text("Analyzing \(emails.count) \(mode.rawValue.lowercased())")
+                            .font(Typography.caption1)
+                            .foregroundColor(AppColors.secondary)
+                    }
+                }
                 Spacer()
                 Button(action: { dismiss() }) {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.gray)
+                        .foregroundColor(AppColors.secondary)
+                        .imageScale(.large)
                 }
+                .buttonStyle(.plain)
                 .help("Close AI window")
             }
 
             Divider()
 
-            // Input
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Type your question about your emails:")
-                    .font(.headline)
+            VStack(alignment: .leading, spacing: Spacing.xSmall) {
+                Text("Ask a question about your emails")
+                    .font(Typography.headline)
 
-                HStack(spacing: 12) {
-                    TextField("e.g. Which client sent the most attachments?", text: $question)
-                        .textFieldStyle(.roundedBorder)
+                HStack(spacing: Spacing.small) {
+                    TextField("e.g. What's the sentiment of my emails?", text: $question)
+                        .textFieldStyle(.plain)
+                        .font(Typography.body)
+                        .padding(.horizontal, Spacing.small)
+                        .padding(.vertical, Spacing.xSmall)
+                        .background(AppColors.backgroundSecondary)
+                        .cornerRadius(CornerRadius.medium)
                         .onSubmit { runQA() }
                         .disabled(loading)
 
                     Button {
                         runQA()
                     } label: {
-                        Label("Get Answer", systemImage: "sparkle.magnifyingglass")
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.title2)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || loading)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(canSend ? AppColors.primary : AppColors.secondary.opacity(0.5))
+                    .disabled(!canSend)
                 }
             }
 
-            // Results
             resultView
 
             Spacer()
         }
-        .padding(28)
-        .frame(minWidth: 560, minHeight: 380)
+        .padding(Spacing.large)
+        .frame(minWidth: 560, minHeight: 400)
+        .background(AppColors.backgroundTertiary)
+    }
+
+    private var canSend: Bool {
+        !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !loading
     }
 
     // MARK: - Result UI
     @ViewBuilder
     private var resultView: some View {
         if loading {
-            HStack(spacing: 10) {
+            HStack(spacing: Spacing.xSmall) {
                 ProgressView()
-                Text("AI is thinking…")
-                    .foregroundColor(.secondary)
+                    .scaleEffect(0.8)
+                Text("Analyzing...")
+                    .font(Typography.callout)
+                    .foregroundColor(AppColors.secondary)
             }
-            .padding(.vertical, 20)
-
+            .padding(.vertical, Spacing.medium)
         } else if !answer.isEmpty {
             ScrollView {
                 Text(answer)
-                    .padding()
+                    .font(Typography.body)
+                    .textSelection(.enabled)
+                    .padding(Spacing.medium)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.gray.opacity(0.1))
-                    .cornerRadius(8)
-                    .font(.body)
+                    .background(AppColors.backgroundSecondary)
+                    .cornerRadius(CornerRadius.large)
             }
             .frame(minHeight: 160, maxHeight: 320)
         }
     }
 
-    // MARK: - QA Logic (Simulated)
+    // MARK: - QA Logic
     private func runQA() {
         guard !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         answer = ""
@@ -159,8 +201,10 @@ struct AskAIView: View {
 
         DispatchQueue.global(qos: .userInitiated).async {
             let result = simulateQA(question: question, emails: emails)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                self.answer = result
+            DispatchQueue.main.async {
+                withAnimation(AnimationTiming.normal) {
+                    self.answer = result
+                }
                 self.loading = false
             }
         }

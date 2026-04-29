@@ -80,7 +80,7 @@ public struct MIMEPart: Codable {
         MIMEPart.extractParameters(from: contentDisposition)
     }
     public var summary: String {
-        var result = "📄 MIME Part Summary\n"
+        var result = "MIME Part Summary\n"
         result += "• MIME Type     : \(mimeType)\n"
         result += "• Charset       : \(charset)\n"
         result += "• Encoding      : \(transferEncoding)\n"
@@ -170,7 +170,7 @@ public struct MIMEPart: Codable {
             try data.write(to: url, options: .atomic)
             return url
         } catch {
-            print("❌ Failed to save attachment: \(error)")
+            print("Failed to save attachment: \(error)")
             return nil
         }
     }

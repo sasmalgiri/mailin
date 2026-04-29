@@ -14,6 +14,7 @@ import SwiftUI
 struct mailinApp: App {
     // MARK: - App State
     @StateObject private var appState = AppStateManager()
+    @StateObject private var storeManager = StoreManager()
     @Environment(\.openWindow) private var openWindow
     
     // MARK: - Scene Configuration
@@ -22,6 +23,7 @@ struct mailinApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(appState)
+                .environmentObject(storeManager)
                 .frame(minWidth: 1000, minHeight: 700)
                 .onAppear {
                     configureAppearance()
@@ -38,6 +40,7 @@ struct mailinApp: App {
         Settings {
             SettingsView()
                 .environmentObject(appState)
+                .environmentObject(storeManager)
         }
         
         // About window
@@ -69,8 +72,10 @@ struct mailinApp: App {
             
             Divider()
             
-            Button("Export Filtered Emails...") {
-                appState.triggerExport = true
+            Button("Export Filtered Emails (Pro)...") {
+                if storeManager.requirePremium() {
+                    appState.triggerExport = true
+                }
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .disabled(!appState.hasFilteredEmails)
@@ -90,8 +95,10 @@ struct mailinApp: App {
             .keyboardShortcut("r", modifiers: [.command, .shift])
             .disabled(!appState.hasParsedEmails)
             
-            Button("Ask AI...") {
-                appState.showAIAssistant = true
+            Button("Ask AI (Pro)...") {
+                if storeManager.requirePremium() {
+                    appState.showAIAssistant = true
+                }
             }
             .keyboardShortcut("k", modifiers: .command)
             .disabled(!appState.hasParsedEmails)

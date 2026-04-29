@@ -4,11 +4,16 @@ MAILIN - APP STORE LISTING METADATA
 
 APP NAME: mailin
 
-SUBTITLE: Email Archive Analyzer
+SUBTITLE: Private Email Archive Analyzer
 
 CATEGORY: Productivity
 
-PRICE: (Set your price on App Store Connect)
+PRICE: Free (with In-App Purchases)
+
+IN-APP PURCHASES:
+  - Monthly Pro: $2.99/month (auto-renewable subscription)
+  - Yearly Pro: $19.99/year (auto-renewable subscription) — Best Value
+  - Lifetime Pro: $29.99 (one-time purchase) — Pay Once, Own Forever
 
 BUNDLE ID: com.ecosanskriti.mailin
 
@@ -16,43 +21,57 @@ BUNDLE ID: com.ecosanskriti.mailin
 DESCRIPTION
 ------------------------------------
 
-mailin is a powerful, privacy-first email archive analyzer for macOS. Import your .mbox or .eml email archives and instantly gain insights into your communication patterns.
+mailin is a powerful email archive analyzer built with 100% native Apple technology. Free to try. No ads. No data collection. Ever.
+
+FLEXIBLE PRICING — YOUR CHOICE
+Try mailin free with up to 50 emails. Upgrade to Pro with a monthly subscription, yearly plan, or a one-time lifetime purchase. No pressure, no tricks — choose what works for you.
+
+COMPLETE PRIVACY — ZERO DATA LEAVES YOUR DEVICE
+mailin processes everything locally using Apple's on-device AI and NLP frameworks. No cloud servers. No telemetry. No accounts required. No internet connection needed. Your emails are yours alone.
+
+NATIVE APPLE. EVERY DEVICE.
+Built entirely in SwiftUI with Apple's native frameworks — not Electron, not Java, not a web wrapper. Runs natively on every Mac with Apple Silicon and Intel. Fast, fluid, and designed for macOS.
 
 KEY FEATURES:
 
-- Advanced Email Parsing: Full RFC 822 and MIME compliant parser that handles complex multipart messages, nested attachments, and encoded content.
+- On-Device AI Assistant: Ask natural language questions about your emails — sentiment analysis, topic extraction, entity recognition, language detection — all powered by Apple's NaturalLanguage framework running entirely on your device.
 
-- Smart Filtering: Filter emails by sender, recipient, date range, message type (sent/received), and more. Find exactly what you're looking for in seconds.
+- Advanced Email Parsing: Full RFC 822 and MIME compliant parser that handles complex multipart messages, nested attachments, quoted-printable, base64, and international character sets.
 
-- Reply Analytics: Track your communication patterns with detailed reply frequency statistics and conversation threading.
+- Smart Filtering: Filter emails by sender, recipient, date range, domain, reply count, and message type. Find exactly what you need in seconds.
 
-- AI Email Assistant: Ask natural language questions about your email archive — "Who did I email the most?" "What are my most common subjects?"
+- Reply Analytics: Track communication patterns with reply frequency charts, conversation threading, and sender statistics.
 
-- Attachment Management: View, save, and open email attachments directly from the analyzer. Supports PDF, images, documents, and more.
+- Attachment Management: View, download, and export email attachments — PDF, images, documents, and more. Batch download all attachments at once.
 
-- Privacy First: All processing happens entirely on your Mac. No data is sent to any server. Your emails stay on your device.
+- Multiple Export Formats: Export filtered emails as EML, JSON, CSV, or plain text for backup, legal discovery, or further analysis.
 
-- Export Capabilities: Export filtered emails in EML, JSON, or plain text formats for backup or further analysis.
+- Google Takeout Ready: Import .mbox files exported from Gmail via Google Takeout. Also supports Thunderbird, Apple Mail, and any standard .mbox or .eml files.
 
-Perfect for professionals, researchers, legal teams, and anyone who needs to analyze email archives efficiently.
+PERFECT FOR:
+- Professionals managing email archives
+- Legal teams and compliance officers
+- Researchers analyzing communication patterns
+- Anyone leaving Gmail who wants to read their Google Takeout data
+- Privacy-conscious users who refuse to upload emails to cloud services
 
 ------------------------------------
 KEYWORDS (100 characters max)
 ------------------------------------
 
-email,mbox,eml,archive,analyzer,parser,mail,export,filter,search,privacy,MIME,attachment,analytics
+email,mbox,eml,archive,analyzer,privacy,Google Takeout,parser,AI,filter,export,attachment,offline
 
 ------------------------------------
 WHAT'S NEW (Version 1.0)
 ------------------------------------
 
-Initial release of mailin — your personal email archive analyzer.
+Initial release of mailin — your private, AI-powered email archive analyzer. One-time purchase, all features included.
 
 ------------------------------------
 PROMOTIONAL TEXT (170 characters max)
 ------------------------------------
 
-Analyze your email archives with powerful parsing, smart filtering, reply analytics, and AI insights. 100% private — all processing happens on your Mac.
+Free to try. Complete privacy. Analyze email archives with on-device AI, smart filters, and reply analytics. No cloud, no data collection. Upgrade for unlimited access.
 
 ------------------------------------
 SUPPORT URL
@@ -64,7 +83,7 @@ mailto:sasmalgiri@gmail.com
 COPYRIGHT
 ------------------------------------
 
-2025 mailin
+2025 mailin. All rights reserved.
 
 ------------------------------------
 AGE RATING
@@ -77,12 +96,26 @@ SCREENSHOTS NEEDED
 ------------------------------------
 
 You need screenshots for Mac. Take them at these steps:
-1. Open the app and show the main window with the file selection screen
-2. Show the app with emails loaded and the filter sidebar visible
-3. Show an email detail view with body content
-4. Show the AI Assistant in action
-5. Show the reply statistics or analytics view
+1. Main window with welcome screen showing privacy badges
+2. Emails loaded with filter sidebar and email list
+3. Email detail view with headers, body, and attachments
+4. AI Assistant answering a sentiment analysis query
+5. Reply statistics chart view
 
 Use Cmd+Shift+5 to capture screenshots.
 Mac App Store requires at least 1 screenshot.
 Recommended: 3-5 screenshots at 2560x1600 or 1280x800 resolution.
+
+------------------------------------
+APP STORE SEARCH OPTIMIZATION NOTES
+------------------------------------
+
+Target search terms users will use:
+- "mbox viewer"
+- "Google Takeout viewer"
+- "email archive mac"
+- "mbox reader"
+- "email analyzer"
+- "eml viewer mac"
+- "offline email viewer"
+- "email privacy"

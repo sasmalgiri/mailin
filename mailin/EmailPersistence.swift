@@ -2,7 +2,9 @@ import Foundation
 
 struct EmailPersistence {
     private static var storeURL: URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return FileManager.default.temporaryDirectory.appendingPathComponent("mailin").appendingPathComponent("saved_emails.json")
+        }
         let appDir = appSupport.appendingPathComponent("mailin", isDirectory: true)
         try? FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
         return appDir.appendingPathComponent("saved_emails.json")

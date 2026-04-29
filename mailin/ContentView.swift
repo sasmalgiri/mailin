@@ -4,10 +4,12 @@ import AppKit
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppStateManager
+    @EnvironmentObject var storeManager: StoreManager
     @StateObject private var viewModel = ContentViewModel()
     @StateObject private var modelVM: ParsedEmailListViewModel
     @State private var showSpinner = false
     @State private var parseFailed = false
+    @State private var parsingObserver: NSObjectProtocol?
 
     init() {
         let vm = ContentViewModel()
@@ -26,30 +28,37 @@ struct ContentView: View {
             VStack {
                 if parseFailed {
                     InfoBanner(
-                        text: "❌ Failed to parse file. Please check your .mbox/.eml file or contact support.",
-                        color: .red, systemImage: "exclamationmark.triangle.fill"
-                    ).padding(.top, 24)
+                        text: "Failed to parse file. Please check your .mbox/.eml file or contact support.",
+                        color: AppColors.error, systemImage: "exclamationmark.triangle.fill"
+                    ).padding(.top, Spacing.large)
                 } else if !modelVM.isParsed {
                     InfoBanner(
-                        text: "📂 Select a .mbox or .eml file to start parsing.",
-                        color: .accentColor, systemImage: "info.circle.fill"
-                    ).padding(.top, 24)
+                        text: "Select a .mbox or .eml file to start parsing.",
+                        color: AppColors.primary, systemImage: "info.circle.fill"
+                    ).padding(.top, Spacing.large)
                 }
                 Spacer()
             }
         }
         .onChange(of: modelVM.isParsed) { _, newValue in
             if newValue {
+                modelVM.isPremiumUser = storeManager.isPremium
                 modelVM.applyFilters()
                 appState.hasParsedEmails = true
                 appState.hasFilteredEmails = !modelVM.filteredEmails.isEmpty
+            }
+        }
+        .onChange(of: storeManager.isPremium) { _, newValue in
+            modelVM.isPremiumUser = newValue
+            if modelVM.isParsed {
+                modelVM.applyFilters()
             }
         }
         .onChange(of: modelVM.filteredEmails.count) { _, _ in
             appState.hasFilteredEmails = !modelVM.filteredEmails.isEmpty
         }
         .onAppear {
-            NotificationCenter.default.addObserver(
+            parsingObserver = NotificationCenter.default.addObserver(
                 forName: .parsingFinished,
                 object: nil,
                 queue: .main
@@ -65,8 +74,19 @@ struct ContentView: View {
                 modelVM.loadFromContentViewModel()
             }
         }
+        .onDisappear {
+            if let observer = parsingObserver {
+                NotificationCenter.default.removeObserver(observer)
+                parsingObserver = nil
+            }
+        }
         .sheet(isPresented: $appState.showAIAssistant) {
             AIAssistantView(emails: modelVM.filteredEmails.isEmpty ? modelVM.allEmails : modelVM.filteredEmails)
+                .environmentObject(storeManager)
+        }
+        .sheet(isPresented: $storeManager.showPaywall) {
+            PaywallView()
+                .environmentObject(storeManager)
         }
     }
 
@@ -89,8 +109,8 @@ struct ContentView: View {
             if modelVM.showParsedList {
                 VStack(spacing: 0) {
                     HStack {
-                        Text("📨 Mailin")
-                            .font(.title2).bold()
+                        Text("mailin")
+                            .font(Typography.title2)
                         Spacer()
                     }
                     .padding(.horizontal)
@@ -112,32 +132,54 @@ struct ContentView: View {
 
     private var leftSidebar: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 14) {
-                // Show email + file button only BEFORE parsing starts
+            VStack(alignment: .leading, spacing: Spacing.small) {
                 if !modelVM.isParsed && viewModel.loadingProgress == 0 {
-                    HStack(spacing: 12) {
+                    HStack(spacing: Spacing.small) {
                         Image(systemName: "envelope.badge.shield.half.filled")
-                            .font(.title2)
-                            .foregroundStyle(.blue)
+                            .font(Typography.title2)
+                            .foregroundStyle(
+                                .linearGradient(colors: [.blue, .purple], startPoint: .topLeading, endPoint: .bottomTrailing)
+                            )
                         Text("mailin")
-                            .font(.title3)
-                            .fontWeight(.semibold)
+                            .font(Typography.title3)
                         TextField("Your Email", text: $viewModel.senderEmail)
                             .textFieldStyle(.roundedBorder)
                             .disabled(modelVM.isParsed || modelVM.isParsing)
                     }
 
-                    Button("📂 Select .mbox File") {
+                    Button {
                         openPanelFallback()
+                    } label: {
+                        Label("Select .mbox File", systemImage: "folder")
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(PrimaryButtonStyle())
                     .disabled(viewModel.senderEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || modelVM.isParsing)
                 }
 
                 if modelVM.isParsed {
-                    HStack(spacing: 8) {
+                    if !storeManager.isPremium && modelVM.allEmails.count > StoreManager.freeEmailLimit {
+                        Button {
+                            storeManager.showPaywall = true
+                        } label: {
+                            HStack(spacing: Spacing.xSmall) {
+                                Image(systemName: "crown.fill")
+                                    .foregroundColor(.orange)
+                                Text("Showing \(StoreManager.freeEmailLimit) of \(modelVM.allEmails.count) emails — Upgrade to Pro")
+                                    .font(Typography.caption1)
+                                    .fontWeight(.semibold)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, Spacing.xSmall)
+                            .background(Color.orange.opacity(0.12))
+                            .cornerRadius(CornerRadius.medium)
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    HStack(spacing: Spacing.xSmall) {
                         Text("Min Reply Count")
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(Typography.caption1)
+                            .fontWeight(.semibold)
                         Spacer()
                         Stepper(value: $modelVM.minReplyCount, in: 0...modelVM.maxReplyCount, step: 1, onEditingChanged: { _ in
                             modelVM.applyFilters()
@@ -148,18 +190,18 @@ struct ContentView: View {
                     }
 
                     summarySection
-                        .padding(.bottom, 4)
+                        .padding(.bottom, Spacing.xxSmall)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 12)
-            .background(Color(NSColor.windowBackgroundColor))
+            .padding(.horizontal, Spacing.small)
+            .padding(.top, Spacing.small)
+            .background(AppColors.backgroundPrimary)
             .zIndex(1)
 
             if modelVM.isParsed {
                 ScrollView {
                     filterSection
-                        .padding(.horizontal, 10)
+                        .padding(.horizontal, Spacing.xSmall)
                 }
                 stickyFilterButtons
             }
@@ -168,22 +210,23 @@ struct ContentView: View {
     }
 
     private var summarySection: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 12) {
-                Text("📈 \(modelVM.filteredEmails.count) Emails")
-                    .font(.title3)
-                    .foregroundColor(.secondary)
+        VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
+            HStack(spacing: Spacing.small) {
+                Label("\(modelVM.filteredEmails.count) Emails", systemImage: "chart.bar.fill")
+                    .font(Typography.title3)
+                    .foregroundColor(AppColors.secondary)
                 Spacer()
                 if let start = modelVM.filteredDateRange.0, let end = modelVM.filteredDateRange.1 {
                     Text("\(formatted(start)) – \(formatted(end))")
-                        .font(.title3).bold()
-                        .foregroundColor(.blue)
+                        .font(Typography.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundColor(AppColors.info)
                         .lineLimit(1)
                         .minimumScaleFactor(0.75)
-                        .padding(4)
+                        .padding(Spacing.xxSmall)
                 }
             }
-            HStack(spacing: 8) {
+            HStack(spacing: Spacing.xSmall) {
                 DatePicker("", selection: $modelVM.startDate, displayedComponents: .date)
                     .labelsHidden()
                     .frame(maxWidth: 120)
@@ -196,26 +239,33 @@ struct ContentView: View {
     }
 
     private var filterSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: Spacing.xSmall) {
             Divider()
-            Text("📤 From").font(.headline)
+            Label("From", systemImage: "arrow.up.forward")
+                .font(Typography.headline)
+                .foregroundColor(AppColors.sentEmail)
             multiToggleList(items: modelVM.allFromEmails, selection: $modelVM.selectedFromEmails)
-            Text("📥 To").font(.headline)
+
+            Label("To", systemImage: "arrow.down.backward")
+                .font(Typography.headline)
+                .foregroundColor(AppColors.receivedEmail)
             multiToggleList(items: modelVM.allToEmails, selection: $modelVM.selectedToEmails)
 
             if !modelVM.sortedSendersByReplyCount.isEmpty {
-                Text("📬 Senders by Reply Count").font(.headline).padding(.top, 6)
+                Label("Senders by Reply Count", systemImage: "envelope.arrow.triangle.branch")
+                    .font(Typography.headline)
+                    .padding(.top, Spacing.xSmall)
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: Spacing.xSmall) {
                         ForEach(modelVM.sortedSendersByReplyCount, id: \.email) { entry in
                             HStack {
                                 Text(entry.email.prefix(38))
-                                    .font(.system(size: 12))
+                                    .font(Typography.caption1)
                                     .lineLimit(1)
                                 Spacer()
                                 Text("\(entry.count)")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.secondary)
+                                    .font(Typography.caption1)
+                                    .foregroundColor(AppColors.secondary)
                             }
                         }
                     }
@@ -226,83 +276,92 @@ struct ContentView: View {
     }
 
     private var stickyFilterButtons: some View {
-        HStack(spacing: 10) {
-            Button("🔎 Apply") {
+        HStack(spacing: Spacing.xSmall) {
+            Button {
                 modelVM.applyFilters()
+            } label: {
+                Label("Apply", systemImage: "magnifyingglass")
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(PrimaryButtonStyle())
 
-            Button("🧹 Clear") {
+            Button {
                 modelVM.resetFilters()
+            } label: {
+                Label("Clear", systemImage: "xmark.circle")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(SecondaryButtonStyle())
 
-            Button("📤 Export .eml") {
-                exportFilteredEmailsAsEML()
+            Button {
+                if storeManager.requirePremium() {
+                    exportFilteredEmailsAsEML()
+                }
+            } label: {
+                Label(storeManager.isPremium ? "Export .eml" : "Export .eml (Pro)", systemImage: "square.and.arrow.up")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(SecondaryButtonStyle())
         }
-        .padding(.vertical, 12)
-        .padding(.horizontal, 8)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .padding(.vertical, Spacing.small)
+        .padding(.horizontal, Spacing.xSmall)
+        .background(AppColors.backgroundSecondary)
     }
 
     private var emptyPlaceholder: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: Spacing.large) {
             Spacer()
 
             Image(nsImage: NSApplication.shared.applicationIconImage)
                 .resizable()
                 .scaledToFit()
                 .frame(width: 80, height: 80)
+                .shadow(color: .black.opacity(0.1), radius: Shadows.medium.radius, y: Shadows.medium.y)
 
-            Text("Welcome to mailin")
-                .font(.title)
-                .fontWeight(.bold)
+            VStack(spacing: Spacing.xSmall) {
+                Text("Welcome to mailin")
+                    .font(Typography.title1)
 
-            Text("Analyze your email archives with AI-powered insights")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-
-            VStack(alignment: .leading, spacing: 12) {
-                onboardingStep(number: "1", text: "Enter your email address in the sidebar")
-                onboardingStep(number: "2", text: "Select a .mbox or .eml file to import")
-                onboardingStep(number: "3", text: "Explore filters, analytics, and AI assistant")
+                Text("Analyze your email archives with AI-powered insights")
+                    .font(Typography.subheadline)
+                    .foregroundColor(AppColors.secondary)
             }
-            .padding(20)
-            .background(Color(nsColor: .controlBackgroundColor))
-            .cornerRadius(12)
 
-            HStack(spacing: 16) {
-                Label("100% Offline", systemImage: "lock.shield")
-                Label("On-Device AI", systemImage: "brain.head.profile")
-                Label("No Data Collected", systemImage: "eye.slash")
+            VStack(alignment: .leading, spacing: Spacing.small) {
+                onboardingStep(number: "1", icon: "envelope", text: "Enter your email address in the sidebar")
+                onboardingStep(number: "2", icon: "folder", text: "Select a .mbox or .eml file to import")
+                onboardingStep(number: "3", icon: "sparkles", text: "Explore filters, analytics, and AI assistant")
             }
-            .font(.caption)
-            .foregroundColor(.secondary)
+            .padding(Spacing.medium)
+            .background(AppColors.backgroundSecondary)
+            .cornerRadius(CornerRadius.large)
+
+            HStack(spacing: Spacing.medium) {
+                Label("Free to Try", systemImage: "gift.fill")
+                Label("Complete Privacy", systemImage: "lock.shield.fill")
+                Label("Native Apple AI", systemImage: "brain.head.profile")
+            }
+            .font(Typography.caption1)
+            .foregroundColor(AppColors.secondary)
 
             Spacer()
         }
         .frame(maxWidth: 450)
     }
 
-    private func onboardingStep(number: String, text: String) -> some View {
-        HStack(spacing: 12) {
-            Text(number)
-                .font(.caption)
-                .fontWeight(.bold)
+    private func onboardingStep(number: String, icon: String, text: String) -> some View {
+        HStack(spacing: Spacing.small) {
+            Image(systemName: icon)
+                .font(Typography.caption1)
                 .foregroundColor(.white)
-                .frame(width: 22, height: 22)
-                .background(Color.accentColor)
+                .frame(width: 24, height: 24)
+                .background(AppColors.primary)
                 .clipShape(Circle())
             Text(text)
-                .font(.callout)
+                .font(Typography.callout)
         }
     }
 
     private func multiToggleList(items: [String], selection: Binding<[String]>) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: Spacing.xSmall) {
                 ForEach(items, id: \.self) { item in
                     Toggle(isOn: Binding(
                         get: { selection.wrappedValue.contains(item) },
@@ -315,7 +374,7 @@ struct ContentView: View {
                             modelVM.applyFilters()
                         }
                     )) {
-                        Text(item.prefix(38)).font(.system(size: 12))
+                        Text(item.prefix(38)).font(Typography.caption1)
                     }
                 }
             }
@@ -327,27 +386,27 @@ struct ContentView: View {
         ZStack {
             VisualEffectBlur(material: .underWindowBackground, blendingMode: .withinWindow)
                 .edgesIgnoringSafeArea(.all)
-            VStack(spacing: 16) {
+            VStack(spacing: Spacing.medium) {
                 ProgressView(value: viewModel.loadingProgress)
                     .scaleEffect(1.6)
-                    .progressViewStyle(CircularProgressViewStyle(tint: .accentColor))
-                    .shadow(radius: 10)
+                    .progressViewStyle(CircularProgressViewStyle(tint: AppColors.primary))
+                    .shadow(radius: Shadows.medium.radius)
                 Text(viewModel.loadingText.isEmpty
-                    ? (parseFailed ? "❌ Failed to parse file." : "📂 Parsing .mbox file…")
+                    ? (parseFailed ? "Failed to parse file." : "Parsing .mbox file…")
                     : viewModel.loadingText)
                     .foregroundColor(.primary)
-                    .font(.headline)
+                    .font(Typography.headline)
                 if viewModel.loadingProgress > 0.01 && viewModel.loadingProgress < 0.99 {
                     Text("\(Int(viewModel.loadingProgress * 100))% complete")
-                        .foregroundColor(.secondary)
-                        .font(.subheadline)
+                        .foregroundColor(AppColors.secondary)
+                        .font(Typography.subheadline)
                 }
             }
-            .padding(32)
+            .padding(Spacing.xLarge)
             .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(Color(.windowBackgroundColor).opacity(0.97))
-                    .shadow(radius: 24)
+                RoundedRectangle(cornerRadius: CornerRadius.xLarge)
+                    .fill(AppColors.backgroundPrimary.opacity(0.97))
+                    .shadow(radius: Shadows.xLarge.radius)
             )
         }
         .zIndex(99)
@@ -365,9 +424,9 @@ struct ContentView: View {
         let panel = NSOpenPanel()
         if #available(macOS 12.0, *) {
             panel.allowedContentTypes = [
-                UTType(filenameExtension: "mbox")!,
-                UTType(filenameExtension: "eml")!
-            ]
+                UTType(filenameExtension: "mbox"),
+                UTType(filenameExtension: "eml")
+            ].compactMap { $0 }
         } else {
             panel.allowedFileTypes = ["mbox", "eml"]
         }
@@ -425,7 +484,7 @@ struct ContentView: View {
                     do {
                         try FileUtils.writeData(Data(emlContent.utf8), to: fileURL.path)
                     } catch {
-                        print("❌ Failed to write \(filename): \(error)")
+                        print("Failed to write \(filename): \(error)")
                         FileUtilsAudit.logError(error, context: "EML Export", path: fileURL.path)
                     }
                 }
@@ -438,28 +497,29 @@ struct ContentView: View {
 // MARK: - InfoBanner
 struct InfoBanner: View {
     var text: String
-    var color: Color = .accentColor
+    var color: Color = AppColors.primary
     var systemImage: String? = nil
 
     var body: some View {
-        HStack {
+        HStack(spacing: Spacing.xSmall) {
             if let systemImage {
                 Image(systemName: systemImage)
                     .foregroundColor(.white)
             }
             Text(text)
+                .font(Typography.callout)
                 .foregroundColor(.white)
                 .fontWeight(.semibold)
             Spacer()
         }
-        .padding(.horizontal)
-        .padding(.vertical, 10)
+        .padding(.horizontal, Spacing.medium)
+        .padding(.vertical, Spacing.xSmall)
         .background(color.opacity(0.95))
-        .cornerRadius(10)
-        .shadow(radius: 6)
-        .padding(.horizontal)
+        .cornerRadius(CornerRadius.medium)
+        .shadow(color: .black.opacity(0.08), radius: Shadows.medium.radius, y: Shadows.medium.y)
+        .padding(.horizontal, Spacing.medium)
         .transition(.move(edge: .top).combined(with: .opacity))
-        .animation(.easeInOut, value: text)
+        .animation(AnimationTiming.normal, value: text)
     }
 }
 

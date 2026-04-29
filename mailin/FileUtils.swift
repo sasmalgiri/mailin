@@ -75,7 +75,7 @@ public class FileUtilsAudit {
         for plugin in plugins { plugin(msg, path, [:]) }
     }
     public static func logError(_ err: Error, context: String, path: String = "") {
-        log("❌ \(context): \(err)", level: .error, path: path)
+        log("[Error] \(context): \(err)", level: .error, path: path)
     }
     public static func auditHistory() -> [(Date, String, String)] { logs }
 }
@@ -424,7 +424,7 @@ public class FileUtils {
     // MARK: - Misc Logging
     public static func info(_ message: String) { FileUtilsAudit.log(message, level: .info) }
     public static func debug(_ message: String) { FileUtilsAudit.log(message, level: .debug) }
-    public static func warn(_ message: String) { FileUtilsAudit.log("⚠️ [Warning] \(message)", level: .warning) }
+    public static func warn(_ message: String) { FileUtilsAudit.log("[Warning] \(message)", level: .warning) }
 }
 
 // MARK: - Typealiases and Extensions
@@ -438,7 +438,9 @@ public extension URL {
     }
 }
 public func appSupportDirectory(appFolder: String = "mailin") throws -> URL {
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        guard let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            throw NSError(domain: "FileUtils", code: 1, userInfo: [NSLocalizedDescriptionKey: "Application Support directory not found"])
+        }
         let folder = dir.appendingPathComponent(appFolder, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         return folder

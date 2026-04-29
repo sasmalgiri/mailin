@@ -135,13 +135,15 @@ struct MBOXParser {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(parsed)
 
-        let supportDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        guard let supportDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            throw NSError(domain: "MBOXParser", code: 1, userInfo: [NSLocalizedDescriptionKey: "Application Support directory not found"])
+        }
         let folder = supportDir.appendingPathComponent("mailin", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
 
         let output = folder.appendingPathComponent("parsed_session.json")
         try FileUtils.writeData(data, to: output.path)
-        print("✅ Session JSON saved at: \(output.path)")
+        print("Session JSON saved at: \(output.path)")
     }
 
     static func summarize(emails: [RawEmail]) -> SummaryMetadata {
@@ -268,7 +270,7 @@ struct MBOXParser {
         case "iso-8859-1", "latin1": encoding = .isoLatin1
         case "us-ascii", "ascii": encoding = .ascii
         default:
-            print("⚠️ Unknown charset: \(charset) → fallback to UTF-8")
+            print("Unknown charset: \(charset), using UTF-8")
             encoding = .utf8
         }
         return String(data: data, encoding: encoding)

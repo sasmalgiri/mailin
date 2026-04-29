@@ -145,17 +145,6 @@ public class EmailBodyExtractor {
             let typeName = parseParam("name", in: part.headers["Content-Type"])
             let suggestedName = forceFilename ?? part.filename ?? dispName ?? typeName ?? "attachment"
             let contentID = part.headers["Content-ID"]?.trimmingCharacters(in: CharacterSet(charactersIn: "<> \t\r\n"))
-            print("==== DEBUG: Attachment Part Headers ====")
-            for (k, v) in part.headers {
-                print("\(k): \(v)")
-            }
-            print("MIME type: \(part.mimeType)")
-            print("Transfer-Encoding: \(part.transferEncoding)")
-            print("Filename: \(part.filename ?? "nil")")
-            print("Body first 200 chars:")
-            print(part.body.prefix(200))
-            print("Body length: \(part.body.count) chars")
-            print("==== END DEBUG ====")
 
             // --- NEW LOGIC ---
             return try AttachmentSaver.saveAttachment(
@@ -168,7 +157,7 @@ public class EmailBodyExtractor {
                 contentID: contentID
             )
         } catch {
-            print("❌ Attachment extraction failed: \(error)")
+            print("Attachment extraction failed: \(error)")
             return nil
         }
     }

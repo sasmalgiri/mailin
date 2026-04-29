@@ -8,11 +8,12 @@ import AppKit
 
 struct EmailDetailView: View {
     let email: MBOXParser.RawEmail
-    
+
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var storeManager: StoreManager
     @State private var showCleanView = true
     @State private var safeHTML: String = ""
-    
+
     @State private var htmlMinHeightString: String = "600"
     @State private var htmlMinHeight: CGFloat = 600
 
@@ -23,7 +24,7 @@ struct EmailDetailView: View {
             topBar
             Divider()
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: Spacing.medium) {
                     subjectView
                     headerBlock
                     Divider()
@@ -32,54 +33,57 @@ struct EmailDetailView: View {
                     htmlBodyView
                     attachmentsSection
                     exportButtons
-                    Spacer(minLength: 20)
+                    Spacer(minLength: Spacing.medium)
                 }
-                .padding()
+                .padding(Spacing.medium)
             }
         }
-        .navigationTitle("📧 Email Detail")
+        .navigationTitle("Email Detail")
         .onAppear {
             safeHTML = sanitizedHTMLBody(from: email)
         }
-        .animation(.easeInOut(duration: 0.25), value: showCleanView)
+        .animation(AnimationTiming.normal, value: showCleanView)
     }
-    
+
     private var topBar: some View {
         HStack {
             Spacer()
             Button(action: { dismiss() }) {
-                Label("Close", systemImage: "xmark.circle.fill")
-                    .labelStyle(IconOnlyLabelStyle())
-                    .foregroundColor(.gray)
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundColor(AppColors.secondary)
                     .imageScale(.large)
             }
-            .padding(.trailing)
+            .buttonStyle(.plain)
+            .padding(.trailing, Spacing.medium)
             .help("Close this email")
         }
-        .padding(.top, 8)
+        .padding(.top, Spacing.xSmall)
     }
-    
+
     private var subjectView: some View {
         Text(subjectLine)
-            .font(.title2.bold())
+            .font(Typography.title2)
             .transition(.opacity.combined(with: .move(edge: .top)))
     }
-    
+
     private var cleanToggle: some View {
-        Toggle("🧼 Clean Quote View", isOn: $showCleanView)
-            .toggleStyle(SwitchToggleStyle())
-            .padding(.bottom, 6)
+        Toggle(isOn: $showCleanView) {
+            Label("Clean Quote View", systemImage: "text.quote")
+                .font(Typography.callout)
+        }
+        .toggleStyle(SwitchToggleStyle())
+        .padding(.bottom, Spacing.xSmall)
     }
-    
+
     private var emailBodyView: some View {
         Group {
-            Text("Plain Text")
-                .font(.headline)
+            Label("Plain Text", systemImage: "doc.text")
+                .font(Typography.headline)
             ScrollView {
                 Text(emailBody)
-                    .font(.system(.body, design: .monospaced))
+                    .font(Typography.monoBody)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
+                    .padding(Spacing.xSmall)
             }
             .frame(minHeight: 500, maxHeight: 800)
             .emailBoxStyle()
@@ -89,14 +93,14 @@ struct EmailDetailView: View {
     private var htmlBodyView: some View {
         let trimmedHTML = email.htmlBody.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedHTML.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("🌐 HTML View")
-                    .font(.headline)
-                    .padding(.leading, 16)
-                
-                // Height control input
-                HStack {
+            VStack(alignment: .leading, spacing: Spacing.xSmall) {
+                Label("HTML View", systemImage: "globe")
+                    .font(Typography.headline)
+                    .padding(.leading, Spacing.medium)
+
+                HStack(spacing: Spacing.xSmall) {
                     Text("View Height:")
+                        .font(Typography.callout)
                     TextField("Height", text: $htmlMinHeightString)
                         .frame(width: 60)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
@@ -115,83 +119,91 @@ struct EmailDetailView: View {
                             }
                         }
                     Text("px")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        .font(Typography.caption1)
+                        .foregroundColor(AppColors.secondary)
                 }
-                .padding(.leading, 8)
-                
-                // The HTML content view with padding INSIDE the border
+                .padding(.leading, Spacing.xSmall)
+
                 EmailHTMLView(html: trimmedHTML, minHeight: htmlMinHeight)
-                    .padding(14)          // <-- Add space inside the border!
+                    .padding(Spacing.small)
                     .frame(maxWidth: .infinity, minHeight: htmlMinHeight)
-                    .emailBoxStyle()      // <-- Border sticks to outer edge!
+                    .emailBoxStyle()
             }
-            .padding(.top, 16)
+            .padding(.top, Spacing.medium)
         }
     }
 
-    // MARK: - Attachments Section with Download Buttons
+    // MARK: - Attachments Section
     private var attachmentsSection: some View {
         Group {
             if !email.attachments.isEmpty {
                 Divider()
-                Text("📎 Attachments")
-                    .font(.headline)
+                Label("Attachments (\(email.attachments.count))", systemImage: "paperclip")
+                    .font(Typography.headline)
 
-                // --- Download All Attachments Buttons ---
-                HStack(spacing: 18) {
-                    Button("⬇️ Download All Attachments") {
+                Button {
+                    if storeManager.requirePremium() {
                         downloadAllAttachments()
                     }
-                    .buttonStyle(.borderedProminent)
-                    .padding(.vertical, 4)
-
-                    Button("SwiftEmailKit: Download All") {
-                        downloadAllAttachments()
-                    }
-                    .buttonStyle(.bordered)
-                    .padding(.vertical, 4)
+                } label: {
+                    Label(storeManager.isPremium ? "Download All Attachments" : "Download All (Pro)", systemImage: "arrow.down.circle.fill")
                 }
+                .buttonStyle(PrimaryButtonStyle())
+                .padding(.vertical, Spacing.xxSmall)
 
                 ForEach(email.attachments, id: \.filename) { att in
-                    HStack(spacing: 6) {
+                    HStack(spacing: Spacing.xSmall) {
                         Image(systemName: "paperclip")
-                            .foregroundColor(.gray)
-                        VStack(alignment: .leading) {
+                            .foregroundColor(AppColors.secondary)
+                        VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
                             Text(att.filename.isEmpty ? "Unnamed Attachment" : att.filename)
-                                .font(.subheadline)
-                            Text("\(att.mimeType) • \(formatSize(att.size))")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                                .font(Typography.subheadline)
+                                .fontWeight(.medium)
+                            Text("\(att.mimeType) · \(formatSize(att.size))")
+                                .font(Typography.caption1)
+                                .foregroundColor(AppColors.secondary)
                         }
                         Spacer()
-                        // --- Native Download
-                        Button("Download") {
+                        Button {
                             if let fileURL = att.fileURL {
                                 saveAttachmentToUserFolder(fileURL: fileURL, suggestedName: att.filename)
                             }
+                        } label: {
+                            Label("Download", systemImage: "arrow.down.circle")
+                                .font(Typography.caption1)
                         }
+                        .buttonStyle(SecondaryButtonStyle())
                         .disabled(att.fileURL == nil)
-
-                        // --- SwiftEmailKit Download (calls the same logic here) ---
-                        Button("SwiftEmailKit") {
-                            if let fileURL = att.fileURL {
-                                saveAttachmentToUserFolder(fileURL: fileURL, suggestedName: att.filename)
-                            }
-                        }
-                        .disabled(att.fileURL == nil)
-                        .help("Use SwiftEmailKit logic (same as above in this build).")
                     }
-                    .padding(.vertical, 2)
+                    .padding(.vertical, Spacing.xxxSmall)
                 }
             }
         }
     }
 
     private var exportButtons: some View {
-        HStack(spacing: 20) {
-            Button("📄 Export as TXT") { exportAsPlainText() }
-            Button("📊 Export as CSV") { exportAsCSV() }
+        HStack(spacing: Spacing.medium) {
+            Button {
+                if storeManager.requirePremium() {
+                    exportAsPlainText()
+                }
+            } label: {
+                Label(storeManager.isPremium ? "Export as TXT" : "Export TXT (Pro)", systemImage: "doc.text")
+            }
+            .buttonStyle(SecondaryButtonStyle())
+
+            Button {
+                if storeManager.requirePremium() {
+                    exportAsCSV()
+                }
+            } label: {
+                Label(storeManager.isPremium ? "Export as CSV" : "Export CSV (Pro)", systemImage: "tablecells")
+            }
+            .buttonStyle(SecondaryButtonStyle())
+        }
+        .sheet(isPresented: $storeManager.showPaywall) {
+            PaywallView()
+                .environmentObject(storeManager)
         }
     }
 
@@ -266,7 +278,7 @@ struct EmailDetailView: View {
                 do {
                     try FileUtils.copyFile(from: fileURL, to: destinationURL)
                 } catch {
-                    print("❌ Error copying file: \(error.localizedDescription)")
+                    print("Error copying file: \(error.localizedDescription)")
                 }
             }
         }
@@ -288,7 +300,7 @@ struct EmailDetailView: View {
                     do {
                         try FileUtils.copyFile(from: fileURL, to: destURL)
                     } catch {
-                        print("❌ Error copying attachment \(att.filename): \(error)")
+                        print("Error copying attachment \(att.filename): \(error)")
                     }
                 }
             }
@@ -317,7 +329,7 @@ struct EmailDetailView: View {
                 do {
                     try FileUtils.writeString(exportText, to: url)
                 } catch {
-                    print("❌ Failed to export as TXT: \(error)")
+                    print("Failed to export as TXT: \(error)")
                 }
             }
         }
@@ -338,22 +350,22 @@ struct EmailDetailView: View {
                 do {
                     try FileUtils.writeString(csvContent, to: url)
                 } catch {
-                    print("❌ Failed to export CSV: \(error)")
+                    print("Failed to export CSV: \(error)")
                 }
             }
         }
     }
 
     private var headerBlock: some View {
-        VStack(spacing: 12) {
-            HStack(alignment: .top, spacing: 24) {
-                VStack(alignment: .leading, spacing: 6) {
+        VStack(spacing: Spacing.small) {
+            HStack(alignment: .top, spacing: Spacing.large) {
+                VStack(alignment: .leading, spacing: Spacing.xSmall) {
                     LabelText(title: "From", value: header("From"))
                     LabelText(title: "To", value: header("To"))
                     LabelText(title: "Reply-To", value: header("Reply-To"))
                 }
                 Spacer()
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: Spacing.xSmall) {
                     LabelText(title: "Date", value: header("Date"))
                     LabelText(title: "CC", value: header("Cc"))
                     LabelText(title: "BCC", value: header("Bcc"))
@@ -361,6 +373,9 @@ struct EmailDetailView: View {
                 }
             }
         }
+        .padding(Spacing.small)
+        .background(AppColors.backgroundSecondary)
+        .cornerRadius(CornerRadius.medium)
     }
 }
 
@@ -368,7 +383,7 @@ struct EmailDetailView: View {
 struct LabelText: View {
     let title: String, value: String
     var body: some View {
-        HStack(alignment: .top, spacing: 4) {
+        HStack(alignment: .top, spacing: Spacing.xxSmall) {
             Text("\(title):")
                 .fontWeight(.semibold)
                 .frame(width: 70, alignment: .leading)
@@ -376,7 +391,7 @@ struct LabelText: View {
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .font(.footnote)
+        .font(Typography.footnote)
     }
 }
 
@@ -384,17 +399,14 @@ struct LabelText: View {
 extension View {
     func emailBoxStyle() -> some View {
         self
-            .background(Color(nsColor: .textBackgroundColor))
-            .cornerRadius(8)
+            .background(AppColors.backgroundTertiary)
+            .cornerRadius(CornerRadius.medium)
             .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color.gray.opacity(0.2), lineWidth: 1)
+                RoundedRectangle(cornerRadius: CornerRadius.medium)
+                    .stroke(AppColors.separatorLight, lineWidth: 1)
             )
     }
 }
-
-// MARK: - Cross-Platform AttributedTextView
-//it has been remove to make it modular
 
 // MARK: - HTML Escaping Extension
 extension String {
@@ -444,7 +456,6 @@ func decodeWithCharset(data: Data, charset: String) -> String? {
     case "us-ascii", "ascii": encoding = .ascii
     case "windows-1252": encoding = .windowsCP1252
     default:
-        print("⚠️ Unknown charset: \(charset) → fallback to UTF-8")
         encoding = .utf8
     }
     return String(data: data, encoding: encoding)
@@ -452,7 +463,7 @@ func decodeWithCharset(data: Data, charset: String) -> String? {
 import AppKit
 
 extension View {
-    func openInWindow(title: String = "Email") {
+    func openInWindow(title: String = "Email", storeManager: StoreManager? = nil) {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 900, height: 700),
             styleMask: [.titled, .closable, .resizable],
@@ -461,8 +472,12 @@ extension View {
         )
         window.title = title
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: self)
+        if let storeManager {
+            window.contentView = NSHostingView(rootView: self.environmentObject(storeManager))
+        } else {
+            window.contentView = NSHostingView(rootView: self)
+        }
         window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
     }
 }

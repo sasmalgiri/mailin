@@ -42,7 +42,7 @@ public class MIMEParser {
         let separator = rawEmail.contains("\r\n\r\n") ? "\r\n\r\n" : "\n\n"
         let components = rawEmail.components(separatedBy: separator)
         guard components.count >= 2 else {
-            print("❌ Failed to split headers/body")
+            print("Failed to split headers/body")
             return (headers: [:], parts: [])
         }
         let headerBlock = components[0]

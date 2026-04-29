@@ -33,7 +33,10 @@ public struct QuotedPrintableDecoder {
                 if let ascii = char.asciiValue {
                     output.append(ascii)
                 } else {
-                    let scalar = char.unicodeScalars.first!
+                    guard let scalar = char.unicodeScalars.first else {
+                        i = cleaned.index(after: i)
+                        continue
+                    }
                     var buffer = [UInt8]()
                     var s = scalar.value
                     while s > 0 {

@@ -12,100 +12,105 @@ struct AboutView: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            // App Icon & Info
-            VStack(spacing: 16) {
+            VStack(spacing: Spacing.medium) {
                 Image(nsImage: NSApplication.shared.applicationIconImage)
                     .resizable()
                     .scaledToFit()
                     .frame(width: 128, height: 128)
-                    .shadow(radius: 10)
-                
-                VStack(spacing: 4) {
+                    .shadow(color: .black.opacity(0.1), radius: Shadows.large.radius, y: Shadows.large.y)
+
+                VStack(spacing: Spacing.xxSmall) {
                     Text("mailin")
-                        .font(.system(size: 32, weight: .bold, design: .rounded))
-                    
+                        .font(Typography.largeTitle)
+
                     Text("Email Archive Analyzer")
-                        .font(.headline)
-                        .foregroundColor(.secondary)
+                        .font(Typography.headline)
+                        .foregroundColor(AppColors.secondary)
                 }
-                
+
                 if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
                    let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String {
                     Text("Version \(version) (\(build))")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        .font(Typography.caption1)
+                        .foregroundColor(AppColors.secondary)
                 }
             }
-            .padding(.top, 40)
-            .padding(.bottom, 30)
-            
+            .padding(.top, Spacing.xLarge)
+            .padding(.bottom, Spacing.large)
+
             Divider()
-            
-            // Features
+
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: Spacing.medium) {
+                    featureRow(
+                        icon: "gift.fill",
+                        title: "Free to Try, Flexible Upgrade",
+                        description: "Monthly, yearly, or lifetime — choose the plan that works for you."
+                    )
+                    featureRow(
+                        icon: "lock.shield.fill",
+                        title: "Complete Privacy",
+                        description: "Zero data collection. Zero cloud. Everything stays on your device."
+                    )
+                    featureRow(
+                        icon: "apple.logo",
+                        title: "Native Apple Technology",
+                        description: "Built with SwiftUI and on-device AI. Fast, fluid, and truly native."
+                    )
+                    featureRow(
+                        icon: "brain.head.profile",
+                        title: "On-Device AI",
+                        description: "Sentiment analysis, topics, entities, and language detection — all offline."
+                    )
                     featureRow(
                         icon: "envelope.open.fill",
                         title: "Advanced Parsing",
-                        description: "RFC822 & MIME compliant email parser"
+                        description: "RFC 822 & MIME compliant. Google Takeout, Thunderbird, Apple Mail ready."
                     )
-                    
                     featureRow(
-                        icon: "chart.line.uptrend.xyaxis",
+                        icon: "chart.bar.fill",
                         title: "Reply Analytics",
-                        description: "Track communication patterns and frequency"
-                    )
-                    
-                    featureRow(
-                        icon: "brain.head.profile",
-                        title: "AI Assistant",
-                        description: "Natural language email analysis"
-                    )
-                    
-                    featureRow(
-                        icon: "shield.checkered",
-                        title: "Privacy First",
-                        description: "All processing happens locally on your device"
+                        description: "Track communication patterns, reply frequency, and conversation threads."
                     )
                 }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 20)
+                .padding(.horizontal, Spacing.large)
+                .padding(.vertical, Spacing.medium)
             }
-            
+
             Divider()
-            
-            // Footer
-            VStack(spacing: 12) {
+
+            VStack(spacing: Spacing.small) {
                 Button("Contact Support") {
-                    openURL(URL(string: "mailto:sasmalgiri@gmail.com")!)
+                    guard let url = URL(string: "mailto:sasmalgiri@gmail.com") else { return }
+                    openURL(url)
                 }
                 .buttonStyle(.link)
 
-                Text("© 2025 mailin. All rights reserved.")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+                Text("\u{00A9} 2025 mailin. All rights reserved.")
+                    .font(Typography.caption2)
+                    .foregroundColor(AppColors.secondary)
             }
-            .padding(.vertical, 20)
+            .padding(.vertical, Spacing.medium)
         }
         .frame(width: 400, height: 500)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(AppColors.backgroundPrimary)
     }
-    
-    // MARK: - Feature Row
+
     private func featureRow(icon: String, title: String, description: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: Spacing.small) {
             Image(systemName: icon)
-                .font(.title2)
-                .foregroundStyle(.blue)
+                .font(Typography.title2)
+                .foregroundStyle(
+                    .linearGradient(colors: [.blue, .purple], startPoint: .topLeading, endPoint: .bottomTrailing)
+                )
                 .frame(width: 32)
-            
-            VStack(alignment: .leading, spacing: 4) {
+
+            VStack(alignment: .leading, spacing: Spacing.xxSmall) {
                 Text(title)
-                    .font(.headline)
-                
+                    .font(Typography.headline)
                 Text(description)
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
+                    .font(Typography.subheadline)
+                    .foregroundColor(AppColors.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }

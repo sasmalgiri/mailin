@@ -116,7 +116,7 @@ struct EmailChunker {
             if valid {
                 return attachment.filename
             } else {
-                print("⚠️ Skipped invalid attachment: \(attachment.filename)")
+                print("Skipped invalid attachment: \(attachment.filename)")
                 return nil
             }
         }

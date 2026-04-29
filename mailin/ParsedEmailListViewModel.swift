@@ -26,6 +26,9 @@ class ParsedEmailListViewModel: ObservableObject {
         didSet { applyFilters() }
     }
 
+    // MARK: - Premium
+    var isPremiumUser: Bool = false
+
     // MARK: - Data
     @Published var allEmails: [MBOXParser.RawEmail] = []
     @Published var filteredEmails: [MBOXParser.RawEmail] = []
@@ -104,13 +107,17 @@ class ParsedEmailListViewModel: ObservableObject {
         applyFilters()
     }
 
-    // MARK: - Apply Filters (with minReplyCount logic)
+    // MARK: - Apply Filters (with minReplyCount logic + free limit)
     func applyFilters() {
-        filteredEmails = allEmails.filter { email in
+        var result = allEmails.filter { email in
             let fromEmail = email.headers["From"] ?? ""
             let replyCount = replyCountPerSender[fromEmail] ?? 0
             return filterMatch(email) && replyCount >= minReplyCount
         }
+        if !isPremiumUser && result.count > StoreManager.freeEmailLimit {
+            result = Array(result.prefix(StoreManager.freeEmailLimit))
+        }
+        filteredEmails = result
         sortFilteredEmails()
     }
 
@@ -192,9 +199,9 @@ class ParsedEmailListViewModel: ObservableObject {
         case subjectAsc = "Subject A-Z"
         var label: String {
             switch self {
-            case .dateAsc: return "🕒 Date ↑"
-            case .dateDesc: return "🕒 Date ↓"
-            case .subjectAsc: return "🔤 Subject A-Z"
+            case .dateAsc: return "Date (Oldest)"
+            case .dateDesc: return "Date (Newest)"
+            case .subjectAsc: return "Subject A-Z"
             }
         }
     }

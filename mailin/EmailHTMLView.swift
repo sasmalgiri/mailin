@@ -11,16 +11,17 @@ struct EmailHTMLView: View {
                     .frame(minHeight: minHeight, maxHeight: .infinity)
                     .padding()
             } else {
-                Text("⚠️ Unable to render HTML.")
+                Label("Unable to render HTML.", systemImage: "exclamationmark.triangle")
+                    .foregroundColor(AppColors.secondary)
                     .padding()
             }
         }
         .frame(minHeight: minHeight)
-        .background(Color(nsColor: .textBackgroundColor))
-        .cornerRadius(8)
+        .background(AppColors.backgroundTertiary)
+        .cornerRadius(CornerRadius.medium)
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.gray.opacity(0.2), lineWidth: 1)
+            RoundedRectangle(cornerRadius: CornerRadius.medium)
+                .stroke(AppColors.separatorLight, lineWidth: 1)
         )
     }
 

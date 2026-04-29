@@ -28,14 +28,14 @@ class ContentViewModel: ObservableObject {
     func parseSelectedFiles(_ urls: [URL]) {
         guard !senderEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             DispatchQueue.main.async {
-                self.statusMessage = "❌ Please enter your email address before selecting files."
+                self.statusMessage = "Please enter your email address before selecting files."
                 self.statusColor = .red
             }
             return
         }
 
         DispatchQueue.main.async {
-            self.statusMessage = "⏳ Parsing files..."
+            self.statusMessage = "Parsing files..."
             self.statusColor = .blue
             self.isParsed = false
             self.selectedFiles = urls
@@ -67,7 +67,7 @@ class ContentViewModel: ObservableObject {
                     }
                     allEmails.append(contentsOf: withSource)
                 } catch {
-                    print("❌ Error parsing \(fileURL.lastPathComponent): \(error)")
+                    print("Error parsing \(fileURL.lastPathComponent): \(error)")
                 }
                 // Ensure we show 100% for each file after done
                 DispatchQueue.main.async {
@@ -78,7 +78,7 @@ class ContentViewModel: ObservableObject {
 
             DispatchQueue.main.async {
                 guard !allEmails.isEmpty else {
-                    self.statusMessage = "⚠️ No emails found. Make sure your file is a valid .mbox (from Gmail Takeout, Thunderbird, etc.) or .eml file."
+                    self.statusMessage = "No emails found. Make sure your file is a valid .mbox (from Gmail Takeout, Thunderbird, etc.) or .eml file."
                     self.statusColor = .orange
                     self.isParsed = false
                     self.loadingProgress = 0.0
@@ -89,7 +89,7 @@ class ContentViewModel: ObservableObject {
                 self.parsedEmails = self.annotate(allEmails)
                 self.isParsed = true
                 self.updateMetadataDisplay()
-                self.statusMessage = "✅ Parsed \(self.parsedEmails.count) emails from \(urls.count) file(s)."
+                self.statusMessage = "Parsed \(self.parsedEmails.count) emails from \(urls.count) file(s)."
                 self.statusColor = .green
                 self.loadingProgress = 1.0
                 self.loadingText = "Done!"
@@ -103,7 +103,7 @@ class ContentViewModel: ObservableObject {
     // MARK: - Metadata/AI
     func autoDetectMetadata() {
         guard isParsed else {
-            statusMessage = "⚠️ Parse a file first."
+            statusMessage = "Parse a file first."
             statusColor = .orange
             return
         }
@@ -115,35 +115,35 @@ class ContentViewModel: ObservableObject {
         subjectList = sortedSubjects.map { $0.key }
         let dates = parsedEmails.compactMap { MBOXParser.parseDate($0.headers["Date"]) }
         detectedDateRange = (dates.min(), dates.max())
-        statusMessage = "🧠 Metadata detected: \(subjectList.count) subjects."
+        statusMessage = "Metadata detected: \(subjectList.count) subjects."
         statusColor = .blue
     }
 
     func runAIQuery() {
         guard isParsed else {
-            aiResponse = "⚠️ Please parse a file first."
+            aiResponse = "Please parse a file first."
             return
         }
         let lower = aiPrompt.lowercased()
         if lower.contains("how many") && lower.contains("sent") {
             let count = parsedEmails.filter { $0.messageType == "sent" }.count
-            aiResponse = "📤 Total sent emails: \(count)"
+            aiResponse = "Total sent emails: \(count)"
         } else if lower.contains("how many") && lower.contains("received") {
             let count = parsedEmails.filter { $0.messageType == "received" }.count
-            aiResponse = "📥 Total received emails: \(count)"
+            aiResponse = "Total received emails: \(count)"
         } else if lower.contains("top subject") {
             let freq = Dictionary(grouping: parsedEmails.map { $0.headers["Subject"] ?? "(No Subject)" }, by: { $0 })
                 .mapValues { $0.count }
                 .sorted { $0.value > $1.value }
-            aiResponse = "🏷 Top Subjects:\n" + freq.prefix(5).map { "\($0.key): \($0.value)" }.joined(separator: "\n")
+            aiResponse = "Top Subjects:\n" + freq.prefix(5).map { "\($0.key): \($0.value)" }.joined(separator: "\n")
         } else if lower.contains("reply frequency") {
             let freq = replyFrequency(for: senderEmail)
             let summary = freq.sorted { $0.value > $1.value }.prefix(5)
                 .map { "\($0.key): \($0.value)" }
                 .joined(separator: "\n")
-            aiResponse = "📈 Top Reply Recipients:\n" + summary
+            aiResponse = "Top Reply Recipients:\n" + summary
         } else {
-            aiResponse = "🤔 Sorry, I didn't understand that. Try asking about 'sent emails', 'received emails', 'top subjects', or 'reply frequency'."
+            aiResponse = "Sorry, I didn't understand that. Try asking about 'sent emails', 'received emails', 'top subjects', or 'reply frequency'."
         }
     }
 
@@ -204,7 +204,7 @@ class ContentViewModel: ObservableObject {
         self.isParsed = !emails.isEmpty
         if isParsed {
             updateMetadataDisplay()
-            statusMessage = "✅ Restored \(emails.count) emails from previous session."
+            statusMessage = "Restored \(emails.count) emails from previous session."
             statusColor = .green
             NotificationCenter.default.post(name: .parsingFinished, object: nil)
         }
@@ -234,7 +234,7 @@ class ContentViewModel: ObservableObject {
             do {
                 try FileUtils.writeData(Data(emlContent.utf8), to: fileURL.path)
             } catch {
-                print("❌ Failed to write \(filename): \(error)")
+                print("Failed to write \(filename): \(error)")
                 // Optionally log error here with FileUtilsAudit or similar
             }
         }
