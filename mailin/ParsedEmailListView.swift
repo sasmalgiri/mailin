@@ -7,7 +7,12 @@ struct ParsedEmailListView: View {
         case stats
         case rawSource(String)
 
-        var id: UUID? { nil }
+        var id: String {
+            switch self {
+            case .stats: return "stats"
+            case .rawSource: return "rawSource"
+            }
+        }
     }
 
    

@@ -3,12 +3,11 @@ import UniformTypeIdentifiers
 import AppKit
 
 struct ContentView: View {
+    @EnvironmentObject var appState: AppStateManager
     @StateObject private var viewModel = ContentViewModel()
     @StateObject private var modelVM: ParsedEmailListViewModel
     @State private var showSpinner = false
     @State private var parseFailed = false
-  
-
 
     init() {
         let vm = ContentViewModel()
@@ -40,13 +39,14 @@ struct ContentView: View {
             }
         }
         .onChange(of: modelVM.isParsed) { _, newValue in
-            if newValue { modelVM.applyFilters() }
+            if newValue {
+                modelVM.applyFilters()
+                appState.hasParsedEmails = true
+                appState.hasFilteredEmails = !modelVM.filteredEmails.isEmpty
+            }
         }
-        .onChange(of: modelVM.isParsing) { _, newValue in
-            print("📦 Parsing started: \(newValue)")
-        }
-        .onChange(of: parseFailed) { _, newValue in
-            print("❌ Parse failed: \(newValue)")
+        .onChange(of: modelVM.filteredEmails.count) { _, _ in
+            appState.hasFilteredEmails = !modelVM.filteredEmails.isEmpty
         }
         .onAppear {
             NotificationCenter.default.addObserver(
@@ -56,9 +56,18 @@ struct ContentView: View {
             ) { _ in
                 modelVM.loadFromContentViewModel()
                 showSpinner = false
+                EmailPersistence.save(emails: viewModel.parsedEmails, senderEmail: viewModel.senderEmail)
+            }
+            let restored = EmailPersistence.load()
+            if !restored.emails.isEmpty {
+                viewModel.senderEmail = restored.senderEmail
+                viewModel.restoreEmails(restored.emails)
+                modelVM.loadFromContentViewModel()
             }
         }
-        
+        .sheet(isPresented: $appState.showAIAssistant) {
+            AIAssistantView(emails: modelVM.filteredEmails.isEmpty ? modelVM.allEmails : modelVM.filteredEmails)
+        }
     }
 
     // MARK: - Layout

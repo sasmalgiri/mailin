@@ -198,6 +198,18 @@ class ContentViewModel: ObservableObject {
         return counts
     }
 
+    // MARK: - Restore persisted emails
+    func restoreEmails(_ emails: [MBOXParser.RawEmail]) {
+        self.parsedEmails = emails
+        self.isParsed = !emails.isEmpty
+        if isParsed {
+            updateMetadataDisplay()
+            statusMessage = "✅ Restored \(emails.count) emails from previous session."
+            statusColor = .green
+            NotificationCenter.default.post(name: .parsingFinished, object: nil)
+        }
+    }
+
     // MARK: - Export as EML (raw string)
     func exportEmailAsEML(_ email: MBOXParser.RawEmail) -> String {
         var result = ""
