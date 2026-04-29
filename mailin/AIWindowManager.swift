@@ -168,28 +168,42 @@ struct AskAIView: View {
 
     private func simulateQA(question: String, emails: [MBOXParser.RawEmail]) -> String {
         if emails.isEmpty { return "No emails to analyze." }
-        let lowerQ = question.lowercased()
+        let lower = question.lowercased()
 
-        if lowerQ.contains("attachment") {
+        if lower.contains("sentiment") || lower.contains("tone") || lower.contains("mood") {
+            let result = EmailNLPEngine.averageSentiment(of: emails)
+            return "Sentiment: \(result.label) (score: \(String(format: "%.2f", result.average)))\nPositive: \(result.positive) | Neutral: \(result.neutral) | Negative: \(result.negative)"
+        }
+
+        if lower.contains("topic") || lower.contains("keyword") || lower.contains("discuss") {
+            let topics = EmailNLPEngine.extractTopics(from: emails, limit: 8)
+            if topics.isEmpty { return "Not enough text to extract topics." }
+            return "Top topics:\n" + topics.enumerated().map { "\($0.offset + 1). \($0.element.word) (\($0.element.count)x)" }.joined(separator: "\n")
+        }
+
+        if lower.contains("people") || lower.contains("entities") || lower.contains("names") {
+            let entities = EmailNLPEngine.extractEntities(from: emails, limit: 8)
+            if entities.isEmpty { return "No named entities found." }
+            return "Key entities:\n" + entities.map { "\($0.name) (\($0.type)) - \($0.count)x" }.joined(separator: "\n")
+        }
+
+        if lower.contains("language") {
+            let langs = EmailNLPEngine.detectLanguages(in: emails)
+            if langs.isEmpty { return "Could not detect languages." }
+            return "Languages:\n" + langs.map { "\($0.language): \($0.count) emails (\(String(format: "%.0f", $0.percentage))%)" }.joined(separator: "\n")
+        }
+
+        if lower.contains("attachment") {
             let top = emails.max { $0.attachments.count < $1.attachments.count }
-            return """
-            Top email with most attachments:
-            Subject: \(top?.headers["Subject"] ?? "(No Subject)")
-            From: \(top?.headers["From"] ?? "-")
-            Attachments: \(top?.attachments.count ?? 0)
-            """
+            return "Top email with most attachments:\nSubject: \(top?.headers["Subject"] ?? "(No Subject)")\nFrom: \(top?.headers["From"] ?? "-")\nAttachments: \(top?.attachments.count ?? 0)"
         }
 
-        if lowerQ.contains("date") {
-            let dates = emails.compactMap { $0.headers["Date"] }
-            return "Sample of parsed email dates:\n" + dates.prefix(5).joined(separator: "\n")
+        if lower.contains("summary") || lower.contains("overview") || lower.contains("analyze") {
+            let sentiment = EmailNLPEngine.averageSentiment(of: emails)
+            let topics = EmailNLPEngine.extractTopics(from: emails, limit: 5)
+            return "Summary of \(emails.count) emails:\nTone: \(sentiment.label)\nTopics: \(topics.map(\.word).joined(separator: ", "))"
         }
 
-        return """
-        Demo answer for:
-        \"\(question)\"
-
-        (Tip: Integrate your Core ML QA here!)
-        """
+        return "Try asking about: sentiment, topics, people mentioned, languages, attachments, or summary."
     }
 }
