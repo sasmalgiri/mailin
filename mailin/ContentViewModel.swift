@@ -78,7 +78,7 @@ class ContentViewModel: ObservableObject {
 
             DispatchQueue.main.async {
                 guard !allEmails.isEmpty else {
-                    self.statusMessage = "⚠️ No emails parsed. Please check your files."
+                    self.statusMessage = "⚠️ No emails found. Make sure your file is a valid .mbox (from Gmail Takeout, Thunderbird, etc.) or .eml file."
                     self.statusColor = .orange
                     self.isParsed = false
                     self.loadingProgress = 0.0

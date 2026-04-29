@@ -248,15 +248,55 @@ struct ContentView: View {
     }
 
     private var emptyPlaceholder: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 24) {
             Spacer()
-            Image(systemName: "envelope.open")
-                .font(.system(size: 50))
-                .foregroundColor(.gray)
-            Text("📬 Upload a .mbox file to begin.")
-                .foregroundColor(.gray)
-                .font(.headline)
+
+            Image(nsImage: NSApplication.shared.applicationIconImage)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 80, height: 80)
+
+            Text("Welcome to mailin")
+                .font(.title)
+                .fontWeight(.bold)
+
+            Text("Analyze your email archives with AI-powered insights")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+
+            VStack(alignment: .leading, spacing: 12) {
+                onboardingStep(number: "1", text: "Enter your email address in the sidebar")
+                onboardingStep(number: "2", text: "Select a .mbox or .eml file to import")
+                onboardingStep(number: "3", text: "Explore filters, analytics, and AI assistant")
+            }
+            .padding(20)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .cornerRadius(12)
+
+            HStack(spacing: 16) {
+                Label("100% Offline", systemImage: "lock.shield")
+                Label("On-Device AI", systemImage: "brain.head.profile")
+                Label("No Data Collected", systemImage: "eye.slash")
+            }
+            .font(.caption)
+            .foregroundColor(.secondary)
+
             Spacer()
+        }
+        .frame(maxWidth: 450)
+    }
+
+    private func onboardingStep(number: String, text: String) -> some View {
+        HStack(spacing: 12) {
+            Text(number)
+                .font(.caption)
+                .fontWeight(.bold)
+                .foregroundColor(.white)
+                .frame(width: 22, height: 22)
+                .background(Color.accentColor)
+                .clipShape(Circle())
+            Text(text)
+                .font(.callout)
         }
     }
 

@@ -14,6 +14,7 @@ struct SettingsView: View {
     @AppStorage("maxAttachmentSize") private var maxAttachmentSize = 250.0
     @AppStorage("enableAIFeatures") private var enableAIFeatures = true
     @AppStorage("exportFormat") private var exportFormat = "EML"
+    @State private var savedDataCleared = false
     
     var body: some View {
         TabView {
@@ -158,21 +159,28 @@ struct SettingsView: View {
             Section {
                 Toggle("Enable AI features", isOn: $enableAIFeatures)
                     .help("Show AI assistant and analysis features")
-                
-                Button("Clear AI cache") {
-                    // Clear AI cache
-                }
-                .disabled(true)
             } header: {
                 Text("AI Assistant")
                     .font(.headline)
             }
-            
+
             Section {
+                Button("Clear saved email data") {
+                    EmailPersistence.clear()
+                    savedDataCleared = true
+                }
+                .disabled(savedDataCleared || !EmailPersistence.hasSavedData)
+
+                if savedDataCleared {
+                    Text("Saved data cleared. Restart the app to start fresh.")
+                        .font(.caption)
+                        .foregroundColor(.green)
+                }
+
                 Button("Clear all temporary files") {
                     clearTempFiles()
                 }
-                
+
                 Button("Reset all settings") {
                     resetSettings()
                 }
