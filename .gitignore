@@ -1,0 +1,38 @@
+# Xcode
+build/
+DerivedData/
+*.xcuserdata/
+*.xcworkspace/xcuserdata/
+xcuserdata/
+
+# macOS
+.DS_Store
+*.swp
+*~
+._*
+
+# Swift Package Manager
+.build/
+Packages/
+Package.resolved
+
+# Python (development artifacts)
+*.pyc
+__pycache__/
+*.egg-info/
+venv/
+.env/
+
+# ML Models (too large for git)
+*.h5
+*.pb
+*.mlmodel
+*.mlpackage/
+
+# IDE
+.idea/
+*.code-workspace
+.vscode/
+
+# Archives
+*.xcarchive

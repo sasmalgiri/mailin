@@ -1,0 +1,88 @@
+====================================
+MAILIN - APP STORE LISTING METADATA
+====================================
+
+APP NAME: mailin
+
+SUBTITLE: Email Archive Analyzer
+
+CATEGORY: Productivity
+
+PRICE: (Set your price on App Store Connect)
+
+BUNDLE ID: com.ecosanskriti.mailin
+
+------------------------------------
+DESCRIPTION
+------------------------------------
+
+mailin is a powerful, privacy-first email archive analyzer for macOS. Import your .mbox or .eml email archives and instantly gain insights into your communication patterns.
+
+KEY FEATURES:
+
+- Advanced Email Parsing: Full RFC 822 and MIME compliant parser that handles complex multipart messages, nested attachments, and encoded content.
+
+- Smart Filtering: Filter emails by sender, recipient, date range, message type (sent/received), and more. Find exactly what you're looking for in seconds.
+
+- Reply Analytics: Track your communication patterns with detailed reply frequency statistics and conversation threading.
+
+- AI Email Assistant: Ask natural language questions about your email archive — "Who did I email the most?" "What are my most common subjects?"
+
+- Attachment Management: View, save, and open email attachments directly from the analyzer. Supports PDF, images, documents, and more.
+
+- Privacy First: All processing happens entirely on your Mac. No data is sent to any server. Your emails stay on your device.
+
+- Export Capabilities: Export filtered emails in EML, JSON, or plain text formats for backup or further analysis.
+
+Perfect for professionals, researchers, legal teams, and anyone who needs to analyze email archives efficiently.
+
+------------------------------------
+KEYWORDS (100 characters max)
+------------------------------------
+
+email,mbox,eml,archive,analyzer,parser,mail,export,filter,search,privacy,MIME,attachment,analytics
+
+------------------------------------
+WHAT'S NEW (Version 1.0)
+------------------------------------
+
+Initial release of mailin — your personal email archive analyzer.
+
+------------------------------------
+PROMOTIONAL TEXT (170 characters max)
+------------------------------------
+
+Analyze your email archives with powerful parsing, smart filtering, reply analytics, and AI insights. 100% private — all processing happens on your Mac.
+
+------------------------------------
+SUPPORT URL
+------------------------------------
+
+mailto:sasmalgiri@gmail.com
+
+------------------------------------
+COPYRIGHT
+------------------------------------
+
+2025 mailin
+
+------------------------------------
+AGE RATING
+------------------------------------
+
+4+ (No objectionable content)
+
+------------------------------------
+SCREENSHOTS NEEDED
+------------------------------------
+
+You need screenshots for Mac. Take them at these steps:
+1. Open the app and show the main window with the file selection screen
+2. Show the app with emails loaded and the filter sidebar visible
+3. Show an email detail view with body content
+4. Show the AI Assistant in action
+5. Show the reply statistics or analytics view
+
+Use Cmd+Shift+5 to capture screenshots.
+Mac App Store requires at least 1 screenshot.
+Recommended: 3-5 screenshots at 2560x1600 or 1280x800 resolution.
