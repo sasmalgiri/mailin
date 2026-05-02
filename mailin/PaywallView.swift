@@ -26,7 +26,7 @@ struct PaywallView: View {
                 .padding(Spacing.large)
             }
         }
-        .frame(minWidth: 520, minHeight: 620)
+        .frame(minWidth: 400, idealWidth: 540, minHeight: 500, idealHeight: 650)
         .background(AppColors.backgroundPrimary)
         .onAppear {
             selectedProduct = store.yearlyProduct
@@ -44,10 +44,10 @@ struct PaywallView: View {
                 )
 
             Text("Unlock mailin Pro")
-                .font(Typography.title1)
+                .font(.system(size: 26, weight: .bold, design: .rounded))
 
-            Text("One-time purchase or flexible subscription")
-                .font(Typography.subheadline)
+            Text("Unlimited emails, AI insights, exports & more")
+                .font(.system(size: 14))
                 .foregroundColor(AppColors.secondary)
 
             HStack(spacing: Spacing.medium) {
@@ -56,6 +56,10 @@ struct PaywallView: View {
             }
             .font(Typography.caption1)
             .foregroundColor(AppColors.secondary)
+
+            Text("Choose a one-time purchase or flexible subscription below")
+                .font(Typography.caption2)
+                .foregroundColor(AppColors.secondary.opacity(0.7))
         }
         .padding(.vertical, Spacing.large)
     }
@@ -142,9 +146,41 @@ struct PaywallView: View {
 
             if !store.products.isEmpty {
                 purchaseButton
+            } else if let loadError = store.productLoadError {
+                VStack(spacing: Spacing.small) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.title2)
+                        .foregroundColor(AppColors.warning)
+                    Text(loadError)
+                        .font(Typography.caption1)
+                        .foregroundColor(AppColors.secondary)
+                        .multilineTextAlignment(.center)
+                    Button("Retry") {
+                        Task { await store.loadProducts() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
+                .padding(Spacing.medium)
+                .frame(maxWidth: .infinity)
+                .background(AppColors.backgroundSecondary)
+                .cornerRadius(CornerRadius.large)
             } else {
-                ProgressView("Loading plans...")
-                    .padding()
+                VStack(spacing: Spacing.small) {
+                    ProgressView()
+                        .scaleEffect(0.9)
+                    Text("Loading available plans from the App Store...")
+                        .font(Typography.caption1)
+                        .foregroundColor(AppColors.secondary)
+                    Text("Make sure you're signed in to the App Store and have an internet connection.")
+                        .font(Typography.caption2)
+                        .foregroundColor(AppColors.secondary.opacity(0.7))
+                        .multilineTextAlignment(.center)
+                }
+                .padding(Spacing.medium)
+                .frame(maxWidth: .infinity)
+                .background(AppColors.backgroundSecondary)
+                .cornerRadius(CornerRadius.large)
             }
         }
     }
@@ -215,7 +251,7 @@ struct PaywallView: View {
                     try await store.purchase(product)
                     if store.isPremium { dismiss() }
                 } catch {
-                    errorMessage = "Purchase failed. Please try again."
+                    errorMessage = "Purchase failed: \(error.localizedDescription)"
                 }
             }
         } label: {
@@ -255,16 +291,20 @@ struct PaywallView: View {
 
     private var legalText: some View {
         VStack(spacing: Spacing.xxSmall) {
-            Text("Subscriptions auto-renew until cancelled. Manage subscriptions in System Settings. Lifetime purchase is a one-time payment with no expiration.")
+            Text("Payment will be charged to your Apple ID account at confirmation of purchase. Subscriptions automatically renew unless cancelled at least 24 hours before the end of the current period. Your account will be charged for renewal within 24 hours prior to the end of the current period. You can manage and cancel subscriptions in your Account Settings. Lifetime purchase is a one-time payment with no expiration.")
                 .font(Typography.caption2)
                 .foregroundColor(AppColors.secondary)
                 .multilineTextAlignment(.center)
 
             HStack(spacing: Spacing.medium) {
-                Link("Terms of Use", destination: URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!)
-                    .font(Typography.caption2)
-                Link("Privacy Policy", destination: URL(string: "mailto:sasmalgiri@gmail.com")!)
-                    .font(Typography.caption2)
+                if let termsURL = URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/") {
+                    Link("Terms of Use", destination: termsURL)
+                        .font(Typography.caption2)
+                }
+                if let privacyURL = URL(string: "https://sasmalgiri.github.io/mailin/privacy") {
+                    Link("Privacy Policy", destination: privacyURL)
+                        .font(Typography.caption2)
+                }
             }
         }
         .padding(.top, Spacing.xSmall)

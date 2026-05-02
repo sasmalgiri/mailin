@@ -1,7 +1,10 @@
 import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
+import zlib
+import CryptoKit
 
+@MainActor
 class ContentViewModel: ObservableObject {
     @Published var senderEmail: String = ""
     @Published var selectedFiles: [URL] = []
@@ -13,53 +16,197 @@ class ContentViewModel: ObservableObject {
     @Published var subjectList: [String] = []
     @Published var detectedDateRange: (Date?, Date?) = (nil, nil)
 
-    // --- For loading spinner/progress UI ---
-    @Published var loadingProgress: Double = 0.0  // 0.0...1.0
+    @Published var loadingProgress: Double = 0.0
     @Published var loadingText: String = ""
+    @Published var parseErrors: [String] = []
+    @Published var memoryUsageMB: Double = 0.0
+    @Published var duplicatesRemoved: Int = 0
 
-    private(set) var parsedEmails: [MBOXParser.RawEmail] = []
+    @Published private(set) var parsedEmails: [MBOXParser.RawEmail] = []
     private(set) var metadata: [String: Any] = [:]
+    private var isParsing = false
+    private var memoryTimer: Timer?
+    private var pendingTempDirs: [URL] = []
 
     init() {
         statusMessage = "Please enter your sender email to begin."
     }
 
-    // MARK: - MBOX Parsing with fine-grained progress
-    func parseSelectedFiles(_ urls: [URL]) {
-        guard !senderEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            DispatchQueue.main.async {
-                self.statusMessage = "Please enter your email address before selecting files."
-                self.statusColor = .red
+    private static let streamingThreshold: Int64 = 500_000_000 // 500MB
+
+    private func fileSize(at url: URL) -> Int64 {
+        (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
+    }
+
+    static func currentMemoryUsageMB() -> Double {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
             }
+        }
+        guard result == KERN_SUCCESS else { return 0 }
+        return Double(info.resident_size) / (1024.0 * 1024.0)
+    }
+
+    private func startMemoryMonitoring() {
+        memoryTimer?.invalidate()
+        memoryTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.memoryUsageMB = Self.currentMemoryUsageMB()
+        }
+    }
+
+    private func stopMemoryMonitoring() {
+        memoryTimer?.invalidate()
+        memoryTimer = nil
+    }
+
+    // MARK: - Zip Import Support (sandbox-safe, no Process)
+    func extractMailFilesFromZip(at zipURL: URL) -> [URL] {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("mailin_zip_\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        pendingTempDirs.append(tempDir)
+
+        guard let archive = try? Data(contentsOf: zipURL) else { return [] }
+
+        var mailFiles: [URL] = []
+        var offset = 0
+        let bytes = [UInt8](archive)
+
+        while offset + 30 <= bytes.count {
+            let sig = UInt32(bytes[offset]) | UInt32(bytes[offset+1]) << 8 | UInt32(bytes[offset+2]) << 16 | UInt32(bytes[offset+3]) << 24
+            guard sig == 0x04034b50 else { break }
+
+            let method = UInt16(bytes[offset+8]) | UInt16(bytes[offset+9]) << 8
+            let compressedSize = Int(UInt32(bytes[offset+18]) | UInt32(bytes[offset+19]) << 8 | UInt32(bytes[offset+20]) << 16 | UInt32(bytes[offset+21]) << 24)
+            let uncompressedSize = Int(UInt32(bytes[offset+22]) | UInt32(bytes[offset+23]) << 8 | UInt32(bytes[offset+24]) << 16 | UInt32(bytes[offset+25]) << 24)
+            let nameLen = Int(UInt16(bytes[offset+26]) | UInt16(bytes[offset+27]) << 8)
+            let extraLen = Int(UInt16(bytes[offset+28]) | UInt16(bytes[offset+29]) << 8)
+
+            let nameStart = offset + 30
+            guard nameStart + nameLen <= bytes.count else { break }
+            let nameData = Data(bytes[nameStart..<nameStart+nameLen])
+            let name = String(data: nameData, encoding: .utf8) ?? ""
+
+            let dataStart = nameStart + nameLen + extraLen
+            guard dataStart + compressedSize <= bytes.count else { break }
+
+            let ext = (name as NSString).pathExtension.lowercased()
+            if (ext == "mbox" || ext == "eml") && !name.hasSuffix("/") {
+                let compressedData = Data(bytes[dataStart..<dataStart+compressedSize])
+                var fileData: Data?
+
+                if method == 0 {
+                    fileData = compressedData
+                } else if method == 8 {
+                    fileData = decompressDeflate(compressedData, uncompressedSize: uncompressedSize)
+                }
+
+                if let data = fileData {
+                    let safeName = name.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "..", with: "_")
+                    let destURL = tempDir.appendingPathComponent(safeName)
+                    try? data.write(to: destURL)
+                    mailFiles.append(destURL)
+                }
+            }
+
+            offset = dataStart + compressedSize
+        }
+
+        return mailFiles
+    }
+
+    private func decompressDeflate(_ data: Data, uncompressedSize: Int) -> Data? {
+        guard !data.isEmpty else { return nil }
+        let bufferSize = max(uncompressedSize, 65536)
+        var decompressed = Data(count: bufferSize)
+        let result = data.withUnsafeBytes { srcPtr -> Data? in
+            decompressed.withUnsafeMutableBytes { dstPtr -> Data? in
+                guard let srcBase = srcPtr.bindMemory(to: UInt8.self).baseAddress,
+                      let dstBase = dstPtr.bindMemory(to: UInt8.self).baseAddress else { return nil }
+                var stream = z_stream()
+                stream.next_in = UnsafeMutablePointer<UInt8>(mutating: srcBase)
+                stream.avail_in = UInt32(data.count)
+                stream.next_out = dstBase
+                stream.avail_out = UInt32(bufferSize)
+
+                guard inflateInit2_(&stream, -15, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK else { return nil }
+                defer { inflateEnd(&stream) }
+
+                let status = inflate(&stream, Z_FINISH)
+                guard status == Z_STREAM_END || status == Z_OK else { return nil }
+
+                return Data(dstPtr.prefix(Int(stream.total_out)))
+            }
+        }
+        return result
+    }
+
+// MARK: - MBOX Parsing with fine-grained progress
+    func parseSelectedFiles(_ urls: [URL]) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard !isParsing else { return }
+        guard !senderEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            statusMessage = "Please enter your email address before selecting files."
+            statusColor = .red
             return
         }
 
-        DispatchQueue.main.async {
-            self.statusMessage = "Parsing files..."
-            self.statusColor = .blue
-            self.isParsed = false
-            self.selectedFiles = urls
-            self.loadingProgress = 0.0
-            self.loadingText = "Initializing..."
-        }
-
+        statusMessage = "Parsing files..."
+        statusColor = .blue
+        isParsed = false
+        selectedFiles = urls
+        loadingProgress = 0.0
+        loadingText = "Initializing..."
+        isParsing = true
+        parseErrors = []
+        duplicatesRemoved = 0
+        startMemoryMonitoring()
+        let capturedSenderEmail = senderEmail
+        let forensicEnabled = UserDefaults.standard.bool(forKey: "forensicModeEnabled")
         DispatchQueue.global(qos: .userInitiated).async {
             var allEmails: [MBOXParser.RawEmail] = []
+            var errors: [String] = []
+            var fileHashes: [ForensicManager.SourceFileHash] = []
             let totalFiles = Double(urls.count)
             for (idx, fileURL) in urls.enumerated() {
+                if forensicEnabled {
+                    if let hash = ForensicManager.computeHashes(for: fileURL) {
+                        fileHashes.append(hash)
+                    }
+                }
                 do {
-                    // --- PER-EMAIL PROGRESS BLOCK (the magic!) ---
-                    let emails = try MBOXParser.parse(
-                        fileURL: fileURL,
-                        senderEmail: self.senderEmail,
-                        onProgress: { prog in
-                            DispatchQueue.main.async {
-                                // Nested progress: current file index + email progress
-                                self.loadingProgress = (Double(idx) + prog) / totalFiles
-                                self.loadingText = "Parsing \(fileURL.lastPathComponent): \(Int(prog * 100))%"
-                            }
+                    let useStreaming = self.fileSize(at: fileURL) > Self.streamingThreshold
+                    DispatchQueue.main.async {
+                        if useStreaming {
+                            self.loadingText = "Streaming \(fileURL.lastPathComponent)..."
                         }
-                    )
+                    }
+                    let emails: [MBOXParser.RawEmail]
+                    if useStreaming {
+                        emails = try MBOXParser.parseStreaming(
+                            fileURL: fileURL,
+                            senderEmail: capturedSenderEmail,
+                            onProgress: { prog in
+                                DispatchQueue.main.async {
+                                    self.loadingProgress = (Double(idx) + prog) / totalFiles
+                                    self.loadingText = "Streaming \(fileURL.lastPathComponent): \(Int(prog * 100))%"
+                                }
+                            }
+                        )
+                    } else {
+                        emails = try MBOXParser.parse(
+                            fileURL: fileURL,
+                            senderEmail: capturedSenderEmail,
+                            onProgress: { prog in
+                                DispatchQueue.main.async {
+                                    self.loadingProgress = (Double(idx) + prog) / totalFiles
+                                    self.loadingText = "Parsing \(fileURL.lastPathComponent): \(Int(prog * 100))%"
+                                }
+                            }
+                        )
+                    }
                     let withSource = emails.map { email -> MBOXParser.RawEmail in
                         var copy = email
                         copy.headers["sourceFile"] = fileURL.lastPathComponent
@@ -67,9 +214,8 @@ class ContentViewModel: ObservableObject {
                     }
                     allEmails.append(contentsOf: withSource)
                 } catch {
-                    print("Error parsing \(fileURL.lastPathComponent): \(error)")
+                    errors.append("\(fileURL.lastPathComponent): \(error.localizedDescription)")
                 }
-                // Ensure we show 100% for each file after done
                 DispatchQueue.main.async {
                     self.loadingText = "Parsed \(idx+1) of \(urls.count) file(s)..."
                     self.loadingProgress = min(1.0, Double(idx + 1) / totalFiles)
@@ -77,8 +223,17 @@ class ContentViewModel: ObservableObject {
             }
 
             DispatchQueue.main.async {
+                self.isParsing = false
+                self.stopMemoryMonitoring()
+                self.parseErrors = errors
+
                 guard !allEmails.isEmpty else {
-                    self.statusMessage = "No emails found. Make sure your file is a valid .mbox (from Gmail Takeout, Thunderbird, etc.) or .eml file."
+                    let fileNames = urls.map { $0.lastPathComponent }.joined(separator: ", ")
+                    if errors.isEmpty {
+                        self.statusMessage = "No emails found in \(fileNames). Make sure it's a valid .mbox (Gmail Takeout, Thunderbird, Apple Mail) or .eml file."
+                    } else {
+                        self.statusMessage = "Failed to parse \(fileNames): \(errors.first ?? "Unknown error"). Try a smaller file or check the format."
+                    }
                     self.statusColor = .orange
                     self.isParsed = false
                     self.loadingProgress = 0.0
@@ -86,20 +241,37 @@ class ContentViewModel: ObservableObject {
                     return
                 }
 
-                self.parsedEmails = self.annotate(allEmails)
+                for hash in fileHashes {
+                    ForensicManager.shared.registerFileHash(hash)
+                }
+
+                let beforeCount = allEmails.count
+                let deduplicated = Self.deduplicate(allEmails)
+                self.duplicatesRemoved = beforeCount - deduplicated.count
+                self.parsedEmails = self.annotate(deduplicated)
                 self.isParsed = true
                 self.updateMetadataDisplay()
-                self.statusMessage = "Parsed \(self.parsedEmails.count) emails from \(urls.count) file(s)."
-                self.statusColor = .green
+
+                if forensicEnabled {
+                    ForensicManager.shared.storeEmailHashes(self.parsedEmails)
+                }
+                ForensicManager.shared.logAction("Parse Complete", detail: "Parsed \(self.parsedEmails.count) emails from \(urls.count) file(s). \(self.duplicatesRemoved) duplicates removed.")
+                if errors.isEmpty {
+                    self.statusMessage = "Parsed \(self.parsedEmails.count) emails from \(urls.count) file(s)."
+                    self.statusColor = .green
+                } else {
+                    self.statusMessage = "Parsed \(self.parsedEmails.count) emails. \(errors.count) file(s) had errors."
+                    self.statusColor = .orange
+                }
                 self.loadingProgress = 1.0
                 self.loadingText = "Done!"
+                self.cleanupTempDirs()
 
                 NotificationCenter.default.post(name: .parsingFinished, object: nil)
             }
         }
     }
 
-    // ... (rest of your code is unchanged and correct) ...
     // MARK: - Metadata/AI
     func autoDetectMetadata() {
         guard isParsed else {
@@ -147,15 +319,56 @@ class ContentViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Smart Deduplication (exact + fuzzy)
+    private static func deduplicate(_ emails: [MBOXParser.RawEmail]) -> [MBOXParser.RawEmail] {
+        var seen = Set<String>()
+        var fuzzyIndex: [String: [Date]] = [:]
+        var result: [MBOXParser.RawEmail] = []
+
+        for (_, email) in emails.enumerated() {
+            let messageID = email.headers["Message-ID"] ?? email.headers["Message-Id"] ?? ""
+            if !messageID.isEmpty {
+                guard seen.insert(messageID).inserted else { continue }
+            } else {
+                let fingerprint = "\(email.headers["From"] ?? "")\(email.headers["Date"] ?? "")\(email.headers["Subject"] ?? "")"
+                guard seen.insert(fingerprint).inserted else { continue }
+            }
+
+            let subject = (email.headers["Subject"] ?? "").lowercased()
+                .replacingOccurrences(of: "re:", with: "").replacingOccurrences(of: "fwd:", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let from = (email.headers["From"] ?? "").lowercased()
+            let date = MBOXParser.parseDate(email.headers["Date"]) ?? .distantPast
+
+            let fuzzyKey = "\(subject)|\(from)"
+            let isDuplicate: Bool
+            if date == .distantPast {
+                isDuplicate = false
+            } else if let existingDates = fuzzyIndex[fuzzyKey] {
+                isDuplicate = existingDates.contains { abs($0.timeIntervalSince(date)) < 60 }
+            } else {
+                isDuplicate = false
+            }
+
+            guard !isDuplicate else { continue }
+            fuzzyIndex[fuzzyKey, default: []].append(date)
+            result.append(email)
+        }
+        return result
+    }
+
     // MARK: - Annotate parsed emails (sent/received/normalize)
     private func annotate(_ emails: [MBOXParser.RawEmail]) -> [MBOXParser.RawEmail] {
         var annotated = emails
-        let normalizedSender = senderEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        var normalizedSender = senderEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
 
         if normalizedSender.isEmpty {
             let froms = emails.compactMap { $0.headers["From"] }
             senderEmail = mostCommon(in: froms)
+            normalizedSender = senderEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         }
+
+        guard !normalizedSender.isEmpty else { return annotated }
 
         for i in 0..<annotated.count {
             let from = annotated[i].headers["From"]?.lowercased() ?? ""
@@ -179,6 +392,7 @@ class ContentViewModel: ObservableObject {
 
     // MARK: - Reply Frequency (threading)
     func replyFrequency(for userEmail: String) -> [String: Int] {
+        guard !userEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [:] }
         let replies = parsedEmails.filter {
             $0.headers["From"]?.lowercased().contains(userEmail.lowercased()) == true
         }
@@ -198,6 +412,27 @@ class ContentViewModel: ObservableObject {
         return counts
     }
 
+    // MARK: - Clear all parsed state
+    private func cleanupTempDirs() {
+        for dir in pendingTempDirs {
+            try? FileManager.default.removeItem(at: dir)
+        }
+        pendingTempDirs.removeAll()
+    }
+
+    func clearParsedData() {
+        cleanupTempDirs()
+        parsedEmails = []
+        isParsed = false
+        subjectList = []
+        detectedDateRange = (nil, nil)
+        loadingProgress = 0.0
+        loadingText = ""
+        parseErrors = []
+        statusMessage = "Data cleared. Select a new file to begin."
+        statusColor = .gray
+    }
+
     // MARK: - Restore persisted emails
     func restoreEmails(_ emails: [MBOXParser.RawEmail]) {
         self.parsedEmails = emails
@@ -206,7 +441,6 @@ class ContentViewModel: ObservableObject {
             updateMetadataDisplay()
             statusMessage = "Restored \(emails.count) emails from previous session."
             statusColor = .green
-            NotificationCenter.default.post(name: .parsingFinished, object: nil)
         }
     }
 
@@ -222,22 +456,33 @@ class ContentViewModel: ObservableObject {
     }
 
     // MARK: - FileUtils EML Export (atomic & auditable!)
-    func exportFilteredEmailsAsEML(to folder: URL, emails: [MBOXParser.RawEmail]) {
+    @discardableResult
+    func exportFilteredEmailsAsEML(to folder: URL, emails: [MBOXParser.RawEmail]) -> Int {
+        var usedNames = Set<String>()
+        var failedCount = 0
         for (index, email) in emails.enumerated() {
             let rawSubject = email.headers["Subject"] ?? "(no-subject)"
             let safeSubject = rawSubject
-                .replacingOccurrences(of: "[^A-Za-z0-9]", with: "_", options: [.regularExpression])
-                .prefix(30)
-            let filename = "\(index + 1)_\(safeSubject).eml"
+                .replacingOccurrences(of: "[^A-Za-z0-9 ]", with: "_", options: [.regularExpression])
+                .trimmingCharacters(in: .whitespaces)
+                .prefix(60)
+            var filename = "\(index + 1)_\(safeSubject).eml"
+            var counter = 1
+            while usedNames.contains(filename) {
+                filename = "\(index + 1)_\(safeSubject)_\(counter).eml"
+                counter += 1
+            }
+            usedNames.insert(filename)
             let fileURL = folder.appendingPathComponent(filename)
             let emlContent = exportEmailAsEML(email)
             do {
                 try FileUtils.writeData(Data(emlContent.utf8), to: fileURL.path)
             } catch {
-                print("Failed to write \(filename): \(error)")
-                // Optionally log error here with FileUtilsAudit or similar
+                failedCount += 1
+                FileUtilsAudit.logError(error, context: "EML Export", path: fileURL.path)
             }
         }
+        return failedCount
     }
 }
 

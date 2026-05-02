@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - AttachmentMetadata
 
-public struct AttachmentMetadata: Codable {
+public struct AttachmentMetadata: Codable, Sendable {
     public let filename: String
     public let mimeType: String
     public let size: Int
@@ -91,7 +91,7 @@ public class EmailBodyExtractor {
         let lower = part.mimeType.lowercased()
 
         // RFC822 or nested message
-        if lower == "message/rfc822" {
+        if lower.hasPrefix("message/rfc822") {
             if part.isAttachment {
                 if let md = extractAttachment(from: part, forceFilename: "attached.eml") {
                     attachments.append(md)
@@ -157,8 +157,28 @@ public class EmailBodyExtractor {
                 contentID: contentID
             )
         } catch {
-            print("Attachment extraction failed: \(error)")
             return nil
+        }
+    }
+
+    private static func charsetToEncoding(_ charset: String?) -> String.Encoding {
+        switch (charset ?? "utf-8").lowercased() {
+        case "utf-8", "utf8": return .utf8
+        case "iso-8859-1", "latin1", "latin-1": return .isoLatin1
+        case "iso-8859-2", "latin2", "latin-2": return .isoLatin2
+        case "us-ascii", "ascii": return .ascii
+        case "windows-1252", "cp1252": return .windowsCP1252
+        case "windows-1251", "cp1251":
+            return String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.windowsCyrillic.rawValue)))
+        case "shift_jis", "shift-jis", "sjis": return .shiftJIS
+        case "euc-jp": return .japaneseEUC
+        case "iso-2022-jp": return .iso2022JP
+        default:
+            let cfEnc = CFStringConvertIANACharSetNameToEncoding((charset ?? "utf-8") as CFString)
+            if cfEnc != kCFStringEncodingInvalidId {
+                return String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(cfEnc))
+            }
+            return .utf8
         }
     }
 
@@ -167,13 +187,13 @@ public class EmailBodyExtractor {
         guard let h = header else { return nil }
         // Try RFC2231 first
         let rfc2231 = #"(?i)\b\#(key)\*\s*=\s*(?:[\w-]+'[\w-]*')?([^";]+)"#
-        if let re = try? NSRegularExpression(pattern: rfc2231), let m = re.firstMatch(in: h, range: NSRange(location: 0, length: (h as NSString).length)), m.numberOfRanges > 2 {
-            return (h as NSString).substring(with: m.range(at: 2)).removingPercentEncoding
+        if let re = try? NSRegularExpression(pattern: rfc2231), let m = re.firstMatch(in: h, range: NSRange(location: 0, length: (h as NSString).length)), m.numberOfRanges > 1 {
+            return (h as NSString).substring(with: m.range(at: 1)).removingPercentEncoding
         }
         // Try standard
         let pattern = #"(?i)\b\#(key)=["]?([^";]+)["]?"#
-        if let re = try? NSRegularExpression(pattern: pattern), let m = re.firstMatch(in: h, range: NSRange(location: 0, length: (h as NSString).length)), m.numberOfRanges > 2 {
-            return (h as NSString).substring(with: m.range(at: 2))
+        if let re = try? NSRegularExpression(pattern: pattern), let m = re.firstMatch(in: h, range: NSRange(location: 0, length: (h as NSString).length)), m.numberOfRanges > 1 {
+            return (h as NSString).substring(with: m.range(at: 1))
         }
         return nil
     }
@@ -205,7 +225,10 @@ public class EmailBodyExtractor {
         } else if encoding == "base64" {
             let filtered = raw.filter { !$0.isWhitespace }
             if let data = Data(base64Encoded: filtered) {
-                return String(data: data, encoding: .utf8) ?? raw
+                let enc = charsetToEncoding(charset)
+                if let str = String(data: data, encoding: enc) { return str }
+                if let str = String(data: data, encoding: .utf8) { return str }
+                if let str = String(data: data, encoding: .isoLatin1) { return str }
             }
             return raw
         } else {
@@ -260,7 +283,8 @@ public class AttachmentSaver {
         }
 
         // Step 2: Save to temp file (raw, not re-encoded)
-        let ext = mimeType?.components(separatedBy: "/").last ?? "bin"
+        let rawExt = mimeType?.components(separatedBy: "/").last ?? ""
+        let ext = rawExt.isEmpty ? "bin" : rawExt
         let safeName = (suggestedFilename ?? "attachment.\(ext)")
             .replacingOccurrences(of: "/", with: "_")
             .trimmingCharacters(in: .whitespacesAndNewlines)

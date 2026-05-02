@@ -24,7 +24,7 @@ struct AttributedTextView: NSViewRepresentable {
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = true
         textView.textContainer?.widthTracksTextView = true
-        textView.textContainer?.heightTracksTextView = true
+        textView.textContainer?.heightTracksTextView = false
 
         let scrollView = NSScrollView()
         scrollView.borderType = .noBorder

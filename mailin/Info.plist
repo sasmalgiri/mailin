@@ -21,7 +21,7 @@
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSHumanReadableCopyright</key>
-	<string>Copyright © 2025. All rights reserved.</string>
+	<string>Copyright © 2025-2026. All rights reserved.</string>
 	
 	<!-- Privacy Usage Descriptions -->
 	<key>NSDocumentsFolderUsageDescription</key>
@@ -75,7 +75,7 @@
 	</array>
 	
 	<!-- Exported Type Identifiers -->
-	<key>UTExportedTypeDeclarations</key>
+	<key>UTImportedTypeDeclarations</key>
 	<array>
 		<dict>
 			<key>UTTypeConformsTo</key>
@@ -107,14 +107,5 @@
 	<!-- High Resolution Support -->
 	<key>NSHighResolutionCapable</key>
 	<true/>
-	
-	<!-- Scene Configuration (for multiple windows) -->
-	<key>UIApplicationSceneManifest</key>
-	<dict>
-		<key>UIApplicationSupportsMultipleScenes</key>
-		<true/>
-		<key>UISceneConfigurations</key>
-		<dict/>
-	</dict>
 </dict>
 </plist>

@@ -1,7 +1,7 @@
 import Foundation
 import AppKit
 
-public struct MIMEPart: Codable {
+public struct MIMEPart: Codable, Sendable {
     public var headers: [String: String]
     public var body: String
     public var rawBody: String
@@ -111,7 +111,6 @@ public struct MIMEPart: Codable {
             if let data = Data(base64Encoded: padded, options: [.ignoreUnknownCharacters]), !data.isEmpty {
                 return data
             }
-            // Brute force offset for tolerance
             for offset in 1...8 where filtered.count > offset + 16 {
                 let seg = String(filtered.dropFirst(offset))
                 let padLen = (4 - seg.count % 4) % 4
@@ -170,7 +169,6 @@ public struct MIMEPart: Codable {
             try data.write(to: url, options: .atomic)
             return url
         } catch {
-            print("Failed to save attachment: \(error)")
             return nil
         }
     }
@@ -243,19 +241,22 @@ public struct MIMEPart: Codable {
         let rfc2231Pattern = #"\b\#(key)\*\s*=\s*(?:[\w-]+'[\w-]*')?([^;\r\n"]+)"#
         if let regex = try? NSRegularExpression(pattern: rfc2231Pattern, options: .caseInsensitive),
            let match = regex.firstMatch(in: header, range: NSRange(header.startIndex..., in: header)),
-           let range = Range(match.range(at: 2), in: header) {
+           match.numberOfRanges > 1,
+           let range = Range(match.range(at: 1), in: header) {
             return header[range].removingPercentEncoding?.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         let quotedPattern = #"\b\#(key)\s*=\s*"([^"]+)""#
         if let regex = try? NSRegularExpression(pattern: quotedPattern, options: .caseInsensitive),
            let match = regex.firstMatch(in: header, range: NSRange(header.startIndex..., in: header)),
-           let range = Range(match.range(at: 2), in: header) {
+           match.numberOfRanges > 1,
+           let range = Range(match.range(at: 1), in: header) {
             return String(header[range])
         }
         let simplePattern = #"\b\#(key)\s*=\s*([^;\s]+)"#
         if let regex = try? NSRegularExpression(pattern: simplePattern, options: .caseInsensitive),
            let match = regex.firstMatch(in: header, range: NSRange(header.startIndex..., in: header)),
-           let range = Range(match.range(at: 2), in: header) {
+           match.numberOfRanges > 1,
+           let range = Range(match.range(at: 1), in: header) {
             return String(header[range]).trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return nil
@@ -278,7 +279,13 @@ public struct MIMEPart: Codable {
     public static func normalizeHeaders(_ headers: [String: String]) -> [String: String] {
         var normalized: [String: String] = [:]
         for (key, value) in headers {
-            normalized[key.trimmingCharacters(in: .whitespacesAndNewlines).capitalized] = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalizedKey = trimmedKey.split(separator: "-").map { word in
+                let lower = word.lowercased()
+                if lower == "id" || lower == "mime" { return word.uppercased() }
+                return word.prefix(1).uppercased() + word.dropFirst().lowercased()
+            }.joined(separator: "-")
+            normalized[normalizedKey] = value.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return normalized
     }
@@ -297,14 +304,28 @@ public struct MIMEPart: Codable {
     }
 }
 
-/// Helper: Maps charset string to String.Encoding
+/// Helper: Maps charset string to String.Encoding, with CoreFoundation IANA fallback
 fileprivate func stringEncoding(for charset: String) -> String.Encoding {
     switch charset.lowercased() {
         case "utf-8", "utf8": return .utf8
-        case "iso-8859-1", "latin1": return .isoLatin1
+        case "iso-8859-1", "latin1", "latin-1": return .isoLatin1
+        case "iso-8859-2", "latin2", "latin-2": return .isoLatin2
         case "us-ascii", "ascii": return .ascii
-        case "windows-1252": return .windowsCP1252
+        case "windows-1252", "cp1252": return .windowsCP1252
+        case "windows-1250", "cp1250": return String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.windowsLatin2.rawValue)))
+        case "windows-1251", "cp1251": return String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.windowsCyrillic.rawValue)))
         case "macintosh", "macosroman": return .macOSRoman
-        default: return .utf8
+        case "utf-16", "utf16": return .utf16
+        case "utf-16be": return .utf16BigEndian
+        case "utf-16le": return .utf16LittleEndian
+        case "shift_jis", "shift-jis", "sjis": return .shiftJIS
+        case "euc-jp": return .japaneseEUC
+        case "iso-2022-jp": return .iso2022JP
+        default:
+            let cfEnc = CFStringConvertIANACharSetNameToEncoding(charset as CFString)
+            if cfEnc != kCFStringEncodingInvalidId {
+                return String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(cfEnc))
+            }
+            return .utf8
     }
 }

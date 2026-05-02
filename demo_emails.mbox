@@ -1,0 +1,196 @@
+From sender@example.com Mon Jan 15 10:30:00 2025
+From: Sarah Johnson <sarah.johnson@techcorp.com>
+To: Shirshend Sasmal <sasmalgiri@gmail.com>
+Subject: Q1 Product Launch Strategy
+Date: Mon, 15 Jan 2025 10:30:00 +0530
+Message-ID: <msg001@techcorp.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+
+Hi Shirshend,
+
+I wanted to share the Q1 product launch strategy with you. We're planning to roll out the new features in three phases:
+
+Phase 1: Beta testing with select users (February)
+Phase 2: Soft launch in key markets (March)
+Phase 3: Full global launch (April)
+
+The marketing budget has been approved at $50K for digital campaigns. I think we should focus on privacy-first messaging given market trends.
+
+Let me know your thoughts on the timeline. Looking forward to your feedback.
+
+Best regards,
+Sarah
+
+From sasmalgiri@gmail.com Tue Jan 16 14:22:00 2025
+From: Shirshend Sasmal <sasmalgiri@gmail.com>
+To: Sarah Johnson <sarah.johnson@techcorp.com>
+Subject: Re: Q1 Product Launch Strategy
+Date: Tue, 16 Jan 2025 14:22:00 +0530
+Message-ID: <msg002@gmail.com>
+In-Reply-To: <msg001@techcorp.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+
+Hi Sarah,
+
+Thanks for sharing this. The three-phase approach makes a lot of sense. A few suggestions:
+
+1. For Phase 1, we should include power users who gave feedback last quarter
+2. The privacy-first messaging is spot on — this is our key differentiator
+3. Can we allocate part of the budget for influencer partnerships?
+
+I'll prepare a detailed marketing brief by Friday.
+
+Cheers,
+Shirshend
+
+From david.chen@startup.io Wed Jan 17 09:15:00 2025
+From: David Chen <david.chen@startup.io>
+To: Shirshend Sasmal <sasmalgiri@gmail.com>
+Subject: Partnership Opportunity - AI Integration
+Date: Wed, 17 Jan 2025 09:15:00 +0530
+Message-ID: <msg003@startup.io>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+
+Dear Shirshend,
+
+I'm reaching out from Startup.io regarding a potential partnership opportunity. We've developed an on-device AI framework that could complement your product beautifully.
+
+Our technology processes data entirely locally — no cloud dependency, complete privacy preservation. Given your focus on privacy-first solutions, I believe there's strong synergy here.
+
+Would you be available for a 30-minute call next week to explore this further?
+
+Best,
+David Chen
+CTO, Startup.io
+
+From emma.williams@design.co Thu Jan 18 16:45:00 2025
+From: Emma Williams <emma.williams@design.co>
+To: Shirshend Sasmal <sasmalgiri@gmail.com>
+Subject: Updated UI Mockups Ready for Review
+Date: Thu, 18 Jan 2025 16:45:00 +0530
+Message-ID: <msg004@design.co>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+
+Hi Shirshend,
+
+The updated UI mockups are ready for your review. Key changes include:
+
+- Refreshed color palette with better contrast ratios
+- Simplified navigation flow (reduced clicks by 40%)
+- New dark mode implementation following Apple HIG
+- Improved accessibility labels throughout
+
+I've attached the Figma link in a separate email. Please review by EOD Friday so we can finalize for development sprint.
+
+Thanks!
+Emma
+
+From sasmalgiri@gmail.com Fri Jan 19 11:00:00 2025
+From: Shirshend Sasmal <sasmalgiri@gmail.com>
+To: Team <team@techcorp.com>
+Subject: Weekly Standup Notes - Week 3
+Date: Fri, 19 Jan 2025 11:00:00 +0530
+Message-ID: <msg005@gmail.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+
+Team,
+
+Here's a quick summary of this week's progress:
+
+Completed:
+- Finalized Q1 launch strategy with Sarah
+- Reviewed partnership proposal from Startup.io
+- Approved new UI mockups from Emma
+- Fixed 12 bugs from the QA backlog
+
+In Progress:
+- Marketing brief for Phase 1 launch
+- Integration testing for new AI features
+- User research interviews (3 of 8 completed)
+
+Blockers:
+- Need sign-off on the revised privacy policy
+- API rate limiting issue needs backend team input
+
+Have a great weekend everyone!
+
+Shirshend
+
+From notifications@github.com Fri Jan 19 15:30:00 2025
+From: GitHub <notifications@github.com>
+To: Shirshend Sasmal <sasmalgiri@gmail.com>
+Subject: [sasmalgiri/mailin] New release published: v1.0
+Date: Fri, 19 Jan 2025 15:30:00 +0530
+Message-ID: <msg006@github.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+
+A new release has been published for sasmalgiri/mailin.
+
+Release: v1.0 - Initial Release
+Tag: v1.0
+Author: sasmalgiri
+
+mailin v1.0 is here! A privacy-first email archive analyzer built with native Apple technology.
+
+Key features:
+- On-device AI analysis
+- RFC 822 & MIME compliant parser
+- Google Takeout, Thunderbird, Apple Mail support
+- Smart filtering and reply analytics
+
+From priya.sharma@analytics.in Sat Jan 20 08:00:00 2025
+From: Priya Sharma <priya.sharma@analytics.in>
+To: Shirshend Sasmal <sasmalgiri@gmail.com>
+Subject: Market Analysis Report - India Email Landscape
+Date: Sat, 20 Jan 2025 08:00:00 +0530
+Message-ID: <msg007@analytics.in>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+
+Hi Shirshend,
+
+As discussed, here's the market analysis for the Indian email landscape:
+
+Key findings:
+- Gmail dominates with 82.4% market share in India
+- Growing demand for offline email tools (32% YoY increase)
+- Privacy awareness has increased 45% since 2023
+- Mac adoption in India growing at 28% annually
+- Professional users willing to pay for productivity tools
+
+The report suggests strong potential for a privacy-focused email tool targeting Indian professionals and the global diaspora.
+
+Happy to discuss the details further.
+
+Regards,
+Priya
+
+From michael.brown@legal.firm Mon Jan 22 13:15:00 2025
+From: Michael Brown <michael.brown@legal.firm>
+To: Shirshend Sasmal <sasmalgiri@gmail.com>
+Subject: Legal Review - App Store Terms Compliance
+Date: Mon, 22 Jan 2025 13:15:00 +0530
+Message-ID: <msg008@legal.firm>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+
+Dear Shirshend,
+
+I've completed the legal review of your app's compliance with Apple's App Store guidelines. Here's my summary:
+
+1. Privacy Policy: Compliant. Your zero-data-collection approach exceeds requirements.
+2. In-App Purchases: Properly structured with auto-renewable and non-consumable options.
+3. GDPR/CCPA: Not applicable since no personal data is collected or processed on servers.
+4. Export Controls: No issues — the app uses standard Apple frameworks only.
+
+You're clear to submit. I'll send the formal compliance certificate by end of week.
+
+Best regards,
+Michael Brown, Esq.
+

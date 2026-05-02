@@ -33,17 +33,10 @@ public struct QuotedPrintableDecoder {
                 if let ascii = char.asciiValue {
                     output.append(ascii)
                 } else {
-                    guard let scalar = char.unicodeScalars.first else {
-                        i = cleaned.index(after: i)
-                        continue
+                    let charStr = String(char)
+                    if let utf8Data = charStr.data(using: .utf8) {
+                        output.append(contentsOf: utf8Data)
                     }
-                    var buffer = [UInt8]()
-                    var s = scalar.value
-                    while s > 0 {
-                        buffer.insert(UInt8(s & 0xFF), at: 0)
-                        s = s >> 8
-                    }
-                    output.append(contentsOf: buffer)
                 }
                 i = cleaned.index(after: i)
             }
@@ -63,10 +56,21 @@ public struct QuotedPrintableDecoder {
     private static func stringEncoding(for charset: String) -> String.Encoding {
         switch charset.lowercased() {
             case "utf-8", "utf8": return .utf8
-            case "iso-8859-1", "latin1": return .isoLatin1
+            case "iso-8859-1", "latin1", "latin-1": return .isoLatin1
+            case "iso-8859-2", "latin2", "latin-2": return .isoLatin2
             case "us-ascii", "ascii": return .ascii
-            case "windows-1252": return .windowsCP1252
-            default: return .utf8
+            case "windows-1252", "cp1252": return .windowsCP1252
+            case "windows-1251", "cp1251":
+                return String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.windowsCyrillic.rawValue)))
+            case "shift_jis", "shift-jis", "sjis": return .shiftJIS
+            case "euc-jp": return .japaneseEUC
+            case "iso-2022-jp": return .iso2022JP
+            default:
+                let cfEnc = CFStringConvertIANACharSetNameToEncoding(charset as CFString)
+                if cfEnc != kCFStringEncodingInvalidId {
+                    return String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(cfEnc))
+                }
+                return .utf8
         }
     }
 }

@@ -94,7 +94,7 @@ struct EmailChunker {
         let paragraphs = cleanedBody
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty && !$0.hasPrefix(">") && !$0.lowercased().hasPrefix("content-") }
+            .filter { !$0.isEmpty && !$0.hasPrefix(">") && !$0.lowercased().hasPrefix("content-type:") && !$0.lowercased().hasPrefix("content-transfer-encoding:") && !$0.lowercased().hasPrefix("content-disposition:") }
 
         let sentences: [String] = paragraphs.flatMap { splitIntoSentences($0) }
 
@@ -116,7 +116,6 @@ struct EmailChunker {
             if valid {
                 return attachment.filename
             } else {
-                print("Skipped invalid attachment: \(attachment.filename)")
                 return nil
             }
         }
@@ -148,7 +147,27 @@ struct EmailChunker {
                     )
                     chunkIndex += 1
                 }
-                _ = builder.add(sentence)
+                if !builder.add(sentence) {
+                    let truncated = String(sentence.prefix(maxTokensPerChunk * 4))
+                    chunks.append(
+                        ChunkedEmail(
+                            chunkIndex: chunkIndex,
+                            emailIndex: emailIndex,
+                            emailID: emailID,
+                            subject: subject,
+                            from: from,
+                            to: to,
+                            cc: cc,
+                            date: date,
+                            threadID: threadID,
+                            bodyChunk: truncated,
+                            attachmentFilenames: attachments,
+                            isRelevant: isRelevantChunk(truncated),
+                            isReply: isReply
+                        )
+                    )
+                    chunkIndex += 1
+                }
             }
         }
 

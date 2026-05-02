@@ -64,15 +64,31 @@ public struct FileUtilsPolicy {
 
 public enum LogLevel: Int { case none = 0, error, warning, info, debug, verbose }
 public class FileUtilsAudit {
-    public static var logs: [(Date, String, String)] = []
+    private static let queue = DispatchQueue(label: "com.mailin.fileUtilsAudit")
+    private static var _logs: [(Date, String, String)] = []
+    public static var logs: [(Date, String, String)] {
+        queue.sync { _logs }
+    }
+    public static var maxLogCount = 1000
     public static var level: LogLevel = .info
-    public static var plugins: [(_ event: String, _ path: String, _ info: [String: Any]) -> Void] = []
+    private static var _plugins: [(_ event: String, _ path: String, _ info: [String: Any]) -> Void] = []
+    public static var plugins: [(_ event: String, _ path: String, _ info: [String: Any]) -> Void] {
+        get { queue.sync { _plugins } }
+        set { queue.sync { _plugins = newValue } }
+    }
     public static func log(_ msg: String, level: LogLevel = .info, path: String = "") {
         guard level.rawValue <= Self.level.rawValue else { return }
         let timestamp = FileUtils.timeString(Date())
+        #if DEBUG
         print("[\(timestamp)][\(level)] \(msg)\(path.isEmpty ? "" : " [\(path)]")")
-        logs.append((Date(), msg, path))
-        for plugin in plugins { plugin(msg, path, [:]) }
+        #endif
+        queue.sync {
+            _logs.append((Date(), msg, path))
+            if _logs.count > maxLogCount {
+                _logs.removeFirst(_logs.count - maxLogCount)
+            }
+            for plugin in _plugins { plugin(msg, path, [:]) }
+        }
     }
     public static func logError(_ err: Error, context: String, path: String = "") {
         log("[Error] \(context): \(err)", level: .error, path: path)
@@ -91,7 +107,6 @@ private func ensureSandbox(_ path: String) throws -> String {
             FileUtilsAudit.log(msg, level: .error, path: abs)
             if FileUtilsPolicy.failOnViolation {
                 FileUtilsPolicy.violationHandler?(abs, msg)
-                fatalError(msg)
             }
             throw FileUtilsError.sandboxViolation(path: abs)
         }
@@ -103,7 +118,6 @@ private func ensureSandbox(_ path: String) throws -> String {
             FileUtilsAudit.log(msg, level: .error, path: abs)
             if FileUtilsPolicy.failOnViolation {
                 FileUtilsPolicy.violationHandler?(abs, msg)
-                fatalError(msg)
             }
             throw FileUtilsError.permissionDenied(path: abs)
         }
@@ -380,11 +394,18 @@ public class FileUtils {
     public static var processID: Int32 { getpid() }
     public static var currentTime: TimeInterval { Date().timeIntervalSince1970 }
     public static func sleep(seconds: TimeInterval) { Thread.sleep(forTimeInterval: seconds) }
+    private static let logDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+        return f
+    }()
+    private static let logDateFormatterQueue = DispatchQueue(label: "com.mailin.logDateFormatter")
+
     public static func timeString(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
-        return formatter.string(from: date)
+        logDateFormatterQueue.sync {
+            logDateFormatter.string(from: date)
+        }
     }
 
     // MARK: - Atomic Write
@@ -445,3 +466,50 @@ public func appSupportDirectory(appFolder: String = "mailin") throws -> URL {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         return folder
     }
+
+// MARK: - Keychain Helper
+
+import Security
+
+enum KeychainHelper {
+    private static let service = "com.ecosanskriti.mailin"
+
+    static func save(key: String, value: String) {
+        guard let data = value.data(using: .utf8) else { return }
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key
+        ]
+        SecItemDelete(query as CFDictionary)
+        guard !value.isEmpty else { return }
+        var addQuery = query
+        addQuery[kSecValueData as String] = data
+        SecItemAdd(addQuery as CFDictionary, nil)
+    }
+
+    static func load(key: String) -> String {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess, let data = result as? Data, let str = String(data: data, encoding: .utf8) else {
+            return ""
+        }
+        return str
+    }
+
+    static func delete(key: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+}

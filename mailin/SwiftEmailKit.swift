@@ -111,10 +111,12 @@ fileprivate func parseMIMEParams(_ headerValue: String) -> [String: String] {
         if value.hasPrefix("\""), value.hasSuffix("\""), value.count >= 2 {
             value = String(value.dropFirst().dropLast())
         }
-        if let match = keyRaw.range(of: #"([a-zA-Z0-9_\-]+)\*(\d+)\*?"#, options: .regularExpression) {
-            let base = String(keyRaw[match])
-            let numStr = keyRaw[match].replacingOccurrences(of: "[^0-9]", with: "", options: .regularExpression)
-            if let idx = Int(numStr) {
+        if let regex = try? NSRegularExpression(pattern: #"^([a-zA-Z0-9_\-]+)\*(\d+)\*?$"#),
+           let match = regex.firstMatch(in: keyRaw, range: NSRange(keyRaw.startIndex..., in: keyRaw)),
+           let baseRange = Range(match.range(at: 1), in: keyRaw),
+           let numRange = Range(match.range(at: 2), in: keyRaw) {
+            let base = String(keyRaw[baseRange])
+            if let idx = Int(keyRaw[numRange]) {
                 continuation[base, default: [:]][idx] = value.decodeRFC2231Param()
             }
         } else if keyRaw.hasSuffix("*") {
@@ -154,9 +156,10 @@ public class SwiftEmailMessage: Codable {
     public var filename: String?
     public var transferEncoding: String?
     public var partIndex: Int = 0
-    public var parent: SwiftEmailMessage? = nil
+    public weak var parent: SwiftEmailMessage? = nil
 
     public var isMultipart: Bool { contentType.lowercased().hasPrefix("multipart/") }
+    private static let maxParseDepth = 30
 
     // MARK: - Codable keys
     private enum CodingKeys: String, CodingKey {
@@ -207,9 +210,32 @@ public class SwiftEmailMessage: Codable {
         try c.encode(partIndex, forKey: .partIndex)
     }
 
-    public init(rawSource: Data, partIndex: Int = 0, policy: EmailPolicy = DefaultEmailPolicy) {
+    public init(rawSource: Data, partIndex: Int = 0, policy: EmailPolicy = DefaultEmailPolicy, depth: Int = 0) {
         self.partIndex = partIndex
         self.policy = policy
+
+        guard depth < Self.maxParseDepth else {
+            self.headers = [:]
+            self.rawHeaders = [:]
+            self.headerParams = [:]
+            self.headerList = []
+            self.body = ""
+            self.rawBody = rawSource
+            self.subparts = []
+            self.contentType = "application/octet-stream"
+            self.contentTypeParams = [:]
+            self.charset = "utf-8"
+            self.contentDisposition = nil
+            self.contentDispositionParams = [:]
+            self.contentID = nil
+            self.filename = nil
+            self.transferEncoding = nil
+            let defect = EmailParseDefect(message: "Maximum MIME nesting depth (\(Self.maxParseDepth)) exceeded", lineNumber: nil, context: "MIME")
+            self.defects.append(defect)
+            policy.defectHandler?(defect)
+            return
+        }
+
         let sourceStr = String(data: rawSource, encoding: .utf8) ?? String(data: rawSource, encoding: .isoLatin1) ?? ""
         let separator = sourceStr.contains("\r\n\r\n") ? "\r\n\r\n" : "\n\n"
         let split = sourceStr.components(separatedBy: separator)
@@ -248,7 +274,7 @@ public class SwiftEmailMessage: Codable {
                 defects.append(defect)
                 policy.defectHandler?(defect)
                 if policy.mode == .strict {
-                    fatalError("Strict policy: Malformed header line at \(lineNum): \(line)")
+                    break
                 }
                 currentValue += " " + line.trimmingCharacters(in: .whitespaces)
             }
@@ -297,7 +323,7 @@ public class SwiftEmailMessage: Codable {
                 if trimmed.isEmpty || trimmed.hasPrefix("--") { continue }
                 let partSource = trimmed.trimmingCharacters(in: .whitespacesAndNewlines)
                 let partData = partSource.data(using: .utf8) ?? Data()
-                let partMsg = SwiftEmailMessage(rawSource: partData, partIndex: idx, policy: policy)
+                let partMsg = SwiftEmailMessage(rawSource: partData, partIndex: idx, policy: policy, depth: depth + 1)
                 partMsg.parent = self
                 self.subparts.append(partMsg)
                 if !partMsg.defects.isEmpty { self.defects.append(contentsOf: partMsg.defects) }
@@ -305,7 +331,7 @@ public class SwiftEmailMessage: Codable {
         } else if contentType.lowercased().hasPrefix("message/rfc822") {
             self.body = ""
             self.rawBody = Data()
-            let nested = SwiftEmailMessage(rawSource: bodyBlock.data(using: .utf8) ?? Data(), partIndex: 0, policy: policy)
+            let nested = SwiftEmailMessage(rawSource: bodyBlock.data(using: .utf8) ?? Data(), partIndex: 0, policy: policy, depth: depth + 1)
             nested.parent = self
             self.subparts = [nested]
             if !nested.defects.isEmpty { self.defects.append(contentsOf: nested.defects) }
@@ -380,10 +406,11 @@ public class SwiftEmailMessage: Codable {
     public func getAttachments() -> [SwiftEmailAttachment] {
         var attachments: [SwiftEmailAttachment] = []
         for part in walk() where part.filename != nil && !part.isMultipart {
+            guard let filename = part.filename else { continue }
             let isInline = part.contentDispositionParams["inline"] != nil || (part.contentDisposition?.lowercased().contains("inline") ?? false)
             if part.rawBody.count > 0 {
                 attachments.append(SwiftEmailAttachment(
-                    filename: part.filename!,
+                    filename: filename,
                     mimeType: part.contentType,
                     data: part.rawBody,
                     isInline: isInline,
@@ -504,31 +531,50 @@ public class SwiftEmailMessage: Codable {
         return nil
     }
     fileprivate static func decodeQPData(_ qp: String) -> Data? {
-        var str = qp
-        let pattern = #"=([A-Fa-f0-9]{2})"#
-        let regex = try? NSRegularExpression(pattern: pattern, options: [])
-        let nsrange = NSRange(str.startIndex..<str.endIndex, in: str)
-        var offset = 0
-        regex?.enumerateMatches(in: str, options: [], range: nsrange) { match, _, _ in
-            guard let match = match, match.numberOfRanges == 2 else { return }
-            let hex = (str as NSString).substring(with: match.range(at: 1))
-            if let val = UInt8(hex, radix: 16) {
-                let replacement = String(bytes: [val], encoding: .isoLatin1) ?? ""
-                let totalRange = NSRange(location: match.range.location + offset, length: match.range.length)
-                str = (str as NSString).replacingCharacters(in: totalRange, with: replacement)
-                offset -= match.range.length - replacement.count
+        var result = Data()
+        var i = qp.startIndex
+        while i < qp.endIndex {
+            if qp[i] == "=" {
+                let h1 = qp.index(i, offsetBy: 1, limitedBy: qp.endIndex)
+                let h2 = qp.index(i, offsetBy: 2, limitedBy: qp.endIndex)
+                if let h1 = h1, let h2 = h2, h2 < qp.endIndex {
+                    let hex = String(qp[h1...h2])
+                    if let val = UInt8(hex, radix: 16) {
+                        result.append(val)
+                        i = qp.index(after: h2)
+                        continue
+                    }
+                }
             }
+            if let byte = String(qp[i]).data(using: .isoLatin1) {
+                result.append(byte)
+            }
+            i = qp.index(after: i)
         }
-        return str.data(using: .isoLatin1)
+        return result
     }
     fileprivate static func decodeData(_ data: Data, charset: String) -> String? {
+        let encoding: String.Encoding
         switch charset.lowercased() {
-            case "utf-8", "utf8": return String(data: data, encoding: .utf8)
-            case "iso-8859-1", "latin1": return String(data: data, encoding: .isoLatin1)
-            case "us-ascii", "ascii": return String(data: data, encoding: .ascii)
-            case "windows-1252": return String(data: data, encoding: .windowsCP1252)
-            default: return String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1)
+            case "utf-8", "utf8": encoding = .utf8
+            case "iso-8859-1", "latin1", "latin-1": encoding = .isoLatin1
+            case "iso-8859-2", "latin2", "latin-2": encoding = .isoLatin2
+            case "us-ascii", "ascii": encoding = .ascii
+            case "windows-1252", "cp1252": encoding = .windowsCP1252
+            case "windows-1251", "cp1251":
+                encoding = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.windowsCyrillic.rawValue)))
+            case "shift_jis", "shift-jis", "sjis": encoding = .shiftJIS
+            case "euc-jp": encoding = .japaneseEUC
+            case "iso-2022-jp": encoding = .iso2022JP
+            default:
+                let cfEnc = CFStringConvertIANACharSetNameToEncoding(charset as CFString)
+                if cfEnc != kCFStringEncodingInvalidId {
+                    encoding = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(cfEnc))
+                } else {
+                    return String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1)
+                }
         }
+        return String(data: data, encoding: encoding)
     }
     fileprivate static func decodeBody(_ text: String, encoding: String?, charset: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -641,24 +687,32 @@ public class SwiftEmailMessage: Codable {
 
 // MARK: - Helper: Parse email date string (robust)
 
+private let _emailDateFormatterQueue = DispatchQueue(label: "com.mailin.swiftEmailDateFormatter")
+private let _emailDateFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.locale = Locale(identifier: "en_US_POSIX")
+    return f
+}()
+
+private let _emailDateFormats = [
+    "EEE, d MMM yyyy HH:mm:ss Z",
+    "d MMM yyyy HH:mm:ss Z",
+    "EEE, d MMM yyyy HH:mm:ss",
+    "d MMM yyyy HH:mm:ss",
+    "yyyy-MM-dd HH:mm:ss Z",
+    "yyyy-MM-dd HH:mm:ss"
+]
+
 public func swiftParseEmailDate(_ dateStr: String) -> Date? {
-    let fmts = [
-        "EEE, d MMM yyyy HH:mm:ss Z",
-        "d MMM yyyy HH:mm:ss Z",
-        "EEE, d MMM yyyy HH:mm:ss",
-        "d MMM yyyy HH:mm:ss",
-        "yyyy-MM-dd HH:mm:ss Z",
-        "yyyy-MM-dd HH:mm:ss"
-    ]
-    for fmt in fmts {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = fmt
-        if let date = formatter.date(from: dateStr) {
-            return date
+    _emailDateFormatterQueue.sync {
+        for fmt in _emailDateFormats {
+            _emailDateFormatter.dateFormat = fmt
+            if let date = _emailDateFormatter.date(from: dateStr) {
+                return date
+            }
         }
+        return nil
     }
-    return nil
 }
 
 // MARK: - Streaming .mbox Iterator (Chunked, Progress, Huge files)

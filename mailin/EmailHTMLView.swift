@@ -4,15 +4,21 @@ struct EmailHTMLView: View {
     let html: String
     let minHeight: CGFloat
 
+    @State private var cachedAttributed: NSAttributedString?
+    @State private var didParse = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let attributed = attributedHTML {
+            if let attributed = cachedAttributed {
                 AttributedTextView(attributedText: attributed)
                     .frame(minHeight: minHeight, maxHeight: .infinity)
                     .padding()
-            } else {
+            } else if didParse {
                 Label("Unable to render HTML.", systemImage: "exclamationmark.triangle")
                     .foregroundColor(AppColors.secondary)
+                    .padding()
+            } else {
+                ProgressView()
                     .padding()
             }
         }
@@ -23,13 +29,19 @@ struct EmailHTMLView: View {
             RoundedRectangle(cornerRadius: CornerRadius.medium)
                 .stroke(AppColors.separatorLight, lineWidth: 1)
         )
+        .onAppear {
+            guard !didParse else { return }
+            parseHTML()
+        }
     }
 
-    private var attributedHTML: NSAttributedString? {
-        guard !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        guard let data = html.data(using: .utf8) else { return nil }
-
-        return try? NSAttributedString(
+    private func parseHTML() {
+        guard !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let data = html.data(using: .utf8) else {
+            didParse = true
+            return
+        }
+        cachedAttributed = try? NSAttributedString(
             data: data,
             options: [
                 .documentType: NSAttributedString.DocumentType.html,
@@ -37,5 +49,6 @@ struct EmailHTMLView: View {
             ],
             documentAttributes: nil
         )
+        didParse = true
     }
 }

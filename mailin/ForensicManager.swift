@@ -1,0 +1,761 @@
+import Foundation
+import CryptoKit
+import SwiftUI
+
+@MainActor
+class ForensicManager: ObservableObject {
+    static let shared = ForensicManager()
+
+    @AppStorage("forensicModeEnabled") var isEnabled = false
+    @AppStorage("forensicCaseNumber") var caseNumber = ""
+    @AppStorage("forensicExaminerName") var examinerName = ""
+    @AppStorage("forensicOrganization") var organization = ""
+
+    @Published var sourceFileHashes: [SourceFileHash] = []
+    @Published private(set) var auditLog: [AuditEntry] = []
+    @Published var evidenceTags: [UUID: EvidenceTag] = [:]
+    @Published var annotations: [UUID: Annotation] = [:]
+    @Published var perEmailHashes: [UUID: EmailHash] = [:]
+    @Published var integrityStatus: IntegrityStatus = .unknown
+
+    // MARK: - Tamper-evident key derived from case number + app install
+    private var hmacKey: SymmetricKey {
+        let seed = "mailin-forensic-\(caseNumber)-\(installID)"
+        let keyData = SHA256.hash(data: Data(seed.utf8))
+        return SymmetricKey(data: keyData)
+    }
+
+    private var installID: String {
+        if let existing = UserDefaults.standard.string(forKey: "forensicInstallID") {
+            return existing
+        }
+        let newID = UUID().uuidString
+        UserDefaults.standard.set(newID, forKey: "forensicInstallID")
+        return newID
+    }
+
+    // MARK: - Data Types
+
+    struct SourceFileHash: Identifiable, Codable {
+        let id: UUID
+        let filename: String
+        let fileSize: Int64
+        let md5: String
+        let sha1: String
+        let sha256: String
+        let importDate: Date
+    }
+
+    struct AuditEntry: Identifiable, Codable {
+        let id: UUID
+        let sequence: Int
+        let timestamp: Date
+        let action: String
+        let detail: String
+        let examiner: String
+        let previousHash: String
+        let entryHash: String
+    }
+
+    struct EmailHash: Codable {
+        let md5: String
+        let sha1: String
+        let sha256: String
+        let byteCount: Int
+    }
+
+    struct Annotation: Codable {
+        var text: String
+        var examiner: String
+        var timestamp: Date
+    }
+
+    enum IntegrityStatus: Equatable {
+        case unknown
+        case verified
+        case tampered(details: String)
+        case noData
+    }
+
+    enum EvidenceTag: String, CaseIterable, Codable {
+        case none = "None"
+        case relevant = "Relevant"
+        case privileged = "Privileged"
+        case irrelevant = "Irrelevant"
+        case flagged = "Flagged"
+        case suspicious = "Suspicious"
+
+        var color: Color {
+            switch self {
+            case .none: return .secondary
+            case .relevant: return .green
+            case .privileged: return .orange
+            case .irrelevant: return .gray
+            case .flagged: return .red
+            case .suspicious: return .purple
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .none: return "tag"
+            case .relevant: return "checkmark.seal.fill"
+            case .privileged: return "lock.shield.fill"
+            case .irrelevant: return "xmark.circle"
+            case .flagged: return "flag.fill"
+            case .suspicious: return "exclamationmark.triangle.fill"
+            }
+        }
+    }
+
+    // MARK: - File URLs
+
+    private static let appSupportDir: URL = {
+        let dir = (FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory)
+            .appendingPathComponent("mailin", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
+    private let auditLogURL = appSupportDir.appendingPathComponent("forensic_audit_log.json")
+    private let hashesURL = appSupportDir.appendingPathComponent("forensic_hashes.json")
+    private let tagsURL = appSupportDir.appendingPathComponent("forensic_tags.json")
+    private let annotationsURL = appSupportDir.appendingPathComponent("forensic_annotations.json")
+    private let emailHashesURL = appSupportDir.appendingPathComponent("forensic_email_hashes.json")
+    private let chainRootURL = appSupportDir.appendingPathComponent("forensic_chain_root.txt")
+
+    private init() {
+        loadAuditLog()
+        loadHashes()
+        loadTags()
+        loadAnnotations()
+        loadEmailHashes()
+    }
+
+    // MARK: - HMAC-Chained Audit Log (Tamper-Evident)
+
+    private func computeEntryHash(sequence: Int, timestamp: Date, action: String, detail: String, examiner: String, previousHash: String) -> String {
+        let payload = "\(sequence)|\(timestamp.timeIntervalSince1970)|\(action)|\(detail)|\(examiner)|\(previousHash)"
+        let mac = HMAC<SHA256>.authenticationCode(for: Data(payload.utf8), using: hmacKey)
+        return Data(mac).map { String(format: "%02x", $0) }.joined()
+    }
+
+    func logAction(_ action: String, detail: String) {
+        guard isEnabled else { return }
+        let sequence = auditLog.count
+        let previousHash = auditLog.last?.entryHash ?? "GENESIS"
+        let examiner = examinerName.isEmpty ? "Unknown" : examinerName
+        let timestamp = Date()
+
+        let entryHash = computeEntryHash(
+            sequence: sequence,
+            timestamp: timestamp,
+            action: action,
+            detail: detail,
+            examiner: examiner,
+            previousHash: previousHash
+        )
+
+        let entry = AuditEntry(
+            id: UUID(),
+            sequence: sequence,
+            timestamp: timestamp,
+            action: action,
+            detail: detail,
+            examiner: examiner,
+            previousHash: previousHash,
+            entryHash: entryHash
+        )
+        auditLog.append(entry)
+        saveAuditLog()
+        saveChainRoot()
+    }
+
+    func verifyAuditLogIntegrity() -> IntegrityStatus {
+        guard !auditLog.isEmpty else {
+            integrityStatus = .noData
+            return .noData
+        }
+
+        for (index, entry) in auditLog.enumerated() {
+            let expectedPrevious = index == 0 ? "GENESIS" : auditLog[index - 1].entryHash
+            if entry.previousHash != expectedPrevious {
+                let msg = "Chain break at entry \(index): expected previous hash \(expectedPrevious.prefix(16))..., found \(entry.previousHash.prefix(16))..."
+                integrityStatus = .tampered(details: msg)
+                return integrityStatus
+            }
+
+            let recomputed = computeEntryHash(
+                sequence: entry.sequence,
+                timestamp: entry.timestamp,
+                action: entry.action,
+                detail: entry.detail,
+                examiner: entry.examiner,
+                previousHash: entry.previousHash
+            )
+            if recomputed != entry.entryHash {
+                let msg = "Hash mismatch at entry \(index) (\(entry.action)): entry has been modified"
+                integrityStatus = .tampered(details: msg)
+                return integrityStatus
+            }
+
+            if entry.sequence != index {
+                let msg = "Sequence gap at entry \(index): expected \(index), found \(entry.sequence)"
+                integrityStatus = .tampered(details: msg)
+                return integrityStatus
+            }
+        }
+
+        if let storedRoot = try? String(contentsOf: chainRootURL, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+           let lastHash = auditLog.last?.entryHash,
+           storedRoot != lastHash {
+            integrityStatus = .tampered(details: "Chain root mismatch: log was modified outside the application")
+            return integrityStatus
+        }
+
+        integrityStatus = .verified
+        return .verified
+    }
+
+    private func saveChainRoot() {
+        guard let lastHash = auditLog.last?.entryHash else { return }
+        try? lastHash.write(to: chainRootURL, atomically: true, encoding: .utf8)
+    }
+
+    // MARK: - Hash Computation (MD5 + SHA-1 + SHA-256)
+
+    nonisolated static func computeHashes(for url: URL) -> SourceFileHash? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let md5 = Insecure.MD5.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let sha1 = Insecure.SHA1.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let sha256 = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? Int64(data.count)
+        return SourceFileHash(
+            id: UUID(),
+            filename: url.lastPathComponent,
+            fileSize: size,
+            md5: md5,
+            sha1: sha1,
+            sha256: sha256,
+            importDate: Date()
+        )
+    }
+
+    nonisolated static func computeEmailHash(rawSource: String) -> EmailHash {
+        let data = rawSource.data(using: .utf8) ?? Data()
+        return EmailHash(
+            md5: Insecure.MD5.hash(data: data).map { String(format: "%02x", $0) }.joined(),
+            sha1: Insecure.SHA1.hash(data: data).map { String(format: "%02x", $0) }.joined(),
+            sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
+            byteCount: data.count
+        )
+    }
+
+    func registerFileHash(_ hash: SourceFileHash) {
+        sourceFileHashes.append(hash)
+        saveHashes()
+        logAction("File Imported", detail: "\(hash.filename) (\(hash.fileSize) bytes) — SHA-256: \(hash.sha256)")
+    }
+
+    func verifySourceFile(at url: URL) -> (passed: Bool, detail: String) {
+        guard let stored = sourceFileHashes.first(where: { $0.filename == url.lastPathComponent }) else {
+            return (false, "No stored hash for \(url.lastPathComponent)")
+        }
+        guard let current = Self.computeHashes(for: url) else {
+            return (false, "Could not read file \(url.lastPathComponent)")
+        }
+        if current.sha256 != stored.sha256 {
+            return (false, "SHA-256 MISMATCH for \(url.lastPathComponent). Original: \(stored.sha256.prefix(16))... Current: \(current.sha256.prefix(16))...")
+        }
+        if current.md5 != stored.md5 {
+            return (false, "MD5 MISMATCH for \(url.lastPathComponent)")
+        }
+        return (true, "Integrity verified: \(url.lastPathComponent)")
+    }
+
+    func storeEmailHashes(_ emails: [MBOXParser.RawEmail]) {
+        for email in emails {
+            if perEmailHashes[email.id] == nil {
+                perEmailHashes[email.id] = Self.computeEmailHash(rawSource: email.rawSource)
+            }
+        }
+        saveEmailHashes()
+    }
+
+    func verifyEmailIntegrity(_ email: MBOXParser.RawEmail) -> (passed: Bool, detail: String) {
+        guard let stored = perEmailHashes[email.id] else {
+            return (false, "No stored hash for this email")
+        }
+        let current = Self.computeEmailHash(rawSource: email.rawSource)
+        if current.sha256 != stored.sha256 {
+            return (false, "Email content has been modified since import")
+        }
+        return (true, "Email integrity verified (SHA-256 match)")
+    }
+
+    // MARK: - Evidence Tagging
+
+    func tag(_ emailID: UUID, as tag: EvidenceTag) {
+        if tag == .none {
+            evidenceTags.removeValue(forKey: emailID)
+        } else {
+            evidenceTags[emailID] = tag
+        }
+        saveTags()
+        logAction("Evidence Tagged", detail: "Email \(emailID.uuidString.prefix(8)) tagged as \(tag.rawValue)")
+    }
+
+    func bulkTag(_ emailIDs: Set<UUID>, as tag: EvidenceTag) {
+        for id in emailIDs {
+            if tag == .none {
+                evidenceTags.removeValue(forKey: id)
+            } else {
+                evidenceTags[id] = tag
+            }
+        }
+        saveTags()
+        logAction("Bulk Evidence Tag", detail: "\(emailIDs.count) emails tagged as \(tag.rawValue)")
+    }
+
+    func tagForEmail(_ emailID: UUID) -> EvidenceTag {
+        evidenceTags[emailID] ?? .none
+    }
+
+    func taggedCount(for tag: EvidenceTag) -> Int {
+        evidenceTags.values.filter { $0 == tag }.count
+    }
+
+    func emailIDs(withTag tag: EvidenceTag) -> Set<UUID> {
+        Set(evidenceTags.filter { $0.value == tag }.keys)
+    }
+
+    // MARK: - Annotations
+
+    func annotate(_ emailID: UUID, text: String) {
+        annotations[emailID] = Annotation(
+            text: text,
+            examiner: examinerName.isEmpty ? "Unknown" : examinerName,
+            timestamp: Date()
+        )
+        saveAnnotations()
+        logAction("Annotation", detail: "Email \(emailID.uuidString.prefix(8)): \(text.prefix(80))")
+    }
+
+    func annotationFor(_ emailID: UUID) -> Annotation? {
+        annotations[emailID]
+    }
+
+    // MARK: - Email Header Forensics
+
+    struct ReceivedHop: Identifiable {
+        let id = UUID()
+        let from: String
+        let by: String
+        let with: String
+        let date: String
+        let ip: String?
+        let ipv6: String?
+        let authInfo: String?
+        let raw: String
+    }
+
+    static func parseReceivedChain(_ email: MBOXParser.RawEmail) -> [ReceivedHop] {
+        let receivedHeaders = email.rawSource.components(separatedBy: "\n")
+            .reduce(into: [String]()) { result, line in
+                if line.lowercased().hasPrefix("received:") {
+                    result.append(line)
+                } else if !result.isEmpty, (line.hasPrefix(" ") || line.hasPrefix("\t")) {
+                    result[result.count - 1] += " " + line.trimmingCharacters(in: .whitespaces)
+                }
+            }
+
+        return receivedHeaders.map { raw in
+            let cleaned = raw.replacingOccurrences(of: "Received:", with: "", options: .caseInsensitive).trimmingCharacters(in: .whitespaces)
+
+            let fromMatch = cleaned.range(of: #"from\s+(\S+)"#, options: .regularExpression).flatMap { String(cleaned[$0]) } ?? ""
+            let byMatch = cleaned.range(of: #"by\s+(\S+)"#, options: .regularExpression).flatMap { String(cleaned[$0]) } ?? ""
+            let withMatch = cleaned.range(of: #"with\s+(\S+)"#, options: .regularExpression).flatMap { String(cleaned[$0]) } ?? ""
+
+            let ipv4Pattern = #"\[(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\]"#
+            let ip: String?
+            if let ipRange = cleaned.range(of: ipv4Pattern, options: .regularExpression) {
+                ip = String(cleaned[ipRange]).replacingOccurrences(of: "[", with: "").replacingOccurrences(of: "]", with: "")
+            } else {
+                ip = nil
+            }
+
+            let ipv6Pattern = #"\[IPv6:([a-fA-F0-9:]+)\]"#
+            let ipv6: String?
+            if let range = cleaned.range(of: ipv6Pattern, options: .regularExpression) {
+                ipv6 = String(cleaned[range]).replacingOccurrences(of: "[IPv6:", with: "").replacingOccurrences(of: "]", with: "")
+            } else {
+                ipv6 = nil
+            }
+
+            let authPattern = #"auth=(\S+)"#
+            let authInfo: String?
+            if let range = cleaned.range(of: authPattern, options: .regularExpression) {
+                authInfo = String(cleaned[range])
+            } else {
+                authInfo = nil
+            }
+
+            let datePattern = #";(.+)$"#
+            let date: String
+            if let dateRange = cleaned.range(of: datePattern, options: .regularExpression) {
+                date = String(cleaned[dateRange]).replacingOccurrences(of: ";", with: "").trimmingCharacters(in: .whitespaces)
+            } else {
+                date = ""
+            }
+
+            return ReceivedHop(from: fromMatch, by: byMatch, with: withMatch, date: date, ip: ip, ipv6: ipv6, authInfo: authInfo, raw: raw)
+        }
+    }
+
+    static func extractAuthResults(_ email: MBOXParser.RawEmail) -> (spf: String, dkim: String, dmarc: String) {
+        let authHeader = email.headers["Authentication-Results"] ?? email.headers["authentication-results"] ?? ""
+        let spf = authHeader.range(of: #"spf=(\w+)"#, options: .regularExpression).map { String(authHeader[$0]).replacingOccurrences(of: "spf=", with: "") } ?? "N/A"
+        let dkim = authHeader.range(of: #"dkim=(\w+)"#, options: .regularExpression).map { String(authHeader[$0]).replacingOccurrences(of: "dkim=", with: "") } ?? "N/A"
+        let dmarc = authHeader.range(of: #"dmarc=(\w+)"#, options: .regularExpression).map { String(authHeader[$0]).replacingOccurrences(of: "dmarc=", with: "") } ?? "N/A"
+        return (spf, dkim, dmarc)
+    }
+
+    // MARK: - Spoofing Detection
+
+    struct SpoofIndicator: Identifiable {
+        let id = UUID()
+        let severity: SpoofSeverity
+        let type: String
+        let detail: String
+    }
+
+    enum SpoofSeverity: String {
+        case high = "High"
+        case medium = "Medium"
+        case low = "Low"
+
+        var color: Color {
+            switch self {
+            case .high: return .red
+            case .medium: return .orange
+            case .low: return .yellow
+            }
+        }
+    }
+
+    static func detectSpoofingIndicators(_ email: MBOXParser.RawEmail) -> [SpoofIndicator] {
+        var indicators: [SpoofIndicator] = []
+
+        let from = email.headers["From"] ?? ""
+        let returnPath = email.headers["Return-Path"] ?? email.headers["return-path"] ?? ""
+        let replyTo = email.headers["Reply-To"] ?? ""
+
+        let extractDomain: (String) -> String? = { addr in
+            guard let atIndex = addr.lastIndex(of: "@") else { return nil }
+            let afterAt = addr[addr.index(after: atIndex)...]
+            return afterAt.trimmingCharacters(in: CharacterSet(charactersIn: "> \t\r\n")).lowercased()
+        }
+
+        let fromDomain = extractDomain(from)
+        let returnPathDomain = extractDomain(returnPath)
+        let replyToDomain = extractDomain(replyTo)
+
+        if let fd = fromDomain, let rpd = returnPathDomain, !returnPath.isEmpty, fd != rpd {
+            indicators.append(SpoofIndicator(severity: .high, type: "Return-Path Mismatch", detail: "From domain: \(fd), Return-Path domain: \(rpd)"))
+        }
+
+        if let fd = fromDomain, let rtd = replyToDomain, !replyTo.isEmpty, fd != rtd {
+            indicators.append(SpoofIndicator(severity: .medium, type: "Reply-To Mismatch", detail: "From domain: \(fd), Reply-To domain: \(rtd)"))
+        }
+
+        let auth = extractAuthResults(email)
+        if auth.spf == "fail" {
+            indicators.append(SpoofIndicator(severity: .high, type: "SPF Fail", detail: "Sender not authorized by domain's SPF record"))
+        }
+        if auth.dkim == "fail" {
+            indicators.append(SpoofIndicator(severity: .high, type: "DKIM Fail", detail: "Email signature verification failed"))
+        }
+        if auth.dmarc == "fail" {
+            indicators.append(SpoofIndicator(severity: .high, type: "DMARC Fail", detail: "Domain-based message authentication failed"))
+        }
+
+        if let fd = fromDomain {
+            let homoglyphs: [(String, String)] = [
+                ("rn", "m"), ("cl", "d"), ("vv", "w"), ("l", "I"),
+                ("0", "O"), ("1", "l"), ("nn", "m")
+            ]
+            for (fake, real) in homoglyphs {
+                if fd.contains(fake) {
+                    let replaced = fd.replacingOccurrences(of: fake, with: real)
+                    if replaced != fd {
+                        indicators.append(SpoofIndicator(severity: .high, type: "Homoglyph Domain", detail: "Domain '\(fd)' may be impersonating '\(replaced)' (look-alike characters)"))
+                    }
+                }
+            }
+
+            let knownDomains = ["gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "icloud.com", "aol.com", "protonmail.com"]
+            for known in knownDomains {
+                if fd != known && fd.contains(known.replacingOccurrences(of: ".com", with: "")) && !fd.hasSuffix(".\(known)") {
+                    indicators.append(SpoofIndicator(severity: .medium, type: "Subdomain Spoof", detail: "Domain '\(fd)' contains '\(known)' as substring — possible impersonation"))
+                }
+            }
+        }
+
+        let xOrigIP = email.headers["X-Originating-IP"] ?? ""
+        if !xOrigIP.isEmpty {
+            let cleaned = xOrigIP.replacingOccurrences(of: "[", with: "").replacingOccurrences(of: "]", with: "")
+            if cleaned.hasPrefix("10.") || cleaned.hasPrefix("192.168.") || cleaned.hasPrefix("172.") {
+                indicators.append(SpoofIndicator(severity: .low, type: "Private IP Origin", detail: "X-Originating-IP is a private address: \(cleaned)"))
+            }
+        }
+
+        let receivedCount = parseReceivedChain(email).count
+        if receivedCount == 0 {
+            indicators.append(SpoofIndicator(severity: .medium, type: "No Received Headers", detail: "Missing Received chain — email may have been injected directly"))
+        }
+
+        return indicators
+    }
+
+    // MARK: - MIME Tree
+
+    static func buildMIMETree(_ email: MBOXParser.RawEmail) -> [MIMETreeNode] {
+        guard let root = email.mimeRoot else {
+            return [MIMETreeNode(contentType: email.headers["Content-Type"] ?? "text/plain", filename: nil, size: email.plainBody.utf8.count, children: [])]
+        }
+        return [buildNode(from: root)]
+    }
+
+    struct MIMETreeNode: Identifiable {
+        let id = UUID()
+        let contentType: String
+        let filename: String?
+        let size: Int
+        let children: [MIMETreeNode]
+    }
+
+    private static func buildNode(from part: MIMEPart) -> MIMETreeNode {
+        let children = part.subparts.map { buildNode(from: $0) }
+        return MIMETreeNode(
+            contentType: part.mimeType,
+            filename: part.filename,
+            size: part.rawData?.count ?? part.body.utf8.count,
+            children: children
+        )
+    }
+
+    // MARK: - Forensic Export Helpers
+
+    static func batesNumber(prefix: String, index: Int, padding: Int = 6) -> String {
+        "\(prefix)\(String(format: "%0\(padding)d", index))"
+    }
+
+    func exportAuditLog() -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let displayFormatter = DateFormatter()
+        displayFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss Z"
+
+        var report = "FORENSIC AUDIT LOG (TAMPER-EVIDENT)\n"
+        report += String(repeating: "=", count: 76) + "\n"
+        report += "Case Number: \(caseNumber.isEmpty ? "N/A" : caseNumber)\n"
+        report += "Examiner: \(examinerName.isEmpty ? "N/A" : examinerName)\n"
+        report += "Organization: \(organization.isEmpty ? "N/A" : organization)\n"
+        report += "Export Date: \(displayFormatter.string(from: Date()))\n"
+        report += "Total Entries: \(auditLog.count)\n"
+
+        let integrity = verifyAuditLogIntegrity()
+        switch integrity {
+        case .verified:
+            report += "Chain Integrity: VERIFIED (all \(auditLog.count) entries pass HMAC-SHA256 verification)\n"
+        case .tampered(let details):
+            report += "Chain Integrity: FAILED — \(details)\n"
+        case .noData:
+            report += "Chain Integrity: N/A (empty log)\n"
+        case .unknown:
+            report += "Chain Integrity: NOT CHECKED\n"
+        }
+        report += String(repeating: "=", count: 76) + "\n\n"
+
+        if !sourceFileHashes.isEmpty {
+            report += "SOURCE FILE INTEGRITY\n"
+            report += String(repeating: "-", count: 76) + "\n"
+            for hash in sourceFileHashes {
+                report += "File: \(hash.filename)\n"
+                report += "  Size: \(hash.fileSize) bytes\n"
+                report += "  MD5:    \(hash.md5)\n"
+                report += "  SHA-1:  \(hash.sha1)\n"
+                report += "  SHA-256: \(hash.sha256)\n"
+                report += "  Import Date: \(displayFormatter.string(from: hash.importDate))\n\n"
+            }
+        }
+
+        report += "HMAC-CHAINED ACTION LOG\n"
+        report += String(repeating: "-", count: 76) + "\n"
+        for entry in auditLog {
+            report += "#\(entry.sequence) [\(displayFormatter.string(from: entry.timestamp))] \(entry.action)\n"
+            report += "  Detail: \(entry.detail)\n"
+            report += "  Examiner: \(entry.examiner)\n"
+            report += "  HMAC: \(entry.entryHash)\n"
+            report += "  Prev: \(entry.previousHash.prefix(32))...\n\n"
+        }
+
+        report += String(repeating: "=", count: 76) + "\n"
+        report += "END OF AUDIT LOG\n"
+        report += "Final chain hash: \(auditLog.last?.entryHash ?? "N/A")\n"
+        return report
+    }
+
+    func exportBulkForensicCSV(emails: [MBOXParser.RawEmail], batesPrefix: String = "MAIL") -> String {
+        var csv = "Bates Number,Message-ID,Date,From,To,CC,Subject,MD5,SHA-1,SHA-256,Byte Count,Has Attachments,Attachment Count,Evidence Tag,Annotation,Thread-ID,Spoof Risk\n"
+
+        func csvEscape(_ s: String) -> String {
+            "\"" + s.replacingOccurrences(of: "\"", with: "\"\"").replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: "") + "\""
+        }
+
+        for (i, email) in emails.enumerated() {
+            let bates = Self.batesNumber(prefix: batesPrefix, index: i + 1)
+            let hash = perEmailHashes[email.id] ?? Self.computeEmailHash(rawSource: email.rawSource)
+            let tag = tagForEmail(email.id).rawValue
+            let note = annotations[email.id]?.text ?? ""
+            let spoofCount = Self.detectSpoofingIndicators(email).count
+            let cc = email.headers["Cc"] ?? email.headers["CC"] ?? ""
+
+            csv += "\(bates),"
+            csv += "\(csvEscape(email.headers["Message-ID"] ?? email.headers["Message-Id"] ?? "")),"
+            csv += "\(csvEscape(email.headers["Date"] ?? "")),"
+            csv += "\(csvEscape(email.headers["From"] ?? "")),"
+            csv += "\(csvEscape(email.headers["To"] ?? "")),"
+            csv += "\(csvEscape(cc)),"
+            csv += "\(csvEscape(email.headers["Subject"] ?? "")),"
+            csv += "\(hash.md5),"
+            csv += "\(hash.sha1),"
+            csv += "\(hash.sha256),"
+            csv += "\(hash.byteCount),"
+            csv += "\(!email.attachments.isEmpty),"
+            csv += "\(email.attachments.count),"
+            csv += "\(csvEscape(tag)),"
+            csv += "\(csvEscape(note)),"
+            csv += "\(csvEscape(email.threadID ?? "")),"
+            csv += "\(spoofCount)\n"
+        }
+        return csv
+    }
+
+    func exportConcordanceDAT(emails: [MBOXParser.RawEmail], batesPrefix: String = "MAIL") -> String {
+        let sep = "\u{14}"
+        let quote = "\u{FE}"
+        var dat = "\(quote)DOCID\(quote)\(sep)\(quote)BEGBATES\(quote)\(sep)\(quote)ENDBATES\(quote)\(sep)\(quote)FROM\(quote)\(sep)\(quote)TO\(quote)\(sep)\(quote)CC\(quote)\(sep)\(quote)BCC\(quote)\(sep)\(quote)SUBJECT\(quote)\(sep)\(quote)DATESENT\(quote)\(sep)\(quote)MSGID\(quote)\(sep)\(quote)HASHSHA256\(quote)\(sep)\(quote)CUSTODIAN\(quote)\(sep)\(quote)TAG\(quote)\n"
+
+        for (i, email) in emails.enumerated() {
+            let bates = Self.batesNumber(prefix: batesPrefix, index: i + 1)
+            let hash = perEmailHashes[email.id] ?? Self.computeEmailHash(rawSource: email.rawSource)
+            let tag = tagForEmail(email.id).rawValue
+            let cc = email.headers["Cc"] ?? email.headers["CC"] ?? ""
+            let bcc = email.headers["Bcc"] ?? email.headers["BCC"] ?? ""
+
+            func datEscape(_ s: String) -> String {
+                s.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: "")
+            }
+
+            dat += "\(quote)\(bates)\(quote)\(sep)"
+            dat += "\(quote)\(bates)\(quote)\(sep)"
+            dat += "\(quote)\(bates)\(quote)\(sep)"
+            dat += "\(quote)\(datEscape(email.headers["From"] ?? ""))\(quote)\(sep)"
+            dat += "\(quote)\(datEscape(email.headers["To"] ?? ""))\(quote)\(sep)"
+            dat += "\(quote)\(datEscape(cc))\(quote)\(sep)"
+            dat += "\(quote)\(datEscape(bcc))\(quote)\(sep)"
+            dat += "\(quote)\(datEscape(email.headers["Subject"] ?? ""))\(quote)\(sep)"
+            dat += "\(quote)\(datEscape(email.headers["Date"] ?? ""))\(quote)\(sep)"
+            dat += "\(quote)\(datEscape(email.headers["Message-ID"] ?? ""))\(quote)\(sep)"
+            dat += "\(quote)\(hash.sha256)\(quote)\(sep)"
+            dat += "\(quote)\(datEscape(examinerName))\(quote)\(sep)"
+            dat += "\(quote)\(tag)\(quote)\n"
+        }
+        return dat
+    }
+
+    // MARK: - Persistence
+
+    private func saveAuditLog() {
+        guard let data = try? JSONEncoder().encode(auditLog) else { return }
+        try? data.write(to: auditLogURL, options: .atomic)
+    }
+
+    private func loadAuditLog() {
+        guard let data = try? Data(contentsOf: auditLogURL),
+              let log = try? JSONDecoder().decode([AuditEntry].self, from: data) else { return }
+        auditLog = log
+    }
+
+    private func saveHashes() {
+        guard let data = try? JSONEncoder().encode(sourceFileHashes) else { return }
+        try? data.write(to: hashesURL, options: .atomic)
+    }
+
+    private func loadHashes() {
+        guard let data = try? Data(contentsOf: hashesURL),
+              let hashes = try? JSONDecoder().decode([SourceFileHash].self, from: data) else { return }
+        sourceFileHashes = hashes
+    }
+
+    private func saveTags() {
+        let dict = evidenceTags.map { (key: $0.key.uuidString, value: $0.value.rawValue) }
+        guard let data = try? JSONEncoder().encode(Dictionary(uniqueKeysWithValues: dict)) else { return }
+        try? data.write(to: tagsURL, options: .atomic)
+    }
+
+    private func loadTags() {
+        guard let data = try? Data(contentsOf: tagsURL),
+              let dict = try? JSONDecoder().decode([String: String].self, from: data) else { return }
+        for (key, value) in dict {
+            if let uuid = UUID(uuidString: key), let tag = EvidenceTag(rawValue: value) {
+                evidenceTags[uuid] = tag
+            }
+        }
+    }
+
+    private func saveAnnotations() {
+        let dict = annotations.reduce(into: [String: Annotation]()) { $0[$1.key.uuidString] = $1.value }
+        guard let data = try? JSONEncoder().encode(dict) else { return }
+        try? data.write(to: annotationsURL, options: .atomic)
+    }
+
+    private func loadAnnotations() {
+        guard let data = try? Data(contentsOf: annotationsURL),
+              let dict = try? JSONDecoder().decode([String: Annotation].self, from: data) else { return }
+        for (key, value) in dict {
+            if let uuid = UUID(uuidString: key) {
+                annotations[uuid] = value
+            }
+        }
+    }
+
+    private func saveEmailHashes() {
+        let dict = perEmailHashes.reduce(into: [String: EmailHash]()) { $0[$1.key.uuidString] = $1.value }
+        guard let data = try? JSONEncoder().encode(dict) else { return }
+        try? data.write(to: emailHashesURL, options: .atomic)
+    }
+
+    private func loadEmailHashes() {
+        guard let data = try? Data(contentsOf: emailHashesURL),
+              let dict = try? JSONDecoder().decode([String: EmailHash].self, from: data) else { return }
+        for (key, value) in dict {
+            if let uuid = UUID(uuidString: key) {
+                perEmailHashes[uuid] = value
+            }
+        }
+    }
+
+    func clearForensicData() {
+        auditLog = []
+        sourceFileHashes = []
+        evidenceTags = [:]
+        annotations = [:]
+        perEmailHashes = [:]
+        integrityStatus = .unknown
+        for url in [auditLogURL, hashesURL, tagsURL, annotationsURL, emailHashesURL, chainRootURL] {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+}

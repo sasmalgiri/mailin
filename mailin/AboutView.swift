@@ -80,13 +80,24 @@ struct AboutView: View {
             Divider()
 
             VStack(spacing: Spacing.small) {
+                HStack(spacing: Spacing.medium) {
+                    if let privacyURL = URL(string: "https://sasmalgiri.github.io/mailin/privacy") {
+                        Link("Privacy Policy", destination: privacyURL)
+                            .font(Typography.caption1)
+                    }
+                    if let termsURL = URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/") {
+                        Link("Terms of Use", destination: termsURL)
+                            .font(Typography.caption1)
+                    }
+                }
+
                 Button("Contact Support") {
                     guard let url = URL(string: "mailto:sasmalgiri@gmail.com") else { return }
                     openURL(url)
                 }
                 .buttonStyle(.link)
 
-                Text("\u{00A9} 2025 mailin. All rights reserved.")
+                Text("\u{00A9} 2025-2026 mailin. All rights reserved.")
                     .font(Typography.caption2)
                     .foregroundColor(AppColors.secondary)
             }

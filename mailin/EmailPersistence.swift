@@ -1,6 +1,8 @@
 import Foundation
 
 struct EmailPersistence {
+    private static let saveQueue = DispatchQueue(label: "com.ecosanskriti.mailin.persistence", qos: .utility)
+
     private static var storeURL: URL {
         guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
             return FileManager.default.temporaryDirectory.appendingPathComponent("mailin").appendingPathComponent("saved_emails.json")
@@ -21,19 +23,31 @@ struct EmailPersistence {
     }
 
     static func save(emails: [MBOXParser.RawEmail], senderEmail: String) {
-        DispatchQueue.global(qos: .utility).async {
-            do {
-                let encoder = JSONEncoder()
-                encoder.outputFormatting = .prettyPrinted
-                let data = try encoder.encode(emails)
-                try data.write(to: storeURL, options: .atomic)
+        guard !emails.isEmpty else { return }
+        saveQueue.async {
+            performSave(emails: emails, senderEmail: senderEmail)
+        }
+    }
 
-                let meta = SessionMeta(senderEmail: senderEmail, emailCount: emails.count, savedAt: Date())
-                let metaData = try encoder.encode(meta)
-                try metaData.write(to: metaURL, options: .atomic)
-            } catch {
-                print("Failed to save emails: \(error)")
-            }
+    static func saveSync(emails: [MBOXParser.RawEmail], senderEmail: String) {
+        guard !emails.isEmpty else { return }
+        saveQueue.sync {
+            performSave(emails: emails, senderEmail: senderEmail)
+        }
+    }
+
+    private static func performSave(emails: [MBOXParser.RawEmail], senderEmail: String) {
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = .prettyPrinted
+            let data = try encoder.encode(emails)
+            let meta = SessionMeta(senderEmail: senderEmail, emailCount: emails.count, savedAt: Date())
+            let metaData = try encoder.encode(meta)
+
+            try data.write(to: storeURL, options: .atomic)
+            try metaData.write(to: metaURL, options: .atomic)
+        } catch {
+            FileUtilsAudit.log("Failed to save emails: \(error.localizedDescription)", level: .error)
         }
     }
 
@@ -53,7 +67,6 @@ struct EmailPersistence {
             }
             return (emails, senderEmail)
         } catch {
-            print("Failed to load emails: \(error)")
             return ([], "")
         }
     }
@@ -61,6 +74,10 @@ struct EmailPersistence {
     static func clear() {
         try? FileManager.default.removeItem(at: storeURL)
         try? FileManager.default.removeItem(at: metaURL)
+    }
+
+    static func flushPendingSaves() {
+        saveQueue.sync {}
     }
 
     static var hasSavedData: Bool {

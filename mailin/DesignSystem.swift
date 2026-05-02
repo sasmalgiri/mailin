@@ -7,6 +7,52 @@
 
 import SwiftUI
 
+// MARK: - Adaptive Layout
+
+enum WindowSizeClass: Equatable {
+    case compact    // < 800pt wide (small window / 11" screen)
+    case regular    // 800–1200pt (typical laptop)
+    case expanded   // > 1200pt (large monitor / ultrawide)
+
+    static func from(width: CGFloat) -> WindowSizeClass {
+        if width < 800 { return .compact }
+        if width <= 1200 { return .regular }
+        return .expanded
+    }
+}
+
+struct WindowSizeClassKey: EnvironmentKey {
+    static let defaultValue: WindowSizeClass = .regular
+}
+
+extension EnvironmentValues {
+    var windowSizeClass: WindowSizeClass {
+        get { self[WindowSizeClassKey.self] }
+        set { self[WindowSizeClassKey.self] = newValue }
+    }
+}
+
+struct AdaptiveLayoutModifier: ViewModifier {
+    @State private var sizeClass: WindowSizeClass = .regular
+
+    func body(content: Content) -> some View {
+        GeometryReader { geo in
+            content
+                .environment(\.windowSizeClass, WindowSizeClass.from(width: geo.size.width))
+                .onAppear { sizeClass = WindowSizeClass.from(width: geo.size.width) }
+                .onChange(of: geo.size.width) { _, newWidth in
+                    sizeClass = WindowSizeClass.from(width: newWidth)
+                }
+        }
+    }
+}
+
+extension View {
+    func adaptiveLayout() -> some View {
+        modifier(AdaptiveLayoutModifier())
+    }
+}
+
 // MARK: - Spacing System
 enum Spacing {
     static let xxxSmall: CGFloat = 2
@@ -29,23 +75,22 @@ enum CornerRadius {
     static let round: CGFloat = 9999
 }
 
-// MARK: - Typography
+// MARK: - Typography (Dynamic Type compatible)
 enum Typography {
-    static let largeTitle = Font.system(size: 34, weight: .bold, design: .rounded)
-    static let title1 = Font.system(size: 28, weight: .bold, design: .rounded)
-    static let title2 = Font.system(size: 22, weight: .bold, design: .rounded)
-    static let title3 = Font.system(size: 20, weight: .semibold, design: .rounded)
-    static let headline = Font.system(size: 17, weight: .semibold)
-    static let body = Font.system(size: 15, weight: .regular)
-    static let callout = Font.system(size: 14, weight: .regular)
-    static let subheadline = Font.system(size: 13, weight: .regular)
-    static let footnote = Font.system(size: 12, weight: .regular)
-    static let caption1 = Font.system(size: 11, weight: .regular)
-    static let caption2 = Font.system(size: 10, weight: .regular)
-    
-    // Monospaced variants for email content
-    static let monoBody = Font.system(size: 13, weight: .regular, design: .monospaced)
-    static let monoSmall = Font.system(size: 11, weight: .regular, design: .monospaced)
+    static let largeTitle = Font.largeTitle.weight(.bold)
+    static let title1 = Font.title.weight(.bold)
+    static let title2 = Font.title2.weight(.bold)
+    static let title3 = Font.title3.weight(.semibold)
+    static let headline = Font.headline
+    static let body = Font.body
+    static let callout = Font.callout
+    static let subheadline = Font.subheadline
+    static let footnote = Font.footnote
+    static let caption1 = Font.caption
+    static let caption2 = Font.caption2
+
+    static let monoBody = Font.system(.subheadline, design: .monospaced)
+    static let monoSmall = Font.system(.caption, design: .monospaced)
 }
 
 // MARK: - Colors (Semantic)
@@ -194,6 +239,29 @@ extension View {
     }
 }
 
+// MARK: - Focus Visible (WCAG 2.4.7)
+
+struct FocusRingModifier: ViewModifier {
+    @Environment(\.isFocused) private var isFocused
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(
+                RoundedRectangle(cornerRadius: CornerRadius.medium)
+                    .stroke(AppColors.primary, lineWidth: 2)
+                    .opacity(isFocused ? 1 : 0)
+                    .padding(-2)
+            )
+    }
+}
+
+extension View {
+    func focusRing() -> some View {
+        self.focusable()
+            .modifier(FocusRingModifier())
+    }
+}
+
 // MARK: - Custom Button Styles
 
 struct PrimaryButtonStyle: ButtonStyle {
@@ -232,6 +300,46 @@ struct SecondaryButtonStyle: ButtonStyle {
     }
 }
 
+// MARK: - Compact Button Styles (for sidebar/toolbar use)
+
+struct CompactPrimaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(Typography.callout)
+            .fontWeight(.semibold)
+            .foregroundColor(.white)
+            .padding(.horizontal, Spacing.small)
+            .padding(.vertical, Spacing.xSmall)
+            .background(
+                RoundedRectangle(cornerRadius: CornerRadius.medium)
+                    .fill(AppColors.primary)
+            )
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .animation(AnimationTiming.fast, value: configuration.isPressed)
+    }
+}
+
+struct CompactSecondaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(Typography.callout)
+            .fontWeight(.medium)
+            .foregroundColor(AppColors.primary)
+            .padding(.horizontal, Spacing.small)
+            .padding(.vertical, Spacing.xSmall)
+            .background(
+                RoundedRectangle(cornerRadius: CornerRadius.medium)
+                    .fill(AppColors.backgroundSecondary)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: CornerRadius.medium)
+                            .stroke(AppColors.primary.opacity(0.3), lineWidth: 1)
+                    )
+            )
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .animation(AnimationTiming.fast, value: configuration.isPressed)
+    }
+}
+
 // MARK: - Custom Components
 
 /// Apple-style empty state view
@@ -241,37 +349,36 @@ struct EmptyStateView: View {
     let message: String
     var actionTitle: String?
     var action: (() -> Void)?
-    
+
     var body: some View {
         VStack(spacing: Spacing.large) {
             Image(systemName: icon)
-                .font(.system(size: 64))
+                .font(.system(size: 48))
                 .foregroundStyle(
                     .linearGradient(
-                        colors: [AppColors.primary, AppColors.primary.opacity(0.6)],
+                        colors: [AppColors.primary.opacity(0.5), AppColors.primary.opacity(0.2)],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
                 )
-            
-            VStack(spacing: Spacing.small) {
+
+            VStack(spacing: Spacing.xSmall) {
                 Text(title)
-                    .font(Typography.title2)
-                    .fontWeight(.semibold)
-                
+                    .font(.system(size: 18, weight: .semibold, design: .rounded))
+
                 Text(message)
-                    .font(Typography.body)
+                    .font(.system(size: 13))
                     .foregroundColor(AppColors.secondary)
                     .multilineTextAlignment(.center)
-                    .frame(maxWidth: 400)
+                    .frame(maxWidth: 360)
             }
-            
+
             if let actionTitle, let action {
                 Button(actionTitle, action: action)
                     .buttonStyle(PrimaryButtonStyle())
             }
         }
-        .padding(Spacing.xxLarge)
+        .padding(Spacing.xLarge)
     }
 }
 
@@ -296,5 +403,45 @@ struct LoadingView: View {
                 .fill(AppColors.backgroundTertiary)
                 .shadow(color: .black.opacity(0.1), radius: 20)
         )
+    }
+}
+
+// MARK: - Contact Avatar
+struct ContactAvatar: View {
+    let name: String
+    var size: CGFloat = 30
+
+    private var initials: String {
+        let parts = name.split(separator: " ").filter { !$0.isEmpty }
+        if parts.count >= 2 {
+            return String(parts[0].prefix(1) + parts[1].prefix(1)).uppercased()
+        }
+        return String(name.prefix(2)).uppercased()
+    }
+
+    private var gradientColors: [Color] {
+        let hash = abs(name.hashValue)
+        let palettes: [[Color]] = [
+            [.blue, .purple],
+            [.green, .teal],
+            [.orange, .pink],
+            [.indigo, .blue],
+            [.purple, .pink],
+            [.teal, .cyan],
+            [.red, .orange],
+            [.mint, .green],
+        ]
+        return palettes[hash % palettes.count]
+    }
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(LinearGradient(colors: gradientColors, startPoint: .topLeading, endPoint: .bottomTrailing))
+            Text(initials)
+                .font(.system(size: size * 0.38, weight: .semibold, design: .rounded))
+                .foregroundColor(.white)
+        }
+        .frame(width: size, height: size)
     }
 }

@@ -42,7 +42,6 @@ public class MIMEParser {
         let separator = rawEmail.contains("\r\n\r\n") ? "\r\n\r\n" : "\n\n"
         let components = rawEmail.components(separatedBy: separator)
         guard components.count >= 2 else {
-            print("Failed to split headers/body")
             return (headers: [:], parts: [])
         }
         let headerBlock = components[0]
@@ -52,7 +51,7 @@ public class MIMEParser {
         let boundary = extractBoundary(contentType)
         let parts: [MIMEPart]
         if let boundary = boundary {
-            parts = buildRecursiveParts(bodyBlock, boundary: boundary, defaultContentType: contentType)
+            parts = buildRecursiveParts(bodyBlock, boundary: boundary, defaultContentType: contentType, depth: 0)
         } else {
             parts = [makeSinglePart(headers: headers, content: bodyBlock)]
         }
@@ -110,7 +109,10 @@ public class MIMEParser {
         }
         return "utf-8"
     }
-    private static func buildRecursiveParts(_ body: String, boundary: String, defaultContentType: String) -> [MIMEPart] {
+    private static let maxRecursionDepth = 20
+
+    private static func buildRecursiveParts(_ body: String, boundary: String, defaultContentType: String, depth: Int) -> [MIMEPart] {
+        guard depth < maxRecursionDepth else { return [] }
         let marker = "--\(boundary)"
         let segments = body.components(separatedBy: marker)
         var parts: [MIMEPart] = []
@@ -125,7 +127,6 @@ public class MIMEParser {
             let contentType = headers["Content-Type"] ?? defaultContentType
             let charset = extractCharset(contentType)
             let encoding = headers["Content-Transfer-Encoding"] ?? ""
-            // *** Only decode text parts, not attachments ***
             let bodyToStore = isAttachment(headers) ? rawBody : decodeBody(rawBody, encoding: encoding, charset: charset)
             var part = MIMEPart(
                 headers: headers,
@@ -140,7 +141,7 @@ public class MIMEParser {
             )
             if contentType.lowercased().hasPrefix("multipart/"),
                let nestedBoundary = extractBoundary(contentType) {
-                part.subparts = buildRecursiveParts(part.body, boundary: nestedBoundary, defaultContentType: contentType)
+                part.subparts = buildRecursiveParts(part.body, boundary: nestedBoundary, defaultContentType: contentType, depth: depth + 1)
             } else if contentType.lowercased().hasPrefix("message/rfc822") {
                 let nested = parseEmail(rawEmail: part.body)
                 part.subparts = nested.parts
@@ -194,10 +195,23 @@ public class MIMEParser {
     private static func stringEncoding(for charset: String) -> String.Encoding {
         switch charset.lowercased() {
             case "utf-8", "utf8": return .utf8
-            case "iso-8859-1", "latin1": return .isoLatin1
+            case "iso-8859-1", "latin1", "latin-1": return .isoLatin1
+            case "iso-8859-2", "latin2", "latin-2": return .isoLatin2
             case "us-ascii", "ascii": return .ascii
-            case "windows-1252": return .windowsCP1252
-            default: return .utf8
+            case "windows-1252", "cp1252": return .windowsCP1252
+            case "windows-1251", "cp1251":
+                return String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.windowsCyrillic.rawValue)))
+            case "macintosh", "macosroman": return .macOSRoman
+            case "utf-16", "utf16": return .utf16
+            case "shift_jis", "shift-jis", "sjis": return .shiftJIS
+            case "euc-jp": return .japaneseEUC
+            case "iso-2022-jp": return .iso2022JP
+            default:
+                let cfEnc = CFStringConvertIANACharSetNameToEncoding(charset as CFString)
+                if cfEnc != kCFStringEncodingInvalidId {
+                    return String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(cfEnc))
+                }
+                return .utf8
         }
     }
     private static func makeSinglePart(headers: [String: String], content: String) -> MIMEPart {

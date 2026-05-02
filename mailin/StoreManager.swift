@@ -20,6 +20,7 @@ class StoreManager: ObservableObject {
     @Published private(set) var products: [Product] = []
     @Published private(set) var isPremium = false
     @Published private(set) var purchaseInProgress = false
+    @Published private(set) var productLoadError: String?
     @Published var showPaywall = false
 
     private var transactionListener: Task<Void, Error>?
@@ -39,6 +40,7 @@ class StoreManager: ObservableObject {
     // MARK: - Load Products
 
     func loadProducts() async {
+        productLoadError = nil
         do {
             let storeProducts = try await Product.products(for: StoreManager.allProductIDs)
             products = storeProducts.sorted { lhs, rhs in
@@ -47,14 +49,18 @@ class StoreManager: ObservableObject {
                 let rhsIndex = order.firstIndex(of: rhs.id) ?? 99
                 return lhsIndex < rhsIndex
             }
+            if products.isEmpty {
+                productLoadError = "No products found. Please check your App Store connection."
+            }
         } catch {
-            print("Failed to load products: \(error)")
+            productLoadError = "Could not load plans: \(error.localizedDescription)"
         }
     }
 
     // MARK: - Purchase
 
     func purchase(_ product: Product) async throws {
+        guard !purchaseInProgress else { return }
         purchaseInProgress = true
         defer { purchaseInProgress = false }
 
@@ -90,7 +96,8 @@ class StoreManager: ObservableObject {
         for await result in Transaction.currentEntitlements {
             guard let transaction = try? checkVerified(result) else { continue }
 
-            if StoreManager.allProductIDs.contains(transaction.productID) {
+            if StoreManager.allProductIDs.contains(transaction.productID)
+                && transaction.revocationDate == nil {
                 isPremium = true
                 return
             }
@@ -120,7 +127,7 @@ class StoreManager: ObservableObject {
     }
 
     private func listenForTransactions() -> Task<Void, Error> {
-        Task.detached { [weak self] in
+        Task { [weak self] in
             for await result in Transaction.updates {
                 guard let self, let transaction = try? self.checkVerified(result) else { continue }
                 await transaction.finish()
