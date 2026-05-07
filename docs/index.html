@@ -3,66 +3,375 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>mailin - Email Archive Analyzer for Mac</title>
+    <title>mailin - Private Email Archive Analyzer for Mac</title>
+    <meta name="description" content="Analyze email archives with on-device AI. 100% private. No cloud. No data collection. Import Gmail Takeout, Thunderbird, and .mbox files.">
     <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+            color: #1d1d1f;
+            background: #fff;
+            -webkit-font-smoothing: antialiased;
+        }
+        a { color: #0071e3; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        /* Hero */
+        .hero {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            color: #fff;
+            text-align: center;
+            padding: 80px 20px 60px;
+        }
+        .hero-icon {
+            width: 120px;
+            height: 120px;
+            border-radius: 26px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0 auto 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 56px;
+            box-shadow: 0 12px 40px rgba(102, 126, 234, 0.4);
+        }
+        .hero h1 {
+            font-size: 48px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+            margin-bottom: 12px;
+        }
+        .hero .tagline {
+            font-size: 22px;
+            color: rgba(255,255,255,0.8);
+            max-width: 500px;
+            margin: 0 auto 32px;
+            line-height: 1.4;
+        }
+        .cta-button {
+            display: inline-block;
+            background: #0071e3;
+            color: #fff;
+            padding: 14px 32px;
+            border-radius: 50px;
+            font-size: 17px;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+        .cta-button:hover { background: #0077ED; text-decoration: none; }
+        .hero-note {
+            margin-top: 16px;
+            font-size: 14px;
+            color: rgba(255,255,255,0.5);
+        }
+
+        /* Privacy Banner */
+        .privacy-banner {
+            background: #f5f5f7;
+            text-align: center;
+            padding: 40px 20px;
+        }
+        .privacy-banner .badges {
+            display: flex;
+            justify-content: center;
+            gap: 40px;
+            flex-wrap: wrap;
             max-width: 700px;
-            margin: 40px auto;
-            padding: 0 20px;
-            line-height: 1.6;
-            color: #333;
+            margin: 0 auto;
+        }
+        .badge {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 15px;
+            font-weight: 500;
+            color: #1d1d1f;
+        }
+        .badge-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: #34c759;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            font-weight: bold;
+        }
+
+        /* Features */
+        .features {
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 60px 20px;
+        }
+        .features h2 {
+            text-align: center;
+            font-size: 36px;
+            font-weight: 700;
+            margin-bottom: 48px;
+            letter-spacing: -0.3px;
+        }
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 32px;
+        }
+        .feature-card {
+            background: #f5f5f7;
+            border-radius: 16px;
+            padding: 28px;
+        }
+        .feature-card .icon {
+            font-size: 32px;
+            margin-bottom: 12px;
+        }
+        .feature-card h3 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        .feature-card p {
+            font-size: 15px;
+            color: #6e6e73;
+            line-height: 1.5;
+        }
+
+        /* Pricing */
+        .pricing {
+            background: #f5f5f7;
+            padding: 60px 20px;
             text-align: center;
         }
-        h1 { font-size: 32px; margin-bottom: 8px; }
-        .tagline { color: #666; font-size: 18px; margin-bottom: 40px; }
-        .features { text-align: left; margin: 30px 0; }
-        .features h2 { font-size: 20px; }
-        .features ul { padding-left: 20px; }
-        .features li { margin-bottom: 8px; }
-        .links { margin-top: 40px; }
-        .links a {
-            display: inline-block;
-            margin: 0 12px;
-            color: #007aff;
-            font-size: 15px;
+        .pricing h2 {
+            font-size: 36px;
+            font-weight: 700;
+            margin-bottom: 12px;
         }
-        .privacy-badge {
-            background: #f0f8f0;
-            border-left: 3px solid #34c759;
-            padding: 12px 16px;
-            margin: 30px 0;
-            border-radius: 4px;
+        .pricing .subtitle {
+            font-size: 17px;
+            color: #6e6e73;
+            margin-bottom: 40px;
+        }
+        .pricing-cards {
+            display: flex;
+            justify-content: center;
+            gap: 24px;
+            flex-wrap: wrap;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        .price-card {
+            background: #fff;
+            border-radius: 16px;
+            padding: 32px 28px;
+            width: 260px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+        }
+        .price-card.featured {
+            border: 2px solid #0071e3;
+            position: relative;
+        }
+        .price-card.featured::after {
+            content: "Most Popular";
+            position: absolute;
+            top: -12px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #0071e3;
+            color: #fff;
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .price-card h3 { font-size: 20px; margin-bottom: 8px; }
+        .price-card .price {
+            font-size: 36px;
+            font-weight: 700;
+            margin: 12px 0 4px;
+        }
+        .price-card .period { font-size: 14px; color: #6e6e73; margin-bottom: 16px; }
+        .price-card ul {
+            list-style: none;
+            text-align: left;
+            font-size: 14px;
+            color: #6e6e73;
+        }
+        .price-card ul li {
+            padding: 6px 0;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        .price-card ul li::before {
+            content: "\2713";
+            color: #34c759;
+            font-weight: bold;
+            margin-right: 8px;
+        }
+
+        /* Perfect For */
+        .perfect-for {
+            max-width: 700px;
+            margin: 0 auto;
+            padding: 60px 20px;
+            text-align: center;
+        }
+        .perfect-for h2 {
+            font-size: 36px;
+            font-weight: 700;
+            margin-bottom: 32px;
+        }
+        .use-cases {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
             text-align: left;
         }
-        a { color: #007aff; }
+        .use-case {
+            background: #f5f5f7;
+            border-radius: 12px;
+            padding: 16px 20px;
+            font-size: 15px;
+        }
+
+        /* Footer */
+        footer {
+            background: #1d1d1f;
+            color: rgba(255,255,255,0.6);
+            text-align: center;
+            padding: 40px 20px;
+            font-size: 13px;
+        }
+        footer a { color: rgba(255,255,255,0.8); }
+        footer .links { margin-bottom: 16px; }
+        footer .links a { margin: 0 16px; }
+
+        @media (max-width: 600px) {
+            .hero h1 { font-size: 32px; }
+            .hero .tagline { font-size: 18px; }
+            .features h2, .pricing h2, .perfect-for h2 { font-size: 28px; }
+            .use-cases { grid-template-columns: 1fr; }
+            .privacy-banner .badges { gap: 20px; }
+        }
     </style>
 </head>
 <body>
-    <h1>mailin</h1>
-    <p class="tagline">Email Archive Analyzer for Mac</p>
 
-    <div class="privacy-badge">
-        <strong>100% Private.</strong> All processing happens on your device. Zero data collection. Zero cloud. Your emails never leave your Mac.
-    </div>
+    <section class="hero">
+        <div class="hero-icon">&#9993;</div>
+        <h1>mailin</h1>
+        <p class="tagline">Private Email Archive Analyzer for Mac. Powered by on-device AI.</p>
+        <a class="cta-button" href="https://apps.apple.com/app/mailin/id0000000000">Download on the Mac App Store</a>
+        <p class="hero-note">Free to try &middot; macOS 14+</p>
+    </section>
 
-    <div class="features">
-        <h2>Features</h2>
-        <ul>
-            <li><strong>Smart Import</strong> &mdash; Open .mbox and .eml files from Gmail Takeout, Thunderbird, Apple Mail, and more</li>
-            <li><strong>On-Device AI</strong> &mdash; Sentiment analysis, topic detection, entity extraction, and language identification &mdash; all offline</li>
-            <li><strong>Advanced Analytics</strong> &mdash; Communication patterns, reply frequency, and conversation threading</li>
-            <li><strong>Full MIME Support</strong> &mdash; RFC 822 compliant parsing with attachment handling</li>
-            <li><strong>Native macOS</strong> &mdash; Built with SwiftUI for a fast, fluid experience</li>
-        </ul>
-    </div>
+    <section class="privacy-banner">
+        <div class="badges">
+            <div class="badge"><div class="badge-icon">&#10003;</div> 100% On-Device</div>
+            <div class="badge"><div class="badge-icon">&#10003;</div> Zero Data Collection</div>
+            <div class="badge"><div class="badge-icon">&#10003;</div> No Cloud Servers</div>
+            <div class="badge"><div class="badge-icon">&#10003;</div> No Account Required</div>
+        </div>
+    </section>
 
-    <div class="links">
-        <a href="privacy/">Privacy Policy</a>
-        <a href="https://www.apple.com/legal/internet-services/itunes/dev/stdeula/">Terms of Use</a>
-        <a href="mailto:sasmalgiri@gmail.com">Contact Support</a>
-    </div>
+    <section class="features">
+        <h2>Everything you need to analyze email archives</h2>
+        <div class="feature-grid">
+            <div class="feature-card">
+                <div class="icon">&#128300;</div>
+                <h3>On-Device AI Assistant</h3>
+                <p>Ask natural language questions about your emails. Sentiment analysis, topic extraction, entity recognition, and language detection &mdash; all running locally.</p>
+            </div>
+            <div class="feature-card">
+                <div class="icon">&#128233;</div>
+                <h3>Advanced Email Parsing</h3>
+                <p>Full RFC 822 and MIME compliant parser. Handles multipart messages, nested attachments, quoted-printable, base64, and international character sets.</p>
+            </div>
+            <div class="feature-card">
+                <div class="icon">&#128269;</div>
+                <h3>Smart Filtering</h3>
+                <p>Filter by sender, recipient, date range, domain, reply count, and message type. Boolean search, regex, and proximity search supported.</p>
+            </div>
+            <div class="feature-card">
+                <div class="icon">&#128202;</div>
+                <h3>Email Analytics</h3>
+                <p>Communication pattern charts, reply frequency analysis, conversation threading, and sender statistics at a glance.</p>
+            </div>
+            <div class="feature-card">
+                <div class="icon">&#128274;</div>
+                <h3>Forensic Tools</h3>
+                <p>Header analysis, phishing detection, HMAC-verified audit trails, evidence tagging, and legal compliance reporting for professionals.</p>
+            </div>
+            <div class="feature-card">
+                <div class="icon">&#128230;</div>
+                <h3>Import & Export</h3>
+                <p>Import .mbox and .eml from Gmail Takeout, Thunderbird, or Apple Mail. Export as EML, JSON, CSV, or plain text.</p>
+            </div>
+        </div>
+    </section>
 
-    <p style="margin-top: 40px; color: #999; font-size: 13px;">&copy; 2025-2026 mailin. All rights reserved.</p>
+    <section class="pricing">
+        <h2>Simple, honest pricing</h2>
+        <p class="subtitle">Try free with up to 200 emails. Upgrade when you're ready.</p>
+        <div class="pricing-cards">
+            <div class="price-card">
+                <h3>Free</h3>
+                <div class="price">$0</div>
+                <div class="period">forever</div>
+                <ul>
+                    <li>Up to 200 emails</li>
+                    <li>Basic search & filter</li>
+                    <li>Email detail view</li>
+                    <li>EML export</li>
+                </ul>
+            </div>
+            <div class="price-card featured">
+                <h3>Personal</h3>
+                <div class="price">$4.99</div>
+                <div class="period">/month or $29.99 lifetime</div>
+                <ul>
+                    <li>Unlimited emails</li>
+                    <li>AI assistant & analytics</li>
+                    <li>All export formats</li>
+                    <li>Topic clustering</li>
+                </ul>
+            </div>
+            <div class="price-card">
+                <h3>Professional</h3>
+                <div class="price">$9.99</div>
+                <div class="period">/month or $79.99 lifetime</div>
+                <ul>
+                    <li>Everything in Personal</li>
+                    <li>Forensic tools</li>
+                    <li>Audit trail</li>
+                    <li>Predictive coding</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <section class="perfect-for">
+        <h2>Built for</h2>
+        <div class="use-cases">
+            <div class="use-case">&#128188; Professionals managing email archives</div>
+            <div class="use-case">&#9878;&#65039; Legal teams & compliance officers</div>
+            <div class="use-case">&#128218; Researchers analyzing communication</div>
+            <div class="use-case">&#128274; Privacy-conscious users</div>
+            <div class="use-case">&#128231; Anyone leaving Gmail</div>
+            <div class="use-case">&#128187; macOS power users</div>
+        </div>
+    </section>
+
+    <footer>
+        <div class="links">
+            <a href="privacy/">Privacy Policy</a>
+            <a href="https://www.apple.com/legal/internet-services/itunes/dev/stdeula/">Terms of Use</a>
+            <a href="support/">Support</a>
+            <a href="mailto:sasmalgiri@gmail.com">Contact</a>
+        </div>
+        <p>&copy; 2025 mailin. All rights reserved. Built with native Apple technology.</p>
+    </footer>
+
 </body>
 </html>
