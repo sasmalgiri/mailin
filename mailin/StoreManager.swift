@@ -22,12 +22,27 @@ enum PurchaseTier: Int, Comparable {
 @MainActor
 class StoreManager: ObservableObject {
 
-    // MARK: - Product IDs
+    // MARK: - Product IDs (One-Time Purchase)
 
     static let personalID = "com.ecosanskriti.mailin.personal"
     static let professionalID = "com.ecosanskriti.mailin.professional"
 
-    static let allProductIDs: Set<String> = [personalID, professionalID]
+    // MARK: - Subscription Product IDs
+
+    static let subPersonalMonthlyID = "com.ecosanskriti.mailin.sub.personal.monthly"
+    static let subPersonalYearlyID = "com.ecosanskriti.mailin.sub.personal.yearly"
+    static let subProfessionalMonthlyID = "com.ecosanskriti.mailin.sub.professional.monthly"
+    static let subProfessionalYearlyID = "com.ecosanskriti.mailin.sub.professional.yearly"
+
+    static let allProductIDs: Set<String> = [
+        personalID, professionalID,
+        subPersonalMonthlyID, subPersonalYearlyID,
+        subProfessionalMonthlyID, subProfessionalYearlyID
+    ]
+
+    static let personalSubscriptionIDs: Set<String> = [subPersonalMonthlyID, subPersonalYearlyID]
+    static let professionalSubscriptionIDs: Set<String> = [subProfessionalMonthlyID, subProfessionalYearlyID]
+    static let allSubscriptionIDs: Set<String> = personalSubscriptionIDs.union(professionalSubscriptionIDs)
 
     nonisolated static let freeEmailLimit = 200
 
@@ -46,7 +61,9 @@ class StoreManager: ObservableObject {
     // MARK: - Published State
 
     @Published private(set) var products: [Product] = []
+    @Published private(set) var subscriptionProducts: [Product] = []
     @Published private(set) var currentTier: PurchaseTier = .free
+    @Published private(set) var isSubscribed = false
     @Published private(set) var purchaseInProgress = false
     @Published private(set) var purchasePending = false
     @Published private(set) var productLoadError: String?
@@ -75,10 +92,21 @@ class StoreManager: ObservableObject {
         productLoadError = nil
         do {
             let storeProducts = try await Product.products(for: StoreManager.allProductIDs)
-            products = storeProducts.sorted { lhs, _ in
-                lhs.id == StoreManager.personalID
-            }
-            if products.isEmpty {
+
+            products = storeProducts
+                .filter { $0.type == .nonConsumable }
+                .sorted { $0.id == StoreManager.personalID }
+
+            subscriptionProducts = storeProducts
+                .filter { $0.type == .autoRenewable }
+                .sorted { lhs, rhs in
+                    let lhsIsProf = StoreManager.professionalSubscriptionIDs.contains(lhs.id)
+                    let rhsIsProf = StoreManager.professionalSubscriptionIDs.contains(rhs.id)
+                    if lhsIsProf != rhsIsProf { return !lhsIsProf }
+                    return lhs.price < rhs.price
+                }
+
+            if products.isEmpty && subscriptionProducts.isEmpty {
                 productLoadError = "No products found. Please check your App Store connection."
             }
         } catch {
@@ -124,18 +152,31 @@ class StoreManager: ObservableObject {
 
     func checkEntitlements() async {
         var detectedTier: PurchaseTier = .free
+        var subscriptionActive = false
 
         for await result in Transaction.currentEntitlements {
             guard let transaction = try? checkVerified(result) else { continue }
             guard transaction.revocationDate == nil else { continue }
 
-            if transaction.productID == StoreManager.professionalID {
-                detectedTier = .professional
-            } else if transaction.productID == StoreManager.personalID && detectedTier < .professional {
-                detectedTier = .personal
+            if transaction.productType == .autoRenewable {
+                if transaction.expirationDate ?? .distantPast > Date() {
+                    subscriptionActive = true
+                    if StoreManager.professionalSubscriptionIDs.contains(transaction.productID) {
+                        detectedTier = .professional
+                    } else if StoreManager.personalSubscriptionIDs.contains(transaction.productID) && detectedTier < .professional {
+                        detectedTier = .personal
+                    }
+                }
+            } else {
+                if transaction.productID == StoreManager.professionalID {
+                    detectedTier = .professional
+                } else if transaction.productID == StoreManager.personalID && detectedTier < .professional {
+                    detectedTier = .personal
+                }
             }
         }
         currentTier = detectedTier
+        isSubscribed = subscriptionActive
     }
 
     // MARK: - Feature Gating
@@ -156,10 +197,25 @@ class StoreManager: ObservableObject {
         return isProfessional
     }
 
-    // MARK: - Helpers
+    // MARK: - Helpers (One-Time)
 
     var personalProduct: Product? { products.first { $0.id == StoreManager.personalID } }
     var professionalProduct: Product? { products.first { $0.id == StoreManager.professionalID } }
+
+    // MARK: - Helpers (Subscriptions)
+
+    var personalMonthlyProduct: Product? { subscriptionProducts.first { $0.id == StoreManager.subPersonalMonthlyID } }
+    var personalYearlyProduct: Product? { subscriptionProducts.first { $0.id == StoreManager.subPersonalYearlyID } }
+    var professionalMonthlyProduct: Product? { subscriptionProducts.first { $0.id == StoreManager.subProfessionalMonthlyID } }
+    var professionalYearlyProduct: Product? { subscriptionProducts.first { $0.id == StoreManager.subProfessionalYearlyID } }
+
+    var personalSubscriptions: [Product] {
+        subscriptionProducts.filter { StoreManager.personalSubscriptionIDs.contains($0.id) }
+    }
+
+    var professionalSubscriptions: [Product] {
+        subscriptionProducts.filter { StoreManager.professionalSubscriptionIDs.contains($0.id) }
+    }
 
     private nonisolated func checkVerified<T>(_ result: VerificationResult<T>) throws -> T {
         switch result {

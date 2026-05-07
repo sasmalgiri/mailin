@@ -91,7 +91,103 @@
     ]
   },
   "subscriptionGroups" : [
-
+    {
+      "id" : "mailin_pro_access",
+      "localizations" : [
+        {
+          "description" : "Subscribe to mailin for full access",
+          "displayName" : "mailin Pro Access",
+          "locale" : "en_US"
+        }
+      ],
+      "name" : "mailin Pro Access",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [],
+          "codeOffers" : [],
+          "displayPrice" : "9.99",
+          "familyShareable" : true,
+          "groupNumber" : 1,
+          "internalID" : "sub_pro_monthly_001",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "All features including forensic tools, audit trail & review sharing.",
+              "displayName" : "Professional Monthly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.ecosanskriti.mailin.sub.professional.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Professional Monthly",
+          "subscriptionGroupID" : "mailin_pro_access",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [],
+          "codeOffers" : [],
+          "displayPrice" : "59.99",
+          "familyShareable" : true,
+          "groupNumber" : 1,
+          "internalID" : "sub_pro_yearly_001",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "All features including forensic tools, audit trail & review sharing. Save 50%.",
+              "displayName" : "Professional Yearly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.ecosanskriti.mailin.sub.professional.yearly",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "Professional Yearly",
+          "subscriptionGroupID" : "mailin_pro_access",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [],
+          "codeOffers" : [],
+          "displayPrice" : "4.99",
+          "familyShareable" : true,
+          "groupNumber" : 2,
+          "internalID" : "sub_personal_monthly_001",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Unlimited emails, AI, exports & analytics.",
+              "displayName" : "Personal Monthly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.ecosanskriti.mailin.sub.personal.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Personal Monthly",
+          "subscriptionGroupID" : "mailin_pro_access",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [],
+          "codeOffers" : [],
+          "displayPrice" : "29.99",
+          "familyShareable" : true,
+          "groupNumber" : 2,
+          "internalID" : "sub_personal_yearly_001",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Unlimited emails, AI, exports & analytics. Save 50%.",
+              "displayName" : "Personal Yearly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.ecosanskriti.mailin.sub.personal.yearly",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "Personal Yearly",
+          "subscriptionGroupID" : "mailin_pro_access",
+          "type" : "RecurringSubscription"
+        }
+      ]
+    }
   ],
   "version" : {
     "major" : 4,

@@ -5,6 +5,7 @@ private let persistLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "mail
 
 struct EmailPersistence {
     private static let saveQueue = DispatchQueue(label: "com.ecosanskriti.mailin.persistence", qos: .utility)
+    private static let currentVersion = 1
 
     private static var storeURL: URL {
         guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
@@ -20,6 +21,7 @@ struct EmailPersistence {
     }
 
     struct SessionMeta: Codable {
+        var version: Int = 1
         let senderEmail: String
         let emailCount: Int
         let savedAt: Date
@@ -72,7 +74,21 @@ struct EmailPersistence {
             persistLog.info("Loaded \(emails.count) emails")
             return (emails, senderEmail)
         } catch {
-            persistLog.error("Failed to load emails: \(error.localizedDescription)")
+            persistLog.error("Failed to load emails: \(error.localizedDescription). Attempting legacy load.")
+            return loadLegacy()
+        }
+    }
+
+    private static func loadLegacy() -> (emails: [MBOXParser.RawEmail], senderEmail: String) {
+        do {
+            let data = try Data(contentsOf: storeURL)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .deferredToDate
+            let emails = try decoder.decode([MBOXParser.RawEmail].self, from: data)
+            persistLog.info("Legacy load recovered \(emails.count) emails")
+            return (emails, "")
+        } catch {
+            persistLog.error("Legacy load also failed: \(error.localizedDescription)")
             return ([], "")
         }
     }
