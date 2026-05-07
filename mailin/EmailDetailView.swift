@@ -1,10 +1,12 @@
 import SwiftUI
 import CryptoKit
+import PDFKit
+import ImageIO
 
-#if canImport(UIKit)
-import UIKit
-#elseif canImport(AppKit)
+#if os(macOS)
 import AppKit
+#else
+import UIKit
 #endif
 
 struct EmailDetailView: View {
@@ -20,13 +22,26 @@ struct EmailDetailView: View {
     @AppStorage("showInlineImages") private var showInlineImages = true
     @State private var showCleanView = true
     @State private var safeHTML: String = ""
+    @State private var isHTMLReady = false
     @State private var showForensicHeaders = false
     @State private var annotationText: String = ""
     @State private var showSpoofIndicators = false
 
     @State private var htmlMinHeight: CGFloat = 600
     @State private var exportError: String?
+    @State private var cachedSHA256: String = ""
+    @State private var cachedMD5: String = ""
+    #if os(iOS)
+    @State private var showShareSheet = false
+    @State private var shareItems: [Any] = []
+    #endif
     @AppStorage("autoAdvanceAfterTag") private var autoAdvanceAfterTag = true
+
+    // AI Reply Suggestion
+    @State private var showReplySheet = false
+    @State private var replyText = ""
+    @State private var isGeneratingReply = false
+    @State private var selectedReplyTone: Int = 0
 
     private var currentIndex: Int? {
         allEmails.firstIndex(where: { $0.id == email.id })
@@ -62,6 +77,7 @@ struct EmailDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.medium) {
                     subjectView
+                    riskScoreBadge
                     if forensicManager.isEnabled || personaManager.selectedPersona == .legal {
                         evidenceTagBar
                     }
@@ -73,6 +89,7 @@ struct EmailDetailView: View {
                     cleanToggle
                     emailBodyView
                     htmlBodyView
+                    rtfBodyView
                     attachmentsSection
                     exportButtons
                     Spacer(minLength: Spacing.medium)
@@ -82,7 +99,9 @@ struct EmailDetailView: View {
         }
         .navigationTitle("Email Detail")
         .onAppear {
+            // Compute HTML sanitization and mark ready for rendering
             safeHTML = sanitizedHTMLBody(from: email)
+            isHTMLReady = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .tagCurrentEmail)) { notification in
             if let tag = notification.object as? ForensicManager.EvidenceTag {
@@ -92,7 +111,18 @@ struct EmailDetailView: View {
                 }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .printCurrentEmail)) { _ in
+            printEmail()
+        }
         .animation(AnimationTiming.normal, value: showCleanView)
+        #if os(iOS)
+        .sheet(isPresented: $showShareSheet) {
+            ShareSheet(items: shareItems)
+        }
+        #endif
+        .sheet(isPresented: $showReplySheet) {
+            replySheetView
+        }
     }
 
     private var topBar: some View {
@@ -142,6 +172,23 @@ struct EmailDetailView: View {
 
             Spacer()
 
+            #if canImport(FoundationModels)
+            if #available(macOS 26, iOS 26, *) {
+                if FoundationModelEngine.isAvailable {
+                    Button {
+                        showReplySheet = true
+                    } label: {
+                        Image(systemName: "arrowshape.turn.up.left.fill")
+                            .foregroundColor(AppColors.primary)
+                            .imageScale(.large)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Suggest a reply using on-device AI")
+                    .accessibilityLabel("Suggest AI reply")
+                }
+            }
+            #endif
+
             Button {
                 printEmail()
             } label: {
@@ -169,7 +216,7 @@ struct EmailDetailView: View {
 
     private var subjectView: some View {
         Text(highlightedBody(subjectLine))
-            .font(.system(size: 20, weight: .bold, design: .default))
+            .font(.title2).fontWeight(.bold)
             .transition(.opacity.combined(with: .move(edge: .top)))
             .accessibilityAddTraits(.isHeader)
     }
@@ -221,20 +268,49 @@ struct EmailDetailView: View {
                     .font(Typography.headline)
                     .padding(.leading, Spacing.medium)
 
-                Picker("View Height", selection: $htmlMinHeight) {
-                    Text("Small").tag(CGFloat(400))
-                    Text("Medium").tag(CGFloat(600))
-                    Text("Large").tag(CGFloat(1000))
-                    Text("Extra Large").tag(CGFloat(2000))
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 320)
-                .padding(.leading, Spacing.xSmall)
-                .accessibilityLabel("HTML view height")
+                if isHTMLReady {
+                    Picker("View Height", selection: $htmlMinHeight) {
+                        Text("Small").tag(CGFloat(400))
+                        Text("Medium").tag(CGFloat(600))
+                        Text("Large").tag(CGFloat(1000))
+                        Text("Extra Large").tag(CGFloat(2000))
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 320)
+                    .padding(.leading, Spacing.xSmall)
+                    .accessibilityLabel("HTML view height")
 
-                EmailHTMLView(html: trimmedHTML, minHeight: htmlMinHeight)
+                    EmailHTMLView(html: trimmedHTML, minHeight: htmlMinHeight, attachments: email.attachments)
+                        .padding(Spacing.small)
+                        .frame(maxWidth: .infinity, minHeight: htmlMinHeight)
+                        .emailBoxStyle()
+                } else {
+                    HStack(spacing: Spacing.small) {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                        Text("Preparing HTML view...")
+                            .font(Typography.caption1)
+                            .foregroundColor(AppColors.secondary)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 100)
+                }
+            }
+            .padding(.top, Spacing.medium)
+        }
+    }
+
+    @ViewBuilder
+    private var rtfBodyView: some View {
+        if let rtfPart = email.attachments.first(where: {
+            $0.mimeType.lowercased().contains("rtf") || $0.filename.lowercased().hasSuffix(".rtf")
+        }), let data = attachmentData(for: rtfPart),
+           let attributed = try? NSAttributedString(data: data, options: [.documentType: NSAttributedString.DocumentType.rtf], documentAttributes: nil) {
+            VStack(alignment: .leading, spacing: Spacing.xSmall) {
+                Label("Rich Text", systemImage: "doc.richtext")
+                    .font(Typography.headline)
+                AttributedTextView(attributedText: attributed)
+                    .frame(minHeight: 300, maxHeight: 600)
                     .padding(Spacing.small)
-                    .frame(maxWidth: .infinity, minHeight: htmlMinHeight)
                     .emailBoxStyle()
             }
             .padding(.top, Spacing.medium)
@@ -277,7 +353,7 @@ struct EmailDetailView: View {
                             Spacer()
                             if let fileURL = att.fileURL {
                                 Button {
-                                    NSWorkspace.shared.open(fileURL)
+                                    PlatformURLOpener.open(fileURL)
                                 } label: {
                                     Label("Quick Look", systemImage: "eye")
                                         .font(Typography.caption1)
@@ -317,13 +393,21 @@ struct EmailDetailView: View {
                 ForEach(personaManager.config.exportOrder, id: \.rawValue) { format in
                     exportButton(for: format)
                 }
+
+                Divider()
+
+                Button { if storeManager.requirePremium() { exportAsTIFF() } } label: {
+                    Label("TIFF Image (.tiff)", systemImage: "photo.artframe")
+                }
             } label: {
                 Label(storeManager.isPremium ? "Export Email" : "Export Email (Pro)", systemImage: "square.and.arrow.up")
             }
+            #if os(macOS)
             .menuStyle(.borderedButton)
+            #endif
             .fixedSize()
             .accessibilityLabel("Export email")
-            .accessibilityHint("Choose from text, CSV, PDF, forensic, or redacted export formats")
+            .accessibilityHint("Choose from text, CSV, PDF, TIFF, forensic, or redacted export formats")
         }
         .alert("Export Failed", isPresented: Binding(get: { exportError != nil }, set: { if !$0 { exportError = nil } })) {
             Button("OK") { exportError = nil }
@@ -348,8 +432,8 @@ struct EmailDetailView: View {
                 Label("PDF Document", systemImage: "doc.richtext")
             }
         case .batesPDF:
-            Button { if storeManager.requirePremium() { exportBatesStampedPDF() } } label: {
-                Label("Bates-Stamped PDF", systemImage: "number.square")
+            Button { if storeManager.requireProfessional() { exportBatesStampedPDF() } } label: {
+                Label(storeManager.isProfessional ? "Bates-Stamped PDF" : "Bates-Stamped PDF (Pro)", systemImage: "number.square")
             }
         case .forensicReport:
             Button { if storeManager.requirePremium() { exportForensicReport() } } label: {
@@ -367,7 +451,7 @@ struct EmailDetailView: View {
         HStack(spacing: Spacing.small) {
             Image(systemName: "shield.checkered")
                 .foregroundColor(.orange)
-                .font(.system(size: 12))
+                .font(.footnote)
 
             Text("Evidence:")
                 .font(Typography.caption1)
@@ -382,9 +466,9 @@ struct EmailDetailView: View {
                 } label: {
                     HStack(spacing: 3) {
                         Image(systemName: tag.icon)
-                            .font(.system(size: 10))
+                            .font(.caption)
                         Text(tag.rawValue)
-                            .font(.system(size: 10, weight: .medium))
+                            .font(.caption).fontWeight(.medium)
                     }
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
@@ -404,6 +488,46 @@ struct EmailDetailView: View {
         .padding(.vertical, Spacing.xxSmall)
     }
 
+    // MARK: - Risk Score Badge
+    @ViewBuilder
+    private var riskScoreBadge: some View {
+        let risk = ForensicManager.assessRisk(for: email)
+        if risk.score > 0 {
+            HStack(spacing: Spacing.small) {
+                Image(systemName: risk.level.icon)
+                    .foregroundColor(risk.level.color)
+                    .font(.subheadline)
+
+                Text("Risk: \(risk.score)/100")
+                    .font(.system(.footnote, design: .rounded)).fontWeight(.bold)
+                    .foregroundColor(risk.level.color)
+
+                Text("(\(risk.level.rawValue))")
+                    .font(.caption).fontWeight(.medium)
+                    .foregroundColor(risk.level.color.opacity(0.8))
+
+                Spacer()
+
+                if risk.factors.count > 1 {
+                    Text("\(risk.factors.count) factors")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(.horizontal, Spacing.small)
+            .padding(.vertical, Spacing.xxSmall)
+            .background(risk.level.color.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
+            .overlay(
+                RoundedRectangle(cornerRadius: CornerRadius.medium)
+                    .stroke(risk.level.color.opacity(0.3), lineWidth: 1)
+            )
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Risk score \(risk.score) out of 100, \(risk.level.rawValue)")
+            .help(Text(verbatim: risk.factors.joined(separator: "\n")))
+        }
+    }
+
     // MARK: - Forensic Header Analysis
     private var forensicHeaderSection: some View {
         VStack(alignment: .leading, spacing: Spacing.small) {
@@ -412,7 +536,7 @@ struct EmailDetailView: View {
             } label: {
                 HStack(spacing: Spacing.xSmall) {
                     Image(systemName: showForensicHeaders ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 10))
+                        .font(.caption)
                     Image(systemName: "network")
                         .foregroundColor(.orange)
                     Text("Forensic Header Analysis")
@@ -436,12 +560,12 @@ struct EmailDetailView: View {
                     mimeTreeView
                     Divider()
                     hashVerificationView
+                        .onAppear { computeHashes() }
                     Divider()
                     annotationView
                 }
                 .padding(Spacing.small)
-                .background(.ultraThinMaterial)
-                .cornerRadius(CornerRadius.medium)
+                .adaptiveGlass(in: RoundedRectangle(cornerRadius: CornerRadius.medium))
                 .overlay(
                     RoundedRectangle(cornerRadius: CornerRadius.medium)
                         .stroke(Color.orange.opacity(0.3), lineWidth: 1)
@@ -457,9 +581,9 @@ struct EmailDetailView: View {
         if highCount > 0 {
             HStack(spacing: 2) {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 9))
+                    .font(.caption2)
                 Text("\(highCount) spoof risk")
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.caption2).fontWeight(.bold)
             }
             .foregroundColor(.red)
             .padding(.horizontal, 5)
@@ -469,9 +593,9 @@ struct EmailDetailView: View {
         } else if !indicators.isEmpty {
             HStack(spacing: 2) {
                 Image(systemName: "info.circle")
-                    .font(.system(size: 9))
+                    .font(.caption2)
                 Text("\(indicators.count) notice")
-                    .font(.system(size: 9))
+                    .font(.caption2)
             }
             .foregroundColor(.orange)
         }
@@ -488,7 +612,7 @@ struct EmailDetailView: View {
                 HStack(spacing: 4) {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(.green)
-                        .font(.system(size: 11))
+                        .font(.caption)
                     Text("No spoofing indicators detected")
                         .font(Typography.caption1)
                         .foregroundColor(.green)
@@ -497,23 +621,23 @@ struct EmailDetailView: View {
                 ForEach(indicators) { indicator in
                     HStack(alignment: .top, spacing: 6) {
                         Image(systemName: indicator.severity == .high ? "exclamationmark.triangle.fill" : indicator.severity == .medium ? "exclamationmark.circle.fill" : "info.circle.fill")
-                            .font(.system(size: 10))
+                            .font(.caption)
                             .foregroundColor(indicator.severity.color)
                             .frame(width: 14)
                         VStack(alignment: .leading, spacing: 1) {
                             HStack(spacing: 4) {
                                 Text(indicator.severity.rawValue)
-                                    .font(.system(size: 9, weight: .bold))
+                                    .font(.caption2).fontWeight(.bold)
                                     .foregroundColor(indicator.severity.color)
                                     .padding(.horizontal, 3)
                                     .padding(.vertical, 1)
                                     .background(indicator.severity.color.opacity(0.12))
                                     .cornerRadius(3)
                                 Text(indicator.type)
-                                    .font(.system(size: 10, weight: .semibold))
+                                    .font(.caption).fontWeight(.semibold)
                             }
                             Text(indicator.detail)
-                                .font(.system(size: 9, design: .monospaced))
+                                .font(.system(.caption2, design: .monospaced))
                                 .foregroundColor(.secondary)
                         }
                     }
@@ -549,17 +673,17 @@ struct EmailDetailView: View {
                         }
                     }
                     Image(systemName: node.children.isEmpty ? "doc" : "folder")
-                        .font(.system(size: 9))
+                        .font(.caption2)
                         .foregroundColor(node.children.isEmpty ? .secondary : .orange)
                     Text(node.contentType)
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(.system(.caption, design: .monospaced))
                     if let filename = node.filename {
                         Text("(\(filename))")
-                            .font(.system(size: 9))
+                            .font(.caption2)
                             .foregroundColor(.blue)
                     }
                     Text("\(node.size) bytes")
-                        .font(.system(size: 9))
+                        .font(.caption2)
                         .foregroundColor(.secondary)
                 }
                 ForEach(node.children) { child in
@@ -584,7 +708,7 @@ struct EmailDetailView: View {
                         .background(Color.orange.opacity(0.06))
                         .cornerRadius(4)
                     Text("— \(existing.examiner), \(existing.timestamp.formatted(date: .abbreviated, time: .shortened))")
-                        .font(.system(size: 9))
+                        .font(.caption2)
                         .foregroundColor(.secondary)
                 }
             }
@@ -601,6 +725,7 @@ struct EmailDetailView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(annotationText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityLabel("Save annotation")
             }
         }
         .onAppear {
@@ -626,10 +751,10 @@ struct EmailDetailView: View {
     private func authBadge(label: String, value: String) -> some View {
         HStack(spacing: 3) {
             Text(label)
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .font(.system(.caption, design: .monospaced)).fontWeight(.bold)
                 .foregroundColor(.secondary)
             Text(value)
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .font(.system(.caption, design: .monospaced)).fontWeight(.semibold)
                 .foregroundColor(value == "pass" ? .green : value == "fail" ? .red : .orange)
                 .padding(.horizontal, 4)
                 .padding(.vertical, 1)
@@ -655,32 +780,32 @@ struct EmailDetailView: View {
                 ForEach(Array(hops.enumerated()), id: \.offset) { index, hop in
                     HStack(alignment: .top, spacing: Spacing.xSmall) {
                         Text("\(index + 1)")
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .font(.system(.caption, design: .monospaced)).fontWeight(.bold)
                             .frame(width: 18)
                             .foregroundColor(.orange)
 
                         VStack(alignment: .leading, spacing: 1) {
                             if !hop.from.isEmpty {
                                 Text(hop.from)
-                                    .font(.system(size: 11, design: .monospaced))
+                                    .font(.system(.caption, design: .monospaced))
                             }
                             if !hop.by.isEmpty {
                                 Text(hop.by)
-                                    .font(.system(size: 11, design: .monospaced))
+                                    .font(.system(.caption, design: .monospaced))
                                     .foregroundColor(.secondary)
                             }
                             if let ip = hop.ip {
                                 HStack(spacing: 2) {
                                     Image(systemName: "globe")
-                                        .font(.system(size: 9))
+                                        .font(.caption2)
                                     Text(ip)
-                                        .font(.system(size: 10, design: .monospaced))
+                                        .font(.system(.caption, design: .monospaced))
                                 }
                                 .foregroundColor(.blue)
                             }
                             if !hop.date.isEmpty {
                                 Text(hop.date)
-                                    .font(.system(size: 9, design: .monospaced))
+                                    .font(.system(.caption2, design: .monospaced))
                                     .foregroundColor(.secondary)
                                     .lineLimit(1)
                             }
@@ -698,10 +823,15 @@ struct EmailDetailView: View {
         }
     }
 
-    private var hashVerificationView: some View {
+    private func computeHashes() {
         let rawData = email.rawSource.data(using: .utf8) ?? Data()
-        let sha256 = SHA256.hash(data: rawData).map { String(format: "%02x", $0) }.joined()
-        let md5 = Insecure.MD5.hash(data: rawData).map { String(format: "%02x", $0) }.joined()
+        cachedSHA256 = SHA256.hash(data: rawData).map { String(format: "%02x", $0) }.joined()
+        cachedMD5 = Insecure.MD5.hash(data: rawData).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private var hashVerificationView: some View {
+        let sha256 = cachedSHA256
+        let md5 = cachedMD5
 
         return VStack(alignment: .leading, spacing: Spacing.xxSmall) {
             Text("Message Integrity")
@@ -711,18 +841,17 @@ struct EmailDetailView: View {
             Group {
                 HStack(spacing: 4) {
                     Text("SHA-256:")
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .font(.system(.caption, design: .monospaced)).fontWeight(.semibold)
                     Text(sha256)
-                        .font(.system(size: 9, design: .monospaced))
+                        .font(.system(.caption2, design: .monospaced))
                         .foregroundColor(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Button {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(sha256, forType: .string)
+                        PlatformClipboard.copyString(sha256)
                     } label: {
                         Image(systemName: "doc.on.doc")
-                            .font(.system(size: 9))
+                            .font(.caption2)
                     }
                     .buttonStyle(.plain)
                     .help("Copy SHA-256 hash")
@@ -730,26 +859,174 @@ struct EmailDetailView: View {
                 }
                 HStack(spacing: 4) {
                     Text("MD5:")
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .font(.system(.caption, design: .monospaced)).fontWeight(.semibold)
                     Text(md5)
-                        .font(.system(size: 9, design: .monospaced))
+                        .font(.system(.caption2, design: .monospaced))
                         .foregroundColor(.secondary)
                     Button {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(md5, forType: .string)
+                        PlatformClipboard.copyString(md5)
                     } label: {
                         Image(systemName: "doc.on.doc")
-                            .font(.system(size: 9))
+                            .font(.caption2)
                     }
                     .buttonStyle(.plain)
                     .help("Copy MD5 hash")
                     .accessibilityLabel("Copy MD5 hash to clipboard")
                 }
-                Text("Raw source: \(rawData.count) bytes")
-                    .font(.system(size: 9, design: .monospaced))
+                Text("Raw source: \(email.rawSource.utf8.count) bytes")
+                    .font(.system(.caption2, design: .monospaced))
                     .foregroundColor(.secondary)
             }
         }
+    }
+
+    // MARK: - AI Reply Suggestion Sheet
+    private var replySheetView: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Image(systemName: "arrowshape.turn.up.left.fill")
+                    .foregroundColor(AppColors.primary)
+                Text("AI Reply Suggestion")
+                    .font(Typography.headline)
+                Spacer()
+                Button {
+                    showReplySheet = false
+                    replyText = ""
+                    isGeneratingReply = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(AppColors.secondary)
+                        .imageScale(.large)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(Spacing.medium)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: Spacing.medium) {
+                // Original email context
+                VStack(alignment: .leading, spacing: Spacing.xxSmall) {
+                    Text("Replying to:")
+                        .font(Typography.caption1)
+                        .foregroundColor(AppColors.secondary)
+                    Text(email.headers["Subject"] ?? "(No Subject)")
+                        .font(Typography.subheadline)
+                        .fontWeight(.semibold)
+                        .lineLimit(2)
+                    Text("From: \(email.headers["From"] ?? "Unknown")")
+                        .font(Typography.caption1)
+                        .foregroundColor(AppColors.secondary)
+                }
+                .padding(Spacing.small)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(AppColors.backgroundSecondary)
+                .cornerRadius(CornerRadius.medium)
+
+                // Tone picker
+                VStack(alignment: .leading, spacing: Spacing.xxSmall) {
+                    Text("Tone")
+                        .font(Typography.callout)
+                        .fontWeight(.semibold)
+                    #if canImport(FoundationModels)
+                    if #available(macOS 26, iOS 26, *) {
+                        Picker("Tone", selection: $selectedReplyTone) {
+                            ForEach(Array(FoundationModelEngine.ReplyTone.allCases.enumerated()), id: \.offset) { index, tone in
+                                Text(tone.rawValue).tag(index)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                    #endif
+                }
+
+                // Generate button
+                #if canImport(FoundationModels)
+                if #available(macOS 26, iOS 26, *) {
+                    Button {
+                        generateReply()
+                    } label: {
+                        HStack(spacing: Spacing.xSmall) {
+                            if isGeneratingReply {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                                    .frame(width: 16, height: 16)
+                            } else {
+                                Image(systemName: "sparkles")
+                            }
+                            Text(isGeneratingReply ? "Generating..." : "Generate Reply")
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .disabled(isGeneratingReply)
+                }
+                #endif
+
+                // Reply text area
+                if !replyText.isEmpty || isGeneratingReply {
+                    VStack(alignment: .leading, spacing: Spacing.xxSmall) {
+                        Text("Draft Reply")
+                            .font(Typography.callout)
+                            .fontWeight(.semibold)
+                        ScrollView {
+                            Text(replyText.isEmpty ? "Generating..." : replyText)
+                                .font(Typography.body)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(Spacing.small)
+                                .textSelection(.enabled)
+                        }
+                        .frame(minHeight: 150, maxHeight: 300)
+                        .background(AppColors.backgroundTertiary)
+                        .cornerRadius(CornerRadius.medium)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: CornerRadius.medium)
+                                .stroke(AppColors.separatorLight, lineWidth: 1)
+                        )
+                    }
+
+                    if !replyText.isEmpty && !isGeneratingReply {
+                        Button {
+                            PlatformClipboard.copyString(replyText)
+                        } label: {
+                            Label("Copy to Clipboard", systemImage: "doc.on.doc")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(SecondaryButtonStyle())
+                    }
+                }
+
+                Spacer()
+            }
+            .padding(Spacing.medium)
+        }
+        #if os(macOS)
+        .frame(minWidth: 480, idealWidth: 520, minHeight: 400, idealHeight: 550)
+        #endif
+        .resizableSheet()
+    }
+
+    private func generateReply() {
+        #if canImport(FoundationModels)
+        if #available(macOS 26, iOS 26, *) {
+            isGeneratingReply = true
+            replyText = ""
+            let tones = FoundationModelEngine.ReplyTone.allCases
+            let tone = tones.indices.contains(selectedReplyTone) ? tones[selectedReplyTone] : .professional
+            Task {
+                do {
+                    let _ = try await FoundationModelEngine.suggestReply(to: email, tone: tone) { text in
+                        replyText = text
+                    }
+                    isGeneratingReply = false
+                } catch {
+                    replyText = "Failed to generate reply: \(error.localizedDescription)"
+                    isGeneratingReply = false
+                }
+            }
+        }
+        #endif
     }
 
     private var subjectLine: String {
@@ -814,17 +1091,30 @@ struct EmailDetailView: View {
     @ViewBuilder
     private func attachmentPreview(for att: AttachmentMetadata) -> some View {
         let mime = att.mimeType.lowercased()
-        if mime.hasPrefix("image/"), let data = attachmentData(for: att), let nsImage = NSImage(data: data) {
-            Image(nsImage: nsImage)
+        if mime.hasPrefix("image/"), let data = attachmentData(for: att), let thumb = imageThumbnail(data: data, maxDimension: 400) {
+            platformImage(thumb)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(maxWidth: 400, maxHeight: 300)
                 .cornerRadius(CornerRadius.medium)
                 .accessibilityLabel("Preview of \(att.filename)")
+        } else if mime == "application/pdf" || att.filename.lowercased().hasSuffix(".pdf"),
+                  let data = attachmentData(for: att),
+                  let thumbnail = pdfThumbnail(data: data) {
+            platformImage(thumbnail)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: 200, maxHeight: 260)
+                .cornerRadius(CornerRadius.medium)
+                .overlay(
+                    RoundedRectangle(cornerRadius: CornerRadius.medium)
+                        .stroke(AppColors.separatorLight, lineWidth: 1)
+                )
+                .accessibilityLabel("PDF preview of \(att.filename)")
         } else if mime.hasPrefix("text/") || att.filename.hasSuffix(".txt") || att.filename.hasSuffix(".csv") || att.filename.hasSuffix(".log"),
                   let data = attachmentData(for: att), let text = String(data: data, encoding: .utf8) {
             Text(String(text.prefix(2000)))
-                .font(.system(size: 11, design: .monospaced))
+                .font(.system(.caption, design: .monospaced))
                 .foregroundColor(AppColors.secondary)
                 .padding(Spacing.xSmall)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -833,6 +1123,40 @@ struct EmailDetailView: View {
                 .frame(maxHeight: 200)
                 .accessibilityLabel("Text preview of \(att.filename)")
         }
+    }
+
+    private func pdfThumbnail(data: Data) -> PlatformImage? {
+        guard let doc = PDFDocument(data: data), let page = doc.page(at: 0) else { return nil }
+        let bounds = page.bounds(for: .mediaBox)
+        let scale = min(200 / bounds.width, 260 / bounds.height)
+        let size = CGSize(width: bounds.width * scale, height: bounds.height * scale)
+        return page.thumbnail(of: size, for: .mediaBox)
+    }
+
+    private func imageThumbnail(data: Data, maxDimension: CGFloat = 400) -> PlatformImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxDimension,
+            kCGImageSourceShouldCacheImmediately: true
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+
+        #if os(macOS)
+        return NSImage(cgImage: cgImage, size: CGSize(width: cgImage.width, height: cgImage.height))
+        #else
+        return UIImage(cgImage: cgImage)
+        #endif
+    }
+
+    private func platformImage(_ img: PlatformImage) -> Image {
+        #if os(macOS)
+        return Image(nsImage: img)
+        #else
+        return Image(uiImage: img)
+        #endif
     }
 
     private func attachmentData(for att: AttachmentMetadata) -> Data? {
@@ -899,6 +1223,7 @@ struct EmailDetailView: View {
 
     // Save one file
     private func saveAttachmentToUserFolder(fileURL: URL, suggestedName: String) {
+        #if os(macOS)
         let panel = NSSavePanel()
         panel.nameFieldStringValue = suggestedName
         panel.canCreateDirectories = true
@@ -911,10 +1236,20 @@ struct EmailDetailView: View {
                 }
             }
         }
+        #else
+        let destinationURL = FileManager.default.temporaryDirectory.appendingPathComponent(suggestedName)
+        do {
+            try FileUtils.copyFile(from: fileURL, to: destinationURL)
+            iOSShareFile(at: destinationURL)
+        } catch {
+            exportError = "Failed to save attachment: \(error.localizedDescription)"
+        }
+        #endif
     }
 
     // Download all attachments
     private func downloadAllAttachments() {
+        #if os(macOS)
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -923,26 +1258,36 @@ struct EmailDetailView: View {
         panel.prompt = "Save All"
         panel.begin { result in
             if result == .OK, let folderURL = panel.url {
-                var usedNames = Set<String>()
-                for att in email.attachments {
-                    guard let fileURL = att.fileURL else { continue }
-                    var filename = att.filename
-                    var counter = 1
-                    while usedNames.contains(filename) {
-                        let name = (att.filename as NSString).deletingPathExtension
-                        let ext = (att.filename as NSString).pathExtension
-                        filename = ext.isEmpty ? "\(name)_\(counter)" : "\(name)_\(counter).\(ext)"
-                        counter += 1
-                    }
-                    usedNames.insert(filename)
-                    let destURL = folderURL.appendingPathComponent(filename)
-                    do {
-                        try FileUtils.copyFile(from: fileURL, to: destURL)
-                    } catch {
-                        DispatchQueue.main.async {
-                            exportError = "Failed to save \(att.filename): \(error.localizedDescription)"
-                        }
-                    }
+                saveAllAttachments(to: folderURL)
+            }
+        }
+        #else
+        let folderURL = FileManager.default.temporaryDirectory.appendingPathComponent("attachments_\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
+        saveAllAttachments(to: folderURL)
+        iOSShareFile(at: folderURL)
+        #endif
+    }
+
+    private func saveAllAttachments(to folderURL: URL) {
+        var usedNames = Set<String>()
+        for att in email.attachments {
+            guard let fileURL = att.fileURL else { continue }
+            var filename = att.filename
+            var counter = 1
+            while usedNames.contains(filename) {
+                let name = (att.filename as NSString).deletingPathExtension
+                let ext = (att.filename as NSString).pathExtension
+                filename = ext.isEmpty ? "\(name)_\(counter)" : "\(name)_\(counter).\(ext)"
+                counter += 1
+            }
+            usedNames.insert(filename)
+            let destURL = folderURL.appendingPathComponent(filename)
+            do {
+                try FileUtils.copyFile(from: fileURL, to: destURL)
+            } catch {
+                Task { @MainActor in
+                    exportError = "Failed to save \(att.filename): \(error.localizedDescription)"
                 }
             }
         }
@@ -950,23 +1295,25 @@ struct EmailDetailView: View {
 
     private func exportAsPlainText() {
         let fileName = "\(subjectLine.replacingOccurrences(of: " ", with: "_")).txt"
+
+        var exportText = ""
+        exportText += "Subject: \(subjectLine)\n"
+        exportText += "From: \(header("From"))\n"
+        exportText += "To: \(header("To"))\n"
+        exportText += "Date: \(header("Date"))\n"
+        exportText += "Reply-To: \(header("Reply-To"))\n"
+        exportText += "CC: \(header("Cc"))\n"
+        exportText += "BCC: \(header("Bcc"))\n"
+        exportText += "Message-ID: \(header("Message-ID"))\n\n"
+        exportText += emailBody
+
+        #if os(macOS)
         let panel = NSSavePanel()
         panel.nameFieldStringValue = fileName
         panel.canCreateDirectories = true
 
         panel.begin { result in
             if result == .OK, let url = panel.url {
-                var exportText = ""
-                exportText += "Subject: \(subjectLine)\n"
-                exportText += "From: \(header("From"))\n"
-                exportText += "To: \(header("To"))\n"
-                exportText += "Date: \(header("Date"))\n"
-                exportText += "Reply-To: \(header("Reply-To"))\n"
-                exportText += "CC: \(header("Cc"))\n"
-                exportText += "BCC: \(header("Bcc"))\n"
-                exportText += "Message-ID: \(header("Message-ID"))\n\n"
-                exportText += emailBody
-
                 do {
                     try FileUtils.writeString(exportText, to: url)
                 } catch {
@@ -974,30 +1321,41 @@ struct EmailDetailView: View {
                 }
             }
         }
+        #else
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+        do {
+            try FileUtils.writeString(exportText, to: url)
+            iOSShareFile(at: url)
+        } catch {
+            exportError = "Failed to export as TXT: \(error.localizedDescription)"
+        }
+        #endif
     }
 
     private func exportAsCSV() {
         let fileName = "\(subjectLine.replacingOccurrences(of: " ", with: "_")).csv"
+
+        let csvHeaders = "Subject,From,To,Date,Body\n"
+        func csvEscape(_ s: String) -> String {
+            let sanitized = s
+                .replacingOccurrences(of: "\"", with: "\"\"")
+                .replacingOccurrences(of: "\r\n", with: " ")
+                .replacingOccurrences(of: "\n", with: " ")
+                .replacingOccurrences(of: "\r", with: " ")
+            return "\"" + sanitized + "\""
+        }
+        let csvRow = [subjectLine, header("From"), header("To"), header("Date"), emailBody]
+            .map { csvEscape($0) }
+            .joined(separator: ",") + "\n"
+        let csvContent = csvHeaders + csvRow
+
+        #if os(macOS)
         let panel = NSSavePanel()
         panel.nameFieldStringValue = fileName
         panel.canCreateDirectories = true
 
         panel.begin { result in
             if result == .OK, let url = panel.url {
-                let csvHeaders = "Subject,From,To,Date,Body\n"
-                func csvEscape(_ s: String) -> String {
-                    let sanitized = s
-                        .replacingOccurrences(of: "\"", with: "\"\"")
-                        .replacingOccurrences(of: "\r\n", with: " ")
-                        .replacingOccurrences(of: "\n", with: " ")
-                        .replacingOccurrences(of: "\r", with: " ")
-                    return "\"" + sanitized + "\""
-                }
-                let csvRow = [subjectLine, header("From"), header("To"), header("Date"), emailBody]
-                    .map { csvEscape($0) }
-                    .joined(separator: ",") + "\n"
-                let csvContent = csvHeaders + csvRow
-
                 do {
                     try FileUtils.writeString(csvContent, to: url)
                 } catch {
@@ -1005,6 +1363,15 @@ struct EmailDetailView: View {
                 }
             }
         }
+        #else
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+        do {
+            try FileUtils.writeString(csvContent, to: url)
+            iOSShareFile(at: url)
+        } catch {
+            exportError = "Failed to export CSV: \(error.localizedDescription)"
+        }
+        #endif
     }
 
     private func exportAsPDF() {
@@ -1044,6 +1411,7 @@ struct EmailDetailView: View {
                   documentAttributes: nil
               ) else { return }
 
+        #if os(macOS)
         let printInfo = NSPrintInfo()
         printInfo.paperSize = NSSize(width: 612, height: 792)
         printInfo.topMargin = 36
@@ -1062,9 +1430,7 @@ struct EmailDetailView: View {
         let safeName = subjectLine.replacingOccurrences(of: "[^A-Za-z0-9 ]", with: "_", options: .regularExpression)
         panel.nameFieldStringValue = "\(safeName).pdf"
         panel.canCreateDirectories = true
-        if #available(macOS 12.0, *) {
-            panel.allowedContentTypes = [.pdf]
-        }
+        panel.allowedContentTypes = [.pdf]
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
@@ -1075,6 +1441,24 @@ struct EmailDetailView: View {
         printOp.showsPrintPanel = false
         printOp.showsProgressPanel = false
         printOp.run()
+        #else
+        let safeName = subjectLine.replacingOccurrences(of: "[^A-Za-z0-9 ]", with: "_", options: .regularExpression)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(safeName).pdf")
+
+        let pageRect = CGRect(x: 0, y: 0, width: 612, height: 792)
+        let renderer = UIGraphicsPDFRenderer(bounds: pageRect)
+        do {
+            let pdfData = renderer.pdfData { ctx in
+                ctx.beginPage()
+                let textRect = pageRect.insetBy(dx: 36, dy: 36)
+                attrString.draw(in: textRect)
+            }
+            try pdfData.write(to: url)
+            iOSShareFile(at: url)
+        } catch {
+            exportError = "Failed to export PDF: \(error.localizedDescription)"
+        }
+        #endif
     }
 
     private func exportBatesStampedPDF() {
@@ -1115,12 +1499,21 @@ struct EmailDetailView: View {
         let bodyLines = emailBody.components(separatedBy: .newlines)
         lines.append(contentsOf: bodyLines)
 
-        let bodyFont = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
-        let headerFont = NSFont.systemFont(ofSize: 8, weight: .medium)
-        let batesFont = NSFont.monospacedSystemFont(ofSize: 9, weight: .bold)
-        let bodyAttrs: [NSAttributedString.Key: Any] = [.font: bodyFont, .foregroundColor: NSColor.textColor]
-        let headerAttrs: [NSAttributedString.Key: Any] = [.font: headerFont, .foregroundColor: NSColor.secondaryLabelColor]
-        let batesAttrs: [NSAttributedString.Key: Any] = [.font: batesFont, .foregroundColor: NSColor.textColor]
+        let bodyFont = PlatformFont.monospacedSystemFont(ofSize: 10, weight: .regular)
+        let headerFont = PlatformFont.systemFont(ofSize: 8, weight: .medium)
+        let batesFont = PlatformFont.monospacedSystemFont(ofSize: 9, weight: .bold)
+        #if os(macOS)
+        let labelColor = PlatformColor.labelColor
+        let secondaryLabelColor = PlatformColor.secondaryLabelColor
+        let separatorColor = PlatformColor.separatorColor
+        #else
+        let labelColor = PlatformColor.label
+        let secondaryLabelColor = PlatformColor.secondaryLabel
+        let separatorColor = PlatformColor.separator
+        #endif
+        let bodyAttrs: [NSAttributedString.Key: Any] = [.font: bodyFont, .foregroundColor: labelColor]
+        let headerAttrs: [NSAttributedString.Key: Any] = [.font: headerFont, .foregroundColor: secondaryLabelColor]
+        let batesAttrs: [NSAttributedString.Key: Any] = [.font: batesFont, .foregroundColor: labelColor]
 
         let lineHeight: CGFloat = 14
         let usableHeight = contentTop - contentBottom
@@ -1141,14 +1534,17 @@ struct EmailDetailView: View {
         if !currentPage.isEmpty { pages.append(currentPage) }
         if pages.isEmpty { pages.append([]) }
 
-        let panel = NSSavePanel()
         let safeName = subjectLine.replacingOccurrences(of: "[^A-Za-z0-9 ]", with: "_", options: .regularExpression)
+
+        #if os(macOS)
+        let panel = NSSavePanel()
         panel.nameFieldStringValue = "\(batesNumber)_\(safeName).pdf"
         panel.canCreateDirectories = true
-        if #available(macOS 12.0, *) {
-            panel.allowedContentTypes = [.pdf]
-        }
+        panel.allowedContentTypes = [.pdf]
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        #else
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(batesNumber)_\(safeName).pdf")
+        #endif
 
         var mediaBox = CGRect(x: 0, y: 0, width: pageWidth, height: pageHeight)
         guard let context = CGContext(url as CFURL, mediaBox: &mediaBox, nil) else {
@@ -1161,22 +1557,26 @@ struct EmailDetailView: View {
         for (pageIndex, pageLines) in pages.enumerated() {
             context.beginPage(mediaBox: &mediaBox)
 
+            #if os(macOS)
             let nsContext = NSGraphicsContext(cgContext: context, flipped: false)
             NSGraphicsContext.current = nsContext
+            #else
+            UIGraphicsPushContext(context)
+            #endif
 
             // Header: case info left, Bates number right
             let headerY = pageHeight - margin - 12
             var headerLeft = "mailin Forensic Export"
             if !caseNum.isEmpty { headerLeft = "Case: \(caseNum)" }
             if !examiner.isEmpty { headerLeft += "  |  Examiner: \(examiner)" }
-            (headerLeft as NSString).draw(at: NSPoint(x: margin, y: headerY), withAttributes: headerAttrs)
+            (headerLeft as NSString).draw(at: CGPoint(x: margin, y: headerY), withAttributes: headerAttrs)
 
             let batesStr = "\(batesNumber) — Page \(pageIndex + 1) of \(pages.count)"
             let batesSize = (batesStr as NSString).size(withAttributes: batesAttrs)
-            (batesStr as NSString).draw(at: NSPoint(x: pageWidth - margin - batesSize.width, y: headerY), withAttributes: batesAttrs)
+            (batesStr as NSString).draw(at: CGPoint(x: pageWidth - margin - batesSize.width, y: headerY), withAttributes: batesAttrs)
 
             // Header divider
-            context.setStrokeColor(NSColor.separatorColor.cgColor)
+            context.setStrokeColor(separatorColor.cgColor)
             context.setLineWidth(0.5)
             context.move(to: CGPoint(x: margin, y: headerY - 4))
             context.addLine(to: CGPoint(x: pageWidth - margin, y: headerY - 4))
@@ -1185,36 +1585,44 @@ struct EmailDetailView: View {
             // Body content
             for (lineIdx, line) in pageLines.enumerated() {
                 let y = contentTop - CGFloat(lineIdx) * lineHeight - lineHeight
-                (line as NSString).draw(at: NSPoint(x: margin, y: y), withAttributes: bodyAttrs)
+                (line as NSString).draw(at: CGPoint(x: margin, y: y), withAttributes: bodyAttrs)
             }
 
             // Footer divider
-            context.setStrokeColor(NSColor.separatorColor.cgColor)
+            context.setStrokeColor(separatorColor.cgColor)
             context.move(to: CGPoint(x: margin, y: contentBottom + 8))
             context.addLine(to: CGPoint(x: pageWidth - margin, y: contentBottom + 8))
             context.strokePath()
 
             // Footer: date left, hash right
             let footerY = margin + 10
-            (dateStr as NSString).draw(at: NSPoint(x: margin, y: footerY), withAttributes: headerAttrs)
+            (dateStr as NSString).draw(at: CGPoint(x: margin, y: footerY), withAttributes: headerAttrs)
             if let hash = emailHash {
                 let hashStr = "MD5: \(hash.md5)"
                 let hashSize = (hashStr as NSString).size(withAttributes: headerAttrs)
-                (hashStr as NSString).draw(at: NSPoint(x: pageWidth - margin - hashSize.width, y: footerY), withAttributes: headerAttrs)
+                (hashStr as NSString).draw(at: CGPoint(x: pageWidth - margin - hashSize.width, y: footerY), withAttributes: headerAttrs)
             }
 
+            #if os(macOS)
             NSGraphicsContext.current = nil
+            #else
+            UIGraphicsPopContext()
+            #endif
             context.endPage()
         }
 
         context.closePDF()
+
+        #if os(iOS)
+        iOSShareFile(at: url)
+        #endif
 
         if forensicManager.isEnabled {
             forensicManager.logAction("Bates PDF Export", detail: "\(batesNumber) — \(pages.count) pages, subject: \(subjectLine)")
         }
     }
 
-    private func wrapLine(_ line: String, maxWidth: CGFloat, font: NSFont) -> [String] {
+    private func wrapLine(_ line: String, maxWidth: CGFloat, font: PlatformFont) -> [String] {
         if line.isEmpty { return [""] }
         let attrs: [NSAttributedString.Key: Any] = [.font: font]
         let size = (line as NSString).size(withAttributes: attrs)
@@ -1236,6 +1644,13 @@ struct EmailDetailView: View {
         return result
     }
 
+    #if os(iOS)
+    private func iOSShareFile(at url: URL) {
+        shareItems = [url]
+        showShareSheet = true
+    }
+    #endif
+
     private func printEmail() {
         let headerText = """
         Subject: \(subjectLine)
@@ -1244,6 +1659,7 @@ struct EmailDetailView: View {
         Date: \(header("Date"))
         """
 
+        #if os(macOS)
         let htmlContent: String
         let trimmedHTML = email.htmlBody.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedHTML.isEmpty {
@@ -1282,6 +1698,10 @@ struct EmailDetailView: View {
         printOp.showsPrintPanel = true
         printOp.showsProgressPanel = true
         printOp.run()
+        #else
+        let printText = "\(headerText)\n\n\(emailBody)"
+        PlatformPrinter.printText(printText)
+        #endif
     }
 
     // MARK: - Forensic Report Export
@@ -1368,16 +1788,28 @@ struct EmailDetailView: View {
         report += "\n\n" + String(repeating: "=", count: 70) + "\n"
         report += "END OF FORENSIC REPORT\n"
         report += "Document integrity verified at time of export.\n"
-        report += "SHA-256: \(sha256)\n"
+        report += "SHA-256: \(sha256)\n\n"
+        report += String(repeating: "-", count: 70) + "\n"
+        report += "DISCLAIMER: " + LegalComplianceManager.forensicDisclaimer + "\n"
 
-        let panel = NSSavePanel()
         let safeName = subjectLine.replacingOccurrences(of: "[^A-Za-z0-9 ]", with: "_", options: .regularExpression)
-        panel.nameFieldStringValue = "forensic_\(batesNum)_\(safeName).txt"
+        let fileName = "forensic_\(batesNum)_\(safeName).txt"
+
+        #if os(macOS)
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = fileName
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        #else
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+        #endif
+
         do {
             try report.write(to: url, atomically: true, encoding: .utf8)
             forensicManager.logAction("Forensic Export", detail: "Exported forensic report for \(batesNum): \(subjectLine)")
+            #if os(iOS)
+            iOSShareFile(at: url)
+            #endif
         } catch {
             exportError = error.localizedDescription
         }
@@ -1391,16 +1823,62 @@ struct EmailDetailView: View {
         redactedText += "Date: \(header("Date"))\n\n"
         redactedText += EmailNLPEngine.redactPII(in: emailBody)
 
-        let panel = NSSavePanel()
         let safeName = subjectLine.replacingOccurrences(of: "[^A-Za-z0-9 ]", with: "_", options: .regularExpression)
-        panel.nameFieldStringValue = "redacted_\(safeName).txt"
+        let fileName = "redacted_\(safeName).txt"
+
+        #if os(macOS)
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = fileName
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        #else
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+        #endif
+
         do {
             try redactedText.write(to: url, atomically: true, encoding: .utf8)
+            #if os(iOS)
+            iOSShareFile(at: url)
+            #endif
         } catch {
             exportError = error.localizedDescription
         }
+    }
+
+    // MARK: - TIFF Export
+    private func exportAsTIFF() {
+        guard let tiffData = ExportManager.exportAsTIFF(email: email) else {
+            exportError = "Failed to generate TIFF image."
+            return
+        }
+
+        let safeName = subjectLine.replacingOccurrences(of: "[^A-Za-z0-9 ]", with: "_", options: .regularExpression)
+        let fileName = "\(safeName).tiff"
+
+        #if os(macOS)
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = fileName
+        panel.canCreateDirectories = true
+        panel.allowedContentTypes = [.tiff]
+
+        panel.begin { result in
+            if result == .OK, let url = panel.url {
+                do {
+                    try tiffData.write(to: url)
+                } catch {
+                    exportError = "Failed to export TIFF: \(error.localizedDescription)"
+                }
+            }
+        }
+        #else
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+        do {
+            try tiffData.write(to: url)
+            iOSShareFile(at: url)
+        } catch {
+            exportError = "Failed to export TIFF: \(error.localizedDescription)"
+        }
+        #endif
     }
 
     private var headerBlock: some View {
@@ -1409,8 +1887,7 @@ struct EmailDetailView: View {
             narrowHeaderLayout
         }
         .padding(Spacing.medium)
-        .background(.ultraThinMaterial)
-        .cornerRadius(CornerRadius.large)
+        .adaptiveGlass(in: RoundedRectangle(cornerRadius: CornerRadius.large))
         .overlay(
             RoundedRectangle(cornerRadius: CornerRadius.large)
                 .stroke(AppColors.separatorLight, lineWidth: 0.5)
@@ -1441,8 +1918,11 @@ struct EmailDetailView: View {
                     }
                 }
             }
+            smimeStatusView
         }
+        #if os(macOS)
         .frame(minWidth: 500)
+        #endif
     }
 
     private var narrowHeaderLayout: some View {
@@ -1461,6 +1941,52 @@ struct EmailDetailView: View {
             }
             if hasHeader("Message-ID") {
                 LabelText(title: "Message-ID", value: header("Message-ID"))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var smimeStatusView: some View {
+        let sigResult = SMIMEHandler.verifySignature(of: email)
+        let isEncrypted = SMIMEHandler.isEncrypted(email)
+        if sigResult.status != .notSigned || isEncrypted {
+            HStack(spacing: Spacing.small) {
+                if sigResult.status != .notSigned {
+                    HStack(spacing: 4) {
+                        Image(systemName: sigResult.status == .valid ? "checkmark.seal.fill" : sigResult.status == .unknownSigner ? "questionmark.circle.fill" : "xmark.seal.fill")
+                            .foregroundColor(sigResult.status == .valid ? .green : sigResult.status == .unknownSigner ? .orange : .red)
+                            .font(.footnote)
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text("Signature: \(sigResult.status.rawValue)")
+                                .font(Typography.caption1)
+                                .fontWeight(.semibold)
+                            if let name = sigResult.signerName {
+                                Text(name)
+                                    .font(Typography.caption2)
+                                    .foregroundColor(AppColors.secondary)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, Spacing.small)
+                    .padding(.vertical, Spacing.xxxSmall)
+                    .background(sigResult.status == .valid ? Color.green.opacity(0.1) : Color.orange.opacity(0.1))
+                    .cornerRadius(CornerRadius.small)
+                }
+                if isEncrypted {
+                    HStack(spacing: 4) {
+                        Image(systemName: "lock.fill")
+                            .foregroundColor(.blue)
+                            .font(.footnote)
+                        Text("S/MIME Encrypted")
+                            .font(Typography.caption1)
+                            .fontWeight(.semibold)
+                    }
+                    .padding(.horizontal, Spacing.small)
+                    .padding(.vertical, Spacing.xxxSmall)
+                    .background(Color.blue.opacity(0.1))
+                    .cornerRadius(CornerRadius.small)
+                }
+                Spacer()
             }
         }
     }
@@ -1565,6 +2091,7 @@ func decodeWithCharset(data: Data, charset: String) -> String? {
     }
     return String(data: data, encoding: encoding)
 }
+#if os(macOS)
 import AppKit
 
 extension View {
@@ -1591,3 +2118,4 @@ extension View {
         NSApp.activate()
     }
 }
+#endif

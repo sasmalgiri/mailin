@@ -6,9 +6,9 @@
 
 import Foundation
 
-#if os(macOS) || os(Linux)
+#if canImport(Darwin)
 import Darwin
-#else
+#elseif canImport(Glibc)
 import Glibc
 #endif
 
@@ -440,7 +440,6 @@ public class FileUtils {
     }
 
     // MARK: - File System Watcher (optional)
-    // TODO: Add FSEvents/inotify integration for live mailbox update
 
     // MARK: - Misc Logging
     public static func info(_ message: String) { FileUtilsAudit.log(message, level: .info) }

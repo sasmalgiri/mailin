@@ -9,11 +9,17 @@ import SwiftUI
 
 struct AboutView: View {
     @Environment(\.openURL) private var openURL
-    
+    @State private var showLegalSheet: LegalSheet?
+
+    private enum LegalSheet: String, Identifiable {
+        case privacy, terms, licenses, forensic, accessibility
+        var id: String { rawValue }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             VStack(spacing: Spacing.medium) {
-                Image(nsImage: NSApplication.shared.applicationIconImage)
+                PlatformApp.appIconImage
                     .resizable()
                     .scaledToFit()
                     .frame(width: 128, height: 128)
@@ -37,6 +43,7 @@ struct AboutView: View {
             }
             .padding(.top, Spacing.xLarge)
             .padding(.bottom, Spacing.large)
+            .adaptiveHeroBackground(colors: [.blue, .purple, .indigo, .cyan])
 
             Divider()
 
@@ -45,7 +52,7 @@ struct AboutView: View {
                     featureRow(
                         icon: "gift.fill",
                         title: "Free to Try, Flexible Upgrade",
-                        description: "Monthly, yearly, or lifetime — choose the plan that works for you."
+                        description: "Monthly or yearly — choose the plan that works for you."
                     )
                     featureRow(
                         icon: "lock.shield.fill",
@@ -75,27 +82,47 @@ struct AboutView: View {
                 }
                 .padding(.horizontal, Spacing.large)
                 .padding(.vertical, Spacing.medium)
+                .adaptiveCard(cornerRadius: CornerRadius.large)
             }
 
             Divider()
 
             VStack(spacing: Spacing.small) {
                 HStack(spacing: Spacing.medium) {
-                    if let privacyURL = URL(string: "https://sasmalgiri.github.io/mailin/privacy") {
-                        Link("Privacy Policy", destination: privacyURL)
-                            .font(Typography.caption1)
-                    }
-                    if let termsURL = URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/") {
-                        Link("Terms of Use", destination: termsURL)
-                            .font(Typography.caption1)
-                    }
+                    Button("Privacy Policy") { showLegalSheet = .privacy }
+                        .font(Typography.caption1)
+                    Button("Terms of Use") { showLegalSheet = .terms }
+                        .font(Typography.caption1)
+                    Button("Licenses") { showLegalSheet = .licenses }
+                        .font(Typography.caption1)
                 }
+                #if os(macOS)
+                .buttonStyle(.link)
+                #else
+                .buttonStyle(.borderless)
+                #endif
+
+                HStack(spacing: Spacing.medium) {
+                    Button("Forensic Disclaimer") { showLegalSheet = .forensic }
+                        .font(Typography.caption2)
+                    Button("Accessibility") { showLegalSheet = .accessibility }
+                        .font(Typography.caption2)
+                }
+                #if os(macOS)
+                .buttonStyle(.link)
+                #else
+                .buttonStyle(.borderless)
+                #endif
 
                 Button("Contact Support") {
                     guard let url = URL(string: "mailto:sasmalgiri@gmail.com") else { return }
                     openURL(url)
                 }
+                #if os(macOS)
                 .buttonStyle(.link)
+                #else
+                .buttonStyle(.borderless)
+                #endif
 
                 Text("\u{00A9} 2025-2026 mailin. All rights reserved.")
                     .font(Typography.caption2)
@@ -103,17 +130,85 @@ struct AboutView: View {
             }
             .padding(.vertical, Spacing.medium)
         }
-        .frame(width: 400, height: 500)
+        #if os(macOS)
+        .frame(width: 400, height: 560)
+        #endif
         .background(AppColors.backgroundPrimary)
+        .sheet(item: $showLegalSheet) { sheet in
+            legalSheetContent(sheet)
+        }
     }
+
+    @ViewBuilder
+    private func legalSheetContent(_ sheet: LegalSheet) -> some View {
+        NavigationStack {
+            ScrollView {
+                Text(textForSheet(sheet))
+                    .font(.system(.caption, design: .monospaced))
+                    .padding(Spacing.medium)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .navigationTitle(titleForSheet(sheet))
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showLegalSheet = nil }
+                }
+            }
+        }
+        #if os(macOS)
+        .frame(width: 500, height: 450)
+        #endif
+    }
+
+    private func titleForSheet(_ sheet: LegalSheet) -> String {
+        switch sheet {
+        case .privacy: return "Privacy Policy"
+        case .terms: return "Terms of Use"
+        case .licenses: return "Third-Party Notices"
+        case .forensic: return "Forensic Disclaimer"
+        case .accessibility: return "Accessibility"
+        }
+    }
+
+    private func textForSheet(_ sheet: LegalSheet) -> String {
+        switch sheet {
+        case .privacy: return LegalComplianceManager.privacyPolicySummary
+        case .terms: return LegalComplianceManager.termsOfUseSummary
+        case .licenses: return LegalComplianceManager.thirdPartyNotices
+        case .forensic: return LegalComplianceManager.forensicDisclaimer
+        case .accessibility: return Self.accessibilityStatement
+        }
+    }
+
+    private static let accessibilityStatement = """
+    ACCESSIBILITY STATEMENT
+
+    mailin is committed to providing an accessible experience for all users.
+
+    Supported Accessibility Features:
+    • VoiceOver: All interactive elements have accessibility labels and hints
+    • Dynamic Type: Text scales with system font size settings
+    • Keyboard Navigation: Full keyboard support on macOS and iPad with external keyboard
+    • Reduce Motion: Respects system reduce motion preference
+    • High Contrast: Semantic colors adapt to increased contrast settings
+    • Focus Indicators: Visible focus rings on interactive elements
+
+    Known Limitations:
+    • HTML email rendering may not be fully accessible for complex email layouts
+    • Some chart visualizations in Analytics may have limited VoiceOver descriptions
+
+    If you encounter accessibility barriers, please contact us:
+    sasmalgiri@gmail.com
+
+    We are committed to improving accessibility in every release.
+    """
 
     private func featureRow(icon: String, title: String, description: String) -> some View {
         HStack(alignment: .top, spacing: Spacing.small) {
-            Image(systemName: icon)
-                .font(Typography.title2)
-                .foregroundStyle(
-                    .linearGradient(colors: [.blue, .purple], startPoint: .topLeading, endPoint: .bottomTrailing)
-                )
+            featureIcon(icon)
                 .frame(width: 32)
 
             VStack(alignment: .leading, spacing: Spacing.xxSmall) {
@@ -124,6 +219,25 @@ struct AboutView: View {
                     .foregroundColor(AppColors.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+    @ViewBuilder
+    private func featureIcon(_ name: String) -> some View {
+        if #available(macOS 15, iOS 18, *) {
+            Image(systemName: name)
+                .font(Typography.title2)
+                .foregroundStyle(
+                    MeshGradient(width: 2, height: 2, points: [
+                        .init(0, 0), .init(1, 0),
+                        .init(0, 1), .init(1, 1)
+                    ], colors: [.blue, .purple, .indigo, .cyan])
+                )
+        } else {
+            Image(systemName: name)
+                .font(Typography.title2)
+                .foregroundStyle(
+                    .linearGradient(colors: [.blue, .purple], startPoint: .topLeading, endPoint: .bottomTrailing)
+                )
         }
     }
 }

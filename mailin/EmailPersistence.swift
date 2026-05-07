@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let persistLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "mailin", category: "Persistence")
 
 struct EmailPersistence {
     private static let saveQueue = DispatchQueue(label: "com.ecosanskriti.mailin.persistence", qos: .utility)
@@ -46,16 +49,17 @@ struct EmailPersistence {
 
             try data.write(to: storeURL, options: .atomic)
             try metaData.write(to: metaURL, options: .atomic)
+            persistLog.info("Saved \(emails.count) emails (\(data.count) bytes)")
         } catch {
-            FileUtilsAudit.log("Failed to save emails: \(error.localizedDescription)", level: .error)
+            persistLog.error("Failed to save emails: \(error.localizedDescription)")
         }
     }
 
     static func load() -> (emails: [MBOXParser.RawEmail], senderEmail: String) {
+        guard FileManager.default.fileExists(atPath: storeURL.path) else {
+            return ([], "")
+        }
         do {
-            guard FileManager.default.fileExists(atPath: storeURL.path) else {
-                return ([], "")
-            }
             let data = try Data(contentsOf: storeURL)
             let emails = try JSONDecoder().decode([MBOXParser.RawEmail].self, from: data)
 
@@ -65,8 +69,10 @@ struct EmailPersistence {
                 let meta = try JSONDecoder().decode(SessionMeta.self, from: metaData)
                 senderEmail = meta.senderEmail
             }
+            persistLog.info("Loaded \(emails.count) emails")
             return (emails, senderEmail)
         } catch {
+            persistLog.error("Failed to load emails: \(error.localizedDescription)")
             return ([], "")
         }
     }

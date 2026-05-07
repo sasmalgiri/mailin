@@ -37,14 +37,11 @@
     <h2>Email Processing</h2>
     <p>All email parsing, analysis, and AI processing happens <strong>entirely on your device</strong>. Your email data is never uploaded to any server, cloud service, or third party. mailin uses Apple's on-device NaturalLanguage framework and FoundationModels framework for AI features &mdash; both run locally on your Mac.</p>
 
-    <h2>Optional Cloud AI Feature</h2>
-    <p>mailin includes an optional Cloud AI assistant that users can enable in Settings. When enabled, email content you choose to analyze is sent to the third-party AI provider whose endpoint you configure (e.g., OpenAI, Anthropic, or a local server). This feature is <strong>off by default</strong>, requires explicit consent each session, and no data is sent without your action. mailin does not store or log any data sent to or received from cloud AI providers.</p>
-
     <h2>Network Access</h2>
     <p>mailin does not require an internet connection to function. Network activity is limited to:</p>
     <ul>
         <li><strong>App Store:</strong> Apple's StoreKit for in-app purchases, handled entirely by Apple's systems.</li>
-        <li><strong>Cloud AI (optional):</strong> Only when explicitly enabled and triggered by you.</li>
+        <li><strong>iCloud Sync (optional):</strong> Forensic metadata only (tags, annotations, case info). Email content is never synced.</li>
     </ul>
 
     <h2>Third-Party Services</h2>

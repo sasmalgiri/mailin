@@ -1,27 +1,59 @@
 import Foundation
 import StoreKit
 
+enum PurchaseTier: Int, Comparable {
+    case free = 0
+    case personal = 1
+    case professional = 2
+
+    static func < (lhs: PurchaseTier, rhs: PurchaseTier) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+
+    var displayName: String {
+        switch self {
+        case .free: return "Free"
+        case .personal: return "Personal"
+        case .professional: return "Professional"
+        }
+    }
+}
+
 @MainActor
 class StoreManager: ObservableObject {
 
     // MARK: - Product IDs
 
-    static let monthlyID = "com.ecosanskriti.mailin.monthly"
-    static let yearlyID = "com.ecosanskriti.mailin.yearly"
-    static let lifetimeID = "com.ecosanskriti.mailin.lifetime"
+    static let personalID = "com.ecosanskriti.mailin.personal"
+    static let professionalID = "com.ecosanskriti.mailin.professional"
 
-    static let subscriptionIDs: Set<String> = [monthlyID, yearlyID]
-    static let allProductIDs: Set<String> = [monthlyID, yearlyID, lifetimeID]
+    static let allProductIDs: Set<String> = [personalID, professionalID]
 
-    nonisolated static let freeEmailLimit = 50
+    nonisolated static let freeEmailLimit = 200
+
+    // MARK: - Professional-Only Features
+
+    enum ProFeature {
+        case auditTrail
+        case collaboration
+        case iCloudSync
+        case chainOfCustody
+        case batesNumbering
+        case batchProcessing
+        case prioritySupport
+    }
 
     // MARK: - Published State
 
     @Published private(set) var products: [Product] = []
-    @Published private(set) var isPremium = false
+    @Published private(set) var currentTier: PurchaseTier = .free
     @Published private(set) var purchaseInProgress = false
+    @Published private(set) var purchasePending = false
     @Published private(set) var productLoadError: String?
     @Published var showPaywall = false
+
+    var isPremium: Bool { currentTier >= .personal }
+    var isProfessional: Bool { currentTier >= .professional }
 
     private var transactionListener: Task<Void, Error>?
 
@@ -43,17 +75,14 @@ class StoreManager: ObservableObject {
         productLoadError = nil
         do {
             let storeProducts = try await Product.products(for: StoreManager.allProductIDs)
-            products = storeProducts.sorted { lhs, rhs in
-                let order: [String] = [StoreManager.monthlyID, StoreManager.yearlyID, StoreManager.lifetimeID]
-                let lhsIndex = order.firstIndex(of: lhs.id) ?? 99
-                let rhsIndex = order.firstIndex(of: rhs.id) ?? 99
-                return lhsIndex < rhsIndex
+            products = storeProducts.sorted { lhs, _ in
+                lhs.id == StoreManager.personalID
             }
             if products.isEmpty {
                 productLoadError = "No products found. Please check your App Store connection."
             }
         } catch {
-            productLoadError = "Could not load plans: \(error.localizedDescription)"
+            productLoadError = "Could not load products: \(error.localizedDescription)"
         }
     }
 
@@ -62,6 +91,7 @@ class StoreManager: ObservableObject {
     func purchase(_ product: Product) async throws {
         guard !purchaseInProgress else { return }
         purchaseInProgress = true
+        purchasePending = false
         defer { purchaseInProgress = false }
 
         let result = try await product.purchase()
@@ -76,7 +106,7 @@ class StoreManager: ObservableObject {
             break
 
         case .pending:
-            break
+            purchasePending = true
 
         @unknown default:
             break
@@ -93,17 +123,22 @@ class StoreManager: ObservableObject {
     // MARK: - Entitlement Check
 
     func checkEntitlements() async {
+        var detectedTier: PurchaseTier = .free
+
         for await result in Transaction.currentEntitlements {
             guard let transaction = try? checkVerified(result) else { continue }
+            guard transaction.revocationDate == nil else { continue }
 
-            if StoreManager.allProductIDs.contains(transaction.productID)
-                && transaction.revocationDate == nil {
-                isPremium = true
-                return
+            if transaction.productID == StoreManager.professionalID {
+                detectedTier = .professional
+            } else if transaction.productID == StoreManager.personalID && detectedTier < .professional {
+                detectedTier = .personal
             }
         }
-        isPremium = false
+        currentTier = detectedTier
     }
+
+    // MARK: - Feature Gating
 
     func requirePremium() -> Bool {
         if isPremium { return true }
@@ -111,11 +146,20 @@ class StoreManager: ObservableObject {
         return false
     }
 
+    func requireProfessional() -> Bool {
+        if isProfessional { return true }
+        showPaywall = true
+        return false
+    }
+
+    func hasAccess(to feature: ProFeature) -> Bool {
+        return isProfessional
+    }
+
     // MARK: - Helpers
 
-    var monthlyProduct: Product? { products.first { $0.id == StoreManager.monthlyID } }
-    var yearlyProduct: Product? { products.first { $0.id == StoreManager.yearlyID } }
-    var lifetimeProduct: Product? { products.first { $0.id == StoreManager.lifetimeID } }
+    var personalProduct: Product? { products.first { $0.id == StoreManager.personalID } }
+    var professionalProduct: Product? { products.first { $0.id == StoreManager.professionalID } }
 
     private nonisolated func checkVerified<T>(_ result: VerificationResult<T>) throws -> T {
         switch result {

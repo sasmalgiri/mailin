@@ -6,7 +6,10 @@ struct ParsedEmailListView: View {
     @EnvironmentObject var storeManager: StoreManager
     @ObservedObject private var forensicManager = ForensicManager.shared
     @ObservedObject private var personaManager = PersonaManager.shared
+    @ObservedObject private var predictiveEngine = PredictiveCodingEngine.shared
+    @ObservedObject private var custodianManager = CustodianManager.shared
     @AppStorage("enableAIFeatures") private var enableAIFeatures = true
+    @FocusState private var isSearchFieldFocused: Bool
  
     private enum ActiveSheet: Identifiable {
         case stats
@@ -32,11 +35,24 @@ struct ParsedEmailListView: View {
     @State private var quickFilterFlagged = false
     @State private var quickFilterUnreviewed = false
     @State private var quickFilterLargeEmails = false
+    @State private var quickFilterPrivileged = false
+    @State private var quickFilterHighPriority = false
+    @State private var quickFilterHasLinks = false
     @State private var showSaveSearchAlert = false
     @State private var saveSearchName = ""
     @State private var showCleanupMode = false
+    @State private var quickFilterAIImportant = false
+    @State private var quickFilterAISuspicious = false
+    @State private var quickFilterAINegative = false
+    @State private var quickFilterAINewsletter = false
+    @State private var showAIPaywall = false
+    private static let freeAIFilterLimit = 3
+    @State private var aiFilterUsageCount: Int = 0
     @State private var listExportError: String?
-   
+    #if os(iOS)
+    @State private var showShareSheet = false
+    @State private var shareItems: [Any] = []
+    #endif
 
     private var quickFilteredEmails: [MBOXParser.RawEmail] {
         model.filteredEmails.filter { email in
@@ -55,12 +71,40 @@ struct ParsedEmailListView: View {
                 let size = email.rawSource.utf8.count
                 if size < 100_000 { return false }
             }
+            if quickFilterPrivileged {
+                let tag = ForensicManager.shared.evidenceTags[email.id] ?? .none
+                if tag != .privileged { return false }
+            }
+            if quickFilterHighPriority {
+                let score = model.priorityScores[email.id] ?? 0
+                if score < 4 { return false }
+            }
+            if quickFilterHasLinks {
+                let body = email.plainBody.lowercased()
+                if !body.contains("http://") && !body.contains("https://") && !body.contains("www.") { return false }
+            }
+            // AI Smart Filters
+            if quickFilterAIImportant {
+                let score = model.priorityScores[email.id] ?? 0
+                if score < 3 { return false }
+            }
+            if quickFilterAISuspicious {
+                if !model.phishingEmailIDs.contains(email.id) { return false }
+            }
+            if quickFilterAINegative {
+                let sentiment = model.sentimentScores[email.id] ?? 0
+                if sentiment >= -0.3 { return false }
+            }
+            if quickFilterAINewsletter {
+                let cat = model.emailClassifications[email.id] ?? .unknown
+                if cat != .newsletter && cat != .promotional { return false }
+            }
             return true
         }
     }
 
     private var quickFilteredThreads: [EmailThread] {
-        let hasQuickFilter = quickFilterSent || quickFilterReceived || quickFilterAttachments || quickFilterFlagged || quickFilterUnreviewed || quickFilterLargeEmails
+        let hasQuickFilter = quickFilterSent || quickFilterReceived || quickFilterAttachments || quickFilterFlagged || quickFilterUnreviewed || quickFilterLargeEmails || quickFilterPrivileged || quickFilterHighPriority || quickFilterHasLinks || quickFilterAIImportant || quickFilterAISuspicious || quickFilterAINegative || quickFilterAINewsletter
         guard hasQuickFilter else { return model.emailThreads }
         let allowedIDs = Set(quickFilteredEmails.map(\.id))
         return model.emailThreads.compactMap { thread in
@@ -77,67 +121,66 @@ struct ParsedEmailListView: View {
 
     // MARK: - UI
     var body: some View {
-        VStack(spacing: Spacing.small) {
+        VStack(spacing: Spacing.xxSmall) {
             headerView
             quickFilterBar
             Divider()
             contentView
-            Spacer(minLength: 0)
 
             if totalAttachments > 0 || !model.filteredEmails.isEmpty {
                 Divider()
-                HStack(spacing: Spacing.xxSmall) {
-                    if totalAttachments > 0 {
-                        Button {
-                            if storeManager.requirePremium() {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: Spacing.xxSmall) {
+                        if totalAttachments > 0 {
+                            Button {
                                 downloadAllAttachments()
+                            } label: {
+                                Label("Export (\(totalAttachments))", systemImage: "arrow.down.circle.fill")
+                                    .font(Typography.caption1)
                             }
-                        } label: {
-                            Label(storeManager.isPremium ? "Export (\(totalAttachments))" : "Export (Pro)", systemImage: "arrow.down.circle.fill")
-                                .font(Typography.caption1)
+                            .buttonStyle(CompactPrimaryButtonStyle())
+                            .controlSize(.small)
                         }
-                        .buttonStyle(CompactPrimaryButtonStyle())
-                        .controlSize(.small)
-                    }
 
-                    if !model.filteredEmails.isEmpty {
-                        Button {
-                            if storeManager.requirePremium() {
+                        if !model.filteredEmails.isEmpty {
+                            Button {
                                 exportFilteredJSON()
+                            } label: {
+                                Label("JSON", systemImage: "square.and.arrow.up")
+                                    .font(Typography.caption1)
                             }
-                        } label: {
-                            Label(storeManager.isPremium ? "JSON" : "JSON (Pro)", systemImage: "square.and.arrow.up")
-                                .font(Typography.caption1)
+                            .buttonStyle(CompactSecondaryButtonStyle())
+                            .controlSize(.small)
                         }
-                        .buttonStyle(CompactSecondaryButtonStyle())
-                        .controlSize(.small)
-                    }
 
-                    Button {
-                        showAnalyticsSheet = true
-                    } label: {
-                        Label(personaManager.config.showAnalyticsProminent ? "Discover Patterns" : "Analytics",
-                              systemImage: personaManager.config.showAnalyticsProminent ? "sparkle.magnifyingglass" : "chart.bar.xaxis")
-                            .font(.system(size: personaManager.config.showAnalyticsProminent ? 12 : 11, weight: .semibold))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, personaManager.config.showAnalyticsProminent ? 14 : 10)
-                            .padding(.vertical, personaManager.config.showAnalyticsProminent ? 7 : 5)
-                            .background(
-                                LinearGradient(
-                                    colors: personaManager.config.showAnalyticsProminent ? [.purple, .blue] : [.orange, .pink],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
+                        Button {
+                            showAnalyticsSheet = true
+                        } label: {
+                            Label(personaManager.config.showAnalyticsProminent ? "Discover Patterns" : "Analytics",
+                                  systemImage: personaManager.config.showAnalyticsProminent ? "sparkle.magnifyingglass" : "chart.bar.xaxis")
+                                .font(personaManager.config.showAnalyticsProminent ? .footnote : .caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.white)
+                                .padding(.horizontal, personaManager.config.showAnalyticsProminent ? 14 : 10)
+                                .padding(.vertical, personaManager.config.showAnalyticsProminent ? 7 : 5)
+                                .background(
+                                    LinearGradient(
+                                        colors: personaManager.config.showAnalyticsProminent ? [.purple, .blue] : [.orange, .pink],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
                                 )
-                            )
-                            .clipShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Email analytics")
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Email analytics")
 
-                    if enableAIFeatures {
-                        AIWindowButton(model: model)
-                            .environmentObject(storeManager)
+                        if enableAIFeatures {
+                            AIWindowButton(model: model)
+                                .environmentObject(storeManager)
+                        }
                     }
+                    .fixedSize(horizontal: true, vertical: false)
                 }
                 .padding(.vertical, Spacing.xxxSmall)
                 .padding(.horizontal, Spacing.xxSmall)
@@ -150,15 +193,23 @@ struct ParsedEmailListView: View {
             switch sheet {
             case .stats:
                 ReplyStatsView(replyData: model.replyFrequency(for: model.viewModel.senderEmail))
+                    #if os(macOS)
                     .frame(minWidth: 500, minHeight: 400)
+                    #endif
             case .rawSource(let rfc822):
                 RawSourceView(rawText: rfc822)
+                    #if os(macOS)
                     .frame(minWidth: 800, minHeight: 600)
+                    #endif
             }
         }
 
         .sheet(isPresented: $showAnalyticsSheet) {
             EmailAnalyticsView(emails: model.filteredEmails)
+        }
+        .sheet(isPresented: $showAIPaywall) {
+            PaywallView()
+                .environmentObject(storeManager)
         }
         .alert("Save Search", isPresented: $showSaveSearchAlert) {
             TextField("Search name", text: $saveSearchName)
@@ -175,12 +226,15 @@ struct ParsedEmailListView: View {
         } message: {
             Text(listExportError ?? "An unknown error occurred.")
         }
+        #if os(iOS)
+        .sheet(isPresented: $showShareSheet) {
+            ShareSheet(items: shareItems)
+        }
+        #endif
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    if storeManager.requirePremium() {
-                        activeSheet = .stats
-                    }
+                    activeSheet = .stats
                 } label: {
                     Label("Reply Stats", systemImage: "chart.bar")
                 }
@@ -194,11 +248,13 @@ struct ParsedEmailListView: View {
         VStack(spacing: Spacing.xxSmall) {
             HStack(spacing: Spacing.xSmall) {
                 Text(personaListTitle)
-                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .font(.system(.headline, design: .rounded))
+                    .fontWeight(.bold)
 
                 if !model.filteredEmails.isEmpty {
                     Text("\(model.filteredEmails.count)")
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .font(.system(.caption, design: .rounded))
+                        .fontWeight(.semibold)
                         .foregroundColor(.white)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 2)
@@ -209,37 +265,99 @@ struct ParsedEmailListView: View {
                 Spacer()
 
                 Toggle(isOn: $model.groupByThread) {
-                    Label("Threads", systemImage: "bubble.left.and.bubble.right")
-                        .font(Typography.caption1)
+                    Label {
+                        #if os(macOS)
+                        Text("Threads")
+                        #else
+                        EmptyView()
+                        #endif
+                    } icon: {
+                        Image(systemName: "bubble.left.and.bubble.right")
+                    }
+                    .font(Typography.caption1)
                 }
                 .toggleStyle(.button)
+                #if os(macOS)
                 .help("Group emails into conversation threads")
+                #endif
                 .accessibilityLabel("Group by thread")
                 .accessibilityHint("Toggle conversation threading")
                 .accessibilityAddTraits(model.groupByThread ? .isSelected : [])
 
-                Picker("Sort by", selection: $model.sortBy) {
-                    ForEach(ParsedEmailListViewModel.SortOption.allCases, id: \.self) {
-                        Text($0.label)
+                Menu {
+                    ForEach(ParsedEmailListViewModel.SortOption.allCases, id: \.self) { option in
+                        Button {
+                            model.sortBy = option
+                            model.applyFilters()
+                        } label: {
+                            if model.sortBy == option {
+                                Label(option.label, systemImage: "checkmark")
+                            } else {
+                                Text(option.label)
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 2) {
+                        Image(systemName: "arrow.up.arrow.down")
+                            .font(.footnote)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 8))
+                            .foregroundColor(.secondary)
                     }
                 }
-                .pickerStyle(.menu)
+                #if os(macOS)
                 .help("Change the order emails are displayed")
-                .accessibilityLabel("Sort order")
-                .onChange(of: model.sortBy) { _, _ in
-                    model.applyFilters()
-                }
+                #endif
+                .accessibilityLabel("Sort order: \(model.sortBy.label)")
             }
 
             HStack(spacing: Spacing.xSmall) {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.footnote)
+                    .fontWeight(.medium)
                     .foregroundColor(AppColors.secondary)
-                TextField("Search emails...", text: $model.searchText)
+                TextField(model.isNaturalLanguageMode ? "Ask naturally, e.g. \"John's emails from last week with attachments\"" : "Search emails...", text: $model.searchText)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 13))
-                    .accessibilityLabel("Search emails")
-                    .accessibilityHint("Supports operators: from:, to:, subject:, has:attachment, before:, after:")
+                    .font(.footnote)
+                    .focused($isSearchFieldFocused)
+                    .accessibilityLabel(model.isNaturalLanguageMode ? "Natural language search" : "Search emails")
+                    .accessibilityHint(model.isNaturalLanguageMode ? "Type a natural language query to filter emails" : "Supports operators: from:, to:, subject:, has:attachment, before:, after:")
+                    .onChange(of: model.searchText) { _, _ in
+                        model.searchTextDidChange()
+                    }
+                    .onChange(of: model.isSearchFocused) { _, newValue in
+                        if newValue {
+                            isSearchFieldFocused = true
+                            model.isSearchFocused = false
+                        }
+                    }
+
+                Button {
+                    model.isNaturalLanguageMode.toggle()
+                    if !model.searchText.isEmpty {
+                        model.searchTextDidChange()
+                    }
+                } label: {
+                    Text("NL")
+                        .font(.system(.caption2, design: .rounded))
+                        .fontWeight(.bold)
+                        .foregroundColor(model.isNaturalLanguageMode ? .white : AppColors.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(model.isNaturalLanguageMode ? AppColors.primary : Color.clear)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(model.isNaturalLanguageMode ? Color.clear : AppColors.secondary.opacity(0.5), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+                #if os(macOS)
+                .help(model.isNaturalLanguageMode ? "Switch to keyword search" : "Switch to natural language search")
+                #endif
+                .accessibilityLabel(model.isNaturalLanguageMode ? "Natural language mode active" : "Enable natural language mode")
+
                 if !model.searchText.isEmpty {
                     Button {
                         showSaveSearchAlert = true
@@ -248,11 +366,14 @@ struct ParsedEmailListView: View {
                             .foregroundColor(AppColors.primary)
                     }
                     .buttonStyle(.plain)
+                    #if os(macOS)
                     .help("Save this search")
+                    #endif
                     .accessibilityLabel("Save current search")
 
                     Button {
                         model.searchText = ""
+                        model.hasAttachmentFilter = false
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundColor(AppColors.secondary)
@@ -285,70 +406,142 @@ struct ParsedEmailListView: View {
                             .foregroundColor(AppColors.secondary)
                     }
                     .buttonStyle(.plain)
+                    #if os(macOS)
                     .help("Saved searches")
+                    #endif
                 }
             }
             .padding(.horizontal, Spacing.small)
             .padding(.vertical, Spacing.xxSmall)
-            .background(AppColors.backgroundSecondary)
-            .cornerRadius(CornerRadius.medium)
+            .adaptiveGlass(in: RoundedRectangle(cornerRadius: CornerRadius.medium))
         }
+    }
+
+    // MARK: - AI Filter Helpers
+
+    private var hasAnyAIFilter: Bool {
+        let cfg = personaManager.config.showQuickFilters
+        return cfg.contains(.aiImportant) || cfg.contains(.aiSuspicious) || cfg.contains(.aiNegative) || cfg.contains(.aiNewsletter)
+    }
+
+    private var hasAnyQuickFilterActive: Bool {
+        quickFilterSent || quickFilterReceived || quickFilterAttachments || quickFilterFlagged || quickFilterUnreviewed || quickFilterLargeEmails || quickFilterPrivileged || quickFilterHighPriority || quickFilterHasLinks || quickFilterAIImportant || quickFilterAISuspicious || quickFilterAINegative || quickFilterAINewsletter
+    }
+
+    private func clearAllQuickFilters() {
+        quickFilterSent = false
+        quickFilterReceived = false
+        quickFilterAttachments = false
+        quickFilterFlagged = false
+        quickFilterUnreviewed = false
+        quickFilterLargeEmails = false
+        quickFilterPrivileged = false
+        quickFilterHighPriority = false
+        quickFilterHasLinks = false
+        quickFilterAIImportant = false
+        quickFilterAISuspicious = false
+        quickFilterAINegative = false
+        quickFilterAINewsletter = false
+    }
+
+    private func aiFilterBinding(for binding: Binding<Bool>) -> Binding<Bool> {
+        Binding(
+            get: { binding.wrappedValue },
+            set: { newValue in
+                if newValue && !storeManager.isPremium {
+                    if aiFilterUsageCount >= Self.freeAIFilterLimit {
+                        showAIPaywall = true
+                        return
+                    }
+                    aiFilterUsageCount += 1
+                }
+                binding.wrappedValue = newValue
+            }
+        )
     }
 
     // MARK: - Quick Filter Bar
     private var quickFilterBar: some View {
-        HStack(spacing: Spacing.xSmall) {
-            if personaManager.showQuickFilter(.sent) {
-                QuickFilterChip(label: "Sent", icon: "arrow.up.right", isActive: Binding(
-                    get: { quickFilterSent },
-                    set: { newValue in
-                        quickFilterSent = newValue
-                        if newValue { quickFilterReceived = false }
+        HStack(spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Spacing.xSmall) {
+                    if personaManager.showQuickFilter(.sent) {
+                        QuickFilterChip(label: "Sent", icon: "arrow.up.right", isActive: Binding(
+                            get: { quickFilterSent },
+                            set: { newValue in
+                                quickFilterSent = newValue
+                                if newValue { quickFilterReceived = false }
+                            }
+                        ))
                     }
-                ))
-            }
-            if personaManager.showQuickFilter(.received) {
-                QuickFilterChip(label: "Received", icon: "arrow.down.left", isActive: Binding(
-                    get: { quickFilterReceived },
-                    set: { newValue in
-                        quickFilterReceived = newValue
-                        if newValue { quickFilterSent = false }
+                    if personaManager.showQuickFilter(.received) {
+                        QuickFilterChip(label: "Received", icon: "arrow.down.left", isActive: Binding(
+                            get: { quickFilterReceived },
+                            set: { newValue in
+                                quickFilterReceived = newValue
+                                if newValue { quickFilterSent = false }
+                            }
+                        ))
                     }
-                ))
+                    if personaManager.showQuickFilter(.attachments) {
+                        QuickFilterChip(label: "Attachments", icon: "paperclip", isActive: $quickFilterAttachments)
+                    }
+                    if personaManager.showQuickFilter(.flagged) {
+                        QuickFilterChip(label: "Flagged", icon: "flag.fill", isActive: $quickFilterFlagged)
+                    }
+                    if personaManager.showQuickFilter(.unreviewed) {
+                        QuickFilterChip(label: "Unreviewed", icon: "eye.slash", isActive: $quickFilterUnreviewed)
+                    }
+                    if personaManager.showQuickFilter(.largeEmails) {
+                        QuickFilterChip(label: "Large", icon: "arrow.up.circle", isActive: $quickFilterLargeEmails)
+                    }
+                    if personaManager.showQuickFilter(.privileged) {
+                        QuickFilterChip(label: "Privileged", icon: "lock.shield", isActive: $quickFilterPrivileged)
+                    }
+                    if personaManager.showQuickFilter(.highPriority) {
+                        QuickFilterChip(label: "High Priority", icon: "exclamationmark.triangle.fill", isActive: $quickFilterHighPriority)
+                    }
+                    if personaManager.showQuickFilter(.hasLinks) {
+                        QuickFilterChip(label: "Has Links", icon: "link", isActive: $quickFilterHasLinks)
+                    }
+                    if personaManager.showQuickFilter(.cleanup) {
+                        QuickFilterChip(label: "Cleanup", icon: "trash.circle", isActive: $showCleanupMode)
+                    }
+
+                    if enableAIFeatures && hasAnyAIFilter {
+                        Divider()
+                            .frame(height: 16)
+                            .padding(.horizontal, 2)
+
+                        if personaManager.showQuickFilter(.aiImportant) {
+                            AIFilterChip(label: "Important", icon: "bolt.fill", isActive: aiFilterBinding(for: $quickFilterAIImportant), isComputing: !model.aiFiltersComputed)
+                        }
+                        if personaManager.showQuickFilter(.aiSuspicious) {
+                            AIFilterChip(label: "Suspicious", icon: "exclamationmark.shield.fill", isActive: aiFilterBinding(for: $quickFilterAISuspicious), isComputing: !model.aiFiltersComputed)
+                        }
+                        if personaManager.showQuickFilter(.aiNegative) {
+                            AIFilterChip(label: "Negative", icon: "hand.thumbsdown.fill", isActive: aiFilterBinding(for: $quickFilterAINegative), isComputing: !model.aiFiltersComputed)
+                        }
+                        if personaManager.showQuickFilter(.aiNewsletter) {
+                            AIFilterChip(label: "Newsletters", icon: "newspaper.fill", isActive: aiFilterBinding(for: $quickFilterAINewsletter), isComputing: !model.aiFiltersComputed)
+                        }
+                    }
+                }
+                .padding(.horizontal, Spacing.xSmall)
             }
-            if personaManager.showQuickFilter(.attachments) {
-                QuickFilterChip(label: "Attachments", icon: "paperclip", isActive: $quickFilterAttachments)
-            }
-            if personaManager.showQuickFilter(.flagged) {
-                QuickFilterChip(label: "Flagged", icon: "flag.fill", isActive: $quickFilterFlagged)
-            }
-            if personaManager.showQuickFilter(.unreviewed) {
-                QuickFilterChip(label: "Unreviewed", icon: "eye.slash", isActive: $quickFilterUnreviewed)
-            }
-            if personaManager.showQuickFilter(.largeEmails) {
-                QuickFilterChip(label: "Large", icon: "arrow.up.circle", isActive: $quickFilterLargeEmails)
-            }
-            if personaManager.showQuickFilter(.cleanup) {
-                QuickFilterChip(label: "Cleanup", icon: "trash.circle", isActive: $showCleanupMode)
-            }
-            Spacer()
-            if quickFilterSent || quickFilterReceived || quickFilterAttachments || quickFilterFlagged || quickFilterUnreviewed || quickFilterLargeEmails {
+
+            if hasAnyQuickFilterActive {
                 Button {
-                    quickFilterSent = false
-                    quickFilterReceived = false
-                    quickFilterAttachments = false
-                    quickFilterFlagged = false
-                    quickFilterUnreviewed = false
-                    quickFilterLargeEmails = false
+                    clearAllQuickFilters()
                 } label: {
                     Text("Clear")
                         .font(Typography.caption2)
                         .foregroundColor(AppColors.primary)
                 }
                 .buttonStyle(.plain)
+                .padding(.trailing, Spacing.xSmall)
             }
         }
-        .padding(.horizontal, Spacing.xSmall)
     }
 
     // MARK: - Main List
@@ -454,11 +647,13 @@ struct ParsedEmailListView: View {
                         .tag(thread.root.id)
                 } else {
                     DisclosureGroup {
-                        ForEach(thread.replies, id: \.id) { reply in
-                            emailRow(for: reply)
-                                .padding(.leading, Spacing.medium)
-                                .padding(.vertical, Spacing.xxxSmall)
-                                .tag(reply.id)
+                        ForEach(Array(thread.replies.enumerated()), id: \.element.id) { index, reply in
+                            HStack(spacing: 0) {
+                                threadConnector(isLast: index == thread.replies.count - 1)
+                                emailRow(for: reply)
+                                    .padding(.vertical, Spacing.xxxSmall)
+                            }
+                            .tag(reply.id)
                         }
                     } label: {
                         HStack(spacing: Spacing.xSmall) {
@@ -478,15 +673,39 @@ struct ParsedEmailListView: View {
         }
     }
 
+    private func threadConnector(isLast: Bool) -> some View {
+        HStack(spacing: 0) {
+            ZStack(alignment: .top) {
+                Rectangle()
+                    .fill(AppColors.primary.opacity(0.25))
+                    .frame(width: 1)
+                    .frame(maxHeight: isLast ? 12 : .infinity)
+            }
+            .frame(width: 1)
+            .padding(.leading, Spacing.xSmall)
+
+            Rectangle()
+                .fill(AppColors.primary.opacity(0.25))
+                .frame(width: 10, height: 1)
+
+            Circle()
+                .fill(AppColors.primary.opacity(0.4))
+                .frame(width: 4, height: 4)
+        }
+        .frame(width: 24)
+    }
+
     private func emailRow(for email: MBOXParser.RawEmail) -> some View {
         HStack(spacing: Spacing.xSmall) {
             if forensicManager.isEnabled {
                 let tag = forensicManager.tagForEmail(email.id)
                 if tag != .none {
                     Image(systemName: tag.icon)
-                        .font(.system(size: 9))
+                        .font(.caption2)
                         .foregroundColor(tag.color)
-                        .help("Evidence: \(tag.rawValue)")
+                        #if os(macOS)
+                        .help(Text(verbatim: "Evidence: \(tag.rawValue)"))
+                        #endif
                 }
             }
 
@@ -495,16 +714,41 @@ struct ParsedEmailListView: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(Typography.caption2)
                     .foregroundColor(.red)
+                    #if os(macOS)
                     .help("High priority")
+                    #endif
             } else if priority == .medium {
                 Image(systemName: "exclamationmark.circle.fill")
                     .font(Typography.caption2)
                     .foregroundColor(.orange)
+                    #if os(macOS)
                     .help("Medium priority")
+                    #endif
             }
 
-            EmailRowView(email: email, searchText: model.searchText)
+            EmailRowView(email: email, searchText: model.searchText, showRiskIndicator: forensicManager.isEnabled || personaManager.selectedPersona == .legal)
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let label = predictiveEngine.predictionLabel(for: email.id) {
+                let score = predictiveEngine.predictionScore(for: email.id) ?? 0.5
+                Text(label)
+                    .font(.caption2)
+                    .fontWeight(.medium)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(score > 0.7 ? Color.green.opacity(0.15) : score < 0.3 ? Color.red.opacity(0.15) : Color.orange.opacity(0.15))
+                    .foregroundColor(score > 0.7 ? .green : score < 0.3 ? .red : .orange)
+                    .cornerRadius(3)
+            }
+
+            if custodianManager.isUnderLegalHold(email.id) {
+                Image(systemName: "lock.shield.fill")
+                    .font(.caption2)
+                    .foregroundColor(.orange)
+                    #if os(macOS)
+                    .help("Under legal hold")
+                    #endif
+            }
 
             Spacer(minLength: Spacing.xSmall)
 
@@ -520,7 +764,9 @@ struct ParsedEmailListView: View {
                     .foregroundColor(AppColors.secondary)
             }
             .buttonStyle(.plain)
+            #if os(macOS)
             .help("View raw RFC 822 source")
+            #endif
             .accessibilityLabel("View raw source")
 
             if !email.attachments.isEmpty {
@@ -541,12 +787,14 @@ struct ParsedEmailListView: View {
             }
         }
         .contextMenu {
+            #if os(macOS)
             Button {
                 EmailDetailView(email: email)
                     .openInWindow(title: decodeMIMEHeader(email.headers["Subject"] ?? "Email"), storeManager: storeManager)
             } label: {
                 Label("Open in Window", systemImage: "macwindow")
             }
+            #endif
 
             Button {
                 let rawData = email.rawSource.data(using: .utf8) ?? Data()
@@ -561,15 +809,13 @@ struct ParsedEmailListView: View {
             Divider()
 
             Button {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(email.headers["Subject"] ?? "", forType: .string)
+                PlatformClipboard.copyString(email.headers["Subject"] ?? "")
             } label: {
                 Label("Copy Subject", systemImage: "doc.on.doc")
             }
 
             Button {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(email.headers["From"] ?? "", forType: .string)
+                PlatformClipboard.copyString(email.headers["From"] ?? "")
             } label: {
                 Label("Copy Sender", systemImage: "person.crop.circle")
             }
@@ -578,8 +824,7 @@ struct ParsedEmailListView: View {
 
             Button {
                 let summary = EmailNLPEngine.summarizeEmail(email)
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(summary, forType: .string)
+                PlatformClipboard.copyString(summary)
             } label: {
                 Label("Summarize (copy to clipboard)", systemImage: "sparkles")
             }
@@ -613,13 +858,25 @@ struct ParsedEmailListView: View {
         }
     }
 
+    #if os(iOS)
+    private func iOSShareFile(at url: URL) {
+        shareItems = [url]
+        showShareSheet = true
+    }
+    #endif
+
     private func saveAttachmentsForEmail(_ email: MBOXParser.RawEmail) {
+        #if os(macOS)
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         panel.prompt = "Save"
         guard panel.runModal() == .OK, let folder = panel.url else { return }
+        #else
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("attachments", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        #endif
         var failedCount = 0
         for att in email.attachments {
             guard let source = att.fileURL else { continue }
@@ -632,44 +889,70 @@ struct ParsedEmailListView: View {
         if failedCount > 0 {
             listExportError = "Failed to save \(failedCount) attachment(s)."
         }
+        #if os(iOS)
+        if failedCount == 0 {
+            iOSShareFile(at: folder)
+        }
+        #endif
     }
 
     // MARK: - Download All Attachments
     private var totalAttachments: Int {
         model.filteredEmails.map { $0.attachments.count }.reduce(0, +)
     }
+    private static let freeAttachmentLimit = 5
+
     private func downloadAllAttachments() {
+            #if os(macOS)
             let panel = NSOpenPanel()
             panel.canChooseDirectories = true
             panel.canChooseFiles = false
             panel.canCreateDirectories = true
             panel.prompt = "Save All"
 
-            if panel.runModal() == .OK, let folderURL = panel.url {
-                var usedNames = Set<String>()
-                for email in model.filteredEmails {
-                    for att in email.attachments {
-                        guard let sourceURL = att.fileURL else { continue }
-                        var filename = att.filename
-                        var counter = 1
-                        while usedNames.contains(filename) {
-                            let name = (att.filename as NSString).deletingPathExtension
-                            let ext = (att.filename as NSString).pathExtension
-                            filename = ext.isEmpty ? "\(name)_\(counter)" : "\(name)_\(counter).\(ext)"
-                            counter += 1
-                        }
-                        usedNames.insert(filename)
-                        let destinationURL = folderURL.appendingPathComponent(filename)
-                        do {
-                            try FileUtils.copyFile(from: sourceURL, to: destinationURL)
-                        } catch {
-                            DispatchQueue.main.async {
-                                listExportError = "Failed to copy \(att.filename): \(error.localizedDescription)"
-                            }
+            guard panel.runModal() == .OK, let folderURL = panel.url else { return }
+            #else
+            let folderURL = FileManager.default.temporaryDirectory.appendingPathComponent("all_attachments", isDirectory: true)
+            try? FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
+            #endif
+
+            var usedNames = Set<String>()
+            var savedCount = 0
+            let limit = storeManager.isPremium ? Int.max : Self.freeAttachmentLimit
+            for email in model.filteredEmails {
+                for att in email.attachments {
+                    if savedCount >= limit {
+                        storeManager.showPaywall = true
+                        listExportError = "Free limit: saved \(savedCount) of \(totalAttachments) attachments. Upgrade to Pro for unlimited."
+                        #if os(iOS)
+                        if savedCount > 0 { iOSShareFile(at: folderURL) }
+                        #endif
+                        return
+                    }
+                    guard let sourceURL = att.fileURL else { continue }
+                    var filename = att.filename
+                    var counter = 1
+                    while usedNames.contains(filename) {
+                        let name = (att.filename as NSString).deletingPathExtension
+                        let ext = (att.filename as NSString).pathExtension
+                        filename = ext.isEmpty ? "\(name)_\(counter)" : "\(name)_\(counter).\(ext)"
+                        counter += 1
+                    }
+                    usedNames.insert(filename)
+                    let destinationURL = folderURL.appendingPathComponent(filename)
+                    do {
+                        try FileUtils.copyFile(from: sourceURL, to: destinationURL)
+                        savedCount += 1
+                    } catch {
+                        Task { @MainActor in
+                            listExportError = "Failed to copy \(att.filename): \(error.localizedDescription)"
                         }
                     }
                 }
             }
+            #if os(iOS)
+            if savedCount > 0 { iOSShareFile(at: folderURL) }
+            #endif
         }
 
     private var personaListTitle: String {
@@ -682,10 +965,18 @@ struct ParsedEmailListView: View {
     }
 
     // MARK: - Export Filtered Emails as JSON
+    private static let freeExportLimit = 10
+
     private func exportFilteredJSON() {
+            let emailsToExport: [MBOXParser.RawEmail]
+            if storeManager.isPremium {
+                emailsToExport = model.filteredEmails
+            } else {
+                emailsToExport = Array(model.filteredEmails.prefix(Self.freeExportLimit))
+            }
             let exportable = MBOXParser.ExportableParsedMBOXFile(
-                emails: model.filteredEmails.map { $0.asExportable() },
-                summary: MBOXParser.summarize(emails: model.filteredEmails)
+                emails: emailsToExport.map { $0.asExportable() },
+                summary: MBOXParser.summarize(emails: emailsToExport)
             )
 
             do {
@@ -694,20 +985,25 @@ struct ParsedEmailListView: View {
                 formatter.dateFormat = "yyyyMMdd_HHmmss"
                 let suggestedName = "filtered_emails_\(formatter.string(from: Date())).json"
 
+                #if os(macOS)
                 let panel = NSSavePanel()
                 panel.nameFieldStringValue = suggestedName
                 panel.canCreateDirectories = true
-                if #available(macOS 12.0, *) {
-                    panel.allowedContentTypes = [.json]
-                } else {
-                    panel.allowedFileTypes = ["json"]
+                panel.allowedContentTypes = [.json]
+
+                guard panel.runModal() == .OK, let url = panel.url else { return }
+                #else
+                let url = FileManager.default.temporaryDirectory.appendingPathComponent(suggestedName)
+                #endif
+
+                try FileUtils.writeData(data, to: url.path)
+                if !storeManager.isPremium && model.filteredEmails.count > Self.freeExportLimit {
+                    storeManager.showPaywall = true
+                    listExportError = "Exported \(Self.freeExportLimit) of \(model.filteredEmails.count) emails. Upgrade to Pro for unlimited export."
                 }
-
-
-
-                if panel.runModal() == .OK, let url = panel.url {
-                    try FileUtils.writeData(data, to: url.path)
-                }
+                #if os(iOS)
+                iOSShareFile(at: url)
+                #endif
             } catch {
                 listExportError = "Failed to export JSON: \(error.localizedDescription)"
             }
@@ -718,6 +1014,7 @@ struct ParsedEmailListView: View {
 struct EmailRowView: View {
     let email: MBOXParser.RawEmail
     var searchText: String = ""
+    var showRiskIndicator: Bool = false
     @Environment(\.windowSizeClass) private var sizeClass
     @AppStorage("emailListDensity") private var density = "comfortable"
     @AppStorage("showEmailPreviews") private var showPreviews = true
@@ -734,6 +1031,10 @@ struct EmailRowView: View {
         email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "?"
     }
 
+    private var riskScore: Int {
+        showRiskIndicator ? ForensicManager.assessRisk(for: email).score : 0
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: Spacing.xSmall) {
             ContactAvatar(name: senderName, size: sizeClass == .compact ? 26 : 30)
@@ -741,16 +1042,25 @@ struct EmailRowView: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack {
                     Text(highlightedText(senderName))
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.footnote)
+                        .fontWeight(.semibold)
                         .lineLimit(1)
+                    if riskScore > 20 {
+                        Image(systemName: riskScore >= 55 ? "exclamationmark.triangle.fill" : "exclamationmark.shield.fill")
+                            .font(.caption2)
+                            .foregroundColor(riskScore >= 55 ? .orange : .yellow)
+                            #if os(macOS)
+                            .help(Text(verbatim: "Risk score: \(riskScore)/100"))
+                            #endif
+                    }
                     Spacer()
                     Text(parseDate(email.headers["Date"]))
-                        .font(.system(size: 11))
+                        .font(.caption)
                         .foregroundColor(AppColors.secondary)
                 }
 
                 Text(highlightedText(email.headers["Subject"] ?? "(No Subject)"))
-                    .font(.system(size: 12))
+                    .font(.footnote)
                     .foregroundColor(.primary.opacity(0.85))
                     .lineLimit(1)
 
@@ -758,7 +1068,7 @@ struct EmailRowView: View {
                     let preview = String(email.plainBody.prefix(100)).replacingOccurrences(of: "\n", with: " ")
                     if !preview.trimmingCharacters(in: .whitespaces).isEmpty {
                         Text(highlightedText(preview))
-                            .font(.system(size: 11))
+                            .font(.caption)
                             .foregroundColor(AppColors.secondary)
                             .lineLimit(1)
                     }
@@ -825,9 +1135,11 @@ struct QuickFilterChip: View {
         } label: {
             HStack(spacing: 3) {
                 Image(systemName: icon)
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.caption)
+                    .fontWeight(.medium)
                 Text(label)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.caption)
+                    .fontWeight(.medium)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
@@ -841,8 +1153,59 @@ struct QuickFilterChip: View {
     }
 }
 
+struct AIFilterChip: View {
+    let label: String
+    let icon: String
+    @Binding var isActive: Bool
+    var isComputing: Bool = false
+
+    var body: some View {
+        Button {
+            guard !isComputing else { return }
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                isActive.toggle()
+            }
+        } label: {
+            HStack(spacing: 3) {
+                if isComputing && !isActive {
+                    ProgressView()
+                        .scaleEffect(0.5)
+                        .frame(width: 10, height: 10)
+                } else {
+                    Image(systemName: icon)
+                        .font(.caption)
+                        .fontWeight(.medium)
+                }
+                Text(label)
+                    .font(.caption)
+                    .fontWeight(.medium)
+                Image(systemName: "sparkles")
+                    .font(.caption2)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(isActive ? Color.purple : AppColors.backgroundSecondary.opacity(0.8))
+            .foregroundColor(isActive ? .white : .purple.opacity(0.8))
+            .clipShape(Capsule())
+            .overlay(
+                Capsule()
+                    .strokeBorder(Color.purple.opacity(isActive ? 0 : 0.3), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(isComputing)
+        .accessibilityLabel("AI Filter \(label)")
+        .accessibilityAddTraits(isActive ? .isSelected : [])
+    }
+}
+
 // MARK: - Attachments Popover
 struct AttachmentsPopoverButton: View {
+    #if os(iOS)
+    @State private var shareURL: URL?
+    @State private var showShare = false
+    @State private var saveError: String?
+    #endif
     let attachments: [AttachmentMetadata]
     @State private var showPopover = false
 
@@ -856,8 +1219,20 @@ struct AttachmentsPopoverButton: View {
         .buttonStyle(.plain)
         .popover(isPresented: $showPopover) {
             VStack(alignment: .leading, spacing: Spacing.xSmall) {
-                Text("Attachments (\(attachments.count))")
-                    .font(Typography.headline)
+                HStack {
+                    Text("Attachments (\(attachments.count))")
+                        .font(Typography.headline)
+                    Spacer()
+                    Button {
+                        showPopover = false
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.body)
+                            .foregroundStyle(AppColors.secondary.opacity(0.6))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Close attachments")
+                }
                 Divider()
                 ForEach(Array(attachments.enumerated()), id: \.offset) { _, att in
                     HStack(spacing: Spacing.xSmall) {
@@ -884,7 +1259,9 @@ struct AttachmentsPopoverButton: View {
                                     .foregroundColor(AppColors.primary)
                             }
                             .buttonStyle(.plain)
-                            .help("Save \(att.filename)")
+                            #if os(macOS)
+                            .help(Text(verbatim: "Save \(att.filename)"))
+                            #endif
                             .accessibilityLabel("Save \(att.filename)")
                         }
                     }
@@ -893,7 +1270,9 @@ struct AttachmentsPopoverButton: View {
             .padding(Spacing.small)
             .frame(width: 280)
         }
-        .help("\(attachments.count) attachment(s)")
+        #if os(macOS)
+        .help(Text(verbatim: "\(attachments.count) attachment(s)"))
+        #endif
         .accessibilityLabel("\(attachments.count) attachments")
     }
 
@@ -921,6 +1300,7 @@ struct AttachmentsPopoverButton: View {
 
     private func saveAttachment(_ att: AttachmentMetadata) {
         guard let sourceURL = att.fileURL else { return }
+        #if os(macOS)
         let panel = NSSavePanel()
         panel.nameFieldStringValue = att.filename
         panel.canCreateDirectories = true
@@ -929,12 +1309,22 @@ struct AttachmentsPopoverButton: View {
                 try FileUtils.copyFile(from: sourceURL, to: dest)
             } catch {
                 let alert = NSAlert()
-                    alert.messageText = "Save Failed"
-                    alert.informativeText = "Failed to save \(att.filename): \(error.localizedDescription)"
-                    alert.alertStyle = .warning
-                    alert.runModal()
+                alert.messageText = "Save Failed"
+                alert.informativeText = "Failed to save \(att.filename): \(error.localizedDescription)"
+                alert.alertStyle = .warning
+                alert.runModal()
             }
         }
+        #else
+        let dest = FileManager.default.temporaryDirectory.appendingPathComponent(att.filename)
+        do {
+            try FileUtils.copyFile(from: sourceURL, to: dest)
+            shareURL = dest
+            showShare = true
+        } catch {
+            saveError = "Failed to save \(att.filename): \(error.localizedDescription)"
+        }
+        #endif
     }
 }
 
@@ -957,15 +1347,16 @@ struct RawSourceView: View {
                 Spacer()
 
                 Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(rawText, forType: .string)
+                    PlatformClipboard.copyString(rawText)
                 } label: {
                     Image(systemName: "doc.on.doc")
                         .foregroundColor(AppColors.secondary)
                         .imageScale(.large)
                 }
                 .buttonStyle(.plain)
+                #if os(macOS)
                 .help("Copy raw source to clipboard")
+                #endif
                 .accessibilityLabel("Copy raw source")
 
                 Button(action: { dismiss() }) {
@@ -974,7 +1365,9 @@ struct RawSourceView: View {
                         .imageScale(.large)
                 }
                 .buttonStyle(.plain)
+                #if os(macOS)
                 .help("Close")
+                #endif
                 .accessibilityLabel("Close raw source view")
             }
             .padding(Spacing.medium)
@@ -1100,7 +1493,9 @@ struct ReplyStatsView: View {
                         .imageScale(.large)
                 }
                 .buttonStyle(.plain)
+                #if os(macOS)
                 .help("Close this stats view")
+                #endif
                 .accessibilityLabel("Close reply statistics")
             }
 

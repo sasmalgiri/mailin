@@ -651,19 +651,18 @@ public class SwiftEmailMessage: Codable {
         while foundNew {
             foundNew = false
             for msg in allMessages {
-                if let inReplyTo = msg.getHeader("In-Reply-To"), threadIDs.contains(inReplyTo), !threadIDs.contains(msg.getHeader("Message-ID") ?? "") {
-                    if let mid = msg.getHeader("Message-ID") {
+                if let mid = msg.getHeader("Message-ID"), !threadIDs.contains(mid) {
+                    if let inReplyTo = msg.getHeader("In-Reply-To"), threadIDs.contains(inReplyTo) {
                         threadIDs.insert(mid)
                         descendants.append(msg)
                         foundNew = true
-                    }
-                } else if let refs = msg.getHeader("References") {
-                    for ref in refs.split(separator: " ").map({ String($0) }) {
-                        if threadIDs.contains(ref), !threadIDs.contains(msg.getHeader("Message-ID") ?? "") {
-                            if let mid = msg.getHeader("Message-ID") {
+                    } else if let refs = msg.getHeader("References") {
+                        for ref in refs.split(separator: " ").map({ String($0) }) {
+                            if threadIDs.contains(ref) {
                                 threadIDs.insert(mid)
                                 descendants.append(msg)
                                 foundNew = true
+                                break
                             }
                         }
                     }

@@ -1,5 +1,7 @@
 import Foundation
+#if os(macOS)
 import AppKit
+#endif
 
 public struct MIMEPart: Codable, Sendable {
     public var headers: [String: String]
@@ -173,10 +175,11 @@ public struct MIMEPart: Codable, Sendable {
         }
     }
 
-    /// Opens the saved attachment in the default macOS app
+    /// Opens the saved attachment in the default app
+    @MainActor
     public func openAttachmentInDefaultApp() {
         if let url = saveRobustDecodedAttachmentToTemp() {
-            NSWorkspace.shared.open(url)
+            PlatformURLOpener.open(url)
         }
     }
 

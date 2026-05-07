@@ -7,16 +7,31 @@
     {
       "displayPrice" : "29.99",
       "familyShareable" : true,
-      "internalID" : "lifetime_001",
+      "internalID" : "personal_001",
       "localizations" : [
         {
-          "description" : "Unlock all features forever. One-time payment.",
-          "displayName" : "Lifetime Pro",
+          "description" : "Unlimited emails, AI, exports & analytics. One-time purchase.",
+          "displayName" : "Personal",
           "locale" : "en_US"
         }
       ],
-      "productID" : "com.ecosanskriti.mailin.lifetime",
-      "referenceName" : "Lifetime Pro",
+      "productID" : "com.ecosanskriti.mailin.personal",
+      "referenceName" : "Personal",
+      "type" : "NonConsumable"
+    },
+    {
+      "displayPrice" : "79.99",
+      "familyShareable" : true,
+      "internalID" : "professional_001",
+      "localizations" : [
+        {
+          "description" : "All features including forensic tools, audit trail & review sharing. One-time purchase.",
+          "displayName" : "Professional",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "com.ecosanskriti.mailin.professional",
+      "referenceName" : "Professional",
       "type" : "NonConsumable"
     }
   ],
@@ -76,71 +91,7 @@
     ]
   },
   "subscriptionGroups" : [
-    {
-      "id" : "mailin_pro",
-      "localizations" : [
 
-      ],
-      "name" : "mailin Pro",
-      "subscriptions" : [
-        {
-          "adHocOffers" : [
-
-          ],
-          "codeOffers" : [
-
-          ],
-          "displayPrice" : "2.99",
-          "familyShareable" : true,
-          "groupNumber" : 1,
-          "internalID" : "monthly_001",
-          "introductoryOffer" : null,
-          "localizations" : [
-            {
-              "description" : "Full access to all Pro features. Cancel anytime.",
-              "displayName" : "Monthly Pro",
-              "locale" : "en_US"
-            }
-          ],
-          "productID" : "com.ecosanskriti.mailin.monthly",
-          "recurringSubscriptionPeriod" : "P1M",
-          "referenceName" : "Monthly Pro",
-          "subscriptionGroupID" : "mailin_pro",
-          "type" : "RecurringSubscription",
-          "winbackOffers" : [
-
-          ]
-        },
-        {
-          "adHocOffers" : [
-
-          ],
-          "codeOffers" : [
-
-          ],
-          "displayPrice" : "19.99",
-          "familyShareable" : true,
-          "groupNumber" : 1,
-          "internalID" : "yearly_001",
-          "introductoryOffer" : null,
-          "localizations" : [
-            {
-              "description" : "Full access to all Pro features. Best value.",
-              "displayName" : "Yearly Pro",
-              "locale" : "en_US"
-            }
-          ],
-          "productID" : "com.ecosanskriti.mailin.yearly",
-          "recurringSubscriptionPeriod" : "P1Y",
-          "referenceName" : "Yearly Pro",
-          "subscriptionGroupID" : "mailin_pro",
-          "type" : "RecurringSubscription",
-          "winbackOffers" : [
-
-          ]
-        }
-      ]
-    }
   ],
   "version" : {
     "major" : 4,

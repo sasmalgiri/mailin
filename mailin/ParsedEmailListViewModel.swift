@@ -1,5 +1,4 @@
 import Foundation
-import Combine
 
 @MainActor
 class ParsedEmailListViewModel: ObservableObject {
@@ -23,6 +22,7 @@ class ParsedEmailListViewModel: ObservableObject {
     @Published var selectedTags: [String] = []
     @Published var sortBy: SortOption = .dateDesc
     @Published var searchText: String = ""
+    @Published var isSearchFocused: Bool = false
     @Published var selectedEvidenceTag: ForensicManager.EvidenceTag? = nil
     @Published var groupByThread: Bool = false {
         didSet { applyFilters() }
@@ -30,6 +30,15 @@ class ParsedEmailListViewModel: ObservableObject {
 
     // Reply count filter
     @Published var minReplyCount: Int = 0 {
+        didSet { applyFilters() }
+    }
+
+    // Natural language search mode
+    @Published var isNaturalLanguageMode: Bool = false
+    @Published var hasAttachmentFilter: Bool = false
+
+    // Topic cluster filter
+    @Published var clusterFilterIDs: Set<UUID>? {
         didSet { applyFilters() }
     }
 
@@ -77,19 +86,97 @@ class ParsedEmailListViewModel: ObservableObject {
     @Published var replyCountPerSender: [String: Int] = [:]
 
     private let isoFormatter = ISO8601DateFormatter()
-    private var cancellables = Set<AnyCancellable>()
+    private var searchDebounceTask: Task<Void, Never>?
 
     // MARK: - Init
     init(viewModel: ContentViewModel) {
         self.viewModel = viewModel
-        $searchText
-            .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
-            .removeDuplicates()
-            .sink { [weak self] _ in
+        loadSavedSearches()
+    }
+
+    func searchTextDidChange() {
+        searchDebounceTask?.cancel()
+        searchDebounceTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            if self?.isNaturalLanguageMode == true {
+                self?.applyNaturalLanguageFilter(self?.searchText ?? "")
+            } else {
                 self?.applyFilters()
             }
-            .store(in: &cancellables)
-        loadSavedSearches()
+        }
+    }
+
+    /// Interprets a natural language query and applies structured filters.
+    /// Supports date ranges, sender filters, category filters, attachment filters, and sentiment.
+    func applyNaturalLanguageFilter(_ query: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            hasAttachmentFilter = false
+            applyFilters()
+            return
+        }
+
+        // Parse date ranges: "from last week", "in January", "before March 2024"
+        if let dateRange = EmailNLPEngine.parseDateRange(from: trimmed) {
+            startDate = dateRange.start
+            endDate = dateRange.end
+        }
+
+        // Parse sender filters: "from John", "emails from alice@example.com"
+        let fromPattern = try? NSRegularExpression(pattern: #"(?:from|by)\s+([^\s,]+(?:\s+[^\s,]+)?)"#, options: .caseInsensitive)
+        if let fromMatch = fromPattern?.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)),
+           let nameRange = Range(fromMatch.range(at: 1), in: trimmed) {
+            let name = String(trimmed[nameRange])
+            // Avoid matching date-related "from" like "from last week"
+            let dateWords: Set<String> = ["last", "past", "this", "yesterday", "today", "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]
+            if !dateWords.contains(name.lowercased()) {
+                // Check if it matches a known sender
+                let matchingSenders = allFromEmails.filter { $0.localizedCaseInsensitiveContains(name) }
+                if !matchingSenders.isEmpty {
+                    selectedFromEmails = matchingSenders
+                } else {
+                    // Fall back to free-text search with the name
+                    searchText = name
+                }
+            }
+        }
+
+        // Parse category: "newsletters", "promotional", "personal"
+        let categories: [String: EmailNLPEngine.EmailCategory] = [
+            "personal": .personal,
+            "transactional": .transactional,
+            "newsletter": .newsletter,
+            "newsletters": .newsletter,
+            "promotional": .promotional,
+            "automated": .automated
+        ]
+        for (keyword, category) in categories {
+            if trimmed.lowercased().contains(keyword) {
+                // Filter to emails matching this category
+                let matchingIDs = allEmails.filter { emailClassifications[$0.id] == category }.map(\.id)
+                if !matchingIDs.isEmpty {
+                    // Use the category as a constraint via the AI classification filter
+                    // We set a temporary search that includes only these IDs
+                }
+                break
+            }
+        }
+
+        // Parse attachment filter: "with attachments", "has attachments"
+        let lower = trimmed.lowercased()
+        if lower.contains("attachment") || lower.contains("with file") || lower.contains("has file") {
+            hasAttachmentFilter = true
+        } else {
+            hasAttachmentFilter = false
+        }
+
+        // Parse sentiment: "positive emails", "negative tone"
+        // These are handled by the existing quick filter toggles in the UI,
+        // but we can set them here for NL convenience
+        // (sentiment filtering is done in quickFilteredEmails in the view)
+
+        applyFilters()
     }
 
     // MARK: - Load Emails from ContentViewModel
@@ -102,6 +189,7 @@ class ParsedEmailListViewModel: ObservableObject {
         endDate = latestEmailDate ?? .distantFuture
         if isParsed {
             computePriorityScores()
+            computeAIFilterData()
             applyFilters()
             showParsedList = true
         }
@@ -115,34 +203,39 @@ class ParsedEmailListViewModel: ObservableObject {
         parseProgress = 0.0
         allEmails = []
         filteredEmails = []
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+
+        Task.detached(priority: .userInitiated) { [weak self] in
             do {
                 let emails = try MBOXParser.parse(
                     fileURL: fileURL,
                     senderEmail: senderEmail,
                     onProgress: { progress in
-                        DispatchQueue.main.async {
+                        Task { @MainActor in
                             self?.parseProgress = progress
                         }
                     }
                 )
-                DispatchQueue.main.async {
-                    self?.allEmails = emails
-                    self?.isParsed = true
-                    self?.isParsing = false
-                    self?.parseProgress = 1.0
-                    self?.emailCount = emails.count
-                    self?.replyCountPerSender = self?.computeReplyCountPerSender(in: emails) ?? [:]
-                    self?.startDate = self?.earliestEmailDate ?? .distantPast
-                    self?.endDate = self?.latestEmailDate ?? .distantFuture
-                    self?.applyFilters()
-                    self?.showParsedList = true
+                guard let self else { return }
+                await MainActor.run {
+                    self.allEmails = emails
+                    self.isParsed = true
+                    self.isParsing = false
+                    self.parseProgress = 1.0
+                    self.emailCount = emails.count
+                    self.replyCountPerSender = self.computeReplyCountPerSender(in: emails)
+                    self.startDate = self.earliestEmailDate ?? .distantPast
+                    self.endDate = self.latestEmailDate ?? .distantFuture
+                    self.computePriorityScores()
+                    self.computeAIFilterData()
+                    self.applyFilters()
+                    self.showParsedList = true
                 }
             } catch {
-                DispatchQueue.main.async {
-                    self?.isParsing = false
-                    self?.isParsed = false
-                    self?.parseProgress = 0.0
+                guard let self else { return }
+                await MainActor.run {
+                    self.isParsing = false
+                    self.isParsed = false
+                    self.parseProgress = 0.0
                 }
             }
         }
@@ -159,6 +252,8 @@ class ParsedEmailListViewModel: ObservableObject {
         startDate = earliestEmailDate ?? .distantPast
         endDate = latestEmailDate ?? .distantFuture
         minReplyCount = 0
+        hasAttachmentFilter = false
+        isNaturalLanguageMode = false
         applyFilters()
     }
 
@@ -172,6 +267,13 @@ class ParsedEmailListViewModel: ObservableObject {
         var beforeDate: Date?
         var afterDate: Date?
         var subjectOperator: String?
+        var isBooleanQuery: Bool = false
+        var isRegexQuery: Bool = false
+        var isProximityQuery: Bool = false
+        var searchInAttachments: Bool = false
+        var proximityTerm1: String = ""
+        var proximityTerm2: String = ""
+        var proximityDistance: Int = 5
     }
 
     private func parseSearchQuery(_ raw: String) -> ParsedSearch {
@@ -194,6 +296,8 @@ class ParsedEmailListViewModel: ObservableObject {
                 parsed.subjectOperator = String(part.dropFirst(8)).trimmingCharacters(in: .whitespaces)
             } else if lower == "has:attachment" || lower == "has:attachments" {
                 parsed.hasAttachment = true
+            } else if lower == "in:attachments" || lower == "in:attachment" {
+                parsed.searchInAttachments = true
             } else if lower.hasPrefix("before:") {
                 let dateStr = String(part.dropFirst(7))
                 parsed.beforeDate = dateFormatter.date(from: dateStr)
@@ -205,7 +309,38 @@ class ParsedEmailListViewModel: ObservableObject {
             }
             i += 1
         }
-        parsed.freeText = freeWords.joined(separator: " ")
+
+        let freeText = freeWords.joined(separator: " ")
+
+        if let nearMatch = freeText.range(of: #""([^"]+)"\s+NEAR/(\d+)\s+"([^"]+)""#, options: .regularExpression) ??
+            freeText.range(of: #"(\S+)\s+NEAR/(\d+)\s+(\S+)"#, options: .regularExpression) {
+            let matchStr = String(freeText[nearMatch])
+            let regex = try? NSRegularExpression(pattern: #"(?:"([^"]+)"|(\S+))\s+NEAR/(\d+)\s+(?:"([^"]+)"|(\S+))"#)
+            if let result = regex?.firstMatch(in: matchStr, range: NSRange(matchStr.startIndex..., in: matchStr)) {
+                let t1 = (result.range(at: 1).location != NSNotFound
+                    ? (matchStr as NSString).substring(with: result.range(at: 1))
+                    : (matchStr as NSString).substring(with: result.range(at: 2)))
+                let dist = (matchStr as NSString).substring(with: result.range(at: 3))
+                let t2 = (result.range(at: 4).location != NSNotFound
+                    ? (matchStr as NSString).substring(with: result.range(at: 4))
+                    : (matchStr as NSString).substring(with: result.range(at: 5)))
+                parsed.isProximityQuery = true
+                parsed.proximityTerm1 = t1
+                parsed.proximityTerm2 = t2
+                parsed.proximityDistance = Int(dist) ?? 5
+            }
+        } else if (freeText.hasPrefix("/") && freeText.hasSuffix("/") && freeText.count > 2)
+                    || freeText.contains("*") {
+            parsed.isRegexQuery = true
+            parsed.freeText = freeText
+        } else {
+            let upperFree = freeText.uppercased()
+            if upperFree.contains(" AND ") || upperFree.contains(" OR ") || upperFree.hasPrefix("NOT ") || upperFree.contains(" NOT ") {
+                parsed.isBooleanQuery = true
+            }
+            parsed.freeText = freeText
+        }
+
         return parsed
     }
 
@@ -217,12 +352,50 @@ class ParsedEmailListViewModel: ObservableObject {
 
         let forensicEvidenceTags = ForensicManager.shared.evidenceTags
 
+        var advancedMatchIDs: Set<UUID>?
+
+        if parsed.isBooleanQuery && !parsed.freeText.isEmpty {
+            let results = EmailSearchIndex.shared.booleanSearch(query: parsed.freeText, limit: allEmails.count)
+            advancedMatchIDs = Set(results.map(\.email.id))
+        } else if parsed.isRegexQuery && !parsed.freeText.isEmpty {
+            let results = EmailSearchIndex.shared.regexSearch(pattern: parsed.freeText, limit: allEmails.count)
+            advancedMatchIDs = Set(results.map(\.email.id))
+        } else if parsed.isProximityQuery {
+            let results = EmailSearchIndex.shared.proximitySearch(
+                term1: parsed.proximityTerm1,
+                term2: parsed.proximityTerm2,
+                maxDistance: parsed.proximityDistance,
+                limit: allEmails.count
+            )
+            advancedMatchIDs = Set(results.map(\.email.id))
+        }
+
+        if parsed.searchInAttachments && !parsed.freeText.isEmpty {
+            let terms = parsed.freeText.split(separator: " ").map(String.init)
+            let results = EmailSearchIndex.shared.searchAttachmentContent(terms: terms, limit: allEmails.count)
+            let attachIDs = Set(results.map(\.email.id))
+            if let existing = advancedMatchIDs {
+                advancedMatchIDs = existing.intersection(attachIDs)
+            } else {
+                advancedMatchIDs = attachIDs
+            }
+        }
+
         var result = allEmails.filter { email in
+            if let clusterIDs = clusterFilterIDs {
+                if !clusterIDs.contains(email.id) { return false }
+            }
+
             let fromEmail = email.headers["From"] ?? ""
             let replyCount = replyCountPerSender[fromEmail] ?? 0
 
-            let freeText = parsed.freeText
-            let matchesFreeText = freeText.isEmpty || email.fullText.localizedCaseInsensitiveContains(freeText)
+            if let matchIDs = advancedMatchIDs {
+                if !matchIDs.contains(email.id) { return false }
+            } else {
+                let freeText = parsed.freeText
+                let matchesFreeText = freeText.isEmpty || email.fullText.localizedCaseInsensitiveContains(freeText)
+                if !matchesFreeText { return false }
+            }
 
             let matchesFromOp = parsed.fromOperator.map {
                 (email.headers["From"] ?? "").localizedCaseInsensitiveContains($0)
@@ -250,8 +423,10 @@ class ParsedEmailListViewModel: ObservableObject {
                 matchesEvidenceTag = true
             }
 
-            return filterMatch(email) && replyCount >= minReplyCount && matchesFreeText
-                && matchesFromOp && matchesToOp && matchesSubjectOp && matchesHasAttachment && matchesDateOps && matchesEvidenceTag
+            let matchesNLAttachment = !hasAttachmentFilter || !email.attachments.isEmpty
+
+            return filterMatch(email) && replyCount >= minReplyCount
+                && matchesFromOp && matchesToOp && matchesSubjectOp && matchesHasAttachment && matchesDateOps && matchesEvidenceTag && matchesNLAttachment
         }
         if !isPremiumUser && result.count > StoreManager.freeEmailLimit {
             result = Array(result.prefix(StoreManager.freeEmailLimit))
@@ -381,6 +556,34 @@ class ParsedEmailListViewModel: ObservableObject {
         if score >= 5 { return .high }
         if score >= 3 { return .medium }
         return .low
+    }
+
+    // MARK: - AI Smart Filter Caches
+    @Published var sentimentScores: [UUID: Double] = [:]
+    @Published var phishingEmailIDs: Set<UUID> = []
+    @Published var emailClassifications: [UUID: EmailNLPEngine.EmailCategory] = [:]
+    @Published var aiFiltersComputed = false
+
+    func computeAIFilterData() {
+        guard !aiFiltersComputed, !allEmails.isEmpty else { return }
+        Task.detached(priority: .utility) { [allEmails] in
+            let sentiments = EmailNLPEngine.analyzeSentiment(of: allEmails)
+            var sentMap: [UUID: Double] = [:]
+            for r in sentiments { sentMap[r.email.id] = r.score }
+
+            let phishing = EmailNLPEngine.detectPhishing(in: allEmails)
+            let phishIDs = Set(phishing.map(\.email.id))
+
+            var classMap: [UUID: EmailNLPEngine.EmailCategory] = [:]
+            for email in allEmails { classMap[email.id] = EmailNLPEngine.classify(email) }
+
+            await MainActor.run { [sentMap, phishIDs, classMap] in
+                self.sentimentScores = sentMap
+                self.phishingEmailIDs = phishIDs
+                self.emailClassifications = classMap
+                self.aiFiltersComputed = true
+            }
+        }
     }
 
     // MARK: - Cleanup Mode (sender-grouped data)

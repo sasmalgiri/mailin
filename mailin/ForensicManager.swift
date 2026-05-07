@@ -1,6 +1,9 @@
 import Foundation
 import CryptoKit
 import SwiftUI
+import os.log
+
+private let forensicLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "mailin", category: "Forensic")
 
 @MainActor
 class ForensicManager: ObservableObject {
@@ -14,16 +17,27 @@ class ForensicManager: ObservableObject {
     @Published var sourceFileHashes: [SourceFileHash] = []
     @Published private(set) var auditLog: [AuditEntry] = []
     @Published var evidenceTags: [UUID: EvidenceTag] = [:]
+    @Published var tagTimestamps: [UUID: Date] = [:]
     @Published var annotations: [UUID: Annotation] = [:]
     @Published var perEmailHashes: [UUID: EmailHash] = [:]
     @Published var integrityStatus: IntegrityStatus = .unknown
 
-    // MARK: - Tamper-evident key derived from case number + app install
-    private var hmacKey: SymmetricKey {
-        let seed = "mailin-forensic-\(caseNumber)-\(installID)"
-        let keyData = SHA256.hash(data: Data(seed.utf8))
+    private static let hmacKeychainKey = "forensicHMACKey"
+
+    private lazy var hmacKey: SymmetricKey = {
+        let existing = KeychainHelper.load(key: Self.hmacKeychainKey)
+        if !existing.isEmpty, let data = Data(base64Encoded: existing) {
+            return SymmetricKey(data: data)
+        }
+        var keyBytes = [UInt8](repeating: 0, count: 32)
+        let status = SecRandomCopyBytes(kSecRandomDefault, keyBytes.count, &keyBytes)
+        if status != errSecSuccess {
+            keyBytes = (0..<32).map { _ in UInt8.random(in: 0...255) }
+        }
+        let keyData = Data(keyBytes)
+        KeychainHelper.save(key: Self.hmacKeychainKey, value: keyData.base64EncodedString())
         return SymmetricKey(data: keyData)
-    }
+    }()
 
     private var installID: String {
         if let existing = UserDefaults.standard.string(forKey: "forensicInstallID") {
@@ -36,7 +50,9 @@ class ForensicManager: ObservableObject {
 
     // MARK: - Data Types
 
-    struct SourceFileHash: Identifiable, Codable {
+    private static let currentDataVersion = 1
+
+    struct SourceFileHash: Identifiable, Codable, Sendable {
         let id: UUID
         let filename: String
         let fileSize: Int64
@@ -44,9 +60,27 @@ class ForensicManager: ObservableObject {
         let sha1: String
         let sha256: String
         let importDate: Date
+        let version: Int
+
+        init(id: UUID, filename: String, fileSize: Int64, md5: String, sha1: String, sha256: String, importDate: Date) {
+            self.id = id; self.filename = filename; self.fileSize = fileSize
+            self.md5 = md5; self.sha1 = sha1; self.sha256 = sha256; self.importDate = importDate; self.version = 1
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            id = try c.decode(UUID.self, forKey: .id)
+            filename = try c.decode(String.self, forKey: .filename)
+            fileSize = try c.decode(Int64.self, forKey: .fileSize)
+            md5 = try c.decode(String.self, forKey: .md5)
+            sha1 = try c.decode(String.self, forKey: .sha1)
+            sha256 = try c.decode(String.self, forKey: .sha256)
+            importDate = try c.decode(Date.self, forKey: .importDate)
+            version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        }
     }
 
-    struct AuditEntry: Identifiable, Codable {
+    struct AuditEntry: Identifiable, Codable, Sendable {
         let id: UUID
         let sequence: Int
         let timestamp: Date
@@ -55,19 +89,66 @@ class ForensicManager: ObservableObject {
         let examiner: String
         let previousHash: String
         let entryHash: String
+        let version: Int
+
+        init(id: UUID, sequence: Int, timestamp: Date, action: String, detail: String, examiner: String, previousHash: String, entryHash: String) {
+            self.id = id; self.sequence = sequence; self.timestamp = timestamp
+            self.action = action; self.detail = detail; self.examiner = examiner
+            self.previousHash = previousHash; self.entryHash = entryHash; self.version = 1
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            id = try c.decode(UUID.self, forKey: .id)
+            sequence = try c.decode(Int.self, forKey: .sequence)
+            timestamp = try c.decode(Date.self, forKey: .timestamp)
+            action = try c.decode(String.self, forKey: .action)
+            detail = try c.decode(String.self, forKey: .detail)
+            examiner = try c.decode(String.self, forKey: .examiner)
+            previousHash = try c.decode(String.self, forKey: .previousHash)
+            entryHash = try c.decode(String.self, forKey: .entryHash)
+            version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        }
     }
 
-    struct EmailHash: Codable {
+    struct EmailHash: Codable, Sendable {
         let md5: String
         let sha1: String
         let sha256: String
         let byteCount: Int
+        let version: Int
+
+        init(md5: String, sha1: String, sha256: String, byteCount: Int) {
+            self.md5 = md5; self.sha1 = sha1; self.sha256 = sha256; self.byteCount = byteCount; self.version = 1
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            md5 = try c.decode(String.self, forKey: .md5)
+            sha1 = try c.decode(String.self, forKey: .sha1)
+            sha256 = try c.decode(String.self, forKey: .sha256)
+            byteCount = try c.decode(Int.self, forKey: .byteCount)
+            version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        }
     }
 
-    struct Annotation: Codable {
-        var text: String
-        var examiner: String
-        var timestamp: Date
+    struct Annotation: Codable, Sendable {
+        let text: String
+        let examiner: String
+        let timestamp: Date
+        let version: Int
+
+        init(text: String, examiner: String, timestamp: Date) {
+            self.text = text; self.examiner = examiner; self.timestamp = timestamp; self.version = 1
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            text = try c.decode(String.self, forKey: .text)
+            examiner = try c.decode(String.self, forKey: .examiner)
+            timestamp = try c.decode(Date.self, forKey: .timestamp)
+            version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        }
     }
 
     enum IntegrityStatus: Equatable {
@@ -293,28 +374,65 @@ class ForensicManager: ObservableObject {
         return (true, "Email integrity verified (SHA-256 match)")
     }
 
+    func batchVerifyAllEmails(_ emails: [MBOXParser.RawEmail]) -> (passed: Int, failed: Int, unverified: Int, details: [String]) {
+        var passed = 0, failed = 0, unverified = 0
+        var details: [String] = []
+        for email in emails {
+            let result = verifyEmailIntegrity(email)
+            if perEmailHashes[email.id] == nil {
+                unverified += 1
+            } else if result.passed {
+                passed += 1
+            } else {
+                failed += 1
+                details.append("FAILED: \(email.headers["Subject"] ?? "Unknown") — \(result.detail)")
+            }
+        }
+        logAction("Batch Verification", detail: "\(passed) passed, \(failed) failed, \(unverified) unverified")
+        return (passed, failed, unverified, details)
+    }
+
+    func exportHashManifest(_ emails: [MBOXParser.RawEmail]) -> String {
+        var csv = "EmailID,Subject,From,Date,MD5,SHA1,SHA256,Integrity\n"
+        for email in emails {
+            let hash = perEmailHashes[email.id]
+            let verification = verifyEmailIntegrity(email)
+            let subject = (email.headers["Subject"] ?? "").replacingOccurrences(of: ",", with: ";")
+            let from = (email.headers["From"] ?? "").replacingOccurrences(of: ",", with: ";")
+            csv += "\(email.id),\"\(subject)\",\"\(from)\",\(email.timestamp),\(hash?.md5 ?? "N/A"),\(hash?.sha1 ?? "N/A"),\(hash?.sha256 ?? "N/A"),\(verification.passed ? "PASS" : "FAIL")\n"
+        }
+        return csv
+    }
+
     // MARK: - Evidence Tagging
 
     func tag(_ emailID: UUID, as tag: EvidenceTag) {
         if tag == .none {
             evidenceTags.removeValue(forKey: emailID)
+            tagTimestamps.removeValue(forKey: emailID)
         } else {
             evidenceTags[emailID] = tag
+            tagTimestamps[emailID] = Date()
         }
         saveTags()
         logAction("Evidence Tagged", detail: "Email \(emailID.uuidString.prefix(8)) tagged as \(tag.rawValue)")
+        CollaborationManager.shared.autoExportIfEnabled()
     }
 
     func bulkTag(_ emailIDs: Set<UUID>, as tag: EvidenceTag) {
+        let now = Date()
         for id in emailIDs {
             if tag == .none {
                 evidenceTags.removeValue(forKey: id)
+                tagTimestamps.removeValue(forKey: id)
             } else {
                 evidenceTags[id] = tag
+                tagTimestamps[id] = now
             }
         }
         saveTags()
         logAction("Bulk Evidence Tag", detail: "\(emailIDs.count) emails tagged as \(tag.rawValue)")
+        CollaborationManager.shared.autoExportIfEnabled()
     }
 
     func tagForEmail(_ emailID: UUID) -> EvidenceTag {
@@ -339,6 +457,7 @@ class ForensicManager: ObservableObject {
         )
         saveAnnotations()
         logAction("Annotation", detail: "Email \(emailID.uuidString.prefix(8)): \(text.prefix(80))")
+        CollaborationManager.shared.autoExportIfEnabled()
     }
 
     func annotationFor(_ emailID: UUID) -> Annotation? {
@@ -359,7 +478,7 @@ class ForensicManager: ObservableObject {
         let raw: String
     }
 
-    static func parseReceivedChain(_ email: MBOXParser.RawEmail) -> [ReceivedHop] {
+    nonisolated static func parseReceivedChain(_ email: MBOXParser.RawEmail) -> [ReceivedHop] {
         let receivedHeaders = email.rawSource.components(separatedBy: "\n")
             .reduce(into: [String]()) { result, line in
                 if line.lowercased().hasPrefix("received:") {
@@ -412,7 +531,7 @@ class ForensicManager: ObservableObject {
         }
     }
 
-    static func extractAuthResults(_ email: MBOXParser.RawEmail) -> (spf: String, dkim: String, dmarc: String) {
+    nonisolated static func extractAuthResults(_ email: MBOXParser.RawEmail) -> (spf: String, dkim: String, dmarc: String) {
         let authHeader = email.headers["Authentication-Results"] ?? email.headers["authentication-results"] ?? ""
         let spf = authHeader.range(of: #"spf=(\w+)"#, options: .regularExpression).map { String(authHeader[$0]).replacingOccurrences(of: "spf=", with: "") } ?? "N/A"
         let dkim = authHeader.range(of: #"dkim=(\w+)"#, options: .regularExpression).map { String(authHeader[$0]).replacingOccurrences(of: "dkim=", with: "") } ?? "N/A"
@@ -443,7 +562,7 @@ class ForensicManager: ObservableObject {
         }
     }
 
-    static func detectSpoofingIndicators(_ email: MBOXParser.RawEmail) -> [SpoofIndicator] {
+    nonisolated static func detectSpoofingIndicators(_ email: MBOXParser.RawEmail) -> [SpoofIndicator] {
         var indicators: [SpoofIndicator] = []
 
         let from = email.headers["From"] ?? ""
@@ -515,6 +634,108 @@ class ForensicManager: ObservableObject {
         }
 
         return indicators
+    }
+
+    // MARK: - Email Risk Score (0–100)
+
+    struct RiskAssessment {
+        let score: Int
+        let level: RiskLevel
+        let factors: [String]
+
+        enum RiskLevel: String {
+            case safe = "Safe"
+            case low = "Low Risk"
+            case medium = "Medium Risk"
+            case high = "High Risk"
+            case critical = "Critical"
+
+            var color: Color {
+                switch self {
+                case .safe: return .green
+                case .low: return .blue
+                case .medium: return .yellow
+                case .high: return .orange
+                case .critical: return .red
+                }
+            }
+
+            var icon: String {
+                switch self {
+                case .safe: return "checkmark.shield.fill"
+                case .low: return "shield.fill"
+                case .medium: return "exclamationmark.shield.fill"
+                case .high: return "exclamationmark.triangle.fill"
+                case .critical: return "xmark.shield.fill"
+                }
+            }
+        }
+    }
+
+    nonisolated static func assessRisk(for email: MBOXParser.RawEmail) -> RiskAssessment {
+        var score = 0
+        var factors: [String] = []
+
+        let indicators = detectSpoofingIndicators(email)
+        let highCount = indicators.filter { $0.severity == .high }.count
+        let medCount = indicators.filter { $0.severity == .medium }.count
+        let lowCount = indicators.filter { $0.severity == .low }.count
+
+        score += highCount * 25
+        score += medCount * 10
+        score += lowCount * 3
+
+        if highCount > 0 {
+            factors.append("\(highCount) high-severity spoofing indicator(s)")
+        }
+        if medCount > 0 {
+            factors.append("\(medCount) medium-severity indicator(s)")
+        }
+
+        let auth = extractAuthResults(email)
+        if auth.spf == "fail" { score += 15; factors.append("SPF authentication failed") }
+        if auth.dkim == "fail" { score += 15; factors.append("DKIM verification failed") }
+        if auth.dmarc == "fail" { score += 15; factors.append("DMARC policy failed") }
+
+        let piiFindings = EmailNLPEngine.detectPII(in: [email])
+        let ssnCount = piiFindings.filter { $0.type == .ssnPattern }.count
+        let ccCount = piiFindings.filter { $0.type == .creditCard }.count
+        if ssnCount > 0 { score += 10; factors.append("\(ssnCount) SSN pattern(s) found") }
+        if ccCount > 0 { score += 10; factors.append("\(ccCount) credit card pattern(s) found") }
+
+        if !email.anomalies.isEmpty {
+            score += email.anomalies.count * 5
+            factors.append("\(email.anomalies.count) anomaly/anomalies detected")
+        }
+
+        let hops = parseReceivedChain(email)
+        if hops.count > 8 {
+            score += 5
+            factors.append("Unusually long routing chain (\(hops.count) hops)")
+        }
+
+        let body = email.plainBody.lowercased()
+        let urgencyPhrases = ["urgent action required", "verify your account", "suspended",
+                              "click here immediately", "act now or", "your account will be"]
+        let matchedPhrases = urgencyPhrases.filter { body.contains($0) }
+        if !matchedPhrases.isEmpty {
+            score += matchedPhrases.count * 8
+            factors.append("Suspicious urgency language detected")
+        }
+
+        score = min(score, 100)
+
+        let level: RiskAssessment.RiskLevel
+        switch score {
+        case 0..<10: level = .safe
+        case 10..<30: level = .low
+        case 30..<55: level = .medium
+        case 55..<80: level = .high
+        default: level = .critical
+        }
+
+        if factors.isEmpty { factors.append("No risk indicators detected") }
+        return RiskAssessment(score: score, level: level, factors: factors)
     }
 
     // MARK: - MIME Tree
@@ -602,15 +823,17 @@ class ForensicManager: ObservableObject {
 
         report += String(repeating: "=", count: 76) + "\n"
         report += "END OF AUDIT LOG\n"
-        report += "Final chain hash: \(auditLog.last?.entryHash ?? "N/A")\n"
+        report += "Final chain hash: \(auditLog.last?.entryHash ?? "N/A")\n\n"
+        report += String(repeating: "-", count: 76) + "\n"
+        report += "DISCLAIMER: " + LegalComplianceManager.forensicDisclaimer + "\n"
         return report
     }
 
     func exportBulkForensicCSV(emails: [MBOXParser.RawEmail], batesPrefix: String = "MAIL") -> String {
-        var csv = "Bates Number,Message-ID,Date,From,To,CC,Subject,MD5,SHA-1,SHA-256,Byte Count,Has Attachments,Attachment Count,Evidence Tag,Annotation,Thread-ID,Spoof Risk\n"
+        var csv = "Bates Number,Message-ID,Date,From,To,CC,Subject,MD5,SHA-1,SHA-256,Byte Count,Has Attachments,Attachment Count,Evidence Tag,Annotation,Thread-ID,Spoof Risk,Risk Score,Risk Level\n"
 
         func csvEscape(_ s: String) -> String {
-            "\"" + s.replacingOccurrences(of: "\"", with: "\"\"").replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: "") + "\""
+            "\"" + s.replacingOccurrences(of: "\"", with: "\"\"").replacingOccurrences(of: "\r\n", with: " ").replacingOccurrences(of: "\r", with: " ").replacingOccurrences(of: "\n", with: " ") + "\""
         }
 
         for (i, email) in emails.enumerated() {
@@ -637,7 +860,10 @@ class ForensicManager: ObservableObject {
             csv += "\(csvEscape(tag)),"
             csv += "\(csvEscape(note)),"
             csv += "\(csvEscape(email.threadID ?? "")),"
-            csv += "\(spoofCount)\n"
+            csv += "\(spoofCount),"
+            let risk = Self.assessRisk(for: email)
+            csv += "\(risk.score),"
+            csv += "\(csvEscape(risk.level.rawValue))\n"
         }
         return csv
     }
@@ -675,75 +901,175 @@ class ForensicManager: ObservableObject {
         return dat
     }
 
+    func exportPrivilegeLog(emails: [MBOXParser.RawEmail]) -> String {
+        let privileged = emails.filter { evidenceTags[$0.id] == .privileged }
+        guard !privileged.isEmpty else { return "" }
+
+        let displayFormatter = DateFormatter()
+        displayFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+
+        var log = "PRIVILEGE LOG\n"
+        log += String(repeating: "=", count: 76) + "\n"
+        log += "Case Number: \(caseNumber.isEmpty ? "N/A" : caseNumber)\n"
+        log += "Prepared by: \(examinerName.isEmpty ? "N/A" : examinerName)\n"
+        log += "Date: \(displayFormatter.string(from: Date()))\n"
+        log += "Total Privileged Documents: \(privileged.count)\n\n"
+
+        log += String(format: "%-8s %-12s %-30s %-30s %s\n", "No.", "Date", "From", "To", "Subject")
+        log += String(repeating: "-", count: 120) + "\n"
+
+        for (i, email) in privileged.enumerated() {
+            let date = email.headers["Date"]?.prefix(10) ?? "N/A"
+            let from = String((email.headers["From"] ?? "N/A").prefix(28))
+            let to = String((email.headers["To"] ?? "N/A").prefix(28))
+            let subject = String((email.headers["Subject"] ?? "N/A").prefix(50))
+
+            log += String(format: "%-8d %-12s %-30s %-30s %s\n",
+                          i + 1,
+                          String(date),
+                          from,
+                          to,
+                          subject)
+
+            if let annotation = annotations[email.id] {
+                log += "         Basis: \(annotation.text)\n"
+            }
+        }
+
+        log += "\n" + String(repeating: "=", count: 76) + "\n"
+        log += "END OF PRIVILEGE LOG\n\n"
+        log += "DISCLAIMER: " + LegalComplianceManager.forensicDisclaimer + "\n"
+        return log
+    }
+
     // MARK: - Persistence
 
     private func saveAuditLog() {
-        guard let data = try? JSONEncoder().encode(auditLog) else { return }
-        try? data.write(to: auditLogURL, options: .atomic)
+        do {
+            let data = try JSONEncoder().encode(auditLog)
+            try data.write(to: auditLogURL, options: .atomic)
+        } catch {
+            forensicLog.error("Failed to save audit log: \(error.localizedDescription)")
+        }
     }
 
     private func loadAuditLog() {
-        guard let data = try? Data(contentsOf: auditLogURL),
-              let log = try? JSONDecoder().decode([AuditEntry].self, from: data) else { return }
-        auditLog = log
+        do {
+            let data = try Data(contentsOf: auditLogURL)
+            auditLog = try JSONDecoder().decode([AuditEntry].self, from: data)
+        } catch {
+            forensicLog.info("No audit log to load: \(error.localizedDescription)")
+        }
     }
 
     private func saveHashes() {
-        guard let data = try? JSONEncoder().encode(sourceFileHashes) else { return }
-        try? data.write(to: hashesURL, options: .atomic)
+        do {
+            let data = try JSONEncoder().encode(sourceFileHashes)
+            try data.write(to: hashesURL, options: .atomic)
+        } catch {
+            forensicLog.error("Failed to save hashes: \(error.localizedDescription)")
+        }
     }
 
     private func loadHashes() {
-        guard let data = try? Data(contentsOf: hashesURL),
-              let hashes = try? JSONDecoder().decode([SourceFileHash].self, from: data) else { return }
-        sourceFileHashes = hashes
+        do {
+            let data = try Data(contentsOf: hashesURL)
+            sourceFileHashes = try JSONDecoder().decode([SourceFileHash].self, from: data)
+        } catch {
+            forensicLog.info("No hashes to load: \(error.localizedDescription)")
+        }
     }
 
     private func saveTags() {
-        let dict = evidenceTags.map { (key: $0.key.uuidString, value: $0.value.rawValue) }
-        guard let data = try? JSONEncoder().encode(Dictionary(uniqueKeysWithValues: dict)) else { return }
-        try? data.write(to: tagsURL, options: .atomic)
+        do {
+            let dict = evidenceTags.map { (key: $0.key.uuidString, value: $0.value.rawValue) }
+            let data = try JSONEncoder().encode(Dictionary(uniqueKeysWithValues: dict))
+            try data.write(to: tagsURL, options: .atomic)
+        } catch {
+            forensicLog.error("Failed to save tags: \(error.localizedDescription)")
+        }
+
+        do {
+            let tsDict = tagTimestamps.reduce(into: [String: Double]()) { $0[$1.key.uuidString] = $1.value.timeIntervalSince1970 }
+            let tsData = try JSONEncoder().encode(tsDict)
+            try tsData.write(to: tagsURL.deletingLastPathComponent().appendingPathComponent("forensic_tag_timestamps.json"), options: .atomic)
+        } catch {
+            forensicLog.error("Failed to save tag timestamps: \(error.localizedDescription)")
+        }
     }
 
     private func loadTags() {
-        guard let data = try? Data(contentsOf: tagsURL),
-              let dict = try? JSONDecoder().decode([String: String].self, from: data) else { return }
-        for (key, value) in dict {
-            if let uuid = UUID(uuidString: key), let tag = EvidenceTag(rawValue: value) {
-                evidenceTags[uuid] = tag
+        do {
+            let data = try Data(contentsOf: tagsURL)
+            let dict = try JSONDecoder().decode([String: String].self, from: data)
+            for (key, value) in dict {
+                if let uuid = UUID(uuidString: key), let tag = EvidenceTag(rawValue: value) {
+                    evidenceTags[uuid] = tag
+                }
             }
+        } catch {
+            forensicLog.info("No tags to load: \(error.localizedDescription)")
+        }
+
+        let tsURL = tagsURL.deletingLastPathComponent().appendingPathComponent("forensic_tag_timestamps.json")
+        do {
+            let tsData = try Data(contentsOf: tsURL)
+            let tsDict = try JSONDecoder().decode([String: Double].self, from: tsData)
+            for (key, ts) in tsDict {
+                if let uuid = UUID(uuidString: key) {
+                    tagTimestamps[uuid] = Date(timeIntervalSince1970: ts)
+                }
+            }
+        } catch {
+            forensicLog.info("No tag timestamps to load: \(error.localizedDescription)")
         }
     }
 
     private func saveAnnotations() {
-        let dict = annotations.reduce(into: [String: Annotation]()) { $0[$1.key.uuidString] = $1.value }
-        guard let data = try? JSONEncoder().encode(dict) else { return }
-        try? data.write(to: annotationsURL, options: .atomic)
+        do {
+            let dict = annotations.reduce(into: [String: Annotation]()) { $0[$1.key.uuidString] = $1.value }
+            let data = try JSONEncoder().encode(dict)
+            try data.write(to: annotationsURL, options: .atomic)
+        } catch {
+            forensicLog.error("Failed to save annotations: \(error.localizedDescription)")
+        }
     }
 
     private func loadAnnotations() {
-        guard let data = try? Data(contentsOf: annotationsURL),
-              let dict = try? JSONDecoder().decode([String: Annotation].self, from: data) else { return }
-        for (key, value) in dict {
-            if let uuid = UUID(uuidString: key) {
-                annotations[uuid] = value
+        do {
+            let data = try Data(contentsOf: annotationsURL)
+            let dict = try JSONDecoder().decode([String: Annotation].self, from: data)
+            for (key, value) in dict {
+                if let uuid = UUID(uuidString: key) {
+                    annotations[uuid] = value
+                }
             }
+        } catch {
+            forensicLog.info("No annotations to load: \(error.localizedDescription)")
         }
     }
 
     private func saveEmailHashes() {
-        let dict = perEmailHashes.reduce(into: [String: EmailHash]()) { $0[$1.key.uuidString] = $1.value }
-        guard let data = try? JSONEncoder().encode(dict) else { return }
-        try? data.write(to: emailHashesURL, options: .atomic)
+        do {
+            let dict = perEmailHashes.reduce(into: [String: EmailHash]()) { $0[$1.key.uuidString] = $1.value }
+            let data = try JSONEncoder().encode(dict)
+            try data.write(to: emailHashesURL, options: .atomic)
+        } catch {
+            forensicLog.error("Failed to save email hashes: \(error.localizedDescription)")
+        }
     }
 
     private func loadEmailHashes() {
-        guard let data = try? Data(contentsOf: emailHashesURL),
-              let dict = try? JSONDecoder().decode([String: EmailHash].self, from: data) else { return }
-        for (key, value) in dict {
-            if let uuid = UUID(uuidString: key) {
-                perEmailHashes[uuid] = value
+        do {
+            let data = try Data(contentsOf: emailHashesURL)
+            let dict = try JSONDecoder().decode([String: EmailHash].self, from: data)
+            for (key, value) in dict {
+                if let uuid = UUID(uuidString: key) {
+                    perEmailHashes[uuid] = value
+                }
             }
+        } catch {
+            forensicLog.info("No email hashes to load: \(error.localizedDescription)")
         }
     }
 
@@ -751,11 +1077,21 @@ class ForensicManager: ObservableObject {
         auditLog = []
         sourceFileHashes = []
         evidenceTags = [:]
+        tagTimestamps = [:]
         annotations = [:]
         perEmailHashes = [:]
         integrityStatus = .unknown
-        for url in [auditLogURL, hashesURL, tagsURL, annotationsURL, emailHashesURL, chainRootURL] {
+        let tsURL = tagsURL.deletingLastPathComponent().appendingPathComponent("forensic_tag_timestamps.json")
+        for url in [auditLogURL, hashesURL, tagsURL, annotationsURL, emailHashesURL, chainRootURL, tsURL] {
             try? FileManager.default.removeItem(at: url)
         }
+    }
+
+    func clearAllForensicData() {
+        clearForensicData()
+        isEnabled = false
+        caseNumber = ""
+        examinerName = ""
+        organization = ""
     }
 }

@@ -18,7 +18,7 @@ struct RawEmail: Codable {
 }
 
 // MARK: - ChunkedEmail
-struct ChunkedEmail: Identifiable, Codable {
+struct ChunkedEmail: Identifiable, Codable, @unchecked Sendable {
     var id = UUID()
     var chunkIndex: Int
     var emailIndex: Int
@@ -217,10 +217,19 @@ struct EmailChunker {
 
     private static func isRelevantChunk(_ text: String) -> Bool {
         let lower = text.lowercased()
-        return lower.contains("due") ||
-               lower.contains("payment") ||
-               lower.contains("schedule") ||
-               lower.contains("invoice") ||
-               lower.rangeOfCharacter(from: .decimalDigits) != nil
+        let actionWords: Set<String> = [
+            "due", "payment", "schedule", "invoice", "deadline", "meeting",
+            "confirm", "approve", "review", "update", "decision", "budget",
+            "proposal", "contract", "agreement", "urgent", "important",
+            "action", "plan", "deliver", "complete", "assign", "request",
+        ]
+        if actionWords.contains(where: { lower.contains($0) }) { return true }
+        if lower.rangeOfCharacter(from: .decimalDigits) != nil &&
+            (lower.contains("$") || lower.contains("%") || lower.contains("#") || lower.contains("date")) {
+            return true
+        }
+        let questionCount = lower.filter { $0 == "?" }.count
+        if questionCount >= 1 { return true }
+        return false
     }
 }

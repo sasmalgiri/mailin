@@ -108,6 +108,11 @@ class PersonaManager: ObservableObject {
         case highPriority = "High Priority"
         case hasLinks = "Has Links"
         case largeEmails = "Large"
+        // AI-powered smart filters
+        case aiImportant = "Important"
+        case aiSuspicious = "Suspicious"
+        case aiNegative = "Negative"
+        case aiNewsletter = "Newsletters"
     }
 
     enum SidebarSection: String, CaseIterable {
@@ -146,7 +151,7 @@ class PersonaManager: ObservableObject {
                 enableAIByDefault: true,
                 showAnalyticsProminent: false,
                 showTechnicalHeaders: true,
-                showQuickFilters: [.attachments, .flagged, .unreviewed],
+                showQuickFilters: [.sent, .received, .attachments, .flagged, .unreviewed, .highPriority, .hasLinks, .aiImportant, .aiSuspicious, .aiNegative],
                 sidebarSections: [.summary, .dateRange, .evidenceTags, .senders, .recipients, .domains],
                 exportOrder: [.batesPDF, .forensicReport, .redacted, .csv, .plainText, .pdf],
                 sampleAIQueries: [
@@ -170,7 +175,7 @@ class PersonaManager: ObservableObject {
                 enableAIByDefault: true,
                 showAnalyticsProminent: false,
                 showTechnicalHeaders: false,
-                showQuickFilters: [.attachments, .flagged, .unreviewed, .cleanup],
+                showQuickFilters: [.attachments, .flagged, .privileged, .unreviewed, .cleanup, .aiImportant, .aiSuspicious, .aiNewsletter],
                 sidebarSections: [.summary, .dateRange, .senders, .recipients, .labels, .evidenceTags],
                 exportOrder: [.batesPDF, .csv, .redacted, .forensicReport, .pdf, .plainText],
                 sampleAIQueries: [
@@ -194,7 +199,7 @@ class PersonaManager: ObservableObject {
                 enableAIByDefault: true,
                 showAnalyticsProminent: false,
                 showTechnicalHeaders: true,
-                showQuickFilters: [.sent, .received, .attachments, .largeEmails],
+                showQuickFilters: [.sent, .received, .attachments, .largeEmails, .hasLinks, .highPriority, .aiImportant, .aiSuspicious, .aiNewsletter],
                 sidebarSections: [.summary, .dateRange, .senders, .recipients, .domains, .labels],
                 exportOrder: [.csv, .plainText, .pdf, .batesPDF, .forensicReport, .redacted],
                 sampleAIQueries: [
@@ -218,7 +223,7 @@ class PersonaManager: ObservableObject {
                 enableAIByDefault: true,
                 showAnalyticsProminent: true,
                 showTechnicalHeaders: false,
-                showQuickFilters: [.sent, .received, .attachments, .largeEmails],
+                showQuickFilters: [.sent, .received, .attachments, .largeEmails, .aiImportant, .aiNegative, .aiNewsletter],
                 sidebarSections: [.summary, .dateRange, .senders, .recipients, .labels, .replyFrequency],
                 exportOrder: [.plainText, .csv, .pdf, .redacted, .batesPDF, .forensicReport],
                 sampleAIQueries: [
@@ -242,8 +247,8 @@ class PersonaManager: ObservableObject {
                 enableAIByDefault: false,
                 showAnalyticsProminent: false,
                 showTechnicalHeaders: false,
-                showQuickFilters: [.sent, .received, .attachments],
-                sidebarSections: [.summary, .dateRange, .senders, .labels],
+                showQuickFilters: [.sent, .received, .attachments, .aiImportant, .aiNewsletter],
+                sidebarSections: [.summary, .dateRange, .senders, .labels, .replyFrequency],
                 exportOrder: [.pdf, .plainText, .csv, .redacted, .batesPDF, .forensicReport],
                 sampleAIQueries: [
                     "Summarize my emails from the last month",
@@ -265,7 +270,7 @@ class PersonaManager: ObservableObject {
                 enableAIByDefault: true,
                 showAnalyticsProminent: true,
                 showTechnicalHeaders: false,
-                showQuickFilters: [.sent, .received, .attachments, .flagged, .cleanup],
+                showQuickFilters: [.sent, .received, .attachments, .flagged, .cleanup, .aiImportant, .aiSuspicious, .aiNegative, .aiNewsletter],
                 sidebarSections: [.summary, .dateRange, .senders, .recipients, .labels, .replyFrequency],
                 exportOrder: [.pdf, .csv, .plainText, .batesPDF, .forensicReport, .redacted],
                 sampleAIQueries: [

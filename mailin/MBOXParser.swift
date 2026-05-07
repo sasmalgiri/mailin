@@ -59,6 +59,26 @@ struct MBOXParser {
         let summary: SummaryMetadata
     }
 
+    struct ParseRecoveryReport {
+        let totalMessages: Int
+        let successfullyParsed: Int
+        let failed: Int
+        var errorCategories: [String: Int]
+
+        var hasDamage: Bool { failed > 0 }
+        var summaryText: String {
+            if !hasDamage { return "All \(totalMessages) emails parsed successfully." }
+            var text = "Recovered \(successfullyParsed) of \(totalMessages) emails (\(failed) damaged)."
+            if !errorCategories.isEmpty {
+                let cats = errorCategories.sorted { $0.value > $1.value }.map { "\($0.key): \($0.value)" }
+                text += " Errors: \(cats.joined(separator: ", "))"
+            }
+            return text
+        }
+    }
+
+    static var lastRecoveryReport: ParseRecoveryReport?
+
     static func parse(
         fileURL: URL,
         senderEmail: String,
@@ -69,19 +89,44 @@ struct MBOXParser {
         var parsedEmails: [RawEmail] = []
         let total = Double(rawMessages.count)
 
+        var recoveryErrors = 0
+        var errorCategories: [String: Int] = [:]
         for (idx, raw) in rawMessages.enumerated() {
-            let email = try processRawMessage(raw, senderEmail: senderEmail)
-            parsedEmails.append(email)
+            do {
+                let email = try processRawMessage(raw, senderEmail: senderEmail)
+                parsedEmails.append(email)
+            } catch {
+                recoveryErrors += 1
+                let category = categorizeParseError(error, rawSnippet: String(raw.prefix(200)))
+                errorCategories[category, default: 0] += 1
+            }
 
             if let onProgress = onProgress {
                 let progress = Double(idx + 1) / total
-                DispatchQueue.main.async { onProgress(progress) }
+                onProgress(progress)
             }
         }
+
+        lastRecoveryReport = ParseRecoveryReport(
+            totalMessages: rawMessages.count,
+            successfullyParsed: parsedEmails.count,
+            failed: recoveryErrors,
+            errorCategories: errorCategories
+        )
 
         let summary = summarize(emails: parsedEmails)
         try saveSessionJSON(exportable: ExportableParsedMBOXFile(emails: parsedEmails.map { $0.asExportable() }, summary: summary))
         return parsedEmails
+    }
+
+    private static func categorizeParseError(_ error: Error, rawSnippet: String) -> String {
+        let desc = String(describing: error).lowercased()
+        if desc.contains("encoding") || desc.contains("utf") || desc.contains("ascii") { return "encoding" }
+        if desc.contains("mime") || desc.contains("content-type") { return "mime" }
+        let lower = rawSnippet.lowercased()
+        if !lower.contains("from:") && !lower.contains("subject:") { return "missing_headers" }
+        if rawSnippet.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "empty_message" }
+        return "unknown"
     }
 
     // MARK: - Streaming Parser for Large Files
@@ -135,7 +180,7 @@ struct MBOXParser {
             if fileSize > 0, let onProgress = onProgress {
                 let offset = Double((try? handle.offset()) ?? 0)
                 let progress = min(offset / Double(fileSize), 1.0)
-                DispatchQueue.main.async { onProgress(progress) }
+                onProgress(progress)
             }
         }
 
@@ -160,7 +205,7 @@ struct MBOXParser {
     }
 
     // MARK: - Per-Email Processing
-    private static func processRawMessage(_ raw: String, senderEmail: String) throws -> RawEmail {
+    static func processRawMessage(_ raw: String, senderEmail: String) throws -> RawEmail {
         let fullRaw = raw.hasPrefix("From ") ? raw : "From " + raw
         let (headers, mimeParts) = MIMEParser.parseEmail(rawEmail: fullRaw)
         let rootPart = mimeParts.first

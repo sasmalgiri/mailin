@@ -1,5 +1,8 @@
 import SwiftUI
 import Charts
+#if os(macOS)
+import AppKit
+#endif
 
 struct EmailAnalyticsView: View {
     let emails: [MBOXParser.RawEmail]
@@ -8,6 +11,10 @@ struct EmailAnalyticsView: View {
     @State private var isComputing = false
     @State private var computeStage: String = ""
     @State private var exportError: String?
+    #if os(iOS)
+    @State private var showShareSheet = false
+    @State private var shareItems: [Any] = []
+    #endif
 
     var body: some View {
         VStack(spacing: 0) {
@@ -50,7 +57,9 @@ struct EmailAnalyticsView: View {
                 Spacer()
             }
         }
+        #if os(macOS)
         .frame(minWidth: 700, idealWidth: 900, minHeight: 550, idealHeight: 700)
+        #endif
         .background(AppColors.backgroundTertiary)
         .task { await computeAnalytics() }
         .alert("Export Failed", isPresented: Binding(get: { exportError != nil }, set: { if !$0 { exportError = nil } })) {
@@ -58,6 +67,11 @@ struct EmailAnalyticsView: View {
         } message: {
             Text(exportError ?? "An unknown error occurred while saving the file.")
         }
+        #if os(iOS)
+        .sheet(isPresented: $showShareSheet) {
+            ShareSheet(items: shareItems)
+        }
+        #endif
     }
 
     // MARK: - Header
@@ -67,9 +81,7 @@ struct EmailAnalyticsView: View {
             HStack(spacing: Spacing.xSmall) {
                 Image(systemName: "chart.bar.xaxis")
                     .font(.title2)
-                    .foregroundStyle(
-                        .linearGradient(colors: [.blue, .purple], startPoint: .topLeading, endPoint: .bottomTrailing)
-                    )
+                    .adaptiveIconGradient(colors: [.blue, .purple])
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Email Analytics")
                         .font(Typography.headline)
@@ -135,25 +147,33 @@ struct EmailAnalyticsView: View {
             )
             Spacer()
         }
+        .adaptiveHeroBackground(colors: [.blue, .cyan, .teal, .green])
     }
 
     // MARK: - Overview Cards
 
     private func overviewCards(data: AnalyticsData) -> some View {
         VStack(spacing: Spacing.small) {
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: Spacing.medium) {
+            LazyVGrid(columns: adaptiveStatColumns, spacing: Spacing.small) {
                 StatCard(title: "Total", value: "\(data.totalCount)", icon: "envelope.fill", color: .blue)
                 StatCard(title: "Sent", value: "\(data.sentCount)", icon: "arrow.up.circle.fill", color: AppColors.sentEmail)
                 StatCard(title: "Received", value: "\(data.receivedCount)", icon: "arrow.down.circle.fill", color: AppColors.receivedEmail)
                 StatCard(title: "Sentiment", value: data.sentimentLabel, icon: data.sentimentIcon, color: data.sentimentColor)
-            }
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: Spacing.medium) {
                 StatCard(title: "High Priority", value: "\(data.highPriorityCount)", icon: "exclamationmark.triangle.fill", color: .red)
                 StatCard(title: "Med Priority", value: "\(data.mediumPriorityCount)", icon: "exclamationmark.circle.fill", color: .orange)
                 StatCard(title: "Attachments", value: "\(data.totalAttachments)", icon: "paperclip", color: .purple)
                 StatCard(title: "Storage", value: String(format: "%.1f MB", data.totalStorageMB), icon: "internaldrive", color: .teal)
             }
         }
+    }
+
+    private var adaptiveStatColumns: [GridItem] {
+        #if os(iOS)
+        if UIScreen.main.bounds.width < 500 {
+            return [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+        }
+        #endif
+        return [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
     }
 
     // MARK: - Sentiment Chart
@@ -314,18 +334,20 @@ struct EmailAnalyticsView: View {
             ForEach(data.contactRelationships) { rel in
                 HStack(spacing: Spacing.xSmall) {
                     Text(truncateEmail(rel.from))
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .font(.system(.caption, design: .monospaced))
+                        .fontWeight(.medium)
                         .frame(maxWidth: 160, alignment: .trailing)
                         .lineLimit(1)
 
                     HStack(spacing: 2) {
                         Image(systemName: "arrow.left.arrow.right")
-                            .font(.system(size: 9))
+                            .font(.caption2)
                             .foregroundColor(.purple.opacity(0.7))
                     }
 
                     Text(truncateEmail(rel.to))
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .font(.system(.caption, design: .monospaced))
+                        .fontWeight(.medium)
                         .frame(maxWidth: 160, alignment: .leading)
                         .lineLimit(1)
 
@@ -339,7 +361,8 @@ struct EmailAnalyticsView: View {
                     .frame(width: 80, height: 8)
 
                     Text("\(rel.count)")
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .font(.system(.caption, design: .monospaced))
+                        .fontWeight(.semibold)
                         .foregroundColor(AppColors.secondary)
                         .frame(width: 30, alignment: .trailing)
                 }
@@ -503,12 +526,20 @@ struct EmailAnalyticsView: View {
             report += "  \(line)\n"
         }
 
+        #if os(macOS)
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "mailin_analytics_report.txt"
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        #else
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mailin_analytics_report.txt")
+        #endif
         do {
             try report.write(to: url, atomically: true, encoding: .utf8)
+            #if os(iOS)
+            shareItems = [url]
+            showShareSheet = true
+            #endif
         } catch {
             exportError = error.localizedDescription
         }
@@ -553,10 +584,11 @@ struct EmailAnalyticsView: View {
                                     .frame(height: 24)
                                     .overlay(
                                         count > 0 ? Text("\(count)")
-                                            .font(.system(size: 8))
+                                            .font(.caption2)
                                             .foregroundColor(intensity > 0.5 ? .white : AppColors.secondary) : nil
                                     )
-                                    .help("\(days[day]) \(h):00 — \(count) emails")
+                                    .help(Text(verbatim: "\(days[day]) \(h):00 — \(count) emails"))
+                                    .accessibilityLabel("\(days[day]) \(h):00, \(count) emails")
                             }
                         }
                     }
@@ -750,56 +782,54 @@ struct EmailAnalyticsView: View {
         isComputing = true
         let emailsCopy = emails
 
-        let data = await withCheckedContinuation { (continuation: CheckedContinuation<AnalyticsData, Never>) in
-            DispatchQueue.global(qos: .userInitiated).async {
-                var result = AnalyticsData()
-                result.totalCount = emailsCopy.count
-                result.sentCount = emailsCopy.filter { $0.messageType == "sent" }.count
-                result.receivedCount = emailsCopy.filter { $0.messageType == "received" }.count
+        let data = await Task.detached(priority: .userInitiated) {
+            var result = AnalyticsData()
+            result.totalCount = emailsCopy.count
+            result.sentCount = emailsCopy.filter { $0.messageType == "sent" }.count
+            result.receivedCount = emailsCopy.filter { $0.messageType == "received" }.count
 
-                DispatchQueue.main.async { computeStage = "Sentiment analysis..." }
-                let sentiment = EmailNLPEngine.averageSentiment(of: emailsCopy)
-                result.avgSentiment = sentiment.average
-                result.sentimentLabel = sentiment.label
-                result.sentimentBuckets = [
-                    SentimentBucket(label: "Positive", count: sentiment.positive, color: .green),
-                    SentimentBucket(label: "Neutral", count: sentiment.neutral, color: .gray),
-                    SentimentBucket(label: "Negative", count: sentiment.negative, color: .red)
-                ]
+            await MainActor.run { computeStage = "Sentiment analysis..." }
+            let sentiment = EmailNLPEngine.averageSentiment(of: emailsCopy)
+            result.avgSentiment = sentiment.average
+            result.sentimentLabel = sentiment.label
+            result.sentimentBuckets = [
+                SentimentBucket(label: "Positive", count: sentiment.positive, color: .green),
+                SentimentBucket(label: "Neutral", count: sentiment.neutral, color: .gray),
+                SentimentBucket(label: "Negative", count: sentiment.negative, color: .red)
+            ]
 
-                DispatchQueue.main.async { computeStage = "Timeline computation..." }
-                result.timelineBuckets = Self.computeTimeline(emails: emailsCopy)
+            await MainActor.run { computeStage = "Timeline computation..." }
+            result.timelineBuckets = Self.computeTimeline(emails: emailsCopy)
 
-                DispatchQueue.main.async { computeStage = "Contact analysis..." }
-                result.topContacts = Self.computeTopContacts(emails: emailsCopy)
+            await MainActor.run { computeStage = "Contact analysis..." }
+            result.topContacts = Self.computeTopContacts(emails: emailsCopy)
 
-                DispatchQueue.main.async { computeStage = "Language detection..." }
-                result.languages = EmailNLPEngine.detectLanguages(in: emailsCopy)
+            await MainActor.run { computeStage = "Language detection..." }
+            result.languages = EmailNLPEngine.detectLanguages(in: emailsCopy)
 
-                DispatchQueue.main.async { computeStage = "Topic extraction..." }
-                result.topTopics = EmailNLPEngine.extractTopics(from: emailsCopy, limit: 12)
+            await MainActor.run { computeStage = "Topic extraction..." }
+            result.topTopics = EmailNLPEngine.extractTopics(from: emailsCopy, limit: 12)
 
-                DispatchQueue.main.async { computeStage = "Heatmap & attachments..." }
-                result.heatmapData = Self.computeHeatmap(emails: emailsCopy)
-                result.attachmentTypes = Self.computeAttachmentTypes(emails: emailsCopy)
-                result.totalAttachments = emailsCopy.reduce(0) { $0 + $1.attachments.count }
-                result.domainCounts = Self.computeDomainCounts(emails: emailsCopy)
-                result.sizeDistribution = Self.computeSizeDistribution(emails: emailsCopy)
+            await MainActor.run { computeStage = "Heatmap & attachments..." }
+            result.heatmapData = Self.computeHeatmap(emails: emailsCopy)
+            result.attachmentTypes = Self.computeAttachmentTypes(emails: emailsCopy)
+            result.totalAttachments = emailsCopy.reduce(0) { $0 + $1.attachments.count }
+            result.domainCounts = Self.computeDomainCounts(emails: emailsCopy)
+            result.sizeDistribution = Self.computeSizeDistribution(emails: emailsCopy)
 
-                DispatchQueue.main.async { computeStage = "Contact relationships..." }
-                result.contactRelationships = Self.computeContactRelationships(emails: emailsCopy)
+            await MainActor.run { computeStage = "Contact relationships..." }
+            result.contactRelationships = Self.computeContactRelationships(emails: emailsCopy)
 
-                DispatchQueue.main.async { computeStage = "Compliance & priority scan..." }
-                result.piiCounts = EmailNLPEngine.piiSummary(in: emailsCopy)
-                let priorities = EmailNLPEngine.scoreAllPriorities(emailsCopy)
-                result.highPriorityCount = priorities.filter { $0.level == .high }.count
-                result.mediumPriorityCount = priorities.filter { $0.level == .medium }.count
-                result.totalStorageMB = Double(emailsCopy.reduce(0) { $0 + $1.rawSource.utf8.count }) / (1024.0 * 1024.0)
+            await MainActor.run { computeStage = "Compliance & priority scan..." }
+            result.piiCounts = EmailNLPEngine.piiSummary(in: emailsCopy)
+            let priorities = EmailNLPEngine.scoreAllPriorities(emailsCopy)
+            result.highPriorityCount = priorities.filter { $0.level == .high }.count
+            result.mediumPriorityCount = priorities.filter { $0.level == .medium }.count
+            result.totalStorageMB = Double(emailsCopy.reduce(0) { $0 + $1.rawSource.utf8.count }) / (1024.0 * 1024.0)
 
-                DispatchQueue.main.async { computeStage = "Done" }
-                continuation.resume(returning: result)
-            }
-        }
+            await MainActor.run { computeStage = "Done" }
+            return result
+        }.value
 
         withAnimation(AnimationTiming.normal) {
             analyticsData = data
@@ -807,7 +837,7 @@ struct EmailAnalyticsView: View {
         }
     }
 
-    private static func computeTimeline(emails: [MBOXParser.RawEmail]) -> [TimelineBucket] {
+    nonisolated private static func computeTimeline(emails: [MBOXParser.RawEmail]) -> [TimelineBucket] {
         let calendar = Calendar.current
         var bucketMap: [Date: (sent: Int, received: Int)] = [:]
 
@@ -828,7 +858,7 @@ struct EmailAnalyticsView: View {
         }
     }
 
-    private static func computeTopContacts(emails: [MBOXParser.RawEmail]) -> [ContactCount] {
+    nonisolated private static func computeTopContacts(emails: [MBOXParser.RawEmail]) -> [ContactCount] {
         var counts: [String: Int] = [:]
         for email in emails {
             let from = email.headers["From"] ?? ""
@@ -842,7 +872,7 @@ struct EmailAnalyticsView: View {
             .map { ContactCount(address: $0.key, count: $0.value) }
     }
 
-    private static func computeHeatmap(emails: [MBOXParser.RawEmail]) -> [HeatmapCell] {
+    nonisolated private static func computeHeatmap(emails: [MBOXParser.RawEmail]) -> [HeatmapCell] {
         let calendar = Calendar.current
         var grid: [Int: [Int: Int]] = [:]
         for email in emails {
@@ -861,7 +891,7 @@ struct EmailAnalyticsView: View {
         return cells
     }
 
-    private static func computeAttachmentTypes(emails: [MBOXParser.RawEmail]) -> [AttachmentTypeCount] {
+    nonisolated private static func computeAttachmentTypes(emails: [MBOXParser.RawEmail]) -> [AttachmentTypeCount] {
         var typeCounts: [String: Int] = [:]
         for email in emails {
             for att in email.attachments {
@@ -874,7 +904,7 @@ struct EmailAnalyticsView: View {
             .map { AttachmentTypeCount(fileType: $0.key, count: $0.value) }
     }
 
-    private static func computeDomainCounts(emails: [MBOXParser.RawEmail]) -> [DomainCount] {
+    nonisolated private static func computeDomainCounts(emails: [MBOXParser.RawEmail]) -> [DomainCount] {
         var counts: [String: Int] = [:]
         for email in emails {
             for domain in email.domains {
@@ -886,7 +916,7 @@ struct EmailAnalyticsView: View {
             .map { DomainCount(domain: $0.key, count: $0.value) }
     }
 
-    private static func computeSizeDistribution(emails: [MBOXParser.RawEmail]) -> [SizeBucket] {
+    nonisolated private static func computeSizeDistribution(emails: [MBOXParser.RawEmail]) -> [SizeBucket] {
         var buckets: [String: Int] = [
             "< 1 KB": 0,
             "1-10 KB": 0,
@@ -914,7 +944,7 @@ struct EmailAnalyticsView: View {
         return order.map { SizeBucket(label: $0, count: buckets[$0] ?? 0) }
     }
 
-    private static func computeContactRelationships(emails: [MBOXParser.RawEmail]) -> [ContactRelationship] {
+    nonisolated private static func computeContactRelationships(emails: [MBOXParser.RawEmail]) -> [ContactRelationship] {
         var pairs: [String: Int] = [:]
         for email in emails {
             let fromRaw = email.headers["From"] ?? ""
@@ -1051,20 +1081,21 @@ struct StatCard: View {
         VStack(spacing: Spacing.xSmall) {
             Image(systemName: icon)
                 .font(.title2)
-                .foregroundStyle(
-                    .linearGradient(colors: [color, color.opacity(0.6)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                )
+                .adaptiveIconGradient(colors: [color, color.opacity(0.6)])
                 .accessibilityHidden(true)
             Text(value)
-                .font(.system(size: 22, weight: .bold, design: .rounded))
+                .font(.system(.title3, design: .rounded))
+                .fontWeight(.bold)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
             Text(title)
                 .font(Typography.caption1)
                 .foregroundColor(AppColors.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity)
-        .padding(Spacing.medium)
+        .padding(Spacing.small)
         .background(.ultraThinMaterial)
         .cornerRadius(CornerRadius.large)
         .overlay(

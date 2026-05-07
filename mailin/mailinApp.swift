@@ -9,16 +9,23 @@
 //
 
 import SwiftUI
+import Observation
+import CoreSpotlight
+#if os(macOS)
 import AppKit
+#endif
 
 @main
 struct mailinApp: App {
     // MARK: - App State
-    @StateObject private var appState = AppStateManager()
+    @State private var appState = AppStateManager()
     @StateObject private var storeManager = StoreManager()
     @ObservedObject private var forensicManager = ForensicManager.shared
     @ObservedObject private var personaManager = PersonaManager.shared
+    @ObservedObject private var compliance = LegalComplianceManager.shared
     @AppStorage("enableAIFeatures") private var enableAIFeatures = true
+    @AppStorage("hasSeenLaunchAnimation") private var hasSeenLaunchAnimation = false
+    @State private var showLaunchAnimation = false
     @Environment(\.openWindow) private var openWindow
     @Environment(\.scenePhase) private var scenePhase
 
@@ -26,45 +33,81 @@ struct mailinApp: App {
     var body: some Scene {
         // Main window with proper sizing and controls
         WindowGroup {
-            ContentView()
-                .environmentObject(appState)
-                .environmentObject(storeManager)
-                .adaptiveLayout()
-                .frame(minWidth: 700, idealWidth: 1100, minHeight: 500, idealHeight: 750)
-                .sheet(isPresented: Binding(
-                    get: { !personaManager.hasCompletedPersonaSelection },
-                    set: { if !$0 { personaManager.completePersonaSelection() } }
-                )) {
-                    PersonaOnboardingView()
-                }
-                .onAppear {
-                    configureAppearance()
-                }
-                .onChange(of: scenePhase) { _, newPhase in
-                    if newPhase == .active {
-                        Task { await storeManager.checkEntitlements() }
+            ZStack {
+                ContentView()
+                    .environment(appState)
+                    .environmentObject(storeManager)
+                    .adaptiveLayout()
+                    #if os(macOS)
+                    .frame(minWidth: 700, idealWidth: 1100, minHeight: 500, idealHeight: 750)
+                    #endif
+                    .sheet(isPresented: Binding(
+                        get: { compliance.needsTermsAcceptance },
+                        set: { _ in }
+                    )) {
+                        TermsAcceptanceView()
+                            .interactiveDismissDisabled()
                     }
+                    .sheet(isPresented: Binding(
+                        get: { !compliance.needsTermsAcceptance && !personaManager.hasCompletedPersonaSelection },
+                        set: { if !$0 { personaManager.completePersonaSelection() } }
+                    )) {
+                        PersonaOnboardingView()
+                    }
+                    .onAppear {
+                        configureAppearance()
+                        ImportProgressNotifier.shared.requestPermission()
+                        if !hasSeenLaunchAnimation {
+                            showLaunchAnimation = true
+                        }
+                    }
+                    .onChange(of: scenePhase) { _, newPhase in
+                        if newPhase == .active {
+                            Task { await storeManager.checkEntitlements() }
+                        }
+                        #if os(iOS)
+                        if newPhase == .background {
+                            EmailPersistence.flushPendingSaves()
+                        }
+                        #endif
+                    }
+                    .onOpenURL { url in
+                        handleIncomingURL(url)
+                    }
+                    .onContinueUserActivity(CSSearchableItemActionType) { activity in
+                        if let emailID = SpotlightIndexer.shared.handleSpotlightActivity(activity) {
+                            NotificationCenter.default.post(name: .spotlightEmailSelected, object: emailID)
+                        }
+                    }
+
+                if showLaunchAnimation {
+                    LaunchAnimationView {
+                        showLaunchAnimation = false
+                        hasSeenLaunchAnimation = true
+                    }
+                    .zIndex(999)
                 }
+            }
         }
-        .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentSize)
+        #if os(macOS)
+        .windowResizability(.contentMinSize)
+        #endif
         .commands {
             appCommands
         }
-        
+
         #if os(macOS)
         // Settings window (Apple standard)
         Settings {
             SettingsView()
-                .environmentObject(appState)
+                .environment(appState)
                 .environmentObject(storeManager)
         }
-        
+
         // About window
         Window("About mailin", id: "about") {
             AboutView()
         }
-        .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
         .defaultSize(width: 400, height: 500)
         #endif
@@ -81,14 +124,20 @@ struct mailinApp: App {
             }
         }
         
-        CommandGroup(after: .newItem) {
+        CommandGroup(replacing: .newItem) {
+            Button("New Import") {
+                appState.triggerNewImport = true
+            }
+            .keyboardShortcut("n", modifiers: .command)
+            .disabled(!appState.hasParsedEmails)
+
             Button("Open Email Archive...") {
                 appState.triggerFileImport = true
             }
             .keyboardShortcut("o", modifiers: .command)
-            
+
             Divider()
-            
+
             Button("Export Filtered Emails (Pro)...") {
                 if storeManager.requirePremium() {
                     appState.triggerExport = true
@@ -96,15 +145,71 @@ struct mailinApp: App {
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .disabled(!appState.hasFilteredEmails)
+
+            Divider()
+
+            Button("Export Contacts (vCard)...") {
+                appState.triggerExportVCard = true
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            Button("Export Calendar Events (ICS)...") {
+                appState.triggerExportICS = true
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            Button("Batch Print All Filtered...") {
+                appState.triggerBatchPrint = true
+            }
+            .disabled(!appState.hasFilteredEmails)
         }
         
+        CommandGroup(replacing: .textEditing) {
+            Button("Find...") {
+                appState.triggerSearch = true
+            }
+            .keyboardShortcut("f", modifiers: .command)
+            .disabled(!appState.hasParsedEmails)
+
+            Button("Select All") {
+                appState.triggerSelectAll = true
+            }
+            .keyboardShortcut("a", modifiers: .command)
+            .disabled(!appState.hasParsedEmails)
+        }
+
+        CommandGroup(replacing: .printItem) {
+            Button("Print Email...") {
+                appState.triggerPrint = true
+            }
+            .keyboardShortcut("p", modifiers: .command)
+            .disabled(!appState.hasParsedEmails)
+        }
+
         CommandGroup(after: .sidebar) {
             Button("Toggle Sidebar") {
                 appState.toggleSidebar()
             }
             .keyboardShortcut("s", modifiers: [.command, .option])
+
+            Divider()
+
+            Button("Command Palette...") {
+                appState.showCommandPalette = true
+            }
+            .keyboardShortcut("p", modifiers: [.command, .shift])
+
+            Button("Keyboard Shortcuts...") {
+                appState.showKeyboardShortcuts = true
+            }
+
+            Divider()
+
+            Button("Workspaces...") {
+                appState.showWorkspaceManager = true
+            }
         }
-        
+
         CommandMenu("Analysis") {
             Button("Reply Statistics...") {
                 appState.showReplyStats = true
@@ -131,6 +236,138 @@ struct mailinApp: App {
             }
             .keyboardShortcut("d", modifiers: [.command, .shift])
             .disabled(!appState.hasParsedEmails)
+
+            Divider()
+
+            Button("Topic Clusters") {
+                withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? nil : .topics }
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            Button("Email Subjects") {
+                withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .subjects ? nil : .subjects }
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            Button("Find Duplicates...") {
+                appState.showDuplicateManager = true
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            Button("Predictive Coding (TAR)...") {
+                appState.showPredictiveCoding = true
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            Button("Attachment Browser...") {
+                appState.showAttachmentGrid = true
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            Divider()
+
+            Button("Email Timeline...") {
+                appState.showTimeline = true
+            }
+            .keyboardShortcut("t", modifiers: [.command, .shift])
+            .disabled(!appState.hasParsedEmails)
+
+            Button("Relationship Graph...") {
+                appState.showRelationshipGraph = true
+            }
+            .keyboardShortcut("j", modifiers: [.command, .shift])
+            .disabled(!appState.hasParsedEmails)
+
+            Divider()
+
+            Button("Archive Comparison...") {
+                appState.showArchiveComparison = true
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            Divider()
+
+            Button("Automation Rules...") {
+                appState.showAutomationRules = true
+            }
+            .keyboardShortcut("u", modifiers: [.command, .shift])
+            .disabled(!appState.hasParsedEmails)
+
+            Button("Batch Operations...") {
+                appState.showBatchOperations = true
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            Button("Thread Summary...") {
+                appState.showThreadSummarizer = true
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            Button("Smart Alerts...") {
+                appState.showSmartAlerts = true
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            Divider()
+
+            Button("Near-Duplicate Detection...") {
+                appState.showNearDuplicates = true
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            Button("Anomaly Detection...") {
+                appState.showAnomalyDetection = true
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            Button("Smart Auto-Tagger...") {
+                appState.showSmartAutoTagger = true
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            Button("Email Digest...") {
+                appState.showAIDigest = true
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            Divider()
+
+            Button("Executive Dashboard...") {
+                appState.showExecutiveDashboard = true
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            Button("Communication Patterns...") {
+                appState.showCommunicationPatterns = true
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            Button("Keyword Monitor...") {
+                appState.showKeywordMonitor = true
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            Button("Report Builder...") {
+                appState.showReportBuilder = true
+            }
+            .disabled(!appState.hasParsedEmails)
+        }
+
+        CommandMenu("Export") {
+            Button("Export as MSG...") {
+                appState.triggerExportMSG = true
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            Button("Export as PST...") {
+                appState.triggerExportPST = true
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            Button("Export Relativity Load File...") {
+                appState.triggerExportRelativity = true
+            }
+            .disabled(!appState.hasParsedEmails)
         }
 
         CommandMenu("Forensic") {
@@ -146,6 +383,60 @@ struct mailinApp: App {
 
             Button("Export Forensic CSV...") {
                 appState.triggerForensicCSVExport = true
+            }
+            .disabled(!forensicManager.isEnabled || !appState.hasParsedEmails)
+
+            Button("Export Hash Manifest...") {
+                appState.triggerExportHashManifest = true
+            }
+            .disabled(!forensicManager.isEnabled || !appState.hasParsedEmails)
+
+            Button("Verify All Email Integrity") {
+                appState.triggerVerifyIntegrity = true
+            }
+            .disabled(!forensicManager.isEnabled || !appState.hasParsedEmails)
+
+            Divider()
+
+            Button("Custodian Manager...") {
+                appState.showCustodianPanel = true
+            }
+            .disabled(!forensicManager.isEnabled || !appState.hasParsedEmails)
+
+            Button("Review Batches...") {
+                appState.showReviewBatches = true
+            }
+            .disabled(!forensicManager.isEnabled || !appState.hasParsedEmails)
+
+            Button("Generate Investigation Report...") {
+                appState.showInvestigationReport = true
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            Divider()
+
+            Button("E-Discovery Workflow...") {
+                appState.showEDiscovery = true
+            }
+            .disabled(!forensicManager.isEnabled || !appState.hasParsedEmails)
+
+            Button("Bates Numbering...") {
+                appState.showBatesNumbering = true
+            }
+            .disabled(!forensicManager.isEnabled || !appState.hasParsedEmails)
+
+            Button("PII Redaction...") {
+                appState.showRedaction = true
+            }
+            .disabled(!forensicManager.isEnabled || !appState.hasParsedEmails)
+
+            Button("GDPR Compliance Report...") {
+                appState.showGDPRReport = true
+            }
+            .disabled(!forensicManager.isEnabled || !appState.hasParsedEmails)
+
+            Button("Chain of Custody...") {
+                appState.showChainOfCustody = true
             }
             .disabled(!forensicManager.isEnabled || !appState.hasParsedEmails)
 
@@ -179,7 +470,7 @@ struct mailinApp: App {
                 Button("Tag: Suspicious") {
                     NotificationCenter.default.post(name: .tagCurrentEmail, object: ForensicManager.EvidenceTag.suspicious)
                 }
-                .keyboardShortcut("5", modifiers: [.command])
+                .keyboardShortcut("5", modifiers: [.command, .shift])
                 .disabled(!appState.hasParsedEmails)
 
                 Button("Clear Tag") {
@@ -193,14 +484,21 @@ struct mailinApp: App {
     
     private static var terminationObserverRegistered = false
 
+    private func handleIncomingURL(_ url: URL) {
+        let scheme = url.scheme ?? ""
+        if scheme == "com.ecosanskriti.mailin" || scheme == "msauth.com.ecosanskriti.mailin" {
+            NotificationCenter.default.post(name: .oauthCallback, object: url)
+        } else {
+            let ext = url.pathExtension.lowercased()
+            if ParserFactory.allSupportedExtensions.contains(ext) {
+                NotificationCenter.default.post(name: .importFileFromURL, object: url)
+            }
+        }
+    }
+
     // MARK: - Appearance Configuration
     private func configureAppearance() {
         #if os(macOS)
-        if let window = NSApp.mainWindow ?? NSApplication.shared.windows.first {
-            window.titlebarAppearsTransparent = true
-            window.titleVisibility = .hidden
-            window.toolbarStyle = .unified
-        }
         if !Self.terminationObserverRegistered {
             Self.terminationObserverRegistered = true
             NotificationCenter.default.addObserver(
@@ -215,24 +513,80 @@ struct mailinApp: App {
     }
 }
 // MARK: - App State Manager
+@Observable
 @MainActor
-class AppStateManager: ObservableObject {
-    @Published var triggerFileImport = false
-    @Published var triggerExport = false
-    @Published var showReplyStats = false
-    @Published var showAIAssistant = false
-    @Published var showAnalytics = false
-    @Published var showReplyStatsSheet = false
-    @Published var hasFilteredEmails = false
-    @Published var hasParsedEmails = false
-    @Published var sidebarVisible = true
-    @Published var triggerAuditLogExport = false
-    @Published var triggerForensicCSVExport = false
-    
+class AppStateManager {
+    var triggerFileImport = false
+    var triggerExport = false
+    var showReplyStats = false
+    var showAIAssistant = false
+    var showAnalytics = false
+    var showReplyStatsSheet = false
+    var hasFilteredEmails = false
+    var hasParsedEmails = false
+    var sidebarVisible = true
+    var triggerAuditLogExport = false
+    var triggerForensicCSVExport = false
+    var triggerSearch = false
+    var triggerSelectAll = false
+    var triggerPrint = false
+    var triggerNewImport = false
+    var showDuplicateManager = false
+    var showTopicClusters = false
+    var showPredictiveCoding = false
+    var showCustodianPanel = false
+    var showReviewBatches = false
+    var triggerExportVCard = false
+    var triggerExportICS = false
+    var triggerExportHashManifest = false
+    var triggerBatchPrint = false
+    var triggerVerifyIntegrity = false
+    var showIMAPConnect = false
+    var showGmailConnect = false
+    var showOutlookConnect = false
+    var showAttachmentGrid = false
+    var triggerExportMSG = false
+    var triggerExportPST = false
+    var triggerExportRelativity = false
+    var showTimeline = false
+    var showRelationshipGraph = false
+    var showArchiveComparison = false
+    var showInvestigationReport = false
+    // v7: Intelligence & Automation
+    var showAutomationRules = false
+    var showBatchOperations = false
+    var showThreadSummarizer = false
+    var showSmartAlerts = false
+    // v7: Forensics & Compliance
+    var showEDiscovery = false
+    var showBatesNumbering = false
+    var showRedaction = false
+    var showGDPRReport = false
+    var showChainOfCustody = false
+    // v8: Intelligence & Polish
+    var showNearDuplicates = false
+    var showAnomalyDetection = false
+    var showSmartAutoTagger = false
+    var showAIDigest = false
+    // v9: Dashboard & Reporting
+    var showExecutiveDashboard = false
+    var showReportBuilder = false
+    var showKeywordMonitor = false
+    var showCommunicationPatterns = false
+    // v9: Security & Workspaces
+    var showWorkspaceManager = false
+    var showCommandPalette = false
+    var showKeyboardShortcuts = false
+    var dockedBottomPanel: DockedPanel? = nil
+
+    enum DockedPanel: String {
+        case topics, subjects
+    }
+
     func toggleSidebar() {
         sidebarVisible.toggle()
     }
-    
+
     func detectMetadata() {
         NotificationCenter.default.post(name: .detectMetadata, object: nil)
     }
@@ -249,14 +603,15 @@ struct PersonaOnboardingView: View {
         VStack(spacing: 0) {
             VStack(spacing: Spacing.small) {
                 Image(systemName: "envelope.open.badge.clock")
-                    .font(.system(size: 40))
+                    .font(.largeTitle)
                     .foregroundStyle(.linearGradient(
                         colors: [selected.accentColor, selected.accentColor.opacity(0.6)],
                         startPoint: .topLeading, endPoint: .bottomTrailing
                     ))
 
                 Text("Welcome to mailin")
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .font(.system(.title3, design: .rounded))
+                    .fontWeight(.bold)
 
                 Text("How will you use mailin? This customizes your interface.")
                     .font(Typography.subheadline)
@@ -274,16 +629,17 @@ struct PersonaOnboardingView: View {
                         } label: {
                             HStack(spacing: Spacing.small) {
                                 Image(systemName: persona.icon)
-                                    .font(.system(size: 22))
+                                    .font(.title3)
                                     .foregroundColor(persona.accentColor)
                                     .frame(width: 32, height: 32)
 
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(persona.displayName)
-                                        .font(.system(size: 14, weight: .semibold))
+                                        .font(.subheadline)
+                                        .fontWeight(.semibold)
                                         .foregroundColor(.primary)
                                     Text(persona.tagline)
-                                        .font(.system(size: 11))
+                                        .font(.caption)
                                         .foregroundColor(.secondary)
                                         .lineLimit(2)
                                 }
@@ -293,7 +649,7 @@ struct PersonaOnboardingView: View {
                                 if selected == persona {
                                     Image(systemName: "checkmark.circle.fill")
                                         .foregroundColor(persona.accentColor)
-                                        .font(.system(size: 18))
+                                        .font(.headline)
                                 }
                             }
                             .padding(Spacing.small)
@@ -321,6 +677,15 @@ struct PersonaOnboardingView: View {
                 .padding(.top, Spacing.small)
 
             HStack {
+                Button("Skip") {
+                    personaManager.completePersonaSelection()
+                    dismiss()
+                }
+                .buttonStyle(.bordered)
+                .accessibilityLabel("Skip persona selection")
+
+                Spacer()
+
                 Text("You can change this anytime in Settings.")
                     .font(Typography.caption1)
                     .foregroundColor(.secondary)
@@ -337,7 +702,10 @@ struct PersonaOnboardingView: View {
             }
             .padding(Spacing.medium)
         }
+        .adaptiveHeroBackground(colors: [selected.accentColor, .purple, .indigo, .teal])
+        #if os(macOS)
         .frame(width: 460, height: 480)
+        #endif
     }
 }
 
@@ -346,5 +714,10 @@ extension Notification.Name {
     static let detectMetadata = Notification.Name("detectMetadata")
     static let dataClearedByUser = Notification.Name("dataClearedByUser")
     static let tagCurrentEmail = Notification.Name("tagCurrentEmail")
+    static let printCurrentEmail = Notification.Name("printCurrentEmail")
+    static let oauthCallback = Notification.Name("oauthCallback")
+    static let importFileFromURL = Notification.Name("importFileFromURL")
+    static let triggerFileImportFromShortcut = Notification.Name("triggerFileImportFromShortcut")
+    static let spotlightEmailSelected = Notification.Name("spotlightEmailSelected")
 }
 

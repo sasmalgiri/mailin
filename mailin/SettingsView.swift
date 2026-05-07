@@ -11,6 +11,8 @@ struct SettingsView: View {
     @EnvironmentObject var storeManager: StoreManager
     @ObservedObject private var forensicManager = ForensicManager.shared
     @ObservedObject private var personaManager = PersonaManager.shared
+    @ObservedObject private var collabManager = CollaborationManager.shared
+    @ObservedObject private var iCloudSync = iCloudSyncManager.shared
     @AppStorage("defaultSenderEmail") private var defaultSenderEmail = ""
     @AppStorage("autoDetectSender") private var autoDetectSender = true
     @AppStorage("showInlineImages") private var showInlineImages = true
@@ -19,9 +21,6 @@ struct SettingsView: View {
     @AppStorage("showEmailPreviews") private var showEmailPreviews = true
     @AppStorage("autoAdvanceAfterTag") private var autoAdvanceAfterTag = true
     @AppStorage("hasConsentedToCloudAI") private var hasConsentedToCloudAI = false
-    @State private var openAIAPIKey = KeychainHelper.load(key: "openAIAPIKey")
-    @AppStorage("openAIModel") private var openAIModel = "gpt-4o-mini"
-    @AppStorage("openAIEndpoint") private var openAIEndpoint = "https://api.openai.com/v1"
     @AppStorage("customModelName") private var customModelName = ""
     @State private var savedDataCleared = false
     @State private var showClearConfirmation = false
@@ -31,7 +30,13 @@ struct SettingsView: View {
     @State private var tempFilesCleared = false
     @State private var settingsReset = false
     @State private var forensicDataCleared = false
-    
+    @State private var showDeleteAllConfirmation = false
+    @State private var allDataDeleted = false
+    @ObservedObject private var compliance = LegalComplianceManager.shared
+    #if os(iOS)
+    @State private var showFolderPicker = false
+    #endif
+
     var body: some View {
         TabView {
             profileSettings
@@ -63,8 +68,20 @@ struct SettingsView: View {
                 .tabItem {
                     Label("Forensic", systemImage: "shield.checkered")
                 }
+
+            collaborationSettings
+                .tabItem {
+                    Label("Review Sharing", systemImage: "person.2.fill")
+                }
+
+            iCloudSyncSettings
+                .tabItem {
+                    Label("iCloud", systemImage: "icloud")
+                }
         }
+        #if os(macOS)
         .frame(minWidth: 400, idealWidth: 540, minHeight: 380, idealHeight: 520)
+        #endif
         .sheet(isPresented: $storeManager.showPaywall) {
             PaywallView()
                 .environmentObject(storeManager)
@@ -81,7 +98,7 @@ struct SettingsView: View {
                     } label: {
                         HStack(spacing: Spacing.small) {
                             Image(systemName: persona.icon)
-                                .font(.system(size: 20))
+                                .font(.title3)
                                 .foregroundColor(persona.accentColor)
                                 .frame(width: 28)
 
@@ -99,7 +116,7 @@ struct SettingsView: View {
                             if personaManager.selectedPersona == persona {
                                 Image(systemName: "checkmark.circle.fill")
                                     .foregroundColor(persona.accentColor)
-                                    .font(.system(size: 16))
+                                    .font(.body)
                             }
                         }
                         .padding(.vertical, Spacing.xxSmall)
@@ -172,6 +189,29 @@ struct SettingsView: View {
                     .font(.headline)
             }
 
+            Section {
+                HStack {
+                    Text("Status")
+                    Spacer()
+                    Text(storeManager.currentTier.displayName)
+                        .foregroundColor(storeManager.isPremium ? .green : AppColors.secondary)
+                        .fontWeight(.semibold)
+                }
+
+                if storeManager.currentTier < .professional {
+                    Button(storeManager.currentTier == .free ? "Upgrade" : "Upgrade to Professional") {
+                        storeManager.showPaywall = true
+                    }
+                }
+
+                Button("Restore Purchases") {
+                    Task { await storeManager.restorePurchases() }
+                }
+            } header: {
+                Text("Purchase")
+                    .font(.headline)
+            }
+
         }
         .formStyle(.grouped)
         .padding()
@@ -222,7 +262,7 @@ struct SettingsView: View {
                     Text("Status")
                     Spacer()
                     if storeManager.isPremium {
-                        Label("Pro", systemImage: "crown.fill")
+                        Label(storeManager.currentTier.displayName, systemImage: "crown.fill")
                             .foregroundColor(.orange)
                             .fontWeight(.semibold)
                     } else {
@@ -231,29 +271,21 @@ struct SettingsView: View {
                     }
                 }
 
-                if !storeManager.isPremium {
-                    Button("Upgrade to Pro") {
+                if storeManager.currentTier < .professional {
+                    Button(storeManager.currentTier == .free ? "Upgrade" : "Upgrade to Professional") {
                         storeManager.showPaywall = true
                     }
                 }
-
-                Button("Manage Subscription") {
-                    if let url = URL(string: "https://apps.apple.com/account/subscriptions") {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
-                .accessibilityLabel("Manage subscription")
-                .accessibilityHint("Opens App Store subscription management")
 
                 Button("Restore Purchases") {
                     Task { await storeManager.restorePurchases() }
                 }
                 .accessibilityLabel("Restore purchases")
             } header: {
-                Text("Subscription")
+                Text("Purchase")
                     .font(.headline)
             } footer: {
-                Text("Manage, cancel, or change your subscription in the App Store.")
+                Text("One-time purchase. No subscription required.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -264,52 +296,6 @@ struct SettingsView: View {
             } header: {
                 Text("AI Assistant")
                     .font(.headline)
-            }
-
-            Section {
-                SecureField("API Key", text: $openAIAPIKey)
-                    .help("Your OpenAI API key (starts with sk-). Stored securely in your Mac's Keychain.")
-                    .accessibilityLabel("OpenAI API key")
-                    .onChange(of: openAIAPIKey) { _, newValue in
-                        KeychainHelper.save(key: "openAIAPIKey", value: newValue)
-                    }
-
-                Picker("Model", selection: $openAIModel) {
-                    Text("GPT-4o Mini (fast, affordable)").tag("gpt-4o-mini")
-                    Text("GPT-4o (best quality)").tag("gpt-4o")
-                    Text("Custom model").tag("custom")
-                }
-
-                if openAIModel == "custom" {
-                    TextField("Custom model name", text: $customModelName)
-                        .help("e.g., gpt-3.5-turbo, llama-3, or any model your endpoint supports")
-                }
-
-                TextField("API Endpoint", text: $openAIEndpoint)
-                    .help("Default: https://api.openai.com/v1 — Change for Ollama, LM Studio, or other OpenAI-compatible servers")
-                    .font(.system(.body, design: .monospaced))
-
-                Toggle("I consent to sending email data to this API provider", isOn: $hasConsentedToCloudAI)
-                    .help("Required before Cloud AI can be used. You can revoke this at any time.")
-                    .accessibilityLabel("Cloud AI data sharing consent")
-
-                HStack(spacing: Spacing.xSmall) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(.orange)
-                        .font(.caption)
-                    Text("When using a cloud API, email data is sent to the provider's servers. Use a local endpoint (Ollama, LM Studio) to keep data on-device.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.top, Spacing.xxSmall)
-            } header: {
-                Text("Cloud AI (Optional)")
-                    .font(.headline)
-            } footer: {
-                Text("Bring your own API key for OpenAI, or use any OpenAI-compatible endpoint (Ollama, LM Studio, etc.)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
             }
 
             Section {
@@ -378,6 +364,52 @@ struct SettingsView: View {
             }
             
             Section {
+                Picker("Auto-delete data after", selection: $compliance.dataRetentionDays) {
+                    Text("Never").tag(0)
+                    Text("30 days").tag(30)
+                    Text("90 days").tag(90)
+                    Text("180 days").tag(180)
+                    Text("1 year").tag(365)
+                }
+
+                Button("Delete All My Data", role: .destructive) {
+                    showDeleteAllConfirmation = true
+                }
+                .alert("Delete All Data", isPresented: $showDeleteAllConfirmation) {
+                    Button("Cancel", role: .cancel) {}
+                    Button("Delete Everything", role: .destructive) {
+                        compliance.deleteAllUserData()
+                        allDataDeleted = true
+                    }
+                } message: {
+                    Text("This will permanently delete ALL data including emails, settings, forensic data, AI keys, and preferences. The app will reset to its initial state. This cannot be undone.")
+                }
+
+                if allDataDeleted {
+                    Text("All data has been deleted. Restart the app for a clean state.")
+                        .font(.caption)
+                        .foregroundColor(.green)
+                }
+
+                if !compliance.termsAcceptedDateString.isEmpty {
+                    HStack {
+                        Text("Terms accepted")
+                        Spacer()
+                        Text(compliance.acceptedTermsVersion)
+                            .foregroundColor(.secondary)
+                    }
+                    .font(.caption)
+                }
+            } header: {
+                Label("Data & Privacy", systemImage: "hand.raised.fill")
+                    .font(.headline)
+            } footer: {
+                Text("mailin collects zero data. All processing is on-device. Use \"Delete All My Data\" to exercise your right to data deletion (GDPR Art. 17 / CCPA).")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Section {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text("Version")
@@ -391,6 +423,17 @@ struct SettingsView: View {
                         Spacer()
                         Text(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1")
                             .foregroundColor(.secondary)
+                    }
+                }
+
+                HStack(spacing: Spacing.medium) {
+                    if let privacyURL = URL(string: "https://sasmalgiri.github.io/mailin/privacy") {
+                        Link("Privacy Policy", destination: privacyURL)
+                            .font(Typography.caption1)
+                    }
+                    if let termsURL = URL(string: "https://sasmalgiri.github.io/mailin/terms") {
+                        Link("Terms of Use", destination: termsURL)
+                            .font(Typography.caption1)
                     }
                 }
             } header: {
@@ -427,9 +470,14 @@ struct SettingsView: View {
                 Text("Forensic Mode")
                     .font(.headline)
             } footer: {
-                Text("Forensic mode enables hash verification of source files, a full audit log, evidence tagging, and blocks cloud AI to maintain chain of custody.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                VStack(alignment: .leading, spacing: Spacing.xSmall) {
+                    Text("Forensic mode enables hash verification of source files, a full audit log, evidence tagging, and blocks cloud AI to maintain chain of custody.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("Disclaimer: Forensic features are analytical tools and have NOT been independently validated for court admissibility. Verify all outputs independently before use in legal proceedings.")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
             }
 
             Section {
@@ -498,7 +546,7 @@ struct SettingsView: View {
                         Label("TAMPERED", systemImage: "exclamationmark.triangle.fill")
                             .foregroundColor(.red)
                             .font(.caption)
-                            .help(detail)
+                            .help(Text(verbatim: detail))
                     case .noData:
                         Text("No entries")
                             .foregroundColor(.secondary)
@@ -571,6 +619,313 @@ struct SettingsView: View {
         .padding()
     }
 
+    // MARK: - Collaboration Settings
+
+    private var collaborationSettings: some View {
+        Form {
+            Section {
+                if !storeManager.isProfessional {
+                    HStack(spacing: Spacing.xSmall) {
+                        Image(systemName: "lock.fill")
+                            .foregroundColor(.purple)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Professional Feature")
+                                .font(Typography.headline)
+                            Text("Review sharing requires the Professional tier.")
+                                .font(Typography.caption1)
+                                .foregroundColor(AppColors.secondary)
+                        }
+                        Spacer()
+                        Button("Upgrade") {
+                            storeManager.showPaywall = true
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    }
+                    .padding(.vertical, Spacing.xxSmall)
+                } else {
+                    Toggle("Enable Review Sharing", isOn: $collabManager.isEnabled)
+                        .help("Share review state with other reviewers via a shared folder (iCloud Drive, Dropbox, etc.)")
+                        .onChange(of: collabManager.isEnabled) { _, enabled in
+                            if enabled {
+                                collabManager.startMonitoring()
+                                collabManager.scanForReviewFiles()
+                            } else {
+                                collabManager.stopMonitoring()
+                            }
+                        }
+
+                    if collabManager.isEnabled {
+                        HStack {
+                            Text("Your reviewer ID")
+                            Spacer()
+                            TextField("Reviewer ID", text: $collabManager.examinerID)
+                                .frame(maxWidth: 200)
+                                .textFieldStyle(.roundedBorder)
+                        }
+                        .help("Identifies your review state files. Other reviewers will see this name.")
+                    }
+                }
+            } header: {
+                Text("Review State Sharing")
+                    .font(.headline)
+            } footer: {
+                Text("Share review progress (tags, annotations, custodians, legal holds) with other reviewers through a shared folder. Email content stays on each device — only review metadata is shared.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            if collabManager.isEnabled {
+                Section {
+                    if let folder = collabManager.sharedFolderURL {
+                        HStack {
+                            Image(systemName: "folder.fill")
+                                .foregroundColor(.blue)
+                            VStack(alignment: .leading) {
+                                Text(folder.lastPathComponent)
+                                    .font(Typography.callout)
+                                Text(folder.path)
+                                    .font(Typography.caption2)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            Spacer()
+                            Button("Change") {
+                                chooseSharedFolder()
+                            }
+                            .controlSize(.small)
+                        }
+                    } else {
+                        Button {
+                            chooseSharedFolder()
+                        } label: {
+                            Label("Choose Shared Folder", systemImage: "folder.badge.plus")
+                        }
+                        .help("Select a folder in iCloud Drive, Dropbox, or any shared location")
+                    }
+
+                    Toggle("Auto-export on changes", isOn: $collabManager.autoExport)
+                        .help("Automatically save review state to the shared folder when you tag or annotate emails")
+                } header: {
+                    Text("Shared Folder")
+                        .font(.headline)
+                } footer: {
+                    Text("Point this to a folder in iCloud Drive, Dropbox, Google Drive, or any shared location. mailin will watch for review state files from other reviewers.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Section {
+                    if collabManager.availableImports.isEmpty {
+                        Text("No review state files from other reviewers found.")
+                            .font(Typography.caption1)
+                            .foregroundColor(.secondary)
+                    } else {
+                        ForEach(collabManager.availableImports) { file in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: Spacing.xxSmall) {
+                                        if file.isNew {
+                                            Circle()
+                                                .fill(.blue)
+                                                .frame(width: 8, height: 8)
+                                        }
+                                        Text(file.examiner)
+                                            .font(Typography.callout)
+                                            .fontWeight(file.isNew ? .semibold : .regular)
+                                    }
+                                    Text("\(file.age) \(file.caseNumber.isEmpty ? "" : "- Case: \(file.caseNumber)")")
+                                        .font(Typography.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                Button("Import") {
+                                    importCollabFile(file)
+                                }
+                                .controlSize(.small)
+                            }
+                        }
+                    }
+
+                    Button {
+                        collabManager.scanForReviewFiles()
+                    } label: {
+                        Label("Refresh", systemImage: "arrow.clockwise")
+                    }
+                    .controlSize(.small)
+                } header: {
+                    HStack {
+                        Text("Available from Others")
+                            .font(.headline)
+                        if collabManager.newImportCount > 0 {
+                            Text("\(collabManager.newImportCount) new")
+                                .font(Typography.caption2)
+                                .foregroundColor(.white)
+                                .padding(.horizontal, Spacing.xxSmall)
+                                .padding(.vertical, 2)
+                                .background(Color.blue)
+                                .cornerRadius(CornerRadius.round)
+                        }
+                    }
+                }
+
+                if !collabManager.statusMessage.isEmpty {
+                    Section {
+                        Text(collabManager.statusMessage)
+                            .font(Typography.caption1)
+                            .foregroundColor(.green)
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+        #if os(iOS)
+        .fileImporter(
+            isPresented: $showFolderPicker,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                collabManager.setSharedFolder(url)
+            }
+        }
+        #endif
+    }
+
+    // MARK: - iCloud Sync Settings
+
+    private var iCloudSyncSettings: some View {
+        Form {
+            Section {
+                if !storeManager.isProfessional {
+                    HStack(spacing: Spacing.xSmall) {
+                        Image(systemName: "lock.fill")
+                            .foregroundColor(.purple)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Professional Feature")
+                                .font(Typography.headline)
+                            Text("iCloud Sync requires the Professional tier.")
+                                .font(Typography.caption1)
+                                .foregroundColor(AppColors.secondary)
+                        }
+                        Spacer()
+                        Button("Upgrade") {
+                            storeManager.showPaywall = true
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    }
+                    .padding(.vertical, Spacing.xxSmall)
+                } else {
+                    Toggle("Enable iCloud Sync", isOn: $iCloudSync.isEnabled)
+                        .help("Sync forensic metadata (evidence tags, annotations, case info) across your devices via iCloud")
+
+                    if iCloudSync.isEnabled {
+                        HStack {
+                            Image(systemName: iCloudSync.syncStatus.icon)
+                                .foregroundColor(iCloudSync.syncStatus.color)
+                            Text(iCloudSync.syncStatus.label)
+                                .font(Typography.caption1)
+                                .foregroundColor(AppColors.secondary)
+                            Spacer()
+                            if let lastSync = iCloudSync.lastSyncDate {
+                                Text(lastSync.formatted(date: .omitted, time: .shortened))
+                                    .font(Typography.caption2)
+                                    .foregroundColor(AppColors.secondary)
+                            }
+                        }
+
+                        if !iCloudSync.isAvailable {
+                            HStack(spacing: Spacing.xSmall) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundColor(.orange)
+                                Text("Sign in to iCloud in System Settings to enable sync.")
+                                    .font(Typography.caption1)
+                                    .foregroundColor(.orange)
+                            }
+                        }
+
+                        Button("Sync Now") {
+                            iCloudSync.forceSyncNow()
+                        }
+                        .disabled(!iCloudSync.isAvailable)
+                    }
+                }
+            } header: {
+                Text("iCloud Sync")
+                    .font(.headline)
+            } footer: {
+                Text("Syncs evidence tags, annotations, and case information across your devices. Email content is never uploaded — only forensic metadata is synced.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            if storeManager.isProfessional && iCloudSync.isEnabled {
+                Section {
+                    HStack {
+                        Text("Synced Data")
+                        Spacer()
+                        Text("Evidence tags, annotations, case info")
+                            .font(Typography.caption1)
+                            .foregroundColor(AppColors.secondary)
+                    }
+                    HStack {
+                        Text("Sync Interval")
+                        Spacer()
+                        Text("Every 60 seconds")
+                            .font(Typography.caption1)
+                            .foregroundColor(AppColors.secondary)
+                    }
+                    HStack {
+                        Text("Email Content")
+                        Spacer()
+                        HStack(spacing: 4) {
+                            Image(systemName: "lock.shield.fill")
+                                .foregroundColor(.green)
+                                .font(.caption)
+                            Text("Never uploaded")
+                                .font(Typography.caption1)
+                                .foregroundColor(.green)
+                        }
+                    }
+                } header: {
+                    Text("Sync Details")
+                        .font(.headline)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+    }
+
+    private func chooseSharedFolder() {
+        #if os(macOS)
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.message = "Choose a shared folder (iCloud Drive, Dropbox, etc.) for collaboration"
+        panel.prompt = "Use This Folder"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        collabManager.setSharedFolder(url)
+        #else
+        showFolderPicker = true
+        #endif
+    }
+
+    private func importCollabFile(_ file: CollaborationManager.ReviewStateFile) {
+        do {
+            let result = try collabManager.importFile(file)
+            collabManager.statusMessage = result.total > 0
+                ? "Imported from \(file.examiner): \(result.summary)"
+                : "Already up to date with \(file.examiner)'s review state."
+        } catch {
+            collabManager.statusMessage = "Import failed: \(error.localizedDescription)"
+        }
+    }
+
     private func formatFileSize(_ bytes: Int64) -> String {
         let kb = Double(bytes) / 1024
         let mb = kb / 1024
@@ -595,10 +950,7 @@ struct SettingsView: View {
         enableAIFeatures = true
         emailListDensity = "comfortable"
         showEmailPreviews = true
-        openAIAPIKey = ""
         KeychainHelper.delete(key: "openAIAPIKey")
-        openAIModel = "gpt-4o-mini"
-        openAIEndpoint = "https://api.openai.com/v1"
         customModelName = ""
     }
 }

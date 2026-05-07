@@ -9,27 +9,57 @@ struct PaywallView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            headerSection
+            ZStack(alignment: .topTrailing) {
+                headerSection
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(AppColors.secondary.opacity(0.6))
+                }
+                .buttonStyle(.plain)
+                .padding(Spacing.medium)
+                .accessibilityLabel("Close")
+            }
             Divider()
             ScrollView {
                 VStack(spacing: Spacing.large) {
                     featureComparison
                     productCards
+                    if store.purchasePending {
+                        HStack(spacing: Spacing.xSmall) {
+                            Image(systemName: "clock.fill")
+                                .foregroundColor(.orange)
+                            Text("Your purchase is pending approval. If you're using Ask to Buy, check with your family organizer.")
+                                .font(Typography.caption1)
+                                .foregroundColor(.orange)
+                        }
+                        .padding(Spacing.small)
+                        .background(Color.orange.opacity(0.1))
+                        .cornerRadius(CornerRadius.medium)
+                    }
                     if let errorMessage {
                         Text(errorMessage)
                             .font(Typography.caption1)
                             .foregroundColor(AppColors.error)
                     }
-                    restoreButton
+                    restoreSection
                     legalText
                 }
                 .padding(Spacing.large)
             }
         }
-        .frame(minWidth: 400, idealWidth: 540, minHeight: 500, idealHeight: 650)
+        #if os(macOS)
+        .frame(minWidth: 500, idealWidth: 640, minHeight: 500, idealHeight: 700)
+        #endif
         .background(AppColors.backgroundPrimary)
         .onAppear {
-            selectedProduct = store.yearlyProduct
+            if store.currentTier == .personal {
+                selectedProduct = store.professionalProduct
+            } else {
+                selectedProduct = store.professionalProduct
+            }
         }
     }
 
@@ -37,17 +67,14 @@ struct PaywallView: View {
 
     private var headerSection: some View {
         VStack(spacing: Spacing.small) {
-            Image(systemName: "crown.fill")
-                .font(.system(size: 44))
-                .foregroundStyle(
-                    .linearGradient(colors: [.orange, .yellow], startPoint: .topLeading, endPoint: .bottomTrailing)
-                )
+            crownIcon
 
-            Text("Unlock mailin Pro")
-                .font(.system(size: 26, weight: .bold, design: .rounded))
+            Text("Unlock mailin")
+                .font(.system(.title2, design: .rounded))
+                .fontWeight(.bold)
 
-            Text("Unlimited emails, AI insights, exports & more")
-                .font(.system(size: 14))
+            Text("One-time purchase. No subscriptions. Yours forever.")
+                .font(.subheadline)
                 .foregroundColor(AppColors.secondary)
 
             HStack(spacing: Spacing.medium) {
@@ -56,12 +83,29 @@ struct PaywallView: View {
             }
             .font(Typography.caption1)
             .foregroundColor(AppColors.secondary)
-
-            Text("Choose a one-time purchase or flexible subscription below")
-                .font(Typography.caption2)
-                .foregroundColor(AppColors.secondary.opacity(0.7))
         }
         .padding(.vertical, Spacing.large)
+        .adaptiveHeroBackground(colors: [.orange, .yellow, .orange, .red])
+    }
+
+    @ViewBuilder
+    private var crownIcon: some View {
+        if #available(macOS 15, iOS 18, *) {
+            Image(systemName: "crown.fill")
+                .font(.largeTitle)
+                .foregroundStyle(
+                    MeshGradient(width: 2, height: 2, points: [
+                        .init(0, 0), .init(1, 0),
+                        .init(0, 1), .init(1, 1)
+                    ], colors: [.orange, .yellow, .red, .orange])
+                )
+        } else {
+            Image(systemName: "crown.fill")
+                .font(.largeTitle)
+                .foregroundStyle(
+                    .linearGradient(colors: [.orange, .yellow], startPoint: .topLeading, endPoint: .bottomTrailing)
+                )
+        }
     }
 
     // MARK: - Feature Comparison
@@ -74,45 +118,60 @@ struct PaywallView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Text("Free")
                     .font(Typography.headline)
-                    .frame(width: 60)
+                    .frame(width: 50)
+                Text("Personal")
+                    .font(Typography.headline)
+                    .foregroundColor(.blue)
+                    .frame(width: 65)
                 Text("Pro")
                     .font(Typography.headline)
-                    .foregroundColor(AppColors.primary)
-                    .frame(width: 60)
+                    .foregroundColor(.purple)
+                    .frame(width: 50)
             }
             .padding(.bottom, Spacing.xxSmall)
 
             Divider()
 
-            featureRow("Parse emails", free: "50 max", pro: "Unlimited")
-            featureRow("View & filter emails", free: true, pro: true)
-            featureRow("AI Assistant (NLP)", free: false, pro: true)
-            featureRow("Sentiment analysis", free: false, pro: true)
-            featureRow("Export (EML/JSON/CSV)", free: false, pro: true)
-            featureRow("Reply analytics", free: false, pro: true)
-            featureRow("Download attachments", free: false, pro: true)
+            featureRow("Parse emails", free: "200", personal: true, pro: true)
+            featureRow("View & filter emails", free: true, personal: true, pro: true)
+            featureRow("Search with operators", free: true, personal: true, pro: true)
+            featureRow("Conversation threading", free: true, personal: true, pro: true)
+            featureRow("AI Assistant", free: "3", personal: true, pro: true)
+            featureRow("AI Smart Filters", free: "3", personal: true, pro: true)
+            featureRow("Analytics & charts", free: true, personal: true, pro: true)
+            featureRow("Export (EML/CSV/PDF)", free: "10", personal: true, pro: true)
+            featureRow("Download attachments", free: "5", personal: true, pro: true)
+            featureRow("Forensic mode", free: true, personal: true, pro: true)
+
+            Divider().padding(.vertical, Spacing.xxxSmall)
+
+            featureRow("Audit trail", free: false, personal: false, pro: true)
+            featureRow("Review state sharing", free: false, personal: false, pro: true)
+            featureRow("iCloud Sync", free: false, personal: false, pro: true)
+            featureRow("Chain of custody", free: false, personal: false, pro: true)
+            featureRow("Bates numbering", free: false, personal: false, pro: true)
+            featureRow("Batch processing", free: false, personal: false, pro: true)
+            featureRow("Priority support", free: false, personal: false, pro: true)
         }
-        .padding(Spacing.medium)
-        .background(AppColors.backgroundSecondary)
-        .cornerRadius(CornerRadius.large)
+        .adaptiveCard(cornerRadius: CornerRadius.large)
     }
 
-    private func featureRow(_ name: String, free: Bool, pro: Bool) -> some View {
+    private func featureRow(_ name: String, free: Bool, personal: Bool, pro: Bool) -> some View {
         HStack {
             Text(name)
                 .font(Typography.callout)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Image(systemName: free ? "checkmark.circle.fill" : "xmark.circle")
-                .foregroundColor(free ? AppColors.success : AppColors.secondary.opacity(0.4))
-                .frame(width: 60)
-            Image(systemName: pro ? "checkmark.circle.fill" : "xmark.circle")
-                .foregroundColor(pro ? AppColors.success : AppColors.secondary.opacity(0.4))
-                .frame(width: 60)
+            checkIcon(free)
+                .frame(width: 50)
+            checkIcon(personal)
+                .frame(width: 65)
+            checkIcon(pro)
+                .frame(width: 50)
         }
         .padding(.vertical, Spacing.xxxSmall)
     }
 
-    private func featureRow(_ name: String, free: String, pro: String) -> some View {
+    private func featureRow(_ name: String, free: String, personal: Bool, pro: Bool) -> some View {
         HStack {
             Text(name)
                 .font(Typography.callout)
@@ -120,72 +179,91 @@ struct PaywallView: View {
             Text(free)
                 .font(Typography.caption1)
                 .foregroundColor(AppColors.secondary)
-                .frame(width: 60)
-            Text(pro)
-                .font(Typography.caption1)
-                .foregroundColor(AppColors.primary)
-                .fontWeight(.semibold)
-                .frame(width: 60)
+                .frame(width: 50)
+            checkIcon(personal)
+                .frame(width: 65)
+            checkIcon(pro)
+                .frame(width: 50)
         }
         .padding(.vertical, Spacing.xxxSmall)
+    }
+
+    private func checkIcon(_ enabled: Bool) -> some View {
+        Image(systemName: enabled ? "checkmark.circle.fill" : "xmark.circle")
+            .foregroundColor(enabled ? AppColors.success : AppColors.secondary.opacity(0.4))
     }
 
     // MARK: - Product Cards
 
     private var productCards: some View {
         VStack(spacing: Spacing.small) {
-            if let monthly = store.monthlyProduct {
-                productCard(monthly, badge: nil)
+            if store.currentTier == .personal {
+                alreadyPersonalBanner
             }
-            if let yearly = store.yearlyProduct {
-                productCard(yearly, badge: "Best Value")
+
+            if store.currentTier < .personal, let personal = store.personalProduct {
+                productCard(personal, tierName: "Personal", price: "$29", badge: nil, color: .blue)
             }
-            if let lifetime = store.lifetimeProduct {
-                productCard(lifetime, badge: "Pay Once")
+            if store.currentTier < .professional, let professional = store.professionalProduct {
+                productCard(professional, tierName: "Professional", price: "$79", badge: "Best Value", color: .purple)
             }
 
             if !store.products.isEmpty {
                 purchaseButton
-            } else if let loadError = store.productLoadError {
+            } else if store.productLoadError != nil {
                 VStack(spacing: Spacing.small) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.title2)
-                        .foregroundColor(AppColors.warning)
-                    Text(loadError)
-                        .font(Typography.caption1)
-                        .foregroundColor(AppColors.secondary)
-                        .multilineTextAlignment(.center)
-                    Button("Retry") {
-                        Task { await store.loadProducts() }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                }
-                .padding(Spacing.medium)
-                .frame(maxWidth: .infinity)
-                .background(AppColors.backgroundSecondary)
-                .cornerRadius(CornerRadius.large)
-            } else {
-                VStack(spacing: Spacing.small) {
-                    ProgressView()
-                        .scaleEffect(0.9)
-                    Text("Loading available plans from the App Store...")
-                        .font(Typography.caption1)
+                    Text("Unable to load products right now.")
+                        .font(Typography.callout)
                         .foregroundColor(AppColors.secondary)
                     Text("Make sure you're signed in to the App Store and have an internet connection.")
                         .font(Typography.caption2)
                         .foregroundColor(AppColors.secondary.opacity(0.7))
                         .multilineTextAlignment(.center)
+                    HStack(spacing: Spacing.medium) {
+                        Button("Retry") {
+                            Task { await store.loadProducts() }
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+
+                        Button("Continue Free") {
+                            dismiss()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    }
                 }
-                .padding(Spacing.medium)
                 .frame(maxWidth: .infinity)
-                .background(AppColors.backgroundSecondary)
-                .cornerRadius(CornerRadius.large)
+                .adaptiveCard(cornerRadius: CornerRadius.large)
+            } else {
+                VStack(spacing: Spacing.small) {
+                    ProgressView()
+                        .scaleEffect(0.9)
+                    Text("Loading products from the App Store...")
+                        .font(Typography.caption1)
+                        .foregroundColor(AppColors.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .adaptiveCard(cornerRadius: CornerRadius.large)
             }
         }
     }
 
-    private func productCard(_ product: Product, badge: String?) -> some View {
+    @ViewBuilder
+    private var alreadyPersonalBanner: some View {
+        HStack(spacing: Spacing.xSmall) {
+            Image(systemName: "checkmark.seal.fill")
+                .foregroundColor(.blue)
+            Text("You own Personal. Upgrade to Professional for advanced forensic tools.")
+                .font(Typography.caption1)
+                .foregroundColor(AppColors.secondary)
+        }
+        .padding(Spacing.small)
+        .background(Color.blue.opacity(0.08))
+        .cornerRadius(CornerRadius.medium)
+    }
+
+    private func productCard(_ product: Product, tierName: String, price: String, badge: String?, color: Color) -> some View {
         let isSelected = selectedProduct?.id == product.id
 
         return Button {
@@ -196,7 +274,7 @@ struct PaywallView: View {
             HStack(spacing: Spacing.small) {
                 VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
                     HStack(spacing: Spacing.xSmall) {
-                        Text(product.displayName)
+                        Text(tierName)
                             .font(Typography.headline)
                         if let badge {
                             Text(badge)
@@ -206,38 +284,38 @@ struct PaywallView: View {
                                 .padding(.horizontal, Spacing.xSmall)
                                 .padding(.vertical, 2)
                                 .background(
-                                    Capsule().fill(
-                                        product.id == StoreManager.lifetimeID
-                                            ? Color.orange
-                                            : AppColors.primary
-                                    )
+                                    Capsule().fill(color)
                                 )
                         }
                     }
                     Text(product.description)
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
-                        .lineLimit(1)
+                        .lineLimit(2)
+                    Text("One-time purchase")
+                        .font(Typography.caption2)
+                        .foregroundColor(AppColors.secondary.opacity(0.7))
                 }
 
                 Spacer()
 
-                Text(product.displayPrice)
-                    .font(Typography.title3)
-                    .fontWeight(.bold)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(product.displayPrice)
+                        .font(Typography.title3)
+                        .fontWeight(.bold)
+                    Text("forever")
+                        .font(Typography.caption2)
+                        .foregroundColor(AppColors.secondary)
+                }
 
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                     .font(.title3)
-                    .foregroundColor(isSelected ? AppColors.primary : AppColors.secondary.opacity(0.4))
+                    .foregroundColor(isSelected ? color : AppColors.secondary.opacity(0.4))
             }
-            .padding(Spacing.medium)
-            .background(
+            .adaptiveCard(cornerRadius: CornerRadius.large)
+            .overlay(
                 RoundedRectangle(cornerRadius: CornerRadius.large)
-                    .fill(isSelected ? AppColors.primary.opacity(0.08) : AppColors.backgroundSecondary)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: CornerRadius.large)
-                            .stroke(isSelected ? AppColors.primary : Color.clear, lineWidth: 2)
-                    )
+                    .stroke(isSelected ? color : Color.clear, lineWidth: 2)
             )
         }
         .buttonStyle(.plain)
@@ -273,31 +351,45 @@ struct PaywallView: View {
 
     private var purchaseLabel: String {
         guard let product = selectedProduct else { return "Select a plan" }
-        if product.id == StoreManager.lifetimeID {
-            return "Buy Lifetime — \(product.displayPrice)"
+        if product.id == StoreManager.personalID {
+            return "Buy Personal — \(product.displayPrice)"
+        } else {
+            return "Buy Professional — \(product.displayPrice)"
         }
-        return "Subscribe — \(product.displayPrice)"
     }
 
     // MARK: - Restore & Legal
 
-    private var restoreButton: some View {
-        Button("Restore Purchases") {
-            Task { await store.restorePurchases() }
+    private var restoreSection: some View {
+        VStack(spacing: Spacing.xSmall) {
+            Button("Restore Purchases") {
+                Task { await store.restorePurchases() }
+            }
+            .font(Typography.callout)
+            #if os(macOS)
+            .buttonStyle(.link)
+            #else
+            .buttonStyle(.borderless)
+            #endif
+
+            Button("Continue with Free Version") {
+                dismiss()
+            }
+            .font(Typography.caption1)
+            .foregroundColor(AppColors.secondary)
+            .accessibilityLabel("Continue using the free version")
         }
-        .buttonStyle(.link)
-        .font(Typography.callout)
     }
 
     private var legalText: some View {
         VStack(spacing: Spacing.xxSmall) {
-            Text("Payment will be charged to your Apple ID account at confirmation of purchase. Subscriptions automatically renew unless cancelled at least 24 hours before the end of the current period. Your account will be charged for renewal within 24 hours prior to the end of the current period. You can manage and cancel subscriptions in your Account Settings. Lifetime purchase is a one-time payment with no expiration.")
+            Text("This is a one-time purchase. No subscription required. Your purchase is protected by Apple and can be restored on all your devices signed in with the same Apple ID.")
                 .font(Typography.caption2)
                 .foregroundColor(AppColors.secondary)
                 .multilineTextAlignment(.center)
 
             HStack(spacing: Spacing.medium) {
-                if let termsURL = URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/") {
+                if let termsURL = URL(string: "https://sasmalgiri.github.io/mailin/terms") {
                     Link("Terms of Use", destination: termsURL)
                         .font(Typography.caption2)
                 }
