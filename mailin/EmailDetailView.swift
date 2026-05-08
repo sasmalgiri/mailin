@@ -13,6 +13,7 @@ struct EmailDetailView: View {
     let email: MBOXParser.RawEmail
     var allEmails: [MBOXParser.RawEmail] = []
     var onNavigate: ((UUID) -> Void)? = nil
+    var onClose: (() -> Void)? = nil
     var searchText: String = ""
 
     @Environment(\.dismiss) private var dismiss
@@ -64,7 +65,7 @@ struct EmailDetailView: View {
                 return
             }
         }
-        if hasNext {
+        if hasNext, idx + 1 < allEmails.count {
             navigate(allEmails[idx + 1].id)
         }
     }
@@ -201,7 +202,7 @@ struct EmailDetailView: View {
             .accessibilityLabel("Print email")
             .keyboardShortcut("p", modifiers: .command)
 
-            Button(action: { dismiss() }) {
+            Button(action: { onClose?() }) {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundColor(AppColors.secondary)
                     .imageScale(.large)

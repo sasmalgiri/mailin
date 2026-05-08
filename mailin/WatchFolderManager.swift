@@ -172,14 +172,16 @@ final class WatchFolderManager: ObservableObject {
             guard supportedExtensions.contains(ext),
                   !knownFiles.contains(fileName) else { continue }
 
-            knownFiles.insert(fileName)
-            importFile(at: fileURL)
+            if importFile(at: fileURL) {
+                knownFiles.insert(fileName)
+            }
         }
     }
 
     // MARK: - File Import
 
-    private func importFile(at fileURL: URL) {
+    @discardableResult
+    private func importFile(at fileURL: URL) -> Bool {
         do {
             let emails: [MBOXParser.RawEmail]
 
@@ -192,10 +194,10 @@ final class WatchFolderManager: ObservableObject {
                 let email = try MBOXParser.processRawMessage(content, senderEmail: senderEmail)
                 emails = [email]
             default:
-                return
+                return false
             }
 
-            guard !emails.isEmpty else { return }
+            guard !emails.isEmpty else { return false }
 
             let logEntry = ImportLogEntry(date: Date(), fileName: fileURL.lastPathComponent, count: emails.count)
 
@@ -214,11 +216,12 @@ final class WatchFolderManager: ObservableObject {
                     userInfo: ["emails": emails, "fileName": fileURL.lastPathComponent]
                 )
             }
+            return true
         } catch {
-            // Log the error silently; the import log will not include a failed import
             #if DEBUG
             print("[WatchFolderManager] Failed to import \(fileURL.lastPathComponent): \(error.localizedDescription)")
             #endif
+            return false
         }
     }
 

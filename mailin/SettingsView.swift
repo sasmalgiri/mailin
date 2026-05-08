@@ -285,7 +285,7 @@ struct SettingsView: View {
                 Text("Purchase")
                     .font(.headline)
             } footer: {
-                Text("One-time purchase. No subscription required.")
+                Text("Buy once for lifetime access, or subscribe monthly/yearly. Cancel anytime.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -950,7 +950,9 @@ struct SettingsView: View {
         enableAIFeatures = true
         emailListDensity = "comfortable"
         showEmailPreviews = true
-        KeychainHelper.delete(key: "openAIAPIKey")
+        autoAdvanceAfterTag = true
+        hasConsentedToCloudAI = false
+        KeychainHelper.delete(key: "apiKey")
         customModelName = ""
     }
 }

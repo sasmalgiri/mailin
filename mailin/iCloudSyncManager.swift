@@ -287,7 +287,7 @@ class iCloudSyncManager: ObservableObject {
                 guard let uuid = UUID(uuidString: key),
                       let tag = ForensicManager.EvidenceTag(rawValue: value) else { continue }
 
-                let remoteTimestamp = remote.tagTimestamps?[key] ?? remote.syncDate
+                guard let remoteTimestamp = remote.tagTimestamps?[key] else { continue }
                 let localTimestamp = forensic.tagTimestamps[uuid] ?? Date.distantPast
                 let localTag = forensic.evidenceTags[uuid]
 

@@ -11,9 +11,14 @@ CATEGORY: Productivity
 PRICE: Free (with In-App Purchases)
 
 IN-APP PURCHASES:
-  - Monthly Pro: $2.99/month (auto-renewable subscription)
-  - Yearly Pro: $19.99/year (auto-renewable subscription) — Best Value
-  - Lifetime Pro: $29.99 (one-time purchase) — Pay Once, Own Forever
+  Personal Tier:
+  - Personal Monthly: $4.99/month (auto-renewable subscription)
+  - Personal Yearly: $29.99/year (auto-renewable subscription) — Save 50%
+  - Personal Lifetime: $29.99 (one-time purchase)
+  Professional Tier:
+  - Professional Monthly: $9.99/month (auto-renewable subscription)
+  - Professional Yearly: $59.99/year (auto-renewable subscription) — Save 50%
+  - Professional Lifetime: $79.99 (one-time purchase) — Best Value
 
 BUNDLE ID: com.ecosanskriti.mailin
 
@@ -24,7 +29,7 @@ DESCRIPTION
 mailin is a powerful email archive analyzer built with 100% native Apple technology. Free to try. No ads. No data collection. Ever.
 
 FLEXIBLE PRICING — YOUR CHOICE
-Try mailin free with up to 50 emails. Upgrade to Pro with a monthly subscription, yearly plan, or a one-time lifetime purchase. No pressure, no tricks — choose what works for you.
+Try mailin free with up to 200 emails. Upgrade with a monthly subscription, yearly plan, or a one-time lifetime purchase. Personal for unlimited emails and AI. Professional for forensic tools and audit trail. No pressure, no tricks.
 
 COMPLETE PRIVACY — ZERO DATA LEAVES YOUR DEVICE
 mailin processes everything locally using Apple's on-device AI and NLP frameworks. No cloud servers. No telemetry. No accounts required. No internet connection needed. Your emails are yours alone.
@@ -65,7 +70,7 @@ email,mbox,eml,archive,analyzer,privacy,Google Takeout,parser,AI,filter,export,a
 WHAT'S NEW (Version 1.0)
 ------------------------------------
 
-Initial release of mailin — your private, AI-powered email archive analyzer. One-time purchase, all features included.
+Initial release of mailin — your private, AI-powered email archive analyzer. Subscribe monthly or buy once for lifetime access.
 
 ------------------------------------
 PROMOTIONAL TEXT (170 characters max)

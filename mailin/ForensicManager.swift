@@ -600,14 +600,18 @@ class ForensicManager: ObservableObject {
 
         if let fd = fromDomain {
             let homoglyphs: [(String, String)] = [
-                ("rn", "m"), ("cl", "d"), ("vv", "w"), ("l", "I"),
+                ("rn", "m"), ("cl", "d"), ("vv", "w"),
                 ("0", "O"), ("1", "l"), ("nn", "m")
             ]
-            for (fake, real) in homoglyphs {
-                if fd.contains(fake) {
-                    let replaced = fd.replacingOccurrences(of: fake, with: real)
-                    if replaced != fd {
-                        indicators.append(SpoofIndicator(severity: .high, type: "Homoglyph Domain", detail: "Domain '\(fd)' may be impersonating '\(replaced)' (look-alike characters)"))
+            let knownSafeDomains: Set<String> = ["gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "icloud.com", "aol.com", "protonmail.com"]
+            if !knownSafeDomains.contains(fd) {
+                let domainName = fd.components(separatedBy: ".").first ?? fd
+                for (fake, real) in homoglyphs {
+                    if domainName.contains(fake) {
+                        let replaced = domainName.replacingOccurrences(of: fake, with: real)
+                        if replaced != domainName && replaced.count >= 3 {
+                            indicators.append(SpoofIndicator(severity: .high, type: "Homoglyph Domain", detail: "Domain '\(fd)' may be impersonating '\(replaced)' (look-alike characters)"))
+                        }
                     }
                 }
             }
@@ -919,7 +923,7 @@ class ForensicManager: ObservableObject {
         log += String(repeating: "-", count: 120) + "\n"
 
         for (i, email) in privileged.enumerated() {
-            let date = email.headers["Date"]?.prefix(10) ?? "N/A"
+            let date = email.headers["Date"] ?? "N/A"
             let from = String((email.headers["From"] ?? "N/A").prefix(28))
             let to = String((email.headers["To"] ?? "N/A").prefix(28))
             let subject = String((email.headers["Subject"] ?? "N/A").prefix(50))
@@ -954,11 +958,15 @@ class ForensicManager: ObservableObject {
     }
 
     private func loadAuditLog() {
+        guard FileManager.default.fileExists(atPath: auditLogURL.path) else { return }
         do {
             let data = try Data(contentsOf: auditLogURL)
             auditLog = try JSONDecoder().decode([AuditEntry].self, from: data)
+            if !auditLog.isEmpty {
+                _ = verifyAuditLogIntegrity()
+            }
         } catch {
-            forensicLog.info("No audit log to load: \(error.localizedDescription)")
+            forensicLog.error("Failed to decode audit log: \(error.localizedDescription)")
         }
     }
 
@@ -972,11 +980,12 @@ class ForensicManager: ObservableObject {
     }
 
     private func loadHashes() {
+        guard FileManager.default.fileExists(atPath: hashesURL.path) else { return }
         do {
             let data = try Data(contentsOf: hashesURL)
             sourceFileHashes = try JSONDecoder().decode([SourceFileHash].self, from: data)
         } catch {
-            forensicLog.info("No hashes to load: \(error.localizedDescription)")
+            forensicLog.error("Failed to decode hashes: \(error.localizedDescription)")
         }
     }
 
@@ -999,29 +1008,33 @@ class ForensicManager: ObservableObject {
     }
 
     private func loadTags() {
-        do {
-            let data = try Data(contentsOf: tagsURL)
-            let dict = try JSONDecoder().decode([String: String].self, from: data)
-            for (key, value) in dict {
-                if let uuid = UUID(uuidString: key), let tag = EvidenceTag(rawValue: value) {
-                    evidenceTags[uuid] = tag
+        if FileManager.default.fileExists(atPath: tagsURL.path) {
+            do {
+                let data = try Data(contentsOf: tagsURL)
+                let dict = try JSONDecoder().decode([String: String].self, from: data)
+                for (key, value) in dict {
+                    if let uuid = UUID(uuidString: key), let tag = EvidenceTag(rawValue: value) {
+                        evidenceTags[uuid] = tag
+                    }
                 }
+            } catch {
+                forensicLog.error("Failed to decode tags: \(error.localizedDescription)")
             }
-        } catch {
-            forensicLog.info("No tags to load: \(error.localizedDescription)")
         }
 
         let tsURL = tagsURL.deletingLastPathComponent().appendingPathComponent("forensic_tag_timestamps.json")
-        do {
-            let tsData = try Data(contentsOf: tsURL)
-            let tsDict = try JSONDecoder().decode([String: Double].self, from: tsData)
-            for (key, ts) in tsDict {
-                if let uuid = UUID(uuidString: key) {
-                    tagTimestamps[uuid] = Date(timeIntervalSince1970: ts)
+        if FileManager.default.fileExists(atPath: tsURL.path) {
+            do {
+                let tsData = try Data(contentsOf: tsURL)
+                let tsDict = try JSONDecoder().decode([String: Double].self, from: tsData)
+                for (key, ts) in tsDict {
+                    if let uuid = UUID(uuidString: key) {
+                        tagTimestamps[uuid] = Date(timeIntervalSince1970: ts)
+                    }
                 }
+            } catch {
+                forensicLog.error("Failed to decode tag timestamps: \(error.localizedDescription)")
             }
-        } catch {
-            forensicLog.info("No tag timestamps to load: \(error.localizedDescription)")
         }
     }
 
@@ -1036,6 +1049,7 @@ class ForensicManager: ObservableObject {
     }
 
     private func loadAnnotations() {
+        guard FileManager.default.fileExists(atPath: annotationsURL.path) else { return }
         do {
             let data = try Data(contentsOf: annotationsURL)
             let dict = try JSONDecoder().decode([String: Annotation].self, from: data)
@@ -1045,7 +1059,7 @@ class ForensicManager: ObservableObject {
                 }
             }
         } catch {
-            forensicLog.info("No annotations to load: \(error.localizedDescription)")
+            forensicLog.error("Failed to decode annotations: \(error.localizedDescription)")
         }
     }
 
@@ -1060,6 +1074,7 @@ class ForensicManager: ObservableObject {
     }
 
     private func loadEmailHashes() {
+        guard FileManager.default.fileExists(atPath: emailHashesURL.path) else { return }
         do {
             let data = try Data(contentsOf: emailHashesURL)
             let dict = try JSONDecoder().decode([String: EmailHash].self, from: data)
@@ -1069,7 +1084,7 @@ class ForensicManager: ObservableObject {
                 }
             }
         } catch {
-            forensicLog.info("No email hashes to load: \(error.localizedDescription)")
+            forensicLog.error("Failed to decode email hashes: \(error.localizedDescription)")
         }
     }
 

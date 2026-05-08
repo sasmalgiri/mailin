@@ -24,7 +24,7 @@ struct AIAssistantView: View {
     @State private var currentTask: Task<Void, Never>?
     @State private var streamingQuery = ""
     @State private var streamingAnswer = ""
-    @State private var freeQueryCount: Int = 0
+    @AppStorage("freeAIQueryCount") private var freeQueryCount: Int = 0
     @State private var showUpgradePaywall = false
     @State private var priorRetrievedEmailIDs: Set<UUID> = []
     @EnvironmentObject private var storeManager: StoreManager
@@ -648,10 +648,6 @@ struct AIAssistantView: View {
         let currentQuery = query
         prompt = ""
 
-        if !storeManager.isPremium {
-            freeQueryCount += 1
-        }
-
         let context = searchContext
         let emailsCopy = emails
         let engine = selectedEngine
@@ -675,6 +671,7 @@ struct AIAssistantView: View {
                 streamingAnswer = ""
                 withAnimation(AnimationTiming.normal) {
                     conversationHistory.append((query: currentQuery, answer: answer, timestamp: Date()))
+                    if !storeManager.isPremium { freeQueryCount += 1 }
                 }
             }
 
@@ -724,6 +721,7 @@ struct AIAssistantView: View {
                 }
                 withAnimation(AnimationTiming.normal) {
                     conversationHistory.append((query: currentQuery, answer: answer, timestamp: Date()))
+                    if !storeManager.isPremium { freeQueryCount += 1 }
                 }
             }
         }
@@ -1516,7 +1514,7 @@ struct AIAssistantView: View {
                         let db = MBOXParser.parseDate(b.headers["Date"]) ?? .distantPast
                         return da > db
                     }
-                    let latest = sorted[0]
+                    guard let latest = sorted.first else { return "No emails found." }
                     let formatter = DateFormatter()
                     formatter.dateStyle = .long
                     formatter.timeStyle = .short

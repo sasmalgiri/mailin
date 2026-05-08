@@ -58,16 +58,23 @@ class SharePlayManager: ObservableObject {
         }
     }
 
+    @Published var activationError: String?
+
     func startSession() {
+        activationError = nil
         Task {
             let activity = EmailReviewActivity()
             switch await activity.prepareForActivation() {
             case .activationPreferred:
-                _ = try? await activity.activate()
+                do {
+                    _ = try await activity.activate()
+                } catch {
+                    activationError = "Failed to start SharePlay: \(error.localizedDescription)"
+                }
             case .activationDisabled:
-                break
+                activationError = "SharePlay requires an active FaceTime call. Start a FaceTime call first, then tap SharePlay."
             default:
-                break
+                activationError = "SharePlay is not available on this device."
             }
         }
     }

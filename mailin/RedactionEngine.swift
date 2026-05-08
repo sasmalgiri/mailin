@@ -117,7 +117,8 @@ struct RedactionEngine {
             let range = NSRange(result.startIndex..., in: result)
             let matchCount = regex.numberOfMatches(in: result, range: range)
             totalCount += matchCount
-            result = regex.stringByReplacingMatches(in: result, range: range, withTemplate: rule.replacement)
+            let escapedReplacement = NSRegularExpression.escapedTemplate(for: rule.replacement)
+            result = regex.stringByReplacingMatches(in: result, range: range, withTemplate: escapedReplacement)
         }
 
         return (result, totalCount)

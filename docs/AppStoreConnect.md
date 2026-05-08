@@ -74,9 +74,10 @@ BUILT FOR PRIVACY
 • All AI features run on-device — your email data never leaves your Mac
 
 FLEXIBLE PLANS
-• Free tier: browse up to 50 emails with basic filtering and NLP
-• Pro: unlimited emails, full analytics, AI assistant, all exports
-• Choose monthly, yearly, or lifetime — cancel anytime
+• Free tier: browse up to 200 emails with basic filtering and NLP
+• Personal: unlimited emails, AI assistant, analytics, and exports
+• Professional: all features including forensic tools, audit trail, and review sharing
+• Subscribe monthly or yearly, or buy once for lifetime access
 
 mailin is built natively with SwiftUI for a fast, fluid Mac experience. Whether you're a journalist investigating a story, a lawyer reviewing evidence, a researcher analyzing communications, or just someone who wants to understand their email history — mailin gives you the tools to do it privately.
 ```
@@ -151,16 +152,18 @@ mailin is an email archive analyzer that parses .mbox and .eml files locally on 
 
 TESTING:
 - A demo file (demo_emails.mbox) is included in the app bundle for testing. On launch, click "Select Files" and choose any .mbox or .eml file, or use the demo data.
-- Free tier allows up to 50 emails. Pro features (analytics, AI, exports) require a subscription.
+- Free tier allows up to 200 emails. Premium features (analytics, AI, exports) require a subscription or one-time purchase.
 
 ON-DEVICE AI:
 - The on-device NLP engine uses Apple's NaturalLanguage framework and works entirely offline.
 - Apple Intelligence features require macOS 26 or later with a supported device.
 - No cloud AI services are used. All AI processing happens on-device.
 
-SUBSCRIPTIONS:
-- Monthly ($2.99/month), Yearly ($19.99/year), Lifetime ($49.99 one-time)
-- All subscriptions unlock the same Pro features.
+IN-APP PURCHASES:
+- Personal: $4.99/month, $29.99/year, or $29.99 one-time (lifetime)
+- Professional: $9.99/month, $59.99/year, or $79.99 one-time (lifetime)
+- Subscriptions auto-renew. Cancel anytime in System Settings > Apple ID > Subscriptions.
+- Free tier: up to 200 emails with basic features.
 
 NETWORK ACCESS:
 - The app requires network access only for StoreKit (in-app purchases) and optional iCloud sync of forensic metadata. All email processing is offline.

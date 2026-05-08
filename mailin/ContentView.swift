@@ -103,7 +103,7 @@ struct ContentView: View {
             VStack {
                 if parseFailed {
                     InfoBanner(
-                        text: "Could not parse this file. Supported formats: .mbox, .eml, .emlx, .msg, .pst, .ost, .zip",
+                        text: "Could not parse this file. Supported formats: .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, .zip",
                         color: AppColors.error, systemImage: "exclamationmark.triangle.fill"
                     ).padding(.top, Spacing.large)
                 }
@@ -118,8 +118,13 @@ struct ContentView: View {
                         Task { @MainActor in
                             let tempDir = FileManager.default.temporaryDirectory
                             let tempFile = tempDir.appendingPathComponent("dropped_\(UUID().uuidString).eml")
-                            try? data.write(to: tempFile)
-                            resolveAndHandleSelectedFile(tempFile)
+                            do {
+                                try data.write(to: tempFile)
+                                resolveAndHandleSelectedFile(tempFile)
+                            } catch {
+                                viewModel.statusMessage = "Failed to save dropped email: \(error.localizedDescription)"
+                                viewModel.statusColor = .red
+                            }
                         }
                     }
                     return true
@@ -153,6 +158,14 @@ struct ContentView: View {
         .onAppear { handleAppear() }
         .onDisappear { handleDisappear() }
         .task { sharePlayManager.listenForSessions() }
+        .alert("SharePlay", isPresented: Binding(
+            get: { sharePlayManager.activationError != nil },
+            set: { if !$0 { sharePlayManager.activationError = nil } }
+        )) {
+            Button("OK") { sharePlayManager.activationError = nil }
+        } message: {
+            Text(sharePlayManager.activationError ?? "")
+        }
         .onReceive(NotificationCenter.default.publisher(for: .dataClearedByUser)) { _ in handleDataCleared() }
         .onReceive(NotificationCenter.default.publisher(for: .detectMetadata)) { _ in viewModel.autoDetectMetadata() }
         .onReceive(NotificationCenter.default.publisher(for: .triggerFileImportFromShortcut)) { _ in openPanelFallback() }
@@ -261,6 +274,7 @@ struct ContentView: View {
                 UTType(filenameExtension: "msg"),
                 UTType(filenameExtension: "pst"),
                 UTType(filenameExtension: "ost"),
+                UTType(filenameExtension: "nsf"),
                 UTType(filenameExtension: "zip")
             ].compactMap { $0 },
             allowsMultipleSelection: true
@@ -309,6 +323,7 @@ struct ContentView: View {
     @ViewBuilder
     private var mainLayout: some View {
         #if os(macOS)
+        @Bindable var appState = appState
         NavigationSplitView {
             leftSidebar
                 .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 360)
@@ -333,9 +348,11 @@ struct ContentView: View {
                         email: email,
                         allEmails: modelVM.filteredEmails,
                         onNavigate: { newID in selectedEmailIDs = [newID] },
+                        onClose: { withAnimation { selectedEmailIDs = [] } },
                         searchText: modelVM.searchText
                     )
                     .id(selectedID)
+                    compactToolsStrip
                 } else if selectedEmailIDs.count == 2 {
                     let pair = Array(selectedEmailIDs)
                     let emailA = modelVM.filteredEmails.first(where: { $0.id == pair[0] })
@@ -403,6 +420,10 @@ struct ContentView: View {
             }
         }
         .liquidGlassToolbar()
+        .sheet(isPresented: $appState.showAuditTrail) {
+            AuditTrailSheet(forensicManager: forensicManager, onExport: { exportAuditLog() })
+                .environmentObject(storeManager)
+        }
         #else
         if horizontalSizeClass == .compact {
             iPhoneLayout
@@ -474,6 +495,7 @@ struct ContentView: View {
                         email: email,
                         allEmails: modelVM.filteredEmails,
                         onNavigate: { newID in selectedEmailIDs = [newID] },
+                        onClose: { withAnimation { selectedEmailIDs = [] } },
                         searchText: modelVM.searchText
                     )
                 }
@@ -563,6 +585,7 @@ struct ContentView: View {
                     email: email,
                     allEmails: modelVM.filteredEmails,
                     onNavigate: { newID in selectedEmailIDs = [newID] },
+                    onClose: { withAnimation { selectedEmailIDs = [] } },
                     searchText: modelVM.searchText
                 )
                 .id(selectedID)
@@ -581,6 +604,9 @@ struct ContentView: View {
                         }
                     }
             }
+        }
+        .sheet(isPresented: $appState.showAuditTrail) {
+            AuditTrailSheet(forensicManager: forensicManager, onExport: { exportAuditLog() })
         }
     }
     #endif
@@ -872,7 +898,7 @@ struct ContentView: View {
                     }
                     .buttonStyle(PrimaryButtonStyle())
                     .disabled(modelVM.isParsing)
-                    .help("Supports .mbox, .eml, .emlx, .msg, .pst, .ost, and .zip files from Gmail, Thunderbird, Apple Mail, Outlook, and other email clients")
+                    .help("Supports .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, and .zip files from Gmail, Thunderbird, Apple Mail, Outlook, Lotus Notes, and other email clients")
                     .accessibilityLabel("Open email archive")
                     .accessibilityHint("Select mbox, eml, or zip files from Gmail Takeout, Thunderbird, Apple Mail, or other email clients")
 
@@ -881,6 +907,7 @@ struct ContentView: View {
                         Button {
                             viewModel.scanForThunderbirdProfiles()
                             if !viewModel.thunderbirdProfiles.isEmpty {
+                                parseFailed = false
                                 viewModel.importThunderbirdProfile(viewModel.thunderbirdProfiles)
                                 showSpinner = true
                             }
@@ -1015,6 +1042,69 @@ struct ContentView: View {
 
     // MARK: - Detail Placeholder with Tools
 
+    private var compactToolsStrip: some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: 0) {
+                Button {
+                    withAnimation { selectedEmailIDs = [] }
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 10, weight: .bold))
+                        Text("Close")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundColor(AppColors.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .background(AppColors.secondary.opacity(0.1))
+                    .cornerRadius(CornerRadius.small)
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, Spacing.small)
+
+                Divider()
+                    .frame(height: 20)
+                    .padding(.horizontal, 6)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: Spacing.xSmall) {
+                        compactToolIcon("sparkles", color: .purple) { appState.showAIAssistant = true }
+                        compactToolIcon("chart.bar", color: .blue) { appState.showAnalytics = true }
+                        compactToolIcon("circle.grid.3x3", color: .teal) {
+                            withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? nil : .topics }
+                        }
+                        compactToolIcon("list.bullet.rectangle.portrait", color: .orange) {
+                            withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .subjects ? nil : .subjects }
+                        }
+                        compactToolIcon("doc.on.doc", color: .indigo) { appState.showDuplicateManager = true }
+                        compactToolIcon("brain", color: .pink) { appState.showPredictiveCoding = true }
+                        compactToolIcon("person.badge.key", color: .cyan) { appState.showCustodianPanel = true }
+                        compactToolIcon("doc.text.magnifyingglass", color: .red) { appState.showInvestigationReport = true }
+                        compactToolIcon("clock.arrow.circlepath", color: .orange) { appState.showAuditTrail = true }
+                        compactToolIcon("square.and.arrow.up", color: .brown) { exportFilteredEmailsAsEML() }
+                    }
+                    .padding(.trailing, Spacing.small)
+                }
+            }
+            .padding(.vertical, 5)
+            .background(AppColors.backgroundSecondary.opacity(0.6))
+        }
+    }
+
+    private func compactToolIcon(_ icon: String, color: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 14))
+                .foregroundColor(color)
+                .frame(width: 32, height: 28)
+                .background(color.opacity(0.1))
+                .cornerRadius(CornerRadius.small)
+        }
+        .buttonStyle(.plain)
+    }
+
     private var detailPlaceholderWithTools: some View {
         ScrollView {
             VStack(spacing: Spacing.large) {
@@ -1083,6 +1173,9 @@ struct ContentView: View {
                             }
                             detailToolButton(title: "Report", icon: "doc.text.magnifyingglass", color: .red) {
                                 appState.showInvestigationReport = true
+                            }
+                            detailToolButton(title: "Audit Trail", icon: "clock.arrow.circlepath", color: .orange) {
+                                appState.showAuditTrail = true
                             }
                             detailToolButton(title: "Export", icon: "square.and.arrow.up", color: .brown) {
                                 exportFilteredEmailsAsEML()
@@ -1876,14 +1969,16 @@ struct ContentView: View {
             UTType(filenameExtension: "msg"),
             UTType(filenameExtension: "pst"),
             UTType(filenameExtension: "ost"),
+            UTType(filenameExtension: "nsf"),
             UTType(filenameExtension: "zip")
         ].compactMap { $0 }
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
-        panel.message = "Select email files (.mbox, .eml, .emlx, .msg, .pst, .ost, .zip) from any email client"
+        panel.message = "Select email files (.mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, .zip) from any email client"
 
         if panel.runModal() == .OK {
+            parseFailed = false
             let urls = panel.urls
             let resolvedURLs = resolveZipFiles(urls)
             if resolvedURLs.count == 1, let url = resolvedURLs.first {
@@ -2306,8 +2401,12 @@ private func handleMultipleFiles(_ urls: [URL]) {
                     .prefix(50)
                 let filename = "\(idx + 1)_\(subject).tiff"
                 let fileURL = folderURL.appendingPathComponent(filename)
-                try? tiffData.write(to: fileURL)
-                savedCount += 1
+                do {
+                    try tiffData.write(to: fileURL)
+                    savedCount += 1
+                } catch {
+                    // Skip failed writes without counting them
+                }
             }
         }
         viewModel.statusMessage = "Exported \(savedCount) emails as TIFF images."
@@ -2519,7 +2618,17 @@ private func handleMultipleFiles(_ urls: [URL]) {
     }
     private func handlePremiumChange() {
         modelVM.isPremiumUser = storeManager.isPremium
-        if modelVM.isParsed { modelVM.applyFilters() }
+        if storeManager.isPremium {
+            UserDefaults.standard.removeObject(forKey: "freeAIQueryCount")
+            UserDefaults.standard.removeObject(forKey: "freeAIFilterUsageCount")
+            UserDefaults.standard.removeObject(forKey: "freeAttachmentDownloadCount")
+        }
+        if modelVM.isParsed {
+            if storeManager.isPremium {
+                modelVM.loadFromContentViewModel()
+            }
+            modelVM.applyFilters()
+        }
     }
     private func handleFilteredChange() {
         appState.hasFilteredEmails = !modelVM.filteredEmails.isEmpty
@@ -2536,6 +2645,9 @@ private func handleMultipleFiles(_ urls: [URL]) {
             MainActor.assumeIsolated {
                 selectedEmailIDs.removeAll()
                 modelVM.resetFilters()
+                if !storeManager.isPremium && viewModel.parsedEmails.count > StoreManager.freeEmailLimit {
+                    viewModel.restoreEmails(Array(viewModel.parsedEmails.prefix(StoreManager.freeEmailLimit)))
+                }
                 modelVM.loadFromContentViewModel()
                 showSpinner = false
                 EmailPersistence.save(emails: viewModel.parsedEmails, senderEmail: viewModel.senderEmail)
@@ -2557,7 +2669,8 @@ private func handleMultipleFiles(_ urls: [URL]) {
             if !restored.senderEmail.isEmpty {
                 viewModel.senderEmail = restored.senderEmail
             }
-            viewModel.restoreEmails(restored.emails)
+            let emailsToRestore = storeManager.isPremium ? restored.emails : Array(restored.emails.prefix(StoreManager.freeEmailLimit))
+            viewModel.restoreEmails(emailsToRestore)
             modelVM.loadFromContentViewModel()
             if !EmailSearchIndex.shared.loadFromDisk(emails: restored.emails) {
                 EmailSearchIndex.shared.buildAsync(from: restored.emails)
@@ -3050,6 +3163,7 @@ struct V9SheetsModifier: ViewModifier {
 
 struct V9UtilitySheetsModifier: ViewModifier {
     @Bindable var appState: AppStateManager
+    @EnvironmentObject private var storeManager: StoreManager
 
     func body(content: Content) -> some View {
         content
@@ -3072,27 +3186,47 @@ struct V9UtilitySheetsModifier: ViewModifier {
 
     private func handleCommand(_ id: String) {
         switch id {
-        case "askAI": appState.showAIAssistant = true
-        case "analytics": appState.showAnalytics = true
-        case "topicClusters": withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? nil : .topics }
+        case "askAI":
+            if storeManager.requirePremium() { appState.showAIAssistant = true }
+        case "analytics":
+            if storeManager.requirePremium() { appState.showAnalytics = true }
+        case "topicClusters":
+            if storeManager.requirePremium() { withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? nil : .topics } }
         case "duplicates": appState.showDuplicateManager = true
-        case "predictiveCoding": appState.showPredictiveCoding = true
-        case "timeline": appState.showTimeline = true
-        case "relationshipGraph": appState.showRelationshipGraph = true
-        case "smartAlerts": appState.showSmartAlerts = true
-        case "anomalyDetection": appState.showAnomalyDetection = true
-        case "autoTagger": appState.showSmartAutoTagger = true
-        case "emailDigest": appState.showAIDigest = true
-        case "nearDuplicates": appState.showNearDuplicates = true
-        case "commPatterns": appState.showCommunicationPatterns = true
-        case "dashboard": appState.showExecutiveDashboard = true
-        case "keywordMonitor": appState.showKeywordMonitor = true
-        case "reportBuilder": appState.showReportBuilder = true
-        case "eDiscovery": appState.showEDiscovery = true
-        case "batesNumbering": appState.showBatesNumbering = true
-        case "redaction": appState.showRedaction = true
-        case "gdprReport": appState.showGDPRReport = true
-        case "chainOfCustody": appState.showChainOfCustody = true
+        case "predictiveCoding":
+            if storeManager.requireProfessional() { appState.showPredictiveCoding = true }
+        case "timeline":
+            if storeManager.requirePremium() { appState.showTimeline = true }
+        case "relationshipGraph":
+            if storeManager.requirePremium() { appState.showRelationshipGraph = true }
+        case "smartAlerts":
+            if storeManager.requirePremium() { appState.showSmartAlerts = true }
+        case "anomalyDetection":
+            if storeManager.requirePremium() { appState.showAnomalyDetection = true }
+        case "autoTagger":
+            if storeManager.requirePremium() { appState.showSmartAutoTagger = true }
+        case "emailDigest":
+            if storeManager.requirePremium() { appState.showAIDigest = true }
+        case "nearDuplicates":
+            if storeManager.requirePremium() { appState.showNearDuplicates = true }
+        case "commPatterns":
+            if storeManager.requirePremium() { appState.showCommunicationPatterns = true }
+        case "dashboard":
+            if storeManager.requirePremium() { appState.showExecutiveDashboard = true }
+        case "keywordMonitor":
+            if storeManager.requirePremium() { appState.showKeywordMonitor = true }
+        case "reportBuilder":
+            if storeManager.requirePremium() { appState.showReportBuilder = true }
+        case "eDiscovery":
+            if storeManager.requireProfessional() { appState.showEDiscovery = true }
+        case "batesNumbering":
+            if storeManager.requireProfessional() { appState.showBatesNumbering = true }
+        case "redaction":
+            if storeManager.requireProfessional() { appState.showRedaction = true }
+        case "gdprReport":
+            if storeManager.requireProfessional() { appState.showGDPRReport = true }
+        case "chainOfCustody":
+            if storeManager.requireProfessional() { appState.showChainOfCustody = true }
         case "workspaces": appState.showWorkspaceManager = true
         case "toggleSidebar": appState.toggleSidebar()
         default: break
@@ -3164,7 +3298,11 @@ struct ArchiveComparisonSheetWrapper: View {
                 allowedContentTypes: [
                     UTType(filenameExtension: "mbox"),
                     UTType(filenameExtension: "eml"),
-                    UTType(filenameExtension: "emlx")
+                    UTType(filenameExtension: "emlx"),
+                    UTType(filenameExtension: "msg"),
+                    UTType(filenameExtension: "pst"),
+                    UTType(filenameExtension: "ost"),
+                    UTType(filenameExtension: "nsf")
                 ].compactMap { $0 },
                 allowsMultipleSelection: false
             ) { result in
@@ -3494,5 +3632,160 @@ struct FeatureBadge: View {
         )
         .accessibilityElement(children: .combine)
         .accessibilityLabel(text)
+    }
+}
+
+// MARK: - Audit Trail Sheet
+
+struct AuditTrailSheet: View {
+    @EnvironmentObject var storeManager: StoreManager
+    @ObservedObject var forensicManager: ForensicManager
+    var onExport: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    private static let freeViewLimit = 10
+
+    private var visibleEntries: [ForensicManager.AuditEntry] {
+        let reversed = forensicManager.auditLog.reversed()
+        if storeManager.isProfessional {
+            return Array(reversed)
+        }
+        return Array(reversed.prefix(Self.freeViewLimit))
+    }
+
+    private var hasMore: Bool {
+        !storeManager.isProfessional && forensicManager.auditLog.count > Self.freeViewLimit
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Audit Trail")
+                    .font(Typography.title3)
+                    .fontWeight(.bold)
+                Spacer()
+                if storeManager.isProfessional {
+                    Button("Export") { onExport() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                } else {
+                    Button("Export (Pro)") { storeManager.showPaywall = true }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .foregroundColor(.purple)
+                }
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(AppColors.secondary.opacity(0.6))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding()
+
+            Divider()
+
+            if forensicManager.auditLog.isEmpty {
+                VStack(spacing: Spacing.medium) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 40))
+                        .foregroundColor(AppColors.secondary.opacity(0.4))
+                    Text("No audit entries yet")
+                        .font(Typography.headline)
+                        .foregroundColor(AppColors.secondary)
+                    Text("Actions like importing files, tagging evidence, and verifying hashes are recorded here.")
+                        .font(Typography.caption1)
+                        .foregroundColor(AppColors.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding()
+            } else {
+                HStack {
+                    if storeManager.isProfessional {
+                        Text("\(forensicManager.auditLog.count) entries")
+                            .font(Typography.caption1)
+                            .foregroundColor(AppColors.secondary)
+                    } else {
+                        Text("Showing \(min(forensicManager.auditLog.count, Self.freeViewLimit)) of \(forensicManager.auditLog.count) entries")
+                            .font(Typography.caption1)
+                            .foregroundColor(AppColors.secondary)
+                    }
+                    Spacer()
+                    let status = forensicManager.integrityStatus
+                    switch status {
+                    case .verified:
+                        Label("Chain Verified", systemImage: "checkmark.seal.fill")
+                            .font(Typography.caption1)
+                            .foregroundColor(.green)
+                    case .tampered:
+                        Label("TAMPERED", systemImage: "exclamationmark.triangle.fill")
+                            .font(Typography.caption1)
+                            .foregroundColor(.red)
+                    case .noData:
+                        Text("No data")
+                            .font(Typography.caption1)
+                            .foregroundColor(AppColors.secondary)
+                    case .unknown:
+                        Button("Verify Integrity") {
+                            _ = forensicManager.verifyAuditLogIntegrity()
+                        }
+                        .font(Typography.caption1)
+                        .controlSize(.small)
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.vertical, Spacing.xSmall)
+
+                List(visibleEntries) { entry in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("#\(entry.sequence)")
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundColor(AppColors.secondary)
+                            Text(entry.action)
+                                .font(Typography.callout)
+                                .fontWeight(.semibold)
+                            Spacer()
+                            Text(entry.timestamp.formatted(date: .abbreviated, time: .shortened))
+                                .font(Typography.caption2)
+                                .foregroundColor(AppColors.secondary)
+                        }
+                        if !entry.detail.isEmpty {
+                            Text(entry.detail)
+                                .font(Typography.caption1)
+                                .foregroundColor(AppColors.secondary)
+                                .lineLimit(2)
+                        }
+                        if !entry.examiner.isEmpty {
+                            Text("by \(entry.examiner)")
+                                .font(Typography.caption2)
+                                .foregroundColor(AppColors.secondary.opacity(0.7))
+                        }
+                        Text(entry.entryHash.prefix(16) + "...")
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundColor(AppColors.secondary.opacity(0.4))
+                    }
+                    .padding(.vertical, 2)
+                }
+
+                if hasMore {
+                    HStack {
+                        Image(systemName: "lock.fill")
+                            .foregroundColor(.purple)
+                        Text("Upgrade to Professional to view all \(forensicManager.auditLog.count) entries and export.")
+                            .font(Typography.caption1)
+                            .foregroundColor(AppColors.secondary)
+                        Spacer()
+                        Button("Upgrade") { storeManager.showPaywall = true }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                    }
+                    .padding()
+                    .background(Color.purple.opacity(0.05))
+                }
+            }
+        }
+        #if os(macOS)
+        .frame(minWidth: 500, idealWidth: 600, minHeight: 400, idealHeight: 550)
+        #endif
     }
 }

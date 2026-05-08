@@ -139,7 +139,7 @@ class EncryptedStorageManager {
         ]
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let keyData = result as? Data else {
+        guard status == errSecSuccess, let keyData = result as? Data, keyData.count == 32 else {
             return nil
         }
         return SymmetricKey(data: keyData)

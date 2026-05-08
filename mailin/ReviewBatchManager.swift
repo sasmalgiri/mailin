@@ -66,6 +66,7 @@ class ReviewBatchManager: ObservableObject {
     }
 
     private func load() {
+        guard FileManager.default.fileExists(atPath: batchesURL.path) else { return }
         struct Saved: Codable { let version: Int?; let batches: [ReviewBatch]; let currentIndex: Int }
         do {
             let data = try Data(contentsOf: batchesURL)
@@ -73,7 +74,7 @@ class ReviewBatchManager: ObservableObject {
             batches = saved.batches
             currentBatchIndex = saved.currentIndex
         } catch {
-            batchLog.info("No saved batches to load: \(error.localizedDescription)")
+            batchLog.error("Failed to decode batches: \(error.localizedDescription)")
         }
     }
 

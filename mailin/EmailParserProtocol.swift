@@ -16,12 +16,14 @@ struct ParserFactory {
             return try MSGParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
         case "pst", "ost":
             return try PSTParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
+        case "nsf":
+            return try NSFParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
         default:
             return try MBOXParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
         }
     }
 
     static let allSupportedExtensions: [String] = [
-        "mbox", "eml", "emlx", "msg", "pst", "ost"
+        "mbox", "eml", "emlx", "msg", "pst", "ost", "nsf"
     ]
 }

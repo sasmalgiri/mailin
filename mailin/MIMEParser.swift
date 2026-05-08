@@ -1,7 +1,7 @@
 import Foundation
 
 public class MIMEParser {
-    public static func parseEmail(rawEmail: String) -> (headers: [String: String], parts: [MIMEPart]) {
+    public static func parseEmail(rawEmail: String, depth: Int = 0) -> (headers: [String: String], parts: [MIMEPart]) {
         #if canImport(SwiftEmailKit)
         if let kitParser = SwiftEmailKit.MIMEParser as AnyObject?,
            let parseFunc = kitParser.parseEmail as? (String) -> (headers: [String: String], parts: [Any]) {
@@ -50,8 +50,9 @@ public class MIMEParser {
         let contentType = headers["Content-Type"] ?? "text/plain"
         let boundary = extractBoundary(contentType)
         let parts: [MIMEPart]
+        guard depth < maxRecursionDepth else { return (headers, []) }
         if let boundary = boundary {
-            parts = buildRecursiveParts(bodyBlock, boundary: boundary, defaultContentType: contentType, depth: 0)
+            parts = buildRecursiveParts(bodyBlock, boundary: boundary, defaultContentType: contentType, depth: depth)
         } else {
             parts = [makeSinglePart(headers: headers, content: bodyBlock)]
         }
@@ -143,7 +144,7 @@ public class MIMEParser {
                let nestedBoundary = extractBoundary(contentType) {
                 part.subparts = buildRecursiveParts(part.body, boundary: nestedBoundary, defaultContentType: contentType, depth: depth + 1)
             } else if contentType.lowercased().hasPrefix("message/rfc822"), depth + 1 < maxRecursionDepth {
-                let nested = parseEmail(rawEmail: part.body)
+                let nested = parseEmail(rawEmail: part.body, depth: depth + 1)
                 part.subparts = nested.parts
             }
             parts.append(part)

@@ -397,7 +397,7 @@ struct MSGWriter {
         for dir in dirs {
             var entry = Data(repeating: 0, count: 128)
             // Name in UTF-16LE (max 32 chars including null)
-            let nameChars = Array(dir.name.utf16.prefix(31))
+            let nameChars = Array(dir.name.utf16.prefix(30))
             for (i, ch) in nameChars.enumerated() {
                 writeUInt16(&entry, offset: i * 2, value: ch)
             }

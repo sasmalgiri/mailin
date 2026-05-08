@@ -28,16 +28,24 @@ struct PSTWriter {
     // MARK: - Public API
 
     static func write(emails: [MBOXParser.RawEmail], to url: URL) throws -> Int {
+        let exportCount = min(emails.count, maxEmailsPerPST)
         let data = try writeData(emails: emails)
         try data.write(to: url, options: .atomic)
-        logger.info("Wrote PST file with \(emails.count) messages to \(url.path)")
-        return emails.count
+        logger.info("Wrote PST file with \(exportCount) messages to \(url.path)")
+        return exportCount
     }
+
+    private static let maxEmailsPerPST = 15
 
     static func writeData(emails: [MBOXParser.RawEmail]) throws -> Data {
         guard !emails.isEmpty else { throw WriterError.emptyInput }
 
-        let estimatedSize = emails.reduce(0) { total, email in
+        let exportEmails = Array(emails.prefix(maxEmailsPerPST))
+        if emails.count > maxEmailsPerPST {
+            logger.warning("PST export limited to \(maxEmailsPerPST) emails (requested \(emails.count)). Use MSG or EML export for larger sets.")
+        }
+
+        let estimatedSize = exportEmails.reduce(0) { total, email in
             total + email.rawSource.utf8.count + email.htmlBody.utf8.count
                 + email.attachments.reduce(0) { $0 + $1.size }
         }
@@ -46,8 +54,8 @@ struct PSTWriter {
         }
 
         do {
-            let result = try buildPST(emails: emails)
-            logger.info("Built PST data: \(result.count) bytes, \(emails.count) messages")
+            let result = try buildPST(emails: exportEmails)
+            logger.info("Built PST data: \(result.count) bytes, \(exportEmails.count) messages")
             return result
         } catch {
             logger.error("Failed to build PST: \(error.localizedDescription)")

@@ -161,7 +161,8 @@ class GraphLayout {
             if nodes[i].isCenterNode {
                 nodes[i].position = CGPoint(x: centerX, y: centerY)
             } else {
-                let angle = (2 * Double.pi * Double(i)) / Double(nodes.count - 1)
+                let divisor = max(1, nodes.count - 1)
+                let angle = (2 * Double.pi * Double(i)) / Double(divisor)
                 nodes[i].position = CGPoint(
                     x: centerX + radius * cos(angle) + Double.random(in: -20...20),
                     y: centerY + radius * sin(angle) + Double.random(in: -20...20)

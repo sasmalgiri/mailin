@@ -47,7 +47,7 @@ struct ParsedEmailListView: View {
     @State private var quickFilterAINewsletter = false
     @State private var showAIPaywall = false
     private static let freeAIFilterLimit = 3
-    @State private var aiFilterUsageCount: Int = 0
+    @AppStorage("freeAIFilterUsageCount") private var aiFilterUsageCount: Int = 0
     @State private var listExportError: String?
     #if os(iOS)
     @State private var showShareSheet = false
@@ -901,6 +901,7 @@ struct ParsedEmailListView: View {
         model.filteredEmails.map { $0.attachments.count }.reduce(0, +)
     }
     private static let freeAttachmentLimit = 5
+    @AppStorage("freeAttachmentDownloadCount") private var freeAttachmentDownloadCount: Int = 0
 
     private func downloadAllAttachments() {
             #if os(macOS)
@@ -918,10 +919,10 @@ struct ParsedEmailListView: View {
 
             var usedNames = Set<String>()
             var savedCount = 0
-            let limit = storeManager.isPremium ? Int.max : Self.freeAttachmentLimit
+            let remaining = storeManager.isPremium ? Int.max : max(0, Self.freeAttachmentLimit - freeAttachmentDownloadCount)
             for email in model.filteredEmails {
                 for att in email.attachments {
-                    if savedCount >= limit {
+                    if savedCount >= remaining {
                         storeManager.showPaywall = true
                         listExportError = "Free limit: saved \(savedCount) of \(totalAttachments) attachments. Upgrade to Pro for unlimited."
                         #if os(iOS)
@@ -949,6 +950,9 @@ struct ParsedEmailListView: View {
                         }
                     }
                 }
+            }
+            if !storeManager.isPremium {
+                freeAttachmentDownloadCount += savedCount
             }
             #if os(iOS)
             if savedCount > 0 { iOSShareFile(at: folderURL) }

@@ -37,7 +37,8 @@ class BatesNumberingManager: ObservableObject {
     // MARK: - Formatting
 
     func formatNumber(_ n: Int) -> String {
-        "\(prefix)\(String(format: "%0\(zeroPadding)d", n))"
+        let safePadding = max(1, zeroPadding)
+        return "\(prefix)\(String(format: "%0\(safePadding)d", n))"
     }
 
     // MARK: - Assignment

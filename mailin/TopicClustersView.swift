@@ -362,7 +362,7 @@ struct TopicClustersView: View {
         let allEmails = emails
 
         Task.detached(priority: .utility) {
-            let k = min(8, max(3, allEmails.count / 50))
+            let k = min(8, max(2, allEmails.count / 20))
             let (result, silhouette) = Self.kMeansPlusPlusClustering(emails: allEmails, k: k)
             await MainActor.run {
                 self.clusters = result
@@ -383,7 +383,8 @@ struct TopicClustersView: View {
 
         let sampled: [MBOXParser.RawEmail]
         if emails.count > maxClusteringEmails {
-            sampled = Array(emails.shuffled().prefix(maxClusteringEmails))
+            let sorted = emails.sorted { $0.id.uuidString < $1.id.uuidString }
+            sampled = Array(sorted.prefix(maxClusteringEmails))
         } else {
             sampled = emails
         }
@@ -400,9 +401,13 @@ struct TopicClustersView: View {
         let dim = vectors[0].1.count
 
         var centroids: [[Double]] = []
-        var rng = SystemRandomNumberGenerator()
+        var seed: UInt64 = 42
+        func nextSeeded() -> Int {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return Int(seed >> 33)
+        }
 
-        let firstIdx = Int.random(in: 0..<vectors.count, using: &rng)
+        let firstIdx = abs(nextSeeded()) % vectors.count
         centroids.append(vectors[firstIdx].1)
 
         for _ in 1..<k {
@@ -419,7 +424,8 @@ struct TopicClustersView: View {
             }
 
             guard totalDist > 0 else { break }
-            var target = Double.random(in: 0..<totalDist, using: &rng)
+            let fraction = Double(abs(nextSeeded()) % 1_000_000) / 1_000_000.0
+            var target = fraction * totalDist
             var chosen = 0
             for (i, d) in distances.enumerated() {
                 target -= d
@@ -513,7 +519,8 @@ struct TopicClustersView: View {
             ))
         }
 
-        return (results.sorted { $0.emailIDs.count > $1.emailIDs.count }, silhouette)
+        let filtered = results.filter { $0.emailIDs.count >= 2 }
+        return (filtered.sorted { $0.emailIDs.count > $1.emailIDs.count }, silhouette)
     }
 
     // MARK: - Silhouette Score
@@ -563,6 +570,7 @@ struct TopicClustersView: View {
             totalSilhouette += s
         }
 
+        guard !sampleIndices.isEmpty else { return 0 }
         return totalSilhouette / Double(sampleIndices.count)
     }
 
@@ -619,9 +627,10 @@ struct TopicClustersView: View {
         }
 
         let n = Double(max(emails.count, 1))
+        let minFreq = emails.count <= 3 ? 1 : 2
         return wordCounts
-            .filter { $0.value >= 2 }
-            .filter { docFreq[$0.key, default: 0] < Int(n * 0.8) }
+            .filter { $0.value >= minFreq }
+            .filter { docFreq[$0.key, default: 0] < Int(n * 0.8) + 1 }
             .map { (word: $0.key, tfidf: Double($0.value) * log(n / Double(docFreq[$0.key, default: 1] + 1) + 1)) }
             .sorted { $0.tfidf > $1.tfidf }
             .prefix(count)

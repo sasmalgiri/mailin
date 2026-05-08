@@ -267,6 +267,9 @@ class ParsedEmailListViewModel: ObservableObject {
         var beforeDate: Date?
         var afterDate: Date?
         var subjectOperator: String?
+        var typeOperator: String?
+        var tagOperator: String?
+        var sourceOperator: String?
         var isBooleanQuery: Bool = false
         var isRegexQuery: Bool = false
         var isProximityQuery: Bool = false
@@ -304,6 +307,12 @@ class ParsedEmailListViewModel: ObservableObject {
             } else if lower.hasPrefix("after:") {
                 let dateStr = String(part.dropFirst(6))
                 parsed.afterDate = dateFormatter.date(from: dateStr)
+            } else if lower.hasPrefix("type:") {
+                parsed.typeOperator = String(part.dropFirst(5)).trimmingCharacters(in: .whitespaces).lowercased()
+            } else if lower.hasPrefix("tag:") {
+                parsed.tagOperator = String(part.dropFirst(4)).trimmingCharacters(in: .whitespaces)
+            } else if lower.hasPrefix("source:") {
+                parsed.sourceOperator = String(part.dropFirst(7)).trimmingCharacters(in: .whitespaces)
             } else {
                 freeWords.append(part)
             }
@@ -425,8 +434,18 @@ class ParsedEmailListViewModel: ObservableObject {
 
             let matchesNLAttachment = !hasAttachmentFilter || !email.attachments.isEmpty
 
+            let matchesType = parsed.typeOperator.map { email.messageType == $0 } ?? true
+            let matchesTag = parsed.tagOperator.map { tag in
+                let emailTags = email.headers["X-Keywords"] ?? email.headers["X-Gmail-Labels"] ?? ""
+                return emailTags.localizedCaseInsensitiveContains(tag)
+            } ?? true
+            let matchesSource = parsed.sourceOperator.map { source in
+                let emailSource = email.headers["X-Source-File"] ?? ""
+                return emailSource.localizedCaseInsensitiveContains(source)
+            } ?? true
+
             return filterMatch(email) && replyCount >= minReplyCount
-                && matchesFromOp && matchesToOp && matchesSubjectOp && matchesHasAttachment && matchesDateOps && matchesEvidenceTag && matchesNLAttachment
+                && matchesFromOp && matchesToOp && matchesSubjectOp && matchesHasAttachment && matchesDateOps && matchesEvidenceTag && matchesNLAttachment && matchesType && matchesTag && matchesSource
         }
         if !isPremiumUser && result.count > StoreManager.freeEmailLimit {
             result = Array(result.prefix(StoreManager.freeEmailLimit))

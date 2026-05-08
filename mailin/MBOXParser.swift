@@ -101,7 +101,7 @@ struct MBOXParser {
                 errorCategories[category, default: 0] += 1
             }
 
-            if let onProgress = onProgress {
+            if let onProgress = onProgress, total > 0 {
                 let progress = Double(idx + 1) / total
                 onProgress(progress)
             }

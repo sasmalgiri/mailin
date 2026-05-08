@@ -251,7 +251,7 @@ struct AttachmentGridView: View {
 
     private func openPreview(for item: AttachmentItem) {
         let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("mailin_preview", isDirectory: true)
+            .appendingPathComponent("mailin_preview/\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         let fileURL = tempDir.appendingPathComponent(item.attachment.filename)
         if let base64 = item.attachment.base64,

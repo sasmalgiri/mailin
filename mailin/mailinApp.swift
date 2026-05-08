@@ -129,7 +129,6 @@ struct mailinApp: App {
                 appState.triggerNewImport = true
             }
             .keyboardShortcut("n", modifiers: .command)
-            .disabled(!appState.hasParsedEmails)
 
             Button("Open Email Archive...") {
                 appState.triggerFileImport = true
@@ -552,6 +551,7 @@ class AppStateManager {
     var showRelationshipGraph = false
     var showArchiveComparison = false
     var showInvestigationReport = false
+    var showAuditTrail = false
     // v7: Intelligence & Automation
     var showAutomationRules = false
     var showBatchOperations = false

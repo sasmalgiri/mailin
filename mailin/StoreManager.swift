@@ -95,7 +95,7 @@ class StoreManager: ObservableObject {
 
             products = storeProducts
                 .filter { $0.type == .nonConsumable }
-                .sorted { $0.id == StoreManager.personalID }
+                .sorted { lhs, _ in lhs.id == StoreManager.personalID }
 
             subscriptionProducts = storeProducts
                 .filter { $0.type == .autoRenewable }
@@ -151,7 +151,8 @@ class StoreManager: ObservableObject {
     // MARK: - Entitlement Check
 
     func checkEntitlements() async {
-        var detectedTier: PurchaseTier = .free
+        var lifetimeTier: PurchaseTier = .free
+        var subscriptionTier: PurchaseTier = .free
         var subscriptionActive = false
 
         for await result in Transaction.currentEntitlements {
@@ -159,23 +160,22 @@ class StoreManager: ObservableObject {
             guard transaction.revocationDate == nil else { continue }
 
             if transaction.productType == .autoRenewable {
-                if transaction.expirationDate ?? .distantPast > Date() {
-                    subscriptionActive = true
-                    if StoreManager.professionalSubscriptionIDs.contains(transaction.productID) {
-                        detectedTier = .professional
-                    } else if StoreManager.personalSubscriptionIDs.contains(transaction.productID) && detectedTier < .professional {
-                        detectedTier = .personal
-                    }
+                guard let expiry = transaction.expirationDate, expiry > Date() else { continue }
+                subscriptionActive = true
+                if StoreManager.professionalSubscriptionIDs.contains(transaction.productID) {
+                    subscriptionTier = .professional
+                } else if StoreManager.personalSubscriptionIDs.contains(transaction.productID) && subscriptionTier < .professional {
+                    subscriptionTier = .personal
                 }
             } else {
                 if transaction.productID == StoreManager.professionalID {
-                    detectedTier = .professional
-                } else if transaction.productID == StoreManager.personalID && detectedTier < .professional {
-                    detectedTier = .personal
+                    lifetimeTier = .professional
+                } else if transaction.productID == StoreManager.personalID && lifetimeTier < .professional {
+                    lifetimeTier = .personal
                 }
             }
         }
-        currentTier = detectedTier
+        currentTier = max(lifetimeTier, subscriptionTier)
         isSubscribed = subscriptionActive
     }
 

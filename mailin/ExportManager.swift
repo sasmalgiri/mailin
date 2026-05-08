@@ -184,11 +184,15 @@ struct ExportManager {
     }
 
     private static func csvEscape(_ value: String) -> String {
-        let cleaned = value.replacingOccurrences(of: "\r\n", with: " ").replacingOccurrences(of: "\n", with: " ")
-        if cleaned.contains(",") || cleaned.contains("\"") || cleaned.contains("\r") {
-            return "\"\(cleaned.replacingOccurrences(of: "\"", with: "\"\""))\""
+        if value.contains(",") || value.contains("\"") || value.contains("\n") || value.contains("\r") {
+            let escaped = value
+                .replacingOccurrences(of: "\"", with: "\"\"")
+                .replacingOccurrences(of: "\r\n", with: " ")
+                .replacingOccurrences(of: "\r", with: " ")
+                .replacingOccurrences(of: "\n", with: " ")
+            return "\"\(escaped)\""
         }
-        return cleaned
+        return value
     }
 
     // MARK: - Batch Print (6G)
@@ -460,7 +464,7 @@ struct ExportManager {
     }
 
     private static func parseEmailAddress(_ raw: String) -> (name: String, email: String) {
-        if let angleStart = raw.firstIndex(of: "<"), let angleEnd = raw.firstIndex(of: ">") {
+        if let angleStart = raw.firstIndex(of: "<"), let angleEnd = raw.firstIndex(of: ">"), angleStart < angleEnd {
             let email = String(raw[raw.index(after: angleStart)..<angleEnd]).trimmingCharacters(in: .whitespaces)
             let name = String(raw[raw.startIndex..<angleStart]).trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
             return (name, email)

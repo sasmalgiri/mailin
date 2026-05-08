@@ -286,6 +286,12 @@ struct PaywallView: View {
             } else {
                 productLoadingView
             }
+
+            Text("Subscription auto-renews. Cancel anytime in System Settings > Apple ID > Subscriptions. Payment charged to your Apple ID at confirmation.")
+                .font(Typography.caption2)
+                .foregroundColor(AppColors.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.top, Spacing.xxSmall)
         }
     }
 
@@ -543,10 +549,8 @@ struct PaywallView: View {
 
             if store.isSubscribed {
                 Button("Manage Subscription") {
-                    Task {
-                        if let windowScene = NSApp.keyWindow {
-                            // Open subscription management
-                        }
+                    if let url = URL(string: "macappstores://apps.apple.com/account/subscriptions") {
+                        NSWorkspace.shared.open(url)
                     }
                 }
                 .font(Typography.caption1)

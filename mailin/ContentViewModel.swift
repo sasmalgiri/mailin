@@ -322,7 +322,7 @@ class ContentViewModel: ObservableObject {
                 guard !finalAllEmails.isEmpty else {
                     let fileNames = urls.map { $0.lastPathComponent }.joined(separator: ", ")
                     if finalErrors.isEmpty {
-                        self.statusMessage = "No emails found in \(fileNames). Supported formats: .mbox, .eml, .emlx, .msg, .pst, .ost"
+                        self.statusMessage = "No emails found in \(fileNames). Supported formats: .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf"
                     } else {
                         self.statusMessage = "Failed to parse \(fileNames): \(finalErrors.first ?? "Unknown error"). Try a smaller file or check the format."
                     }

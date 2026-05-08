@@ -266,7 +266,12 @@ class PredictiveCodingEngine: ObservableObject {
             let maxLog = max(logPosProb, logNegProb)
             let probRel = exp(logPosProb - maxLog)
             let probIrr = exp(logNegProb - maxLog)
-            let posterior = probRel / (probRel + probIrr)
+            let denom = probRel + probIrr
+            guard denom > 0 else {
+                results[id] = 0.5
+                continue
+            }
+            let posterior = probRel / denom
             results[id] = posterior.isNaN ? 0.5 : posterior
         }
 
@@ -305,13 +310,14 @@ class PredictiveCodingEngine: ObservableObject {
     }
 
     nonisolated private static func computeCentroid(_ vectors: [[Double]]) -> [Double]? {
-        guard let first = vectors.first else { return nil }
+        guard let first = vectors.first, !first.isEmpty else { return nil }
         let dim = first.count
         var sum = [Double](repeating: 0, count: dim)
         for vec in vectors {
             for d in 0..<min(dim, vec.count) { sum[d] += vec[d] }
         }
         let count = Double(vectors.count)
+        guard count > 0 else { return nil }
         return sum.map { $0 / count }
     }
 

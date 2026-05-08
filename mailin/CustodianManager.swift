@@ -42,6 +42,7 @@ class CustodianManager: ObservableObject {
     }
 
     private func loadCustodians() {
+        guard FileManager.default.fileExists(atPath: custodiansURL.path) else { return }
         do {
             let data = try Data(contentsOf: custodiansURL)
             let dict = try JSONDecoder().decode([String: String].self, from: data)
@@ -51,7 +52,7 @@ class CustodianManager: ObservableObject {
                 }
             }
         } catch {
-            custodianLog.info("No saved custodians to load: \(error.localizedDescription)")
+            custodianLog.error("Failed to decode custodians: \(error.localizedDescription)")
         }
     }
 
@@ -66,12 +67,13 @@ class CustodianManager: ObservableObject {
     }
 
     private func loadLegalHolds() {
+        guard FileManager.default.fileExists(atPath: legalHoldsURL.path) else { return }
         do {
             let data = try Data(contentsOf: legalHoldsURL)
             let arr = try JSONDecoder().decode([String].self, from: data)
             legalHolds = Set(arr.compactMap { UUID(uuidString: $0) })
         } catch {
-            custodianLog.info("No saved legal holds to load: \(error.localizedDescription)")
+            custodianLog.error("Failed to decode legal holds: \(error.localizedDescription)")
         }
     }
 

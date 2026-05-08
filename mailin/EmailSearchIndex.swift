@@ -951,11 +951,13 @@ final class EmailSearchIndex {
             let fnLen = Int(data[offset+26]) | (Int(data[offset+27]) << 8)
             let extraLen = Int(data[offset+28]) | (Int(data[offset+29]) << 8)
             let compSize = Int(data[offset+18]) | (Int(data[offset+19]) << 8) | (Int(data[offset+20]) << 16) | (Int(data[offset+21]) << 24)
+            guard compSize >= 0 && compSize < data.count else { break }
             let headerEnd = offset + 30
             guard headerEnd + fnLen <= data.count else { break }
             let filename = String(data: data[headerEnd..<headerEnd+fnLen], encoding: .utf8) ?? ""
             let dataStart = headerEnd + fnLen + extraLen
-            if filename == "word/document.xml" && dataStart + compSize <= data.count {
+            guard dataStart >= headerEnd && dataStart + compSize <= data.count else { break }
+            if filename == "word/document.xml" {
                 let fileData = data[dataStart..<dataStart+compSize]
                 do {
                     let decompressed = try (fileData as NSData).decompressed(using: .zlib) as Data

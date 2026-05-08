@@ -41,7 +41,8 @@ class SpotlightIndexer {
                     // Author info
                     let from = email.headers["From"] ?? ""
                     attributeSet.authorNames = [from]
-                    if let emailStart = from.range(of: "<"), let emailEnd = from.range(of: ">") {
+                    if let emailStart = from.range(of: "<"), let emailEnd = from.range(of: ">"),
+                       emailStart.upperBound <= emailEnd.lowerBound {
                         attributeSet.authorEmailAddresses = [String(from[emailStart.upperBound..<emailEnd.lowerBound])]
                     } else if from.contains("@") {
                         attributeSet.authorEmailAddresses = [from.trimmingCharacters(in: .whitespacesAndNewlines)]
