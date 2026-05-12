@@ -27,6 +27,11 @@ public struct QuotedPrintableDecoder {
                         continue
                     }
                 }
+                // Trailing `=` at EOF is a soft line break — skip it
+                if hex1 == nil || hex1 == end {
+                    i = cleaned.index(after: i)
+                    continue
+                }
                 output.append(UInt8(ascii: "="))
                 i = cleaned.index(after: i)
             } else {

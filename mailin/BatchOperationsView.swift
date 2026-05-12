@@ -452,20 +452,24 @@ struct BatchOperationsView: View {
         progressValue = 0
         resultMessage = nil
 
-        let count = selectedIDs.count
-        deletedIDs = selectedIDs
+        let (allowed, blocked) = CustodianManager.shared.filterProtected(selectedIDs)
+        deletedIDs = allowed
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             progressValue = 1.0
 
             ForensicManager.shared.logAction(
                 "Bulk Remove from View",
-                detail: "\(count) email(s) removed from current view"
+                detail: "\(allowed.count) email(s) removed from current view, \(blocked.count) protected by legal hold"
             )
 
             withAnimation(AnimationTiming.fast) {
                 selectedIDs.removeAll()
-                resultMessage = "Removed \(count) email\(count == 1 ? "" : "s") from view"
+                if blocked.isEmpty {
+                    resultMessage = "Removed \(allowed.count) email\(allowed.count == 1 ? "" : "s") from view"
+                } else {
+                    resultMessage = "Removed \(allowed.count) email\(allowed.count == 1 ? "" : "s"), \(blocked.count) protected by legal hold"
+                }
                 isProcessing = false
             }
 

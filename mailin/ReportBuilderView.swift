@@ -298,8 +298,8 @@ struct ReportGenerator {
             if let raw = tag?.rawValue, let score = Double(raw) {
                 total += score
                 count += 1
-                if score > 0.3 { positive += 1 }
-                else if score < -0.3 { negative += 1 }
+                if score > 0.4 { positive += 1 }
+                else if score < -0.4 { negative += 1 }
                 else { neutral += 1 }
             }
         }
@@ -581,7 +581,9 @@ struct ReportBuilderView: View {
                                         .font(Typography.callout)
                                 }
                             }
+                            #if os(macOS)
                             .toggleStyle(.checkbox)
+                            #endif
                         }
                         .padding(.vertical, Spacing.xxxSmall)
                     }
@@ -730,7 +732,7 @@ struct ReportBuilderView: View {
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
             do {
-                try pdf.write(to: url)
+                try pdf.write(to: url, options: .atomic)
                 showSaveSuccess = true
             } catch {
                 saveError = error.localizedDescription

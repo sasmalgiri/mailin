@@ -30,9 +30,12 @@ class ForensicManager: ObservableObject {
             return SymmetricKey(data: data)
         }
         var keyBytes = [UInt8](repeating: 0, count: 32)
-        let status = SecRandomCopyBytes(kSecRandomDefault, keyBytes.count, &keyBytes)
+        var status = SecRandomCopyBytes(kSecRandomDefault, keyBytes.count, &keyBytes)
         if status != errSecSuccess {
-            keyBytes = (0..<32).map { _ in UInt8.random(in: 0...255) }
+            status = SecRandomCopyBytes(kSecRandomDefault, keyBytes.count, &keyBytes)
+            if status != errSecSuccess {
+                keyBytes = (0..<32).map { _ in UInt8.random(in: 0...255) }
+            }
         }
         let keyData = Data(keyBytes)
         KeychainHelper.save(key: Self.hmacKeychainKey, value: keyData.base64EncodedString())
@@ -837,7 +840,9 @@ class ForensicManager: ObservableObject {
         var csv = "Bates Number,Message-ID,Date,From,To,CC,Subject,MD5,SHA-1,SHA-256,Byte Count,Has Attachments,Attachment Count,Evidence Tag,Annotation,Thread-ID,Spoof Risk,Risk Score,Risk Level\n"
 
         func csvEscape(_ s: String) -> String {
-            "\"" + s.replacingOccurrences(of: "\"", with: "\"\"").replacingOccurrences(of: "\r\n", with: " ").replacingOccurrences(of: "\r", with: " ").replacingOccurrences(of: "\n", with: " ") + "\""
+            var v = s
+            if let first = v.first, "=+@-\t\r".contains(first) { v = "'" + v }
+            return "\"" + v.replacingOccurrences(of: "\"", with: "\"\"").replacingOccurrences(of: "\r\n", with: " ").replacingOccurrences(of: "\r", with: " ").replacingOccurrences(of: "\n", with: " ") + "\""
         }
 
         for (i, email) in emails.enumerated() {
@@ -1089,6 +1094,10 @@ class ForensicManager: ObservableObject {
     }
 
     func clearForensicData() {
+        let tsURL = tagsURL.deletingLastPathComponent().appendingPathComponent("forensic_tag_timestamps.json")
+        for url in [auditLogURL, hashesURL, tagsURL, annotationsURL, emailHashesURL, chainRootURL, tsURL] {
+            try? FileManager.default.removeItem(at: url)
+        }
         auditLog = []
         sourceFileHashes = []
         evidenceTags = [:]
@@ -1096,10 +1105,6 @@ class ForensicManager: ObservableObject {
         annotations = [:]
         perEmailHashes = [:]
         integrityStatus = .unknown
-        let tsURL = tagsURL.deletingLastPathComponent().appendingPathComponent("forensic_tag_timestamps.json")
-        for url in [auditLogURL, hashesURL, tagsURL, annotationsURL, emailHashesURL, chainRootURL, tsURL] {
-            try? FileManager.default.removeItem(at: url)
-        }
     }
 
     func clearAllForensicData() {

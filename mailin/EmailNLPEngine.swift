@@ -9,10 +9,54 @@ struct EmailNLPEngine {
         let email: MBOXParser.RawEmail
         let score: Double
         var label: String {
-            if score > 0.3 { return "Positive" }
-            if score < -0.3 { return "Negative" }
+            if score > 0.4 { return "Positive" }
+            if score < -0.4 { return "Negative" }
             return "Neutral"
         }
+    }
+
+    /// Detects structured professional/business emails by looking for common patterns
+    /// such as bullet points, section headers, numbered lists, sign-offs, and business keywords.
+    private static func isStructuredProfessionalEmail(_ body: String) -> Bool {
+        let lines = body.components(separatedBy: .newlines)
+        var signals = 0
+
+        // Bullet points: lines starting with "- ", "• ", or "* "
+        let bulletCount = lines.filter { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return trimmed.hasPrefix("- ") || trimmed.hasPrefix("• ") || trimmed.hasPrefix("* ")
+        }.count
+        if bulletCount >= 2 { signals += 1 }
+
+        // Section headers: lines ending with ":"
+        let headerCount = lines.filter { line in
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.hasSuffix(":") && trimmed.count > 3 && trimmed.count < 80
+        }.count
+        if headerCount >= 1 { signals += 1 }
+
+        // Numbered lists: lines starting with "1.", "2.", etc.
+        let numberedCount = lines.filter { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return trimmed.range(of: #"^\d+\.\s"#, options: .regularExpression) != nil
+        }.count
+        if numberedCount >= 2 { signals += 1 }
+
+        let lower = body.lowercased()
+
+        // Professional sign-offs
+        let signOffs = ["regards", "best regards", "best,", "thanks,", "thank you,", "sincerely", "cheers,"]
+        if signOffs.contains(where: { lower.contains($0) }) { signals += 1 }
+
+        // Professional/business keywords
+        let businessKeywords = ["meeting", "update", "progress", "status", "deadline", "deliverable",
+                                "action item", "standup", "sprint", "blocker", "milestone", "agenda",
+                                "follow up", "sync", "quarterly", "roadmap", "stakeholder"]
+        let keywordHits = businessKeywords.filter { lower.contains($0) }.count
+        if keywordHits >= 2 { signals += 1 }
+
+        // Consider it professional if at least 2 signals are present
+        return signals >= 2
     }
 
     static func analyzeSentiment(of emails: [MBOXParser.RawEmail]) -> [SentimentResult] {
@@ -23,25 +67,35 @@ struct EmailNLPEngine {
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { $0.count > 10 && !$0.hasPrefix(">") }
 
+            var rawScore: Double
             if paragraphs.count <= 1 {
                 tagger.string = body
                 let (tag, _) = tagger.tag(at: body.startIndex, unit: .paragraph, scheme: .sentimentScore)
-                let score = Double(tag?.rawValue ?? "0") ?? 0
-                return SentimentResult(email: email, score: score)
+                rawScore = Double(tag?.rawValue ?? "0") ?? 0
+            } else {
+                var totalScore = 0.0
+                var totalWeight = 0.0
+                for para in paragraphs {
+                    tagger.string = para
+                    let (tag, _) = tagger.tag(at: para.startIndex, unit: .paragraph, scheme: .sentimentScore)
+                    let score = Double(tag?.rawValue ?? "0") ?? 0
+                    let weight = Double(para.count)
+                    totalScore += score * weight
+                    totalWeight += weight
+                }
+                rawScore = totalWeight > 0 ? totalScore / totalWeight : 0
             }
 
-            var totalScore = 0.0
-            var totalWeight = 0.0
-            for para in paragraphs {
-                tagger.string = para
-                let (tag, _) = tagger.tag(at: para.startIndex, unit: .paragraph, scheme: .sentimentScore)
-                let score = Double(tag?.rawValue ?? "0") ?? 0
-                let weight = Double(para.count)
-                totalScore += score * weight
-                totalWeight += weight
+            // Apply professional email bias: structured business emails get a +0.2 nudge
+            // to counteract NLTagger scoring professional language (e.g. "blockers", "bugs",
+            // "issues", "needs") as negative when it is actually neutral business terminology.
+            if isStructuredProfessionalEmail(body) {
+                rawScore += 0.2
+                // Clamp to [-1, 1] range
+                rawScore = min(1.0, max(-1.0, rawScore))
             }
-            let avgScore = totalWeight > 0 ? totalScore / totalWeight : 0
-            return SentimentResult(email: email, score: avgScore)
+
+            return SentimentResult(email: email, score: rawScore)
         }
     }
 
@@ -49,12 +103,12 @@ struct EmailNLPEngine {
         let results = analyzeSentiment(of: emails)
         guard !results.isEmpty else { return (0, "Neutral", 0, 0, 0) }
         let avg = results.map(\.score).reduce(0, +) / Double(results.count)
-        let pos = results.filter { $0.score > 0.3 }.count
-        let neg = results.filter { $0.score < -0.3 }.count
+        let pos = results.filter { $0.score > 0.4 }.count
+        let neg = results.filter { $0.score < -0.4 }.count
         let neu = results.count - pos - neg
         let label: String
-        if avg > 0.3 { label = "Positive" }
-        else if avg < -0.3 { label = "Negative" }
+        if avg > 0.4 { label = "Positive" }
+        else if avg < -0.4 { label = "Negative" }
         else { label = "Neutral" }
         return (avg, label, pos, neg, neu)
     }
@@ -208,8 +262,8 @@ struct EmailNLPEngine {
         let emailCount: Int
         let avgSentiment: Double
         var sentimentLabel: String {
-            if avgSentiment > 0.3 { return "Positive" }
-            if avgSentiment < -0.3 { return "Negative" }
+            if avgSentiment > 0.4 { return "Positive" }
+            if avgSentiment < -0.4 { return "Negative" }
             return "Neutral"
         }
     }
@@ -463,7 +517,7 @@ struct EmailNLPEngine {
             totalWeight += w
         }
         let sentiment = totalWeight > 0 ? totalScore / totalWeight : 0
-        let tone = sentiment > 0.3 ? "positive" : sentiment < -0.3 ? "negative" : "neutral"
+        let tone = sentiment > 0.4 ? "positive" : sentiment < -0.4 ? "negative" : "neutral"
 
         let sentences = cleanBody.components(separatedBy: CharacterSet(charactersIn: ".!?\n"))
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -745,7 +799,7 @@ struct EmailNLPEngine {
         }
 
         let avgSentiment = sentimentCount > 0 ? sentimentSum / Double(sentimentCount) : 0
-        let tone = avgSentiment > 0.3 ? "positive" : avgSentiment < -0.3 ? "negative" : "neutral"
+        let tone = avgSentiment > 0.4 ? "positive" : avgSentiment < -0.4 ? "negative" : "neutral"
 
         var summary = "Thread: \(subject)\n"
         summary += "Messages: \(sorted.count) | Participants: \(participants.joined(separator: ", "))\n"
@@ -1601,10 +1655,10 @@ struct EmailNLPEngine {
         case .sentiment:
             let sentiment = analyzeSentiment(of: matchedEmails)
             let avg = sentiment.map(\.score).reduce(0, +) / Double(max(sentiment.count, 1))
-            let toneWord = avg > 0.3 ? "quite positive" : avg > 0.1 ? "generally positive" : avg > -0.1 ? "neutral" : avg > -0.3 ? "somewhat negative" : "notably negative"
+            let toneWord = avg > 0.4 ? "quite positive" : avg > 0.1 ? "generally positive" : avg > -0.1 ? "neutral" : avg > -0.4 ? "somewhat negative" : "notably negative"
             response += "The tone across these **\(results.count) emails** is **\(toneWord)**.\n\n"
-            let positive = sentiment.filter { $0.score > 0.3 }
-            let negative = sentiment.filter { $0.score < -0.3 }
+            let positive = sentiment.filter { $0.score > 0.4 }
+            let negative = sentiment.filter { $0.score < -0.4 }
             if let topP = positive.sorted(by: { $0.score > $1.score }).first {
                 response += "The most upbeat message is \"\(topP.email.headers["Subject"] ?? "(No Subject)")\" from **\(displayName(topP.email.headers["From"]))** — noticeably warm in tone.\n\n"
             }
@@ -1620,7 +1674,12 @@ struct EmailNLPEngine {
             } else {
                 response += "Based on your emails, **\(topicPhrase)** comes up in **\(results.count) emails**"
                 if senderCount > 1 {
-                    let nameStr = topSenderNames.count <= 2 ? topSenderNames.map { "**\($0)**" }.joined(separator: " and ") : "**\(topSenderNames[0])**, **\(topSenderNames[1])**, and others"
+                    let nameStr: String
+                    if topSenderNames.count >= 3 {
+                        nameStr = "**\(topSenderNames[0])**, **\(topSenderNames[1])**, and others"
+                    } else {
+                        nameStr = topSenderNames.map { "**\($0)**" }.joined(separator: " and ")
+                    }
                     response += " from \(nameStr)"
                 }
                 response += ".\n\n"
@@ -1708,9 +1767,9 @@ struct EmailNLPEngine {
                 let (tag, _) = tagger.tag(at: allBody.startIndex, unit: .paragraph, scheme: .sentimentScore)
                 let sentimentScore = Double(tag?.rawValue ?? "0") ?? 0
                 let tonePhrase: String
-                if sentimentScore > 0.3 { tonePhrase = "with an upbeat, positive tone" }
+                if sentimentScore > 0.4 { tonePhrase = "with an upbeat, positive tone" }
                 else if sentimentScore > 0.1 { tonePhrase = "in a generally constructive tone" }
-                else if sentimentScore < -0.3 { tonePhrase = "with noticeable tension" }
+                else if sentimentScore < -0.4 { tonePhrase = "with noticeable tension" }
                 else if sentimentScore < -0.1 { tonePhrase = "with a somewhat cautious tone" }
                 else { tonePhrase = "" }
 

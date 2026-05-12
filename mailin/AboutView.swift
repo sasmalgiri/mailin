@@ -71,13 +71,13 @@ struct AboutView: View {
                     )
                     featureRow(
                         icon: "envelope.open.fill",
-                        title: "Advanced Parsing",
-                        description: "RFC 822 & MIME compliant. Google Takeout, Thunderbird, Apple Mail ready."
+                        title: "7 Format Support",
+                        description: "MBOX, EML, EMLX, MSG, PST, OST, NSF — Gmail, Outlook, Thunderbird, Apple Mail, Lotus Notes."
                     )
                     featureRow(
                         icon: "chart.bar.fill",
-                        title: "Reply Analytics",
-                        description: "Track communication patterns, reply frequency, and conversation threads."
+                        title: "Analytics Dashboard",
+                        description: "Volume timelines, top contacts, heatmaps, network graphs, and exportable reports."
                     )
                 }
                 .padding(.horizontal, Spacing.large)

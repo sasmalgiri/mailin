@@ -1,6 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import StoreKit
+import TipKit
 #if os(macOS)
 import AppKit
 #endif
@@ -48,11 +49,11 @@ struct ContentView: View {
     @ObservedObject private var forensicManager = ForensicManager.shared
     @ObservedObject private var collabManager = CollaborationManager.shared
     @ObservedObject private var personaManager = PersonaManager.shared
-    @ObservedObject private var sharePlayManager = SharePlayManager.shared
     @Environment(\.windowSizeClass) private var sizeClass
     @AppStorage("defaultSenderEmail") private var defaultSenderEmail = ""
     @AppStorage("enableAIFeatures") private var enableAIFeatures = true
     @AppStorage("autoDetectSender") private var autoDetectSender = true
+    @AppStorage("showAdvancedFeatures") private var showAdvancedFeatures = false
     @StateObject private var viewModel = ContentViewModel()
     @StateObject private var modelVM: ParsedEmailListViewModel
     @State private var showSpinner = false
@@ -119,7 +120,7 @@ struct ContentView: View {
                             let tempDir = FileManager.default.temporaryDirectory
                             let tempFile = tempDir.appendingPathComponent("dropped_\(UUID().uuidString).eml")
                             do {
-                                try data.write(to: tempFile)
+                                try data.write(to: tempFile, options: .atomic)
                                 resolveAndHandleSelectedFile(tempFile)
                             } catch {
                                 viewModel.statusMessage = "Failed to save dropped email: \(error.localizedDescription)"
@@ -157,21 +158,22 @@ struct ContentView: View {
         .onChange(of: modelVM.filteredEmails.count) { handleFilteredChange() }
         .onAppear { handleAppear() }
         .onDisappear { handleDisappear() }
-        .task { sharePlayManager.listenForSessions() }
-        .alert("SharePlay", isPresented: Binding(
-            get: { sharePlayManager.activationError != nil },
-            set: { if !$0 { sharePlayManager.activationError = nil } }
-        )) {
-            Button("OK") { sharePlayManager.activationError = nil }
-        } message: {
-            Text(sharePlayManager.activationError ?? "")
-        }
         .onReceive(NotificationCenter.default.publisher(for: .dataClearedByUser)) { _ in handleDataCleared() }
         .onReceive(NotificationCenter.default.publisher(for: .detectMetadata)) { _ in viewModel.autoDetectMetadata() }
         .onReceive(NotificationCenter.default.publisher(for: .triggerFileImportFromShortcut)) { _ in openPanelFallback() }
         .onReceive(NotificationCenter.default.publisher(for: .spotlightEmailSelected)) { notification in
             if let emailID = notification.object as? UUID {
                 selectedEmailIDs = [emailID]
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .togglePinEmail)) { notification in
+            if let emailID = notification.object as? UUID {
+                modelVM.togglePin(emailID)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .addTagToEmail)) { notification in
+            if let (emailID, tag) = notification.object as? (UUID, String) {
+                modelVM.addUserTag(tag, to: emailID)
             }
         }
         .modifier(MenuTriggerModifier(
@@ -190,7 +192,14 @@ struct ContentView: View {
                 allEmails: modelVM.allEmails,
                 filteredEmails: modelVM.filteredEmails,
                 selectedEmails: modelVM.filteredEmails.filter { selectedEmailIDs.contains($0.id) },
-                searchContext: modelVM.searchText
+                searchContext: modelVM.searchText,
+                onSelectEmail: { emailID in
+                    selectedEmailIDs = [emailID]
+                },
+                onFilterByIDs: { ids in
+                    modelVM.aiPinnedIDs = Set(ids)
+                    modelVM.applyFilters()
+                }
             )
             .environmentObject(storeManager)
             #if os(macOS)
@@ -235,11 +244,6 @@ struct ContentView: View {
                         .transition(.move(edge: .trailing).combined(with: .opacity))
                         .animation(.easeInOut, value: collabManager.newImportCount)
                 }
-                if sharePlayManager.isSessionActive {
-                    sharePlayBanner
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
-                        .animation(.easeInOut, value: sharePlayManager.isSessionActive)
-                }
             }
             .padding(.trailing, Spacing.large)
             .padding(.top, Spacing.small)
@@ -251,6 +255,7 @@ struct ContentView: View {
             custodianManager: custodianManager,
             reviewBatchManager: reviewBatchManager,
             selectedClusterFilter: $selectedClusterFilter,
+            selectedEmailIDs: $selectedEmailIDs,
             exportVCard: exportVCard,
             exportICS: exportICS,
             exportHashManifest: exportHashManifest,
@@ -355,8 +360,8 @@ struct ContentView: View {
                     compactToolsStrip
                 } else if selectedEmailIDs.count == 2 {
                     let pair = Array(selectedEmailIDs)
-                    let emailA = modelVM.filteredEmails.first(where: { $0.id == pair[0] })
-                    let emailB = modelVM.filteredEmails.first(where: { $0.id == pair[1] })
+                    let emailA = pair.count > 0 ? modelVM.filteredEmails.first(where: { $0.id == pair[0] }) : nil
+                    let emailB = pair.count > 1 ? modelVM.filteredEmails.first(where: { $0.id == pair[1] }) : nil
                     if let a = emailA, let b = emailB {
                         VStack(spacing: 0) {
                             HStack {
@@ -364,6 +369,7 @@ struct ContentView: View {
                                     .font(Typography.headline)
                                 Spacer()
                                 Button("Show Batch Actions") {
+                                    appState.showBatchOperations = true
                                 }
                                 .buttonStyle(CompactSecondaryButtonStyle())
                             }
@@ -395,27 +401,16 @@ struct ContentView: View {
                         Label("Analytics", systemImage: "chart.bar")
                     }
 
-                    Button { forensicManager.isEnabled.toggle() } label: {
+                    Button {
+                        if forensicManager.isEnabled {
+                            forensicManager.isEnabled = false
+                        } else if storeManager.requireProfessional() {
+                            forensicManager.isEnabled = true
+                        }
+                    } label: {
                         Label("Forensic", systemImage: forensicManager.isEnabled ? "shield.checkered" : "shield")
                     }
 
-                    if #available(macOS 15, iOS 17, *) {
-                        Button {
-                            if sharePlayManager.isSessionActive {
-                                sharePlayManager.endSession()
-                            } else {
-                                sharePlayManager.startSession()
-                            }
-                        } label: {
-                            Label(
-                                sharePlayManager.isSessionActive ? "End SharePlay" : "SharePlay",
-                                systemImage: sharePlayManager.isSessionActive ? "shareplay.slash" : "shareplay"
-                            )
-                        }
-                        .help(Text(verbatim: sharePlayManager.isSessionActive
-                              ? "End collaborative review session (\(sharePlayManager.participantCount) participants)"
-                              : "Start a SharePlay session to review emails together"))
-                    }
                 }
             }
         }
@@ -470,18 +465,6 @@ struct ContentView: View {
                             Image(systemName: forensicManager.isEnabled ? "shield.checkered" : "shield")
                         }
                         .accessibilityLabel(forensicManager.isEnabled ? "Disable Forensic Mode" : "Enable Forensic Mode")
-                        if #available(macOS 15, iOS 17, *) {
-                            Button {
-                                if sharePlayManager.isSessionActive {
-                                    sharePlayManager.endSession()
-                                } else {
-                                    sharePlayManager.startSession()
-                                }
-                            } label: {
-                                Image(systemName: sharePlayManager.isSessionActive ? "shareplay.slash" : "shareplay")
-                            }
-                            .accessibilityLabel(sharePlayManager.isSessionActive ? "End SharePlay" : "Start SharePlay")
-                        }
                     }
                     Button { showIOSSettings = true } label: {
                         Image(systemName: "gearshape")
@@ -549,18 +532,6 @@ struct ContentView: View {
                                 Image(systemName: forensicManager.isEnabled ? "shield.checkered" : "shield")
                             }
                             .accessibilityLabel(forensicManager.isEnabled ? "Disable Forensic Mode" : "Enable Forensic Mode")
-                            if #available(macOS 15, iOS 17, *) {
-                                Button {
-                                    if sharePlayManager.isSessionActive {
-                                        sharePlayManager.endSession()
-                                    } else {
-                                        sharePlayManager.startSession()
-                                    }
-                                } label: {
-                                    Image(systemName: sharePlayManager.isSessionActive ? "shareplay.slash" : "shareplay")
-                                }
-                                .accessibilityLabel(sharePlayManager.isSessionActive ? "End SharePlay" : "Start SharePlay")
-                            }
                         }
                         Button { showIOSSettings = true } label: {
                             Image(systemName: "gearshape")
@@ -707,7 +678,7 @@ struct ContentView: View {
                 .buttonStyle(SecondaryButtonStyle())
                 .accessibilityHint("Copy subject lines to clipboard")
 
-                if forensicManager.isEnabled {
+                if showAdvancedFeatures && forensicManager.isEnabled {
                     Menu {
                         ForEach(ForensicManager.EvidenceTag.allCases, id: \.self) { tag in
                             Button {
@@ -827,6 +798,9 @@ struct ContentView: View {
             for att in email.attachments {
                 guard let sourceURL = att.fileURL else { continue }
                 var filename = att.filename
+                    .replacingOccurrences(of: "/", with: "_")
+                    .replacingOccurrences(of: "\\", with: "_")
+                    .replacingOccurrences(of: "..", with: "_")
                 var counter = 1
                 while usedNames.contains(filename) {
                     let name = (att.filename as NSString).deletingPathExtension
@@ -1080,9 +1054,11 @@ struct ContentView: View {
                         }
                         compactToolIcon("doc.on.doc", color: .indigo) { appState.showDuplicateManager = true }
                         compactToolIcon("brain", color: .pink) { appState.showPredictiveCoding = true }
-                        compactToolIcon("person.badge.key", color: .cyan) { appState.showCustodianPanel = true }
-                        compactToolIcon("doc.text.magnifyingglass", color: .red) { appState.showInvestigationReport = true }
-                        compactToolIcon("clock.arrow.circlepath", color: .orange) { appState.showAuditTrail = true }
+                        if showAdvancedFeatures {
+                            compactToolIcon("person.badge.key", color: .cyan) { appState.showCustodianPanel = true }
+                            compactToolIcon("doc.text.magnifyingglass", color: .red) { appState.showInvestigationReport = true }
+                            compactToolIcon("clock.arrow.circlepath", color: .orange) { appState.showAuditTrail = true }
+                        }
                         compactToolIcon("square.and.arrow.up", color: .brown) { exportFilteredEmailsAsEML() }
                     }
                     .padding(.trailing, Spacing.small)
@@ -1143,7 +1119,11 @@ struct ContentView: View {
                                 appState.showAnalytics = true
                             }
                             detailToolButton(title: "Forensic", icon: forensicManager.isEnabled ? "shield.checkered" : "shield", color: forensicManager.isEnabled ? .orange : .gray) {
-                                forensicManager.isEnabled.toggle()
+                                if forensicManager.isEnabled {
+                                    forensicManager.isEnabled = false
+                                } else if storeManager.requireProfessional() {
+                                    forensicManager.isEnabled = true
+                                }
                             }
                             detailToolButton(title: "Topics", icon: "circle.grid.3x3", color: appState.dockedBottomPanel == .topics ? .teal.opacity(0.5) : .teal) {
                                 withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? nil : .topics }
@@ -1160,32 +1140,29 @@ struct ContentView: View {
                             detailToolButton(title: "Replies", icon: "arrow.turn.up.left", color: .green) {
                                 appState.showReplyStats = true
                             }
-                            detailToolButton(title: "Custodian", icon: "person.badge.key", color: .cyan) {
-                                appState.showCustodianPanel = true
-                            }
-                            detailToolButton(title: storeManager.isProfessional ? "Batches" : "Batches (Pro)", icon: "list.bullet.rectangle", color: .mint) {
-                                if storeManager.requireProfessional() {
-                                    appState.showReviewBatches = true
+                            if showAdvancedFeatures {
+                                detailToolButton(title: "Custodian", icon: "person.badge.key", color: .cyan) {
+                                    appState.showCustodianPanel = true
+                                }
+                                detailToolButton(title: storeManager.isProfessional ? "Batches" : "Batches (Pro)", icon: "list.bullet.rectangle", color: .mint) {
+                                    if storeManager.requireProfessional() {
+                                        appState.showReviewBatches = true
+                                    }
                                 }
                             }
                             detailToolButton(title: "Compare", icon: "doc.on.doc", color: .indigo) {
                                 appState.showArchiveComparison = true
                             }
-                            detailToolButton(title: "Report", icon: "doc.text.magnifyingglass", color: .red) {
-                                appState.showInvestigationReport = true
-                            }
-                            detailToolButton(title: "Audit Trail", icon: "clock.arrow.circlepath", color: .orange) {
-                                appState.showAuditTrail = true
+                            if showAdvancedFeatures {
+                                detailToolButton(title: "Report", icon: "doc.text.magnifyingglass", color: .red) {
+                                    appState.showInvestigationReport = true
+                                }
+                                detailToolButton(title: "Audit Trail", icon: "clock.arrow.circlepath", color: .orange) {
+                                    appState.showAuditTrail = true
+                                }
                             }
                             detailToolButton(title: "Export", icon: "square.and.arrow.up", color: .brown) {
                                 exportFilteredEmailsAsEML()
-                            }
-                            detailToolButton(title: "Settings", icon: "gearshape", color: .gray) {
-                                #if os(macOS)
-                                openSettings()
-                                #else
-                                showIOSSettings = true
-                                #endif
                             }
                             detailToolButton(
                                 title: storeManager.isPremium ? storeManager.currentTier.displayName : "Upgrade",
@@ -1197,6 +1174,77 @@ struct ContentView: View {
                         }
                         .padding(.horizontal, Spacing.xxLarge)
                     }
+                }
+
+                Divider().padding(.horizontal, Spacing.xxLarge)
+
+                // Persona Selection
+                VStack(spacing: Spacing.medium) {
+                    Text("Persona")
+                        .font(Typography.headline)
+                        .foregroundColor(AppColors.secondary)
+
+                    LazyVGrid(columns: [
+                        GridItem(.flexible()), GridItem(.flexible()),
+                        GridItem(.flexible())
+                    ], spacing: Spacing.small) {
+                        ForEach(PersonaManager.Persona.allCases, id: \.self) { persona in
+                            personaButton(persona)
+                        }
+                    }
+                    .padding(.horizontal, Spacing.xxLarge)
+                }
+
+                Divider().padding(.horizontal, Spacing.xxLarge)
+
+                // Quick Settings
+                VStack(spacing: Spacing.medium) {
+                    Text("Settings")
+                        .font(Typography.headline)
+                        .foregroundColor(AppColors.secondary)
+
+                    LazyVGrid(columns: [
+                        GridItem(.flexible()), GridItem(.flexible()),
+                        GridItem(.flexible()), GridItem(.flexible())
+                    ], spacing: Spacing.small) {
+                        detailToolButton(title: "Profile", icon: "person.crop.circle", color: .blue) {
+                            openSettingsAction()
+                        }
+                        detailToolButton(title: "General", icon: "gearshape", color: .gray) {
+                            openSettingsAction()
+                        }
+                        detailToolButton(title: "Parsing", icon: "envelope.open", color: .blue) {
+                            openSettingsAction()
+                        }
+                        detailToolButton(title: "Display", icon: "eyeglasses", color: .purple) {
+                            openSettingsAction()
+                        }
+                        detailToolButton(title: "Advanced", icon: "slider.horizontal.3", color: .red) {
+                            openSettingsAction()
+                        }
+                        detailToolButton(title: "Forensic", icon: "shield.checkered", color: .orange) {
+                            openSettingsAction()
+                        }
+                        detailToolButton(title: "iCloud", icon: "icloud", color: .blue) {
+                            openSettingsAction()
+                        }
+                        detailToolButton(title: "Collaboration", icon: "person.2", color: .teal) {
+                            openSettingsAction()
+                        }
+                        detailToolButton(title: "Help", icon: "questionmark.circle", color: .green) {
+                            openSettingsAction()
+                        }
+                        detailToolButton(title: "What's New", icon: "sparkles.rectangle.stack", color: .purple) {
+                            appState.showWhatsNew = true
+                        }
+                        detailToolButton(title: "Shortcuts", icon: "keyboard", color: .gray) {
+                            appState.showKeyboardShortcuts = true
+                        }
+                        detailToolButton(title: "Commands", icon: "terminal", color: .indigo) {
+                            appState.showCommandPalette = true
+                        }
+                    }
+                    .padding(.horizontal, Spacing.xxLarge)
                 }
 
                 Spacer()
@@ -1223,6 +1271,42 @@ struct ContentView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title)
+    }
+
+    @ViewBuilder
+    private func personaButton(_ persona: PersonaManager.Persona) -> some View {
+        let isSelected = personaManager.selectedPersona == persona
+        Button {
+            if isSelected {
+                personaManager.switchPersona(to: .general)
+            } else {
+                personaManager.switchPersona(to: persona)
+            }
+        } label: {
+            VStack(spacing: Spacing.xxSmall) {
+                Image(systemName: persona.icon)
+                    .font(.system(size: 22))
+                    .foregroundColor(isSelected ? .white : persona.accentColor)
+                Text(persona.shortLabel)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(isSelected ? .white : AppColors.secondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, Spacing.small)
+            .background(isSelected ? persona.accentColor : persona.accentColor.opacity(0.06))
+            .cornerRadius(CornerRadius.medium)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(persona.displayName)\(isSelected ? ", selected" : "")")
+    }
+
+    private func openSettingsAction() {
+        #if os(macOS)
+        openSettings()
+        #else
+        showIOSSettings = true
+        #endif
     }
 
     private var currentEmailsForDock: [MBOXParser.RawEmail] {
@@ -1370,6 +1454,24 @@ struct ContentView: View {
                 Label("\(modelVM.filteredEmails.count) Emails", systemImage: "chart.bar.fill")
                     .font(Typography.title3)
                     .foregroundColor(AppColors.secondary)
+                if modelVM.aiPinnedIDs != nil {
+                    Button {
+                        modelVM.aiPinnedIDs = nil
+                        modelVM.applyFilters()
+                    } label: {
+                        Label("AI Filter", systemImage: "sparkles")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Capsule().fill(LinearGradient(colors: [.purple, .blue], startPoint: .leading, endPoint: .trailing)))
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 12))
+                            .foregroundColor(.white.opacity(0.8))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear AI filter")
+                }
                 Spacer()
                 if let start = modelVM.filteredDateRange.0, let end = modelVM.filteredDateRange.1 {
                     Text("\(formatted(start)) – \(formatted(end))")
@@ -1416,7 +1518,55 @@ struct ContentView: View {
                 multiToggleList(items: modelVM.allTags, selection: $modelVM.selectedTags)
             }
 
-            if (forensicManager.isEnabled || personaManager.selectedPersona == .legal) && !forensicManager.evidenceTags.isEmpty {
+            if !modelVM.smartTagCounts.isEmpty {
+                SidebarSectionHeader(title: "Smart Tags", icon: "tag.fill", color: .purple, helpText: "Filter by AI-detected category, priority, sentiment, or forensic tag")
+                VStack(alignment: .leading, spacing: Spacing.xxSmall) {
+                    ForEach(modelVM.smartTagCounts, id: \.tag) { entry in
+                        Button {
+                            if modelVM.selectedSmartTags.contains(entry.tag) {
+                                modelVM.selectedSmartTags.remove(entry.tag)
+                            } else {
+                                modelVM.selectedSmartTags.insert(entry.tag)
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: entry.tag.icon)
+                                    .font(.caption2)
+                                    .foregroundColor(entry.tag.color)
+                                Text(entry.tag.rawValue)
+                                    .font(Typography.caption1)
+                                Spacer()
+                                Text("\(entry.count)")
+                                    .font(Typography.caption2)
+                                    .foregroundColor(.secondary)
+                                if modelVM.selectedSmartTags.contains(entry.tag) {
+                                    Image(systemName: "checkmark")
+                                        .font(.caption2)
+                                        .foregroundColor(.purple)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("\(entry.tag.rawValue), \(entry.count) emails\(modelVM.selectedSmartTags.contains(entry.tag) ? ", selected" : "")")
+                    }
+                    if !modelVM.selectedSmartTags.isEmpty {
+                        Button {
+                            modelVM.selectedSmartTags.removeAll()
+                        } label: {
+                            HStack {
+                                Image(systemName: "xmark.circle")
+                                    .font(.caption2)
+                                Text("Clear Tag Filters")
+                                    .font(Typography.caption2)
+                            }
+                            .foregroundColor(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            if showAdvancedFeatures && (forensicManager.isEnabled || personaManager.selectedPersona == .legal) && !forensicManager.evidenceTags.isEmpty {
                 SidebarSectionHeader(title: "Evidence Tags", icon: "shield.checkered", color: .orange, helpText: "Filter by forensic evidence tag")
                 VStack(alignment: .leading, spacing: Spacing.xxSmall) {
                     Button {
@@ -1558,6 +1708,12 @@ struct ContentView: View {
                 } label: {
                     Label("Export as TIFF Image", systemImage: "photo")
                 }
+                Divider()
+                Button {
+                    exportPortableHTML()
+                } label: {
+                    Label("Portable HTML Viewer", systemImage: "globe")
+                }
             } label: {
                 Label("Export Emails", systemImage: "square.and.arrow.up")
                     .frame(maxWidth: .infinity)
@@ -1566,7 +1722,7 @@ struct ContentView: View {
             .help("Export filtered emails")
             .accessibilityLabel("Export filtered emails")
 
-            if forensicManager.isEnabled || personaManager.selectedPersona == .legal {
+            if showAdvancedFeatures && (forensicManager.isEnabled || personaManager.selectedPersona == .legal) {
                 let isLegalOnly = !forensicManager.isEnabled && personaManager.selectedPersona == .legal
                 let menuLabel = isLegalOnly ? "Production Export" : "Forensic Export"
                 let menuIcon = isLegalOnly ? "building.columns" : "shield.checkered"
@@ -1698,6 +1854,9 @@ struct ContentView: View {
             }
             .padding(sizeClass == .compact ? Spacing.medium : Spacing.large)
             .adaptiveGlass(in: .rect(cornerRadius: CornerRadius.large))
+
+            TipView(ImportEmailsTip(), arrowEdge: .top)
+                .padding(.horizontal, Spacing.large)
 
             if sizeClass != .compact {
                 VStack(spacing: Spacing.small) {
@@ -1891,7 +2050,7 @@ struct ContentView: View {
         case .legal: return "Documents never leave your Mac. Privilege review stays confidential."
         case .itAdmin: return "All header analysis happens locally. No email content is transmitted externally."
         case .journalist: return "Source material stays on your Mac. No data is shared with external servers."
-        case .personal, .general: return "All processing happens entirely on your Mac. No data ever leaves your device."
+        case .personal, .general: return "No data ever leaves your device. All analysis is performed locally."
         }
     }
 
@@ -2047,6 +2206,71 @@ private func handleMultipleFiles(_ urls: [URL]) {
 
     private static let freeExportLimit = 10
 
+    private func exportSelectedEmails() {
+        let selected = modelVM.allEmails.filter { selectedEmailIDs.contains($0.id) }
+        guard !selected.isEmpty else { return }
+        #if os(macOS)
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.message = "Export \(selected.count) selected email(s)"
+        panel.prompt = "Export"
+        guard panel.runModal() == .OK, let folderURL = panel.url else { return }
+        let vm = viewModel
+        Task.detached(priority: .userInitiated) {
+            var usedNames = Set<String>()
+            for (index, email) in selected.enumerated() {
+                let safeSubject = (email.headers["Subject"] ?? "(no-subject)")
+                    .replacingOccurrences(of: "[^A-Za-z0-9 ]", with: "_", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespaces)
+                    .prefix(60)
+                var filename = "\(index + 1)_\(safeSubject).eml"
+                var counter = 1
+                while usedNames.contains(filename) {
+                    filename = "\(index + 1)_\(safeSubject)_\(counter).eml"
+                    counter += 1
+                }
+                usedNames.insert(filename)
+                let eml = vm.exportEmailAsEML(email)
+                try? FileUtils.writeData(Data(eml.utf8), to: folderURL.appendingPathComponent(filename).path)
+            }
+            let totalExported = selected.count
+            await MainActor.run {
+                ForensicManager.shared.logAction("Export Selection", detail: "Exported \(totalExported) selected emails as EML")
+            }
+        }
+        #endif
+    }
+
+    private func exportSelectedAsIndividualPDFs() {
+        let selected = modelVM.allEmails.filter { selectedEmailIDs.contains($0.id) }
+        guard !selected.isEmpty else { return }
+        #if os(macOS)
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.message = "Export \(selected.count) email(s) as individual PDFs"
+        panel.prompt = "Export PDFs"
+        guard panel.runModal() == .OK, let folderURL = panel.url else { return }
+        appState.exportProgressValue = 0
+        appState.exportProgressMessage = "Exporting \(selected.count) PDFs..."
+        appState.showExportProgress = true
+        Task.detached(priority: .userInitiated) {
+            let result = ExportManager.exportIndividualPDFs(emails: selected, to: folderURL) { progress in
+                Task { @MainActor in
+                    appState.exportProgressValue = progress
+                }
+            }
+            await MainActor.run {
+                appState.showExportProgress = false
+                ForensicManager.shared.logAction("Individual PDF Export", detail: "\(result.succeeded) exported, \(result.failed) failed")
+            }
+        }
+        #endif
+    }
+
     private func exportFilteredEmailsAsEML() {
         #if os(macOS)
         let panel = NSOpenPanel()
@@ -2136,7 +2360,9 @@ private func handleMultipleFiles(_ urls: [URL]) {
         let totalCount = allEmails.count
         Task.detached(priority: .userInitiated) {
             func csvEscape(_ s: String) -> String {
-                let sanitized = s
+                var v = s
+                if let first = v.first, "=+@-\t\r".contains(first) { v = "'" + v }
+                let sanitized = v
                     .replacingOccurrences(of: "\"", with: "\"\"")
                     .replacingOccurrences(of: "\r\n", with: " ")
                     .replacingOccurrences(of: "\n", with: " ")
@@ -2272,8 +2498,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
 
     private func exportVCard() {
         let emails = modelVM.filteredEmails.isEmpty ? modelVM.allEmails : modelVM.filteredEmails
-        let vcards = ExportManager.exportContacts(from: emails)
-        guard !vcards.isEmpty else {
+        guard let vcardData = ExportManager.exportContacts(from: emails) else {
             viewModel.statusMessage = "No contacts found to export."
             viewModel.statusColor = .orange
             return
@@ -2281,13 +2506,14 @@ private func handleMultipleFiles(_ urls: [URL]) {
         #if os(macOS)
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "contacts.vcf"
+        panel.allowedContentTypes = [.vCard]
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
         #else
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("contacts.vcf")
         #endif
         do {
-            try vcards.write(to: url, atomically: true, encoding: .utf8)
+            try vcardData.write(to: url, options: .atomic)
             viewModel.statusMessage = "Exported contacts as vCard."
             viewModel.statusColor = .green
             #if os(iOS)
@@ -2416,6 +2642,46 @@ private func handleMultipleFiles(_ urls: [URL]) {
             iOSShareFile(at: folderURL)
         }
         #endif
+    }
+
+    private func exportPortableHTML() {
+        let emails = modelVM.filteredEmails
+        guard !emails.isEmpty else {
+            viewModel.statusMessage = "No emails to export."
+            viewModel.statusColor = .orange
+            return
+        }
+        #if os(macOS)
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.message = "Select a folder for the portable HTML export"
+        panel.prompt = "Export"
+        guard panel.runModal() == .OK, let baseURL = panel.url else { return }
+        #else
+        let baseURL = FileManager.default.temporaryDirectory
+        #endif
+        let folderURL = baseURL.appendingPathComponent("mailin_html_export")
+        let isPro = storeManager.isPremium
+        let emailsToExport = isPro ? emails : Array(emails.prefix(Self.freeExportLimit))
+        do {
+            try ExportManager.exportPortableHTML(emails: emailsToExport, to: folderURL)
+            let countNote = (!isPro && emails.count > Self.freeExportLimit)
+                ? " (\(Self.freeExportLimit) of \(emails.count) — upgrade for unlimited)"
+                : ""
+            viewModel.statusMessage = "Exported \(emailsToExport.count) emails as portable HTML\(countNote). Open index.html in any browser."
+            viewModel.statusColor = .green
+            #if os(macOS)
+            NSWorkspace.shared.selectFile(folderURL.appendingPathComponent("index.html").path, inFileViewerRootedAtPath: folderURL.path)
+            #endif
+            #if os(iOS)
+            iOSShareFile(at: folderURL.appendingPathComponent("index.html"))
+            #endif
+        } catch {
+            viewModel.statusMessage = "HTML export failed: \(error.localizedDescription)"
+            viewModel.statusColor = .red
+        }
     }
 
     private func exportReviewState() {
@@ -2677,6 +2943,12 @@ private func handleMultipleFiles(_ urls: [URL]) {
             }
             predictiveEngine.buildVectors(from: restored.emails)
         }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            if WhatsNewView.shouldShow() {
+                appState.showWhatsNew = true
+            }
+        }
     }
 
     private func handleDisappear() {
@@ -2687,21 +2959,35 @@ private func handleMultipleFiles(_ urls: [URL]) {
     }
 
     private func handleDataCleared() {
+        let heldEmails = modelVM.allEmails.filter { CustodianManager.shared.isUnderLegalHold($0.id) }
+
         selectedEmailIDs.removeAll()
         modelVM.resetFilters()
-        modelVM.allEmails = []
-        modelVM.filteredEmails = []
-        modelVM.isParsed = false
-        modelVM.showParsedList = false
-        modelVM.emailCount = 0
+
+        if heldEmails.isEmpty {
+            modelVM.allEmails = []
+            modelVM.filteredEmails = []
+            modelVM.isParsed = false
+            modelVM.showParsedList = false
+            modelVM.emailCount = 0
+        } else {
+            modelVM.allEmails = heldEmails
+            modelVM.filteredEmails = heldEmails
+            modelVM.emailCount = heldEmails.count
+            ForensicManager.shared.logAction(
+                "Data Clear — Legal Hold Enforced",
+                detail: "\(heldEmails.count) email(s) preserved under legal hold"
+            )
+        }
+
         modelVM.replyCountPerSender = [:]
         modelVM.priorityScores = [:]
         viewModel.clearParsedData()
         EmailSearchIndex.shared.clear()
         EmailSearchIndex.shared.deleteDiskCache()
         SpotlightIndexer.shared.removeAllIndexedEmails()
-        appState.hasParsedEmails = false
-        appState.hasFilteredEmails = false
+        appState.hasParsedEmails = !heldEmails.isEmpty
+        appState.hasFilteredEmails = !heldEmails.isEmpty
     }
 
     // MARK: - Menu Trigger Handlers
@@ -2830,39 +3116,6 @@ private func handleMultipleFiles(_ urls: [URL]) {
         .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
     }
 
-    // MARK: - SharePlay Banner
-    private var sharePlayBanner: some View {
-        HStack(spacing: Spacing.xSmall) {
-            Image(systemName: "shareplay")
-                .foregroundColor(.white)
-                .font(.footnote)
-            Text("SharePlay active")
-                .font(Typography.caption1)
-                .fontWeight(.semibold)
-                .foregroundColor(.white)
-            Text("\(sharePlayManager.participantCount) participant\(sharePlayManager.participantCount == 1 ? "" : "s")")
-                .font(Typography.caption2)
-                .foregroundColor(.white.opacity(0.8))
-            Button {
-                sharePlayManager.endSession()
-            } label: {
-                Text("End")
-                    .font(Typography.caption1)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.green)
-                    .padding(.horizontal, Spacing.xSmall)
-                    .padding(.vertical, 3)
-                    .background(.white)
-                    .cornerRadius(CornerRadius.small)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, Spacing.small)
-        .padding(.vertical, Spacing.xSmall)
-        .background(Color.green.opacity(0.85))
-        .cornerRadius(CornerRadius.medium)
-        .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
-    }
 }
 
 // MARK: - Advanced Feature Sheets Modifier
@@ -2908,6 +3161,7 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
     @ObservedObject var custodianManager: CustodianManager
     @ObservedObject var reviewBatchManager: ReviewBatchManager
     @Binding var selectedClusterFilter: String?
+    @Binding var selectedEmailIDs: Set<UUID>
     var exportVCard: () -> Void
     var exportICS: () -> Void
     var exportHashManifest: () -> Void
@@ -2958,6 +3212,15 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
             .onChange(of: appState.triggerExportHashManifest) { _, val in
                 if val { appState.triggerExportHashManifest = false; exportHashManifest() }
             }
+            .onChange(of: appState.triggerExportHeadersCSV) { _, val in
+                if val {
+                    appState.triggerExportHeadersCSV = false
+                    let csv = ExportManager.exportHeadersOnlyCSV(from: currentEmails)
+                    #if os(macOS)
+                    _ = PlatformFileSaver.saveText(csv, suggestedName: "headers_export.csv")
+                    #endif
+                }
+            }
             .onChange(of: appState.triggerBatchPrint) { _, val in
                 if val { appState.triggerBatchPrint = false; batchPrintFiltered() }
             }
@@ -3006,7 +3269,7 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
                     .frame(minWidth: 500, minHeight: 450)
                     #endif
             }
-            .modifier(V7SheetsModifier(appState: appState, emails: currentEmails, senderEmail: senderEmail))
+            .modifier(V7SheetsModifier(appState: appState, emails: currentEmails, senderEmail: senderEmail, selectedEmailIDs: $selectedEmailIDs, modelVM: modelVM))
     }
 }
 
@@ -3015,6 +3278,8 @@ struct V7SheetsModifier: ViewModifier {
     @Bindable var appState: AppStateManager
     var emails: [MBOXParser.RawEmail]
     var senderEmail: String
+    @Binding var selectedEmailIDs: Set<UUID>
+    @ObservedObject var modelVM: ParsedEmailListViewModel
 
     func body(content: Content) -> some View {
         content
@@ -3028,9 +3293,21 @@ struct V7SheetsModifier: ViewModifier {
             .sheet(isPresented: $appState.showBatchOperations) {
                 BatchOperationsView(
                     emails: emails,
-                    selectedIDs: .constant(Set<UUID>()),
-                    onTagApplied: { _, _ in },
-                    onExportRequested: { _, _ in }
+                    selectedIDs: $selectedEmailIDs,
+                    onTagApplied: { tag, ids in
+                        for id in ids {
+                            if tag.isEmpty {
+                                modelVM.userTags[id] = nil
+                            } else {
+                                var tags = modelVM.userTags[id] ?? []
+                                tags.insert(tag)
+                                modelVM.userTags[id] = tags
+                            }
+                        }
+                    },
+                    onExportRequested: { emailsToExport, format in
+                        appState.triggerExport = true
+                    }
                 )
                 .resizableSheet()
                 #if os(macOS)
@@ -3157,13 +3434,18 @@ struct V9SheetsModifier: ViewModifier {
                 CommunicationPatternsView(emails: currentEmails, senderEmail: senderEmail)
                     .resizableSheet()
             }
-            .modifier(V9UtilitySheetsModifier(appState: appState))
+            .modifier(V9UtilitySheetsModifier(appState: appState, modelVM: modelVM))
     }
 }
 
 struct V9UtilitySheetsModifier: ViewModifier {
     @Bindable var appState: AppStateManager
+    @ObservedObject var modelVM: ParsedEmailListViewModel
     @EnvironmentObject private var storeManager: StoreManager
+
+    private var currentEmails: [MBOXParser.RawEmail] {
+        modelVM.filteredEmails.isEmpty ? modelVM.allEmails : modelVM.filteredEmails
+    }
 
     func body(content: Content) -> some View {
         content
@@ -3180,6 +3462,24 @@ struct V9UtilitySheetsModifier: ViewModifier {
             }
             .sheet(isPresented: $appState.showKeyboardShortcuts) {
                 KeyboardShortcutOverlayView()
+                    .resizableSheet()
+            }
+            .sheet(isPresented: $appState.showWhatsNew) {
+                WhatsNewView()
+                    .resizableSheet()
+            }
+            .sheet(isPresented: $appState.showAllAttachmentsGallery) {
+                AllAttachmentsGalleryView(emails: currentEmails)
+                    .resizableSheet()
+            }
+            .sheet(isPresented: $appState.showIOCExtractor) {
+                IOCExtractorView(emails: currentEmails)
+                    .resizableSheet()
+            }
+            .sheet(isPresented: $appState.showGuidedSearch) {
+                GuidedSearchView(searchText: $modelVM.searchText, isPresented: $appState.showGuidedSearch, onSearch: {
+                    modelVM.applyFilters()
+                })
                     .resizableSheet()
             }
     }
@@ -3227,8 +3527,32 @@ struct V9UtilitySheetsModifier: ViewModifier {
             if storeManager.requireProfessional() { appState.showGDPRReport = true }
         case "chainOfCustody":
             if storeManager.requireProfessional() { appState.showChainOfCustody = true }
+        case "forensicMode":
+            ForensicManager.shared.isEnabled.toggle()
+        case "custodianManager":
+            if storeManager.requireProfessional() { appState.showCustodianPanel = true }
+        case "reviewBatches":
+            if storeManager.requireProfessional() { appState.showReviewBatches = true }
+        case "investigationReport":
+            if storeManager.requireProfessional() { appState.showInvestigationReport = true }
+        case "exportFiltered":
+            appState.triggerExport = true
+        case "exportVCard":
+            appState.triggerExportVCard = true
+        case "exportICS":
+            appState.triggerExportICS = true
+        case "exportMSG":
+            appState.triggerExportMSG = true
+        case "exportPST":
+            appState.triggerExportPST = true
+        case "exportRelativity":
+            appState.triggerExportRelativity = true
         case "workspaces": appState.showWorkspaceManager = true
         case "toggleSidebar": appState.toggleSidebar()
+        case "allAttachments": appState.showAllAttachmentsGallery = true
+        case "iocExtractor":
+            if storeManager.requireProfessional() { appState.showIOCExtractor = true }
+        case "guidedSearch": appState.showGuidedSearch = true
         default: break
         }
     }

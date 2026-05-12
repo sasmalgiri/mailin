@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import ImageIO
 #if os(macOS)
 import AppKit
 #else
@@ -10,7 +11,7 @@ struct ExportManager {
 
     // MARK: - vCard Export (6D)
 
-    static func exportContacts(from emails: [MBOXParser.RawEmail]) -> String {
+    static func exportContacts(from emails: [MBOXParser.RawEmail]) -> Data? {
         var contacts: [String: (name: String, email: String)] = [:]
 
         for email in emails {
@@ -26,6 +27,8 @@ struct ExportManager {
             }
         }
 
+        guard !contacts.isEmpty else { return nil }
+
         var vcards = ""
         for (_, contact) in contacts.sorted(by: { $0.key < $1.key }) {
             vcards += "BEGIN:VCARD\r\n"
@@ -40,7 +43,18 @@ struct ExportManager {
             vcards += "EMAIL;TYPE=INTERNET:\(contact.email)\r\n"
             vcards += "END:VCARD\r\n"
         }
-        return vcards
+        return vcards.data(using: .utf8)
+    }
+
+    static func exportContactsToFile(from emails: [MBOXParser.RawEmail]) -> URL? {
+        guard let data = exportContacts(from: emails) else { return nil }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("contacts_\(UUID().uuidString).vcf")
+        do {
+            try data.write(to: url, options: .atomic)
+            return url
+        } catch {
+            return nil
+        }
     }
 
     // MARK: - ICS Calendar Export (6E)
@@ -81,22 +95,80 @@ struct ExportManager {
     static func exportAsTIFF(email: MBOXParser.RawEmail) -> Data? {
         #if os(macOS)
         let text = formatEmailForPrint(email)
-        let attributed = NSAttributedString(string: text, attributes: [
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineBreakMode = .byWordWrapping
+        let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular),
-            .foregroundColor: NSColor.textColor
-        ])
+            .foregroundColor: NSColor.black,
+            .paragraphStyle: paragraphStyle
+        ]
+        let attributed = NSAttributedString(string: text, attributes: attrs)
 
-        let size = NSSize(width: 612, height: 792)
-        let image = NSImage(size: size)
-        image.lockFocus()
-        NSColor.white.setFill()
-        NSRect(origin: .zero, size: size).fill()
-        let rect = NSRect(x: 36, y: 36, width: size.width - 72, height: size.height - 72)
-        attributed.draw(in: rect)
-        image.unlockFocus()
+        let pageWidth: CGFloat = 612
+        let pageHeight: CGFloat = 792
+        let margin: CGFloat = 36
+        let contentWidth = pageWidth - margin * 2
+        let contentHeight = pageHeight - margin * 2
 
-        guard let tiffData = image.tiffRepresentation else { return nil }
-        return tiffData
+        let textBounds = attributed.boundingRect(
+            with: NSSize(width: contentWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading]
+        )
+        let totalTextHeight = ceil(textBounds.height)
+        let pageCount = max(1, Int(ceil(totalTextHeight / contentHeight)))
+
+        var imageReps: [NSBitmapImageRep] = []
+
+        for page in 0..<pageCount {
+            guard let rep = NSBitmapImageRep(
+                bitmapDataPlanes: nil,
+                pixelsWide: Int(pageWidth * 2),
+                pixelsHigh: Int(pageHeight * 2),
+                bitsPerSample: 8,
+                samplesPerPixel: 4,
+                hasAlpha: true,
+                isPlanar: false,
+                colorSpaceName: .calibratedRGB,
+                bytesPerRow: 0,
+                bitsPerPixel: 0
+            ) else { continue }
+            rep.size = NSSize(width: pageWidth, height: pageHeight)
+
+            NSGraphicsContext.saveGraphicsState()
+            guard let context = NSGraphicsContext(bitmapImageRep: rep) else {
+                NSGraphicsContext.restoreGraphicsState()
+                continue
+            }
+            NSGraphicsContext.current = context
+
+            let cgCtx = context.cgContext
+            cgCtx.translateBy(x: 0, y: pageHeight)
+            cgCtx.scaleBy(x: 1, y: -1)
+
+            cgCtx.setFillColor(NSColor.white.cgColor)
+            cgCtx.fill(CGRect(origin: .zero, size: CGSize(width: pageWidth, height: pageHeight)))
+
+            cgCtx.saveGState()
+            cgCtx.clip(to: CGRect(x: margin, y: margin, width: contentWidth, height: contentHeight))
+
+            let yOffset = CGFloat(page) * contentHeight
+            let drawRect = NSRect(x: margin, y: margin - yOffset, width: contentWidth, height: totalTextHeight)
+            attributed.draw(with: drawRect, options: [.usesLineFragmentOrigin, .usesFontLeading])
+
+            cgCtx.restoreGState()
+            NSGraphicsContext.restoreGraphicsState()
+            imageReps.append(rep)
+        }
+
+        guard !imageReps.isEmpty else { return nil }
+        let mutableData = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(mutableData, "public.tiff" as CFString, imageReps.count, nil) else { return nil }
+        for rep in imageReps {
+            guard let cgImage = rep.cgImage else { continue }
+            CGImageDestinationAddImage(dest, cgImage, [kCGImagePropertyTIFFCompression: 5] as CFDictionary)
+        }
+        guard CGImageDestinationFinalize(dest) else { return nil }
+        return mutableData as Data
         #else
         let text = formatEmailForPrint(email)
         let size = CGSize(width: 612, height: 792)
@@ -184,15 +256,19 @@ struct ExportManager {
     }
 
     private static func csvEscape(_ value: String) -> String {
-        if value.contains(",") || value.contains("\"") || value.contains("\n") || value.contains("\r") {
-            let escaped = value
+        var v = value
+        if let first = v.first, "=+@-\t\r".contains(first) {
+            v = "'" + v
+        }
+        if v.contains(",") || v.contains("\"") || v.contains("\n") || v.contains("\r") {
+            let escaped = v
                 .replacingOccurrences(of: "\"", with: "\"\"")
                 .replacingOccurrences(of: "\r\n", with: " ")
                 .replacingOccurrences(of: "\r", with: " ")
                 .replacingOccurrences(of: "\n", with: " ")
             return "\"\(escaped)\""
         }
-        return value
+        return v
     }
 
     // MARK: - Batch Print (6G)
@@ -446,6 +522,136 @@ struct ExportManager {
         }
     }
 
+    // MARK: - Portable HTML Export
+
+    static func exportPortableHTML(emails: [MBOXParser.RawEmail], to folder: URL) throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+        struct EmailEntry: Encodable {
+            let id: String
+            let date: String
+            let from: String
+            let to: String
+            let cc: String
+            let subject: String
+            let preview: String
+            let body: String
+        }
+
+        let entries = emails.map { email -> EmailEntry in
+            let plainBody = email.plainBody.isEmpty
+                ? email.htmlBody.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+                : email.plainBody
+            let preview = String(plainBody.prefix(120)).replacingOccurrences(of: "\n", with: " ")
+            return EmailEntry(
+                id: email.id.uuidString,
+                date: email.headers["Date"] ?? email.timestamp,
+                from: email.headers["From"] ?? "",
+                to: email.headers["To"] ?? "",
+                cc: email.headers["Cc"] ?? "",
+                subject: email.headers["Subject"] ?? "(No Subject)",
+                preview: preview,
+                body: email.htmlBody.isEmpty ? plainBody : email.htmlBody
+            )
+        }
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let jsonData = try encoder.encode(entries)
+        guard let jsonString = String(data: jsonData, encoding: .utf8) else {
+            throw NSError(domain: "ExportManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to encode email data as JSON."])
+        }
+
+        let html = portableHTMLTemplate(emailJSON: jsonString, emailCount: emails.count)
+        let indexURL = folder.appendingPathComponent("index.html")
+        try html.write(to: indexURL, atomically: true, encoding: .utf8)
+    }
+
+    private static func portableHTMLTemplate(emailJSON: String, emailCount: Int) -> String {
+        return """
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>mailin Export (\(emailCount) emails)</title>
+        <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:#f5f5f7;color:#1d1d1f;display:flex;flex-direction:column;height:100vh}
+        header{background:#fff;border-bottom:1px solid #d2d2d7;padding:12px 20px;display:flex;align-items:center;gap:16px;flex-shrink:0}
+        header h1{font-size:18px;font-weight:600;white-space:nowrap}
+        #search{flex:1;max-width:420px;padding:8px 12px;border:1px solid #d2d2d7;border-radius:8px;font-size:14px;outline:none}
+        #search:focus{border-color:#0071e3;box-shadow:0 0 0 3px rgba(0,113,227,.15)}
+        #count{font-size:13px;color:#86868b;white-space:nowrap}
+        .main{display:flex;flex:1;overflow:hidden}
+        .list{width:380px;min-width:260px;overflow-y:auto;border-right:1px solid #d2d2d7;background:#fff;flex-shrink:0}
+        .item{padding:12px 16px;border-bottom:1px solid #f0f0f0;cursor:pointer;transition:background .15s}
+        .item:hover{background:#f0f0f5}
+        .item.active{background:#e8f0fe;border-left:3px solid #0071e3;padding-left:13px}
+        .item .subject{font-weight:600;font-size:14px;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .item .meta{font-size:12px;color:#86868b;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .item .preview{font-size:12px;color:#6e6e73;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .detail{flex:1;overflow-y:auto;padding:24px 32px;background:#fff}
+        .detail-empty{display:flex;align-items:center;justify-content:center;color:#86868b;font-size:15px;height:100%}
+        .detail h2{font-size:20px;margin-bottom:12px}
+        .detail .hdr{font-size:13px;color:#6e6e73;margin-bottom:4px}
+        .detail .hdr b{color:#1d1d1f}
+        .detail hr{border:none;border-top:1px solid #e5e5ea;margin:16px 0}
+        .detail .body{font-size:14px;line-height:1.6;word-wrap:break-word;overflow-wrap:break-word}
+        .detail .body img{max-width:100%}
+        .no-results{padding:32px;text-align:center;color:#86868b;font-size:14px}
+        </style>
+        </head>
+        <body>
+        <header>
+        <h1>mailin Export</h1>
+        <input type="text" id="search" placeholder="Search emails by subject, sender, or content..." autocomplete="off">
+        <span id="count"></span>
+        </header>
+        <div class="main">
+        <div class="list" id="list"></div>
+        <div class="detail" id="detail"><div class="detail-empty">Select an email to view</div></div>
+        </div>
+        <script>
+        var DATA=\(emailJSON);
+        var listEl=document.getElementById("list"),detailEl=document.getElementById("detail"),searchEl=document.getElementById("search"),countEl=document.getElementById("count");
+        var filtered=DATA.slice(),activeId=null;
+        function esc(s){var d=document.createElement("div");d.textContent=s;return d.innerHTML}
+        function render(){
+            listEl.innerHTML="";
+            if(filtered.length===0){listEl.innerHTML='<div class="no-results">No emails match your search.</div>';countEl.textContent="0 / "+DATA.length;return}
+            countEl.textContent=filtered.length===DATA.length?DATA.length+" emails":filtered.length+" / "+DATA.length;
+            filtered.forEach(function(e){
+                var d=document.createElement("div");d.className="item"+(e.id===activeId?" active":"");
+                d.innerHTML='<div class="subject">'+esc(e.subject)+'</div><div class="meta">'+esc(e.from)+' &mdash; '+esc(e.date)+'</div><div class="preview">'+esc(e.preview)+'</div>';
+                d.onclick=function(){activeId=e.id;showDetail(e);render()};
+                listEl.appendChild(d)
+            })
+        }
+        function sanitizeHTML(s){return s.replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi,"").replace(/<iframe[^>]*>[\\s\\S]*?<\\/iframe>/gi,"").replace(/<embed[^>]*>/gi,"").replace(/<object[^>]*>[\\s\\S]*?<\\/object>/gi,"").replace(/<form[^>]*>[\\s\\S]*?<\\/form>/gi,"").replace(/\\son\\w+\\s*=/gi," data-removed=")}
+        function showDetail(e){
+            var isHTML=e.body.indexOf("<")!==-1&&e.body.indexOf(">")!==-1;
+            var bodyContent=isHTML?sanitizeHTML(e.body):'<pre style="white-space:pre-wrap;font-family:inherit">'+esc(e.body)+'</pre>';
+            detailEl.innerHTML='<h2>'+esc(e.subject)+'</h2>'
+                +'<div class="hdr"><b>From:</b> '+esc(e.from)+'</div>'
+                +'<div class="hdr"><b>To:</b> '+esc(e.to)+'</div>'
+                +(e.cc?'<div class="hdr"><b>Cc:</b> '+esc(e.cc)+'</div>':'')
+                +'<div class="hdr"><b>Date:</b> '+esc(e.date)+'</div>'
+                +'<hr><div class="body">'+bodyContent+'</div>'
+        }
+        searchEl.addEventListener("input",function(){
+            var q=searchEl.value.toLowerCase();
+            if(!q){filtered=DATA.slice()}else{filtered=DATA.filter(function(e){return e.subject.toLowerCase().indexOf(q)!==-1||e.from.toLowerCase().indexOf(q)!==-1||e.body.toLowerCase().indexOf(q)!==-1})}
+            render()
+        });
+        render();
+        if(DATA.length>0){activeId=DATA[0].id;showDetail(DATA[0]);render()}
+        </script>
+        </body>
+        </html>
+        """
+    }
+
     // MARK: - Helpers
 
     private static func formatEmailForPrint(_ email: MBOXParser.RawEmail) -> String {
@@ -461,6 +667,158 @@ struct ExportManager {
         text += "\n"
         text += email.plainBody.isEmpty ? email.htmlBody.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression) : email.plainBody
         return text
+    }
+
+    // MARK: - Per-Email PDF Export
+
+    static func exportIndividualPDFs(
+        emails: [MBOXParser.RawEmail],
+        to folder: URL,
+        onProgress: ((Double) -> Void)? = nil
+    ) -> (succeeded: Int, failed: Int) {
+        var succeeded = 0
+        var failed = 0
+        let total = Double(emails.count)
+        var usedNames = Set<String>()
+
+        for (index, email) in emails.enumerated() {
+            let rawSubject = email.headers["Subject"] ?? "(No Subject)"
+            let safeSubject = rawSubject
+                .replacingOccurrences(of: "[^A-Za-z0-9 ]", with: "_", options: .regularExpression)
+                .trimmingCharacters(in: .whitespaces)
+                .prefix(50)
+            var filename = "\(index + 1)_\(safeSubject).pdf"
+            var counter = 1
+            while usedNames.contains(filename) {
+                filename = "\(index + 1)_\(safeSubject)_\(counter).pdf"
+                counter += 1
+            }
+            usedNames.insert(filename)
+
+            let pdfData = generateSinglePDF(email: email)
+            let fileURL = folder.appendingPathComponent(filename)
+            do {
+                try pdfData.write(to: fileURL, options: .atomic)
+                succeeded += 1
+            } catch {
+                failed += 1
+            }
+            onProgress?((Double(index + 1)) / total)
+        }
+        return (succeeded, failed)
+    }
+
+    private static func generateSinglePDF(email: MBOXParser.RawEmail) -> Data {
+        #if os(macOS)
+        let pageWidth: CGFloat = 612
+        let pageHeight: CGFloat = 792
+        let margin: CGFloat = 50
+        let contentWidth = pageWidth - margin * 2
+
+        let mutableData = NSMutableData()
+        var mediaBox = CGRect(x: 0, y: 0, width: pageWidth, height: pageHeight)
+        guard let context = CGContext(consumer: CGDataConsumer(data: mutableData)!, mediaBox: &mediaBox, nil) else {
+            return Data()
+        }
+
+        let headerText = "From: \(email.headers["From"] ?? "")\nTo: \(email.headers["To"] ?? "")\nDate: \(email.headers["Date"] ?? "")\nSubject: \(email.headers["Subject"] ?? "")\n"
+        let body = email.plainBody.isEmpty ? email.htmlBody.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression) : email.plainBody
+
+        let fullText = headerText + "\n" + body
+        let attributed = NSAttributedString(string: fullText, attributes: [
+            .font: NSFont.systemFont(ofSize: 10),
+            .foregroundColor: NSColor.black
+        ])
+
+        let framesetter = CTFramesetterCreateWithAttributedString(attributed)
+        var textRange = CFRange(location: 0, length: 0)
+        let totalLength = attributed.length
+
+        while textRange.location < totalLength {
+            context.beginPage(mediaBox: &mediaBox)
+            context.textMatrix = .identity
+            context.translateBy(x: 0, y: pageHeight)
+            context.scaleBy(x: 1, y: -1)
+
+            let framePath = CGPath(rect: CGRect(x: margin, y: margin, width: contentWidth, height: pageHeight - margin * 2), transform: nil)
+            let ctFrame = CTFramesetterCreateFrame(framesetter, textRange, framePath, nil)
+
+            context.saveGState()
+            context.translateBy(x: 0, y: pageHeight)
+            context.scaleBy(x: 1, y: -1)
+            CTFrameDraw(ctFrame, context)
+            context.restoreGState()
+
+            let visibleRange = CTFrameGetVisibleStringRange(ctFrame)
+            textRange.location += visibleRange.length
+            if visibleRange.length == 0 { break }
+
+            context.endPage()
+        }
+
+        context.closePDF()
+        return mutableData as Data
+        #else
+        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 612, height: 792))
+        return renderer.pdfData { ctx in
+            ctx.beginPage()
+            let body = email.plainBody.isEmpty ? email.htmlBody : email.plainBody
+            let text = "From: \(email.headers["From"] ?? "")\nTo: \(email.headers["To"] ?? "")\nSubject: \(email.headers["Subject"] ?? "")\n\n\(body)"
+            let paragraphStyle = NSMutableParagraphStyle()
+            paragraphStyle.lineBreakMode = .byWordWrapping
+            (text as NSString).draw(in: CGRect(x: 50, y: 50, width: 512, height: 692), withAttributes: [
+                .font: UIFont.systemFont(ofSize: 10),
+                .paragraphStyle: paragraphStyle
+            ])
+        }
+        #endif
+    }
+
+    // MARK: - Privilege Log Generation
+
+    static func generatePrivilegeLog(
+        emails: [MBOXParser.RawEmail],
+        batesPrefix: String = "PRIV",
+        privilegeBasis: [UUID: String] = [:]
+    ) -> String {
+        var csv = "Bates Start,Bates End,Date,From,To,Cc,Subject,Privilege Basis,Document Type\n"
+
+        for (index, email) in emails.enumerated() {
+            let batesNum = String(format: "%@-%06d", batesPrefix, index + 1)
+            let date = email.headers["Date"] ?? ""
+            let from = escapeCSV(email.headers["From"] ?? "")
+            let to = escapeCSV(email.headers["To"] ?? "")
+            let cc = escapeCSV(email.headers["Cc"] ?? "")
+            let subject = escapeCSV(email.headers["Subject"] ?? "")
+            let basis = escapeCSV(privilegeBasis[email.id] ?? "Attorney-Client Communication")
+            let docType = email.attachments.isEmpty ? "Email" : "Email with Attachments"
+            csv += "\(batesNum),\(batesNum),\"\(date)\",\"\(from)\",\"\(to)\",\"\(cc)\",\"\(subject)\",\"\(basis)\",\(docType)\n"
+        }
+        return csv
+    }
+
+    // MARK: - Header-Only CSV Export
+
+    static func exportHeadersOnlyCSV(
+        from emails: [MBOXParser.RawEmail],
+        fields: [String] = ["Date", "From", "To", "Subject", "Cc", "Return-Path", "Received-SPF", "DKIM-Signature", "X-Originating-IP", "Message-ID"]
+    ) -> String {
+        var csv = fields.map { escapeCSV($0) }.joined(separator: ",") + "\n"
+        for email in emails {
+            let row = fields.map { field -> String in
+                escapeCSV(email.headers[field] ?? "")
+            }
+            csv += row.joined(separator: ",") + "\n"
+        }
+        return csv
+    }
+
+    private static func escapeCSV(_ text: String) -> String {
+        let escaped = text.replacingOccurrences(of: "\"", with: "\"\"")
+        if escaped.contains(",") || escaped.contains("\"") || escaped.contains("\n") {
+            return "\"\(escaped)\""
+        }
+        return escaped
     }
 
     private static func parseEmailAddress(_ raw: String) -> (name: String, email: String) {

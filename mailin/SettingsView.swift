@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import TipKit
 
 struct SettingsView: View {
     @EnvironmentObject var storeManager: StoreManager
@@ -69,23 +70,25 @@ struct SettingsView: View {
                     Label("Forensic", systemImage: "shield.checkered")
                 }
 
-            collaborationSettings
-                .tabItem {
-                    Label("Review Sharing", systemImage: "person.2.fill")
-                }
-
             iCloudSyncSettings
                 .tabItem {
-                    Label("iCloud", systemImage: "icloud")
+                    Label("Sync", systemImage: "icloud")
                 }
+
+            collaborationSettings
+                .tabItem {
+                    Label("Collaboration", systemImage: "person.2")
+                }
+
+            helpAndTipsSettings
+                .tabItem {
+                    Label("Help", systemImage: "questionmark.circle")
+                }
+
         }
         #if os(macOS)
         .frame(minWidth: 400, idealWidth: 540, minHeight: 380, idealHeight: 520)
         #endif
-        .sheet(isPresented: $storeManager.showPaywall) {
-            PaywallView()
-                .environmentObject(storeManager)
-        }
     }
     
     // MARK: - Profile / Persona Settings
@@ -94,7 +97,7 @@ struct SettingsView: View {
             Section {
                 ForEach(PersonaManager.Persona.allCases, id: \.rawValue) { persona in
                     Button {
-                        personaManager.selectedPersona = persona
+                        personaManager.switchPersona(to: persona)
                     } label: {
                         HStack(spacing: Spacing.small) {
                             Image(systemName: persona.icon)
@@ -285,7 +288,7 @@ struct SettingsView: View {
                 Text("Purchase")
                     .font(.headline)
             } footer: {
-                Text("Buy once for lifetime access, or subscribe monthly/yearly. Cancel anytime.")
+                Text("Buy once, own forever. No subscriptions required.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -444,12 +447,148 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .padding()
     }
-    
+
+    // MARK: - Help & Tips Settings
+    @State private var showWhatsNewFromSettings = false
+    @State private var tipsReset = false
+
+    private var helpAndTipsSettings: some View {
+        Form {
+            Section {
+                VStack(alignment: .leading, spacing: Spacing.medium) {
+                    helpCard(icon: "1.circle.fill", title: "Import an Archive", description: "Use File > Open (⌘O) or drag-and-drop an .mbox, .eml, .msg, or .pst file into the window.", color: .blue)
+                    helpCard(icon: "2.circle.fill", title: "Browse & Filter", description: "Use the filter bar to narrow results by tag, date, sender, or attachment type. Toggle AI and Pro for more filters.", color: .purple)
+                    helpCard(icon: "3.circle.fill", title: "Analyze & Export", description: "Click any email to view details. Use the Analysis and Export menus for advanced tools.", color: .green)
+                }
+            } header: {
+                Label("Quick Start", systemImage: "play.circle")
+                    .font(.headline)
+            }
+
+            Section {
+                helpRow(icon: "brain", title: "AI Button", description: "Enables AI-powered tags: sentiment, priority, phishing detection, and email classification.", color: .purple)
+                helpRow(icon: "gearshape", title: "Pro Button", description: "Shows forensic, legal, and evidence features: Bates numbering, legal hold, chain of custody.", color: .orange)
+                helpRow(icon: "tag", title: "Tag Pills", description: "Click any tag on an email to see all applicable tags. Set manual tags to override AI suggestions.", color: .teal)
+                helpRow(icon: "line.3.horizontal.decrease.circle", title: "Filter Chips", description: "Add filter chips from the + menu. Active chips narrow the visible email list. Click × to remove.", color: .blue)
+                helpRow(icon: "magnifyingglass", title: "Search Syntax", description: "Use AND, OR, NOT for boolean search. Wrap regex in /slashes/. Use \"word1\" NEAR/5 \"word2\" for proximity.", color: .green)
+            } header: {
+                Label("Feature Guide", systemImage: "lightbulb")
+                    .font(.headline)
+            }
+
+            Section {
+                HStack {
+                    Label("Keyboard Shortcuts", systemImage: "keyboard")
+                    Spacer()
+                    Text("⌘⇧/")
+                        .font(Typography.monoSmall)
+                        .foregroundColor(AppColors.secondary)
+                }
+                .help("Press ⌘⇧/ to see all keyboard shortcuts")
+
+                HStack {
+                    Label("Command Palette", systemImage: "terminal")
+                    Spacer()
+                    Text("⌘⇧P")
+                        .font(Typography.monoSmall)
+                        .foregroundColor(AppColors.secondary)
+                }
+                .help("Press ⌘⇧P to open the command palette for quick access to all features")
+
+                HStack {
+                    Label("Guided Search", systemImage: "text.magnifyingglass")
+                    Spacer()
+                    Text("Help > Search Help")
+                        .font(Typography.caption1)
+                        .foregroundColor(AppColors.secondary)
+                }
+            } header: {
+                Label("Shortcuts", systemImage: "bolt")
+                    .font(.headline)
+            }
+
+            Section {
+                Button("Show What's New") {
+                    showWhatsNewFromSettings = true
+                }
+
+                Button("Reset All Tips") {
+                    try? Tips.resetDatastore()
+                    tipsReset = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { tipsReset = false }
+                }
+
+                if tipsReset {
+                    Label("Tips reset — they will appear again as you use the app.", systemImage: "checkmark.circle")
+                        .font(Typography.caption1)
+                        .foregroundColor(.green)
+                }
+            } header: {
+                Label("Tips & Updates", systemImage: "sparkles")
+                    .font(.headline)
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+        .sheet(isPresented: $showWhatsNewFromSettings) {
+            WhatsNewView()
+        }
+    }
+
+    private func helpCard(icon: String, title: String, description: String, color: Color) -> some View {
+        HStack(alignment: .top, spacing: Spacing.small) {
+            Image(systemName: icon)
+                .font(.system(size: 20))
+                .foregroundColor(color)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(Typography.callout)
+                    .fontWeight(.semibold)
+                Text(description)
+                    .font(Typography.caption1)
+                    .foregroundColor(AppColors.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func helpRow(icon: String, title: String, description: String, color: Color) -> some View {
+        HStack(spacing: Spacing.small) {
+            Image(systemName: icon)
+                .font(.system(size: 14))
+                .foregroundColor(.white)
+                .frame(width: 26, height: 26)
+                .background(color)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(Typography.callout)
+                    .fontWeight(.medium)
+                Text(description)
+                    .font(Typography.caption1)
+                    .foregroundColor(AppColors.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
     // MARK: - Forensic Settings
     private var forensicSettings: some View {
         Form {
             Section {
-                Toggle("Enable Forensic Mode", isOn: $forensicManager.isEnabled)
+                Toggle("Enable Forensic Mode", isOn: Binding(
+                    get: { forensicManager.isEnabled },
+                    set: { newValue in
+                        if newValue {
+                            if storeManager.requireProfessional() {
+                                forensicManager.isEnabled = true
+                            }
+                        } else {
+                            forensicManager.isEnabled = false
+                        }
+                    }
+                ))
                     .help("Activates evidence integrity features: hash verification, audit logging, evidence tagging, and disables cloud AI")
                     .accessibilityLabel("Forensic mode")
 

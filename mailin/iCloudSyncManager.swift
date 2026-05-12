@@ -348,9 +348,15 @@ class iCloudSyncManager: ObservableObject {
         let forensic = ForensicManager.shared
         var errors: [String] = []
 
-        store.set(forensic.caseNumber, forKey: "sync_caseNumber")
-        store.set(forensic.examinerName, forKey: "sync_examinerName")
-        store.set(forensic.organization, forKey: "sync_organization")
+        if !forensic.caseNumber.isEmpty {
+            store.set(forensic.caseNumber, forKey: "sync_caseNumber")
+        }
+        if !forensic.examinerName.isEmpty {
+            store.set(forensic.examinerName, forKey: "sync_examinerName")
+        }
+        if !forensic.organization.isEmpty {
+            store.set(forensic.organization, forKey: "sync_organization")
+        }
 
         let synced = store.synchronize()
         if !synced {

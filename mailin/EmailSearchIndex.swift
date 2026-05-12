@@ -265,7 +265,8 @@ final class EmailSearchIndex {
                         guard let email = emailMap[id] else { continue }
                         let tf = Double(termDocFreqs[matchedTerm]?[id] ?? 1)
                         let dl = Double(docLengths[id] ?? 1)
-                        let bm25 = idf * (tf * (bm25K1 + 1)) / (tf + bm25K1 * (1 - bm25B + bm25B * dl / avgDocLength))
+                        let safeAvgDocLength = avgDocLength > 0 ? avgDocLength : 1.0
+                        let bm25 = idf * (tf * (bm25K1 + 1)) / (tf + bm25K1 * (1 - bm25B + bm25B * dl / safeAvgDocLength))
 
                         // Field-weighted boost: subject/from/to matches are more important
                         var fieldBoost = 1.0
@@ -316,7 +317,8 @@ final class EmailSearchIndex {
 
         guard let embedding = NLEmbedding.sentenceEmbedding(for: .english),
               let queryVector = embedding.vector(for: query) else {
-            return []
+            let terms = query.lowercased().split(separator: " ").map(String.init)
+            return search(terms: terms, limit: limit)
         }
 
         return queue.sync {
@@ -797,7 +799,9 @@ final class EmailSearchIndex {
             normB += b[i] * b[i]
         }
         let denom = sqrt(normA) * sqrt(normB)
-        return denom > 0 ? dot / denom : 0
+        guard denom > 0, !denom.isNaN else { return 0 }
+        let result = dot / denom
+        return result.isNaN ? 0 : result
     }
 
     private func extractAttachmentText(for email: MBOXParser.RawEmail) -> String {

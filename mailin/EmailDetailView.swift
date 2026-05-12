@@ -2,6 +2,7 @@ import SwiftUI
 import CryptoKit
 import PDFKit
 import ImageIO
+import Translation
 
 #if os(macOS)
 import AppKit
@@ -21,12 +22,15 @@ struct EmailDetailView: View {
     @ObservedObject private var forensicManager = ForensicManager.shared
     @ObservedObject private var personaManager = PersonaManager.shared
     @AppStorage("showInlineImages") private var showInlineImages = true
+    @AppStorage("showAdvancedFeatures") private var showAdvancedFeatures = false
     @State private var showCleanView = true
     @State private var safeHTML: String = ""
     @State private var isHTMLReady = false
     @State private var showForensicHeaders = false
     @State private var annotationText: String = ""
     @State private var showSpoofIndicators = false
+    @State private var showHexViewer = false
+    @State private var newTagText = ""
 
     @State private var htmlMinHeight: CGFloat = 600
     @State private var exportError: String?
@@ -43,6 +47,9 @@ struct EmailDetailView: View {
     @State private var replyText = ""
     @State private var isGeneratingReply = false
     @State private var selectedReplyTone: Int = 0
+
+    // Translation
+    @State private var showTranslation = false
 
     private var currentIndex: Int? {
         allEmails.firstIndex(where: { $0.id == email.id })
@@ -79,11 +86,11 @@ struct EmailDetailView: View {
                 VStack(alignment: .leading, spacing: Spacing.medium) {
                     subjectView
                     riskScoreBadge
-                    if forensicManager.isEnabled || personaManager.selectedPersona == .legal {
+                    if showAdvancedFeatures && (forensicManager.isEnabled || personaManager.selectedPersona == .legal) {
                         evidenceTagBar
                     }
                     headerBlock
-                    if forensicManager.isEnabled || personaManager.config.showTechnicalHeaders {
+                    if showAdvancedFeatures && (forensicManager.isEnabled || personaManager.config.showTechnicalHeaders) {
                         forensicHeaderSection
                     }
                     Divider()
@@ -91,7 +98,11 @@ struct EmailDetailView: View {
                     emailBodyView
                     htmlBodyView
                     rtfBodyView
+                    userTagsSection
                     attachmentsSection
+                    if showAdvancedFeatures {
+                        hexViewerSection
+                    }
                     exportButtons
                     Spacer(minLength: Spacing.medium)
                 }
@@ -173,13 +184,24 @@ struct EmailDetailView: View {
 
             Spacer()
 
+            Button {
+                NotificationCenter.default.post(name: .togglePinEmail, object: email.id)
+            } label: {
+                Image(systemName: "pin.fill")
+                    .foregroundColor(AppColors.warning)
+                    .imageScale(.large)
+            }
+            .buttonStyle(.plain)
+            .help("Pin/unpin this email")
+            .accessibilityLabel("Pin email")
+
             #if canImport(FoundationModels)
             if #available(macOS 26, iOS 26, *) {
                 if FoundationModelEngine.isAvailable {
                     Button {
                         showReplySheet = true
                     } label: {
-                        Image(systemName: "arrowshape.turn.up.left.fill")
+                        Image(systemName: "sparkles")
                             .foregroundColor(AppColors.primary)
                             .imageScale(.large)
                     }
@@ -189,6 +211,21 @@ struct EmailDetailView: View {
                 }
             }
             #endif
+
+            Button {
+                showTranslation = true
+            } label: {
+                Image(systemName: "translate")
+                    .foregroundColor(AppColors.secondary)
+                    .imageScale(.large)
+            }
+            .buttonStyle(.plain)
+            .help("Translate email body")
+            .accessibilityLabel("Translate email")
+            .translationPresentation(
+                isPresented: $showTranslation,
+                text: !email.plainBody.isEmpty ? email.plainBody : email.htmlBody.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+            )
 
             Button {
                 printEmail()
@@ -246,18 +283,30 @@ struct EmailDetailView: View {
         .padding(.bottom, Spacing.xSmall)
     }
 
+    @ViewBuilder
     private var emailBodyView: some View {
-        Group {
-            Label("Plain Text", systemImage: "doc.text")
-                .font(Typography.headline)
-            ScrollView {
-                Text(highlightedBody(emailBody))
-                    .font(Typography.monoBody)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(Spacing.xSmall)
+        let trimmedBody = emailBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedBody.isEmpty {
+            Group {
+                Label("Plain Text", systemImage: "doc.text")
+                    .font(Typography.headline)
+                ScrollView {
+                    Text(highlightedBody(emailBody))
+                        .font(Typography.monoBody)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(Spacing.xSmall)
+                }
+                .frame(minHeight: 500, maxHeight: 800)
+                .emailBoxStyle()
             }
-            .frame(minHeight: 500, maxHeight: 800)
-            .emailBoxStyle()
+        } else if email.htmlBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            EmptyStateView(
+                icon: "doc.text",
+                title: "No Email Body",
+                message: "This email has no text or HTML content to display."
+            )
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, Spacing.large)
         }
     }
     @ViewBuilder
@@ -315,6 +364,56 @@ struct EmailDetailView: View {
                     .emailBoxStyle()
             }
             .padding(.top, Spacing.medium)
+        }
+    }
+
+    // MARK: - Custom Tags & Annotations
+
+    private var userTagsSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.xSmall) {
+            Divider()
+            Label("Tags & Notes", systemImage: "tag")
+                .font(Typography.headline)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(Array(email.tags), id: \.self) { tag in
+                        Text(tag)
+                            .font(.caption)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.accentColor.opacity(0.15))
+                            .cornerRadius(6)
+                    }
+                    HStack(spacing: 4) {
+                        TextField("Add tag...", text: $newTagText)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 120)
+                            .onSubmit {
+                                let tag = newTagText.trimmingCharacters(in: .whitespaces)
+                                if !tag.isEmpty {
+                                    NotificationCenter.default.post(name: .addTagToEmail, object: (email.id, tag))
+                                    newTagText = ""
+                                }
+                            }
+                    }
+                }
+            }
+        }
+        .padding(.top, Spacing.small)
+    }
+
+    // MARK: - Hex Viewer
+
+    @ViewBuilder
+    private var hexViewerSection: some View {
+        Divider()
+        DisclosureGroup(isExpanded: $showHexViewer) {
+            HexViewerView(rawSource: email.rawSource.isEmpty ? email.plainBody : email.rawSource)
+                .frame(minHeight: 200, maxHeight: 400)
+        } label: {
+            Label("Hex Viewer", systemImage: "rectangle.and.text.magnifyingglass")
+                .font(Typography.headline)
         }
     }
 
@@ -437,7 +536,7 @@ struct EmailDetailView: View {
                 Label(storeManager.isProfessional ? "Bates-Stamped PDF" : "Bates-Stamped PDF (Pro)", systemImage: "number.square")
             }
         case .forensicReport:
-            Button { if storeManager.requirePremium() { exportForensicReport() } } label: {
+            Button { if storeManager.requireProfessional() { exportForensicReport() } } label: {
                 Label("Forensic Report", systemImage: "shield.checkered")
             }
         case .redacted:
@@ -1338,7 +1437,9 @@ struct EmailDetailView: View {
 
         let csvHeaders = "Subject,From,To,Date,Body\n"
         func csvEscape(_ s: String) -> String {
-            let sanitized = s
+            var v = s
+            if let first = v.first, "=+@-\t\r".contains(first) { v = "'" + v }
+            let sanitized = v
                 .replacingOccurrences(of: "\"", with: "\"\"")
                 .replacingOccurrences(of: "\r\n", with: " ")
                 .replacingOccurrences(of: "\n", with: " ")
@@ -1454,7 +1555,7 @@ struct EmailDetailView: View {
                 let textRect = pageRect.insetBy(dx: 36, dy: 36)
                 attrString.draw(in: textRect)
             }
-            try pdfData.write(to: url)
+            try pdfData.write(to: url, options: .atomic)
             iOSShareFile(at: url)
         } catch {
             exportError = "Failed to export PDF: \(error.localizedDescription)"

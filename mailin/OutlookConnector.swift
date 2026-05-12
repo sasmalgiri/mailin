@@ -6,6 +6,15 @@ import os.log
 
 private let outlookLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "mailin", category: "OutlookConnector")
 
+private final class OutlookOnceFlag: @unchecked Sendable {
+    private var _done = false
+    private let lock = NSLock()
+    var done: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _done }
+        set { lock.lock(); defer { lock.unlock() }; _done = newValue }
+    }
+}
+
 // MARK: - OAuth Configuration
 
 /// Register an app in Azure AD (Entra ID) and paste the Application (client) ID here.
@@ -143,10 +152,13 @@ final class OutlookConnector: ObservableObject {
         defer { isLoading = false }
 
         let callbackURL = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, Error>) in
+            let flag = OutlookOnceFlag()
             let session = ASWebAuthenticationSession(
                 url: authURL,
                 callbackURLScheme: msRedirectURI.components(separatedBy: "://").first
             ) { url, error in
+                guard !flag.done else { return }
+                flag.done = true
                 if let error {
                     continuation.resume(throwing: OutlookError.authenticationFailed(error.localizedDescription))
                 } else if let url {
@@ -481,9 +493,6 @@ final class OutlookConnector: ObservableObject {
             )
         }
 
-        let bodyLines = plainBody.components(separatedBy: .newlines)
-        let joinedHeaders = headers.map { "\($0.key): \($0.value)" }.joined(separator: "\n")
-        let fullText = joinedHeaders + "\n\n" + bodyLines.joined(separator: "\n")
         let domains = MBOXParser.extractDomains(from: headers)
 
         let threadID = msg.conversationId
@@ -493,12 +502,10 @@ final class OutlookConnector: ObservableObject {
         return MBOXParser.RawEmail(
             id: UUID(),
             headers: headers,
-            bodyLines: bodyLines,
             rawSource: rawSource,
             messageType: "received",
             attachments: attachments,
             timestamp: timestamp,
-            fullText: fullText,
             domains: domains,
             plainBody: plainBody,
             htmlBody: htmlBody,

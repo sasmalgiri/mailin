@@ -39,6 +39,7 @@ struct RedactionEngine {
         case phoneNumber = "Phone Number"
         case emailAddress = "Email Address"
         case dateOfBirth = "Date of Birth"
+        case person = "Person"
         case custom = "Custom"
 
         var id: String { rawValue }
@@ -50,9 +51,55 @@ struct RedactionEngine {
             case .phoneNumber: return "phone"
             case .emailAddress: return "envelope"
             case .dateOfBirth: return "calendar"
+            case .person: return "person.crop.circle.badge.minus"
             case .custom: return "gearshape"
             }
         }
+    }
+
+    // MARK: - Redact by Person
+
+    static func personRedactionRules(name: String, email: String? = nil, replacement: String = "[REDACTED PERSON]") -> [RedactionRule] {
+        var rules: [RedactionRule] = []
+        let nameTrimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !nameTrimmed.isEmpty else { return rules }
+
+        let escaped = NSRegularExpression.escapedPattern(for: nameTrimmed)
+        rules.append(RedactionRule(type: .person, pattern: "\\b\(escaped)\\b", replacement: replacement, isEnabled: true))
+
+        let parts = nameTrimmed.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+        if parts.count >= 2 {
+            let firstName = NSRegularExpression.escapedPattern(for: parts[0])
+            guard let lastPart = parts.last else { return rules }
+            let lastName = NSRegularExpression.escapedPattern(for: lastPart)
+            rules.append(RedactionRule(type: .person, pattern: "\\b\(firstName)\\s+\(lastName)\\b", replacement: replacement, isEnabled: true))
+            rules.append(RedactionRule(type: .person, pattern: "\\b\(lastName),\\s*\(firstName)\\b", replacement: replacement, isEnabled: true))
+            if parts[0].count > 1 {
+                let initial = String(parts[0].prefix(1))
+                rules.append(RedactionRule(type: .person, pattern: "\\b\(initial)\\.?\\s+\(lastName)\\b", replacement: replacement, isEnabled: true))
+            }
+        }
+
+        if let emailAddr = email, !emailAddr.isEmpty {
+            let escapedEmail = NSRegularExpression.escapedPattern(for: emailAddr)
+            rules.append(RedactionRule(type: .person, pattern: escapedEmail, replacement: "[REDACTED EMAIL]", isEnabled: true))
+            if let localPart = emailAddr.split(separator: "@").first {
+                let escapedLocal = NSRegularExpression.escapedPattern(for: String(localPart))
+                rules.append(RedactionRule(type: .person, pattern: "\\b\(escapedLocal)\\b", replacement: "[REDACTED]", isEnabled: true))
+            }
+        }
+
+        return rules
+    }
+
+    static func redactPerson(
+        emails: [MBOXParser.RawEmail],
+        name: String,
+        email: String? = nil,
+        replacement: String = "[REDACTED PERSON]"
+    ) -> [RedactedEmail] {
+        let rules = personRedactionRules(name: name, email: email, replacement: replacement)
+        return redactBatch(emails: emails, rules: rules)
     }
 
     // MARK: - Redacted Output
@@ -69,19 +116,28 @@ struct RedactionEngine {
     // MARK: - Default Rules
 
     static let defaultRules: [RedactionRule] = [
+        // SSN with dashes, spaces, or no separator
         RedactionRule(
             type: .ssn,
-            pattern: #"\d{3}-\d{2}-\d{4}"#,
+            pattern: #"\b(?!000|666|9\d{2})\d{3}[-\s]?(?!00)\d{2}[-\s]?(?!0000)\d{4}\b"#,
             replacement: "[REDACTED-SSN]"
         ),
+        // Credit card: 13-19 digits with optional separators (Visa, MC, Amex, Discover)
         RedactionRule(
             type: .creditCard,
-            pattern: #"\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}"#,
+            pattern: #"\b(?:4\d{3}|5[1-5]\d{2}|3[47]\d{2}|6(?:011|5\d{2}))[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{1,7}\b"#,
             replacement: "[REDACTED-CC]"
         ),
+        // US/Canada phone: (xxx) xxx-xxxx, xxx-xxx-xxxx, +1 xxx xxx xxxx
         RedactionRule(
             type: .phoneNumber,
-            pattern: #"(\+?\d{1,3}[\s-]?)?\(?\d{3}\)?[\s-]?\d{3}[\s-]?\d{4}"#,
+            pattern: #"(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b"#,
+            replacement: "[REDACTED-PHONE]"
+        ),
+        // International phone: +xx xx xxxx xxxx (UK, EU, India, etc.)
+        RedactionRule(
+            type: .phoneNumber,
+            pattern: #"\+\d{1,3}[\s.-]\d{2,4}[\s.-]\d{3,4}[\s.-]?\d{3,6}"#,
             replacement: "[REDACTED-PHONE]"
         ),
         RedactionRule(
@@ -89,11 +145,13 @@ struct RedactionEngine {
             pattern: #"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"#,
             replacement: "[REDACTED-EMAIL]"
         ),
+        // DOB with numeric date (validates month 1-12, day 1-31)
         RedactionRule(
             type: .dateOfBirth,
-            pattern: #"(?i)(?:DOB|date\s*of\s*birth|born|birthday)\s*:?\s*\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4}"#,
+            pattern: #"(?i)(?:DOB|date\s*of\s*birth|born|birthday)\s*:?\s*(?:0?[1-9]|1[0-2])[/\-\.](?:0?[1-9]|[12]\d|3[01])[/\-\.]\d{2,4}"#,
             replacement: "[REDACTED-DOB]"
         ),
+        // DOB with month name
         RedactionRule(
             type: .dateOfBirth,
             pattern: #"(?i)(?:DOB|date\s*of\s*birth|born|birthday)\s*:?\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s*\d{2,4}"#,
@@ -158,7 +216,9 @@ struct RedactionEngine {
         var csv = "EmailID,Field,OriginalSnippet,RedactionType,Count\n"
 
         func csvEscape(_ s: String) -> String {
-            "\"" + s.replacingOccurrences(of: "\"", with: "\"\"")
+            var v = s
+            if let first = v.first, "=+@-\t\r".contains(first) { v = "'" + v }
+            return "\"" + v.replacingOccurrences(of: "\"", with: "\"\"")
                 .replacingOccurrences(of: "\n", with: " ")
                 .replacingOccurrences(of: "\r", with: "") + "\""
         }

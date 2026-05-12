@@ -13,11 +13,15 @@ import SwiftUI
 class PersonaManager: ObservableObject {
     static let shared = PersonaManager()
 
-    @AppStorage("selectedPersona") var selectedPersona: Persona = .general {
-        didSet { applyPersonaDefaults() }
-    }
+    @AppStorage("selectedPersona") var selectedPersona: Persona = .general
 
     @Published var hasCompletedPersonaSelection = UserDefaults.standard.bool(forKey: "hasCompletedPersonaSelection")
+
+    func switchPersona(to persona: Persona) {
+        guard persona != selectedPersona else { return }
+        selectedPersona = persona
+        applyPersonaDefaults()
+    }
 
     func completePersonaSelection() {
         hasCompletedPersonaSelection = true
@@ -76,6 +80,19 @@ class PersonaManager: ObservableObject {
             case .journalist: return .purple
             case .personal: return .blue
             case .general: return .mint
+            }
+        }
+
+        var color: Color { accentColor }
+
+        var shortLabel: String {
+            switch self {
+            case .forensic: return "Forensic"
+            case .legal: return "Legal"
+            case .itAdmin: return "IT Admin"
+            case .journalist: return "Journalist"
+            case .personal: return "Personal"
+            case .general: return "General"
             }
         }
     }
@@ -304,8 +321,29 @@ class PersonaManager: ObservableObject {
         UserDefaults.standard.set(cfg.defaultDensity, forKey: "emailListDensity")
         UserDefaults.standard.set(cfg.showEmailPreviews, forKey: "showEmailPreviews")
         UserDefaults.standard.set(cfg.enableAIByDefault, forKey: "enableAIFeatures")
-        if cfg.showForensicByDefault {
-            UserDefaults.standard.set(true, forKey: "forensicModeEnabled")
+        UserDefaults.standard.set(cfg.showForensicByDefault, forKey: "forensicModeEnabled")
+
+        switch selectedPersona {
+        case .forensic:
+            UserDefaults.standard.set(true, forKey: "showAdvancedFeatures")
+            UserDefaults.standard.set(true, forKey: "aiTagsApplied")
+        case .legal:
+            UserDefaults.standard.set(true, forKey: "showAdvancedFeatures")
+            UserDefaults.standard.set(false, forKey: "aiTagsApplied")
+        case .itAdmin:
+            UserDefaults.standard.set(false, forKey: "showAdvancedFeatures")
+            UserDefaults.standard.set(true, forKey: "aiTagsApplied")
+        case .journalist:
+            UserDefaults.standard.set(false, forKey: "showAdvancedFeatures")
+            UserDefaults.standard.set(true, forKey: "aiTagsApplied")
+        case .personal:
+            UserDefaults.standard.set(false, forKey: "showAdvancedFeatures")
+            UserDefaults.standard.set(false, forKey: "aiTagsApplied")
+        case .general:
+            UserDefaults.standard.set(false, forKey: "showAdvancedFeatures")
+            UserDefaults.standard.set(false, forKey: "aiTagsApplied")
         }
+
+        UserDefaults.standard.set(false, forKey: "personaFiltersInitialized")
     }
 }

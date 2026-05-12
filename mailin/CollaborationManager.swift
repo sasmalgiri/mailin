@@ -106,9 +106,9 @@ class CollaborationManager: ObservableObject {
 
         let fd = open(folder.path, O_EVTONLY)
         guard fd >= 0 else { return }
-        monitoredFD = fd
 
         let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: .write, queue: .main)
+        monitoredFD = fd
         source.setEventHandler { [weak self] in
             self?.scanForReviewFiles()
         }

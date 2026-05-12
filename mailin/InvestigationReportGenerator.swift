@@ -583,12 +583,12 @@ struct InvestigationReportGenerator {
             drawText("  No sentiment data available.", attrs: bodyAttrs, state: state)
         } else {
             let avgScore = sentimentResults.map(\.score).reduce(0, +) / Double(sentimentResults.count)
-            let positiveCount = sentimentResults.filter { $0.score > 0.3 }.count
-            let negativeCount = sentimentResults.filter { $0.score < -0.3 }.count
+            let positiveCount = sentimentResults.filter { $0.score > 0.4 }.count
+            let negativeCount = sentimentResults.filter { $0.score < -0.4 }.count
             let neutralCount = sentimentResults.count - positiveCount - negativeCount
             let overallLabel: String
-            if avgScore > 0.3 { overallLabel = "Positive" }
-            else if avgScore < -0.3 { overallLabel = "Negative" }
+            if avgScore > 0.4 { overallLabel = "Positive" }
+            else if avgScore < -0.4 { overallLabel = "Negative" }
             else { overallLabel = "Neutral" }
 
             drawText("  Overall: \(overallLabel) (avg score: \(String(format: "%.3f", avgScore)))", attrs: bodyAttrs, state: state)
@@ -600,7 +600,7 @@ struct InvestigationReportGenerator {
             let barHeight: CGFloat = 12
             let barWidth: CGFloat = contentWidth - 40
             let barX = margin + 20
-            let total = Double(sentimentResults.count)
+            let total = max(1.0, Double(sentimentResults.count))
 
             // Background
             let bgRect = CGRect(x: barX, y: barY - barHeight, width: barWidth, height: barHeight)

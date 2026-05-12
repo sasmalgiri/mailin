@@ -46,6 +46,12 @@ class LegalComplianceManager: ObservableObject {
         defaults.synchronize()
 
         KeychainHelper.delete(key: "apiKey")
+
+        let kvStore = NSUbiquitousKeyValueStore.default
+        for key in ["sync_caseNumber", "sync_examinerName", "sync_organization"] {
+            kvStore.removeObject(forKey: key)
+        }
+        kvStore.synchronize()
     }
 
     // MARK: - Data Retention
@@ -69,9 +75,9 @@ class LegalComplianceManager: ObservableObject {
 
     On-Device Processing: All email parsing, NLP analysis, search indexing, and AI features run entirely on your device. Your email data never leaves your device — period.
 
-    Data Storage: Parsed emails and settings are stored locally using Apple's standard frameworks (UserDefaults, file system). No server-side storage. Optional iCloud Sync (Professional tier) syncs only forensic metadata (tags, annotations, case info) — email content is never uploaded.
+    Data Storage: Parsed emails and settings are stored locally using Apple's standard frameworks (UserDefaults, file system). No server-side storage. If you enable iCloud Sync, review metadata (tags, annotations, case info) syncs via Apple's iCloud Drive — your email content is never uploaded.
 
-    Third-Party Services: The only external service is Apple's App Store for purchases. No advertising SDKs, no analytics frameworks, no cloud APIs.
+    Third-Party Services: Apple App Store for purchases and optionally Apple iCloud for cross-device sync of review metadata. No advertising SDKs, no analytics frameworks, no third-party cloud APIs.
 
     Data Deletion: You can delete all data at any time via Settings > Data & Privacy > Delete All Data.
 
@@ -109,7 +115,7 @@ class LegalComplianceManager: ObservableObject {
 
     11. INDEMNIFICATION: You agree to indemnify and hold harmless the developer from any claims arising from your use of the app.
 
-    12. GOVERNING LAW: These terms are governed by the laws of India.
+    12. GOVERNING LAW: These terms are governed by the laws of India. Any disputes shall be subject to the jurisdiction of Indian courts.
 
     13. CHANGES: We may update these terms. Continued use after changes constitutes acceptance.
 

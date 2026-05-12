@@ -390,8 +390,8 @@ final class SmartNotificationManager: ObservableObject {
 
         let shift = recentSentiment.average - priorSentiment.average
 
-        // Alert if sentiment dropped significantly (at least 0.3 points)
-        guard shift < -0.3 else { return [] }
+        // Alert if sentiment dropped significantly (at least 0.4 points)
+        guard shift < -0.4 else { return [] }
 
         let severity: SmartAlertSeverity
         if shift < -0.6 {

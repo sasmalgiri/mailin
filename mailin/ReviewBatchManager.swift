@@ -50,10 +50,11 @@ class ReviewBatchManager: ObservableObject {
 
     private let batchesURL = appSupportDir.appendingPathComponent("review_batches.json")
 
-    @Published var batches: [ReviewBatch] = [] { didSet { save() } }
-    @Published var currentBatchIndex: Int = 0 { didSet { save() } }
+    @Published var batches: [ReviewBatch] = [] { didSet { if _initialized { save() } } }
+    @Published var currentBatchIndex: Int = 0 { didSet { if _initialized { save() } } }
 
-    private init() { load() }
+    private var _initialized = false
+    private init() { load(); _initialized = true }
 
     private func save() {
         struct Saved: Codable { let version: Int; let batches: [ReviewBatch]; let currentIndex: Int }
@@ -72,7 +73,7 @@ class ReviewBatchManager: ObservableObject {
             let data = try Data(contentsOf: batchesURL)
             let saved = try JSONDecoder().decode(Saved.self, from: data)
             batches = saved.batches
-            currentBatchIndex = saved.currentIndex
+            currentBatchIndex = min(saved.currentIndex, max(saved.batches.count - 1, 0))
         } catch {
             batchLog.error("Failed to decode batches: \(error.localizedDescription)")
         }

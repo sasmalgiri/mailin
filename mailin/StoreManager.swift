@@ -19,30 +19,45 @@ enum PurchaseTier: Int, Comparable {
     }
 }
 
+enum BillingPeriod: String, CaseIterable {
+    case monthly = "Monthly"
+    case yearly = "Yearly"
+    case lifetime = "Lifetime"
+}
+
 @MainActor
 class StoreManager: ObservableObject {
 
-    // MARK: - Product IDs (One-Time Purchase)
+    // MARK: - Product IDs
 
-    static let personalID = "com.ecosanskriti.mailin.personal"
-    static let professionalID = "com.ecosanskriti.mailin.professional"
+    static let personalLifetimeID = "mailin_personal"
+    static let professionalLifetimeID = "Professional_Lifetime"
+    static let personalMonthlyID = "Personal_Monthly"
+    static let personalYearlyID = "Personal_Yearly"
+    static let professionalMonthlyID = "Professional_Monthly"
+    static let professionalYearlyID = "Professional_Yearly"
 
-    // MARK: - Subscription Product IDs
+    static let premiumID = personalLifetimeID
+    static let professionalID = professionalLifetimeID
+    static let personalID = personalLifetimeID
 
-    static let subPersonalMonthlyID = "com.ecosanskriti.mailin.sub.personal.monthly"
-    static let subPersonalYearlyID = "com.ecosanskriti.mailin.sub.personal.yearly"
-    static let subProfessionalMonthlyID = "com.ecosanskriti.mailin.sub.professional.monthly"
-    static let subProfessionalYearlyID = "com.ecosanskriti.mailin.sub.professional.yearly"
-
-    static let allProductIDs: Set<String> = [
-        personalID, professionalID,
-        subPersonalMonthlyID, subPersonalYearlyID,
-        subProfessionalMonthlyID, subProfessionalYearlyID
+    static let personalProductIDs: Set<String> = [
+        personalLifetimeID, personalMonthlyID, personalYearlyID
     ]
 
-    static let personalSubscriptionIDs: Set<String> = [subPersonalMonthlyID, subPersonalYearlyID]
-    static let professionalSubscriptionIDs: Set<String> = [subProfessionalMonthlyID, subProfessionalYearlyID]
-    static let allSubscriptionIDs: Set<String> = personalSubscriptionIDs.union(professionalSubscriptionIDs)
+    static let professionalProductIDs: Set<String> = [
+        professionalLifetimeID, professionalMonthlyID, professionalYearlyID
+    ]
+
+    static let subscriptionProductIDs: Set<String> = [
+        personalMonthlyID, personalYearlyID, professionalMonthlyID, professionalYearlyID
+    ]
+
+    static let lifetimeProductIDs: Set<String> = [
+        personalLifetimeID, professionalLifetimeID
+    ]
+
+    static let allProductIDs: Set<String> = personalProductIDs.union(professionalProductIDs)
 
     nonisolated static let freeEmailLimit = 200
 
@@ -51,26 +66,27 @@ class StoreManager: ObservableObject {
     enum ProFeature {
         case auditTrail
         case collaboration
-        case iCloudSync
         case chainOfCustody
         case batesNumbering
         case batchProcessing
         case prioritySupport
+        case forensicMode
     }
 
     // MARK: - Published State
 
     @Published private(set) var products: [Product] = []
-    @Published private(set) var subscriptionProducts: [Product] = []
     @Published private(set) var currentTier: PurchaseTier = .free
-    @Published private(set) var isSubscribed = false
     @Published private(set) var purchaseInProgress = false
     @Published private(set) var purchasePending = false
     @Published private(set) var productLoadError: String?
+    @Published private(set) var subscriptionExpirationDate: Date?
+    @Published private(set) var isLifetimePurchase = false
     @Published var showPaywall = false
 
     var isPremium: Bool { currentTier >= .personal }
     var isProfessional: Bool { currentTier >= .professional }
+    var isSubscribed: Bool { currentTier >= .personal }
 
     private var transactionListener: Task<Void, Error>?
 
@@ -93,20 +109,9 @@ class StoreManager: ObservableObject {
         do {
             let storeProducts = try await Product.products(for: StoreManager.allProductIDs)
 
-            products = storeProducts
-                .filter { $0.type == .nonConsumable }
-                .sorted { lhs, _ in lhs.id == StoreManager.personalID }
+            products = storeProducts.sorted { lhs, rhs in lhs.price < rhs.price }
 
-            subscriptionProducts = storeProducts
-                .filter { $0.type == .autoRenewable }
-                .sorted { lhs, rhs in
-                    let lhsIsProf = StoreManager.professionalSubscriptionIDs.contains(lhs.id)
-                    let rhsIsProf = StoreManager.professionalSubscriptionIDs.contains(rhs.id)
-                    if lhsIsProf != rhsIsProf { return !lhsIsProf }
-                    return lhs.price < rhs.price
-                }
-
-            if products.isEmpty && subscriptionProducts.isEmpty {
+            if products.isEmpty {
                 productLoadError = "No products found. Please check your App Store connection."
             }
         } catch {
@@ -151,32 +156,52 @@ class StoreManager: ObservableObject {
     // MARK: - Entitlement Check
 
     func checkEntitlements() async {
-        var lifetimeTier: PurchaseTier = .free
-        var subscriptionTier: PurchaseTier = .free
-        var subscriptionActive = false
+        var highestTier: PurchaseTier = .free
+        var hasLifetime = false
+        var latestExpiration: Date?
 
         for await result in Transaction.currentEntitlements {
             guard let transaction = try? checkVerified(result) else { continue }
             guard transaction.revocationDate == nil else { continue }
 
-            if transaction.productType == .autoRenewable {
-                guard let expiry = transaction.expirationDate, expiry > Date() else { continue }
-                subscriptionActive = true
-                if StoreManager.professionalSubscriptionIDs.contains(transaction.productID) {
-                    subscriptionTier = .professional
-                } else if StoreManager.personalSubscriptionIDs.contains(transaction.productID) && subscriptionTier < .professional {
-                    subscriptionTier = .personal
-                }
-            } else {
-                if transaction.productID == StoreManager.professionalID {
-                    lifetimeTier = .professional
-                } else if transaction.productID == StoreManager.personalID && lifetimeTier < .professional {
-                    lifetimeTier = .personal
+            let isProProduct = StoreManager.professionalProductIDs.contains(transaction.productID)
+            let isPersonalProduct = StoreManager.personalProductIDs.contains(transaction.productID)
+
+            if isProProduct {
+                highestTier = .professional
+            } else if isPersonalProduct && highestTier < .personal {
+                highestTier = .personal
+            }
+
+            if StoreManager.lifetimeProductIDs.contains(transaction.productID) {
+                hasLifetime = true
+            }
+
+            if let expirationDate = transaction.expirationDate {
+                if let current = latestExpiration {
+                    if expirationDate > current { latestExpiration = expirationDate }
+                } else {
+                    latestExpiration = expirationDate
                 }
             }
         }
-        currentTier = max(lifetimeTier, subscriptionTier)
-        isSubscribed = subscriptionActive
+
+        currentTier = highestTier
+        isLifetimePurchase = hasLifetime
+        subscriptionExpirationDate = hasLifetime ? nil : latestExpiration
+    }
+
+    // MARK: - Subscription Management
+
+    func manageSubscriptions() async {
+        #if os(iOS)
+        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
+        try? await AppStore.showManageSubscriptions(in: windowScene)
+        #else
+        if let url = URL(string: "macappstores://showManageSubscriptions") {
+            NSWorkspace.shared.open(url)
+        }
+        #endif
     }
 
     // MARK: - Feature Gating
@@ -197,25 +222,46 @@ class StoreManager: ObservableObject {
         return isProfessional
     }
 
-    // MARK: - Helpers (One-Time)
+    // MARK: - Product Helpers
 
-    var personalProduct: Product? { products.first { $0.id == StoreManager.personalID } }
-    var professionalProduct: Product? { products.first { $0.id == StoreManager.professionalID } }
+    var premiumProduct: Product? { products.first { $0.id == StoreManager.personalLifetimeID } }
+    var professionalProduct: Product? { products.first { $0.id == StoreManager.professionalLifetimeID } }
+    var personalProduct: Product? { premiumProduct }
 
-    // MARK: - Helpers (Subscriptions)
+    func personalProduct(for period: BillingPeriod) -> Product? {
+        switch period {
+        case .monthly: return products.first { $0.id == StoreManager.personalMonthlyID }
+        case .yearly: return products.first { $0.id == StoreManager.personalYearlyID }
+        case .lifetime: return products.first { $0.id == StoreManager.personalLifetimeID }
+        }
+    }
 
-    var personalMonthlyProduct: Product? { subscriptionProducts.first { $0.id == StoreManager.subPersonalMonthlyID } }
-    var personalYearlyProduct: Product? { subscriptionProducts.first { $0.id == StoreManager.subPersonalYearlyID } }
-    var professionalMonthlyProduct: Product? { subscriptionProducts.first { $0.id == StoreManager.subProfessionalMonthlyID } }
-    var professionalYearlyProduct: Product? { subscriptionProducts.first { $0.id == StoreManager.subProfessionalYearlyID } }
+    func professionalProduct(for period: BillingPeriod) -> Product? {
+        switch period {
+        case .monthly: return products.first { $0.id == StoreManager.professionalMonthlyID }
+        case .yearly: return products.first { $0.id == StoreManager.professionalYearlyID }
+        case .lifetime: return products.first { $0.id == StoreManager.professionalLifetimeID }
+        }
+    }
+
+    var personalMonthlyProduct: Product? { personalProduct(for: .monthly) }
+    var personalYearlyProduct: Product? { personalProduct(for: .yearly) }
+    var professionalMonthlyProduct: Product? { professionalProduct(for: .monthly) }
+    var professionalYearlyProduct: Product? { professionalProduct(for: .yearly) }
+
+    var subscriptionProducts: [Product] {
+        products.filter { StoreManager.subscriptionProductIDs.contains($0.id) }
+    }
 
     var personalSubscriptions: [Product] {
-        subscriptionProducts.filter { StoreManager.personalSubscriptionIDs.contains($0.id) }
+        products.filter { StoreManager.personalProductIDs.contains($0.id) && $0.id != StoreManager.personalLifetimeID }
     }
 
     var professionalSubscriptions: [Product] {
-        subscriptionProducts.filter { StoreManager.professionalSubscriptionIDs.contains($0.id) }
+        products.filter { StoreManager.professionalProductIDs.contains($0.id) && $0.id != StoreManager.professionalLifetimeID }
     }
+
+    // MARK: - Helpers
 
     private nonisolated func checkVerified<T>(_ result: VerificationResult<T>) throws -> T {
         switch result {

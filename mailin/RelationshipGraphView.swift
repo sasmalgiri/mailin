@@ -39,6 +39,8 @@ class GraphLayout {
     }
 
     func buildGraph(from emails: [MBOXParser.RawEmail], senderEmail: String) {
+        guard !senderEmail.isEmpty else { return }
+
         var contactData: [String: (name: String, count: Int, sent: Int, received: Int, lastDate: Date?, sentiment: Double, sentimentCount: Int)] = [:]
         var edgeData: [String: Int] = [:]
 
@@ -734,8 +736,8 @@ struct RelationshipGraphView: View {
     private func shortName(_ name: String) -> String {
         if name.count <= 12 { return name }
         let parts = name.split(separator: " ")
-        if parts.count >= 2 {
-            return "\(parts[0]) \(parts[1].prefix(1))."
+        if parts.count >= 2, let first = parts.first, let second = parts.dropFirst().first {
+            return "\(first) \(second.prefix(1))."
         }
         return String(name.prefix(12))
     }

@@ -196,11 +196,11 @@ private struct RuleEditorSheet: View {
     @State private var actions: [AutomationAction] = []
 
     // Condition builder state
-    @State private var selectedConditionType: String = AutomationCondition.allTypeLabels[0]
+    @State private var selectedConditionType: String = AutomationCondition.allTypeLabels.first ?? ""
     @State private var conditionValue: String = ""
 
     // Action builder state
-    @State private var selectedActionType: String = AutomationAction.allTypeLabels[0]
+    @State private var selectedActionType: String = AutomationAction.allTypeLabels.first ?? ""
     @State private var actionValue: String = ""
 
     private var isEditing: Bool { rule != nil }

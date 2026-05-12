@@ -5,6 +5,15 @@ import os.log
 
 private let imapLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "mailin", category: "IMAP")
 
+private final class IMAPOnceFlag: @unchecked Sendable {
+    private var _done = false
+    private let lock = NSLock()
+    var done: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _done }
+        set { lock.lock(); defer { lock.unlock() }; _done = newValue }
+    }
+}
+
 // MARK: - Configuration
 struct IMAPConfig: Codable, Sendable {
     let server: String
@@ -100,23 +109,28 @@ final class IMAPClient: ObservableObject {
         self.connection = conn
 
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            let flag = IMAPOnceFlag()
             conn.stateUpdateHandler = { [weak self] state in
-                Task { @MainActor in
-                    switch state {
-                    case .ready:
-                        conn.stateUpdateHandler = nil
-                        cont.resume()
-                    case .failed(let err):
-                        conn.stateUpdateHandler = nil
-                        self?.connectionState = .error(err.localizedDescription)
-                        cont.resume(throwing: IMAPError.connectionFailed(err.localizedDescription))
-                    case .waiting(let err):
-                        conn.stateUpdateHandler = nil
-                        self?.connectionState = .error(err.localizedDescription)
-                        cont.resume(throwing: IMAPError.connectionFailed("Waiting: \(err.localizedDescription)"))
-                    default:
-                        break
-                    }
+                guard !flag.done else { return }
+                switch state {
+                case .ready:
+                    flag.done = true
+                    Task { @MainActor in self?.connectionState = .connected }
+                    cont.resume()
+                case .failed(let err):
+                    flag.done = true
+                    Task { @MainActor in self?.connectionState = .error(err.localizedDescription) }
+                    cont.resume(throwing: IMAPError.connectionFailed(err.localizedDescription))
+                case .waiting(let err):
+                    flag.done = true
+                    Task { @MainActor in self?.connectionState = .error(err.localizedDescription) }
+                    cont.resume(throwing: IMAPError.connectionFailed("Waiting: \(err.localizedDescription)"))
+                case .cancelled:
+                    flag.done = true
+                    Task { @MainActor in self?.connectionState = .disconnected }
+                    cont.resume(throwing: IMAPError.connectionFailed("Connection cancelled"))
+                default:
+                    break
                 }
             }
             conn.start(queue: .global(qos: .userInitiated))
@@ -242,6 +256,77 @@ final class IMAPClient: ObservableObject {
         return emails
     }
 
+    struct IMAPSearchCriteria {
+        var from: String?
+        var to: String?
+        var subject: String?
+        var body: String?
+        var since: Date?
+        var before: Date?
+        var unseen: Bool = false
+        var flagged: Bool = false
+        var hasAttachment: Bool = false
+        var freeText: String?
+
+        func buildCommand() -> String {
+            var parts: [String] = []
+            let fmt = DateFormatter()
+            fmt.dateFormat = "dd-MMM-yyyy"
+            fmt.locale = Locale(identifier: "en_US_POSIX")
+
+            if unseen { parts.append("UNSEEN") }
+            if flagged { parts.append("FLAGGED") }
+            if let from { parts.append("FROM \"\(from.replacingOccurrences(of: "\"", with: "\\\""))\"") }
+            if let to { parts.append("TO \"\(to.replacingOccurrences(of: "\"", with: "\\\""))\"") }
+            if let subject { parts.append("SUBJECT \"\(subject.replacingOccurrences(of: "\"", with: "\\\""))\"") }
+            if let body { parts.append("BODY \"\(body.replacingOccurrences(of: "\"", with: "\\\""))\"") }
+            if let since { parts.append("SENTSINCE \(fmt.string(from: since))") }
+            if let before { parts.append("SENTBEFORE \(fmt.string(from: before))") }
+            if hasAttachment { parts.append("LARGER 1") }
+            if let text = freeText, !text.isEmpty {
+                let sanitized = text.replacingOccurrences(of: "\"", with: "\\\"")
+                parts.append("OR OR SUBJECT \"\(sanitized)\" FROM \"\(sanitized)\" BODY \"\(sanitized)\"")
+            }
+            return parts.isEmpty ? "ALL" : parts.joined(separator: " ")
+        }
+    }
+
+    func searchServerSide(criteria: IMAPSearchCriteria) async throws -> [MBOXParser.RawEmail] {
+        guard case .authenticated = connectionState else { throw IMAPError.notConnected }
+        guard currentFolder != nil else {
+            throw IMAPError.commandFailed(command: "SEARCH", response: "No folder selected")
+        }
+
+        let searchCmd = "SEARCH \(criteria.buildCommand())"
+        statusMessage = "Server-side search: \(criteria.buildCommand())..."
+        imapLog.info("IMAP SEARCH: \(searchCmd)")
+
+        let response = try await sendCommand(searchCmd)
+        let uids = parseSearchResponse(response)
+        guard !uids.isEmpty else {
+            statusMessage = "No results"
+            return []
+        }
+
+        let uidList = uids.prefix(500).map(String.init).joined(separator: ",")
+        let fetchResp = try await sendCommand("FETCH \(uidList) (FLAGS BODY[])", longRunning: true)
+        let rawMessages = extractFetchBodies(from: fetchResp)
+        var emails: [MBOXParser.RawEmail] = []
+
+        for raw in rawMessages {
+            do {
+                let email = try MBOXParser.processRawMessage(raw, senderEmail: config?.username ?? "")
+                emails.append(email)
+            } catch {
+                imapLog.warning("Failed to parse: \(error.localizedDescription)")
+            }
+        }
+
+        fetchedEmails = emails
+        statusMessage = "Found \(emails.count) messages"
+        return emails
+    }
+
     func searchMessages(query: String) async throws -> [MBOXParser.RawEmail] {
         guard case .authenticated = connectionState else { throw IMAPError.notConnected }
         guard currentFolder != nil else {
@@ -251,7 +336,6 @@ final class IMAPClient: ObservableObject {
         statusMessage = "Searching for: \(query)..."
         imapLog.info("Searching: \(query)")
 
-        // Use IMAP SEARCH with OR across common fields
         let sanitized = query.replacingOccurrences(of: "\"", with: "\\\"")
         let searchCmd = "SEARCH OR OR SUBJECT \"\(sanitized)\" FROM \"\(sanitized)\" BODY \"\(sanitized)\""
         let response = try await sendCommand(searchCmd)
@@ -303,9 +387,12 @@ final class IMAPClient: ObservableObject {
         imapLog.debug(">>> \(safeLog)")
 
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            let flag = IMAPOnceFlag()
             connection.send(
                 content: fullCommand.data(using: .utf8),
                 completion: .contentProcessed { error in
+                    guard !flag.done else { return }
+                    flag.done = true
                     if let error = error {
                         cont.resume(throwing: IMAPError.connectionFailed(error.localizedDescription))
                     } else {
@@ -348,21 +435,36 @@ final class IMAPClient: ObservableObject {
     private func readChunk() async throws -> String {
         guard let connection = connection else { throw IMAPError.notConnected }
 
-        return try await withCheckedThrowingContinuation { cont in
-            connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, _, error in
-                if let error = error {
-                    cont.resume(throwing: IMAPError.connectionFailed(error.localizedDescription))
-                    return
+        let timeoutNanos = UInt64(readTimeout * 1_000_000_000)
+        return try await withThrowingTaskGroup(of: String.self) { group in
+            group.addTask {
+                try await withCheckedThrowingContinuation { cont in
+                    let flag = IMAPOnceFlag()
+                    connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, _, error in
+                        guard !flag.done else { return }
+                        flag.done = true
+                        if let error = error {
+                            cont.resume(throwing: IMAPError.connectionFailed(error.localizedDescription))
+                            return
+                        }
+                        guard let data = data, !data.isEmpty else {
+                            cont.resume(throwing: IMAPError.unexpectedResponse("Empty response from server"))
+                            return
+                        }
+                        let text = String(data: data, encoding: .utf8)
+                            ?? String(data: data, encoding: .isoLatin1)
+                            ?? ""
+                        cont.resume(returning: text)
+                    }
                 }
-                guard let data = data, !data.isEmpty else {
-                    cont.resume(throwing: IMAPError.unexpectedResponse("Empty response from server"))
-                    return
-                }
-                let text = String(data: data, encoding: .utf8)
-                    ?? String(data: data, encoding: .isoLatin1)
-                    ?? ""
-                cont.resume(returning: text)
             }
+            group.addTask {
+                try await Task.sleep(nanoseconds: timeoutNanos)
+                throw IMAPError.timeout
+            }
+            guard let result = try await group.next() else { throw IMAPError.timeout }
+            group.cancelAll()
+            return result
         }
     }
 

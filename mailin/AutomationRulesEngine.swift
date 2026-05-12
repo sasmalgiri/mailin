@@ -221,7 +221,7 @@ final class AutomationRulesEngine: ObservableObject {
             isEnabled: true,
             conditions: [
                 .subjectContains("urgent"),
-                .sentimentBelow(-0.3)
+                .sentimentBelow(-0.4)
             ],
             actions: [
                 .markPriority("High"),

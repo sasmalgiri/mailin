@@ -78,8 +78,6 @@ struct NSFParser {
             messageType = "received"
         }
 
-        let bodyLines = body.components(separatedBy: .newlines)
-        let fullText = headers.map { "\($0.key): \($0.value)" }.joined(separator: "\n") + "\n\n" + body
         let domains = MBOXParser.extractDomains(from: headers)
 
         let htmlBody = note.items["$HtmlBody"] ?? note.items["Body_HTML"] ?? ""
@@ -87,12 +85,10 @@ struct NSFParser {
         return MBOXParser.RawEmail(
             id: UUID(),
             headers: headers,
-            bodyLines: bodyLines,
-            rawSource: fullText,
+            rawSource: "",
             messageType: messageType,
             attachments: note.attachments,
             timestamp: timestamp,
-            fullText: fullText,
             domains: domains,
             plainBody: body,
             htmlBody: htmlBody,
@@ -103,7 +99,7 @@ struct NSFParser {
             inReplyTo: headers["In-Reply-To"],
             references: nil,
             tags: note.categories,
-            anomalies: []
+            anomalies: MBOXParser.findAnomalies(headers: headers, body: body.isEmpty ? htmlBody : body, attachments: note.attachments)
         )
     }
 
@@ -196,7 +192,7 @@ struct NSFReader {
 
         let signature = readUInt16(at: 0)
         // NSF signature: 0x1A00 is most common, but some files use other variants
-        let validSignatures: Set<UInt16> = [0x001A, 0x1A00, 0x0000]
+        let validSignatures: Set<UInt16> = [0x001A, 0x1A00]
         guard validSignatures.contains(signature) || isLikelyNSF() else {
             throw NSFParser.NSFError.invalidFormat("Not a valid NSF file (signature: 0x\(String(format: "%04X", signature)))")
         }
@@ -246,7 +242,7 @@ struct NSFReader {
         let maxConsecutiveFailures = 100_000
 
         while offset < data.count - 64 && notes.count < Self.maxNotes && consecutiveFailures < maxConsecutiveFailures {
-            if let (note, nextOffset) = try? readNoteRecord(at: offset) {
+            if let (note, nextOffset) = try? readNoteRecord(at: offset), nextOffset > offset {
                 notes.append(note)
                 offset = nextOffset
                 consecutiveFailures = 0
@@ -286,7 +282,7 @@ struct NSFReader {
 
         guard offset + 8 + nameLen <= data.count else { return nil }
         let valueLenRaw = Int(readUInt32(at: offset + 4))
-        let maxValueLen = data.count - (offset + 8 + nameLen)
+        let maxValueLen = max(0, data.count - (offset + 8 + nameLen))
         let valueLen = min(valueLenRaw, maxValueLen)
         guard valueLen >= 0 && valueLen < 10_000_000 else { return nil }
 
@@ -308,6 +304,15 @@ struct NSFReader {
         var pos = offset
 
         while pos < data.count - 8 && note.items.count < 200 {
+            if let (binName, binData, binNext) = readItemBinary(at: pos),
+               binName == "$FILE" || binName.hasPrefix("$FILE_") || binName == "$AttachmentData" {
+                if let attachment = parseAttachmentItemWithData(name: binName, binaryValue: binData) {
+                    note.attachments.append(attachment)
+                }
+                pos = binNext
+                continue
+            }
+
             guard let (itemName, itemValue, nextPos) = readItem(at: pos) else { break }
 
             if itemName == "$FILE" {
@@ -324,7 +329,6 @@ struct NSFReader {
 
             pos = nextPos
 
-            // If we encounter "Form" again, we've hit the next note
             if itemName == "Form" && note.items.count > 1 {
                 break
             }
@@ -342,7 +346,7 @@ struct NSFReader {
 
         guard offset + 8 + nameLen <= data.count else { return nil }
         let valueLenRaw = Int(readUInt32(at: offset + 4))
-        let maxValueLen = data.count - (offset + 8 + nameLen)
+        let maxValueLen = max(0, data.count - (offset + 8 + nameLen))
         let valueLen = min(valueLenRaw, maxValueLen)
         guard valueLen >= 0 && valueLen < 10_000_000 else { return nil }
 
@@ -355,14 +359,124 @@ struct NSFReader {
         let value: String
         if valueLen > 0 {
             let valueData = data[valueStart..<(valueStart + valueLen)]
-            value = String(data: valueData, encoding: .utf8)
-                ?? String(data: valueData, encoding: .isoLatin1)
-                ?? ""
+            if name == "Body" || name == "$HtmlBody" || name == "Body_HTML" {
+                value = decodeBodyValue(valueData)
+            } else {
+                value = String(data: valueData, encoding: .utf8)
+                    ?? String(data: valueData, encoding: .isoLatin1)
+                    ?? ""
+            }
         } else {
             value = ""
         }
 
         return (name, value.trimmingCharacters(in: .controlCharacters), valueStart + valueLen)
+    }
+
+    private func readItemBinary(at offset: Int) -> (String, Data, Int)? {
+        guard offset + 8 <= data.count else { return nil }
+
+        let nameLen = Int(readUInt16(at: offset + 2))
+        guard nameLen > 0 && nameLen < 256 else { return nil }
+
+        guard offset + 8 + nameLen <= data.count else { return nil }
+        let valueLenRaw = Int(readUInt32(at: offset + 4))
+        let maxValueLen = max(0, data.count - (offset + 8 + nameLen))
+        let valueLen = min(valueLenRaw, maxValueLen)
+        guard valueLen >= 0 && valueLen < 50_000_000 else { return nil }
+
+        let nameStart = offset + 8
+        guard let name = readLMBCSString(at: nameStart, length: nameLen) else { return nil }
+
+        let valueStart = nameStart + nameLen
+        guard valueStart + valueLen <= data.count else { return nil }
+
+        let valueData = valueLen > 0 ? Data(data[valueStart..<(valueStart + valueLen)]) : Data()
+        return (name, valueData, valueStart + valueLen)
+    }
+
+    private func decodeBodyValue(_ valueData: Data) -> String {
+        if let text = String(data: valueData, encoding: .utf8), !text.isEmpty {
+            return text
+        }
+        if let decompressed = lzssDecompress(valueData) {
+            if let text = String(data: decompressed, encoding: .utf8) ?? String(data: decompressed, encoding: .isoLatin1) {
+                return text
+            }
+        }
+        if valueData.count >= 4 {
+            let stripped = stripCompositeHeader(valueData)
+            if let text = String(data: stripped, encoding: .utf8) ?? String(data: stripped, encoding: .isoLatin1), !text.trimmingCharacters(in: .controlCharacters).isEmpty {
+                return text
+            }
+        }
+        return String(data: valueData, encoding: .isoLatin1) ?? ""
+    }
+
+    private func stripCompositeHeader(_ data: Data) -> Data {
+        guard data.count > 8 else { return data }
+        var offset = 0
+        while offset + 4 <= data.count {
+            let sig = UInt16(data[offset]) | (UInt16(data[offset + 1]) << 8)
+            let len = UInt16(data[offset + 2]) | (UInt16(data[offset + 3]) << 8)
+            if sig == 0x0000 && len == 0x0000 { break }
+            let recordLen = 4 + Int(len)
+            if sig == 0x0005 || sig == 0x0500 {
+                let textStart = offset + 4
+                if textStart < data.count {
+                    return Data(data[textStart...])
+                }
+            }
+            offset += max(recordLen, 4)
+        }
+        return data
+    }
+
+    private func lzssDecompress(_ input: Data) -> Data? {
+        guard input.count > 4 else { return nil }
+        let expectedSize = Int(UInt32(input[0]) | (UInt32(input[1]) << 8) | (UInt32(input[2]) << 16) | (UInt32(input[3]) << 24))
+        guard expectedSize > 0 && expectedSize < 50_000_000 else { return nil }
+
+        var output = Data(capacity: expectedSize)
+        var window = [UInt8](repeating: 0x20, count: 4096)
+        var windowPos = 1
+        var inputPos = 4
+
+        while inputPos < input.count && output.count < expectedSize {
+            guard inputPos < input.count else { break }
+            let flags = input[inputPos]
+            inputPos += 1
+
+            for bit in 0..<8 {
+                guard inputPos < input.count && output.count < expectedSize else { break }
+
+                if flags & (1 << bit) != 0 {
+                    output.append(input[inputPos])
+                    window[windowPos % 4096] = input[inputPos]
+                    windowPos += 1
+                    inputPos += 1
+                } else {
+                    guard inputPos + 1 < input.count else { break }
+                    let b1 = Int(input[inputPos])
+                    let b2 = Int(input[inputPos + 1])
+                    inputPos += 2
+
+                    let offset = b1 | ((b2 & 0xF0) << 4)
+                    let length = (b2 & 0x0F) + 3
+
+                    for i in 0..<length {
+                        guard output.count < expectedSize else { break }
+                        let byte = window[(offset + i) % 4096]
+                        output.append(byte)
+                        window[windowPos % 4096] = byte
+                        windowPos += 1
+                    }
+                }
+            }
+        }
+
+        guard output.count > 0 else { return nil }
+        return output
     }
 
     // MARK: - Scan-Based Parse (Fallback)
@@ -482,31 +596,78 @@ struct NSFReader {
         let filename = value.components(separatedBy: CharacterSet(charactersIn: "/\\")).last ?? value
         guard !filename.isEmpty else { return nil }
 
-        let ext = (filename as NSString).pathExtension.lowercased()
-        let mimeType: String
-        switch ext {
-        case "pdf": mimeType = "application/pdf"
-        case "doc", "docx": mimeType = "application/msword"
-        case "xls", "xlsx": mimeType = "application/vnd.ms-excel"
-        case "ppt", "pptx": mimeType = "application/vnd.ms-powerpoint"
-        case "jpg", "jpeg": mimeType = "image/jpeg"
-        case "png": mimeType = "image/png"
-        case "gif": mimeType = "image/gif"
-        case "txt": mimeType = "text/plain"
-        case "html", "htm": mimeType = "text/html"
-        case "zip": mimeType = "application/zip"
-        default: mimeType = "application/octet-stream"
-        }
-
         return AttachmentMetadata(
             filename: filename.trimmingCharacters(in: .controlCharacters),
-            mimeType: mimeType,
+            mimeType: Self.mimeType(for: filename),
             size: 0,
             isInline: false,
             contentID: nil,
             base64: nil,
             fileURL: nil
         )
+    }
+
+    private func parseAttachmentItemWithData(name: String, binaryValue: Data) -> AttachmentMetadata? {
+        guard !binaryValue.isEmpty else { return nil }
+
+        var filename = name
+        var contentData = binaryValue
+
+        if binaryValue.count > 64 {
+            let header = binaryValue.prefix(256)
+            if let headerStr = String(data: header, encoding: .ascii) {
+                let parts = headerStr.components(separatedBy: CharacterSet(charactersIn: "\0"))
+                    .map { $0.trimmingCharacters(in: .controlCharacters) }
+                    .filter { !$0.isEmpty && $0.contains(".") }
+                if let extracted = parts.first {
+                    filename = extracted.components(separatedBy: CharacterSet(charactersIn: "/\\")).last ?? extracted
+                    if let filenameEnd = header.firstIndex(of: 0x00), filenameEnd < header.endIndex {
+                        let dataStart = header.index(after: filenameEnd)
+                        let offset = header.distance(from: header.startIndex, to: dataStart)
+                        if offset < binaryValue.count {
+                            contentData = Data(binaryValue[binaryValue.startIndex.advanced(by: offset)...])
+                        }
+                    }
+                }
+            }
+        }
+
+        let base64 = contentData.base64EncodedString()
+
+        return AttachmentMetadata(
+            filename: filename.trimmingCharacters(in: .controlCharacters),
+            mimeType: Self.mimeType(for: filename),
+            size: contentData.count,
+            isInline: false,
+            contentID: nil,
+            base64: base64,
+            fileURL: nil
+        )
+    }
+
+    private static func mimeType(for filename: String) -> String {
+        let ext = (filename as NSString).pathExtension.lowercased()
+        switch ext {
+        case "pdf": return "application/pdf"
+        case "doc", "docx": return "application/msword"
+        case "xls", "xlsx": return "application/vnd.ms-excel"
+        case "ppt", "pptx": return "application/vnd.ms-powerpoint"
+        case "jpg", "jpeg": return "image/jpeg"
+        case "png": return "image/png"
+        case "gif": return "image/gif"
+        case "txt": return "text/plain"
+        case "html", "htm": return "text/html"
+        case "zip": return "application/zip"
+        case "tiff", "tif": return "image/tiff"
+        case "bmp": return "image/bmp"
+        case "rtf": return "text/rtf"
+        case "xml": return "application/xml"
+        case "csv": return "text/csv"
+        case "mp3": return "audio/mpeg"
+        case "mp4": return "video/mp4"
+        case "wav": return "audio/wav"
+        default: return "application/octet-stream"
+        }
     }
 
     // MARK: - Binary Helpers

@@ -95,7 +95,10 @@ struct KeywordMonitor {
         return (count, ranges)
     }
 
+    private static let maxRegexPatternLength = 500
+
     private static func countRegexMatches(in text: String, pattern: String, caseSensitive: Bool) -> (count: Int, ranges: [Range<String.Index>]) {
+        guard pattern.count <= maxRegexPatternLength else { return (0, []) }
         var options: NSRegularExpression.Options = []
         if !caseSensitive { options.insert(.caseInsensitive) }
 
@@ -114,7 +117,7 @@ struct KeywordMonitor {
 
     private static func extractSnippet(from text: String, keyword: WatchedKeyword, maxLength: Int) -> String {
         if keyword.isRegex {
-            // For regex, try to find first match
+            guard keyword.keyword.count <= maxRegexPatternLength else { return String(text.prefix(maxLength)) }
             let regexOptions: NSRegularExpression.Options = keyword.caseSensitive ? [] : [.caseInsensitive]
             guard let regex = try? NSRegularExpression(pattern: keyword.keyword, options: regexOptions) else {
                 return String(text.prefix(maxLength))
@@ -265,10 +268,14 @@ struct KeywordMonitorView: View {
                 HStack(spacing: Spacing.medium) {
                     Toggle("Regex", isOn: $newKeywordIsRegex)
                         .font(Typography.caption1)
+                        #if os(macOS)
                         .toggleStyle(.checkbox)
+                        #endif
                     Toggle("Case Sensitive", isOn: $newKeywordCaseSensitive)
                         .font(Typography.caption1)
+                        #if os(macOS)
                         .toggleStyle(.checkbox)
+                        #endif
                     Spacer()
                 }
             }

@@ -54,6 +54,20 @@ public struct MIMEPart: Codable, Sendable {
         self.rawData = rawData
     }
 
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        headers = try container.decodeIfPresent([String: String].self, forKey: .headers) ?? [:]
+        body = try container.decodeIfPresent(String.self, forKey: .body) ?? ""
+        rawBody = try container.decodeIfPresent(String.self, forKey: .rawBody) ?? ""
+        mimeType = try container.decodeIfPresent(String.self, forKey: .mimeType) ?? "text/plain"
+        contentDisposition = try container.decodeIfPresent(String.self, forKey: .contentDisposition) ?? ""
+        filename = try container.decodeIfPresent(String.self, forKey: .filename)
+        transferEncoding = try container.decodeIfPresent(String.self, forKey: .transferEncoding) ?? "7bit"
+        charset = try container.decodeIfPresent(String.self, forKey: .charset) ?? "utf-8"
+        subparts = try container.decodeIfPresent([MIMEPart].self, forKey: .subparts) ?? []
+        rawData = nil
+    }
+
     // ---- Computed Properties ----
     public var isMultipart: Bool { mimeType.lowercased().hasPrefix("multipart/") }
     public var isText: Bool { mimeType.lowercased().hasPrefix("text/") }

@@ -253,7 +253,11 @@ struct AttachmentGridView: View {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("mailin_preview/\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let fileURL = tempDir.appendingPathComponent(item.attachment.filename)
+        let safeName = item.attachment.filename
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "\\", with: "_")
+            .replacingOccurrences(of: "..", with: "_")
+        let fileURL = tempDir.appendingPathComponent(safeName)
         if let base64 = item.attachment.base64,
            let data = Data(base64Encoded: base64, options: .ignoreUnknownCharacters) {
             try? data.write(to: fileURL, options: .atomic)

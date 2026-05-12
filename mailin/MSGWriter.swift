@@ -27,7 +27,7 @@ struct MSGWriter {
             guard let data = write(email: email) else { continue }
             let safeName = sanitizeFilename(email.headers["Subject"] ?? "email_\(count + 1)")
             let fileURL = folder.appendingPathComponent("\(safeName).msg")
-            try data.write(to: fileURL)
+            try data.write(to: fileURL, options: .atomic)
             count += 1
         }
         logger.info("Wrote \(count) MSG files to \(folder.path)")
@@ -304,6 +304,7 @@ struct MSGWriter {
             let sectorCount = (info.size + sectorSize - 1) / sectorSize
             for i in 0..<sectorCount {
                 let sec = info.startSector + i
+                guard sec < fat.count else { break }
                 fat[sec] = (i < sectorCount - 1) ? Int32(sec + 1) : endOfChain
             }
         }

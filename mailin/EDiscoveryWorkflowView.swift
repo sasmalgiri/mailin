@@ -733,18 +733,15 @@ struct EDiscoveryWorkflowView: View {
                 .foregroundColor(AppColors.secondary)
 
             Button {
-                ForensicManager.shared.logAction(
-                    "Legal Hold Applied",
-                    detail: "Legal hold applied to \(emails.count) emails for case \(manager.caseInfo.caseNumber)"
-                )
+                CustodianManager.shared.placeLegalHold(on: emails)
                 ForensicManager.shared.storeEmailHashes(emails)
-                showActionMessage("Legal hold applied, hashes stored")
+                showActionMessage("Legal hold applied with evidence seals — \(emails.count) emails protected")
             } label: {
                 Label("Apply Legal Hold", systemImage: "lock.shield")
             }
             .buttonStyle(PrimaryButtonStyle())
             .accessibilityLabel("Apply legal hold to all emails")
-            .accessibilityHint("Logs the hold in the forensic audit trail and stores integrity hashes")
+            .accessibilityHint("Places legal hold with cryptographic evidence seals and stores integrity hashes")
         }
     }
 
@@ -862,6 +859,26 @@ struct EDiscoveryWorkflowView: View {
                 }
                 .buttonStyle(SecondaryButtonStyle())
                 .accessibilityLabel("Export production CSV")
+
+                Button {
+                    let log = ForensicManager.shared.exportPrivilegeLog(emails: emails)
+                    if log.isEmpty {
+                        showActionMessage("No privileged emails tagged — tag emails first")
+                    } else {
+                        #if os(macOS)
+                        _ = PlatformFileSaver.saveText(log, suggestedName: "privilege_log.csv")
+                        #endif
+                        ForensicManager.shared.logAction(
+                            "E-Discovery: Privilege Log",
+                            detail: "Privilege log generated for \(emails.count) emails"
+                        )
+                        showActionMessage("Privilege log generated")
+                    }
+                } label: {
+                    Label("Privilege Log", systemImage: "doc.text.magnifyingglass")
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .accessibilityLabel("Generate privilege log")
             }
         }
     }

@@ -275,11 +275,12 @@ class SmartAutoTagger: ObservableObject {
               let date = MBOXParser.parseDate(dateStr) else { return nil }
 
         let hour = Calendar.current.component(.hour, from: date)
+        let minute = Calendar.current.component(.minute, from: date)
         if hour < 8 || hour >= 18 {
             return TagSuggestion(
                 tag: "After Hours",
                 confidence: 0.7,
-                reason: "Sent at \(hour):00 — outside typical business hours"
+                reason: "Sent at \(String(format: "%02d:%02d", hour, minute)) — outside typical business hours"
             )
         }
         return nil

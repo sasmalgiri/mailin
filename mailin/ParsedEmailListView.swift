@@ -1,4 +1,6 @@
 import SwiftUI
+import UniformTypeIdentifiers
+import TipKit
 
 struct ParsedEmailListView: View {
     @ObservedObject var model: ParsedEmailListViewModel
@@ -45,6 +47,26 @@ struct ParsedEmailListView: View {
     @State private var quickFilterAISuspicious = false
     @State private var quickFilterAINegative = false
     @State private var quickFilterAINewsletter = false
+    @State private var quickFilterTagPersonal = false
+    @State private var quickFilterTagTransactional = false
+    @State private var quickFilterTagPromotional = false
+    @State private var quickFilterTagAutomated = false
+    @State private var quickFilterTagRelevant = false
+    @State private var quickFilterTagPositive = false
+    @State private var quickFilterTagPhishing = false
+    @State private var quickFilterTagNeutral = false
+    @State private var quickFilterTagIrrelevant = false
+    @State private var quickFilterTagSuspicious = false
+    @State private var quickFilterTagMediumPriority = false
+    @State private var activeFilterTags: Set<String> = []
+    @State private var manualOverrideTags: [UUID: Set<EmailQuickTag>] = [:]
+    @State private var tagPopoverEmailID: UUID? = nil
+    @State private var showPresetSaveAlert = false
+    @State private var presetName = ""
+    @AppStorage("savedFilterPresets") private var savedPresetsData: Data = Data()
+    @AppStorage("aiTagsApplied") private var aiTagsApplied = false
+    @AppStorage("showAdvancedFeatures") private var showAdvancedFeatures = false
+    @AppStorage("personaFiltersInitialized") private var personaFiltersInitialized = false
     @State private var showAIPaywall = false
     private static let freeAIFilterLimit = 3
     @AppStorage("freeAIFilterUsageCount") private var aiFilterUsageCount: Int = 0
@@ -93,18 +115,31 @@ struct ParsedEmailListView: View {
             }
             if quickFilterAINegative {
                 let sentiment = model.sentimentScores[email.id] ?? 0
-                if sentiment >= -0.3 { return false }
+                if sentiment >= -0.4 { return false }
             }
             if quickFilterAINewsletter {
                 let cat = model.emailClassifications[email.id] ?? .unknown
                 if cat != .newsletter && cat != .promotional { return false }
             }
+            let active = activeTags(for: email)
+            let activeSet = Set(active)
+            if quickFilterTagPersonal && !activeSet.contains(.personal) { return false }
+            if quickFilterTagTransactional && !activeSet.contains(.transactional) { return false }
+            if quickFilterTagPromotional && !activeSet.contains(.promotional) { return false }
+            if quickFilterTagAutomated && !activeSet.contains(.automated) { return false }
+            if quickFilterTagRelevant && !activeSet.contains(.relevant) { return false }
+            if quickFilterTagPositive && !activeSet.contains(.positive) { return false }
+            if quickFilterTagPhishing && !activeSet.contains(.phishing) { return false }
+            if quickFilterTagNeutral && !activeSet.contains(.neutral) { return false }
+            if quickFilterTagIrrelevant && !activeSet.contains(.irrelevant) { return false }
+            if quickFilterTagSuspicious && !activeSet.contains(.suspicious) { return false }
+            if quickFilterTagMediumPriority && !activeSet.contains(.mediumPriority) { return false }
             return true
         }
     }
 
     private var quickFilteredThreads: [EmailThread] {
-        let hasQuickFilter = quickFilterSent || quickFilterReceived || quickFilterAttachments || quickFilterFlagged || quickFilterUnreviewed || quickFilterLargeEmails || quickFilterPrivileged || quickFilterHighPriority || quickFilterHasLinks || quickFilterAIImportant || quickFilterAISuspicious || quickFilterAINegative || quickFilterAINewsletter
+        let hasQuickFilter = quickFilterSent || quickFilterReceived || quickFilterAttachments || quickFilterFlagged || quickFilterUnreviewed || quickFilterLargeEmails || quickFilterPrivileged || quickFilterHighPriority || quickFilterHasLinks || quickFilterAIImportant || quickFilterAISuspicious || quickFilterAINegative || quickFilterAINewsletter || quickFilterTagPersonal || quickFilterTagTransactional || quickFilterTagPromotional || quickFilterTagAutomated || quickFilterTagRelevant || quickFilterTagPositive || quickFilterTagPhishing || quickFilterTagNeutral || quickFilterTagIrrelevant || quickFilterTagSuspicious || quickFilterTagMediumPriority
         guard hasQuickFilter else { return model.emailThreads }
         let allowedIDs = Set(quickFilteredEmails.map(\.id))
         return model.emailThreads.compactMap { thread in
@@ -323,8 +358,11 @@ struct ParsedEmailListView: View {
                     .focused($isSearchFieldFocused)
                     .accessibilityLabel(model.isNaturalLanguageMode ? "Natural language search" : "Search emails")
                     .accessibilityHint(model.isNaturalLanguageMode ? "Type a natural language query to filter emails" : "Supports operators: from:, to:, subject:, has:attachment, before:, after:")
-                    .onChange(of: model.searchText) { _, _ in
+                    .onChange(of: model.searchText) { _, newValue in
                         model.searchTextDidChange()
+                        if !newValue.isEmpty {
+                            Task { await SearchSyntaxTip.searchUsed.donate() }
+                        }
                     }
                     .onChange(of: model.isSearchFocused) { _, newValue in
                         if newValue {
@@ -425,7 +463,7 @@ struct ParsedEmailListView: View {
     }
 
     private var hasAnyQuickFilterActive: Bool {
-        quickFilterSent || quickFilterReceived || quickFilterAttachments || quickFilterFlagged || quickFilterUnreviewed || quickFilterLargeEmails || quickFilterPrivileged || quickFilterHighPriority || quickFilterHasLinks || quickFilterAIImportant || quickFilterAISuspicious || quickFilterAINegative || quickFilterAINewsletter
+        quickFilterSent || quickFilterReceived || quickFilterAttachments || quickFilterFlagged || quickFilterUnreviewed || quickFilterLargeEmails || quickFilterPrivileged || quickFilterHighPriority || quickFilterHasLinks || quickFilterAIImportant || quickFilterAISuspicious || quickFilterAINegative || quickFilterAINewsletter || quickFilterTagPersonal || quickFilterTagTransactional || quickFilterTagPromotional || quickFilterTagAutomated || quickFilterTagRelevant || quickFilterTagPositive || quickFilterTagPhishing || quickFilterTagNeutral || quickFilterTagIrrelevant || quickFilterTagSuspicious || quickFilterTagMediumPriority
     }
 
     private func clearAllQuickFilters() {
@@ -442,6 +480,18 @@ struct ParsedEmailListView: View {
         quickFilterAISuspicious = false
         quickFilterAINegative = false
         quickFilterAINewsletter = false
+        quickFilterTagPersonal = false
+        quickFilterTagTransactional = false
+        quickFilterTagPromotional = false
+        quickFilterTagAutomated = false
+        quickFilterTagRelevant = false
+        quickFilterTagPositive = false
+        quickFilterTagPhishing = false
+        quickFilterTagNeutral = false
+        quickFilterTagIrrelevant = false
+        quickFilterTagSuspicious = false
+        quickFilterTagMediumPriority = false
+        activeFilterTags.removeAll()
     }
 
     private func aiFilterBinding(for binding: Binding<Bool>) -> Binding<Bool> {
@@ -465,82 +515,415 @@ struct ParsedEmailListView: View {
         HStack(spacing: 0) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: Spacing.xSmall) {
-                    if personaManager.showQuickFilter(.sent) {
-                        QuickFilterChip(label: "Sent", icon: "arrow.up.right", isActive: Binding(
-                            get: { quickFilterSent },
-                            set: { newValue in
-                                quickFilterSent = newValue
-                                if newValue { quickFilterReceived = false }
-                            }
-                        ))
-                    }
-                    if personaManager.showQuickFilter(.received) {
-                        QuickFilterChip(label: "Received", icon: "arrow.down.left", isActive: Binding(
-                            get: { quickFilterReceived },
-                            set: { newValue in
-                                quickFilterReceived = newValue
-                                if newValue { quickFilterSent = false }
-                            }
-                        ))
-                    }
-                    if personaManager.showQuickFilter(.attachments) {
-                        QuickFilterChip(label: "Attachments", icon: "paperclip", isActive: $quickFilterAttachments)
-                    }
-                    if personaManager.showQuickFilter(.flagged) {
-                        QuickFilterChip(label: "Flagged", icon: "flag.fill", isActive: $quickFilterFlagged)
-                    }
-                    if personaManager.showQuickFilter(.unreviewed) {
-                        QuickFilterChip(label: "Unreviewed", icon: "eye.slash", isActive: $quickFilterUnreviewed)
-                    }
-                    if personaManager.showQuickFilter(.largeEmails) {
-                        QuickFilterChip(label: "Large", icon: "arrow.up.circle", isActive: $quickFilterLargeEmails)
-                    }
-                    if personaManager.showQuickFilter(.privileged) {
-                        QuickFilterChip(label: "Privileged", icon: "lock.shield", isActive: $quickFilterPrivileged)
-                    }
-                    if personaManager.showQuickFilter(.highPriority) {
-                        QuickFilterChip(label: "High Priority", icon: "exclamationmark.triangle.fill", isActive: $quickFilterHighPriority)
-                    }
-                    if personaManager.showQuickFilter(.hasLinks) {
-                        QuickFilterChip(label: "Has Links", icon: "link", isActive: $quickFilterHasLinks)
-                    }
-                    if personaManager.showQuickFilter(.cleanup) {
-                        QuickFilterChip(label: "Cleanup", icon: "trash.circle", isActive: $showCleanupMode)
-                    }
-
-                    if enableAIFeatures && hasAnyAIFilter {
-                        Divider()
-                            .frame(height: 16)
-                            .padding(.horizontal, 2)
-
-                        if personaManager.showQuickFilter(.aiImportant) {
-                            AIFilterChip(label: "Important", icon: "bolt.fill", isActive: aiFilterBinding(for: $quickFilterAIImportant), isComputing: !model.aiFiltersComputed)
-                        }
-                        if personaManager.showQuickFilter(.aiSuspicious) {
-                            AIFilterChip(label: "Suspicious", icon: "exclamationmark.shield.fill", isActive: aiFilterBinding(for: $quickFilterAISuspicious), isComputing: !model.aiFiltersComputed)
-                        }
-                        if personaManager.showQuickFilter(.aiNegative) {
-                            AIFilterChip(label: "Negative", icon: "hand.thumbsdown.fill", isActive: aiFilterBinding(for: $quickFilterAINegative), isComputing: !model.aiFiltersComputed)
-                        }
-                        if personaManager.showQuickFilter(.aiNewsletter) {
-                            AIFilterChip(label: "Newsletters", icon: "newspaper.fill", isActive: aiFilterBinding(for: $quickFilterAINewsletter), isComputing: !model.aiFiltersComputed)
+                    ForEach(activeFilterChips, id: \.key) { chip in
+                        let isAIChip = Self.aiFilterKeys.contains(chip.key)
+                        if !isAIChip || aiTagsApplied {
+                            DismissableFilterChip(
+                                label: chip.label,
+                                icon: chip.icon,
+                                color: isAIChip ? chip.color.opacity(aiTagsApplied ? 1 : 0.4) : chip.color,
+                                isActive: filterBinding(for: chip.key),
+                                onRemove: { removeFilterChip(chip.key) }
+                            )
                         }
                     }
                 }
                 .padding(.horizontal, Spacing.xSmall)
             }
 
-            if hasAnyQuickFilterActive {
+            HStack(spacing: 4) {
                 Button {
-                    clearAllQuickFilters()
+                    aiTagsApplied.toggle()
+                    Task { await AIToggleTip.filtersUsed.donate() }
                 } label: {
-                    Text("Clear")
-                        .font(Typography.caption2)
-                        .foregroundColor(AppColors.primary)
+                    HStack(spacing: 2) {
+                        Image(systemName: aiTagsApplied ? "brain.fill" : "brain")
+                            .font(.system(size: 10))
+                        Text(aiTagsApplied ? "AI On" : "AI")
+                            .font(.system(size: 9, weight: .medium))
+                    }
+                    .foregroundColor(aiTagsApplied ? .white : AppColors.primary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(aiTagsApplied ? AppColors.primary : AppColors.primary.opacity(0.1))
+                    .cornerRadius(4)
                 }
                 .buttonStyle(.plain)
-                .padding(.trailing, Spacing.xSmall)
+                .popoverTip(AIToggleTip(), arrowEdge: .bottom)
+                #if os(macOS)
+                .help(aiTagsApplied ? "AI tags active — click to show basic tags only" : "Apply AI classification, sentiment & priority tags")
+                #endif
+
+                Button {
+                    showAdvancedFeatures.toggle()
+                    Task { await ProToggleTip.filtersUsed.donate() }
+                } label: {
+                    HStack(spacing: 2) {
+                        Image(systemName: showAdvancedFeatures ? "gearshape.fill" : "gearshape")
+                            .font(.system(size: 10))
+                        Text(showAdvancedFeatures ? "Pro" : "Pro")
+                            .font(.system(size: 9, weight: .medium))
+                    }
+                    .foregroundColor(showAdvancedFeatures ? .white : AppColors.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(showAdvancedFeatures ? AppColors.secondary : AppColors.secondary.opacity(0.1))
+                    .cornerRadius(4)
+                }
+                .buttonStyle(.plain)
+                .popoverTip(ProToggleTip(), arrowEdge: .bottom)
+                #if os(macOS)
+                .help(showAdvancedFeatures ? "Advanced features visible — click to simplify" : "Show forensic, legal & advanced features")
+                #endif
+
+                addFilterMenu
+
+                presetMenu
+
+                if hasAnyQuickFilterActive {
+                    Button {
+                        clearAllQuickFilters()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.caption)
+                            .foregroundColor(AppColors.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    #if os(macOS)
+                    .help("Clear all filters")
+                    #endif
+                }
             }
+            .padding(.trailing, Spacing.xSmall)
+        }
+        .onAppear { initializePersonaFilters() }
+        .onChange(of: personaFiltersInitialized) { _, newValue in
+            if !newValue { initializePersonaFilters() }
+        }
+        .alert("Save Preset", isPresented: $showPresetSaveAlert) {
+            TextField("Preset name", text: $presetName)
+            Button("Save") { saveCurrentPreset() }
+            Button("Cancel", role: .cancel) { presetName = "" }
+        } message: {
+            Text("Enter a name for this filter preset.")
+        }
+    }
+
+    private static let aiFilterKeys: Set<String> = [
+        "personal", "transactional", "newsletter", "promotional", "automated",
+        "positive", "negative", "neutral",
+        "highPriority", "mediumPriority", "important",
+        "phishing", "aiSuspicious"
+    ]
+
+    private static let advancedFilterKeys: Set<String> = [
+        "privileged", "relevant", "irrelevant", "flagged", "suspicious",
+        "unreviewed", "cleanup"
+    ]
+
+    private func initializePersonaFilters() {
+        guard !personaFiltersInitialized else { return }
+        personaFiltersInitialized = true
+
+        let persona = personaManager.selectedPersona
+        switch persona {
+        case .forensic:
+            activeFilterTags = ["sent", "received", "flagged", "suspicious", "relevant", "unreviewed"]
+            showAdvancedFeatures = true
+            aiTagsApplied = true
+        case .legal:
+            activeFilterTags = ["privileged", "relevant", "irrelevant", "attachments"]
+            showAdvancedFeatures = true
+            aiTagsApplied = false
+        case .itAdmin:
+            activeFilterTags = ["sent", "received", "attachments", "phishing", "highPriority"]
+            showAdvancedFeatures = false
+            aiTagsApplied = true
+        case .journalist:
+            activeFilterTags = ["sent", "received", "personal", "negative", "positive"]
+            showAdvancedFeatures = false
+            aiTagsApplied = true
+        case .personal:
+            activeFilterTags = ["sent", "received", "attachments"]
+            showAdvancedFeatures = false
+            aiTagsApplied = false
+        case .general:
+            activeFilterTags = ["sent", "received", "attachments", "highPriority"]
+            showAdvancedFeatures = false
+            aiTagsApplied = false
+        }
+    }
+
+    private struct FilterChipInfo: Identifiable {
+        let key: String
+        let label: String
+        let icon: String
+        let color: Color
+        let section: String
+        var id: String { key }
+    }
+
+    private static let allFilterChips: [FilterChipInfo] = [
+        FilterChipInfo(key: "sent", label: "Sent", icon: "arrow.up.right", color: .blue, section: "Type"),
+        FilterChipInfo(key: "received", label: "Received", icon: "arrow.down.left", color: .teal, section: "Type"),
+        FilterChipInfo(key: "attachments", label: "Attachments", icon: "paperclip", color: .brown, section: "Type"),
+        FilterChipInfo(key: "hasLinks", label: "Has Links", icon: "link", color: .indigo, section: "Type"),
+        FilterChipInfo(key: "largeEmails", label: "Large Emails", icon: "arrow.up.circle", color: .orange, section: "Type"),
+
+        FilterChipInfo(key: "personal", label: "Personal", icon: "person.fill", color: .cyan, section: "Category"),
+        FilterChipInfo(key: "transactional", label: "Transactional", icon: "creditcard", color: .indigo, section: "Category"),
+        FilterChipInfo(key: "newsletter", label: "Newsletters", icon: "newspaper.fill", color: .mint, section: "Category"),
+        FilterChipInfo(key: "promotional", label: "Promotional", icon: "megaphone", color: .pink, section: "Category"),
+        FilterChipInfo(key: "automated", label: "Automated", icon: "gearshape", color: .gray, section: "Category"),
+
+        FilterChipInfo(key: "relevant", label: "Relevant", icon: "checkmark.seal.fill", color: .green, section: "Evidence"),
+        FilterChipInfo(key: "privileged", label: "Privileged", icon: "lock.shield.fill", color: .orange, section: "Evidence"),
+        FilterChipInfo(key: "irrelevant", label: "Irrelevant", icon: "xmark.circle", color: .gray, section: "Evidence"),
+        FilterChipInfo(key: "flagged", label: "Flagged", icon: "flag.fill", color: .red, section: "Evidence"),
+        FilterChipInfo(key: "suspicious", label: "Suspicious", icon: "exclamationmark.triangle.fill", color: .purple, section: "Evidence"),
+
+        FilterChipInfo(key: "positive", label: "Positive", icon: "face.smiling", color: .green, section: "Sentiment"),
+        FilterChipInfo(key: "negative", label: "Negative", icon: "face.dashed", color: .red, section: "Sentiment"),
+        FilterChipInfo(key: "neutral", label: "Neutral", icon: "minus.circle", color: .gray, section: "Sentiment"),
+
+        FilterChipInfo(key: "highPriority", label: "High Priority", icon: "exclamationmark.triangle.fill", color: .red, section: "Priority"),
+        FilterChipInfo(key: "mediumPriority", label: "Medium Priority", icon: "exclamationmark.circle", color: .orange, section: "Priority"),
+        FilterChipInfo(key: "important", label: "Important", icon: "bolt.fill", color: .purple, section: "Priority"),
+
+        FilterChipInfo(key: "phishing", label: "Phishing", icon: "shield.slash", color: .red, section: "Security"),
+        FilterChipInfo(key: "aiSuspicious", label: "AI Suspicious", icon: "exclamationmark.shield.fill", color: .purple, section: "Security"),
+
+        FilterChipInfo(key: "unreviewed", label: "Unreviewed", icon: "eye.slash", color: .secondary, section: "Review"),
+        FilterChipInfo(key: "cleanup", label: "Cleanup", icon: "trash.circle", color: .secondary, section: "Review"),
+    ]
+
+    private var activeFilterChips: [FilterChipInfo] {
+        return Self.allFilterChips.filter { activeFilterTags.contains($0.key) }
+    }
+
+    private func filterBinding(for key: String) -> Binding<Bool> {
+        switch key {
+        case "sent": return Binding(get: { quickFilterSent }, set: { quickFilterSent = $0; if $0 { quickFilterReceived = false } })
+        case "received": return Binding(get: { quickFilterReceived }, set: { quickFilterReceived = $0; if $0 { quickFilterSent = false } })
+        case "attachments": return $quickFilterAttachments
+        case "flagged": return $quickFilterFlagged
+        case "unreviewed": return $quickFilterUnreviewed
+        case "largeEmails": return $quickFilterLargeEmails
+        case "privileged": return $quickFilterPrivileged
+        case "highPriority": return $quickFilterHighPriority
+        case "hasLinks": return $quickFilterHasLinks
+        case "cleanup": return $showCleanupMode
+        case "important": return $quickFilterAIImportant
+        case "aiSuspicious": return $quickFilterAISuspicious
+        case "negative": return $quickFilterAINegative
+        case "newsletter": return $quickFilterAINewsletter
+        case "personal": return $quickFilterTagPersonal
+        case "transactional": return $quickFilterTagTransactional
+        case "promotional": return $quickFilterTagPromotional
+        case "automated": return $quickFilterTagAutomated
+        case "relevant": return $quickFilterTagRelevant
+        case "positive": return $quickFilterTagPositive
+        case "phishing": return $quickFilterTagPhishing
+        case "neutral": return $quickFilterTagNeutral
+        case "irrelevant": return $quickFilterTagIrrelevant
+        case "suspicious": return $quickFilterTagSuspicious
+        case "mediumPriority": return $quickFilterTagMediumPriority
+        default: return .constant(false)
+        }
+    }
+
+    private func removeFilterChip(_ key: String) {
+        filterBinding(for: key).wrappedValue = false
+        activeFilterTags.remove(key)
+    }
+
+    private var addFilterMenu: some View {
+        Menu {
+            let sections = Dictionary(grouping: Self.allFilterChips, by: \.section)
+            let basicSections = ["Type"]
+            let aiSections = ["Category", "Sentiment", "Priority", "Security"]
+            let advancedSections = ["Evidence", "Review"]
+
+            ForEach(basicSections, id: \.self) { section in
+                if let chips = sections[section] {
+                    Section(section) {
+                        ForEach(chips) { chip in
+                            filterChipButton(chip)
+                        }
+                    }
+                }
+            }
+
+            if aiTagsApplied {
+                ForEach(aiSections, id: \.self) { section in
+                    if let chips = sections[section] {
+                        Section("\(section) (AI)") {
+                            ForEach(chips) { chip in
+                                filterChipButton(chip)
+                            }
+                        }
+                    }
+                }
+            } else {
+                Section {
+                    Label("Turn on AI to see Category, Sentiment & Priority filters", systemImage: "brain")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            if showAdvancedFeatures {
+                ForEach(advancedSections, id: \.self) { section in
+                    if let chips = sections[section] {
+                        Section("\(section) (Pro)") {
+                            ForEach(chips) { chip in
+                                filterChipButton(chip)
+                            }
+                        }
+                    }
+                }
+            } else {
+                Section {
+                    Label("Turn on Pro to see Evidence & Review filters", systemImage: "gearshape")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+        } label: {
+            Image(systemName: "plus.circle.fill")
+                .font(.callout)
+                .foregroundColor(AppColors.primary)
+        }
+        .buttonStyle(.plain)
+        #if os(macOS)
+        .help("Add filter")
+        #endif
+        .accessibilityLabel("Add a filter")
+    }
+
+    @ViewBuilder
+    private func filterChipButton(_ chip: FilterChipInfo) -> some View {
+        let isVisible = activeFilterTags.contains(chip.key)
+        Button {
+            if !isVisible {
+                activeFilterTags.insert(chip.key)
+            }
+            filterBinding(for: chip.key).wrappedValue = true
+        } label: {
+            Label {
+                HStack {
+                    Text(chip.label)
+                    if isVisible {
+                        Spacer()
+                        Image(systemName: "checkmark")
+                            .font(.caption2)
+                    }
+                }
+            } icon: {
+                Image(systemName: chip.icon)
+                    .foregroundColor(chip.color)
+            }
+        }
+    }
+
+    private var presetMenu: some View {
+        Menu {
+            Section("Save") {
+                Button {
+                    presetName = ""
+                    showPresetSaveAlert = true
+                } label: {
+                    Label("Save Current as Preset", systemImage: "square.and.arrow.down")
+                }
+                .disabled(!hasAnyQuickFilterActive && activeFilterTags.isEmpty)
+            }
+
+            let presets = loadPresetsV2()
+            if !presets.isEmpty {
+                Section("Load") {
+                    ForEach(presets.sorted(by: { $0.key < $1.key }), id: \.key) { name, preset in
+                        Button {
+                            applyPreset(preset)
+                        } label: {
+                            Label {
+                                VStack(alignment: .leading) {
+                                    Text(name)
+                                    Text(preset.visible.joined(separator: ", "))
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                            } icon: {
+                                Image(systemName: "line.3.horizontal.decrease.circle")
+                            }
+                        }
+                    }
+                }
+                Section("Delete") {
+                    ForEach(presets.sorted(by: { $0.key < $1.key }), id: \.key) { name, _ in
+                        Button(role: .destructive) {
+                            deletePreset(name)
+                        } label: {
+                            Label(name, systemImage: "trash")
+                        }
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "slider.horizontal.3")
+                .font(.callout)
+                .foregroundColor(AppColors.secondary)
+        }
+        .buttonStyle(.plain)
+        #if os(macOS)
+        .help("Filter presets")
+        #endif
+        .accessibilityLabel("Filter presets")
+    }
+
+    private struct FilterPreset: Codable {
+        let visible: [String]
+        let active: [String]
+    }
+
+    private func saveCurrentPreset() {
+        let trimmed = presetName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let visibleKeys = Array(activeFilterTags)
+        let activeKeys = visibleKeys.filter { filterBinding(for: $0).wrappedValue }
+        guard !visibleKeys.isEmpty else { return }
+        var presets = loadPresetsV2()
+        presets[trimmed] = FilterPreset(visible: visibleKeys, active: activeKeys)
+        if let data = try? JSONEncoder().encode(presets) {
+            savedPresetsData = data
+        }
+        presetName = ""
+    }
+
+    private func loadPresetsV2() -> [String: FilterPreset] {
+        if let v2 = try? JSONDecoder().decode([String: FilterPreset].self, from: savedPresetsData) {
+            return v2
+        }
+        if let v1 = try? JSONDecoder().decode([String: [String]].self, from: savedPresetsData) {
+            return v1.mapValues { FilterPreset(visible: $0, active: $0) }
+        }
+        return [:]
+    }
+
+    private func applyPreset(_ preset: FilterPreset) {
+        clearAllQuickFilters()
+        for key in preset.visible {
+            activeFilterTags.insert(key)
+        }
+        for key in preset.active {
+            filterBinding(for: key).wrappedValue = true
+        }
+    }
+
+    private func deletePreset(_ name: String) {
+        var presets = loadPresetsV2()
+        presets.removeValue(forKey: name)
+        if let data = try? JSONEncoder().encode(presets) {
+            savedPresetsData = data
         }
     }
 
@@ -638,6 +1021,12 @@ struct ParsedEmailListView: View {
         return field.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private func sanitizeFilename(_ name: String) -> String {
+        let cleaned = name.replacingOccurrences(of: "[^a-zA-Z0-9 _-]", with: "", options: .regularExpression)
+        let trimmed = String(cleaned.prefix(50)).trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? "email" : trimmed
+    }
+
     private var threadedListView: some View {
         List(selection: $selectedEmailIDs) {
             ForEach(quickFilteredThreads) { thread in
@@ -709,6 +1098,15 @@ struct ParsedEmailListView: View {
                 }
             }
 
+            if model.isPinned(email.id) {
+                Image(systemName: "star.fill")
+                    .font(.caption2)
+                    .foregroundColor(.yellow)
+                    #if os(macOS)
+                    .help("Pinned")
+                    #endif
+            }
+
             let priority = model.priorityLevel(for: email.id)
             if priority == .high {
                 Image(systemName: "exclamationmark.triangle.fill")
@@ -751,6 +1149,8 @@ struct ParsedEmailListView: View {
             }
 
             Spacer(minLength: Spacing.xSmall)
+
+            emailTagPill(for: email)
 
             Button {
                 let rawData = email.rawSource.data(using: .utf8) ?? Data()
@@ -856,6 +1256,19 @@ struct ParsedEmailListView: View {
                 }
             }
         }
+        #if os(iOS)
+        .onDrag {
+            let data = Data(email.rawSource.utf8)
+            let provider = NSItemProvider()
+            let filename = sanitizeFilename(email.headers["Subject"] ?? "email") + ".eml"
+            provider.suggestedName = filename
+            provider.registerDataRepresentation(forTypeIdentifier: UTType.emailMessage.identifier, visibility: .all) { completion in
+                completion(data, nil)
+                return nil
+            }
+            return provider
+        }
+        #endif
     }
 
     #if os(iOS)
@@ -864,6 +1277,307 @@ struct ParsedEmailListView: View {
         showShareSheet = true
     }
     #endif
+
+    // MARK: - Email Tag Picker
+
+    private enum EmailQuickTag: String, CaseIterable {
+        case none = "—"
+        case sent = "Sent"
+        case received = "Received"
+        case personal = "Personal"
+        case transactional = "Transactional"
+        case newsletter = "Newsletter"
+        case promotional = "Promotional"
+        case automated = "Automated"
+        case relevant = "Relevant"
+        case privileged = "Privileged"
+        case irrelevant = "Irrelevant"
+        case flagged = "Flagged"
+        case suspicious = "Suspicious"
+        case positive = "Positive"
+        case negative = "Negative"
+        case neutral = "Neutral"
+        case highPriority = "High Priority"
+        case mediumPriority = "Medium Priority"
+        case hasAttachment = "Has Attachment"
+        case phishing = "Phishing"
+
+        var icon: String {
+            switch self {
+            case .none: return "tag"
+            case .sent: return "arrow.up.circle"
+            case .received: return "arrow.down.circle"
+            case .personal: return "person.fill"
+            case .transactional: return "creditcard"
+            case .newsletter: return "newspaper"
+            case .promotional: return "megaphone"
+            case .automated: return "gearshape"
+            case .relevant: return "checkmark.seal.fill"
+            case .privileged: return "lock.shield.fill"
+            case .irrelevant: return "xmark.circle"
+            case .flagged: return "flag.fill"
+            case .suspicious: return "exclamationmark.triangle.fill"
+            case .positive: return "face.smiling"
+            case .negative: return "face.dashed"
+            case .neutral: return "minus.circle"
+            case .highPriority: return "exclamationmark.triangle.fill"
+            case .mediumPriority: return "exclamationmark.circle"
+            case .hasAttachment: return "paperclip"
+            case .phishing: return "shield.slash"
+            }
+        }
+
+        var color: Color {
+            switch self {
+            case .none: return .secondary
+            case .sent: return .blue
+            case .received: return .teal
+            case .personal: return .cyan
+            case .transactional: return .indigo
+            case .newsletter: return .mint
+            case .promotional: return .pink
+            case .automated: return .gray
+            case .relevant: return .green
+            case .privileged: return .orange
+            case .irrelevant: return .gray
+            case .flagged: return .red
+            case .suspicious: return .purple
+            case .positive: return .green
+            case .negative: return .red
+            case .neutral: return .gray
+            case .highPriority: return .red
+            case .mediumPriority: return .orange
+            case .hasAttachment: return .brown
+            case .phishing: return .red
+            }
+        }
+    }
+
+    // MARK: - Tag Resolution
+
+    private func aiTags(for email: MBOXParser.RawEmail) -> [EmailQuickTag] {
+        var tags: [EmailQuickTag] = []
+
+        let forensicTag = forensicManager.tagForEmail(email.id)
+        if forensicTag != .none {
+            switch forensicTag {
+            case .relevant: tags.append(.relevant)
+            case .privileged: tags.append(.privileged)
+            case .irrelevant: tags.append(.irrelevant)
+            case .flagged: tags.append(.flagged)
+            case .suspicious: tags.append(.suspicious)
+            case .none: break
+            }
+        }
+
+        let priority = model.priorityLevel(for: email.id)
+        if priority == .high { tags.append(.highPriority) }
+        else if priority == .medium { tags.append(.mediumPriority) }
+
+        if model.phishingEmailIDs.contains(email.id) { tags.append(.phishing) }
+
+        if let score = model.sentimentScores[email.id] {
+            if score > 0.4 { tags.append(.positive) }
+            else if score < -0.4 { tags.append(.negative) }
+            else { tags.append(.neutral) }
+        }
+
+        if let category = model.emailClassifications[email.id] {
+            switch category {
+            case .personal: tags.append(.personal)
+            case .transactional: tags.append(.transactional)
+            case .newsletter: tags.append(.newsletter)
+            case .promotional: tags.append(.promotional)
+            case .automated: tags.append(.automated)
+            case .unknown: break
+            }
+        }
+
+        if tags.isEmpty {
+            if email.messageType == "sent" { tags.append(.sent) }
+            else if email.messageType == "received" { tags.append(.received) }
+            if !email.attachments.isEmpty { tags.append(.hasAttachment) }
+        }
+
+        return tags
+    }
+
+    private func basicTags(for email: MBOXParser.RawEmail) -> [EmailQuickTag] {
+        var tags: [EmailQuickTag] = []
+        if email.messageType == "sent" { tags.append(.sent) }
+        else if email.messageType == "received" { tags.append(.received) }
+        if !email.attachments.isEmpty { tags.append(.hasAttachment) }
+
+        let forensicTag = forensicManager.tagForEmail(email.id)
+        if forensicTag != .none {
+            switch forensicTag {
+            case .relevant: tags.append(.relevant)
+            case .privileged: tags.append(.privileged)
+            case .irrelevant: tags.append(.irrelevant)
+            case .flagged: tags.append(.flagged)
+            case .suspicious: tags.append(.suspicious)
+            case .none: break
+            }
+        }
+        return tags
+    }
+
+    private func activeTags(for email: MBOXParser.RawEmail) -> [EmailQuickTag] {
+        if let manual = manualOverrideTags[email.id], !manual.isEmpty {
+            return Array(manual).sorted { $0.rawValue < $1.rawValue }
+        }
+        return aiTagsApplied ? aiTags(for: email) : basicTags(for: email)
+    }
+
+    private func hasManualOverride(for emailID: UUID) -> Bool {
+        guard let manual = manualOverrideTags[emailID] else { return false }
+        return !manual.isEmpty
+    }
+
+    private func resolveCurrentTag(for email: MBOXParser.RawEmail) -> EmailQuickTag {
+        activeTags(for: email).first ?? .none
+    }
+
+    // MARK: - Tag Pill (compact: 1 tag + "+N")
+
+    private func emailTagPill(for email: MBOXParser.RawEmail) -> some View {
+        let active = activeTags(for: email)
+        let isManual = hasManualOverride(for: email.id)
+        let primary = active.first ?? .none
+        let extra = max(0, active.count - 1)
+
+        return Menu {
+            let sectionTitle = isManual ? "Manual Tags (Active)" : aiTagsApplied ? "AI Tags (Active)" : "Basic Tags"
+            Section(sectionTitle) {
+                ForEach(active, id: \.self) { tag in
+                    Label(tag.rawValue, systemImage: tag.icon)
+                }
+            }
+
+            if isManual && aiTagsApplied {
+                let ai = aiTags(for: email)
+                if !ai.isEmpty {
+                    Section("AI Tags (Overridden)") {
+                        ForEach(ai, id: \.self) { tag in
+                            Label {
+                                Text(tag.rawValue)
+                                    .strikethrough()
+                            } icon: {
+                                Image(systemName: tag.icon)
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !aiTagsApplied && !isManual {
+                Section {
+                    Button {
+                        aiTagsApplied = true
+                    } label: {
+                        Label("Apply AI to see more tags", systemImage: "brain")
+                    }
+                }
+            }
+
+            Divider()
+
+            Section("Set Manual Tags") {
+                let currentManual = manualOverrideTags[email.id] ?? []
+                Section("Category") {
+                    manualTagToggle(.personal, current: currentManual, email: email)
+                    manualTagToggle(.transactional, current: currentManual, email: email)
+                    manualTagToggle(.newsletter, current: currentManual, email: email)
+                    manualTagToggle(.promotional, current: currentManual, email: email)
+                    manualTagToggle(.automated, current: currentManual, email: email)
+                }
+                Section("Sentiment") {
+                    manualTagToggle(.positive, current: currentManual, email: email)
+                    manualTagToggle(.negative, current: currentManual, email: email)
+                    manualTagToggle(.neutral, current: currentManual, email: email)
+                }
+                if showAdvancedFeatures {
+                    Section("Evidence") {
+                        manualTagToggle(.relevant, current: currentManual, email: email)
+                        manualTagToggle(.privileged, current: currentManual, email: email)
+                        manualTagToggle(.irrelevant, current: currentManual, email: email)
+                        manualTagToggle(.flagged, current: currentManual, email: email)
+                        manualTagToggle(.suspicious, current: currentManual, email: email)
+                    }
+                }
+                Section("Other") {
+                    manualTagToggle(.highPriority, current: currentManual, email: email)
+                    manualTagToggle(.mediumPriority, current: currentManual, email: email)
+                    manualTagToggle(.phishing, current: currentManual, email: email)
+                }
+            }
+
+            Divider()
+
+            if isManual {
+                Button {
+                    manualOverrideTags[email.id] = nil
+                } label: {
+                    Label(aiTagsApplied ? "Reset to AI Tags" : "Reset to Basic Tags", systemImage: "arrow.uturn.backward")
+                }
+            }
+        } label: {
+            HStack(spacing: 2) {
+                if isManual {
+                    Image(systemName: "person.fill")
+                        .font(.system(size: 7))
+                        .foregroundColor(.white)
+                        .padding(2)
+                        .background(primary.color)
+                        .clipShape(Circle())
+                }
+                Image(systemName: primary.icon)
+                    .font(.system(size: 9))
+                Text(primary.rawValue)
+                    .font(.system(size: 9, weight: .medium))
+                    .lineLimit(1)
+                if extra > 0 {
+                    Text("+\(extra)")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(AppColors.secondary.opacity(0.6))
+                        .clipShape(Capsule())
+                }
+            }
+            .foregroundColor(primary.color)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(primary.color.opacity(0.1))
+            .cornerRadius(4)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .accessibilityLabel("Tags: \(active.map(\.rawValue).joined(separator: ", "))")
+    }
+
+    @ViewBuilder
+    private func manualTagToggle(_ tag: EmailQuickTag, current: Set<EmailQuickTag>, email: MBOXParser.RawEmail) -> some View {
+        Button {
+            var tags = manualOverrideTags[email.id] ?? []
+            if tags.contains(tag) {
+                tags.remove(tag)
+            } else {
+                tags.insert(tag)
+            }
+            manualOverrideTags[email.id] = tags.isEmpty ? nil : tags
+        } label: {
+            HStack {
+                Label(tag.rawValue, systemImage: tag.icon)
+                if current.contains(tag) {
+                    Spacer()
+                    Image(systemName: "checkmark")
+                        .foregroundColor(.accentColor)
+                }
+            }
+        }
+    }
 
     private func saveAttachmentsForEmail(_ email: MBOXParser.RawEmail) {
         #if os(macOS)
@@ -881,7 +1595,11 @@ struct ParsedEmailListView: View {
         for att in email.attachments {
             guard let source = att.fileURL else { continue }
             do {
-                try FileUtils.copyFile(from: source, to: folder.appendingPathComponent(att.filename))
+                let safeName = att.filename
+                    .replacingOccurrences(of: "/", with: "_")
+                    .replacingOccurrences(of: "\\", with: "_")
+                    .replacingOccurrences(of: "..", with: "_")
+                try FileUtils.copyFile(from: source, to: folder.appendingPathComponent(safeName))
             } catch {
                 failedCount += 1
             }
@@ -932,6 +1650,9 @@ struct ParsedEmailListView: View {
                     }
                     guard let sourceURL = att.fileURL else { continue }
                     var filename = att.filename
+                        .replacingOccurrences(of: "/", with: "_")
+                        .replacingOccurrences(of: "\\", with: "_")
+                        .replacingOccurrences(of: "..", with: "_")
                     var counter = 1
                     while usedNames.contains(filename) {
                         let name = (att.filename as NSString).deletingPathExtension
@@ -1122,6 +1843,58 @@ struct EmailRowView: View {
             return Self.sameYearFormatter.string(from: date)
         }
         return Self.fullDateFormatter.string(from: date)
+    }
+}
+
+// MARK: - Dismissable Filter Chip
+struct DismissableFilterChip: View {
+    let label: String
+    let icon: String
+    var color: Color = .secondary
+    @Binding var isActive: Bool
+    var onRemove: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Button {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                    isActive.toggle()
+                }
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: icon)
+                        .font(.caption)
+                        .fontWeight(.medium)
+                    Text(label)
+                        .font(.caption)
+                        .fontWeight(.medium)
+                }
+                .padding(.leading, 10)
+                .padding(.trailing, onRemove != nil ? 4 : 10)
+                .padding(.vertical, 5)
+            }
+            .buttonStyle(.plain)
+
+            if let onRemove {
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                        onRemove()
+                    }
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .padding(3)
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 6)
+                .accessibilityLabel("Remove \(label) filter")
+            }
+        }
+        .background(isActive ? color : AppColors.backgroundSecondary.opacity(0.8))
+        .foregroundColor(isActive ? .white : color)
+        .clipShape(Capsule())
+        .accessibilityLabel("Filter \(label)")
+        .accessibilityAddTraits(isActive ? .isSelected : [])
     }
 }
 

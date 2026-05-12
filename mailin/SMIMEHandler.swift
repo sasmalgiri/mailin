@@ -191,7 +191,8 @@ struct SMIMEHandler {
         let bytes = [UInt8](derData)
         var dates: [Date] = []
 
-        for i in 0..<(bytes.count - 13) {
+        guard bytes.count >= 15 else { return (nil, nil) }
+        for i in 0..<(bytes.count - 1) {
             // UTCTime tag (0x17) with length 13
             if bytes[i] == 0x17 && bytes[i + 1] == 13 && i + 15 <= bytes.count {
                 let timeBytes = Array(bytes[(i + 2)..<(i + 15)])

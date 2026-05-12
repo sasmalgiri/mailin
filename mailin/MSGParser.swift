@@ -92,8 +92,6 @@ struct MSGParser {
         let messageType = !senderEmail.isEmpty && from.lowercased().contains(senderEmail.lowercased()) ? "sent" : "received"
 
         let effectiveBody = !body.isEmpty ? body : (!htmlBody.isEmpty ? htmlBody : rtfBody)
-        let bodyLines = effectiveBody.components(separatedBy: .newlines)
-        let fullText = headers.map { "\($0): \($1)" }.joined(separator: "\n") + "\n\n" + effectiveBody
         let domains = MBOXParser.extractDomains(from: headers)
 
         let attachments = try ole2.readAttachments()
@@ -101,12 +99,10 @@ struct MSGParser {
         return MBOXParser.RawEmail(
             id: UUID(),
             headers: headers,
-            bodyLines: bodyLines,
-            rawSource: fullText,
+            rawSource: "",
             messageType: messageType,
             attachments: attachments,
             timestamp: timestamp,
-            fullText: fullText,
             domains: domains,
             plainBody: body,
             htmlBody: htmlBody,
@@ -260,6 +256,9 @@ struct OLE2Reader {
         }
         self.sectorSize = 1 << sectorSizePower
         let miniSectorSizePower = Int(readUInt16(data, offset: 32))
+        guard miniSectorSizePower >= 0 && miniSectorSizePower <= 16 else {
+            throw MSGError.invalidFormat("Invalid mini sector size power: \(miniSectorSizePower)")
+        }
         self.miniSectorSize = 1 << miniSectorSizePower
         self.miniStreamCutoff = Int(readUInt32(data, offset: 56))
 
@@ -282,6 +281,7 @@ struct OLE2Reader {
             var difatRead = 0
             while difatSector >= 0 && difatRead < difatSectorCount && difatRead < 1000 {
                 let base = 512 + difatSector * sectorSize
+                guard base >= 0 && base < data.count else { break }
                 let entriesPerSector = (sectorSize / 4) - 1
                 for i in 0..<entriesPerSector {
                     let pos = base + i * 4
@@ -310,9 +310,9 @@ struct OLE2Reader {
             self.miniFat = []
         }
 
-        if !directories.isEmpty && directories[0].size > 0 {
-            let rootChain = Self.buildChain(startSector: directories[0].startSector, fat: fat)
-            self.miniStreamData = Self.readStreamData(data: data, chain: rootChain, sectorSize: sectorSize, streamSize: directories[0].size)
+        if let rootDir = directories.first, rootDir.size > 0 {
+            let rootChain = Self.buildChain(startSector: rootDir.startSector, fat: fat)
+            self.miniStreamData = Self.readStreamData(data: data, chain: rootChain, sectorSize: sectorSize, streamSize: rootDir.size)
         }
     }
 

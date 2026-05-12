@@ -396,9 +396,9 @@ struct TopicClustersView: View {
                 vectors.append((email.id, vec))
             }
         }
-        guard vectors.count >= k else { return ([], 0) }
+        guard vectors.count >= k, let firstVec = vectors.first else { return ([], 0) }
 
-        let dim = vectors[0].1.count
+        let dim = firstVec.1.count
 
         var centroids: [[Double]] = []
         var seed: UInt64 = 42

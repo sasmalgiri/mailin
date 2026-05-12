@@ -55,12 +55,10 @@ class EncryptedStorageManager {
             MBOXParser.RawEmail(
                 id: id,
                 headers: headers,
-                bodyLines: plainBody.components(separatedBy: "\n"),
                 rawSource: rawSourceSnippet,
                 messageType: messageType,
                 attachments: attachments,
                 timestamp: timestamp,
-                fullText: plainBody,
                 domains: extractDomains(),
                 plainBody: plainBody,
                 htmlBody: htmlBody,

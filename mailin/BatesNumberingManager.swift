@@ -16,22 +16,24 @@ private let batesLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "mailin
 @MainActor
 class BatesNumberingManager: ObservableObject {
     @Published var prefix: String = "MAILIN" {
-        didSet { persistAssignments() }
+        didSet { if _initialized { persistAssignments() } }
     }
     @Published var startNumber: Int = 1 {
-        didSet { persistAssignments() }
+        didSet { if _initialized { persistAssignments() } }
     }
     @Published var zeroPadding: Int = 6 {
-        didSet { persistAssignments() }
+        didSet { if _initialized { persistAssignments() } }
     }
     @Published var assignments: [UUID: String] = [:]
 
+    private var _initialized = false
     private static let assignmentsKey = "batesNumberAssignments"
     private static let configKey = "batesNumberConfig"
 
     init() {
         loadAssignments()
         loadConfig()
+        _initialized = true
     }
 
     // MARK: - Formatting
@@ -86,7 +88,9 @@ class BatesNumberingManager: ObservableObject {
         var csv = "BatesNumber,From,To,Subject,Date,MessageID,AttachmentCount\n"
 
         func csvEscape(_ s: String) -> String {
-            "\"" + s.replacingOccurrences(of: "\"", with: "\"\"")
+            var v = s
+            if let first = v.first, "=+@-\t\r".contains(first) { v = "'" + v }
+            return "\"" + v.replacingOccurrences(of: "\"", with: "\"\"")
                 .replacingOccurrences(of: "\n", with: " ")
                 .replacingOccurrences(of: "\r", with: "") + "\""
         }

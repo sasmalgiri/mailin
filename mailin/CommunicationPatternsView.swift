@@ -586,7 +586,7 @@ struct CommunicationPatternsView: View {
     private func sentimentIndicator(_ score: Double) -> some View {
         HStack(spacing: 2) {
             Circle()
-                .fill(score > 0.3 ? AppColors.success : (score < -0.3 ? AppColors.error : AppColors.warning))
+                .fill(score > 0.4 ? AppColors.success : (score < -0.4 ? AppColors.error : AppColors.warning))
                 .frame(width: 6, height: 6)
             Text(String(format: "%.2f", score))
                 .font(Typography.caption2)
@@ -709,8 +709,9 @@ struct CommunicationPatternsView: View {
     // MARK: - Helpers
 
     private func weekdayName(_ weekday: Int) -> String {
-        guard weekday >= 1 && weekday <= 7 else { return "?" }
-        return weekdayNames[weekday - 1]
+        let index = weekday - 1
+        guard index >= 0, index < weekdayNames.count else { return "?" }
+        return weekdayNames[index]
     }
 
     private var busiestHourLabel: String {

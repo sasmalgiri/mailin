@@ -5,18 +5,24 @@ import NaturalLanguage
 class PredictiveCodingEngine: ObservableObject {
     static let shared = PredictiveCodingEngine()
 
-    @Published var relevantIDs: Set<UUID> = []
-    @Published var irrelevantIDs: Set<UUID> = []
+    @Published var relevantIDs: Set<UUID> = [] { didSet { if _initialized { persistTags() } } }
+    @Published var irrelevantIDs: Set<UUID> = [] { didSet { if _initialized { persistTags() } } }
     @Published var predictions: [UUID: Double] = [:]
     @Published var suggestedForReview: [UUID] = []
     @Published var isTraining = false
     @Published var activeLearningRound: Int = 0
     @Published var confidenceDistribution: [String: Int] = [:]
 
+    private var _initialized = false
     private var emailVectors: [UUID: [Double]] = [:]
     private var emailTokens: [UUID: [String: Double]] = [:]
     private var idfWeights: [String: Double] = [:]
     private var allEmailIDs: [UUID] = []
+
+    private init() {
+        loadPersistedTags()
+        _initialized = true
+    }
 
     // MARK: - Build
 
@@ -102,9 +108,14 @@ class PredictiveCodingEngine: ObservableObject {
     // MARK: - Training (Naive Bayes + Vector Cosine Ensemble)
 
     private func retrain() {
-        guard !relevantIDs.isEmpty else {
+        guard !relevantIDs.isEmpty || !irrelevantIDs.isEmpty else {
             predictions.removeAll()
             suggestedForReview.removeAll()
+            return
+        }
+        guard !relevantIDs.isEmpty else {
+            predictions = Dictionary(uniqueKeysWithValues: allEmailIDs.map { ($0, 0.3) })
+            suggestedForReview = Array(allEmailIDs.prefix(20))
             return
         }
 
@@ -240,8 +251,8 @@ class PredictiveCodingEngine: ObservableObject {
             }
         }
 
-        let totalRel = relWordScore.values.reduce(0, +) + smoothing * Double(vocabulary.count)
-        let totalIrr = irrWordScore.values.reduce(0, +) + smoothing * Double(vocabulary.count)
+        let totalRel = max(relWordScore.values.reduce(0, +) + smoothing * Double(max(vocabulary.count, 1)), smoothing)
+        let totalIrr = max(irrWordScore.values.reduce(0, +) + smoothing * Double(max(vocabulary.count, 1)), smoothing)
 
         var results: [UUID: Double] = [:]
 
@@ -330,7 +341,9 @@ class PredictiveCodingEngine: ObservableObject {
             normB += b[i] * b[i]
         }
         let denom = sqrt(normA) * sqrt(normB)
-        return denom > 0 ? dot / denom : 0
+        guard denom > 0, !denom.isNaN else { return 0 }
+        let result = dot / denom
+        return result.isNaN ? 0 : result
     }
 
     // MARK: - Statistics
@@ -388,4 +401,39 @@ class PredictiveCodingEngine: ObservableObject {
     }
 
     func clearAll() { reset() }
+
+    // MARK: - Persistence
+
+    private static let tagsURL: URL = {
+        let dir = (FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory)
+            .appendingPathComponent("mailin", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("predictive_tags.json")
+    }()
+
+    private struct PersistedTags: Codable {
+        let relevant: [String]
+        let irrelevant: [String]
+    }
+
+    private func persistTags() {
+        let data = PersistedTags(
+            relevant: relevantIDs.map(\.uuidString),
+            irrelevant: irrelevantIDs.map(\.uuidString)
+        )
+        do {
+            let encoded = try JSONEncoder().encode(data)
+            try encoded.write(to: Self.tagsURL, options: .atomic)
+        } catch {
+            print("[PredictiveCoding] Failed to persist tags: \(error.localizedDescription)")
+        }
+    }
+
+    func loadPersistedTags() {
+        guard FileManager.default.fileExists(atPath: Self.tagsURL.path) else { return }
+        guard let data = try? Data(contentsOf: Self.tagsURL),
+              let decoded = try? JSONDecoder().decode(PersistedTags.self, from: data) else { return }
+        relevantIDs = Set(decoded.relevant.compactMap { UUID(uuidString: $0) })
+        irrelevantIDs = Set(decoded.irrelevant.compactMap { UUID(uuidString: $0) })
+    }
 }

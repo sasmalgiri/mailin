@@ -5,13 +5,8 @@ struct PaywallView: View {
     @EnvironmentObject private var store: StoreManager
     @Environment(\.dismiss) private var dismiss
     @State private var selectedProduct: Product?
+    @State private var selectedPeriod: BillingPeriod = .yearly
     @State private var errorMessage: String?
-    @State private var purchaseMode: PurchaseMode = .subscribe
-
-    enum PurchaseMode: String, CaseIterable {
-        case subscribe = "Subscribe"
-        case buyOnce = "Buy Once"
-    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -32,12 +27,8 @@ struct PaywallView: View {
             ScrollView {
                 VStack(spacing: Spacing.large) {
                     featureComparison
-                    purchaseModePicker
-                    if purchaseMode == .subscribe {
-                        subscriptionCards
-                    } else {
-                        oneTimePurchaseCards
-                    }
+                    billingPeriodPicker
+                    purchaseCards
                     if store.purchasePending {
                         HStack(spacing: Spacing.xSmall) {
                             Image(systemName: "clock.fill")
@@ -67,13 +58,20 @@ struct PaywallView: View {
         #endif
         .background(AppColors.backgroundPrimary)
         .onAppear {
-            if store.currentTier >= .personal {
-                purchaseMode = .buyOnce
-                selectedProduct = store.professionalProduct
-            } else {
-                purchaseMode = .subscribe
-                selectedProduct = store.personalMonthlyProduct
-            }
+            updateSelectedProduct()
+        }
+        .onChange(of: selectedPeriod, initial: false) {
+            updateSelectedProduct()
+        }
+    }
+
+    private func updateSelectedProduct() {
+        if let pro = store.professionalProduct(for: selectedPeriod) {
+            selectedProduct = pro
+        } else if let personal = store.personalProduct(for: selectedPeriod) {
+            selectedProduct = personal
+        } else {
+            selectedProduct = store.products.first
         }
     }
 
@@ -87,7 +85,7 @@ struct PaywallView: View {
                 .font(.system(.title2, design: .rounded))
                 .fontWeight(.bold)
 
-            Text("Subscribe monthly or buy once — your choice.")
+            Text("Subscribe monthly, yearly, or buy once for lifetime access.")
                 .font(.subheadline)
                 .foregroundColor(AppColors.secondary)
 
@@ -147,24 +145,32 @@ struct PaywallView: View {
             Divider()
 
             featureRow("Parse emails", free: "200", personal: true, pro: true)
+            featureRow("All formats (MBOX/EML/MSG/PST)", free: true, personal: true, pro: true)
             featureRow("View & filter emails", free: true, personal: true, pro: true)
-            featureRow("Search with operators", free: true, personal: true, pro: true)
+            featureRow("Boolean/regex/proximity search", free: true, personal: true, pro: true)
             featureRow("Conversation threading", free: true, personal: true, pro: true)
             featureRow("AI Assistant", free: "3", personal: true, pro: true)
             featureRow("AI Smart Filters", free: "3", personal: true, pro: true)
             featureRow("Analytics & charts", free: true, personal: true, pro: true)
             featureRow("Export (EML/CSV/PDF)", free: "10", personal: true, pro: true)
             featureRow("Download attachments", free: "5", personal: true, pro: true)
-            featureRow("Forensic mode", free: true, personal: true, pro: true)
 
             Divider().padding(.vertical, Spacing.xxxSmall)
 
+            featureRow("S/MIME verify & decrypt", free: false, personal: true, pro: true)
+            featureRow("Deduplication", free: false, personal: true, pro: true)
+            featureRow("Export (PST/MSG/vCard/ICS)", free: false, personal: true, pro: true)
+
+            Divider().padding(.vertical, Spacing.xxxSmall)
+
+            featureRow("Forensic mode", free: false, personal: false, pro: true)
             featureRow("Audit trail", free: false, personal: false, pro: true)
-            featureRow("Review state sharing", free: false, personal: false, pro: true)
-            featureRow("iCloud Sync", free: false, personal: false, pro: true)
             featureRow("Chain of custody", free: false, personal: false, pro: true)
             featureRow("Bates numbering", free: false, personal: false, pro: true)
+            featureRow("Predictive coding (AI)", free: false, personal: false, pro: true)
             featureRow("Batch processing", free: false, personal: false, pro: true)
+            featureRow("Custodian management", free: false, personal: false, pro: true)
+            featureRow("Legal hold", free: false, personal: false, pro: true)
             featureRow("Priority support", free: false, personal: false, pro: true)
         }
         .adaptiveCard(cornerRadius: CornerRadius.large)
@@ -207,48 +213,73 @@ struct PaywallView: View {
             .foregroundColor(enabled ? AppColors.success : AppColors.secondary.opacity(0.4))
     }
 
-    // MARK: - Purchase Mode Picker
+    // MARK: - Billing Period Picker
 
-    private var purchaseModePicker: some View {
-        Picker("", selection: $purchaseMode) {
-            ForEach(PurchaseMode.allCases, id: \.self) { mode in
-                Text(mode.rawValue).tag(mode)
-            }
-        }
-        .pickerStyle(.segmented)
-        .onChange(of: purchaseMode) { _, newMode in
-            withAnimation(AnimationTiming.fast) {
-                switch newMode {
-                case .subscribe:
-                    if store.currentTier >= .personal {
-                        selectedProduct = store.professionalMonthlyProduct
-                    } else {
-                        selectedProduct = store.personalMonthlyProduct
+    private var billingPeriodPicker: some View {
+        HStack(spacing: 0) {
+            ForEach(BillingPeriod.allCases, id: \.self) { period in
+                Button {
+                    withAnimation(AnimationTiming.fast) {
+                        selectedPeriod = period
                     }
-                case .buyOnce:
-                    if store.currentTier >= .personal {
-                        selectedProduct = store.professionalProduct
-                    } else {
-                        selectedProduct = store.personalProduct
+                } label: {
+                    VStack(spacing: 2) {
+                        Text(period.rawValue)
+                            .font(Typography.callout)
+                            .fontWeight(selectedPeriod == period ? .semibold : .regular)
+                        if period == .yearly {
+                            Text(verbatim: "Save 40%")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundColor(.green)
+                        } else if period == .lifetime {
+                            Text("Best Value")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundColor(.purple)
+                        } else {
+                            Text(" ")
+                                .font(.system(size: 9))
+                        }
                     }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, Spacing.small)
+                    .background(
+                        RoundedRectangle(cornerRadius: CornerRadius.medium)
+                            .fill(selectedPeriod == period ? AppColors.backgroundPrimary : Color.clear)
+                            .shadow(color: selectedPeriod == period ? .black.opacity(0.1) : .clear, radius: 2, y: 1)
+                    )
                 }
+                .buttonStyle(.plain)
             }
         }
+        .padding(3)
+        .background(
+            RoundedRectangle(cornerRadius: CornerRadius.large)
+                .fill(AppColors.secondary.opacity(0.1))
+        )
     }
 
-    // MARK: - Subscription Cards
+    // MARK: - Purchase Cards
 
-    private var subscriptionCards: some View {
+    private var purchaseCards: some View {
         VStack(spacing: Spacing.small) {
-            if store.currentTier == .personal {
-                alreadyPersonalBanner
+            if store.isPremium && !store.isProfessional {
+                HStack(spacing: Spacing.xSmall) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .foregroundColor(.blue)
+                    Text("You own Personal. Upgrade to Professional for forensic & advanced tools.")
+                        .font(Typography.caption1)
+                        .foregroundColor(AppColors.secondary)
+                }
+                .padding(Spacing.small)
+                .background(Color.blue.opacity(0.08))
+                .cornerRadius(CornerRadius.medium)
             }
 
-            if store.isSubscribed {
+            if store.isProfessional {
                 HStack(spacing: Spacing.xSmall) {
-                    Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
+                    Image(systemName: "checkmark.seal.fill")
                         .foregroundColor(.green)
-                    Text("You have an active subscription.")
+                    Text("You own Professional. All features are unlocked.")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
                 }
@@ -257,141 +288,22 @@ struct PaywallView: View {
                 .cornerRadius(CornerRadius.medium)
             }
 
-            if !store.subscriptionProducts.isEmpty {
-                if store.currentTier < .personal {
-                    Text("Personal")
-                        .font(Typography.headline)
-                        .foregroundColor(.blue)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                    ForEach(store.personalSubscriptions, id: \.id) { product in
-                        subscriptionCard(product, color: .blue)
-                    }
-
-                    Divider().padding(.vertical, Spacing.xxSmall)
+            if !store.products.isEmpty {
+                if store.currentTier < .personal, let personal = store.personalProduct(for: selectedPeriod) {
+                    purchaseCard(personal, tierName: "Personal", badge: nil, color: .blue)
                 }
-
-                if store.currentTier < .professional {
-                    Text("Professional")
-                        .font(Typography.headline)
-                        .foregroundColor(.purple)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                    ForEach(store.professionalSubscriptions, id: \.id) { product in
-                        subscriptionCard(product, color: .purple)
-                    }
+                if store.currentTier < .professional, let professional = store.professionalProduct(for: selectedPeriod) {
+                    purchaseCard(professional, tierName: "Professional", badge: "Most Popular", color: .purple)
                 }
             } else if store.productLoadError != nil {
                 productLoadErrorView
             } else {
                 productLoadingView
             }
-
-            Text("Subscription auto-renews. Cancel anytime in System Settings > Apple ID > Subscriptions. Payment charged to your Apple ID at confirmation.")
-                .font(Typography.caption2)
-                .foregroundColor(AppColors.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.top, Spacing.xxSmall)
         }
     }
 
-    private func subscriptionCard(_ product: Product, color: Color) -> some View {
-        let isSelected = selectedProduct?.id == product.id
-        let isYearly = product.id.contains("yearly")
-
-        return Button {
-            withAnimation(AnimationTiming.fast) {
-                selectedProduct = product
-            }
-        } label: {
-            HStack(spacing: Spacing.small) {
-                VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
-                    HStack(spacing: Spacing.xSmall) {
-                        Text(isYearly ? "Yearly" : "Monthly")
-                            .font(Typography.headline)
-                        if isYearly {
-                            Text("Save 50%")
-                                .font(Typography.caption2)
-                                .fontWeight(.bold)
-                                .foregroundColor(.white)
-                                .padding(.horizontal, Spacing.xSmall)
-                                .padding(.vertical, 2)
-                                .background(Capsule().fill(color))
-                        }
-                    }
-                    Text(product.description)
-                        .font(Typography.caption1)
-                        .foregroundColor(AppColors.secondary)
-                        .lineLimit(2)
-                    Text("Cancel anytime")
-                        .font(Typography.caption2)
-                        .foregroundColor(AppColors.secondary.opacity(0.7))
-                }
-
-                Spacer()
-
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(product.displayPrice)
-                        .font(Typography.title3)
-                        .fontWeight(.bold)
-                    Text(isYearly ? "/year" : "/month")
-                        .font(Typography.caption2)
-                        .foregroundColor(AppColors.secondary)
-                }
-
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.title3)
-                    .foregroundColor(isSelected ? color : AppColors.secondary.opacity(0.4))
-            }
-            .adaptiveCard(cornerRadius: CornerRadius.large)
-            .overlay(
-                RoundedRectangle(cornerRadius: CornerRadius.large)
-                    .stroke(isSelected ? color : Color.clear, lineWidth: 2)
-            )
-        }
-        .buttonStyle(.plain)
-    }
-
-    // MARK: - One-Time Purchase Cards
-
-    private var oneTimePurchaseCards: some View {
-        VStack(spacing: Spacing.small) {
-            if store.currentTier == .personal {
-                alreadyPersonalBanner
-            }
-
-            if store.currentTier < .personal, let personal = store.personalProduct {
-                oneTimeCard(personal, tierName: "Personal", badge: nil, color: .blue)
-            }
-            if store.currentTier < .professional, let professional = store.professionalProduct {
-                oneTimeCard(professional, tierName: "Professional", badge: "Best Value", color: .purple)
-            }
-
-            if store.products.isEmpty {
-                if store.productLoadError != nil {
-                    productLoadErrorView
-                } else {
-                    productLoadingView
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var alreadyPersonalBanner: some View {
-        HStack(spacing: Spacing.xSmall) {
-            Image(systemName: "checkmark.seal.fill")
-                .foregroundColor(.blue)
-            Text("You own Personal. Upgrade to Professional for advanced forensic tools.")
-                .font(Typography.caption1)
-                .foregroundColor(AppColors.secondary)
-        }
-        .padding(Spacing.small)
-        .background(Color.blue.opacity(0.08))
-        .cornerRadius(CornerRadius.medium)
-    }
-
-    private func oneTimeCard(_ product: Product, tierName: String, badge: String?, color: Color) -> some View {
+    private func purchaseCard(_ product: Product, tierName: String, badge: String?, color: Color) -> some View {
         let isSelected = selectedProduct?.id == product.id
 
         return Button {
@@ -411,16 +323,14 @@ struct PaywallView: View {
                                 .foregroundColor(.white)
                                 .padding(.horizontal, Spacing.xSmall)
                                 .padding(.vertical, 2)
-                                .background(
-                                    Capsule().fill(color)
-                                )
+                                .background(Capsule().fill(color))
                         }
                     }
                     Text(product.description)
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
                         .lineLimit(2)
-                    Text("One-time purchase")
+                    Text(pricingSubtitle)
                         .font(Typography.caption2)
                         .foregroundColor(AppColors.secondary.opacity(0.7))
                 }
@@ -431,7 +341,7 @@ struct PaywallView: View {
                     Text(product.displayPrice)
                         .font(Typography.title3)
                         .fontWeight(.bold)
-                    Text("forever")
+                    Text(pricingSuffix)
                         .font(Typography.caption2)
                         .foregroundColor(AppColors.secondary)
                 }
@@ -447,6 +357,22 @@ struct PaywallView: View {
             )
         }
         .buttonStyle(.plain)
+    }
+
+    private var pricingSuffix: String {
+        switch selectedPeriod {
+        case .monthly: return "/month"
+        case .yearly: return "/year"
+        case .lifetime: return "one-time"
+        }
+    }
+
+    private var pricingSubtitle: String {
+        switch selectedPeriod {
+        case .monthly: return "Auto-renewable subscription"
+        case .yearly: return "Auto-renewable subscription — save 40%"
+        case .lifetime: return "One-time purchase — best value"
+        }
     }
 
     // MARK: - Purchase Button
@@ -480,16 +406,8 @@ struct PaywallView: View {
 
     private var purchaseLabel: String {
         guard let product = selectedProduct else { return "Select a plan" }
-
-        if StoreManager.allSubscriptionIDs.contains(product.id) {
-            let isYearly = product.id.contains("yearly")
-            let tierName = StoreManager.professionalSubscriptionIDs.contains(product.id) ? "Professional" : "Personal"
-            return "Subscribe \(tierName) — \(product.displayPrice)/\(isYearly ? "year" : "month")"
-        } else if product.id == StoreManager.personalID {
-            return "Buy Personal — \(product.displayPrice)"
-        } else {
-            return "Buy Professional — \(product.displayPrice)"
-        }
+        let tierName = StoreManager.professionalProductIDs.contains(product.id) ? "Professional" : "Personal"
+        return "Buy \(tierName) — \(product.displayPrice)"
     }
 
     // MARK: - Shared Views
@@ -547,14 +465,16 @@ struct PaywallView: View {
             .buttonStyle(.borderless)
             #endif
 
-            if store.isSubscribed {
+            if store.isPremium && !store.isLifetimePurchase {
                 Button("Manage Subscription") {
-                    if let url = URL(string: "macappstores://apps.apple.com/account/subscriptions") {
-                        NSWorkspace.shared.open(url)
-                    }
+                    Task { await store.manageSubscriptions() }
                 }
                 .font(Typography.caption1)
-                .foregroundColor(.blue)
+                #if os(macOS)
+                .buttonStyle(.link)
+                #else
+                .buttonStyle(.borderless)
+                #endif
             }
 
             Button("Continue with Free Version") {
@@ -568,17 +488,10 @@ struct PaywallView: View {
 
     private var legalText: some View {
         VStack(spacing: Spacing.xxSmall) {
-            if purchaseMode == .subscribe {
-                Text("Subscriptions auto-renew until cancelled. You can manage or cancel anytime in System Settings > Apple ID > Subscriptions. Payment is charged to your Apple ID at confirmation of purchase.")
-                    .font(Typography.caption2)
-                    .foregroundColor(AppColors.secondary)
-                    .multilineTextAlignment(.center)
-            } else {
-                Text("This is a one-time purchase. No subscription required. Your purchase is protected by Apple and can be restored on all your devices signed in with the same Apple ID.")
-                    .font(Typography.caption2)
-                    .foregroundColor(AppColors.secondary)
-                    .multilineTextAlignment(.center)
-            }
+            Text("Subscriptions auto-renew unless cancelled 24 hours before the end of the billing period. Manage subscriptions in System Settings. Lifetime purchases are permanent. All purchases can be restored on your devices signed in with the same Apple ID.")
+                .font(Typography.caption2)
+                .foregroundColor(AppColors.secondary)
+                .multilineTextAlignment(.center)
 
             HStack(spacing: Spacing.medium) {
                 if let termsURL = URL(string: "https://sasmalgiri.github.io/mailin/terms") {

@@ -11,6 +11,7 @@
 import SwiftUI
 import Observation
 import CoreSpotlight
+import TipKit
 #if os(macOS)
 import AppKit
 #endif
@@ -53,10 +54,14 @@ struct mailinApp: App {
                         set: { if !$0 { personaManager.completePersonaSelection() } }
                     )) {
                         PersonaOnboardingView()
+                            .interactiveDismissDisabled()
                     }
                     .onAppear {
                         configureAppearance()
                         ImportProgressNotifier.shared.requestPermission()
+                        try? Tips.configure([
+                            .displayFrequency(.weekly)
+                        ])
                         if !hasSeenLaunchAnimation {
                             showLaunchAnimation = true
                         }
@@ -154,6 +159,11 @@ struct mailinApp: App {
 
             Button("Export Calendar Events (ICS)...") {
                 appState.triggerExportICS = true
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            Button("Export Headers Only (CSV)...") {
+                appState.triggerExportHeadersCSV = true
             }
             .disabled(!appState.hasParsedEmails)
 
@@ -294,6 +304,21 @@ struct mailinApp: App {
 
             Button("Batch Operations...") {
                 appState.showBatchOperations = true
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            Button("All Attachments...") {
+                appState.showAllAttachmentsGallery = true
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            Button("IOC Extractor...") {
+                appState.showIOCExtractor = true
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            Button("Guided Search...") {
+                appState.showGuidedSearch = true
             }
             .disabled(!appState.hasParsedEmails)
 
@@ -479,6 +504,30 @@ struct mailinApp: App {
                 .disabled(!appState.hasParsedEmails)
             }
         }
+
+        CommandGroup(replacing: .help) {
+            Button("What's New...") {
+                appState.showWhatsNew = true
+            }
+
+            Button("Keyboard Shortcuts") {
+                appState.showKeyboardShortcuts = true
+            }
+            .keyboardShortcut("?", modifiers: [.command])
+
+            Button("Search Help...") {
+                appState.showGuidedSearch = true
+            }
+
+            Divider()
+
+            if let supportURL = URL(string: "https://sasmalgiri.github.io/mailin/support") {
+                Link("mailin Support", destination: supportURL)
+            }
+            if let privacyURL = URL(string: "https://sasmalgiri.github.io/mailin/privacy") {
+                Link("Privacy Policy", destination: privacyURL)
+            }
+        }
     }
     
     private static var terminationObserverRegistered = false
@@ -538,11 +587,9 @@ class AppStateManager {
     var triggerExportVCard = false
     var triggerExportICS = false
     var triggerExportHashManifest = false
+    var triggerExportHeadersCSV = false
     var triggerBatchPrint = false
     var triggerVerifyIntegrity = false
-    var showIMAPConnect = false
-    var showGmailConnect = false
-    var showOutlookConnect = false
     var showAttachmentGrid = false
     var triggerExportMSG = false
     var triggerExportPST = false
@@ -577,6 +624,14 @@ class AppStateManager {
     var showWorkspaceManager = false
     var showCommandPalette = false
     var showKeyboardShortcuts = false
+    var showWhatsNew = false
+    // v10: User-requested features
+    var showAllAttachmentsGallery = false
+    var showIOCExtractor = false
+    var showGuidedSearch = false
+    var showExportProgress = false
+    var exportProgressValue: Double = 0
+    var exportProgressMessage: String = ""
     var dockedBottomPanel: DockedPanel? = nil
 
     enum DockedPanel: String {
@@ -693,7 +748,7 @@ struct PersonaOnboardingView: View {
                 Spacer()
 
                 Button("Get Started") {
-                    personaManager.selectedPersona = selected
+                    personaManager.switchPersona(to: selected)
                     personaManager.completePersonaSelection()
                     dismiss()
                 }
@@ -719,5 +774,7 @@ extension Notification.Name {
     static let importFileFromURL = Notification.Name("importFileFromURL")
     static let triggerFileImportFromShortcut = Notification.Name("triggerFileImportFromShortcut")
     static let spotlightEmailSelected = Notification.Name("spotlightEmailSelected")
+    static let togglePinEmail = Notification.Name("togglePinEmail")
+    static let addTagToEmail = Notification.Name("addTagToEmail")
 }
 

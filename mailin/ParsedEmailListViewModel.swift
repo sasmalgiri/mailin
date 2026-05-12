@@ -1,9 +1,12 @@
 import Foundation
+import SwiftUI
 
 @MainActor
 class ParsedEmailListViewModel: ObservableObject {
     // MARK: - Root ViewModel
     var viewModel: ContentViewModel
+
+    private var isResettingFilters = false
 
     // MARK: - UI State
     @Published var isParsed = false
@@ -25,12 +28,12 @@ class ParsedEmailListViewModel: ObservableObject {
     @Published var isSearchFocused: Bool = false
     @Published var selectedEvidenceTag: ForensicManager.EvidenceTag? = nil
     @Published var groupByThread: Bool = false {
-        didSet { applyFilters() }
+        didSet { if !isResettingFilters { applyFilters() } }
     }
 
     // Reply count filter
     @Published var minReplyCount: Int = 0 {
-        didSet { applyFilters() }
+        didSet { if !isResettingFilters { applyFilters() } }
     }
 
     // Natural language search mode
@@ -39,7 +42,137 @@ class ParsedEmailListViewModel: ObservableObject {
 
     // Topic cluster filter
     @Published var clusterFilterIDs: Set<UUID>? {
-        didSet { applyFilters() }
+        didSet { if !isResettingFilters { applyFilters() } }
+    }
+
+    // Smart tag filter
+    @Published var selectedSmartTags: Set<SmartTag> = [] {
+        didSet { if !isResettingFilters { applyFilters() } }
+    }
+
+    enum SmartTag: String, CaseIterable, Hashable {
+        case sent = "Sent"
+        case received = "Received"
+        case personal = "Personal"
+        case transactional = "Transactional"
+        case newsletter = "Newsletter"
+        case promotional = "Promotional"
+        case automated = "Automated"
+        case relevant = "Relevant"
+        case privileged = "Privileged"
+        case irrelevant = "Irrelevant"
+        case flagged = "Flagged"
+        case suspicious = "Suspicious"
+        case positive = "Positive"
+        case negative = "Negative"
+        case highPriority = "High Priority"
+        case mediumPriority = "Medium Priority"
+        case hasAttachment = "Has Attachment"
+        case phishing = "Phishing"
+
+        var icon: String {
+            switch self {
+            case .sent: return "arrow.up.circle"
+            case .received: return "arrow.down.circle"
+            case .personal: return "person.fill"
+            case .transactional: return "creditcard"
+            case .newsletter: return "newspaper"
+            case .promotional: return "megaphone"
+            case .automated: return "gearshape"
+            case .relevant: return "checkmark.seal.fill"
+            case .privileged: return "lock.shield.fill"
+            case .irrelevant: return "xmark.circle"
+            case .flagged: return "flag.fill"
+            case .suspicious: return "exclamationmark.triangle.fill"
+            case .positive: return "face.smiling"
+            case .negative: return "face.dashed"
+            case .highPriority: return "exclamationmark.triangle.fill"
+            case .mediumPriority: return "exclamationmark.circle"
+            case .hasAttachment: return "paperclip"
+            case .phishing: return "shield.slash"
+            }
+        }
+
+        var color: Color {
+            switch self {
+            case .sent: return .blue
+            case .received: return .teal
+            case .personal: return .cyan
+            case .transactional: return .indigo
+            case .newsletter: return .mint
+            case .promotional: return .pink
+            case .automated: return .gray
+            case .relevant: return .green
+            case .privileged: return .orange
+            case .irrelevant: return .gray
+            case .flagged: return .red
+            case .suspicious: return .purple
+            case .positive: return .green
+            case .negative: return .red
+            case .highPriority: return .red
+            case .mediumPriority: return .orange
+            case .hasAttachment: return .brown
+            case .phishing: return .red
+            }
+        }
+    }
+
+    func resolveSmartTag(for email: MBOXParser.RawEmail) -> SmartTag? {
+        let forensicTag = ForensicManager.shared.tagForEmail(email.id)
+        if forensicTag != .none {
+            switch forensicTag {
+            case .relevant: return .relevant
+            case .privileged: return .privileged
+            case .irrelevant: return .irrelevant
+            case .flagged: return .flagged
+            case .suspicious: return .suspicious
+            case .none: break
+            }
+        }
+
+        let priority = priorityLevel(for: email.id)
+        if priority == .high { return .highPriority }
+        if priority == .medium { return .mediumPriority }
+
+        if phishingEmailIDs.contains(email.id) { return .phishing }
+
+        if let score = sentimentScores[email.id] {
+            if score > 0.4 { return .positive }
+            if score < -0.4 { return .negative }
+        }
+
+        if let category = emailClassifications[email.id] {
+            switch category {
+            case .personal: return .personal
+            case .transactional: return .transactional
+            case .newsletter: return .newsletter
+            case .promotional: return .promotional
+            case .automated: return .automated
+            case .unknown: break
+            }
+        }
+
+        if email.messageType == "sent" { return .sent }
+        if email.messageType == "received" { return .received }
+
+        if !email.attachments.isEmpty { return .hasAttachment }
+
+        return nil
+    }
+
+    @Published var smartTagCounts: [(tag: SmartTag, count: Int)] = []
+
+    func recomputeSmartTagCounts() {
+        var counts: [SmartTag: Int] = [:]
+        for email in allEmails {
+            if let tag = resolveSmartTag(for: email) {
+                counts[tag, default: 0] += 1
+            }
+        }
+        smartTagCounts = SmartTag.allCases.compactMap { tag in
+            guard let count = counts[tag], count > 0 else { return nil }
+            return (tag: tag, count: count)
+        }
     }
 
     // MARK: - Saved Searches
@@ -82,8 +215,84 @@ class ParsedEmailListViewModel: ObservableObject {
     // MARK: - Data
     @Published var allEmails: [MBOXParser.RawEmail] = []
     @Published var filteredEmails: [MBOXParser.RawEmail] = []
+    @Published var aiPinnedIDs: Set<UUID>? = nil
     @Published var emailThreads: [EmailThread] = []
     @Published var replyCountPerSender: [String: Int] = [:]
+
+    // MARK: - Pin/Star & Custom Tags & Annotations
+    @Published var pinnedIDs: Set<UUID> = [] { didSet { if _userDataInitialized { persistUserData() } } }
+    @Published var userTags: [UUID: Set<String>] = [:] { didSet { if _userDataInitialized { persistUserData() } } }
+    @Published var annotations: [UUID: String] = [:] { didSet { if _userDataInitialized { persistUserData() } } }
+    private var _userDataInitialized = false
+    @Published var showPinnedOnly = false { didSet { if !isResettingFilters { applyFilters() } } }
+
+    func togglePin(_ emailID: UUID) {
+        if pinnedIDs.contains(emailID) { pinnedIDs.remove(emailID) }
+        else { pinnedIDs.insert(emailID) }
+    }
+
+    func isPinned(_ emailID: UUID) -> Bool { pinnedIDs.contains(emailID) }
+
+    func addUserTag(_ tag: String, to emailID: UUID) {
+        userTags[emailID, default: []].insert(tag)
+    }
+
+    func removeUserTag(_ tag: String, from emailID: UUID) {
+        userTags[emailID]?.remove(tag)
+    }
+
+    func userTagsFor(_ emailID: UUID) -> Set<String> {
+        userTags[emailID] ?? []
+    }
+
+    var allUserTags: [String] {
+        Array(Set(userTags.values.flatMap { $0 })).sorted()
+    }
+
+    func setAnnotation(_ text: String, for emailID: UUID) {
+        annotations[emailID] = text.isEmpty ? nil : text
+    }
+
+    func annotationFor(_ emailID: UUID) -> String {
+        annotations[emailID] ?? ""
+    }
+
+    private static let userDataURL: URL = {
+        let dir = (FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory)
+            .appendingPathComponent("mailin", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("user_review_data.json")
+    }()
+
+    private func persistUserData() {
+        let data = UserReviewData(
+            pinnedIDs: Array(pinnedIDs).map(\.uuidString),
+            userTags: userTags.reduce(into: [String: [String]]()) { $0[$1.key.uuidString] = Array($1.value) },
+            annotations: annotations.reduce(into: [String: String]()) { $0[$1.key.uuidString] = $1.value }
+        )
+        if let encoded = try? JSONEncoder().encode(data) {
+            try? encoded.write(to: Self.userDataURL, options: .atomic)
+        }
+    }
+
+    private func loadUserData() {
+        guard FileManager.default.fileExists(atPath: Self.userDataURL.path),
+              let data = try? Data(contentsOf: Self.userDataURL),
+              let decoded = try? JSONDecoder().decode(UserReviewData.self, from: data) else { return }
+        pinnedIDs = Set(decoded.pinnedIDs.compactMap { UUID(uuidString: $0) })
+        userTags = decoded.userTags.reduce(into: [UUID: Set<String>]()) {
+            if let uuid = UUID(uuidString: $1.key) { $0[uuid] = Set($1.value) }
+        }
+        annotations = decoded.annotations.reduce(into: [UUID: String]()) {
+            if let uuid = UUID(uuidString: $1.key) { $0[uuid] = $1.value }
+        }
+    }
+
+    struct UserReviewData: Codable {
+        let pinnedIDs: [String]
+        let userTags: [String: [String]]
+        let annotations: [String: String]
+    }
 
     private let isoFormatter = ISO8601DateFormatter()
     private var searchDebounceTask: Task<Void, Never>?
@@ -92,6 +301,8 @@ class ParsedEmailListViewModel: ObservableObject {
     init(viewModel: ContentViewModel) {
         self.viewModel = viewModel
         loadSavedSearches()
+        loadUserData()
+        _userDataInitialized = true
     }
 
     func searchTextDidChange() {
@@ -227,6 +438,7 @@ class ParsedEmailListViewModel: ObservableObject {
                     self.endDate = self.latestEmailDate ?? .distantFuture
                     self.computePriorityScores()
                     self.computeAIFilterData()
+                    self.recomputeSmartTagCounts()
                     self.applyFilters()
                     self.showParsedList = true
                 }
@@ -243,6 +455,7 @@ class ParsedEmailListViewModel: ObservableObject {
 
     // MARK: - Reset Filters
     func resetFilters() {
+        isResettingFilters = true
         selectedFromEmails.removeAll()
         selectedToEmails.removeAll()
         selectedDomains.removeAll()
@@ -254,6 +467,10 @@ class ParsedEmailListViewModel: ObservableObject {
         minReplyCount = 0
         hasAttachmentFilter = false
         isNaturalLanguageMode = false
+        selectedSmartTags.removeAll()
+        selectedEvidenceTag = nil
+        clusterFilterIDs = nil
+        isResettingFilters = false
         applyFilters()
     }
 
@@ -326,17 +543,22 @@ class ParsedEmailListViewModel: ObservableObject {
             let matchStr = String(freeText[nearMatch])
             let regex = try? NSRegularExpression(pattern: #"(?:"([^"]+)"|(\S+))\s+NEAR/(\d+)\s+(?:"([^"]+)"|(\S+))"#)
             if let result = regex?.firstMatch(in: matchStr, range: NSRange(matchStr.startIndex..., in: matchStr)) {
-                let t1 = (result.range(at: 1).location != NSNotFound
-                    ? (matchStr as NSString).substring(with: result.range(at: 1))
-                    : (matchStr as NSString).substring(with: result.range(at: 2)))
-                let dist = (matchStr as NSString).substring(with: result.range(at: 3))
-                let t2 = (result.range(at: 4).location != NSNotFound
-                    ? (matchStr as NSString).substring(with: result.range(at: 4))
-                    : (matchStr as NSString).substring(with: result.range(at: 5)))
-                parsed.isProximityQuery = true
-                parsed.proximityTerm1 = t1
-                parsed.proximityTerm2 = t2
-                parsed.proximityDistance = Int(dist) ?? 5
+                let r1 = result.range(at: 1)
+                let r2 = result.range(at: 2)
+                let r3 = result.range(at: 3)
+                let r4 = result.range(at: 4)
+                let r5 = result.range(at: 5)
+                let t1 = r1.location != NSNotFound ? (matchStr as NSString).substring(with: r1)
+                       : r2.location != NSNotFound ? (matchStr as NSString).substring(with: r2) : nil
+                let dist = r3.location != NSNotFound ? (matchStr as NSString).substring(with: r3) : nil
+                let t2 = r4.location != NSNotFound ? (matchStr as NSString).substring(with: r4)
+                       : r5.location != NSNotFound ? (matchStr as NSString).substring(with: r5) : nil
+                if let t1, let t2 {
+                    parsed.isProximityQuery = true
+                    parsed.proximityTerm1 = t1
+                    parsed.proximityTerm2 = t2
+                    parsed.proximityDistance = Int(dist ?? "") ?? 5
+                }
             }
         } else if (freeText.hasPrefix("/") && freeText.hasSuffix("/") && freeText.count > 2)
                     || freeText.contains("*") {
@@ -391,8 +613,12 @@ class ParsedEmailListViewModel: ObservableObject {
         }
 
         var result = allEmails.filter { email in
+            if showPinnedOnly && !pinnedIDs.contains(email.id) { return false }
             if let clusterIDs = clusterFilterIDs {
                 if !clusterIDs.contains(email.id) { return false }
+            }
+            if let pinnedIDs = aiPinnedIDs {
+                if !pinnedIDs.contains(email.id) { return false }
             }
 
             let fromEmail = email.headers["From"] ?? ""
@@ -432,6 +658,13 @@ class ParsedEmailListViewModel: ObservableObject {
                 matchesEvidenceTag = true
             }
 
+            let matchesSmartTag: Bool
+            if selectedSmartTags.isEmpty {
+                matchesSmartTag = true
+            } else {
+                matchesSmartTag = resolveSmartTag(for: email).map { selectedSmartTags.contains($0) } ?? false
+            }
+
             let matchesNLAttachment = !hasAttachmentFilter || !email.attachments.isEmpty
 
             let matchesType = parsed.typeOperator.map { email.messageType == $0 } ?? true
@@ -445,7 +678,7 @@ class ParsedEmailListViewModel: ObservableObject {
             } ?? true
 
             return filterMatch(email) && replyCount >= minReplyCount
-                && matchesFromOp && matchesToOp && matchesSubjectOp && matchesHasAttachment && matchesDateOps && matchesEvidenceTag && matchesNLAttachment && matchesType && matchesTag && matchesSource
+                && matchesFromOp && matchesToOp && matchesSubjectOp && matchesHasAttachment && matchesDateOps && matchesEvidenceTag && matchesSmartTag && matchesNLAttachment && matchesType && matchesTag && matchesSource
         }
         if !isPremiumUser && result.count > StoreManager.freeEmailLimit {
             result = Array(result.prefix(StoreManager.freeEmailLimit))
@@ -455,6 +688,7 @@ class ParsedEmailListViewModel: ObservableObject {
         if groupByThread {
             emailThreads = ThreadGrouper.group(filteredEmails)
         }
+        recomputeSmartTagCounts()
     }
 
     // MARK: - Compute reply count per sender (actual sent mails)
@@ -601,6 +835,7 @@ class ParsedEmailListViewModel: ObservableObject {
                 self.phishingEmailIDs = phishIDs
                 self.emailClassifications = classMap
                 self.aiFiltersComputed = true
+                self.recomputeSmartTagCounts()
             }
         }
     }

@@ -3,6 +3,166 @@ import Foundation
 #if canImport(FoundationModels)
 import FoundationModels
 
+// MARK: - @Generable Structured Output Types
+
+@available(macOS 26, iOS 26, *)
+@Generable(description: "A prioritized email item")
+struct EmailTriageItem {
+    @Guide(description: "Email subject")
+    var subject: String
+    @Guide(description: "Sender")
+    var sender: String
+    @Guide(description: "Why important")
+    var reason: String
+    @Guide(description: "Recommended action")
+    var action: String
+    var urgency: EmailTriageUrgency
+}
+
+@available(macOS 26, iOS 26, *)
+@Generable
+enum EmailTriageUrgency: String {
+    case actNow
+    case today
+    case thisWeek
+}
+
+@available(macOS 26, iOS 26, *)
+@Generable(description: "Email triage results")
+struct EmailTriageResult {
+    @Guide(description: "Prioritized emails", .maximumCount(10))
+    var items: [EmailTriageItem]
+    @Guide(description: "Overall assessment")
+    var summary: String
+}
+
+@available(macOS 26, iOS 26, *)
+@Generable(description: "An insight from email analysis")
+struct EmailInsightItem {
+    @Guide(description: "Short heading")
+    var heading: String
+    @Guide(description: "Explanation with evidence")
+    var detail: String
+    var category: EmailInsightCategory
+}
+
+@available(macOS 26, iOS 26, *)
+@Generable
+enum EmailInsightCategory: String {
+    case pattern
+    case anomaly
+    case actionNeeded
+    case trend
+    case risk
+}
+
+@available(macOS 26, iOS 26, *)
+@Generable(description: "Email archive insights")
+struct EmailInsightsResult {
+    @Guide(description: "Insights", .maximumCount(5))
+    var insights: [EmailInsightItem]
+    @Guide(description: "Health summary")
+    var healthSummary: String
+}
+
+@available(macOS 26, iOS 26, *)
+@Generable(description: "A security finding")
+struct EmailSecurityFinding {
+    @Guide(description: "Email subject")
+    var subject: String
+    @Guide(description: "Sender")
+    var sender: String
+    var riskLevel: SecurityRiskLevel
+    @Guide(description: "What is suspicious")
+    var explanation: String
+    @Guide(description: "Recommended action")
+    var remediation: String
+}
+
+@available(macOS 26, iOS 26, *)
+@Generable
+enum SecurityRiskLevel: String {
+    case safe
+    case caution
+    case atRisk
+}
+
+@available(macOS 26, iOS 26, *)
+@Generable(description: "Security brief")
+struct EmailSecurityBrief {
+    @Guide(description: "Findings", .maximumCount(10))
+    var findings: [EmailSecurityFinding]
+    var overallPosture: SecurityRiskLevel
+    @Guide(description: "Summary")
+    var summary: String
+}
+
+// MARK: - AI Tools for Dynamic Email Search
+
+@available(macOS 26, iOS 26, *)
+struct SearchEmailsTool: Tool {
+    let name = "searchEmails"
+    let description = "Search the email archive for emails matching keywords"
+
+    @Generable
+    struct Arguments {
+        @Guide(description: "Search keywords")
+        var query: String
+    }
+
+    let emails: [MBOXParser.RawEmail]
+
+    func call(arguments: Arguments) async throws -> String {
+        let terms = EmailNLPEngine.extractSearchTerms(from: arguments.query)
+        let results = EmailSearchIndex.shared.hybridSearch(query: arguments.query, terms: terms, limit: 5)
+        if results.isEmpty { return "No emails found for '\(arguments.query)'" }
+        var output = ""
+        for r in results {
+            let subj = r.email.headers["Subject"] ?? "(No Subject)"
+            let from = r.email.headers["From"] ?? "Unknown"
+            let date = r.email.headers["Date"] ?? ""
+            let body = String(r.email.plainBody.prefix(300))
+            output += "Subject: \(subj)\nFrom: \(from)\nDate: \(date)\nBody: \(body)\n\n"
+        }
+        return output
+    }
+}
+
+@available(macOS 26, iOS 26, *)
+struct GetThreadInfoTool: Tool {
+    let name = "getThread"
+    let description = "Get all emails in a conversation thread by subject keyword"
+
+    @Generable
+    struct Arguments {
+        @Guide(description: "Subject keyword")
+        var subject: String
+    }
+
+    let emails: [MBOXParser.RawEmail]
+
+    func call(arguments: Arguments) async throws -> String {
+        let threads = ThreadGrouper.group(emails)
+        let lower = arguments.subject.lowercased()
+        guard let thread = threads.first(where: { $0.subject.lowercased().contains(lower) }) else {
+            return "No thread found for '\(arguments.subject)'"
+        }
+        var output = "Thread: \(thread.subject) (\(thread.count) emails)\n\n"
+        let sorted = thread.allEmails.sorted {
+            (MBOXParser.parseDate($0.headers["Date"]) ?? .distantPast) <
+            (MBOXParser.parseDate($1.headers["Date"]) ?? .distantPast)
+        }
+        for email in sorted.prefix(10) {
+            let from = email.headers["From"] ?? "Unknown"
+            let date = email.headers["Date"] ?? ""
+            output += "From: \(from) (\(date))\n\(String(email.plainBody.prefix(200)))\n\n"
+        }
+        return output
+    }
+}
+
+// MARK: - Foundation Model Engine
+
 @available(macOS 26, iOS 26, *)
 struct FoundationModelEngine {
 
@@ -56,6 +216,9 @@ struct FoundationModelEngine {
 
             Your role:
             - Answer thoroughly with specific evidence from the emails
+            - ALWAYS refer to emails by their actual **Subject** line (in bold), never as \
+              "Email 1" or "Email 2". For example say "**Q1 Product Launch Strategy** from \
+              **Sarah Johnson**" not "Email 1"
             - Use **bold** for names, dates, and key terms
             - Quote relevant email content directly
             - Synthesize information across multiple emails into coherent insights
@@ -63,9 +226,14 @@ struct FoundationModelEngine {
             - If data is insufficient, state what you can determine and what's uncertain
             - Be conversational and insightful — like a colleague who read every email
             - Use bullet points and clear structure for complex answers
+            - If the user asks about something not in the provided emails, use the searchEmails \
+              tool to find more relevant emails
             """
 
-        let session = LanguageModelSession(instructions: instructions)
+        let session = LanguageModelSession(
+            tools: [SearchEmailsTool(emails: emails), GetThreadInfoTool(emails: emails)],
+            instructions: instructions
+        )
 
         let isRAG = contextEmails.count < emails.count
         let prompt = """
@@ -113,13 +281,14 @@ struct FoundationModelEngine {
         }
 
         context += "RELEVANT EMAILS:\n\n"
-        for (i, email) in retrievedEmails.prefix(20).enumerated() {
+        for (_, email) in retrievedEmails.prefix(20).enumerated() {
+            let subj = email.headers["Subject"] ?? "(No Subject)"
             let body = bodySnippet(for: email, maxLength: 600)
             context += """
-                --- Email \(i + 1) ---
+                --- \(subj) ---
                 From: \(email.headers["From"] ?? "Unknown")
                 To: \(email.headers["To"] ?? "Unknown")
-                Subject: \(email.headers["Subject"] ?? "(No Subject)")
+                Subject: \(subj)
                 Date: \(email.headers["Date"] ?? "")
                 Body: \(body)
 
@@ -135,15 +304,22 @@ struct FoundationModelEngine {
             Rules:
             - The NLP analysis numbers (counts, sentiment scores, classifications) are \
               computed deterministically — use them as ground truth
+            - ALWAYS refer to emails by their actual **Subject** line (in bold), never as \
+              "Email 1" or "Email 2". For example say "**Q1 Product Launch Strategy** from \
+              **Sarah Johnson**" not "Email 1"
             - Quote specific email content to support your points
             - Use **bold** for names, dates, and key terms
             - Be conversational like a colleague who read every email
             - Connect dots across emails — identify patterns and insights
             - If you notice something interesting the user didn't ask about, mention it briefly
             - Keep responses focused and evidence-based
+            - Use the searchEmails tool if you need more context beyond the provided emails
             """
 
-        let session = LanguageModelSession(instructions: instructions)
+        let session = LanguageModelSession(
+            tools: [SearchEmailsTool(emails: retrievedEmails)],
+            instructions: instructions
+        )
         let prompt = "User question: \(query)\n\n\(context)"
 
         let stream = session.streamResponse(to: prompt)
@@ -189,13 +365,14 @@ struct FoundationModelEngine {
         }
 
         context += "EMAILS:\n\n"
-        for (i, email) in retrievedEmails.prefix(20).enumerated() {
+        for (_, email) in retrievedEmails.prefix(20).enumerated() {
+            let subj = email.headers["Subject"] ?? "(No Subject)"
             let body = bodySnippet(for: email, maxLength: 600)
             context += """
-                --- Email \(i + 1) ---
+                --- \(subj) ---
                 From: \(email.headers["From"] ?? "Unknown")
                 To: \(email.headers["To"] ?? "Unknown")
-                Subject: \(email.headers["Subject"] ?? "(No Subject)")
+                Subject: \(subj)
                 Date: \(email.headers["Date"] ?? "")
                 Body: \(body)
 
@@ -211,6 +388,9 @@ struct FoundationModelEngine {
             Rules:
             - The NLP analysis numbers (counts, sentiment, classifications) are deterministic \
               ground truth — use them as-is, never guess different numbers
+            - ALWAYS refer to emails by their actual **Subject** line (in bold), never as \
+              "Email 1" or "Email 2". For example say "**Q1 Product Launch Strategy** from \
+              **Sarah Johnson**" not "Email 1"
             - Quote the KEY PASSAGES directly — they are the most relevant excerpts
             - Use the CONVERSATION THREADS timeline to narrate how discussions evolved over time
             - Connect dots across emails — identify patterns, outcomes, turning points, and insights
@@ -219,9 +399,13 @@ struct FoundationModelEngine {
             - Structure complex answers with bullet points or numbered lists
             - If you notice something interesting the user didn't ask about, mention it briefly
             - Keep responses focused and evidence-based — every claim should trace to an email
+            - Use the searchEmails tool if you need more context beyond the provided emails
             """
 
-        let session = LanguageModelSession(instructions: instructions)
+        let session = LanguageModelSession(
+            tools: [SearchEmailsTool(emails: retrievedEmails)],
+            instructions: instructions
+        )
         let prompt = "User question: \(query)\n\n\(context)"
 
         let stream = session.streamResponse(to: prompt)
@@ -251,7 +435,11 @@ struct FoundationModelEngine {
     // MARK: - Smart Triage / Priority Inbox
 
     static func triageEmails(_ emails: [MBOXParser.RawEmail], onUpdate: @MainActor @Sendable @escaping (String) -> Void) async throws -> String {
-        // Run NLP priority scoring
+        guard !emails.isEmpty else {
+            let msg = "No emails to triage. Import emails first."
+            await onUpdate(msg)
+            return msg
+        }
         let replyCountPerSender: [String: Int] = Dictionary(
             emails.compactMap { $0.headers["From"]?.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .map { ($0, 1) },
@@ -261,13 +449,14 @@ struct FoundationModelEngine {
         let topEmails = Array(priorityResults.prefix(10))
 
         var context = "PRIORITY TRIAGE — Top \(topEmails.count) high-priority emails from \(emails.count) total:\n\n"
-        for (i, result) in topEmails.enumerated() {
+        for (_, result) in topEmails.enumerated() {
             let email = result.email
+            let subj = email.headers["Subject"] ?? "(No Subject)"
             context += """
-                --- Priority Email \(i + 1) (score: \(result.score), level: \(result.level.rawValue)) ---
+                --- \(subj) (score: \(result.score), level: \(result.level.rawValue)) ---
                 From: \(email.headers["From"] ?? "Unknown")
                 To: \(email.headers["To"] ?? "Unknown")
-                Subject: \(email.headers["Subject"] ?? "(No Subject)")
+                Subject: \(subj)
                 Date: \(email.headers["Date"] ?? "")
                 Priority reasons: \(result.reasons.joined(separator: ", "))
                 Body: \(bodySnippet(for: email, maxLength: 400))
@@ -281,6 +470,8 @@ struct FoundationModelEngine {
             explain why each email matters and suggest specific actions.
 
             Rules:
+            - ALWAYS refer to emails by their actual **Subject** line (in bold), never as \
+              "Email 1" or "Message 2"
             - For each email, explain WHY it's important in one sentence
             - Suggest a specific action (reply, delegate, schedule, archive)
             - Group by urgency: "Act Now", "Today", "This Week"
@@ -303,7 +494,11 @@ struct FoundationModelEngine {
     // MARK: - Proactive Insights Dashboard
 
     static func generateInsights(_ emails: [MBOXParser.RawEmail], onUpdate: @MainActor @Sendable @escaping (String) -> Void) async throws -> String {
-        // Run NLP classification, sentiment, entity extraction
+        guard !emails.isEmpty else {
+            let msg = "No emails to analyze. Import emails first."
+            await onUpdate(msg)
+            return msg
+        }
         let classification = EmailNLPEngine.classifyAll(emails)
         let sentiment = EmailNLPEngine.averageSentiment(of: emails)
         let entities = EmailNLPEngine.extractEntities(from: emails, limit: 10)
@@ -391,12 +586,13 @@ struct FoundationModelEngine {
         }
 
         var context = "CONVERSATION THREAD — \(sorted.count) emails:\n\n"
-        for (i, email) in sorted.enumerated() {
+        for (_, email) in sorted.enumerated() {
+            let subj = email.headers["Subject"] ?? "(No Subject)"
             context += """
-                --- Message \(i + 1) ---
+                --- \(subj) ---
                 From: \(email.headers["From"] ?? "Unknown")
                 To: \(email.headers["To"] ?? "Unknown")
-                Subject: \(email.headers["Subject"] ?? "(No Subject)")
+                Subject: \(subj)
                 Date: \(email.headers["Date"] ?? "")
                 Body: \(bodySnippet(for: email, maxLength: 600))
 
@@ -408,6 +604,8 @@ struct FoundationModelEngine {
             Create a narrative timeline of the conversation thread.
 
             Rules:
+            - ALWAYS refer to emails by their actual **Subject** line (in bold), never as \
+              "Email 1" or "Message 2"
             - Narrate the conversation chronologically like a story
             - Highlight key decisions, turning points, and action items
             - Note tone shifts and sentiment changes between messages
@@ -432,7 +630,11 @@ struct FoundationModelEngine {
     // MARK: - Security Brief
 
     static func securityBrief(_ emails: [MBOXParser.RawEmail], onUpdate: @MainActor @Sendable @escaping (String) -> Void) async throws -> String {
-        // Run phishing detection and PII detection
+        guard !emails.isEmpty else {
+            let msg = "No emails to analyze for security. Import emails first."
+            await onUpdate(msg)
+            return msg
+        }
         let phishingFlags = EmailNLPEngine.detectPhishing(in: emails)
         let piiSummary = EmailNLPEngine.piiSummary(in: emails)
 
@@ -474,6 +676,7 @@ struct FoundationModelEngine {
             personally identifiable information exposure. Explain the findings clearly.
 
             Rules:
+            - ALWAYS refer to emails by their actual **Subject** line (in bold), never by number
             - Explain each risk in plain, non-technical language
             - For phishing: explain what makes each email suspicious and what could happen
             - For PII: explain the exposure risk and what someone could do with the data
@@ -612,13 +815,14 @@ struct FoundationModelEngine {
 
         let snippetLength = allEmails != nil ? 800 : 500
         let sample = Array(contextEmails.prefix(50))
-        for (i, email) in sample.enumerated() {
+        for (_, email) in sample.enumerated() {
+            let subj = email.headers["Subject"] ?? "(No Subject)"
             let body = bodySnippet(for: email, maxLength: snippetLength)
             context += """
-                --- Email \(i + 1) ---
+                --- \(subj) ---
                 From: \(email.headers["From"] ?? "Unknown")
                 To: \(email.headers["To"] ?? "Unknown")
-                Subject: \(email.headers["Subject"] ?? "(No Subject)")
+                Subject: \(subj)
                 Date: \(email.headers["Date"] ?? "")
                 Type: \(email.messageType)
                 Body: \(body)
@@ -649,6 +853,154 @@ struct FoundationModelEngine {
         }
         if text.count <= maxLength { return text }
         return String(text.prefix(maxLength)) + "..."
+    }
+
+    // MARK: - Structured Generation (returns typed data instead of free text)
+
+    static func triageStructured(_ emails: [MBOXParser.RawEmail]) async throws -> EmailTriageResult {
+        guard !emails.isEmpty else {
+            return EmailTriageResult(items: [], summary: "No emails to triage.")
+        }
+        let replyCountPerSender: [String: Int] = Dictionary(
+            emails.compactMap { $0.headers["From"]?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .map { ($0, 1) },
+            uniquingKeysWith: +
+        )
+        let priorityResults = EmailNLPEngine.scoreAllPriorities(emails, replyCountPerSender: replyCountPerSender)
+        let topEmails = Array(priorityResults.prefix(10))
+
+        var context = "Priority-scored emails from \(emails.count) total:\n\n"
+        for result in topEmails {
+            let email = result.email
+            let subj = email.headers["Subject"] ?? "(No Subject)"
+            context += """
+                Subject: \(subj)
+                From: \(email.headers["From"] ?? "Unknown")
+                Date: \(email.headers["Date"] ?? "")
+                Score: \(result.score), Level: \(result.level.rawValue)
+                Reasons: \(result.reasons.joined(separator: ", "))
+                Body: \(bodySnippet(for: email, maxLength: 300))
+
+                """
+        }
+
+        let instructions = """
+            You are an email triage specialist. Analyze priority-scored emails and \
+            produce structured triage results. Be concise and actionable.
+            """
+
+        let session = LanguageModelSession(instructions: instructions)
+        let response = try await session.respond(
+            to: "Triage these emails:\n\n\(context)",
+            generating: EmailTriageResult.self
+        )
+        return response.content
+    }
+
+    static func insightsStructured(_ emails: [MBOXParser.RawEmail]) async throws -> EmailInsightsResult {
+        guard !emails.isEmpty else {
+            return EmailInsightsResult(insights: [], healthSummary: "No emails to analyze.")
+        }
+        let classification = EmailNLPEngine.classifyAll(emails)
+        let sentiment = EmailNLPEngine.averageSentiment(of: emails)
+        let contacts = EmailNLPEngine.contactInsights(from: emails, limit: 8)
+        let topics = EmailNLPEngine.extractTopics(from: emails, limit: 8)
+
+        var context = "Archive stats for \(emails.count) emails:\n"
+        context += "Sentiment: \(sentiment.label) (avg \(String(format: "%.2f", sentiment.average)))\n"
+        context += "Positive: \(sentiment.positive), Neutral: \(sentiment.neutral), Negative: \(sentiment.negative)\n"
+
+        let catStrings = EmailNLPEngine.EmailCategory.allCases.compactMap { cat -> String? in
+            guard let count = classification[cat], count > 0 else { return nil }
+            return "\(cat.rawValue): \(count)"
+        }
+        if !catStrings.isEmpty { context += "Categories: \(catStrings.joined(separator: ", "))\n" }
+        if !topics.isEmpty { context += "Topics: \(topics.map { "\($0.word) (\($0.count)x)" }.joined(separator: ", "))\n" }
+        if !contacts.isEmpty {
+            context += "Top contacts:\n"
+            for c in contacts { context += "  \(c.address): \(c.emailCount) emails, sentiment: \(c.sentimentLabel)\n" }
+        }
+
+        let instructions = """
+            You are an email intelligence analyst. Produce structured insights \
+            from verified NLP statistics. Each insight must be specific and data-backed.
+            """
+
+        let session = LanguageModelSession(instructions: instructions)
+        let response = try await session.respond(
+            to: "Generate insights:\n\n\(context)",
+            generating: EmailInsightsResult.self
+        )
+        return response.content
+    }
+
+    static func securityStructured(_ emails: [MBOXParser.RawEmail]) async throws -> EmailSecurityBrief {
+        guard !emails.isEmpty else {
+            return EmailSecurityBrief(findings: [], overallPosture: .safe, summary: "No emails to analyze.")
+        }
+        let phishingFlags = EmailNLPEngine.detectPhishing(in: emails)
+        let piiSummary = EmailNLPEngine.piiSummary(in: emails)
+
+        var context = "Security scan of \(emails.count) emails:\n\n"
+        if phishingFlags.isEmpty {
+            context += "Phishing: None detected\n"
+        } else {
+            context += "Phishing alerts (\(phishingFlags.count)):\n"
+            for flag in phishingFlags.prefix(10) {
+                context += "  Subject: \(flag.email.headers["Subject"] ?? "(No Subject)")\n"
+                context += "  From: \(flag.email.headers["From"] ?? "Unknown")\n"
+                context += "  Risk: \(flag.riskLevel.rawValue), Reasons: \(flag.reasons.joined(separator: "; "))\n\n"
+            }
+        }
+        if !piiSummary.isEmpty {
+            context += "PII detected:\n"
+            for (type, count) in piiSummary { context += "  \(type.rawValue): \(count)\n" }
+        }
+
+        let instructions = "You are a cybersecurity analyst. Produce structured security findings."
+
+        let session = LanguageModelSession(instructions: instructions)
+        let response = try await session.respond(
+            to: "Security brief:\n\n\(context)",
+            generating: EmailSecurityBrief.self
+        )
+        return response.content
+    }
+
+    static func formatTriageResult(_ result: EmailTriageResult) -> String {
+        var output = ""
+        let groups: [(String, [EmailTriageItem])] = [
+            ("Act Now", result.items.filter { $0.urgency == .actNow }),
+            ("Today", result.items.filter { $0.urgency == .today }),
+            ("This Week", result.items.filter { $0.urgency == .thisWeek })
+        ]
+        for (label, items) in groups where !items.isEmpty {
+            output += "### \(label)\n\n"
+            for item in items {
+                output += "**\(item.subject)** from **\(item.sender)**\n"
+                output += "- \(item.reason)\n"
+                output += "- Action: \(item.action)\n\n"
+            }
+        }
+        output += "---\n\(result.summary)"
+        return output
+    }
+
+    static func formatInsightsResult(_ result: EmailInsightsResult) -> String {
+        var output = ""
+        for insight in result.insights {
+            let icon: String
+            switch insight.category {
+            case .pattern: icon = "🔄"
+            case .anomaly: icon = "⚠️"
+            case .actionNeeded: icon = "📌"
+            case .trend: icon = "📈"
+            case .risk: icon = "🛡️"
+            }
+            output += "### \(icon) \(insight.heading)\n\n\(insight.detail)\n\n"
+        }
+        output += "---\n\(result.healthSummary)"
+        return output
     }
 }
 

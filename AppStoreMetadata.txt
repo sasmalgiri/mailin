@@ -13,12 +13,12 @@ PRICE: Free (with In-App Purchases)
 IN-APP PURCHASES:
   Personal Tier:
   - Personal Monthly: $4.99/month (auto-renewable subscription)
-  - Personal Yearly: $29.99/year (auto-renewable subscription) — Save 50%
-  - Personal Lifetime: $29.99 (one-time purchase)
+  - Personal Yearly: $29.99/year (auto-renewable subscription) — Save 40%
+  - Personal Lifetime: $49.99 (one-time purchase)
   Professional Tier:
   - Professional Monthly: $9.99/month (auto-renewable subscription)
-  - Professional Yearly: $59.99/year (auto-renewable subscription) — Save 50%
-  - Professional Lifetime: $79.99 (one-time purchase) — Best Value
+  - Professional Yearly: $79.99/year (auto-renewable subscription) — Save 40%
+  - Professional Lifetime: $149.99 (one-time purchase) — Best Value
 
 BUNDLE ID: com.ecosanskriti.mailin
 
@@ -26,69 +26,139 @@ BUNDLE ID: com.ecosanskriti.mailin
 DESCRIPTION
 ------------------------------------
 
-mailin is a powerful email archive analyzer built with 100% native Apple technology. Free to try. No ads. No data collection. Ever.
+mailin is a powerful, privacy-first email archive analyzer for Mac, iPhone, and iPad. Import your .mbox, .eml, .emlx, .msg, .pst, .ost, or .nsf files from Gmail Takeout, Thunderbird, Apple Mail, Outlook, or Lotus Notes — and instantly search, filter, analyze, and export your email history. Available in 11 languages. Everything runs on your device. Nothing leaves your device.
 
-FLEXIBLE PRICING — YOUR CHOICE
-Try mailin free with up to 200 emails. Upgrade with a monthly subscription, yearly plan, or a one-time lifetime purchase. Personal for unlimited emails and AI. Professional for forensic tools and audit trail. No pressure, no tricks.
+IMPORT & BROWSE
+- Open .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, and .zip archives from any email provider
+- Full MIME and RFC 822 support with attachment handling
+- Conversation threading groups related emails together
+- Full-text search across subjects, senders, and body content
+- Import from Gmail Takeout, Thunderbird, Apple Mail, Outlook, Lotus Notes
 
-COMPLETE PRIVACY — ZERO DATA LEAVES YOUR DEVICE
-mailin processes everything locally using Apple's on-device AI and NLP frameworks. No cloud servers. No telemetry. No accounts required. No internet connection needed. Your emails are yours alone.
+ADVANCED SEARCH
+- Boolean operators (AND / OR / NOT) for precise queries
+- Regex and wildcard search for pattern matching
+- Proximity search — find terms near each other ("budget" NEAR/5 "deadline")
+- BM25 relevance ranking for the best results first
+- Gmail label detection from Google Takeout exports
 
-NATIVE APPLE. EVERY DEVICE.
-Built entirely in SwiftUI with Apple's native frameworks — not Electron, not Java, not a web wrapper. Runs natively on every Mac with Apple Silicon and Intel. Fast, fluid, and designed for macOS.
+ON-DEVICE AI & NLP
+- Sentiment analysis — see the emotional tone of every email
+- Topic and keyword extraction powered by Apple NaturalLanguage
+- Language detection for multilingual archives (11 languages)
+- Priority scoring highlights what matters most
+- PII and GDPR compliance scanning
+- Predictive coding — AI learns what's relevant as you review
+- Near-duplicate detection — find similar emails across your archive
+- AI Assistant — ask natural language questions about your emails
+- AI Digest — generate summaries of your email archive
+- Anomaly detection — automatically flag unusual patterns
+- Apple Intelligence support on macOS 26 and later
 
-KEY FEATURES:
+ANALYTICS DASHBOARD
+- Email volume timeline with sent vs. received breakdown
+- Top contacts and communication pairs
+- Activity heatmap by day and hour
+- Attachment type breakdown and email size distribution
+- Contact network visualization
+- Exportable analytics reports
 
-- On-Device AI Assistant: Ask natural language questions about your emails — sentiment analysis, topic extraction, entity recognition, language detection — all powered by Apple's NaturalLanguage framework running entirely on your device.
+EXPORT ANYWHERE
+- Export as EML, JSON, CSV, PDF, MSG, or PST
+- Bates-stamped PDF for legal and compliance
+- Forensic reports with SHA-256, SHA-1, and MD5 hashes
+- Concordance load files for legal review platforms
+- vCard contact export from email headers
+- Bulk download all attachments at once
+- Redacted exports with PII automatically removed
 
-- Advanced Email Parsing: Full RFC 822 and MIME compliant parser that handles complex multipart messages, nested attachments, quoted-printable, base64, and international character sets.
+FORENSIC & LEGAL TOOLS
+- Tamper-proof HMAC audit logging and chain of custody
+- Evidence tagging and examiner annotations
+- SPF, DKIM, and DMARC authentication analysis
+- S/MIME signature verification and encryption detection
+- Spoofing and phishing detection
+- MIME tree inspection and received chain analysis
+- Bates numbering and Concordance load file export
+- Custodian management and legal hold marking
+- Review batching for systematic document review
+- Deduplication and near-duplicate detection
 
-- Smart Filtering: Filter emails by sender, recipient, date range, domain, reply count, and message type. Find exactly what you need in seconds.
+AVAILABLE IN 11 LANGUAGES
+- English, German, Spanish, French, Hindi, Italian, Japanese, Korean, Portuguese (Brazil), Chinese Simplified, Chinese Traditional
+- Interface automatically adapts to your system language
 
-- Reply Analytics: Track communication patterns with reply frequency charts, conversation threading, and sender statistics.
+MULTI-PLATFORM
+- Native app for Mac, iPhone, and iPad
+- Built with SwiftUI for a fast, fluid experience on every Apple device
+- Optimized for both desktop and touch interfaces
 
-- Attachment Management: View, download, and export email attachments — PDF, images, documents, and more. Batch download all attachments at once.
+ADDITIONAL FEATURES
+- Email comparison — side-by-side diff view of two emails
+- Keyword monitoring — set up alerts for specific terms
+- Automation rules — auto-tag and organize by custom rules
+- Encrypted storage — AES-256 encryption for sensitive archives
+- Biometric lock — Touch ID / Face ID to protect your archives
+- Spotlight search integration — find emails from macOS Spotlight
+- iCloud sync — sync settings across your Apple devices
+- Smart alerts — notifications for important patterns
+- Archive comparison — compare two archive files
 
-- Multiple Export Formats: Export filtered emails as EML, JSON, CSV, or plain text for backup, legal discovery, or further analysis.
+BUILT FOR PRIVACY
+- Zero data collection — no analytics, no tracking, no telemetry
+- All processing happens on-device using Apple frameworks
+- App Sandbox with minimal permissions
+- All AI features run on-device — your email data never leaves your device
 
-- Google Takeout Ready: Import .mbox files exported from Gmail via Google Takeout. Also supports Thunderbird, Apple Mail, and any standard .mbox or .eml files.
+FLEXIBLE PLANS
+- Free tier: browse up to 200 emails with basic filtering and NLP
+- Personal: unlimited emails, AI assistant, analytics, and exports
+- Professional: all Personal features plus audit trail, chain of custody, Bates numbering, batch processing, predictive coding, and priority support
+- Subscribe monthly or yearly, or buy once for lifetime access
 
-PERFECT FOR:
-- Professionals managing email archives
-- Legal teams and compliance officers
-- Researchers analyzing communication patterns
-- Anyone leaving Gmail who wants to read their Google Takeout data
-- Privacy-conscious users who refuse to upload emails to cloud services
+mailin is built natively with SwiftUI for a fast, fluid experience on Mac, iPhone, and iPad. Whether you're a journalist investigating a story, a lawyer reviewing evidence, a researcher analyzing communications, or just someone who wants to understand their email history — mailin gives you the tools to do it privately, in your language.
 
 ------------------------------------
 KEYWORDS (100 characters max)
 ------------------------------------
 
-email,mbox,eml,archive,analyzer,privacy,Google Takeout,parser,AI,filter,export,attachment,offline
+mbox,eml,pst,msg,email,archive,analyzer,gmail,takeout,forensic,nlp,sentiment,export,privacy,search
 
 ------------------------------------
 WHAT'S NEW (Version 1.0)
 ------------------------------------
 
-Initial release of mailin — your private, AI-powered email archive analyzer. Subscribe monthly or buy once for lifetime access.
+Initial release of mailin — your private, on-device email archive analyzer. Import MBOX, EML, EMLX, MSG, PST, OST, and NSF archives. 11 languages, forensic tools, on-device AI, analytics dashboard. Subscribe monthly, yearly, or buy once for lifetime access.
 
 ------------------------------------
 PROMOTIONAL TEXT (170 characters max)
 ------------------------------------
 
-Free to try. Complete privacy. Analyze email archives with on-device AI, smart filters, and reply analytics. No cloud, no data collection. Upgrade for unlimited access.
+Analyze email archives privately on Mac, iPhone & iPad. 7 formats, on-device AI, forensic tools, 11 languages. No cloud, no data collection. Free to try.
 
 ------------------------------------
 SUPPORT URL
 ------------------------------------
 
-mailto:sasmalgiri@gmail.com
+https://sasmalgiri.github.io/mailin/support/
+
+------------------------------------
+MARKETING URL
+------------------------------------
+
+https://sasmalgiri.github.io/mailin/
+
+------------------------------------
+PRIVACY POLICY URL
+------------------------------------
+
+https://sasmalgiri.github.io/mailin/privacy/
 
 ------------------------------------
 COPYRIGHT
 ------------------------------------
 
-2025 mailin. All rights reserved.
+2025-2026 mailin. All rights reserved.
 
 ------------------------------------
 AGE RATING
@@ -100,16 +170,22 @@ AGE RATING
 SCREENSHOTS NEEDED
 ------------------------------------
 
-You need screenshots for Mac. Take them at these steps:
+Mac App Store (at least 1, recommended 3-5 at 2560x1600 or 1280x800):
 1. Main window with welcome screen showing privacy badges
 2. Emails loaded with filter sidebar and email list
 3. Email detail view with headers, body, and attachments
 4. AI Assistant answering a sentiment analysis query
-5. Reply statistics chart view
+5. Analytics dashboard with charts and heatmap
 
-Use Cmd+Shift+5 to capture screenshots.
-Mac App Store requires at least 1 screenshot.
-Recommended: 3-5 screenshots at 2560x1600 or 1280x800 resolution.
+iOS App Store (iPhone 6.5" and 5.5", iPad 12.9"):
+1. Email list with filters
+2. Email detail view
+3. AI Assistant
+4. Analytics dashboard
+5. Import file picker
+
+Use Cmd+Shift+5 for Mac screenshots.
+Use Simulator or physical device for iOS screenshots.
 
 ------------------------------------
 APP STORE SEARCH OPTIMIZATION NOTES
@@ -122,5 +198,9 @@ Target search terms users will use:
 - "mbox reader"
 - "email analyzer"
 - "eml viewer mac"
+- "pst viewer mac"
+- "msg viewer"
 - "offline email viewer"
 - "email privacy"
+- "email forensic"
+- "email export"

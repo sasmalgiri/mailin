@@ -150,14 +150,25 @@ class BiometricLockManager: ObservableObject {
     // MARK: - Lock
 
     func lock() {
-        guard isEnabled else { return }
+        guard isEnabled else {
+            isLocked = false
+            return
+        }
         isLocked = true
         authError = nil
+    }
+
+    func ensureUnlockedIfDisabled() {
+        if !isEnabled && isLocked {
+            isLocked = false
+            authError = nil
+        }
     }
 
     // MARK: - Auto-Lock Timer
 
     func handleScenePhaseChange(_ newPhase: ScenePhase) {
+        ensureUnlockedIfDisabled()
         guard isEnabled else { return }
 
         switch newPhase {
@@ -187,7 +198,8 @@ class BiometricLockManager: ObservableObject {
         autoLockTask?.cancel()
         let timeout = TimeInterval(lockTimeoutMinutes * 60)
         autoLockTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+            let safeNanos = UInt64(min(timeout, 86400) * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: safeNanos)
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 self?.lock()

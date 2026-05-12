@@ -10,6 +10,27 @@ public struct AttachmentMetadata: Codable, Sendable {
     public let contentID: String?
     public let base64: String?
     public let fileURL: URL?
+
+    public init(filename: String, mimeType: String, size: Int, isInline: Bool = false, contentID: String? = nil, base64: String? = nil, fileURL: URL? = nil) {
+        self.filename = filename
+        self.mimeType = mimeType
+        self.size = size
+        self.isInline = isInline
+        self.contentID = contentID
+        self.base64 = base64
+        self.fileURL = fileURL
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        filename = try container.decodeIfPresent(String.self, forKey: .filename) ?? "unknown"
+        mimeType = try container.decodeIfPresent(String.self, forKey: .mimeType) ?? "application/octet-stream"
+        size = try container.decodeIfPresent(Int.self, forKey: .size) ?? 0
+        isInline = try container.decodeIfPresent(Bool.self, forKey: .isInline) ?? false
+        contentID = try container.decodeIfPresent(String.self, forKey: .contentID)
+        base64 = try container.decodeIfPresent(String.self, forKey: .base64)
+        fileURL = try container.decodeIfPresent(URL.self, forKey: .fileURL)
+    }
 }
 
 
@@ -187,12 +208,12 @@ public class EmailBodyExtractor {
         guard let h = header else { return nil }
         // Try RFC2231 first
         let rfc2231 = #"(?i)\b\#(key)\*\s*=\s*(?:[\w-]+'[\w-]*')?([^";]+)"#
-        if let re = try? NSRegularExpression(pattern: rfc2231), let m = re.firstMatch(in: h, range: NSRange(location: 0, length: (h as NSString).length)), m.numberOfRanges > 1 {
+        if let re = try? NSRegularExpression(pattern: rfc2231), let m = re.firstMatch(in: h, range: NSRange(location: 0, length: (h as NSString).length)), m.numberOfRanges > 1, m.range(at: 1).location != NSNotFound {
             return (h as NSString).substring(with: m.range(at: 1)).removingPercentEncoding
         }
         // Try standard
         let pattern = #"(?i)\b\#(key)=["]?([^";]+)["]?"#
-        if let re = try? NSRegularExpression(pattern: pattern), let m = re.firstMatch(in: h, range: NSRange(location: 0, length: (h as NSString).length)), m.numberOfRanges > 1 {
+        if let re = try? NSRegularExpression(pattern: pattern), let m = re.firstMatch(in: h, range: NSRange(location: 0, length: (h as NSString).length)), m.numberOfRanges > 1, m.range(at: 1).location != NSNotFound {
             return (h as NSString).substring(with: m.range(at: 1))
         }
         return nil
@@ -287,6 +308,8 @@ public class AttachmentSaver {
         let ext = rawExt.isEmpty ? "bin" : rawExt
         let safeName = (suggestedFilename ?? "attachment.\(ext)")
             .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "\\", with: "_")
+            .replacingOccurrences(of: "..", with: "_")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString + "_" + safeName)

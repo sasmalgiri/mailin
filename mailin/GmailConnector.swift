@@ -6,6 +6,15 @@ import CryptoKit
 
 private let gmailLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "mailin", category: "GmailConnector")
 
+private final class GmailOnceFlag: @unchecked Sendable {
+    private var _done = false
+    private let lock = NSLock()
+    var done: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _done }
+        set { lock.lock(); defer { lock.unlock() }; _done = newValue }
+    }
+}
+
 // MARK: - Configuration
 // Replace with your OAuth client ID from https://console.cloud.google.com/apis/credentials
 private let kGmailClientIDPlaceholder = "YOUR_GOOGLE_OAUTH_CLIENT_ID.apps.googleusercontent.com"
@@ -141,7 +150,10 @@ class GmailConnector: ObservableObject {
 
         let callbackURL = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<URL, Error>) in
             let scheme = URL(string: config.redirectURI)?.scheme
+            let flag = GmailOnceFlag()
             let authSession = ASWebAuthenticationSession(url: authorizationURL, callbackURLScheme: scheme) { url, err in
+                guard !flag.done else { return }
+                flag.done = true
                 if let err { cont.resume(throwing: GmailConnectorError.authenticationFailed(err.localizedDescription)) }
                 else if let url { cont.resume(returning: url) }
                 else { cont.resume(throwing: GmailConnectorError.authenticationFailed("No callback URL")) }
@@ -309,17 +321,14 @@ class GmailConnector: ObservableObject {
         } else {
             timestamp = MBOXParser.parseDate(headers["Date"]).map { ISO8601DateFormatter().string(from: $0) } ?? "1970-01-01T00:00:00Z"
         }
-        let bodyLines = (plain.isEmpty ? html : plain).components(separatedBy: .newlines)
-        let hdrText = headers.map { "\($0.key): \($0.value)" }.joined(separator: "\n")
         let from = (headers["From"] ?? "").lowercased()
         let sender = userEmail.lowercased()
 
         return MBOXParser.RawEmail(
-            id: UUID(), headers: headers, bodyLines: bodyLines,
-            rawSource: hdrText + "\n\n" + plain + (html.isEmpty ? "" : "\n\n" + html),
+            id: UUID(), headers: headers,
+            rawSource: "",
             messageType: !sender.isEmpty && from.contains(sender) ? "sent" : "received",
             attachments: atts, timestamp: timestamp,
-            fullText: hdrText + "\n\n" + bodyLines.joined(separator: "\n"),
             domains: MBOXParser.extractDomains(from: headers),
             plainBody: plain, htmlBody: html, mimeRoot: nil, mimeSummary: nil, mimeDiagnostics: [],
             threadID: msg.threadId ?? headers["Message-ID"] ?? UUID().uuidString,

@@ -317,7 +317,7 @@ struct AIDigestGenerator {
 
         // Find the most positive and most negative emails
         let sentimentResults = EmailNLPEngine.analyzeSentiment(of: emails)
-        if let mostPositive = sentimentResults.max(by: { $0.score < $1.score }), mostPositive.score > 0.3 {
+        if let mostPositive = sentimentResults.max(by: { $0.score < $1.score }), mostPositive.score > 0.4 {
             items.append(DigestItem(
                 headline: "Most positive: \(mostPositive.email.headers["Subject"] ?? "(No Subject)")",
                 detail: "From \(mostPositive.email.headers["From"] ?? "Unknown") — sentiment: \(String(format: "%.2f", mostPositive.score))",
@@ -326,7 +326,7 @@ struct AIDigestGenerator {
             ))
         }
 
-        if let mostNegative = sentimentResults.min(by: { $0.score < $1.score }), mostNegative.score < -0.3 {
+        if let mostNegative = sentimentResults.min(by: { $0.score < $1.score }), mostNegative.score < -0.4 {
             items.append(DigestItem(
                 headline: "Most negative: \(mostNegative.email.headers["Subject"] ?? "(No Subject)")",
                 detail: "From \(mostNegative.email.headers["From"] ?? "Unknown") — sentiment: \(String(format: "%.2f", mostNegative.score))",

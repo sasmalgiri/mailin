@@ -5,12 +5,10 @@ struct MBOXParser {
     struct RawEmail: Identifiable, Codable, Sendable {
         let id: UUID
         var headers: [String: String]
-        var bodyLines: [String]
         var rawSource: String
         var messageType: String
         var attachments: [AttachmentMetadata]
         var timestamp: String
-        var fullText: String
         var domains: [String]
         var plainBody: String
         var htmlBody: String
@@ -22,6 +20,84 @@ struct MBOXParser {
         var references: [String]?
         var tags: [String] = []
         var anomalies: [String] = []
+
+        var bodyLines: [String] {
+            (plainBody.isEmpty ? htmlBody : plainBody).components(separatedBy: .newlines)
+        }
+
+        var fullText: String {
+            let headerStr = headers.map { "\($0.key): \($0.value)" }.joined(separator: "\n")
+            return headerStr + "\n\n" + (plainBody.isEmpty ? htmlBody : plainBody)
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case id, headers, rawSource, messageType, attachments, timestamp
+            case domains, plainBody, htmlBody, mimeRoot, mimeSummary
+            case mimeDiagnostics, threadID, inReplyTo, references, tags, anomalies
+            case bodyLines, fullText
+        }
+
+        init(id: UUID = UUID(), headers: [String: String], bodyLines: [String] = [], rawSource: String, messageType: String, attachments: [AttachmentMetadata], timestamp: String, fullText: String = "", domains: [String], plainBody: String, htmlBody: String, mimeRoot: MIMEPart? = nil, mimeSummary: String? = nil, mimeDiagnostics: [String] = [], threadID: String? = nil, inReplyTo: String? = nil, references: [String]? = nil, tags: [String] = [], anomalies: [String] = []) {
+            self.id = id
+            self.headers = headers
+            self.rawSource = rawSource
+            self.messageType = messageType
+            self.attachments = attachments
+            self.timestamp = timestamp
+            self.domains = domains
+            self.plainBody = plainBody
+            self.htmlBody = htmlBody
+            self.mimeRoot = mimeRoot
+            self.mimeSummary = mimeSummary
+            self.mimeDiagnostics = mimeDiagnostics
+            self.threadID = threadID
+            self.inReplyTo = inReplyTo
+            self.references = references
+            self.tags = tags
+            self.anomalies = anomalies
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+            headers = try container.decodeIfPresent([String: String].self, forKey: .headers) ?? [:]
+            rawSource = try container.decodeIfPresent(String.self, forKey: .rawSource) ?? ""
+            messageType = try container.decodeIfPresent(String.self, forKey: .messageType) ?? "received"
+            attachments = try container.decodeIfPresent([AttachmentMetadata].self, forKey: .attachments) ?? []
+            timestamp = try container.decodeIfPresent(String.self, forKey: .timestamp) ?? ""
+            domains = try container.decodeIfPresent([String].self, forKey: .domains) ?? []
+            plainBody = try container.decodeIfPresent(String.self, forKey: .plainBody) ?? ""
+            htmlBody = try container.decodeIfPresent(String.self, forKey: .htmlBody) ?? ""
+            mimeRoot = try container.decodeIfPresent(MIMEPart.self, forKey: .mimeRoot)
+            mimeSummary = try container.decodeIfPresent(String.self, forKey: .mimeSummary)
+            mimeDiagnostics = try container.decodeIfPresent([String].self, forKey: .mimeDiagnostics) ?? []
+            threadID = try container.decodeIfPresent(String.self, forKey: .threadID)
+            inReplyTo = try container.decodeIfPresent(String.self, forKey: .inReplyTo)
+            references = try container.decodeIfPresent([String].self, forKey: .references)
+            tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
+            anomalies = try container.decodeIfPresent([String].self, forKey: .anomalies) ?? []
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(id, forKey: .id)
+            try container.encode(headers, forKey: .headers)
+            try container.encode(rawSource, forKey: .rawSource)
+            try container.encode(messageType, forKey: .messageType)
+            try container.encode(attachments, forKey: .attachments)
+            try container.encode(timestamp, forKey: .timestamp)
+            try container.encode(domains, forKey: .domains)
+            try container.encode(plainBody, forKey: .plainBody)
+            try container.encode(htmlBody, forKey: .htmlBody)
+            try container.encodeIfPresent(mimeRoot, forKey: .mimeRoot)
+            try container.encodeIfPresent(mimeSummary, forKey: .mimeSummary)
+            try container.encode(mimeDiagnostics, forKey: .mimeDiagnostics)
+            try container.encodeIfPresent(threadID, forKey: .threadID)
+            try container.encodeIfPresent(inReplyTo, forKey: .inReplyTo)
+            try container.encodeIfPresent(references, forKey: .references)
+            try container.encode(tags, forKey: .tags)
+            try container.encode(anomalies, forKey: .anomalies)
+        }
     }
 
     struct ExportableRawEmail: Codable {
@@ -226,9 +302,6 @@ struct MBOXParser {
         let from = mappedHeaders["From"] ?? ""
         let type = !senderEmail.isEmpty && from.lowercased().contains(senderEmail.lowercased()) ? "sent" : "received"
 
-        let bodyLines = (extraction.plainBody.isEmpty ? extraction.htmlBody : extraction.plainBody).components(separatedBy: .newlines)
-        let joinedHeaders = mappedHeaders.map { "\($0): \($1)" }.joined(separator: "\n")
-        let fullText = joinedHeaders + "\n\n" + bodyLines.joined(separator: "\n")
         let timestamp = parseDate(mappedHeaders["Date"]).map { cachedISOFormatter.string(from: $0) } ?? "1970-01-01T00:00:00Z"
         let domains = extractDomains(from: mappedHeaders)
 
@@ -242,12 +315,10 @@ struct MBOXParser {
         return RawEmail(
             id: UUID(),
             headers: mappedHeaders,
-            bodyLines: bodyLines,
             rawSource: fullRaw,
             messageType: type,
             attachments: extraction.attachments,
             timestamp: timestamp,
-            fullText: fullText,
             domains: domains,
             plainBody: extraction.plainBody,
             htmlBody: extraction.htmlBody,

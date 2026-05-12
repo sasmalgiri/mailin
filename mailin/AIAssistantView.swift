@@ -12,13 +12,15 @@ struct AIAssistantView: View {
     let filteredEmails: [MBOXParser.RawEmail]
     let selectedEmails: [MBOXParser.RawEmail]
     var searchContext: String = ""
+    var onSelectEmail: ((UUID) -> Void)?
+    var onFilterByIDs: (([UUID]) -> Void)?
 
     @ObservedObject private var forensicManager = ForensicManager.shared
     @ObservedObject private var personaManager = PersonaManager.shared
 
     @State private var prompt = ""
     @State private var isProcessing = false
-    @State private var conversationHistory: [(query: String, answer: String, timestamp: Date)] = []
+    @State private var conversationHistory: [(query: String, answer: String, timestamp: Date, relatedEmailIDs: [UUID])] = []
     @State private var selectedEngine: AIEngine = .nlp
     @State private var emailScope: EmailScope = .filtered
     @State private var currentTask: Task<Void, Never>?
@@ -27,6 +29,7 @@ struct AIAssistantView: View {
     @AppStorage("freeAIQueryCount") private var freeQueryCount: Int = 0
     @State private var showUpgradePaywall = false
     @State private var priorRetrievedEmailIDs: Set<UUID> = []
+    @State private var lastRetrievedEmailIDs: [UUID] = []
     @EnvironmentObject private var storeManager: StoreManager
 
     static let freeQueryLimit = 3
@@ -131,11 +134,7 @@ struct AIAssistantView: View {
         #endif
         .background(AppColors.backgroundTertiary)
         .onAppear {
-            if foundationModelAvailable {
-                selectedEngine = .appleAI
-            } else {
-                selectedEngine = .nlp
-            }
+            selectedEngine = .nlp
             if !selectedEmails.isEmpty {
                 emailScope = .selected
             }
@@ -224,13 +223,27 @@ struct AIAssistantView: View {
     private var headerView: some View {
         VStack(spacing: 0) {
             HStack(spacing: Spacing.small) {
-                Image(systemName: "brain.head.profile")
-                    .font(.title2)
-                    .adaptiveIconGradient(colors: [.blue, .purple])
+                aiHeaderIcon
 
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("AI Email Assistant")
-                        .font(Typography.headline)
+                    HStack(spacing: Spacing.xxSmall) {
+                        Text("AI Email Assistant")
+                            .font(Typography.headline)
+                        if foundationModelAvailable {
+                            Text("Apple Intelligence")
+                                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                                .foregroundStyle(
+                                    LinearGradient(colors: [.purple, .blue, .cyan], startPoint: .leading, endPoint: .trailing)
+                                )
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(
+                                    Capsule().fill(
+                                        LinearGradient(colors: [.purple.opacity(0.1), .blue.opacity(0.08), .cyan.opacity(0.1)], startPoint: .leading, endPoint: .trailing)
+                                    )
+                                )
+                        }
+                    }
                     Text(engineDescription)
                         .font(Typography.caption2)
                         .foregroundColor(AppColors.secondary)
@@ -323,10 +336,29 @@ struct AIAssistantView: View {
         }
     }
 
+    @ViewBuilder
+    private var aiHeaderIcon: some View {
+        if #available(macOS 26, iOS 26, *) {
+            Image(systemName: "apple.intelligence")
+                .font(.title2)
+                .foregroundStyle(
+                    LinearGradient(colors: [.purple, .blue, .indigo], startPoint: .topLeading, endPoint: .bottomTrailing)
+                )
+        } else {
+            Image(systemName: "sparkles")
+                .font(.title2)
+                .adaptiveIconGradient(colors: [.purple, .blue, .indigo])
+        }
+    }
+
     private var engineDescription: String {
         switch selectedEngine {
-        case .appleAI: return "On-device Apple Intelligence"
-        case .nlp: return "On-device NLP analysis"
+        case .appleAI: return "Apple Intelligence + RAG — 100% on-device"
+        case .nlp:
+            if foundationModelAvailable {
+                return "NLP + Apple Intelligence RAG — on-device"
+            }
+            return "NLP + RAG — on-device analysis"
         }
     }
 
@@ -348,7 +380,7 @@ struct AIAssistantView: View {
                         emptyStateView
                     } else {
                         ForEach(Array(conversationHistory.enumerated()), id: \.offset) { index, item in
-                            chatBubble(query: item.query, answer: item.answer, timestamp: item.timestamp)
+                            chatBubble(query: item.query, answer: item.answer, timestamp: item.timestamp, relatedEmailIDs: item.relatedEmailIDs, bubbleIndex: index)
                                 .id(index)
                         }
                         if !streamingQuery.isEmpty {
@@ -391,8 +423,12 @@ struct AIAssistantView: View {
                     .font(Typography.title3)
                 Text({
                     switch selectedEngine {
-                    case .appleAI: return "Powered by Apple Intelligence — 100% on-device"
-                    case .nlp: return "Powered by on-device Natural Language Processing"
+                    case .appleAI: return "Powered by Apple Intelligence + RAG — 100% on-device"
+                    case .nlp:
+                        if foundationModelAvailable {
+                            return "NLP retrieval + Apple Intelligence synthesis — fully on-device"
+                        }
+                        return "Powered by on-device NLP with semantic retrieval"
                     }}())
                     .font(Typography.subheadline)
                     .foregroundColor(AppColors.secondary)
@@ -483,9 +519,8 @@ struct AIAssistantView: View {
         return f
     }()
 
-    private func chatBubble(query: String, answer: String, timestamp: Date? = nil, isStreaming: Bool = false) -> some View {
+    private func chatBubble(query: String, answer: String, timestamp: Date? = nil, isStreaming: Bool = false, relatedEmailIDs: [UUID] = [], bubbleIndex: Int = 0) -> some View {
         VStack(spacing: Spacing.small) {
-            // User message
             HStack {
                 Spacer(minLength: Spacing.xxLarge)
                 VStack(alignment: .trailing, spacing: 2) {
@@ -507,14 +542,15 @@ struct AIAssistantView: View {
                 .accessibilityLabel("Your question: \(query)")
             }
 
-            // AI response
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: Spacing.xxSmall) {
-                        Image(systemName: "brain.head.profile")
+                        Image(systemName: "sparkles")
                             .font(Typography.caption1)
-                            .foregroundStyle(.purple)
-                        Text("AI")
+                            .foregroundStyle(
+                                LinearGradient(colors: [.purple, .blue], startPoint: .leading, endPoint: .trailing)
+                            )
+                        Text(selectedEngine == .appleAI ? "Apple AI" : "NLP")
                             .font(Typography.caption1)
                             .foregroundColor(AppColors.secondary)
                         if isStreaming {
@@ -524,15 +560,12 @@ struct AIAssistantView: View {
                         }
                     }
                     .accessibilityHidden(true)
-                    Text(answer)
-                        .font(Typography.body)
-                        .textSelection(.enabled)
-                        .padding(.horizontal, Spacing.small)
-                        .padding(.vertical, Spacing.xSmall)
-                        .background(AppColors.backgroundSecondary)
-                        .cornerRadius(CornerRadius.large)
-                        .opacity(isStreaming && answer == "Thinking..." ? 0.5 : 1.0)
-                        .accessibilityLabel(isStreaming ? "AI is thinking" : "AI response: \(answer)")
+                    renderedMarkdown(answer, isStreaming: isStreaming, relatedEmailIDs: relatedEmailIDs)
+
+                    if !isStreaming && !relatedEmailIDs.isEmpty {
+                        relatedEmailCards(ids: relatedEmailIDs, bubbleIndex: bubbleIndex, answerText: answer)
+                    }
+
                     if let ts = timestamp, !isStreaming {
                         Text(Self.chatTimestampFormatter.string(from: ts))
                             .font(.system(size: 10))
@@ -542,6 +575,446 @@ struct AIAssistantView: View {
                 Spacer(minLength: Spacing.xxLarge)
             }
         }
+        .overlay(alignment: .bottom) {
+            if let toast = showActionToast {
+                Text(toast)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, Spacing.small)
+                    .padding(.vertical, Spacing.xxSmall)
+                    .background(Capsule().fill(Color.black.opacity(0.75)))
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .padding(.bottom, 4)
+            }
+        }
+    }
+
+    @State private var expandedResultSet: Set<Int> = []
+    @State private var showActionToast: String?
+
+    private func renderedMarkdown(_ text: String, isStreaming: Bool, relatedEmailIDs: [UUID] = []) -> some View {
+        let relatedEmails = relatedEmailIDs.compactMap { id in allEmails.first { $0.id == id } }
+        let lines = text.components(separatedBy: "\n")
+        let lineEmailMap = buildLineEmailMap(lines: lines, emails: relatedEmails)
+        let numberedRefs = detectNumberedEmailRefs(text: text, emails: relatedEmails)
+        let hasLineLinks = !lineEmailMap.isEmpty
+
+        return VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
+                if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                    Spacer().frame(height: 6)
+                } else {
+                    VStack(alignment: .leading, spacing: 2) {
+                        if let attributed = try? AttributedString(markdown: line, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
+                            Text(attributed)
+                        } else {
+                            Text(line)
+                        }
+
+                        if let email = lineEmailMap[index] {
+                            inlineEmailLink(email: email)
+                        }
+                    }
+                }
+            }
+
+            if !numberedRefs.isEmpty && !hasLineLinks {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(Array(numberedRefs.enumerated()), id: \.offset) { _, pair in
+                        Button {
+                            onSelectEmail?(pair.email.id)
+                            dismiss()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "envelope.open.fill")
+                                    .font(.system(size: 9))
+                                Text("\(pair.label): \(pair.email.headers["Subject"] ?? pair.email.headers["subject"] ?? "(No Subject)")")
+                                    .font(.system(size: 10, weight: .medium))
+                                    .lineLimit(1)
+                                Image(systemName: "arrow.up.forward")
+                                    .font(.system(size: 8))
+                            }
+                            .foregroundColor(.blue)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(Color.blue.opacity(0.08))
+                            .cornerRadius(4)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Open \(pair.label): \(pair.email.headers["Subject"] ?? "email")")
+                    }
+                }
+                .padding(.top, 4)
+            }
+        }
+        .font(Typography.body)
+        .textSelection(.enabled)
+        .padding(.horizontal, Spacing.small)
+        .padding(.vertical, Spacing.xSmall)
+        .background(AppColors.backgroundSecondary)
+        .cornerRadius(CornerRadius.large)
+        .opacity(isStreaming && text == "Thinking..." ? 0.5 : 1.0)
+        .accessibilityLabel(isStreaming ? "AI is thinking" : "AI response")
+    }
+
+    private func inlineEmailLink(email: MBOXParser.RawEmail) -> some View {
+        Button {
+            onSelectEmail?(email.id)
+            dismiss()
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "envelope.open.fill")
+                    .font(.system(size: 9))
+                Text("Open this email")
+                    .font(.system(size: 10, weight: .medium))
+                Image(systemName: "arrow.up.forward")
+                    .font(.system(size: 8))
+            }
+            .foregroundColor(.blue)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color.blue.opacity(0.08))
+            .cornerRadius(4)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open email: \(email.headers["Subject"] ?? email.headers["subject"] ?? "email")")
+    }
+
+    private struct NumberedEmailRef {
+        let label: String
+        let email: MBOXParser.RawEmail
+    }
+
+    private func detectNumberedEmailRefs(text: String, emails: [MBOXParser.RawEmail]) -> [NumberedEmailRef] {
+        guard !emails.isEmpty else { return [] }
+        var results: [NumberedEmailRef] = []
+        var matched: Set<Int> = []
+
+        let patterns = [
+            "\\b[Ee]mail\\s+(\\d+)\\b",
+            "\\b[Ee]mail\\s*#(\\d+)\\b",
+            "\\b[Mm]essage\\s+(\\d+)\\b"
+        ]
+        let nsText = text as NSString
+        for pat in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pat) else { continue }
+            let hits = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
+            for hit in hits {
+                if let range = Range(hit.range(at: 1), in: text),
+                   let num = Int(text[range]),
+                   num >= 1 && num <= emails.count && !matched.contains(num) {
+                    results.append(NumberedEmailRef(label: "Email \(num)", email: emails[num - 1]))
+                    matched.insert(num)
+                }
+            }
+        }
+
+        if results.isEmpty && emails.count <= 5 {
+            let textLower = text.lowercased()
+            let ordinals = ["first", "second", "third", "fourth", "fifth"]
+            for (i, ordinal) in ordinals.prefix(emails.count).enumerated() where !matched.contains(i + 1) {
+                if textLower.contains("\(ordinal) email") || textLower.contains("\(ordinal) message") {
+                    results.append(NumberedEmailRef(label: "\(ordinal.capitalized) email", email: emails[i]))
+                    matched.insert(i + 1)
+                }
+            }
+        }
+
+        return results
+    }
+
+    private func buildLineEmailMap(lines: [String], emails: [MBOXParser.RawEmail]) -> [Int: MBOXParser.RawEmail] {
+        guard !emails.isEmpty else { return [:] }
+        var map: [Int: MBOXParser.RawEmail] = [:]
+        var linked: Set<UUID> = []
+        for (index, line) in lines.enumerated() {
+            let lineLower = line.lowercased()
+            for email in emails where !linked.contains(email.id) {
+                let subject = (email.headers["Subject"] ?? email.headers["subject"] ?? "").lowercased()
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if subject.count > 5 && lineLower.contains(subject) {
+                    map[index] = email
+                    linked.insert(email.id)
+                    break
+                }
+                if subject.count > 15 {
+                    let shortSubject = String(subject.prefix(30))
+                    if lineLower.contains(shortSubject) {
+                        map[index] = email
+                        linked.insert(email.id)
+                        break
+                    }
+                }
+                let from = (email.headers["From"] ?? email.headers["from"] ?? "").lowercased()
+                let senderName = from.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if senderName.count > 3 && subject.count > 5 {
+                    let subjectWords = subject.components(separatedBy: .whitespaces).filter { $0.count > 3 }
+                    let matchCount = subjectWords.filter { lineLower.contains($0) }.count
+                    if matchCount >= 3 && lineLower.contains(senderName) {
+                        map[index] = email
+                        linked.insert(email.id)
+                        break
+                    }
+                }
+            }
+        }
+        return map
+    }
+
+    private func relatedEmailCards(ids: [UUID], bubbleIndex: Int = 0, answerText: String = "") -> some View {
+        let allMatched = ids.compactMap { id in allEmails.first { $0.id == id } }
+        let answerLower = answerText.lowercased()
+        let referenced = allMatched.filter { email in
+            let subj = (email.headers["Subject"] ?? email.headers["subject"] ?? "").lowercased()
+            let from = (email.headers["From"] ?? email.headers["from"] ?? "").lowercased()
+            let msgID = (email.headers["Message-ID"] ?? email.headers["message-id"] ?? "").lowercased()
+            return (!subj.isEmpty && answerLower.contains(subj)) ||
+                   (!from.isEmpty && answerLower.contains(from)) ||
+                   (!msgID.isEmpty && answerLower.contains(msgID))
+        }
+        let matchedEmails = referenced.isEmpty ? allMatched : referenced
+        let isExpanded = expandedResultSet.contains(bubbleIndex)
+        let displayEmails = isExpanded ? matchedEmails : Array(matchedEmails.prefix(5))
+
+        return VStack(alignment: .leading, spacing: Spacing.xxSmall) {
+            HStack(spacing: Spacing.xxSmall) {
+                Image(systemName: "envelope.open")
+                    .font(.system(size: 10))
+                    .foregroundColor(AppColors.secondary)
+                Text("\(matchedEmails.count) related email\(matchedEmails.count == 1 ? "" : "s") — tap to open")
+                    .font(.system(size: 10))
+                    .foregroundColor(AppColors.secondary)
+                Spacer()
+                if matchedEmails.count > 5 {
+                    Button {
+                        withAnimation(AnimationTiming.fast) {
+                            if isExpanded { expandedResultSet.remove(bubbleIndex) }
+                            else { expandedResultSet.insert(bubbleIndex) }
+                        }
+                    } label: {
+                        Text(isExpanded ? "Show less" : "Show all \(matchedEmails.count)")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.blue)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.top, Spacing.xxSmall)
+
+            ForEach(displayEmails, id: \.id) { email in
+                Button {
+                    onSelectEmail?(email.id)
+                    dismiss()
+                } label: {
+                    HStack(spacing: Spacing.xSmall) {
+                        Image(systemName: "envelope.fill")
+                            .font(.system(size: 11))
+                            .foregroundColor(.blue)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(email.headers["Subject"] ?? email.headers["subject"] ?? "(No Subject)")
+                                .font(.system(size: 11, weight: .medium))
+                                .lineLimit(1)
+                            HStack(spacing: 4) {
+                                Text(email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? email.headers["from"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "Unknown")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(AppColors.secondary)
+                                    .lineLimit(1)
+                                if !email.timestamp.isEmpty {
+                                    Text("·")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(AppColors.secondary.opacity(0.5))
+                                    Text(Self.formatShortDate(email.timestamp))
+                                        .font(.system(size: 10))
+                                        .foregroundColor(AppColors.secondary.opacity(0.7))
+                                }
+                            }
+                            if !email.plainBody.isEmpty {
+                                Text(email.plainBody.prefix(80).replacingOccurrences(of: "\n", with: " "))
+                                    .font(.system(size: 10))
+                                    .foregroundColor(AppColors.secondary.opacity(0.6))
+                                    .lineLimit(1)
+                            }
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9))
+                            .foregroundColor(AppColors.secondary.opacity(0.5))
+                    }
+                    .padding(.horizontal, Spacing.xSmall)
+                    .padding(.vertical, Spacing.xxxSmall)
+                    .background(AppColors.backgroundPrimary)
+                    .cornerRadius(CornerRadius.small)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: CornerRadius.small)
+                            .stroke(Color.blue.opacity(0.2), lineWidth: 0.5)
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open email: \(email.headers["Subject"] ?? email.headers["subject"] ?? "No Subject")")
+            }
+
+            emailActionToolbar(emails: matchedEmails, answerText: answerText)
+        }
+    }
+
+    private func emailActionToolbar(emails: [MBOXParser.RawEmail], answerText: String = "") -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: Spacing.xSmall) {
+                actionButton("Copy Answer", icon: "doc.on.clipboard") {
+                    PlatformClipboard.copyString(answerText)
+                    showToast("Answer copied")
+                }
+
+                Divider().frame(height: 16)
+
+                actionButton("Copy Subjects", icon: "doc.on.doc") {
+                    let subjects = emails.map { $0.headers["Subject"] ?? $0.headers["subject"] ?? "(No Subject)" }
+                    PlatformClipboard.copyString(subjects.joined(separator: "\n"))
+                    showToast("Copied \(subjects.count) subjects")
+                }
+                actionButton("Copy Senders", icon: "person.2") {
+                    let senders = Set(emails.compactMap { $0.headers["From"] ?? $0.headers["from"] })
+                    PlatformClipboard.copyString(senders.sorted().joined(separator: "\n"))
+                    showToast("Copied \(senders.count) senders")
+                }
+                actionButton("Copy Bodies", icon: "doc.plaintext") {
+                    let bodies = emails.map { email in
+                        let subj = email.headers["Subject"] ?? email.headers["subject"] ?? ""
+                        let from = email.headers["From"] ?? email.headers["from"] ?? ""
+                        return "--- \(subj) (from: \(from)) ---\n\(email.plainBody)"
+                    }
+                    PlatformClipboard.copyString(bodies.joined(separator: "\n\n"))
+                    showToast("Copied \(emails.count) emails")
+                }
+
+                Divider().frame(height: 16)
+
+                actionButton("Export CSV", icon: "tablecells") {
+                    exportEmailsAsCSV(emails)
+                }
+                actionButton("Export JSON", icon: "curlybraces") {
+                    exportEmailsAsJSON(emails)
+                }
+                actionButton("Export EML", icon: "envelope") {
+                    exportEmailsAsEML(emails)
+                }
+
+                Divider().frame(height: 16)
+
+                actionButton("Filter These", icon: "line.3.horizontal.decrease.circle") {
+                    let ids = emails.map(\.id)
+                    onFilterByIDs?(ids)
+                    dismiss()
+                }
+                actionButton("Tag Relevant", icon: "tag") {
+                    for email in emails {
+                        forensicManager.tag(email.id, as: .relevant)
+                    }
+                    showToast("Tagged \(emails.count) as relevant")
+                }
+                actionButton("Tag Flagged", icon: "flag") {
+                    for email in emails {
+                        forensicManager.tag(email.id, as: .flagged)
+                    }
+                    showToast("Flagged \(emails.count) emails")
+                }
+            }
+            .padding(.top, Spacing.xxSmall)
+        }
+    }
+
+    private func actionButton(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: icon)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(.blue)
+                .padding(.horizontal, Spacing.xSmall)
+                .padding(.vertical, 4)
+                .background(Color.blue.opacity(0.08))
+                .cornerRadius(CornerRadius.small)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func showToast(_ message: String) {
+        withAnimation(AnimationTiming.fast) { showActionToast = message }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            withAnimation(AnimationTiming.fast) { showActionToast = nil }
+        }
+    }
+
+    private static func formatShortDate(_ raw: String) -> String {
+        if let date = MBOXParser.parseDate(raw) {
+            let fmt = DateFormatter()
+            fmt.dateFormat = "MMM d, yyyy"
+            return fmt.string(from: date)
+        }
+        return String(raw.prefix(11))
+    }
+
+    private func exportEmailsAsCSV(_ emails: [MBOXParser.RawEmail]) {
+        var csv = "From,To,Subject,Date,Body\n"
+        for email in emails {
+            let from = (email.headers["From"] ?? email.headers["from"] ?? "").replacingOccurrences(of: "\"", with: "\"\"")
+            let to = (email.headers["To"] ?? email.headers["to"] ?? "").replacingOccurrences(of: "\"", with: "\"\"")
+            let subj = (email.headers["Subject"] ?? email.headers["subject"] ?? "").replacingOccurrences(of: "\"", with: "\"\"")
+            let body = String(email.plainBody.prefix(500)).replacingOccurrences(of: "\"", with: "\"\"").replacingOccurrences(of: "\n", with: " ")
+            csv += "\"\(from)\",\"\(to)\",\"\(subj)\",\"\(email.timestamp)\",\"\(body)\"\n"
+        }
+        #if os(macOS)
+        if let url = PlatformFileSaver.savePanel(suggestedName: "ai_search_results.csv", allowedTypes: [.commaSeparatedText]) {
+            try? csv.write(to: url, atomically: true, encoding: .utf8)
+            showToast("Exported \(emails.count) emails as CSV")
+        }
+        #else
+        PlatformClipboard.copyString(csv)
+        showToast("CSV copied to clipboard")
+        #endif
+    }
+
+    private func exportEmailsAsJSON(_ emails: [MBOXParser.RawEmail]) {
+        let items = emails.map { email -> [String: String] in
+            ["from": email.headers["From"] ?? email.headers["from"] ?? "",
+             "to": email.headers["To"] ?? email.headers["to"] ?? "",
+             "subject": email.headers["Subject"] ?? email.headers["subject"] ?? "",
+             "date": email.timestamp,
+             "body": email.plainBody]
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: items, options: [.prettyPrinted, .sortedKeys]),
+              let json = String(data: data, encoding: .utf8) else { return }
+        #if os(macOS)
+        if let url = PlatformFileSaver.savePanel(suggestedName: "ai_search_results.json", allowedTypes: [.json]) {
+            try? json.write(to: url, atomically: true, encoding: .utf8)
+            showToast("Exported \(emails.count) emails as JSON")
+        }
+        #else
+        PlatformClipboard.copyString(json)
+        showToast("JSON copied to clipboard")
+        #endif
+    }
+
+    private func exportEmailsAsEML(_ emails: [MBOXParser.RawEmail]) {
+        #if os(macOS)
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Export Here"
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        var count = 0
+        for email in emails {
+            let subj = (email.headers["Subject"] ?? email.headers["subject"] ?? "email")
+                .replacingOccurrences(of: "/", with: "_").prefix(50)
+            let filename = "\(subj)_\(count).eml"
+            let url = folder.appendingPathComponent(String(filename))
+            try? email.rawSource.write(to: url, atomically: true, encoding: .utf8)
+            count += 1
+        }
+        showToast("Exported \(count) EML files")
+        #else
+        PlatformClipboard.copyString(emails.map(\.rawSource).joined(separator: "\n\n"))
+        showToast("EML content copied to clipboard")
+        #endif
     }
 
     // MARK: - Input Area
@@ -662,6 +1135,8 @@ struct AIAssistantView: View {
                 }
                 streamingQuery = currentQuery
                 streamingAnswer = ""
+                let retrieved = Self.retrieveRelevantEmails(query: currentQuery, emails: emailsCopy, priorContext: "", predictions: [:])
+                let retrievedIDs = Array(retrieved.prefix(5).map(\.id))
                 var answer = await askFoundationModelStreaming(currentQuery)
                 guard !Task.isCancelled else { return }
                 if !context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -670,7 +1145,7 @@ struct AIAssistantView: View {
                 streamingQuery = ""
                 streamingAnswer = ""
                 withAnimation(AnimationTiming.normal) {
-                    conversationHistory.append((query: currentQuery, answer: answer, timestamp: Date()))
+                    conversationHistory.append((query: currentQuery, answer: answer, timestamp: Date(), relatedEmailIDs: retrievedIDs))
                     if !storeManager.isPremium { freeQueryCount += 1 }
                 }
             }
@@ -694,6 +1169,7 @@ struct AIAssistantView: View {
 
                 // Step 2: If Apple AI available + query is open-ended, use agentic RAG pipeline
                 var answer: String
+                var retrievedIDs: [UUID] = []
                 if canUseAppleAI && Self.isOpenEndedQuery(currentQuery) {
                     let priorIDs = priorRetrievedEmailIDs
                     let ragResult = await Task.detached(priority: .userInitiated) {
@@ -701,6 +1177,7 @@ struct AIAssistantView: View {
                     }.value
 
                     priorRetrievedEmailIDs.formUnion(ragResult.retrievedEmails.map(\.id))
+                    retrievedIDs = Array(ragResult.retrievedEmails.prefix(5).map(\.id))
 
                     streamingQuery = currentQuery
                     streamingAnswer = ""
@@ -714,13 +1191,15 @@ struct AIAssistantView: View {
                     streamingAnswer = ""
                 } else {
                     answer = nlpResult
+                    let quickRetrieve = Self.retrieveRelevantEmails(query: currentQuery, emails: emailsCopy, priorContext: priorContext, predictions: currentPredictions)
+                    retrievedIDs = Array(quickRetrieve.prefix(5).map(\.id))
                 }
 
                 if !context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     answer = "Scoped to search: \"\(context)\" (\(emailsCopy.count) matches)\n\n" + answer
                 }
                 withAnimation(AnimationTiming.normal) {
-                    conversationHistory.append((query: currentQuery, answer: answer, timestamp: Date()))
+                    conversationHistory.append((query: currentQuery, answer: answer, timestamp: Date(), relatedEmailIDs: retrievedIDs))
                     if !storeManager.isPremium { freeQueryCount += 1 }
                 }
             }
@@ -865,6 +1344,29 @@ struct AIAssistantView: View {
             "important", "urgent", "missed", "action", "summarize", "thread", "conversation", "summary",
             "overview", "analyze", "cleanup", "storage", "disk", "space", "biggest", "relationship",
             "communication", "mention", "positive", "negative",
+            "smallest", "shortest", "longest", "largest", "fewest", "heaviest", "long",
+            "replied", "active", "busiest", "messages",
+            "many", "much", "count", "total", "sent", "send", "received",
+            "email", "mail", "message",
+            "unanswered", "unreplied", "ignored", "no reply", "never replied",
+            "forwarded", "forward", "fwd",
+            "link", "url", "links", "urls", "http", "click",
+            "response time", "reply time", "slow", "fast", "quick",
+            "late", "night", "morning", "afternoon", "evening", "midnight", "hour",
+            "between", "to",
+            "pdf", "image", "photo", "picture", "document", "spreadsheet", "excel", "word",
+            "zip", "csv", "ics", "calendar", "invite",
+            "compare", "versus", "vs", "difference",
+            "habit", "trend", "pattern", "volume", "over time", "monthly", "weekly", "daily",
+            "cc", "bcc", "copied", "carbon copy",
+            "no subject", "blank subject", "empty subject",
+            "newsletter", "unsubscribe", "marketing", "promotional", "promo",
+            "out of office", "auto-reply", "autoreply", "automatic reply", "ooo", "vacation",
+            "weekend", "saturday", "sunday",
+            "money", "dollar", "payment", "invoice", "amount", "price", "cost",
+            "deadline", "due", "overdue", "expire", "expiring",
+            "group", "distribution", "mass", "bulk",
+            "who do i", "who did i",
         ]
         let specificTerms = extraTerms.filter { !handlerKeywords.contains($0.lowercased()) }
         let dateRange = EmailNLPEngine.parseDateRange(from: lower)
@@ -920,10 +1422,10 @@ struct AIAssistantView: View {
             // Natural language framing
             var response = scopeLabel
             let toneDesc: String
-            if result.average > 0.3 { toneDesc = "quite positive" }
+            if result.average > 0.4 { toneDesc = "quite positive" }
             else if result.average > 0.1 { toneDesc = "generally positive" }
             else if result.average > -0.1 { toneDesc = "fairly neutral" }
-            else if result.average > -0.3 { toneDesc = "somewhat negative" }
+            else if result.average > -0.4 { toneDesc = "somewhat negative" }
             else { toneDesc = "noticeably negative" }
 
             response += "Your emails have a **\(toneDesc)** tone overall. "
@@ -1032,8 +1534,8 @@ struct AIAssistantView: View {
             let languages = EmailNLPEngine.detectLanguages(in: scopedEmails)
             if languages.isEmpty { return "I couldn't reliably detect languages in these emails — the content may be too short for accurate detection." }
             var result = scopeLabel
-            if languages.count == 1 {
-                result += "Your emails are predominantly in **\(languages[0].language)** — virtually all \(languages[0].count) emails are written in this language.\n"
+            if languages.count == 1, let first = languages.first {
+                result += "Your emails are predominantly in **\(first.language)** — virtually all \(first.count) emails are written in this language.\n"
             } else {
                 result += "Your emails span **\(languages.count) languages**. Here's the breakdown:\n\n"
                 for lang in languages {
@@ -1252,8 +1754,7 @@ struct AIAssistantView: View {
                 guard let count = counts[cat], count > 0 else { return nil }
                 return (cat, count)
             }.sorted { $0.1 > $1.1 }
-            if sorted.isEmpty { return scopeLabel + "I couldn't categorize these emails — there may not be enough content to classify." }
-            let topCat = sorted[0]
+            guard let topCat = sorted.first else { return scopeLabel + "I couldn't categorize these emails — there may not be enough content to classify." }
             var result = scopeLabel + "Your inbox is primarily made up of **\(topCat.0.rawValue.lowercased())** emails (\(pct(topCat.1, scopedEmails.count))% of your archive). Here's the full breakdown:\n\n"
             for (cat, count) in sorted {
                 let bar = String(repeating: "█", count: max(1, Int(Double(count) / Double(scopedEmails.count) * 20)))
@@ -1282,6 +1783,12 @@ struct AIAssistantView: View {
             let medium = results.filter { $0.level == .medium }
             let low = results.count - high.count - medium.count
 
+            let repliedToIDs = Set(scopedEmails.compactMap { $0.inReplyTo })
+            let unansweredHighPriority = high.filter { r in
+                guard let msgID = r.email.headers["Message-ID"] ?? r.email.headers["Message-Id"] else { return false }
+                return r.email.messageType == "received" && !repliedToIDs.contains(msgID)
+            }
+
             var result = scopeLabel
             if high.isEmpty && medium.isEmpty {
                 result += "Everything looks manageable — I didn't find any high or medium priority emails that need your immediate attention.\n"
@@ -1290,13 +1797,17 @@ struct AIAssistantView: View {
             } else {
                 result += "You have **\(high.count) high-priority** email\(high.count == 1 ? "" : "s") that may need your attention"
                 if medium.count > 0 { result += ", plus \(medium.count) at medium priority" }
+                if !unansweredHighPriority.isEmpty { result += " — **\(unansweredHighPriority.count) still unanswered**" }
                 result += ".\n\n"
             }
             if !high.isEmpty {
                 result += "**Needs attention:**\n\n"
                 for (i, r) in high.prefix(5).enumerated() {
                     let from = r.email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? r.email.headers["From"] ?? "?"
-                    result += "\(i + 1). **\(r.email.headers["Subject"] ?? "(No Subject)")**\n"
+                    let msgID = r.email.headers["Message-ID"] ?? r.email.headers["Message-Id"] ?? ""
+                    let isUnanswered = r.email.messageType == "received" && !repliedToIDs.contains(msgID) && !msgID.isEmpty
+                    let unansweredTag = isUnanswered ? " ⚠️ *unanswered*" : ""
+                    result += "\(i + 1). **\(r.email.headers["Subject"] ?? "(No Subject)")**\(unansweredTag)\n"
                     result += "   From **\(from)** — \(r.reasons.joined(separator: ", "))\n\n"
                 }
             }
@@ -1309,6 +1820,7 @@ struct AIAssistantView: View {
                 }
             }
             if low > 0 { result += "The remaining \(low) email\(low == 1 ? "" : "s") are routine and low priority." }
+            if !unansweredHighPriority.isEmpty { result += "\n\nAsk \"unanswered emails\" for a full list of emails you haven't replied to." }
             return result
         }
 
@@ -1349,6 +1861,127 @@ struct AIAssistantView: View {
             return result
         }
 
+        // MARK: - Longest / shortest / most words
+        if lower.contains("longest") || lower.contains("shortest") || lower.contains("most words") || lower.contains("fewest words") || lower.contains("biggest email") || lower.contains("smallest email") || (lower.contains("long") && lower.contains("email")) {
+            let isLongest = !lower.contains("shortest") && !lower.contains("fewest") && !lower.contains("smallest")
+            let sorted = scopedEmails.sorted { a, b in
+                let aLen = a.plainBody.isEmpty ? a.htmlBody.count : a.plainBody.count
+                let bLen = b.plainBody.isEmpty ? b.htmlBody.count : b.plainBody.count
+                return isLongest ? aLen > bLen : aLen < bLen
+            }
+            let top = Array(sorted.prefix(5))
+            guard let winner = top.first else { return scopeLabel + "No emails found to analyze." }
+
+            let label = isLongest ? "longest" : "shortest"
+            let winnerBody = winner.plainBody.isEmpty ? winner.htmlBody : winner.plainBody
+            let winnerChars = winnerBody.count
+            let winnerWords = winnerBody.split(separator: " ").count
+            let winnerFrom = winner.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "Unknown"
+            let winnerSubj = winner.headers["Subject"] ?? winner.headers["subject"] ?? "(No Subject)"
+            let winnerDate: String = {
+                guard let dateStr = winner.headers["Date"], let date = MBOXParser.parseDate(dateStr) else { return "" }
+                let formatter = DateFormatter()
+                formatter.dateStyle = .medium
+                return formatter.string(from: date)
+            }()
+            let preview = String(winnerBody.prefix(120)).replacingOccurrences(of: "\n", with: " ")
+
+            var result = scopeLabel
+            result += "**\(label.capitalized) email: \"\(winnerSubj)\"** from **\(winnerFrom)**"
+            if !winnerDate.isEmpty { result += " (\(winnerDate))" }
+            result += "\n"
+            result += "\(winnerChars) characters · \(winnerWords) words\n\n"
+            if !preview.isEmpty {
+                result += "*\"\(preview)...\"*\n\n"
+            }
+
+            let maxLen = (top.first.map { ($0.plainBody.isEmpty ? $0.htmlBody : $0.plainBody).count }) ?? 1
+            result += "**All emails ranked by length:**\n\n"
+            for (i, email) in top.enumerated() {
+                let body = email.plainBody.isEmpty ? email.htmlBody : email.plainBody
+                let chars = body.count
+                let words = body.split(separator: " ").count
+                let subj = email.headers["Subject"] ?? email.headers["subject"] ?? "(No Subject)"
+                let from = email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "Unknown"
+                let barLen = maxLen > 0 ? max(1, Int(Double(chars) / Double(maxLen) * 20)) : 1
+                let bar = String(repeating: "█", count: barLen)
+                result += "\(i + 1). **\(subj)** — \(chars) chars, \(words) words\n"
+                result += "   \(from) \(bar)\n"
+            }
+
+            let avgChars = scopedEmails.isEmpty ? 0 : scopedEmails.reduce(0) { $0 + ($1.plainBody.isEmpty ? $1.htmlBody : $1.plainBody).count } / scopedEmails.count
+            result += "\nAverage email length across your archive: **\(avgChars) characters**."
+            return result
+        }
+
+        // MARK: - Most/fewest attachments
+        if (lower.contains("most attachment") || lower.contains("biggest attachment") || lower.contains("largest attachment") || lower.contains("heaviest email") || lower.contains("which email has attachment")) {
+            let withAttach = scopedEmails.filter { !$0.attachments.isEmpty }
+                .sorted { $0.attachments.count > $1.attachments.count }
+            let top = Array(withAttach.prefix(5))
+
+            guard let winner = top.first else { return scopeLabel + "None of these emails have attachments." }
+            let winnerSubj = winner.headers["Subject"] ?? "(No Subject)"
+            let winnerFrom = winner.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "Unknown"
+
+            var result = scopeLabel
+            result += "**Most attachments: \"\(winnerSubj)\"** from **\(winnerFrom)** — \(winner.attachments.count) attachment\(winner.attachments.count == 1 ? "" : "s")\n\n"
+
+            let types = winner.attachments.map { $0.filename.isEmpty ? $0.mimeType : $0.filename }
+            result += "Attachments: \(types.joined(separator: ", "))\n\n"
+
+            if top.count > 1 {
+                result += "**Emails with most attachments:**\n\n"
+                for (i, email) in top.enumerated() {
+                    let subj = email.headers["Subject"] ?? "(No Subject)"
+                    let from = email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "Unknown"
+                    let fileTypes = email.attachments.compactMap(\.filename).prefix(3).joined(separator: ", ")
+                    result += "\(i + 1). **\(subj)** — \(email.attachments.count) files (\(fileTypes))\n"
+                    result += "   From **\(from)**\n"
+                }
+            }
+
+            let totalWithAttach = scopedEmails.filter { !$0.attachments.isEmpty }.count
+            let pct = scopedEmails.isEmpty ? 0 : Int(Double(totalWithAttach) / Double(scopedEmails.count) * 100)
+            result += "\n\(totalWithAttach) of \(scopedEmails.count) emails (\(pct)%) have attachments."
+            return result
+        }
+
+        // MARK: - Most replied-to thread
+        if lower.contains("most replied") || lower.contains("most active thread") || lower.contains("busiest thread") || lower.contains("longest thread") || lower.contains("most messages") {
+            let threads = ThreadGrouper.group(scopedEmails)
+            let sorted = threads.sorted { $0.count > $1.count }
+            let top = Array(sorted.prefix(5))
+
+            guard let winner = top.first else { return scopeLabel + "No conversation threads found." }
+            var result = scopeLabel
+            result += "**Most active thread: \"\(winner.subject)\"** — \(winner.count) messages\n\n"
+
+            let participants = Set(winner.allEmails.compactMap {
+                $0.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces)
+            })
+            result += "Participants: \(participants.joined(separator: ", "))\n"
+
+            if let first = winner.allEmails.first?.headers["Date"].flatMap({ MBOXParser.parseDate($0) }),
+               let last = winner.allEmails.last?.headers["Date"].flatMap({ MBOXParser.parseDate($0) }) {
+                let days = Calendar.current.dateComponents([.day], from: first, to: last).day ?? 0
+                result += "Span: \(days) day\(days == 1 ? "" : "s")\n"
+            }
+
+            if top.count > 1 {
+                result += "\n**Top threads by reply count:**\n\n"
+                for (i, thread) in top.enumerated() {
+                    let partCount = Set(thread.allEmails.compactMap {
+                        $0.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces)
+                    }).count
+                    let maxCount = max(1, top[0].count)
+                    let bar = String(repeating: "█", count: max(1, Int(Double(thread.count) / Double(maxCount) * 15)))
+                    result += "\(i + 1). **\(thread.subject)** — \(thread.count) msgs, \(partCount) people \(bar)\n"
+                }
+            }
+            return result
+        }
+
         if lower.contains("cleanup") || lower.contains("storage") || lower.contains("disk") || lower.contains("space") || lower.contains("biggest") {
             let totalSize = scopedEmails.reduce(0) { $0 + $1.rawSource.utf8.count }
             let totalMB = Double(totalSize) / (1024.0 * 1024.0)
@@ -1374,6 +2007,862 @@ struct AIAssistantView: View {
             if let topEntry = topSenders.first {
                 let topName = topEntry.key.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? topEntry.key
                 result += "\nIf you're looking to free up space, emails from **\(topName)** would be the best place to start."
+            }
+            return result
+        }
+
+        // MARK: - Unanswered / unreplied emails
+        if lower.contains("unanswered") || lower.contains("unreplied") || lower.contains("no reply") || lower.contains("never replied") || lower.contains("ignored") || (lower.contains("didn't") && lower.contains("reply")) || (lower.contains("not") && lower.contains("respond")) {
+            let repliedToIDs = Set(scopedEmails.compactMap { $0.inReplyTo })
+
+            let unanswered = scopedEmails.filter { email in
+                guard let msgID = email.headers["Message-ID"] ?? email.headers["Message-Id"] else { return false }
+                return email.messageType == "received" && !repliedToIDs.contains(msgID)
+            }.sorted { a, b in
+                let da = MBOXParser.parseDate(a.headers["Date"]) ?? .distantPast
+                let db = MBOXParser.parseDate(b.headers["Date"]) ?? .distantPast
+                return da > db
+            }
+
+            let hasQuestion = unanswered.filter { email in
+                let body = email.plainBody.isEmpty ? email.htmlBody : email.plainBody
+                return body.contains("?") || (email.headers["Subject"] ?? "").contains("?")
+            }
+
+            var result = scopeLabel
+            if unanswered.isEmpty {
+                result += "You've replied to everything — no unanswered emails found."
+                return result
+            }
+
+            result += "Found **\(unanswered.count) email\(unanswered.count == 1 ? "" : "s")** you haven't replied to"
+            if !hasQuestion.isEmpty {
+                result += " (\(hasQuestion.count) contain questions)"
+            }
+            result += ".\n\n"
+
+            let toShow = hasQuestion.isEmpty ? unanswered : hasQuestion
+            let label = hasQuestion.isEmpty ? "Most recent unanswered" : "Emails with unanswered questions"
+            result += "**\(label):**\n\n"
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
+            for (i, email) in toShow.prefix(8).enumerated() {
+                let from = email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "Unknown"
+                let dateStr = email.headers["Date"].flatMap { MBOXParser.parseDate($0) }.map { formatter.string(from: $0) } ?? ""
+                let preview = String((email.plainBody.isEmpty ? email.htmlBody : email.plainBody).prefix(80)).replacingOccurrences(of: "\n", with: " ")
+                result += "\(i + 1). **\(email.headers["Subject"] ?? "(No Subject)")** from **\(from)**\n"
+                result += "   \(dateStr)"
+                if !preview.isEmpty { result += " — *\"\(preview)...\"*" }
+                result += "\n\n"
+            }
+            if unanswered.count > 8 { result += "...and \(unanswered.count - 8) more unanswered emails." }
+            return result
+        }
+
+        // MARK: - Forwarded emails
+        if lower.contains("forwarded") || lower.contains("forward") || lower.contains("fwd") {
+            let forwarded = scopedEmails.filter { email in
+                let subject = (email.headers["Subject"] ?? "").lowercased()
+                return subject.hasPrefix("fwd:") || subject.hasPrefix("fw:") || subject.contains("[fwd") || subject.contains("forwarded")
+            }.sorted { a, b in
+                let da = MBOXParser.parseDate(a.headers["Date"]) ?? .distantPast
+                let db = MBOXParser.parseDate(b.headers["Date"]) ?? .distantPast
+                return da > db
+            }
+
+            var result = scopeLabel
+            if forwarded.isEmpty {
+                result += "No forwarded emails found in your archive."
+                return result
+            }
+
+            let pctForwarded = scopedEmails.count > 0 ? Int(Double(forwarded.count) / Double(scopedEmails.count) * 100) : 0
+            result += "Found **\(forwarded.count) forwarded email\(forwarded.count == 1 ? "" : "s")** (\(pctForwarded)% of your archive).\n\n"
+
+            var forwarderCounts: [String: Int] = [:]
+            for email in forwarded {
+                let from = email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "Unknown"
+                forwarderCounts[from, default: 0] += 1
+            }
+            let topForwarders = forwarderCounts.sorted { $0.value > $1.value }.prefix(3)
+            if let top = topForwarders.first {
+                result += "**\(top.key)** forwards the most (\(top.value) emails).\n\n"
+            }
+
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
+            result += "**Recent forwards:**\n\n"
+            for (i, email) in forwarded.prefix(8).enumerated() {
+                let from = email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "Unknown"
+                let dateStr = email.headers["Date"].flatMap { MBOXParser.parseDate($0) }.map { formatter.string(from: $0) } ?? ""
+                let subj = (email.headers["Subject"] ?? "(No Subject)").replacingOccurrences(of: "Fwd: ", with: "").replacingOccurrences(of: "FW: ", with: "").replacingOccurrences(of: "Fw: ", with: "")
+                result += "\(i + 1). **\(subj)** — forwarded by **\(from)**, \(dateStr)\n"
+            }
+            if forwarded.count > 8 { result += "\n...and \(forwarded.count - 8) more." }
+            return result
+        }
+
+        // MARK: - Emails with links/URLs
+        if lower.contains("link") || lower.contains("url") || (lower.contains("http") && !lower.contains("phishing")) || lower.contains("click") {
+            let urlRegex = try? NSRegularExpression(pattern: "https?://[^\\s<>\"']+", options: .caseInsensitive)
+            var emailsWithLinks: [(email: MBOXParser.RawEmail, linkCount: Int, domains: [String])] = []
+
+            for email in scopedEmails {
+                let body = email.plainBody.isEmpty ? email.htmlBody : email.plainBody
+                guard let regex = urlRegex else { continue }
+                let matches = regex.matches(in: body, range: NSRange(body.startIndex..., in: body))
+                if !matches.isEmpty {
+                    var domains: [String] = []
+                    for match in matches.prefix(10) {
+                        if let range = Range(match.range, in: body) {
+                            let url = String(body[range])
+                            if let host = URLComponents(string: url)?.host {
+                                domains.append(host)
+                            }
+                        }
+                    }
+                    emailsWithLinks.append((email: email, linkCount: matches.count, domains: domains))
+                }
+            }
+
+            var result = scopeLabel
+            if emailsWithLinks.isEmpty {
+                result += "No emails containing links or URLs found."
+                return result
+            }
+
+            let totalLinks = emailsWithLinks.reduce(0) { $0 + $1.linkCount }
+            let pctWithLinks = scopedEmails.count > 0 ? Int(Double(emailsWithLinks.count) / Double(scopedEmails.count) * 100) : 0
+            result += "**\(emailsWithLinks.count) email\(emailsWithLinks.count == 1 ? "" : "s")** contain links (\(pctWithLinks)% of your archive), with **\(totalLinks) total URLs** found.\n\n"
+
+            var domainCounts: [String: Int] = [:]
+            for entry in emailsWithLinks {
+                for domain in entry.domains { domainCounts[domain, default: 0] += 1 }
+            }
+            let topDomains = domainCounts.sorted { $0.value > $1.value }.prefix(5)
+            if !topDomains.isEmpty {
+                result += "**Most linked domains:**\n"
+                for domain in topDomains {
+                    result += "- \(domain.key) (\(domain.value) links)\n"
+                }
+                result += "\n"
+            }
+
+            let sorted = emailsWithLinks.sorted { $0.linkCount > $1.linkCount }
+            result += "**Emails with the most links:**\n\n"
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
+            for (i, entry) in sorted.prefix(5).enumerated() {
+                let from = entry.email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "Unknown"
+                let dateStr = entry.email.headers["Date"].flatMap { MBOXParser.parseDate($0) }.map { formatter.string(from: $0) } ?? ""
+                result += "\(i + 1). **\(entry.email.headers["Subject"] ?? "(No Subject)")** — \(entry.linkCount) links\n"
+                result += "   From **\(from)**, \(dateStr)\n"
+            }
+            result += "\nTip: Ask \"scan for phishing\" to check if any links look suspicious."
+            return result
+        }
+
+        // MARK: - Emails by time of day
+        if lower.contains("late night") || lower.contains("after midnight") || lower.contains("early morning") || lower.contains("after hours") || lower.contains("night email") || lower.contains("night owl") ||
+           ((lower.contains("morning") || lower.contains("afternoon") || lower.contains("evening") || lower.contains("night")) && (lower.contains("email") || lower.contains("sent") || lower.contains("mail"))) {
+            let calendar = Calendar.current
+            var morningEmails: [MBOXParser.RawEmail] = []    // 6-12
+            var afternoonEmails: [MBOXParser.RawEmail] = []  // 12-17
+            var eveningEmails: [MBOXParser.RawEmail] = []    // 17-22
+            var nightEmails: [MBOXParser.RawEmail] = []      // 22-6
+
+            for email in scopedEmails {
+                guard let date = email.headers["Date"].flatMap({ MBOXParser.parseDate($0) }) else { continue }
+                let hour = calendar.component(.hour, from: date)
+                switch hour {
+                case 6..<12: morningEmails.append(email)
+                case 12..<17: afternoonEmails.append(email)
+                case 17..<22: eveningEmails.append(email)
+                default: nightEmails.append(email)
+                }
+            }
+
+            let total = morningEmails.count + afternoonEmails.count + eveningEmails.count + nightEmails.count
+            var result = scopeLabel + "Here's when your emails are sent and received:\n\n"
+
+            let periods: [(String, [MBOXParser.RawEmail], String)] = [
+                ("Morning (6 AM–12 PM)", morningEmails, "🌅"),
+                ("Afternoon (12–5 PM)", afternoonEmails, "☀️"),
+                ("Evening (5–10 PM)", eveningEmails, "🌆"),
+                ("Night (10 PM–6 AM)", nightEmails, "🌙"),
+            ]
+
+            for (name, emails, icon) in periods {
+                let pct = total > 0 ? Int(Double(emails.count) / Double(total) * 100) : 0
+                let barLen = total > 0 ? max(1, Int(Double(emails.count) / Double(total) * 30)) : 1
+                let bar = String(repeating: "█", count: barLen)
+                result += "\(icon) **\(name):** \(emails.count) emails (\(pct)%) \(bar)\n"
+            }
+            result += "\n"
+
+            if lower.contains("late night") || lower.contains("after midnight") || lower.contains("night") || lower.contains("after hours") {
+                if nightEmails.isEmpty {
+                    result += "No late-night emails found — healthy boundaries!"
+                } else {
+                    let sorted = nightEmails.sorted { a, b in
+                        let da = MBOXParser.parseDate(a.headers["Date"]) ?? .distantPast
+                        let db = MBOXParser.parseDate(b.headers["Date"]) ?? .distantPast
+                        return da > db
+                    }
+                    let nightSent = nightEmails.filter { $0.messageType == "sent" }.count
+                    let nightReceived = nightEmails.count - nightSent
+                    result += "**Late-night activity:** \(nightSent) sent, \(nightReceived) received after hours.\n\n"
+                    let timeFmt = DateFormatter()
+                    timeFmt.dateStyle = .medium
+                    timeFmt.timeStyle = .short
+                    result += "**Recent night emails:**\n"
+                    for (i, email) in sorted.prefix(5).enumerated() {
+                        let from = email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "Unknown"
+                        let dateStr = email.headers["Date"].flatMap { MBOXParser.parseDate($0) }.map { timeFmt.string(from: $0) } ?? ""
+                        result += "\(i + 1). **\(email.headers["Subject"] ?? "(No Subject)")** — \(from), \(dateStr)\n"
+                    }
+                }
+            } else {
+                let peakPeriod = periods.max(by: { $0.1.count < $1.1.count })
+                if let peak = peakPeriod {
+                    result += "Your inbox is busiest in the **\(peak.0.components(separatedBy: " (").first ?? peak.0)**."
+                }
+            }
+            return result
+        }
+
+        // MARK: - Response time analysis
+        if lower.contains("response time") || lower.contains("reply time") || (lower.contains("how") && lower.contains("fast") && lower.contains("reply")) || (lower.contains("slow") && lower.contains("reply")) || (lower.contains("quick") && lower.contains("reply")) || lower.contains("average reply") || lower.contains("time to respond") {
+            let messageIDMap: [String: MBOXParser.RawEmail] = {
+                var map: [String: MBOXParser.RawEmail] = [:]
+                for email in scopedEmails {
+                    if let msgID = email.headers["Message-ID"] ?? email.headers["Message-Id"] {
+                        map[msgID] = email
+                    }
+                }
+                return map
+            }()
+
+            var contactResponseTimes: [String: [TimeInterval]] = [:]
+            var myResponseTimes: [TimeInterval] = []
+
+            for email in scopedEmails {
+                guard let replyToID = email.inReplyTo,
+                      let originalEmail = messageIDMap[replyToID],
+                      let replyDate = email.headers["Date"].flatMap({ MBOXParser.parseDate($0) }),
+                      let origDate = originalEmail.headers["Date"].flatMap({ MBOXParser.parseDate($0) }) else { continue }
+
+                let interval = replyDate.timeIntervalSince(origDate)
+                guard interval > 0 && interval < 30 * 24 * 3600 else { continue }
+
+                if email.messageType == "sent" {
+                    myResponseTimes.append(interval)
+                } else {
+                    let from = email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? email.headers["From"] ?? "Unknown"
+                    contactResponseTimes[from, default: []].append(interval)
+                }
+            }
+
+            var result = scopeLabel
+
+            if myResponseTimes.isEmpty && contactResponseTimes.isEmpty {
+                result += "I can't calculate response times — I need threaded conversations with Message-ID headers to track replies. Your emails may be standalone messages."
+                return result
+            }
+
+            result += "**Email Response Time Analysis**\n\n"
+
+            if !myResponseTimes.isEmpty {
+                let avgMine = myResponseTimes.reduce(0, +) / Double(myResponseTimes.count)
+                let medianMine = myResponseTimes.sorted()[myResponseTimes.count / 2]
+                result += "**Your response time:** You reply in **\(formatInterval(avgMine))** on average (median: \(formatInterval(medianMine))) based on \(myResponseTimes.count) replies.\n\n"
+            }
+
+            if !contactResponseTimes.isEmpty {
+                let contactAvgs = contactResponseTimes.map { (name: $0.key, avg: $0.value.reduce(0, +) / Double($0.value.count), count: $0.value.count) }
+                    .sorted { $0.avg < $1.avg }
+
+                let fastest = contactAvgs.prefix(3)
+                let slowest = contactAvgs.suffix(3).reversed()
+
+                if !fastest.isEmpty {
+                    result += "**Fastest to reply:**\n"
+                    for (i, c) in fastest.enumerated() {
+                        result += "\(i + 1). **\(c.name)** — \(formatInterval(c.avg)) average (\(c.count) replies)\n"
+                    }
+                    result += "\n"
+                }
+                if contactAvgs.count > 3 {
+                    result += "**Slowest to reply:**\n"
+                    for (i, c) in slowest.enumerated() {
+                        result += "\(i + 1). **\(c.name)** — \(formatInterval(c.avg)) average (\(c.count) replies)\n"
+                    }
+                }
+            }
+            return result
+        }
+
+        // MARK: - Emails with specific attachment types (PDF, images, spreadsheets, etc.)
+        if (lower.contains("pdf") || lower.contains("image") || lower.contains("photo") || lower.contains("picture") || lower.contains("spreadsheet") || lower.contains("excel") || lower.contains("word") || lower.contains("zip") || lower.contains("csv") || lower.contains("document")) && (lower.contains("email") || lower.contains("attachment") || lower.contains("with") || lower.contains("contain") || lower.contains("have") || lower.contains("find") || lower.contains("show")) {
+            let typeMap: [(keywords: [String], extensions: [String], label: String)] = [
+                (["pdf"], ["pdf"], "PDF"),
+                (["image", "photo", "picture"], ["jpg", "jpeg", "png", "gif", "bmp", "tiff", "heic", "webp"], "image"),
+                (["spreadsheet", "excel", "xlsx", "xls"], ["xlsx", "xls", "csv", "numbers"], "spreadsheet"),
+                (["word", "doc"], ["doc", "docx", "rtf"], "Word document"),
+                (["zip", "archive", "compressed"], ["zip", "gz", "tar", "rar", "7z"], "archive"),
+                (["csv"], ["csv"], "CSV"),
+                (["calendar", "invite", "ics"], ["ics"], "calendar invite"),
+            ]
+
+            var targetExts: [String] = []
+            var targetLabel = "matching"
+            for (keywords, extensions, label) in typeMap {
+                if keywords.contains(where: { lower.contains($0) }) {
+                    targetExts.append(contentsOf: extensions)
+                    targetLabel = label
+                }
+            }
+
+            let matched = scopedEmails.filter { email in
+                email.attachments.contains { att in
+                    let name = att.filename.lowercased()
+                    let mimeType = att.mimeType.lowercased()
+                    let extMatch = targetExts.contains { name.hasSuffix(".\($0)") }
+                    let mimeMatch: Bool
+                    if targetLabel == "image" {
+                        mimeMatch = mimeType.hasPrefix("image/")
+                    } else if targetLabel == "PDF" {
+                        mimeMatch = mimeType == "application/pdf"
+                    } else {
+                        mimeMatch = false
+                    }
+                    return extMatch || mimeMatch
+                }
+            }.sorted { a, b in
+                let da = MBOXParser.parseDate(a.headers["Date"]) ?? .distantPast
+                let db = MBOXParser.parseDate(b.headers["Date"]) ?? .distantPast
+                return da > db
+            }
+
+            var result = scopeLabel
+            if matched.isEmpty {
+                result += "No emails with \(targetLabel) attachments found."
+                return result
+            }
+
+            let totalAttachments = matched.reduce(0) { total, email in
+                total + email.attachments.filter { att in
+                    let name = att.filename.lowercased()
+                    return targetExts.contains { name.hasSuffix(".\($0)") } || (targetLabel == "image" && att.mimeType.lowercased().hasPrefix("image/")) || (targetLabel == "PDF" && att.mimeType.lowercased() == "application/pdf")
+                }.count
+            }
+
+            result += "Found **\(matched.count) email\(matched.count == 1 ? "" : "s")** with **\(totalAttachments) \(targetLabel) attachment\(totalAttachments == 1 ? "" : "s")**.\n\n"
+
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
+            for (i, email) in matched.prefix(8).enumerated() {
+                let from = email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "Unknown"
+                let dateStr = email.headers["Date"].flatMap { MBOXParser.parseDate($0) }.map { formatter.string(from: $0) } ?? ""
+                let fileNames = email.attachments.filter { att in
+                    let name = att.filename.lowercased()
+                    return targetExts.contains { name.hasSuffix(".\($0)") } || (targetLabel == "image" && att.mimeType.lowercased().hasPrefix("image/")) || (targetLabel == "PDF" && att.mimeType.lowercased() == "application/pdf")
+                }.map(\.filename)
+                result += "\(i + 1). **\(email.headers["Subject"] ?? "(No Subject)")** — \(from), \(dateStr)\n"
+                result += "   📎 \(fileNames.joined(separator: ", "))\n"
+            }
+            if matched.count > 8 { result += "\n...and \(matched.count - 8) more." }
+            return result
+        }
+
+        // MARK: - Compare two contacts
+        if lower.contains("compare") || lower.contains("versus") || lower.contains(" vs ") || (lower.contains("difference") && lower.contains("between")) {
+            let nameTagger = NLTagger(tagSchemes: [.nameType])
+            nameTagger.string = query
+            var detectedNames: [String] = []
+            nameTagger.enumerateTags(in: query.startIndex..<query.endIndex, unit: .word, scheme: .nameType, options: [.joinNames]) { tag, range in
+                if tag == .personalName || tag == .organizationName {
+                    detectedNames.append(String(query[range]))
+                }
+                return true
+            }
+
+            if detectedNames.isEmpty {
+                let parts = lower.replacingOccurrences(of: "compare", with: "")
+                    .replacingOccurrences(of: "versus", with: "and")
+                    .replacingOccurrences(of: " vs ", with: " and ")
+                    .components(separatedBy: " and ")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty && $0.count > 1 }
+                detectedNames = parts
+            }
+
+            if detectedNames.count >= 2 {
+                let name1 = detectedNames[0]
+                let name2 = detectedNames[1]
+                let emails1 = EmailNLPEngine.fuzzyMatchContacts(name: name1, in: scopedEmails)
+                let emails2 = EmailNLPEngine.fuzzyMatchContacts(name: name2, in: scopedEmails)
+
+                if emails1.isEmpty && emails2.isEmpty {
+                    return "I couldn't find emails from either \"\(name1)\" or \"\(name2)\"."
+                }
+
+                let displayName1 = emails1.first?.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? name1.capitalized
+                let displayName2 = emails2.first?.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? name2.capitalized
+
+                let sent1 = emails1.filter { $0.messageType == "sent" }.count
+                let recv1 = emails1.filter { $0.messageType == "received" }.count
+                let sent2 = emails2.filter { $0.messageType == "sent" }.count
+                let recv2 = emails2.filter { $0.messageType == "received" }.count
+
+                let sentiment1 = EmailNLPEngine.averageSentiment(of: emails1)
+                let sentiment2 = EmailNLPEngine.averageSentiment(of: emails2)
+                let tone1 = sentiment1.average > 0.1 ? "positive" : sentiment1.average < -0.1 ? "critical" : "neutral"
+                let tone2 = sentiment2.average > 0.1 ? "positive" : sentiment2.average < -0.1 ? "critical" : "neutral"
+
+                let dates1 = emails1.compactMap { MBOXParser.parseDate($0.headers["Date"]) }.sorted()
+                let dates2 = emails2.compactMap { MBOXParser.parseDate($0.headers["Date"]) }.sorted()
+                let dateFmt = DateFormatter()
+                dateFmt.dateStyle = .medium
+
+                let avgLen1 = emails1.isEmpty ? 0 : emails1.reduce(0) { $0 + ($1.plainBody.isEmpty ? $1.htmlBody : $1.plainBody).count } / emails1.count
+                let avgLen2 = emails2.isEmpty ? 0 : emails2.reduce(0) { $0 + ($1.plainBody.isEmpty ? $1.htmlBody : $1.plainBody).count } / emails2.count
+
+                var result = scopeLabel + "**\(displayName1)** vs **\(displayName2)**\n\n"
+                result += "| | **\(displayName1)** | **\(displayName2)** |\n"
+                result += "|---|---|---|\n"
+                result += "| Total emails | \(emails1.count) | \(emails2.count) |\n"
+                result += "| You sent | \(sent1) | \(sent2) |\n"
+                result += "| You received | \(recv1) | \(recv2) |\n"
+                result += "| Tone | \(tone1) | \(tone2) |\n"
+                result += "| Avg email length | \(avgLen1) chars | \(avgLen2) chars |\n"
+                if let first1 = dates1.first { result += "| First email | \(dateFmt.string(from: first1)) |" } else { result += "| First email | — |" }
+                if let first2 = dates2.first { result += " \(dateFmt.string(from: first2)) |\n" } else { result += " — |\n" }
+                if let last1 = dates1.last { result += "| Last email | \(dateFmt.string(from: last1)) |" } else { result += "| Last email | — |" }
+                if let last2 = dates2.last { result += " \(dateFmt.string(from: last2)) |\n" } else { result += " — |\n" }
+
+                let moreActive = emails1.count > emails2.count ? displayName1 : displayName2
+                let warmer = sentiment1.average > sentiment2.average ? displayName1 : displayName2
+                result += "\n**\(moreActive)** is the more active correspondent. **\(warmer)** has a warmer tone overall."
+                return result
+            }
+        }
+
+        // MARK: - Email volume trends over time
+        if lower.contains("habit") || lower.contains("trend") || lower.contains("over time") || lower.contains("volume") || (lower.contains("pattern") && !lower.contains("phishing")) || lower.contains("monthly") || lower.contains("weekly") || lower.contains("daily") {
+            let calendar = Calendar.current
+            var monthlyVolume: [(month: String, sent: Int, received: Int)] = []
+            var monthMap: [String: (sent: Int, received: Int)] = [:]
+            let monthFmt = DateFormatter()
+            monthFmt.dateFormat = "yyyy-MM"
+            let displayFmt = DateFormatter()
+            displayFmt.dateFormat = "MMM yyyy"
+
+            for email in scopedEmails {
+                guard let date = email.headers["Date"].flatMap({ MBOXParser.parseDate($0) }) else { continue }
+                let key = monthFmt.string(from: date)
+                var current = monthMap[key] ?? (sent: 0, received: 0)
+                if email.messageType == "sent" { current.sent += 1 } else { current.received += 1 }
+                monthMap[key] = current
+            }
+
+            let sortedMonths = monthMap.keys.sorted()
+            for key in sortedMonths {
+                if let date = monthFmt.date(from: key), let val = monthMap[key] {
+                    monthlyVolume.append((month: displayFmt.string(from: date), sent: val.sent, received: val.received))
+                }
+            }
+
+            guard !monthlyVolume.isEmpty else { return scopeLabel + "Not enough date data to show trends." }
+
+            var result = scopeLabel + "**Email Volume Trends**\n\n"
+
+            let maxTotal = monthlyVolume.map { $0.sent + $0.received }.max() ?? 1
+            for entry in monthlyVolume.suffix(12) {
+                let total = entry.sent + entry.received
+                let barLen = max(1, Int(Double(total) / Double(maxTotal) * 25))
+                let bar = String(repeating: "█", count: barLen)
+                result += "\(entry.month.padding(toLength: 8, withPad: " ", startingAt: 0)) \(bar) \(total) (\(entry.sent)↑ \(entry.received)↓)\n"
+            }
+            result += "\n"
+
+            let totalSent = monthlyVolume.reduce(0) { $0 + $1.sent }
+            let totalRecv = monthlyVolume.reduce(0) { $0 + $1.received }
+            let avgMonthly = monthlyVolume.isEmpty ? 0 : (totalSent + totalRecv) / monthlyVolume.count
+            result += "**Average:** \(avgMonthly) emails/month (\(monthlyVolume.isEmpty ? 0 : totalSent / monthlyVolume.count) sent, \(monthlyVolume.isEmpty ? 0 : totalRecv / monthlyVolume.count) received)\n"
+
+            if monthlyVolume.count >= 3 {
+                let recentAvg = monthlyVolume.suffix(3).reduce(0) { $0 + $1.sent + $1.received } / 3
+                let olderAvg = monthlyVolume.prefix(max(1, monthlyVolume.count - 3)).reduce(0) { $0 + $1.sent + $1.received } / max(1, monthlyVolume.count - 3)
+                if recentAvg > olderAvg + 5 {
+                    result += "\n📈 Your email volume has been **increasing** recently."
+                } else if recentAvg < olderAvg - 5 {
+                    result += "\n📉 Your email volume has been **decreasing** recently."
+                } else {
+                    result += "\n📊 Your email volume has been **steady**."
+                }
+            }
+
+            let peakMonth = monthlyVolume.max(by: { ($0.sent + $0.received) < ($1.sent + $1.received) })
+            if let peak = peakMonth {
+                result += "\n**Peak month:** \(peak.month) with \(peak.sent + peak.received) emails."
+            }
+
+            let dayOfWeekCounts = [Int](repeating: 0, count: 8)
+            var dowCounts = dayOfWeekCounts
+            for email in scopedEmails {
+                guard let date = email.headers["Date"].flatMap({ MBOXParser.parseDate($0) }) else { continue }
+                let dow = calendar.component(.weekday, from: date)
+                dowCounts[dow] += 1
+            }
+            let weekendCount = dowCounts[1] + dowCounts[7]
+            let weekdayCount = (2...6).reduce(0) { $0 + dowCounts[$1] }
+            let weekendPct = (weekendCount + weekdayCount) > 0 ? Int(Double(weekendCount) / Double(weekendCount + weekdayCount) * 100) : 0
+            result += "\n**Weekend vs weekday:** \(weekendPct)% of emails are on weekends."
+
+            return result
+        }
+
+        // MARK: - CC'd / BCC'd emails
+        if lower.contains("cc'd") || lower.contains("cc me") || lower.contains("copied on") || lower.contains("carbon copy") || lower.contains("bcc") || (lower.contains("cc") && (lower.contains("email") || lower.contains("mail"))) {
+            let ccEmails = scopedEmails.filter { email in
+                let cc = email.headers["Cc"] ?? email.headers["CC"] ?? ""
+                return !cc.isEmpty
+            }.sorted { a, b in
+                let da = MBOXParser.parseDate(a.headers["Date"]) ?? .distantPast
+                let db = MBOXParser.parseDate(b.headers["Date"]) ?? .distantPast
+                return da > db
+            }
+
+            var result = scopeLabel
+            if ccEmails.isEmpty {
+                result += "No emails with CC recipients found."
+                return result
+            }
+
+            let pctCC = scopedEmails.count > 0 ? Int(Double(ccEmails.count) / Double(scopedEmails.count) * 100) : 0
+            result += "**\(ccEmails.count) email\(ccEmails.count == 1 ? "" : "s")** have CC recipients (\(pctCC)% of your archive).\n\n"
+
+            var ccCounts: [String: Int] = [:]
+            for email in ccEmails {
+                let cc = email.headers["Cc"] ?? email.headers["CC"] ?? ""
+                for addr in cc.split(separator: ",").map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) }) {
+                    let name = addr.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? addr
+                    ccCounts[name, default: 0] += 1
+                }
+            }
+            let topCC = ccCounts.sorted { $0.value > $1.value }.prefix(5)
+            if !topCC.isEmpty {
+                result += "**Most frequently CC'd:**\n"
+                for (i, entry) in topCC.enumerated() {
+                    result += "\(i + 1). **\(entry.key)** — CC'd on \(entry.value) email\(entry.value == 1 ? "" : "s")\n"
+                }
+                result += "\n"
+            }
+
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
+            result += "**Recent CC'd emails:**\n\n"
+            for (i, email) in ccEmails.prefix(5).enumerated() {
+                let from = email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "Unknown"
+                let dateStr = email.headers["Date"].flatMap { MBOXParser.parseDate($0) }.map { formatter.string(from: $0) } ?? ""
+                result += "\(i + 1). **\(email.headers["Subject"] ?? "(No Subject)")** — \(from), \(dateStr)\n"
+            }
+            return result
+        }
+
+        // MARK: - Emails with no subject
+        if lower.contains("no subject") || lower.contains("blank subject") || lower.contains("empty subject") || lower.contains("without subject") || lower.contains("missing subject") {
+            let noSubject = scopedEmails.filter { email in
+                let subject = (email.headers["Subject"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                return subject.isEmpty
+            }.sorted { a, b in
+                let da = MBOXParser.parseDate(a.headers["Date"]) ?? .distantPast
+                let db = MBOXParser.parseDate(b.headers["Date"]) ?? .distantPast
+                return da > db
+            }
+
+            var result = scopeLabel
+            if noSubject.isEmpty {
+                result += "All emails have subject lines — none are blank."
+                return result
+            }
+
+            let pct = scopedEmails.count > 0 ? Int(Double(noSubject.count) / Double(scopedEmails.count) * 100) : 0
+            result += "Found **\(noSubject.count) email\(noSubject.count == 1 ? "" : "s")** with no subject line (\(pct)% of archive).\n\n"
+
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
+            for (i, email) in noSubject.prefix(8).enumerated() {
+                let from = email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "Unknown"
+                let dateStr = email.headers["Date"].flatMap { MBOXParser.parseDate($0) }.map { formatter.string(from: $0) } ?? ""
+                let preview = String((email.plainBody.isEmpty ? email.htmlBody : email.plainBody).prefix(60)).replacingOccurrences(of: "\n", with: " ")
+                result += "\(i + 1). From **\(from)** — \(dateStr)\n"
+                if !preview.isEmpty { result += "   *\"\(preview)...\"*\n" }
+            }
+            if noSubject.count > 8 { result += "\n...and \(noSubject.count - 8) more." }
+            return result
+        }
+
+        // MARK: - Newsletters / marketing / promotional
+        if lower.contains("newsletter") || lower.contains("unsubscribe") || lower.contains("marketing") || lower.contains("promotional") || lower.contains("promo") || lower.contains("mailing list") {
+            let newsletters = scopedEmails.filter { email in
+                let body = (email.plainBody.isEmpty ? email.htmlBody : email.plainBody).lowercased()
+                let from = (email.headers["From"] ?? "").lowercased()
+                let listHeader = email.headers["List-Unsubscribe"] ?? email.headers["List-Id"] ?? ""
+                return body.contains("unsubscribe") || !listHeader.isEmpty ||
+                    from.contains("newsletter") || from.contains("noreply") || from.contains("no-reply") ||
+                    from.contains("marketing") || from.contains("news@") || from.contains("updates@")
+            }
+
+            var result = scopeLabel
+            if newsletters.isEmpty {
+                result += "No newsletters or marketing emails detected."
+                return result
+            }
+
+            let pctNews = scopedEmails.count > 0 ? Int(Double(newsletters.count) / Double(scopedEmails.count) * 100) : 0
+            result += "Found **\(newsletters.count) newsletter/marketing email\(newsletters.count == 1 ? "" : "s")** (\(pctNews)% of your archive).\n\n"
+
+            var senderCounts: [String: Int] = [:]
+            for email in newsletters {
+                let from = email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? email.headers["From"] ?? "Unknown"
+                senderCounts[from, default: 0] += 1
+            }
+            let topSenders = senderCounts.sorted { $0.value > $1.value }.prefix(8)
+            result += "**Top newsletter sources:**\n\n"
+            for (i, entry) in topSenders.enumerated() {
+                result += "\(i + 1). **\(entry.key)** — \(entry.value) email\(entry.value == 1 ? "" : "s")\n"
+            }
+            if senderCounts.count > 8 { result += "\n...and \(senderCounts.count - 8) more sources." }
+            result += "\n\nThese emails make up \(pctNews)% of your archive. Consider unsubscribing from inactive ones to reduce clutter."
+            return result
+        }
+
+        // MARK: - Out of office / auto-replies
+        if lower.contains("out of office") || lower.contains("auto-reply") || lower.contains("autoreply") || lower.contains("automatic reply") || lower.contains("ooo") || lower.contains("vacation reply") {
+            let autoReplies = scopedEmails.filter { email in
+                let subject = (email.headers["Subject"] ?? "").lowercased()
+                let autoSubmitted = (email.headers["Auto-Submitted"] ?? "").lowercased()
+                let precedence = (email.headers["Precedence"] ?? "").lowercased()
+                return subject.contains("out of office") || subject.contains("automatic reply") ||
+                    subject.contains("auto reply") || subject.contains("ooo:") ||
+                    subject.contains("vacation") || subject.contains("away from") ||
+                    autoSubmitted == "auto-replied" || precedence == "bulk" || precedence == "auto_reply"
+            }.sorted { a, b in
+                let da = MBOXParser.parseDate(a.headers["Date"]) ?? .distantPast
+                let db = MBOXParser.parseDate(b.headers["Date"]) ?? .distantPast
+                return da > db
+            }
+
+            var result = scopeLabel
+            if autoReplies.isEmpty {
+                result += "No out-of-office or auto-reply messages found."
+                return result
+            }
+
+            result += "Found **\(autoReplies.count) auto-reply/out-of-office** message\(autoReplies.count == 1 ? "" : "s").\n\n"
+
+            var senderCounts: [String: Int] = [:]
+            for email in autoReplies {
+                let from = email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "Unknown"
+                senderCounts[from, default: 0] += 1
+            }
+
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
+            for (i, email) in autoReplies.prefix(8).enumerated() {
+                let from = email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "Unknown"
+                let dateStr = email.headers["Date"].flatMap { MBOXParser.parseDate($0) }.map { formatter.string(from: $0) } ?? ""
+                result += "\(i + 1). **\(from)** — \(dateStr)\n"
+                result += "   \(email.headers["Subject"] ?? "(No Subject)")\n"
+            }
+            if autoReplies.count > 8 { result += "\n...and \(autoReplies.count - 8) more." }
+            return result
+        }
+
+        // MARK: - Weekend emails
+        if lower.contains("weekend") || lower.contains("saturday") || lower.contains("sunday") {
+            let calendar = Calendar.current
+            let weekendEmails = scopedEmails.filter { email in
+                guard let date = email.headers["Date"].flatMap({ MBOXParser.parseDate($0) }) else { return false }
+                let weekday = calendar.component(.weekday, from: date)
+                return weekday == 1 || weekday == 7
+            }.sorted { a, b in
+                let da = MBOXParser.parseDate(a.headers["Date"]) ?? .distantPast
+                let db = MBOXParser.parseDate(b.headers["Date"]) ?? .distantPast
+                return da > db
+            }
+
+            var result = scopeLabel
+            if weekendEmails.isEmpty {
+                result += "No weekend emails found — looks like weekends are email-free!"
+                return result
+            }
+
+            let weekdayEmails = scopedEmails.count - weekendEmails.count
+            let satCount = weekendEmails.filter { email in
+                guard let date = email.headers["Date"].flatMap({ MBOXParser.parseDate($0) }) else { return false }
+                return calendar.component(.weekday, from: date) == 7
+            }.count
+            let sunCount = weekendEmails.count - satCount
+            let sentOnWeekend = weekendEmails.filter { $0.messageType == "sent" }.count
+            let pctWeekend = scopedEmails.count > 0 ? Int(Double(weekendEmails.count) / Double(scopedEmails.count) * 100) : 0
+
+            result += "**\(weekendEmails.count) email\(weekendEmails.count == 1 ? "" : "s")** were sent/received on weekends (\(pctWeekend)% of your archive).\n\n"
+            result += "- **Saturday:** \(satCount) emails\n"
+            result += "- **Sunday:** \(sunCount) emails\n"
+            result += "- **You sent** \(sentOnWeekend) emails on weekends\n"
+            result += "- **Weekday emails:** \(weekdayEmails)\n\n"
+
+            var weekendSenders: [String: Int] = [:]
+            for email in weekendEmails.filter({ $0.messageType == "received" }) {
+                let from = email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "Unknown"
+                weekendSenders[from, default: 0] += 1
+            }
+            let topWeekendSenders = weekendSenders.sorted { $0.value > $1.value }.prefix(3)
+            if !topWeekendSenders.isEmpty {
+                result += "**Who emails you on weekends:**\n"
+                for (i, entry) in topWeekendSenders.enumerated() {
+                    result += "\(i + 1). **\(entry.key)** — \(entry.value) weekend email\(entry.value == 1 ? "" : "s")\n"
+                }
+            }
+            return result
+        }
+
+        // MARK: - Emails mentioning money / payments / invoices
+        if lower.contains("money") || lower.contains("dollar") || lower.contains("payment") || lower.contains("invoice") || lower.contains("amount") || lower.contains("price") || lower.contains("cost") || lower.contains("bill") || (lower.contains("financial") && !lower.contains("phishing")) {
+            let moneyRegex = try? NSRegularExpression(pattern: "\\$[\\d,]+\\.?\\d*|\\d+\\.\\d{2}\\s*(USD|EUR|GBP)|payment|invoice|receipt|billing|refund", options: .caseInsensitive)
+
+            let financialEmails = scopedEmails.filter { email in
+                let text = "\(email.headers["Subject"] ?? "") \(email.plainBody.isEmpty ? email.htmlBody : email.plainBody)"
+                guard let regex = moneyRegex else { return false }
+                return regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
+            }.sorted { a, b in
+                let da = MBOXParser.parseDate(a.headers["Date"]) ?? .distantPast
+                let db = MBOXParser.parseDate(b.headers["Date"]) ?? .distantPast
+                return da > db
+            }
+
+            var result = scopeLabel
+            if financialEmails.isEmpty {
+                result += "No emails mentioning money, payments, or invoices found."
+                return result
+            }
+
+            result += "Found **\(financialEmails.count) email\(financialEmails.count == 1 ? "" : "s")** with financial content (payments, invoices, amounts).\n\n"
+
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
+            for (i, email) in financialEmails.prefix(8).enumerated() {
+                let from = email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "Unknown"
+                let dateStr = email.headers["Date"].flatMap { MBOXParser.parseDate($0) }.map { formatter.string(from: $0) } ?? ""
+                result += "\(i + 1). **\(email.headers["Subject"] ?? "(No Subject)")** — \(from), \(dateStr)\n"
+            }
+            if financialEmails.count > 8 { result += "\n...and \(financialEmails.count - 8) more." }
+            result += "\n\n⚠️ Tip: Ask \"scan for phishing\" to check if any financial emails look suspicious."
+            return result
+        }
+
+        // MARK: - Deadline / due date emails
+        if lower.contains("deadline") || lower.contains("due") || lower.contains("overdue") || lower.contains("expire") || lower.contains("expiring") || lower.contains("due date") {
+            let deadlineRegex = try? NSRegularExpression(pattern: "deadline|due date|due by|expires?|expiring|overdue|by end of|no later than|must be submitted|action required by", options: .caseInsensitive)
+
+            let deadlineEmails = scopedEmails.filter { email in
+                let text = "\(email.headers["Subject"] ?? "") \(email.plainBody.isEmpty ? email.htmlBody : email.plainBody)"
+                guard let regex = deadlineRegex else { return false }
+                return regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
+            }.sorted { a, b in
+                let da = MBOXParser.parseDate(a.headers["Date"]) ?? .distantPast
+                let db = MBOXParser.parseDate(b.headers["Date"]) ?? .distantPast
+                return da > db
+            }
+
+            var result = scopeLabel
+            if deadlineEmails.isEmpty {
+                result += "No emails mentioning deadlines or due dates found."
+                return result
+            }
+
+            result += "Found **\(deadlineEmails.count) email\(deadlineEmails.count == 1 ? "" : "s")** mentioning deadlines or due dates.\n\n"
+
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
+            for (i, email) in deadlineEmails.prefix(8).enumerated() {
+                let from = email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "Unknown"
+                let dateStr = email.headers["Date"].flatMap { MBOXParser.parseDate($0) }.map { formatter.string(from: $0) } ?? ""
+                let preview = String((email.plainBody.isEmpty ? email.htmlBody : email.plainBody).prefix(80)).replacingOccurrences(of: "\n", with: " ")
+                result += "\(i + 1). **\(email.headers["Subject"] ?? "(No Subject)")** — \(from), \(dateStr)\n"
+                if !preview.isEmpty { result += "   *\"\(preview)...\"*\n" }
+            }
+            if deadlineEmails.count > 8 { result += "\n...and \(deadlineEmails.count - 8) more." }
+            result += "\n\nAsk \"show me unanswered emails\" to check if any deadline emails still need a response."
+            return result
+        }
+
+        // MARK: - Group / mass / bulk emails
+        if lower.contains("group email") || lower.contains("mass email") || lower.contains("bulk email") || lower.contains("distribution") || (lower.contains("group") && lower.contains("mail")) {
+            let groupEmails = scopedEmails.filter { email in
+                let to = email.headers["To"] ?? ""
+                let cc = email.headers["Cc"] ?? email.headers["CC"] ?? ""
+                let recipientCount = to.split(separator: ",").count + cc.split(separator: ",").count
+                let listHeader = email.headers["List-Id"] ?? email.headers["List-Unsubscribe"] ?? ""
+                return recipientCount >= 5 || !listHeader.isEmpty
+            }.sorted { a, b in
+                let da = MBOXParser.parseDate(a.headers["Date"]) ?? .distantPast
+                let db = MBOXParser.parseDate(b.headers["Date"]) ?? .distantPast
+                return da > db
+            }
+
+            var result = scopeLabel
+            if groupEmails.isEmpty {
+                result += "No group or mass emails found (looking for emails with 5+ recipients or mailing list headers)."
+                return result
+            }
+
+            let pctGroup = scopedEmails.count > 0 ? Int(Double(groupEmails.count) / Double(scopedEmails.count) * 100) : 0
+            result += "Found **\(groupEmails.count) group/mass email\(groupEmails.count == 1 ? "" : "s")** (\(pctGroup)% of archive).\n\n"
+
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
+            for (i, email) in groupEmails.prefix(8).enumerated() {
+                let from = email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "Unknown"
+                let dateStr = email.headers["Date"].flatMap { MBOXParser.parseDate($0) }.map { formatter.string(from: $0) } ?? ""
+                let to = email.headers["To"] ?? ""
+                let cc = email.headers["Cc"] ?? email.headers["CC"] ?? ""
+                let recipientCount = to.split(separator: ",").count + cc.split(separator: ",").count
+                result += "\(i + 1). **\(email.headers["Subject"] ?? "(No Subject)")** — \(from), \(dateStr) (\(recipientCount) recipients)\n"
+            }
+            if groupEmails.count > 8 { result += "\n...and \(groupEmails.count - 8) more." }
+            return result
+        }
+
+        // MARK: - Who do I email most? (outgoing focus)
+        if (lower.contains("who do i") || lower.contains("who did i")) && (lower.contains("email") || lower.contains("write") || lower.contains("send") || lower.contains("mail") || lower.contains("contact")) {
+            let sentEmails = scopedEmails.filter { $0.messageType == "sent" }
+            var recipientCounts: [String: Int] = [:]
+            for email in sentEmails {
+                let to = email.headers["To"] ?? ""
+                for addr in to.split(separator: ",").map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) }) {
+                    let name = addr.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? addr
+                    if !name.isEmpty { recipientCounts[name, default: 0] += 1 }
+                }
+            }
+
+            let topRecipients = recipientCounts.sorted { $0.value > $1.value }.prefix(10)
+
+            var result = scopeLabel
+            if topRecipients.isEmpty {
+                result += "No sent emails found to analyze your outgoing patterns."
+                return result
+            }
+
+            result += "**People you email most** (based on \(sentEmails.count) sent emails):\n\n"
+            let maxCount = topRecipients.first?.value ?? 1
+            for (i, entry) in topRecipients.enumerated() {
+                let barLen = max(1, Int(Double(entry.value) / Double(maxCount) * 20))
+                let bar = String(repeating: "█", count: barLen)
+                result += "\(i + 1). **\(entry.key)** — \(entry.value) email\(entry.value == 1 ? "" : "s") \(bar)\n"
             }
             return result
         }
@@ -1426,10 +2915,10 @@ struct AIAssistantView: View {
 
             // Tone summary
             let toneDesc: String
-            if sentiment.average > 0.3 { toneDesc = "quite positive" }
+            if sentiment.average > 0.4 { toneDesc = "quite positive" }
             else if sentiment.average > 0.1 { toneDesc = "generally positive" }
             else if sentiment.average > -0.1 { toneDesc = "mostly neutral" }
-            else if sentiment.average > -0.3 { toneDesc = "somewhat negative" }
+            else if sentiment.average > -0.4 { toneDesc = "somewhat negative" }
             else { toneDesc = "noticeably negative" }
             result += "**Tone:** The overall sentiment is **\(toneDesc)** — \(pct(sentiment.positive, scopedEmails.count))% positive, \(pct(sentiment.neutral, scopedEmails.count))% neutral, and \(pct(sentiment.negative, scopedEmails.count))% negative.\n\n"
 
@@ -1652,6 +3141,112 @@ struct AIAssistantView: View {
             }
         }
 
+        // MARK: - "Show me emails to [person]" or "emails I sent to [person]"
+        let toPatterns = ["show me emails to", "show emails to", "emails to", "mail to", "messages to",
+                          "find emails to", "emails i sent to", "emails sent to", "what did i send to",
+                          "what i sent to", "my emails to"]
+        for pattern in toPatterns {
+            if lower.hasPrefix(pattern) || lower.contains("sent to") {
+                var nameStart: String
+                if lower.contains("sent to") {
+                    nameStart = lower.components(separatedBy: "sent to").last?.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "?", with: "") ?? ""
+                } else {
+                    nameStart = lower.replacingOccurrences(of: pattern, with: "").trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "?", with: "")
+                }
+                if !nameStart.isEmpty {
+                    let nameLower = nameStart.lowercased()
+                    let contactEmails = scopedEmails.filter { email in
+                        let to = (email.headers["To"] ?? "").lowercased()
+                        let cc = (email.headers["Cc"] ?? "").lowercased()
+                        return to.contains(nameLower) || cc.contains(nameLower)
+                    }
+                    if !contactEmails.isEmpty {
+                        let sorted = contactEmails.sorted { a, b in
+                            let da = MBOXParser.parseDate(a.headers["Date"]) ?? .distantPast
+                            let db = MBOXParser.parseDate(b.headers["Date"]) ?? .distantPast
+                            return da > db
+                        }
+                        let formatter = DateFormatter()
+                        formatter.dateStyle = .medium
+                        var result = "Found **\(contactEmails.count) email\(contactEmails.count == 1 ? "" : "s")** sent to **\(nameStart.capitalized)**:\n\n"
+                        for (i, email) in sorted.prefix(10).enumerated() {
+                            let dateStr = email.headers["Date"].flatMap { MBOXParser.parseDate($0) }.map { formatter.string(from: $0) } ?? ""
+                            let from = email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "You"
+                            let hasAttach = email.attachments.isEmpty ? "" : " 📎"
+                            result += "\(i + 1). **\(email.headers["Subject"] ?? "(No Subject)")**\(hasAttach) — \(dateStr)\n"
+                            result += "   From: \(from)\n"
+                        }
+                        if contactEmails.count > 10 { result += "\n...and \(contactEmails.count - 10) more." }
+                        result += "\n\nAsk \"emails from \(nameStart)\" to see what they sent you."
+                        return result
+                    }
+                    return "I couldn't find any emails sent to \"\(nameStart)\". Try \"who emails me most?\" to see your contacts."
+                }
+                break
+            }
+        }
+
+        // MARK: - "Emails between X and Y"
+        let betweenPatterns = ["emails between", "messages between", "conversation between",
+                               "correspondence between", "mail between", "exchange between"]
+        for pattern in betweenPatterns {
+            if lower.contains(pattern) {
+                let rest = lower.components(separatedBy: pattern).last?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let parts = rest.components(separatedBy: " and ")
+                if parts.count == 2 {
+                    let name1 = parts[0].trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "?", with: "")
+                    let name2 = parts[1].trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "?", with: "")
+                    if !name1.isEmpty && !name2.isEmpty {
+                        let meKeywords = ["me", "myself", "i"]
+                        let isName1Me = meKeywords.contains(name1.lowercased())
+                        let isName2Me = meKeywords.contains(name2.lowercased())
+
+                        let matched: [MBOXParser.RawEmail]
+                        if isName1Me || isName2Me {
+                            let otherName = (isName1Me ? name2 : name1).lowercased()
+                            matched = scopedEmails.filter { email in
+                                let from = (email.headers["From"] ?? "").lowercased()
+                                let to = (email.headers["To"] ?? "").lowercased()
+                                let cc = (email.headers["Cc"] ?? "").lowercased()
+                                return from.contains(otherName) || to.contains(otherName) || cc.contains(otherName)
+                            }
+                        } else {
+                            let n1 = name1.lowercased()
+                            let n2 = name2.lowercased()
+                            matched = scopedEmails.filter { email in
+                                let all = "\(email.headers["From"] ?? "") \(email.headers["To"] ?? "") \(email.headers["Cc"] ?? "")".lowercased()
+                                return all.contains(n1) && all.contains(n2)
+                            }
+                        }
+
+                        if !matched.isEmpty {
+                            let sorted = matched.sorted { a, b in
+                                let da = MBOXParser.parseDate(a.headers["Date"]) ?? .distantPast
+                                let db = MBOXParser.parseDate(b.headers["Date"]) ?? .distantPast
+                                return da > db
+                            }
+                            let formatter = DateFormatter()
+                            formatter.dateStyle = .medium
+                            let sentiment = EmailNLPEngine.averageSentiment(of: matched)
+                            let toneWord = sentiment.average > 0.1 ? "positive" : sentiment.average < -0.1 ? "tense" : "neutral"
+                            var result = "Found **\(matched.count) email\(matched.count == 1 ? "" : "s")** between **\(name1.capitalized)** and **\(name2.capitalized)** — overall tone is \(toneWord).\n\n"
+                            for (i, email) in sorted.prefix(10).enumerated() {
+                                let from = email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "Unknown"
+                                let dateStr = email.headers["Date"].flatMap { MBOXParser.parseDate($0) }.map { formatter.string(from: $0) } ?? ""
+                                let hasAttach = email.attachments.isEmpty ? "" : " 📎"
+                                result += "\(i + 1). **\(email.headers["Subject"] ?? "(No Subject)")**\(hasAttach)\n"
+                                result += "   \(from) — \(dateStr)\n"
+                            }
+                            if matched.count > 10 { result += "\n...and \(matched.count - 10) more." }
+                            return result
+                        }
+                        return "I couldn't find any emails between \"\(name1)\" and \"\(name2)\". Check the spelling or try \"who emails me most?\" to see your contacts."
+                    }
+                }
+                break
+            }
+        }
+
         // MARK: - "Thank you" / acknowledgements
         if lower.hasPrefix("thank") || lower == "thanks" || lower == "ok" || lower == "okay" || lower == "got it" || lower == "cool" || lower == "great" || lower == "nice" {
             return "You're welcome! Let me know if you'd like to explore anything else about your emails."
@@ -1661,18 +3256,26 @@ struct AIAssistantView: View {
             return """
             Ask me anything about your emails in natural language! Examples:
 
-            • "What did Michael say about the project?"
+            **Search & Find**
             • "Find emails about meetings last month"
+            • "Show me emails from Sarah" / "emails to John"
+            • "Emails between me and David"
             • "When was the last email from Priya?"
-            • "How many emails mention shipping?"
-            • "Show me emails from last week"
-            • "Tell me more about John"
-            • "Give me a full summary"
-            • "What's the sentiment of my emails?"
-            • "Scan for phishing or scams"
-            • "Show me high priority emails"
-            • "Show me thread sentiment trends"
-            • "Summarize the conversation threads"
+
+            **Analytics & Insights**
+            • "Who emails me most?" / "Give me a full summary"
+            • "What topics come up?" / "What's the sentiment?"
+            • "Who takes longest to reply?" / "My response time"
+            • "Show me late night emails" / "When am I busiest?"
+
+            **Action Items**
+            • "Show me unanswered emails"
+            • "High priority emails" / "What did I miss?"
+            • "Which emails were forwarded?"
+            • "Show me emails with links"
+
+            **Security & Privacy**
+            • "Scan for phishing" / "Check for sensitive data"
 
             I understand dates (last week, January, this month), fuzzy names, \
             follow-up questions, and related concepts (meeting → conference, call). \
@@ -1787,7 +3390,7 @@ struct AIAssistantView: View {
         }
         if lower.contains("when") || lower.contains("time") || lower.contains("day") || lower.contains("date") {
             suggestions.append("\"When is my inbox busiest?\" — see activity patterns")
-            suggestions.append("\"Show me recent emails\" — see the latest messages")
+            suggestions.append("\"Show me late night emails\" — after-hours activity")
         }
         if lower.contains("what") || lower.contains("about") {
             suggestions.append("\"What topics come up most?\" — discover key themes")
@@ -1800,16 +3403,29 @@ struct AIAssistantView: View {
             suggestions.append("\"Scan for phishing\" — check for suspicious emails")
             suggestions.append("\"Check for sensitive data\" — find PII in your archive")
         }
+        if lower.contains("reply") || lower.contains("respond") || lower.contains("answer") || lower.contains("ignore") {
+            suggestions.append("\"Show me unanswered emails\" — emails you haven't replied to")
+            suggestions.append("\"Who takes longest to reply?\" — response time analysis")
+        }
+        if lower.contains("send") || lower.contains("to") || lower.contains("wrote") {
+            suggestions.append("\"Emails I sent to [name]\" — your outgoing messages")
+            suggestions.append("\"Emails between me and [name]\" — full correspondence")
+        }
+        if lower.contains("link") || lower.contains("forward") || lower.contains("share") {
+            suggestions.append("\"Show me emails with links\" — find URLs in your archive")
+            suggestions.append("\"Which emails were forwarded?\" — forwarded messages")
+        }
         if suggestions.isEmpty {
             suggestions = [
                 "\"Give me a summary\" — full archive overview",
-                "\"What topics come up?\" — discover themes",
+                "\"Show me unanswered emails\" — emails needing replies",
                 "\"Who emails me most?\" — see top contacts",
                 "\"What's the sentiment?\" — tone analysis",
                 "\"Find emails about [topic]\" — search your archive",
+                "\"Who takes longest to reply?\" — response times",
             ]
         }
-        let suggestionList = suggestions.prefix(4).map { "- \($0)" }.joined(separator: "\n")
+        let suggestionList = suggestions.prefix(5).map { "- \($0)" }.joined(separator: "\n")
         return "I'm not sure I understood that, but I can analyze your \(emails.count) emails in many ways. Try one of these:\n\n\(suggestionList)\n\nOr type **help** to see everything I can do!"
     }
 
@@ -2373,10 +3989,10 @@ struct AIAssistantView: View {
         }
 
         let toneDesc: String
-        if sentiment.average > 0.3 { toneDesc = "very positive" }
+        if sentiment.average > 0.4 { toneDesc = "very positive" }
         else if sentiment.average > 0.1 { toneDesc = "friendly and positive" }
         else if sentiment.average > -0.1 { toneDesc = "professional and neutral" }
-        else if sentiment.average > -0.3 { toneDesc = "somewhat formal or critical" }
+        else if sentiment.average > -0.4 { toneDesc = "somewhat formal or critical" }
         else { toneDesc = "notably direct or negative" }
 
         var result = "Here's what I know about **\(displayName)**:\n\n"
@@ -2407,8 +4023,8 @@ struct AIAssistantView: View {
         if !subjects.isEmpty {
             let cleaned = subjects.map { $0.replacingOccurrences(of: "Re: ", with: "").replacingOccurrences(of: "Fwd: ", with: "") }
             let unique = Array(Set(cleaned))
-            if unique.count == 1 {
-                result += "**Topic discussed:** \(unique[0])\n\n"
+            if unique.count == 1, let first = unique.first {
+                result += "**Topic discussed:** \(first)\n\n"
             } else {
                 result += "**Topics discussed** (\(unique.count)):\n"
                 for subj in unique.prefix(8) {
@@ -2449,12 +4065,22 @@ struct AIAssistantView: View {
         String(format: "%.0f", Double(count) / Double(max(total, 1)) * 100)
     }
 
+    nonisolated private static func formatInterval(_ seconds: TimeInterval) -> String {
+        let minutes = Int(seconds / 60)
+        let hours = Int(seconds / 3600)
+        let days = Int(seconds / 86400)
+        if days > 0 { return "\(days) day\(days == 1 ? "" : "s")" }
+        if hours > 0 { return "\(hours) hour\(hours == 1 ? "" : "s")" }
+        return "\(max(1, minutes)) minute\(minutes == 1 ? "" : "s")"
+    }
+
     // MARK: - Conversation Persistence
 
     private struct SavedTurn: Codable {
         let query: String
         let answer: String
         var timestamp: Date?
+        var relatedEmailIDs: [UUID]?
     }
 
     nonisolated private static var conversationURL: URL {
@@ -2467,7 +4093,7 @@ struct AIAssistantView: View {
 
     private func saveConversation() {
         guard !conversationHistory.isEmpty else { return }
-        let turns = conversationHistory.suffix(20).map { SavedTurn(query: $0.query, answer: $0.answer, timestamp: $0.timestamp) }
+        let turns = conversationHistory.suffix(20).map { SavedTurn(query: $0.query, answer: $0.answer, timestamp: $0.timestamp, relatedEmailIDs: $0.relatedEmailIDs) }
         if let data = try? JSONEncoder().encode(turns) {
             try? data.write(to: Self.conversationURL, options: .atomic)
         }
@@ -2477,7 +4103,7 @@ struct AIAssistantView: View {
         guard conversationHistory.isEmpty,
               let data = try? Data(contentsOf: Self.conversationURL),
               let turns = try? JSONDecoder().decode([SavedTurn].self, from: data) else { return }
-        conversationHistory = turns.map { (query: $0.query, answer: $0.answer, timestamp: $0.timestamp ?? Date()) }
+        conversationHistory = turns.map { (query: $0.query, answer: $0.answer, timestamp: $0.timestamp ?? Date(), relatedEmailIDs: $0.relatedEmailIDs ?? []) }
     }
 
     nonisolated static func clearSavedConversation() {
@@ -2528,5 +4154,5 @@ struct AIAssistantView: View {
 }
 
 #Preview {
-    AIAssistantView(allEmails: [], filteredEmails: [], selectedEmails: [])
+    AIAssistantView(allEmails: [], filteredEmails: [], selectedEmails: [], onSelectEmail: nil, onFilterByIDs: nil)
 }

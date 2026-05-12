@@ -35,7 +35,7 @@ struct PSTWriter {
         return exportCount
     }
 
-    private static let maxEmailsPerPST = 15
+    private static let maxEmailsPerPST = 5000
 
     static func writeData(emails: [MBOXParser.RawEmail]) throws -> Data {
         guard !emails.isEmpty else { throw WriterError.emptyInput }

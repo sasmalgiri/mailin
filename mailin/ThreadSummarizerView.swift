@@ -766,12 +766,12 @@ private struct SentimentArcChart: View {
             .stroke(AppColors.separatorLight, lineWidth: 1)
 
             // Draw sentiment line
-            if points.count >= 2 {
+            if points.count >= 2, let firstPoint = points.first {
                 let stepX = width / CGFloat(max(points.count - 1, 1))
 
                 // Gradient fill below / above the line
                 Path { path in
-                    path.move(to: CGPoint(x: 0, y: yPosition(for: points[0].score, midY: midY, halfHeight: midY * 0.85)))
+                    path.move(to: CGPoint(x: 0, y: yPosition(for: firstPoint.score, midY: midY, halfHeight: midY * 0.85)))
                     for i in 1..<points.count {
                         let x = CGFloat(i) * stepX
                         let y = yPosition(for: points[i].score, midY: midY, halfHeight: midY * 0.85)
@@ -791,7 +791,7 @@ private struct SentimentArcChart: View {
 
                 // Main line
                 Path { path in
-                    path.move(to: CGPoint(x: 0, y: yPosition(for: points[0].score, midY: midY, halfHeight: midY * 0.85)))
+                    path.move(to: CGPoint(x: 0, y: yPosition(for: firstPoint.score, midY: midY, halfHeight: midY * 0.85)))
                     for i in 1..<points.count {
                         let x = CGFloat(i) * stepX
                         let y = yPosition(for: points[i].score, midY: midY, halfHeight: midY * 0.85)
@@ -820,8 +820,8 @@ private struct SentimentArcChart: View {
     }
 
     private func colorForScore(_ score: Double) -> Color {
-        if score > 0.3 { return AppColors.success }
-        if score < -0.3 { return AppColors.error }
+        if score > 0.4 { return AppColors.success }
+        if score < -0.4 { return AppColors.error }
         return AppColors.secondary
     }
 }

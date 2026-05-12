@@ -185,7 +185,7 @@ struct CustodianPanelView: View {
                 Spacer()
                 if let sel = selectedCustodian, sel != "__unassigned__" {
                     Button("Place All on Legal Hold") {
-                        manager.placeLegalHold(on: filteredEmails.map(\.id))
+                        manager.placeLegalHold(on: filteredEmails)
                     }
                     .buttonStyle(CompactSecondaryButtonStyle())
                 }
@@ -238,7 +238,7 @@ struct CustodianPanelView: View {
                                 }
                             } else {
                                 Button("Place Legal Hold") {
-                                    manager.placeLegalHold(email.id)
+                                    manager.placeLegalHold(email.id, email: email)
                                 }
                             }
                         } label: {

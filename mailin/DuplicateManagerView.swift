@@ -182,14 +182,13 @@ struct DuplicateManagerView: View {
             Button("Cancel") { dismiss() }
                 .buttonStyle(.bordered)
             Button("Remove Selected") {
-                let protected = selectedForRemoval.filter { CustodianManager.shared.isUnderLegalHold($0) }
-                let toRemove = selectedForRemoval.subtracting(protected)
-                model.allEmails.removeAll { toRemove.contains($0.id) }
+                let (allowed, blocked) = CustodianManager.shared.filterProtected(selectedForRemoval)
+                model.allEmails.removeAll { allowed.contains($0.id) }
                 model.applyFilters()
-                if !protected.isEmpty {
-                    legalHoldWarning = "\(protected.count) email(s) skipped — under legal hold."
+                if !blocked.isEmpty {
+                    legalHoldWarning = "\(blocked.count) email(s) skipped — under legal hold with evidence seal."
                 }
-                if toRemove.isEmpty && !protected.isEmpty { return }
+                if allowed.isEmpty && !blocked.isEmpty { return }
                 dismiss()
             }
             .buttonStyle(.borderedProminent)

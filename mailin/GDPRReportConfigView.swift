@@ -96,6 +96,12 @@ struct GDPRReportConfigView: View {
 
             await MainActor.run {
                 isGenerating = false
+
+                guard !pdfData.isEmpty else {
+                    generationError = "Failed to generate PDF report."
+                    return
+                }
+
                 let fileName = "GDPR_Report_\(subject.replacingOccurrences(of: "[^A-Za-z0-9]", with: "_", options: .regularExpression)).pdf"
 
                 #if os(macOS)

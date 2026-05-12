@@ -49,19 +49,15 @@ struct PSTParser {
                 headers["X-Priority"] = importance == 2 ? "1" : importance == 0 ? "5" : "3"
             }
 
-            let bodyLines = msg.bodyText.components(separatedBy: .newlines)
-            let fullText = headers.map { "\($0): \($1)" }.joined(separator: "\n") + "\n\n" + msg.bodyText
             let domains = MBOXParser.extractDomains(from: headers)
 
             return MBOXParser.RawEmail(
                 id: UUID(),
                 headers: headers,
-                bodyLines: bodyLines,
-                rawSource: fullText,
+                rawSource: "",
                 messageType: messageType,
                 attachments: msg.attachments,
                 timestamp: timestamp,
-                fullText: fullText,
                 domains: domains,
                 plainBody: msg.bodyText,
                 htmlBody: msg.bodyHTML,

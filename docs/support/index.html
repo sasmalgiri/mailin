@@ -3,70 +3,530 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>mailin - Support</title>
+    <title>mailin - Support &amp; FAQ</title>
+    <meta name="description" content="Get help with mailin — the private email archive analyzer for Mac. FAQs, troubleshooting, subscription management, and contact information.">
     <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            max-width: 700px;
-            margin: 40px auto;
-            padding: 0 20px;
-            line-height: 1.6;
-            color: #333;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+            color: #1d1d1f;
+            background: #fff;
+            -webkit-font-smoothing: antialiased;
         }
-        h1 { font-size: 28px; margin-bottom: 4px; }
-        h2 { font-size: 20px; margin-top: 30px; }
-        .subtitle { color: #666; font-size: 16px; margin-bottom: 30px; }
-        a { color: #007AFF; }
-        .faq { background: #f5f5f7; border-radius: 12px; padding: 20px; margin: 15px 0; }
-        .faq h3 { margin-top: 0; font-size: 16px; }
-        .faq p { margin-bottom: 0; color: #555; }
-        .contact-box { background: #e8f0fe; border-radius: 12px; padding: 20px; margin: 20px 0; text-align: center; }
+        a { color: #0071e3; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        /* Navigation */
+        nav {
+            position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+            background: rgba(255,255,255,0.92);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(0,0,0,0.08);
+            padding: 0 24px;
+        }
+        nav .nav-inner {
+            max-width: 1080px; margin: 0 auto;
+            display: flex; align-items: center; justify-content: space-between;
+            height: 52px;
+        }
+        nav .logo { font-size: 20px; font-weight: 700; color: #1d1d1f; }
+        nav .nav-links a {
+            margin-left: 28px; font-size: 14px; font-weight: 500; color: #6e6e73;
+        }
+        nav .nav-links a:hover { color: #1d1d1f; text-decoration: none; }
+        nav .nav-links a.active { color: #1d1d1f; }
+
+        /* Header */
+        .page-header {
+            background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
+            color: #fff;
+            text-align: center;
+            padding: 120px 20px 60px;
+        }
+        .page-header h1 { font-size: 44px; font-weight: 800; margin-bottom: 12px; }
+        .page-header p { font-size: 18px; color: rgba(255,255,255,0.65); max-width: 520px; margin: 0 auto; }
+
+        /* Content */
+        .content { max-width: 800px; margin: 0 auto; padding: 48px 20px 80px; }
+
+        /* Section headers */
+        .section-header {
+            font-size: 28px; font-weight: 700; margin: 48px 0 20px;
+            padding-bottom: 10px; border-bottom: 2px solid #f0f0f2;
+            letter-spacing: -0.3px;
+        }
+        .section-header:first-of-type { margin-top: 0; }
+
+        /* FAQ items */
+        .faq {
+            background: #f5f5f7; border-radius: 12px; padding: 20px 24px;
+            margin: 14px 0;
+        }
+        .faq h3 {
+            font-size: 16px; font-weight: 600; margin-bottom: 8px; color: #1d1d1f;
+        }
+        .faq p, .faq ul, .faq ol {
+            font-size: 15px; color: #555; line-height: 1.65;
+        }
+        .faq ul, .faq ol { padding-left: 20px; margin-top: 8px; }
+        .faq li { margin-bottom: 4px; }
+        .faq code {
+            background: #e8e8ed; padding: 2px 6px; border-radius: 4px;
+            font-family: 'SF Mono', Menlo, monospace; font-size: 13px;
+        }
+        .faq a { font-weight: 500; }
+
+        /* Format grid */
+        .format-list {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px; margin-top: 12px;
+        }
+        .format-item {
+            background: #fff; border: 1px solid #e8e8ed; border-radius: 8px;
+            padding: 10px 14px; font-size: 14px;
+        }
+        .format-item strong { color: #0071e3; }
+
+        /* Pricing quick-ref */
+        .pricing-ref {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px;
+        }
+        .pricing-ref-card {
+            background: #fff; border: 1px solid #e8e8ed; border-radius: 10px; padding: 16px;
+        }
+        .pricing-ref-card h4 { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+        .pricing-ref-card .prices { font-size: 14px; color: #555; line-height: 1.6; }
+
+        /* Contact */
+        .contact-section {
+            background: linear-gradient(135deg, #0f0c29 0%, #302b63 100%);
+            border-radius: 16px; padding: 40px 32px; text-align: center;
+            margin-top: 48px; color: #fff;
+        }
+        .contact-section h2 { font-size: 24px; font-weight: 700; margin-bottom: 12px; }
+        .contact-section p { color: rgba(255,255,255,0.65); font-size: 15px; margin-bottom: 8px; }
+        .contact-section a { color: #667eea; font-weight: 600; }
+        .contact-section .contact-methods {
+            display: flex; justify-content: center; gap: 32px; margin-top: 20px; flex-wrap: wrap;
+        }
+        .contact-method {
+            background: rgba(255,255,255,0.08); border-radius: 12px; padding: 16px 24px;
+        }
+        .contact-method .label { font-size: 12px; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+
+        /* Footer */
+        footer {
+            background: #1d1d1f; color: rgba(255,255,255,0.6);
+            text-align: center; padding: 40px 20px; font-size: 13px;
+        }
+        footer a { color: rgba(255,255,255,0.8); }
+        footer .links { margin-bottom: 16px; }
+        footer .links a { margin: 0 16px; }
+
+        @media (max-width: 640px) {
+            .page-header { padding: 100px 20px 48px; }
+            .page-header h1 { font-size: 32px; }
+            .section-header { font-size: 22px; }
+            .format-list { grid-template-columns: 1fr; }
+            .pricing-ref { grid-template-columns: 1fr; }
+            .contact-section .contact-methods { flex-direction: column; align-items: center; }
+            nav .nav-links a { margin-left: 16px; font-size: 13px; }
+        }
     </style>
 </head>
 <body>
-    <h1>mailin Support</h1>
-    <p class="subtitle">Private Email Archive Analyzer for Mac</p>
 
-    <h2>Frequently Asked Questions</h2>
+    <nav>
+        <div class="nav-inner">
+            <a href="../" class="logo">mailin</a>
+            <div class="nav-links">
+                <a href="../#features">Features</a>
+                <a href="../#pricing">Pricing</a>
+                <a href="./" class="active">Support</a>
+                <a href="../privacy/">Privacy</a>
+            </div>
+        </div>
+    </nav>
 
-    <div class="faq">
-        <h3>What file formats does mailin support?</h3>
-        <p>mailin supports .mbox and .eml files. This includes exports from Gmail (Google Takeout), Thunderbird, Apple Mail, and any standard email archive.</p>
+    <section class="page-header">
+        <h1>Support &amp; FAQ</h1>
+        <p>Everything you need to know about using mailin.</p>
+    </section>
+
+    <div class="content">
+
+        <!-- Getting Started -->
+        <h2 class="section-header">Getting Started</h2>
+
+        <div class="faq">
+            <h3>What is mailin?</h3>
+            <p>mailin is a privacy-first email archive analyzer for Mac, iPhone, and iPad. It lets you import email archives from Gmail, Outlook, Thunderbird, Apple Mail, and other providers, then search, filter, analyze, and export your email history. Available in 11 languages. Everything runs on your device &mdash; no cloud servers, no data collection, no account required.</p>
+        </div>
+
+        <div class="faq">
+            <h3>What file formats does mailin support?</h3>
+            <p>mailin supports all major email archive formats:</p>
+            <div class="format-list">
+                <div class="format-item"><strong>.mbox</strong> &mdash; Gmail Takeout, Thunderbird</div>
+                <div class="format-item"><strong>.eml</strong> &mdash; Standard email message</div>
+                <div class="format-item"><strong>.emlx</strong> &mdash; Apple Mail</div>
+                <div class="format-item"><strong>.msg</strong> &mdash; Outlook single email</div>
+                <div class="format-item"><strong>.pst</strong> &mdash; Outlook archive</div>
+                <div class="format-item"><strong>.ost</strong> &mdash; Outlook offline data</div>
+                <div class="format-item"><strong>.nsf</strong> &mdash; Lotus Notes (IBM Notes)</div>
+            </div>
+            <p style="margin-top: 10px;">You can also import <strong>.zip</strong> files containing any of the above formats. mailin will automatically extract and parse them.</p>
+        </div>
+
+        <div class="faq">
+            <h3>How do I import emails?</h3>
+            <p>Open mailin and click <strong>"Select Files"</strong> or drag and drop files onto the window. You can select one or multiple files at once. mailin will automatically detect the format and begin parsing.</p>
+        </div>
+
+        <div class="faq">
+            <h3>How do I import my Gmail emails?</h3>
+            <ol>
+                <li>Go to <a href="https://takeout.google.com">Google Takeout</a></li>
+                <li>Deselect all, then select only <strong>"Mail"</strong></li>
+                <li>Choose your export format (default is fine) and click <strong>"Create export"</strong></li>
+                <li>Wait for Google to prepare your archive (may take hours for large mailboxes)</li>
+                <li>Download the <code>.zip</code> file when ready</li>
+                <li>Open mailin and select the <code>.zip</code> file, or extract it and open the <code>.mbox</code> file inside</li>
+            </ol>
+        </div>
+
+        <div class="faq">
+            <h3>How do I import from Apple Mail?</h3>
+            <p>Apple Mail stores emails as <code>.emlx</code> files inside <code>~/Library/Mail/</code>. In mailin, click <strong>"Select Files"</strong> and navigate to your Mail library to select <code>.emlx</code> files. You can also drag and drop <code>.emlx</code> files from Finder directly into mailin.</p>
+        </div>
+
+        <div class="faq">
+            <h3>How do I import from Outlook?</h3>
+            <p>If you have Outlook <code>.pst</code> or <code>.ost</code> archive files, open them directly in mailin. For individual emails saved as <code>.msg</code> files, select those too. mailin handles all Outlook formats natively.</p>
+        </div>
+
+        <div class="faq">
+            <h3>What are the system requirements?</h3>
+            <p>mailin runs on both Mac and iOS:</p>
+            <ul>
+                <li><strong>Mac:</strong> macOS 14 (Sonoma) or later &mdash; Apple Silicon and Intel</li>
+                <li><strong>iPhone &amp; iPad:</strong> iOS 17 / iPadOS 17 or later</li>
+            </ul>
+            <p style="margin-top: 8px;">Apple Intelligence features require macOS 26 (Tahoe) or later with a supported device.</p>
+        </div>
+
+        <div class="faq">
+            <h3>What languages does mailin support?</h3>
+            <p>mailin's interface is fully localized in <strong>11 languages</strong>:</p>
+            <p style="margin-top: 6px;">English, Deutsch (German), Espa&ntilde;ol (Spanish), Fran&ccedil;ais (French), &#2361;&#2367;&#2306;&#2342;&#2368; (Hindi), Italiano (Italian), &#26085;&#26412;&#35486; (Japanese), &#54620;&#44397;&#50612; (Korean), Portugu&ecirc;s (Brazilian Portuguese), &#20013;&#25991;&#31616;&#20307; (Chinese Simplified), &#20013;&#25991;&#32321;&#39636; (Chinese Traditional).</p>
+            <p style="margin-top: 6px;">Your system language is detected automatically. You can also change the language in System Settings &gt; Language &amp; Region.</p>
+        </div>
+
+        <!-- Features -->
+        <h2 class="section-header">Features</h2>
+
+        <div class="faq">
+            <h3>What AI features does mailin include?</h3>
+            <p>mailin uses Apple's on-device NaturalLanguage framework for:</p>
+            <ul>
+                <li><strong>Sentiment analysis</strong> &mdash; see the emotional tone of every email</li>
+                <li><strong>Topic and keyword extraction</strong> &mdash; automatically identify key topics</li>
+                <li><strong>Language detection</strong> &mdash; identify languages in multilingual archives</li>
+                <li><strong>Priority scoring</strong> &mdash; AI highlights what matters most</li>
+                <li><strong>PII scanning</strong> &mdash; detect personal information for GDPR compliance</li>
+                <li><strong>AI Assistant</strong> &mdash; ask natural language questions about your emails</li>
+                <li><strong>AI Smart Filters</strong> &mdash; describe what you're looking for in plain English</li>
+            </ul>
+            <p style="margin-top: 8px;">On macOS 26+, mailin also supports <strong>Apple Intelligence</strong> for enhanced on-device AI capabilities. All AI processing happens entirely on your Mac &mdash; nothing is sent to any server.</p>
+        </div>
+
+        <div class="faq">
+            <h3>How does search work?</h3>
+            <p>mailin provides powerful full-text search across subjects, senders, recipients, and email body content. Search features include:</p>
+            <ul>
+                <li><strong>Boolean operators</strong> &mdash; use AND, OR, NOT to combine search terms</li>
+                <li><strong>Wildcard and regex</strong> &mdash; use <code>*</code> for wildcards or <code>/pattern/</code> for regex</li>
+                <li><strong>Proximity search</strong> &mdash; find terms near each other (e.g., "budget" NEAR/5 "deadline")</li>
+                <li><strong>Smart filters</strong> &mdash; filter by sender, domain, date range, labels, attachments, and more</li>
+                <li><strong>Gmail label detection</strong> &mdash; automatically reads labels from Google Takeout exports</li>
+            </ul>
+        </div>
+
+        <div class="faq">
+            <h3>What analytics are available?</h3>
+            <p>The analytics dashboard shows interactive charts and statistics about your email archive:</p>
+            <ul>
+                <li>Email volume timeline with sent vs. received breakdown</li>
+                <li>Top contacts and communication pairs</li>
+                <li>Activity heatmap by day and hour</li>
+                <li>Attachment type breakdown and email size distribution</li>
+                <li>Contact network visualization</li>
+            </ul>
+            <p style="margin-top: 8px;">Analytics reports can be exported for use in presentations or documentation.</p>
+        </div>
+
+        <div class="faq">
+            <h3>What forensic tools does mailin offer?</h3>
+            <p>Professional-tier forensic tools include:</p>
+            <ul>
+                <li><strong>SPF, DKIM, and DMARC analysis</strong> &mdash; verify email authentication</li>
+                <li><strong>Spoofing and phishing detection</strong> &mdash; identify suspicious emails</li>
+                <li><strong>Evidence tagging</strong> &mdash; tag and annotate emails for investigation</li>
+                <li><strong>Chain of custody</strong> &mdash; track who accessed evidence and when</li>
+                <li><strong>Tamper-proof audit trail</strong> &mdash; immutable log of all actions</li>
+                <li><strong>Bates numbering</strong> &mdash; sequential numbering for legal document production</li>
+                <li><strong>SHA-256, SHA-1, and MD5 hashing</strong> &mdash; verify email integrity</li>
+                <li><strong>MIME tree inspection</strong> &mdash; examine raw email structure</li>
+                <li><strong>Received chain analysis</strong> &mdash; trace email routing path</li>
+            </ul>
+        </div>
+
+        <div class="faq">
+            <h3>What export formats are available?</h3>
+            <p>mailin can export emails and analysis in multiple formats:</p>
+            <ul>
+                <li><strong>EML</strong> &mdash; standard email format, compatible with any email client</li>
+                <li><strong>CSV</strong> &mdash; spreadsheet-compatible for data analysis</li>
+                <li><strong>PDF</strong> &mdash; formatted documents with optional Bates stamping</li>
+                <li><strong>Plain text</strong> &mdash; simple text export</li>
+                <li><strong>JSON</strong> &mdash; structured data for developers</li>
+                <li><strong>MSG</strong> &mdash; Outlook message format export</li>
+                <li><strong>PST</strong> &mdash; Outlook archive export</li>
+                <li><strong>vCard</strong> &mdash; export contacts extracted from email headers</li>
+                <li><strong>Forensic reports</strong> &mdash; with SHA-256, SHA-1, and MD5 hash verification</li>
+                <li><strong>Concordance load files</strong> &mdash; for legal review platforms</li>
+                <li><strong>Redacted exports</strong> &mdash; PII automatically removed</li>
+                <li><strong>Bulk attachment download</strong> &mdash; save all attachments at once</li>
+            </ul>
+        </div>
+
+        <div class="faq">
+            <h3>What is conversation threading?</h3>
+            <p>mailin automatically groups related emails into conversation threads based on subject line and message references. This makes it easy to follow back-and-forth exchanges without scrolling through thousands of individual messages.</p>
+        </div>
+
+        <div class="faq">
+            <h3>What other advanced features are available?</h3>
+            <p>mailin includes many additional capabilities beyond the core features:</p>
+            <ul>
+                <li><strong>Email comparison</strong> &mdash; side-by-side diff view of two emails</li>
+                <li><strong>Anomaly detection</strong> &mdash; automatically flag unusual patterns</li>
+                <li><strong>Keyword monitoring</strong> &mdash; set up alerts for specific terms</li>
+                <li><strong>Automation rules</strong> &mdash; auto-tag and organize emails by rules</li>
+                <li><strong>Archive comparison</strong> &mdash; compare two archive files</li>
+                <li><strong>AI Digest</strong> &mdash; generate summaries of your email archive</li>
+                <li><strong>Smart alerts</strong> &mdash; notifications for important patterns</li>
+                <li><strong>Encrypted storage</strong> &mdash; AES-256 encryption for sensitive archives</li>
+                <li><strong>iCloud sync</strong> &mdash; sync settings across your Apple devices (via Apple's iCloud, no third-party servers)</li>
+            </ul>
+        </div>
+
+        <div class="faq">
+            <h3>Does mailin support Spotlight search?</h3>
+            <p>Yes. mailin can index email subjects and senders using Apple's CoreSpotlight framework, so you can find emails directly from macOS Spotlight search. This index is stored locally and never transmitted. You can disable this in Settings.</p>
+        </div>
+
+        <!-- Subscriptions & Billing -->
+        <h2 class="section-header">Subscriptions &amp; Billing</h2>
+
+        <div class="faq">
+            <h3>What's included in the free version?</h3>
+            <p>The free tier lets you:</p>
+            <ul>
+                <li>Import and browse up to <strong>200 emails</strong></li>
+                <li>Use all supported file formats</li>
+                <li>Use basic search and filters</li>
+                <li>View email details, headers, and attachments</li>
+                <li>Use <strong>3 AI assistant</strong> queries</li>
+                <li>Use <strong>3 AI smart filter</strong> queries</li>
+                <li>View analytics and charts</li>
+            </ul>
+            <p style="margin-top: 8px;">No account or payment information is required to use the free tier.</p>
+        </div>
+
+        <div class="faq">
+            <h3>What plans are available?</h3>
+            <p>mailin offers two premium tiers, each available as a monthly subscription, yearly subscription, or one-time lifetime purchase:</p>
+            <div class="pricing-ref">
+                <div class="pricing-ref-card">
+                    <h4>Personal</h4>
+                    <div class="prices">
+                        $4.99/month<br>
+                        $29.99/year<br>
+                        $49.99 lifetime (one-time)
+                    </div>
+                </div>
+                <div class="pricing-ref-card">
+                    <h4>Professional</h4>
+                    <div class="prices">
+                        $9.99/month<br>
+                        $79.99/year<br>
+                        $149.99 lifetime (one-time)
+                    </div>
+                </div>
+            </div>
+            <p style="margin-top: 12px;"><strong>Personal</strong> unlocks unlimited emails, unlimited AI, all export formats, S/MIME verification, and deduplication.</p>
+            <p><strong>Professional</strong> adds forensic mode, audit trail, chain of custody, Bates numbering, predictive coding, custodian management, legal hold, and priority support.</p>
+        </div>
+
+        <div class="faq">
+            <h3>How do subscriptions work?</h3>
+            <p>Monthly and yearly subscriptions are <strong>auto-renewable</strong>. Your Apple ID is charged at the start of each billing period. Subscriptions automatically renew unless you cancel at least 24 hours before the current period ends.</p>
+            <p style="margin-top: 6px;">The <strong>lifetime</strong> option is a one-time purchase &mdash; pay once, own it forever. No recurring charges.</p>
+        </div>
+
+        <div class="faq">
+            <h3>How do I cancel my subscription?</h3>
+            <p>You can cancel anytime through Apple:</p>
+            <ol>
+                <li>Open <strong>System Settings</strong> on your Mac</li>
+                <li>Click your <strong>Apple ID</strong> at the top</li>
+                <li>Select <strong>Subscriptions</strong></li>
+                <li>Find <strong>mailin</strong> and click <strong>Cancel Subscription</strong></li>
+            </ol>
+            <p style="margin-top: 8px;">After cancelling, you'll continue to have access until the end of your current billing period. You will not be charged again.</p>
+        </div>
+
+        <div class="faq">
+            <h3>How do I manage my subscription?</h3>
+            <p>You can manage your subscription in two ways:</p>
+            <ul>
+                <li><strong>From mailin:</strong> Open the app, go to the upgrade screen, and tap <strong>"Manage Subscription"</strong></li>
+                <li><strong>From System Settings:</strong> Apple ID &rarr; Subscriptions &rarr; mailin</li>
+            </ul>
+            <p style="margin-top: 8px;">From there you can upgrade, downgrade, switch billing periods, or cancel.</p>
+        </div>
+
+        <div class="faq">
+            <h3>How do I restore my purchase?</h3>
+            <p>If you reinstalled mailin or are using a new Mac with the same Apple ID:</p>
+            <ol>
+                <li>Open mailin</li>
+                <li>Click <strong>"Upgrade"</strong> to open the paywall</li>
+                <li>Click <strong>"Restore Purchases"</strong> at the bottom</li>
+            </ol>
+            <p style="margin-top: 8px;">Your purchases are tied to your Apple ID and will be restored automatically. This works for both subscriptions and lifetime purchases.</p>
+        </div>
+
+        <div class="faq">
+            <h3>Can I get a refund?</h3>
+            <p>Refunds are handled by Apple. Visit <a href="https://reportaproblem.apple.com">reportaproblem.apple.com</a> to request a refund for any App Store purchase. We do not process refunds directly.</p>
+        </div>
+
+        <div class="faq">
+            <h3>Can I share my purchase with my family?</h3>
+            <p>Yes. All mailin purchases (subscriptions and lifetime) support <strong>Family Sharing</strong>. If you have Family Sharing set up with your Apple ID, family members can use your mailin subscription at no extra cost.</p>
+        </div>
+
+        <!-- Privacy & Security -->
+        <h2 class="section-header">Privacy &amp; Security</h2>
+
+        <div class="faq">
+            <h3>Is my email data safe?</h3>
+            <p>Yes. mailin processes everything <strong>100% on your device</strong>. Your email content is never sent to any server, cloud service, or third party. There is no analytics, no telemetry, no tracking, and no account required.</p>
+        </div>
+
+        <div class="faq">
+            <h3>Does mailin need an internet connection?</h3>
+            <p>No. mailin works entirely offline for all email processing, AI analysis, search, and export features. The only network access is for <strong>App Store purchases</strong> (handled by Apple's StoreKit), which is required to verify subscriptions and process transactions.</p>
+        </div>
+
+        <div class="faq">
+            <h3>Does mailin use cloud AI?</h3>
+            <p>No. All AI features use Apple's on-device <strong>NaturalLanguage framework</strong>. On macOS 26+, mailin can also use Apple Intelligence's on-device models via the <strong>FoundationModels framework</strong>. No data is sent to OpenAI, Google, or any other cloud AI service.</p>
+        </div>
+
+        <div class="faq">
+            <h3>Where is my data stored?</h3>
+            <p>All imported email data is stored locally in mailin's sandboxed app container on your Mac. You can clear all data at any time from Settings. When you clear data, it is permanently deleted from your device.</p>
+        </div>
+
+        <div class="faq">
+            <h3>Can I lock mailin with Touch ID?</h3>
+            <p>Yes. mailin supports biometric authentication via Touch ID. You can enable this in Settings to require Touch ID before accessing your email archives.</p>
+        </div>
+
+        <!-- Troubleshooting -->
+        <h2 class="section-header">Troubleshooting</h2>
+
+        <div class="faq">
+            <h3>My file isn't opening. What should I do?</h3>
+            <p>Check the following:</p>
+            <ul>
+                <li>Make sure your file has a supported extension: <code>.mbox</code>, <code>.eml</code>, <code>.emlx</code>, <code>.msg</code>, <code>.pst</code>, <code>.ost</code>, <code>.nsf</code>, or <code>.zip</code></li>
+                <li>Try dragging the file directly onto the mailin window instead of using the file picker</li>
+                <li>If the file is inside a <code>.zip</code>, try extracting it first</li>
+                <li>If the file is very large (over 1 GB), give it time to process &mdash; mailin uses streaming for large files</li>
+            </ul>
+            <p style="margin-top: 8px;">If the issue persists, contact us with the file format and size so we can investigate.</p>
+        </div>
+
+        <div class="faq">
+            <h3>How does mailin handle large archives?</h3>
+            <p>mailin uses <strong>streaming parsing</strong> for large archives. Instead of loading the entire file into memory, it processes emails incrementally. This allows mailin to handle archives of several gigabytes. You'll see a progress indicator while large files are being processed.</p>
+        </div>
+
+        <div class="faq">
+            <h3>Some emails appear garbled or have missing characters.</h3>
+            <p>This usually happens with emails that use non-standard character encodings. mailin supports all major encodings (UTF-8, ISO-8859-1, Windows-1252, and more), but some very old or non-standard emails may not render perfectly. If you encounter this, try exporting the email as EML and opening it in another viewer to verify the original encoding.</p>
+        </div>
+
+        <div class="faq">
+            <h3>AI features aren't working.</h3>
+            <p>The on-device NLP engine requires macOS 14 or later and works on all supported Macs. If AI Smart Filters or the AI Assistant aren't responding:</p>
+            <ul>
+                <li>Make sure you haven't exceeded the free-tier limit (3 AI queries for free users)</li>
+                <li>Try closing and reopening mailin</li>
+                <li>Apple Intelligence features (macOS 26+) require a supported device &mdash; check Apple's compatibility list</li>
+            </ul>
+        </div>
+
+        <div class="faq">
+            <h3>My purchase isn't showing up.</h3>
+            <p>Try these steps in order:</p>
+            <ol>
+                <li>Click <strong>"Restore Purchases"</strong> in the upgrade screen</li>
+                <li>Make sure you're signed in with the same Apple ID you used to purchase</li>
+                <li>Check your subscription status in System Settings &rarr; Apple ID &rarr; Subscriptions</li>
+                <li>Restart mailin</li>
+            </ol>
+            <p style="margin-top: 8px;">If the problem continues, contact us with your Apple ID email and approximate purchase date.</p>
+        </div>
+
+        <div class="faq">
+            <h3>Can I use mailin on multiple Macs?</h3>
+            <p>Yes. Your mailin purchase is tied to your Apple ID, not a specific Mac. Sign in with the same Apple ID on any Mac, open mailin, and tap <strong>"Restore Purchases"</strong> to activate your subscription or lifetime purchase.</p>
+        </div>
+
+        <!-- Contact -->
+        <div class="contact-section">
+            <h2>Still need help?</h2>
+            <p>We're happy to help with bug reports, feature requests, or any questions.</p>
+            <div class="contact-methods">
+                <div class="contact-method">
+                    <div class="label">Email</div>
+                    <a href="mailto:sasmalgiri@gmail.com">sasmalgiri@gmail.com</a>
+                </div>
+                <div class="contact-method">
+                    <div class="label">GitHub</div>
+                    <a href="https://github.com/sasmalgiri/mailin/issues">Report an Issue</a>
+                </div>
+            </div>
+        </div>
+
     </div>
 
-    <div class="faq">
-        <h3>Is my data safe?</h3>
-        <p>Yes. mailin processes everything 100% on your device. No data is sent to any server. No cloud, no telemetry, no accounts required.</p>
-    </div>
+    <footer>
+        <div class="links">
+            <a href="../privacy/">Privacy Policy</a>
+            <a href="../terms/">Terms of Use</a>
+            <a href="./">Support</a>
+            <a href="mailto:sasmalgiri@gmail.com">Contact</a>
+        </div>
+        <p>&copy; 2025-2026 mailin. All rights reserved. Built with native Apple technology.</p>
+        <p style="margin-top: 8px; font-size: 12px;">Subscriptions auto-renew unless cancelled. <a href="../terms/">Terms apply</a>.</p>
+    </footer>
 
-    <div class="faq">
-        <h3>How do I import my Gmail emails?</h3>
-        <p>Go to <a href="https://takeout.google.com">Google Takeout</a>, select "Mail", download the export, then open the .mbox file in mailin using "New Import".</p>
-    </div>
-
-    <div class="faq">
-        <h3>What's included in the free version?</h3>
-        <p>The free tier lets you analyze up to 200 emails with all basic features. Upgrade to Personal for unlimited emails and AI, or Professional for forensic tools and audit trail.</p>
-    </div>
-
-    <div class="faq">
-        <h3>How do I restore my purchase?</h3>
-        <p>Open mailin, click "Upgrade" to open the paywall, then click "Restore Purchases" at the bottom.</p>
-    </div>
-
-    <div class="faq">
-        <h3>The app isn't opening my file. What should I do?</h3>
-        <p>Make sure your file has a .mbox or .eml extension. If the file is very large (over 1GB), give it a moment to process. If the issue persists, contact us below.</p>
-    </div>
-
-    <h2>Contact Us</h2>
-
-    <div class="contact-box">
-        <p>For bug reports, feature requests, or any questions:</p>
-        <p><strong>Email:</strong> <a href="mailto:sasmalgiri@gmail.com">sasmalgiri@gmail.com</a></p>
-        <p><strong>GitHub:</strong> <a href="https://github.com/sasmalgiri/mailin/issues">Report an Issue</a></p>
-    </div>
-
-    <p style="color: #999; font-size: 13px; margin-top: 40px; text-align: center;">&copy; 2025 mailin. All rights reserved.</p>
 </body>
 </html>

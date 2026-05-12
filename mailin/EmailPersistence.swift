@@ -49,8 +49,8 @@ struct EmailPersistence {
             let meta = SessionMeta(senderEmail: senderEmail, emailCount: emails.count, savedAt: Date())
             let metaData = try encoder.encode(meta)
 
-            try data.write(to: storeURL, options: .atomic)
             try metaData.write(to: metaURL, options: .atomic)
+            try data.write(to: storeURL, options: .atomic)
             persistLog.info("Saved \(emails.count) emails (\(data.count) bytes)")
         } catch {
             persistLog.error("Failed to save emails: \(error.localizedDescription)")

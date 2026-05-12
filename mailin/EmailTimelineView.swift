@@ -15,6 +15,7 @@ struct EmailTimelineView: View {
     let emails: [MBOXParser.RawEmail]
     @State private var granularity: Granularity = .week
     @State private var selectedBucket: DateBucket?
+    @State private var selectedTimezone: TimeZone = .current
     @Environment(\.dismiss) private var dismiss
 
     // MARK: - Types
@@ -58,10 +59,17 @@ struct EmailTimelineView: View {
         .sorted { $0.date < $1.date }
     }
 
+    private var normalizedCalendar: Calendar {
+        var cal = Calendar.current
+        cal.timeZone = selectedTimezone
+        return cal
+    }
+
     private var buckets: [DateBucket] {
-        let calendar = Calendar.current
+        let calendar = normalizedCalendar
         let dateFormatter = DateFormatter()
         dateFormatter.locale = Locale.current
+        dateFormatter.timeZone = selectedTimezone
 
         var grouped: [Date: (sent: Int, received: Int, ids: [UUID])] = [:]
 
@@ -108,7 +116,7 @@ struct EmailTimelineView: View {
     }
 
     private var hourDistribution: [HourActivity] {
-        let calendar = Calendar.current
+        let calendar = normalizedCalendar
         var hourCounts = [Int](repeating: 0, count: 24)
 
         for (date, _) in parsedDates {
@@ -123,7 +131,7 @@ struct EmailTimelineView: View {
     }
 
     private var stats: TimelineStats {
-        let calendar = Calendar.current
+        let calendar = normalizedCalendar
         let dates = parsedDates.map { $0.date }
         guard !dates.isEmpty else {
             return TimelineStats(
@@ -254,6 +262,17 @@ struct EmailTimelineView: View {
 
     // MARK: - Granularity Picker
 
+    private static let commonTimezones: [(label: String, tz: TimeZone)] = {
+        let ids = ["UTC", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+                    "Europe/London", "Europe/Paris", "Europe/Berlin", "Asia/Tokyo", "Asia/Shanghai",
+                    "Asia/Kolkata", "Australia/Sydney", "Pacific/Auckland"]
+        return ids.compactMap { id -> (String, TimeZone)? in
+            guard let tz = TimeZone(identifier: id) else { return nil }
+            let abbr = tz.abbreviation() ?? id
+            return ("\(abbr) — \(id.replacingOccurrences(of: "_", with: " ").components(separatedBy: "/").last ?? id)", tz)
+        }
+    }()
+
     private var granularityPicker: some View {
         HStack {
             Text("Group by:")
@@ -268,6 +287,18 @@ struct EmailTimelineView: View {
             .frame(maxWidth: 240)
             .accessibilityLabel("Timeline granularity")
             Spacer()
+            Text("Timezone:")
+                .font(Typography.subheadline)
+                .foregroundColor(AppColors.secondary)
+            Picker("Timezone", selection: $selectedTimezone) {
+                Text("Local (\(TimeZone.current.abbreviation() ?? ""))").tag(TimeZone.current)
+                Divider()
+                ForEach(Self.commonTimezones, id: \.tz.identifier) { item in
+                    Text(item.label).tag(item.tz)
+                }
+            }
+            .frame(maxWidth: 220)
+            .accessibilityLabel("Normalize timestamps to timezone")
         }
     }
 

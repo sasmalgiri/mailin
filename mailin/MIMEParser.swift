@@ -114,40 +114,43 @@ public class MIMEParser {
 
     private static func buildRecursiveParts(_ body: String, boundary: String, defaultContentType: String, depth: Int) -> [MIMEPart] {
         guard depth < maxRecursionDepth else { return [] }
+        guard !boundary.isEmpty else { return [] }
         let marker = "--\(boundary)"
         let segments = body.components(separatedBy: marker)
         var parts: [MIMEPart] = []
         for segment in segments {
-            let trimmed = segment.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty || trimmed.hasPrefix("--") { continue }
-            let partSeparator = trimmed.contains("\r\n\r\n") ? "\r\n\r\n" : "\n\n"
-            let sections = trimmed.components(separatedBy: partSeparator)
-            let headerSection = sections.first ?? ""
-            let rawBody = sections.dropFirst().joined(separator: partSeparator)
-            let headers = parseHeaders(from: headerSection)
-            let contentType = headers["Content-Type"] ?? defaultContentType
-            let charset = extractCharset(contentType)
-            let encoding = headers["Content-Transfer-Encoding"] ?? ""
-            let bodyToStore = isAttachment(headers) ? rawBody : decodeBody(rawBody, encoding: encoding, charset: charset)
-            var part = MIMEPart(
-                headers: headers,
-                body: bodyToStore,
-                rawBody: rawBody,
-                mimeType: contentType,
-                contentDisposition: headers["Content-Disposition"] ?? "",
-                filename: extractFilename(headers["Content-Disposition"]) ?? extractFilename(headers["Content-Type"]),
-                transferEncoding: encoding,
-                charset: charset,
-                subparts: []
-            )
-            if contentType.lowercased().hasPrefix("multipart/"),
-               let nestedBoundary = extractBoundary(contentType) {
-                part.subparts = buildRecursiveParts(part.body, boundary: nestedBoundary, defaultContentType: contentType, depth: depth + 1)
-            } else if contentType.lowercased().hasPrefix("message/rfc822"), depth + 1 < maxRecursionDepth {
-                let nested = parseEmail(rawEmail: part.body, depth: depth + 1)
-                part.subparts = nested.parts
+            autoreleasepool {
+                let trimmed = segment.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty || trimmed.hasPrefix("--") { return }
+                let partSeparator = trimmed.contains("\r\n\r\n") ? "\r\n\r\n" : "\n\n"
+                let sections = trimmed.components(separatedBy: partSeparator)
+                let headerSection = sections.first ?? ""
+                let rawBody = sections.dropFirst().joined(separator: partSeparator)
+                let headers = parseHeaders(from: headerSection)
+                let contentType = headers["Content-Type"] ?? defaultContentType
+                let charset = extractCharset(contentType)
+                let encoding = headers["Content-Transfer-Encoding"] ?? ""
+                let bodyToStore = isAttachment(headers) ? rawBody : decodeBody(rawBody, encoding: encoding, charset: charset)
+                var part = MIMEPart(
+                    headers: headers,
+                    body: bodyToStore,
+                    rawBody: rawBody,
+                    mimeType: contentType,
+                    contentDisposition: headers["Content-Disposition"] ?? "",
+                    filename: extractFilename(headers["Content-Disposition"]) ?? extractFilename(headers["Content-Type"]),
+                    transferEncoding: encoding,
+                    charset: charset,
+                    subparts: []
+                )
+                if contentType.lowercased().hasPrefix("multipart/"),
+                   let nestedBoundary = extractBoundary(contentType) {
+                    part.subparts = buildRecursiveParts(part.body, boundary: nestedBoundary, defaultContentType: contentType, depth: depth + 1)
+                } else if contentType.lowercased().hasPrefix("message/rfc822"), depth + 1 < maxRecursionDepth {
+                    let nested = parseEmail(rawEmail: part.body, depth: depth + 1)
+                    part.subparts = nested.parts
+                }
+                parts.append(part)
             }
-            parts.append(part)
         }
         return parts
     }
@@ -234,28 +237,27 @@ public class MIMEParser {
         )
     }
     private static func extractFilename(_ header: String?) -> String? {
-        guard let header = header else { return nil }
-        let filenameStarPattern = #"filename\*\s*=\s*(?:[\w-]+'[\w-]*')?([^;"]+)"#
-        if let regex = try? NSRegularExpression(pattern: filenameStarPattern, options: .caseInsensitive) {
-            if let match = regex.firstMatch(in: header, range: NSRange(header.startIndex..., in: header)),
-               let range = Range(match.range(at: 1), in: header) {
-                return header[range].removingPercentEncoding?.trimmingCharacters(in: .whitespacesAndNewlines)
-            }
+        guard let header = header, !header.isEmpty else { return nil }
+        let headerRange = NSRange(header.startIndex..., in: header)
+
+        if let regex = try? NSRegularExpression(pattern: #"filename\*\s*=\s*(?:[\w-]+'[\w-]*')?([^;"]+)"#, options: .caseInsensitive),
+           let match = regex.firstMatch(in: header, range: headerRange),
+           let range = Range(match.range(at: 1), in: header) {
+            return header[range].removingPercentEncoding?.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        let filenamePattern = #"filename\s*=\s*"([^"]+)""#
-        if let regex = try? NSRegularExpression(pattern: filenamePattern, options: .caseInsensitive) {
-            if let match = regex.firstMatch(in: header, range: NSRange(header.startIndex..., in: header)),
-               let range = Range(match.range(at: 1), in: header) {
-                return String(header[range])
-            }
+
+        if let regex = try? NSRegularExpression(pattern: #"filename\s*=\s*"([^"]+)""#, options: .caseInsensitive),
+           let match = regex.firstMatch(in: header, range: headerRange),
+           let range = Range(match.range(at: 1), in: header) {
+            return String(header[range])
         }
-        let simplePattern = #"filename\s*=\s*([^;\s]+)"#
-        if let regex = try? NSRegularExpression(pattern: simplePattern, options: .caseInsensitive) {
-            if let match = regex.firstMatch(in: header, range: NSRange(header.startIndex..., in: header)),
-               let range = Range(match.range(at: 1), in: header) {
-                return String(header[range]).trimmingCharacters(in: .whitespacesAndNewlines)
-            }
+
+        if let regex = try? NSRegularExpression(pattern: #"filename\s*=\s*([^;\s]+)"#, options: .caseInsensitive),
+           let match = regex.firstMatch(in: header, range: headerRange),
+           let range = Range(match.range(at: 1), in: header) {
+            return String(header[range]).trimmingCharacters(in: .whitespacesAndNewlines)
         }
+
         return nil
     }
 }

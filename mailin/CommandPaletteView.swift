@@ -22,6 +22,7 @@ struct PaletteCommand: Identifiable {
 
 struct CommandPaletteView: View {
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("showAdvancedFeatures") private var showAdvancedFeatures = false
     @State private var searchText = ""
     @State private var selectedIndex = 0
     @FocusState private var isSearchFocused: Bool
@@ -139,15 +140,25 @@ struct CommandPaletteView: View {
             PaletteCommand(name: "Workspaces", icon: "square.stack.3d.up", shortcut: nil, category: "View") {
                 execute("workspaces")
             },
+            PaletteCommand(name: "All Attachments", icon: "paperclip.circle", shortcut: nil, category: "View") {
+                execute("allAttachments")
+            },
+            PaletteCommand(name: "IOC Extractor", icon: "shield.lefthalf.filled", shortcut: nil, category: "Forensic") {
+                execute("iocExtractor")
+            },
+            PaletteCommand(name: "Guided Search", icon: "questionmark.circle", shortcut: nil, category: "View") {
+                execute("guidedSearch")
+            },
         ]
     }
 
     // MARK: - Filtered Commands
 
     private var filteredCommands: [PaletteCommand] {
-        guard !searchText.isEmpty else { return allCommands }
+        let base = showAdvancedFeatures ? allCommands : allCommands.filter { $0.category != "Forensic" }
+        guard !searchText.isEmpty else { return base }
         let query = searchText.lowercased()
-        return allCommands.filter { command in
+        return base.filter { command in
             command.name.lowercased().contains(query) ||
             command.category.lowercased().contains(query)
         }

@@ -19,9 +19,13 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>3</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2025-2026 mailin. All rights reserved.</string>
+
+	<!-- Encryption: only Apple frameworks (CryptoKit, Security.framework, HTTPS) -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 
 	<!-- Privacy Usage Descriptions -->
 	<key>NSDocumentsFolderUsageDescription</key>
@@ -35,6 +39,12 @@
 
 	<key>NSFaceIDUsageDescription</key>
 	<string>mailin uses Face ID or Touch ID to unlock the app and protect your email archives.</string>
+
+	<!-- iOS Document Browser Support -->
+	<key>UISupportsDocumentBrowser</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 
 	<!-- iOS Launch Screen (required for iOS submission) -->
 	<key>UILaunchScreen</key>

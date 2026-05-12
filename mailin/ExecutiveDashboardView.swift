@@ -103,7 +103,7 @@ struct ExecutiveDashboardView: View {
                 title: "Avg Sentiment",
                 value: String(format: "%.2f", data.averageSentiment),
                 icon: "heart.fill",
-                color: data.averageSentiment > 0.3 ? .green : (data.averageSentiment < -0.3 ? .red : .orange)
+                color: data.averageSentiment > 0.4 ? .green : (data.averageSentiment < -0.4 ? .red : .orange)
             )
             AnimatedStatCard(
                 title: "Response Rate",

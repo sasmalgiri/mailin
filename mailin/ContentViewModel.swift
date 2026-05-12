@@ -35,6 +35,11 @@ class ContentViewModel: ObservableObject {
         monitorMemoryPressure()
     }
 
+    deinit {
+        memoryTimer?.invalidate()
+        memoryPressureSource?.cancel()
+    }
+
     nonisolated private static let streamingThreshold: Int64 = 100_000_000 // 100MB
 
     enum MemoryPressure { case normal, elevated, critical }
@@ -160,7 +165,7 @@ class ContentViewModel: ObservableObject {
             let name = String(data: nameData, encoding: .utf8) ?? ""
 
             let dataStart = nameStart + nameLen + extraLen
-            guard dataStart + compressedSize <= bytes.count else { break }
+            guard dataStart >= nameStart, dataStart + compressedSize <= bytes.count else { break }
 
             let ext = (name as NSString).pathExtension.lowercased()
             if (ext == "mbox" || ext == "eml") && !name.hasSuffix("/") {
@@ -235,10 +240,24 @@ class ContentViewModel: ObservableObject {
 
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
+            defer {
+                Task { @MainActor in
+                    if self.isParsing {
+                        self.isParsing = false
+                        self.stopMemoryMonitoring()
+                        if self.loadingProgress < 1.0 {
+                            self.statusMessage = "Parsing interrupted unexpectedly."
+                            self.statusColor = .orange
+                            self.loadingProgress = 0.0
+                            self.loadingText = ""
+                        }
+                    }
+                }
+            }
             var allEmails: [MBOXParser.RawEmail] = []
             var errors: [String] = []
             var fileHashes: [ForensicManager.SourceFileHash] = []
-            let totalFiles = Double(urls.count)
+            let totalFiles = max(1.0, Double(urls.count))
             for (idx, fileURL) in urls.enumerated() {
                 if forensicEnabled {
                     if let hash = ForensicManager.computeHashes(for: fileURL) {
@@ -638,14 +657,137 @@ class ContentViewModel: ObservableObject {
         return String(format: "%.2f GB", Double(bytes) / 1_073_741_824.0)
     }
 
-    // MARK: - Export as EML (raw string)
+    // MARK: - Export as EML (full MIME)
     nonisolated func exportEmailAsEML(_ email: MBOXParser.RawEmail) -> String {
-        var result = ""
-        for (key, value) in email.headers {
-            result += "\(key): \(value)\r\n"
+        if !email.rawSource.isEmpty && email.rawSource.contains("MIME-Version") {
+            let source = email.rawSource
+            if source.hasPrefix("From ") {
+                if let firstNewline = source.firstIndex(of: "\n") {
+                    return String(source[source.index(after: firstNewline)...])
+                }
+            }
+            return source
         }
-        result += "\r\n"
-        result += email.plainBody
+
+        let boundary = "mailin-eml-\(UUID().uuidString)"
+        var lines: [String] = []
+
+        let orderedKeys = ["From", "To", "Cc", "Bcc", "Subject", "Date", "Message-ID", "In-Reply-To", "References"]
+        for key in orderedKeys {
+            if let value = email.headers[key], !value.isEmpty {
+                lines.append("\(key): \(value)")
+            }
+        }
+        for (key, value) in email.headers where !orderedKeys.contains(key) && !value.isEmpty {
+            lines.append("\(key): \(value)")
+        }
+        lines.append("MIME-Version: 1.0")
+
+        let hasHTML = !email.htmlBody.isEmpty
+        let hasAttachments = !email.attachments.isEmpty && email.attachments.contains(where: { $0.base64 != nil })
+
+        if hasAttachments {
+            lines.append("Content-Type: multipart/mixed; boundary=\"\(boundary)\"")
+            lines.append("")
+            lines.append("--\(boundary)")
+
+            if hasHTML && !email.plainBody.isEmpty {
+                let altBoundary = "mailin-alt-\(UUID().uuidString)"
+                lines.append("Content-Type: multipart/alternative; boundary=\"\(altBoundary)\"")
+                lines.append("")
+                lines.append("--\(altBoundary)")
+                lines.append("Content-Type: text/plain; charset=utf-8")
+                lines.append("Content-Transfer-Encoding: quoted-printable")
+                lines.append("")
+                lines.append(quotedPrintableEncode(email.plainBody))
+                lines.append("--\(altBoundary)")
+                lines.append("Content-Type: text/html; charset=utf-8")
+                lines.append("Content-Transfer-Encoding: quoted-printable")
+                lines.append("")
+                lines.append(quotedPrintableEncode(email.htmlBody))
+                lines.append("--\(altBoundary)--")
+            } else if hasHTML {
+                lines.append("Content-Type: text/html; charset=utf-8")
+                lines.append("Content-Transfer-Encoding: quoted-printable")
+                lines.append("")
+                lines.append(quotedPrintableEncode(email.htmlBody))
+            } else {
+                lines.append("Content-Type: text/plain; charset=utf-8")
+                lines.append("Content-Transfer-Encoding: quoted-printable")
+                lines.append("")
+                lines.append(quotedPrintableEncode(email.plainBody))
+            }
+
+            for attachment in email.attachments {
+                guard let b64 = attachment.base64, !b64.isEmpty else { continue }
+                lines.append("--\(boundary)")
+                lines.append("Content-Type: \(attachment.mimeType); name=\"\(attachment.filename)\"")
+                lines.append("Content-Disposition: attachment; filename=\"\(attachment.filename)\"")
+                lines.append("Content-Transfer-Encoding: base64")
+                if let cid = attachment.contentID, !cid.isEmpty {
+                    lines.append("Content-ID: <\(cid)>")
+                }
+                lines.append("")
+                let lineWrapped = stride(from: 0, to: b64.count, by: 76).map { start in
+                    let end = min(start + 76, b64.count)
+                    let startIdx = b64.index(b64.startIndex, offsetBy: start)
+                    let endIdx = b64.index(b64.startIndex, offsetBy: end)
+                    return String(b64[startIdx..<endIdx])
+                }.joined(separator: "\r\n")
+                lines.append(lineWrapped)
+            }
+            lines.append("--\(boundary)--")
+        } else if hasHTML && !email.plainBody.isEmpty {
+            let altBoundary = "mailin-alt-\(UUID().uuidString)"
+            lines.append("Content-Type: multipart/alternative; boundary=\"\(altBoundary)\"")
+            lines.append("")
+            lines.append("--\(altBoundary)")
+            lines.append("Content-Type: text/plain; charset=utf-8")
+            lines.append("Content-Transfer-Encoding: quoted-printable")
+            lines.append("")
+            lines.append(quotedPrintableEncode(email.plainBody))
+            lines.append("--\(altBoundary)")
+            lines.append("Content-Type: text/html; charset=utf-8")
+            lines.append("Content-Transfer-Encoding: quoted-printable")
+            lines.append("")
+            lines.append(quotedPrintableEncode(email.htmlBody))
+            lines.append("--\(altBoundary)--")
+        } else if hasHTML {
+            lines.append("Content-Type: text/html; charset=utf-8")
+            lines.append("Content-Transfer-Encoding: quoted-printable")
+            lines.append("")
+            lines.append(quotedPrintableEncode(email.htmlBody))
+        } else {
+            lines.append("Content-Type: text/plain; charset=utf-8")
+            lines.append("Content-Transfer-Encoding: quoted-printable")
+            lines.append("")
+            lines.append(quotedPrintableEncode(email.plainBody))
+        }
+
+        return lines.joined(separator: "\r\n")
+    }
+
+    private nonisolated func quotedPrintableEncode(_ text: String) -> String {
+        var result = ""
+        var lineLength = 0
+        for char in text {
+            if char == "\n" {
+                result += "\r\n"
+                lineLength = 0
+            } else if char == "\r" {
+                continue
+            } else if char.isASCII, let ascii = char.asciiValue, ascii >= 32 && ascii <= 126 && char != "=" {
+                if lineLength >= 75 { result += "=\r\n"; lineLength = 0 }
+                result.append(char)
+                lineLength += 1
+            } else {
+                for byte in String(char).utf8 {
+                    if lineLength >= 73 { result += "=\r\n"; lineLength = 0 }
+                    result += String(format: "=%02X", byte)
+                    lineLength += 3
+                }
+            }
+        }
         return result
     }
 
