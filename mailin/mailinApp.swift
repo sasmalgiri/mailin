@@ -668,7 +668,7 @@ struct PersonaOnboardingView: View {
                     .font(.system(.title3, design: .rounded))
                     .fontWeight(.bold)
 
-                Text("How will you use mailin? This customizes your interface.")
+                Text("How will you use mailin? This sets your default layout, visible tools, and AI suggestions. You can change it anytime in Settings.")
                     .font(Typography.subheadline)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
@@ -697,6 +697,13 @@ struct PersonaOnboardingView: View {
                                         .font(.caption)
                                         .foregroundColor(.secondary)
                                         .lineLimit(2)
+                                    if selected == persona {
+                                        Text(persona.impactDescription)
+                                            .font(.caption2)
+                                            .foregroundColor(persona.accentColor.opacity(0.8))
+                                            .lineLimit(2)
+                                            .transition(.opacity)
+                                    }
                                 }
 
                                 Spacer()

@@ -731,6 +731,7 @@ struct ContentView: View {
             var usedNames = Set<String>()
             var exportedCount = 0
             var failedCount = 0
+            var failedSubjects: [String] = []
             for (index, email) in limitedEmails.enumerated() {
                 let rawSubject = email.headers["Subject"] ?? "(no-subject)"
                 let safeSubject = rawSubject
@@ -751,11 +752,13 @@ struct ContentView: View {
                     exportedCount += 1
                 } catch {
                     failedCount += 1
+                    failedSubjects.append(String(rawSubject.prefix(40)))
                     FileUtilsAudit.logError(error, context: "EML Export", path: fileURL.path)
                 }
             }
             let finalExported = exportedCount
             let finalFailed = failedCount
+            let finalFailedSubjects = failedSubjects
             let totalSelected = emails.count
             await MainActor.run {
                 if !isPro && totalSelected > finalExported {
@@ -763,7 +766,9 @@ struct ContentView: View {
                     vm.statusColor = .orange
                     self.storeManager.showPaywall = true
                 } else if finalFailed > 0 {
-                    vm.statusMessage = "Exported \(finalExported) emails. \(finalFailed) failed to save."
+                    let failedHint = finalFailedSubjects.prefix(3).joined(separator: ", ")
+                    let moreHint = finalFailed > 3 ? " and \(finalFailed - 3) more" : ""
+                    vm.statusMessage = "Exported \(finalExported) emails. \(finalFailed) failed: \(failedHint)\(moreHint)"
                     vm.statusColor = .orange
                 } else {
                     vm.statusMessage = "Exported \(finalExported) emails to \(folderURL.lastPathComponent)."
@@ -1566,7 +1571,7 @@ struct ContentView: View {
                 }
             }
 
-            if showAdvancedFeatures && (forensicManager.isEnabled || personaManager.selectedPersona == .legal) && !forensicManager.evidenceTags.isEmpty {
+            if forensicManager.isEnabled || personaManager.selectedPersona == .legal || personaManager.selectedPersona == .forensic {
                 SidebarSectionHeader(title: "Evidence Tags", icon: "shield.checkered", color: .orange, helpText: "Filter by forensic evidence tag")
                 VStack(alignment: .leading, spacing: Spacing.xxSmall) {
                     Button {
@@ -1588,9 +1593,11 @@ struct ContentView: View {
                     .accessibilityLabel("Show all emails")
                     .accessibilityAddTraits(modelVM.selectedEvidenceTag == nil ? .isSelected : [])
 
-                    ForEach(ForensicManager.EvidenceTag.allCases.filter { $0 != .none }, id: \.self) { tag in
-                        let count = forensicManager.taggedCount(for: tag)
-                        if count > 0 {
+                    let tagsWithCounts = ForensicManager.EvidenceTag.allCases.filter { $0 != .none }.map { ($0, forensicManager.taggedCount(for: $0)) }
+                    let hasAnyTags = tagsWithCounts.contains { $0.1 > 0 }
+
+                    if hasAnyTags {
+                        ForEach(tagsWithCounts.filter { $0.1 > 0 }, id: \.0) { tag, count in
                             Button {
                                 modelVM.selectedEvidenceTag = tag
                                 modelVM.applyFilters()
@@ -1616,6 +1623,11 @@ struct ContentView: View {
                             .accessibilityLabel("Filter by \(tag.rawValue), \(count) emails")
                             .accessibilityAddTraits(modelVM.selectedEvidenceTag == tag ? .isSelected : [])
                         }
+                    } else {
+                        Text("Right-click emails to assign evidence tags")
+                            .font(Typography.caption2)
+                            .foregroundColor(.secondary)
+                            .padding(.vertical, Spacing.xxSmall)
                     }
                 }
             }
@@ -2292,6 +2304,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             var usedNames = Set<String>()
             var exportedCount = 0
             var failedCount = 0
+            var failedSubjects: [String] = []
             for (index, email) in emailsToExport.enumerated() {
                 let rawSubject = email.headers["Subject"] ?? "(no-subject)"
                 let safeSubject = rawSubject
@@ -2312,11 +2325,13 @@ private func handleMultipleFiles(_ urls: [URL]) {
                     exportedCount += 1
                 } catch {
                     failedCount += 1
+                    failedSubjects.append(String(rawSubject.prefix(40)))
                     FileUtilsAudit.logError(error, context: "EML Export", path: fileURL.path)
                 }
             }
             let finalExported = exportedCount
             let finalFailed = failedCount
+            let finalFailedSubjects = failedSubjects
             let totalAvailable = allFiltered.count
             await MainActor.run {
                 if !isPro && totalAvailable > Self.freeExportLimit {
@@ -2324,7 +2339,9 @@ private func handleMultipleFiles(_ urls: [URL]) {
                     vm.statusColor = .orange
                     self.storeManager.showPaywall = true
                 } else if finalFailed > 0 {
-                    vm.statusMessage = "Exported \(finalExported) emails. \(finalFailed) failed to save."
+                    let failedHint = finalFailedSubjects.prefix(3).joined(separator: ", ")
+                    let moreHint = finalFailed > 3 ? " and \(finalFailed - 3) more" : ""
+                    vm.statusMessage = "Exported \(finalExported) emails. \(finalFailed) failed: \(failedHint)\(moreHint)"
                     vm.statusColor = .orange
                 } else {
                     vm.statusMessage = "Exported \(finalExported) emails to \(folderURL.lastPathComponent)."

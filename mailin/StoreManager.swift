@@ -59,7 +59,7 @@ class StoreManager: ObservableObject {
 
     static let allProductIDs: Set<String> = personalProductIDs.union(professionalProductIDs)
 
-    nonisolated static let freeEmailLimit = 200
+    nonisolated static let freeEmailLimit = 500
 
     // MARK: - Professional-Only Features
 

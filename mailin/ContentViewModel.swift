@@ -341,9 +341,17 @@ class ContentViewModel: ObservableObject {
                 guard !finalAllEmails.isEmpty else {
                     let fileNames = urls.map { $0.lastPathComponent }.joined(separator: ", ")
                     if finalErrors.isEmpty {
-                        self.statusMessage = "No emails found in \(fileNames). Supported formats: .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf"
+                        let extensions = urls.map { $0.pathExtension.lowercased() }
+                        let supported = Set(["mbox", "eml", "emlx", "msg", "pst", "ost", "nsf", "zip"])
+                        let unsupported = extensions.filter { !supported.contains($0) && !$0.isEmpty }
+                        if !unsupported.isEmpty {
+                            self.statusMessage = "Unsupported format: .\(unsupported.first!). Supported: .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, .zip"
+                        } else {
+                            self.statusMessage = "No emails found in \(fileNames). The file may be empty or contain no recognizable email messages."
+                        }
                     } else {
-                        self.statusMessage = "Failed to parse \(fileNames): \(finalErrors.first ?? "Unknown error"). Try a smaller file or check the format."
+                        let errorSummary = finalErrors.prefix(3).joined(separator: "; ")
+                        self.statusMessage = "Failed to parse \(fileNames): \(errorSummary)"
                     }
                     self.statusColor = .orange
                     self.isParsed = false
@@ -372,7 +380,8 @@ class ContentViewModel: ObservableObject {
                     self.statusMessage = "Parsed \(self.parsedEmails.count) emails from \(urls.count) file(s)."
                     self.statusColor = .green
                 } else {
-                    self.statusMessage = "Parsed \(self.parsedEmails.count) emails. \(finalErrors.count) file(s) had errors."
+                    let errorHint = finalErrors.first.map { " (\($0))" } ?? ""
+                    self.statusMessage = "Parsed \(self.parsedEmails.count) emails. \(finalErrors.count) file(s) had errors\(errorHint)."
                     self.statusColor = .orange
                 }
                 self.loadingProgress = 1.0

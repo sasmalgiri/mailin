@@ -72,6 +72,17 @@ class PersonaManager: ObservableObject {
             }
         }
 
+        var impactDescription: String {
+            switch self {
+            case .forensic: return "Shows: evidence tags, audit trail, hash verification, technical headers"
+            case .legal: return "Shows: privilege filters, Bates numbering, production exports, review batches"
+            case .itAdmin: return "Shows: MIME tree, SPF/DKIM analysis, routing headers, domain filters"
+            case .journalist: return "Shows: analytics dashboard, reply patterns, sentiment filters, redaction"
+            case .personal: return "Shows: clean layout, basic search and filters, attachment gallery"
+            case .general: return "Shows: everything — you can toggle features on or off as needed"
+            }
+        }
+
         var accentColor: Color {
             switch self {
             case .forensic: return .orange

@@ -86,11 +86,11 @@ struct EmailDetailView: View {
                 VStack(alignment: .leading, spacing: Spacing.medium) {
                     subjectView
                     riskScoreBadge
-                    if showAdvancedFeatures && (forensicManager.isEnabled || personaManager.selectedPersona == .legal) {
+                    if forensicManager.isEnabled || personaManager.selectedPersona == .legal || (showAdvancedFeatures && personaManager.selectedPersona == .forensic) {
                         evidenceTagBar
                     }
                     headerBlock
-                    if showAdvancedFeatures && (forensicManager.isEnabled || personaManager.config.showTechnicalHeaders) {
+                    if personaManager.config.showTechnicalHeaders || (showAdvancedFeatures && forensicManager.isEnabled) {
                         forensicHeaderSection
                     }
                     Divider()

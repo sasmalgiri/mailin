@@ -144,7 +144,7 @@ struct PaywallView: View {
 
             Divider()
 
-            featureRow("Parse emails", free: "200", personal: true, pro: true)
+            featureRow("Parse emails", free: "500", personal: true, pro: true)
             featureRow("All formats (MBOX/EML/MSG/PST)", free: true, personal: true, pro: true)
             featureRow("View & filter emails", free: true, personal: true, pro: true)
             featureRow("Boolean/regex/proximity search", free: true, personal: true, pro: true)

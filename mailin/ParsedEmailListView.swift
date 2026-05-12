@@ -352,7 +352,7 @@ struct ParsedEmailListView: View {
                     .font(.footnote)
                     .fontWeight(.medium)
                     .foregroundColor(AppColors.secondary)
-                TextField(model.isNaturalLanguageMode ? "Ask naturally, e.g. \"John's emails from last week with attachments\"" : "Search emails...", text: $model.searchText)
+                TextField(model.isNaturalLanguageMode ? "Ask naturally, e.g. \"John's emails from last week with attachments\"" : "Search — try from:name, AND/OR/NOT, \"exact phrase\", or /regex/", text: $model.searchText)
                     .textFieldStyle(.plain)
                     .font(.footnote)
                     .focused($isSearchFieldFocused)
