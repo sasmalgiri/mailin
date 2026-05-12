@@ -371,7 +371,7 @@ struct MBOXParser {
             }
         }
         parts.append(String(content[lastIndex...]))
-        return parts
+        return parts.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 
     static func generateMIMEDiagnostics(root: MIMEPart?) -> [String] {
