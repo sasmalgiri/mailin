@@ -118,11 +118,17 @@ final class ChainOfCustodyManager: ObservableObject {
         var csv = "Date,Event Type,Actor,Description,Email Count,Hash Before,Hash After\n"
         let formatter = ISO8601DateFormatter()
 
+        func csvField(_ text: String) -> String {
+            var val = text.replacingOccurrences(of: "\"", with: "\"\"")
+            if let first = val.first, "=+@-\t\r".contains(first) { val = "'" + val }
+            if val.contains(",") || val.contains("\"") || val.contains("\n") { return "\"\(val)\"" }
+            return val
+        }
         for event in events {
             let date = formatter.string(from: event.date)
             let type = event.eventType.rawValue
-            let actor = event.actor.replacingOccurrences(of: ",", with: ";")
-            let desc = event.description.replacingOccurrences(of: ",", with: ";")
+            let actor = csvField(event.actor)
+            let desc = csvField(event.description)
             let count = event.emailIDs.count
             let before = event.hashBefore ?? ""
             let after = event.hashAfter ?? ""

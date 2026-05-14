@@ -22,8 +22,10 @@ class ContentViewModel: ObservableObject {
     @Published var parseErrors: [String] = []
     @Published var memoryUsageMB: Double = 0.0
     @Published var duplicatesRemoved: Int = 0
+    @Published private(set) var removedDuplicates: [MBOXParser.RawEmail] = []
 
     @Published private(set) var parsedEmails: [MBOXParser.RawEmail] = []
+    @Published var totalParsedCount: Int = 0
     private(set) var metadata: [String: Any] = [:]
     private var isParsing = false
     private var memoryTimer: Timer?
@@ -222,7 +224,7 @@ class ContentViewModel: ObservableObject {
     }
 
 // MARK: - MBOX Parsing with fine-grained progress
-    func parseSelectedFiles(_ urls: [URL]) {
+    func parseSelectedFiles(_ urls: [URL], removeDuplicates: Bool = true) {
         guard !isParsing else { return }
 
         statusMessage = "Parsing files..."
@@ -345,7 +347,7 @@ class ContentViewModel: ObservableObject {
                         let supported = Set(["mbox", "eml", "emlx", "msg", "pst", "ost", "nsf", "zip"])
                         let unsupported = extensions.filter { !supported.contains($0) && !$0.isEmpty }
                         if !unsupported.isEmpty {
-                            self.statusMessage = "Unsupported format: .\(unsupported.first!). Supported: .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, .zip"
+                            self.statusMessage = "Unsupported format: .\(unsupported.first ?? "unknown"). Supported: .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, .zip"
                         } else {
                             self.statusMessage = "No emails found in \(fileNames). The file may be empty or contain no recognizable email messages."
                         }
@@ -365,10 +367,22 @@ class ContentViewModel: ObservableObject {
                     ForensicManager.shared.registerFileHash(hash)
                 }
 
-                let beforeCount = finalAllEmails.count
-                let deduplicated = Self.deduplicate(finalAllEmails)
-                self.duplicatesRemoved = beforeCount - deduplicated.count
-                self.parsedEmails = self.annotate(deduplicated)
+                if removeDuplicates {
+                    let dedupResult = Self.deduplicate(finalAllEmails)
+                    self.duplicatesRemoved = dedupResult.removed.count
+                    var seenDupIDs = Set<String>()
+                    self.removedDuplicates = dedupResult.removed.filter { email in
+                        let key = (email.headers["Message-ID"] ?? email.headers["Message-Id"])
+                            ?? "\(email.headers["From"] ?? "")\(email.headers["Date"] ?? "")\(email.headers["Subject"] ?? "")"
+                        return seenDupIDs.insert(key).inserted
+                    }
+                    self.parsedEmails = self.annotate(dedupResult.kept)
+                } else {
+                    self.duplicatesRemoved = 0
+                    self.removedDuplicates = []
+                    self.parsedEmails = self.annotate(finalAllEmails)
+                }
+                self.totalParsedCount = self.parsedEmails.count
                 self.isParsed = true
                 self.updateMetadataDisplay()
 
@@ -376,12 +390,19 @@ class ContentViewModel: ObservableObject {
                     ForensicManager.shared.storeEmailHashes(self.parsedEmails)
                 }
                 ForensicManager.shared.logAction("Parse Complete", detail: "Parsed \(self.parsedEmails.count) emails from \(urls.count) file(s). \(self.duplicatesRemoved) duplicates removed.")
+                let recoveryInfo: String
+                if let report = MBOXParser.lastRecoveryReport, report.hasDamage {
+                    recoveryInfo = " (\(report.failed) unparseable skipped)"
+                } else {
+                    recoveryInfo = ""
+                }
+                let dedupInfo = self.duplicatesRemoved > 0 ? " \(self.duplicatesRemoved) duplicates removed." : ""
                 if finalErrors.isEmpty {
-                    self.statusMessage = "Parsed \(self.parsedEmails.count) emails from \(urls.count) file(s)."
-                    self.statusColor = .green
+                    self.statusMessage = "Parsed \(self.parsedEmails.count) emails from \(urls.count) file(s).\(dedupInfo)\(recoveryInfo)"
+                    self.statusColor = recoveryInfo.isEmpty ? .green : .orange
                 } else {
                     let errorHint = finalErrors.first.map { " (\($0))" } ?? ""
-                    self.statusMessage = "Parsed \(self.parsedEmails.count) emails. \(finalErrors.count) file(s) had errors\(errorHint)."
+                    self.statusMessage = "Parsed \(self.parsedEmails.count) emails. \(finalErrors.count) file(s) had errors\(errorHint).\(dedupInfo)\(recoveryInfo)"
                     self.statusColor = .orange
                 }
                 self.loadingProgress = 1.0
@@ -453,8 +474,8 @@ class ContentViewModel: ObservableObject {
         #endif
     }
 
-    func importThunderbirdProfile(_ urls: [URL]) {
-        parseSelectedFiles(urls)
+    func importThunderbirdProfile(_ urls: [URL], removeDuplicates: Bool = true) {
+        parseSelectedFiles(urls, removeDuplicates: removeDuplicates)
     }
 
     // MARK: - Apple Mail Auto-Import
@@ -535,18 +556,25 @@ class ContentViewModel: ObservableObject {
     }
 
     // MARK: - Smart Deduplication (exact + fuzzy)
-    private static func deduplicate(_ emails: [MBOXParser.RawEmail]) -> [MBOXParser.RawEmail] {
+    private static func deduplicate(_ emails: [MBOXParser.RawEmail]) -> (kept: [MBOXParser.RawEmail], removed: [MBOXParser.RawEmail]) {
         var seen = Set<String>()
         var fuzzyIndex: [String: [Date]] = [:]
         var result: [MBOXParser.RawEmail] = []
+        var removed: [MBOXParser.RawEmail] = []
 
         for (_, email) in emails.enumerated() {
             let messageID = email.headers["Message-ID"] ?? email.headers["Message-Id"] ?? ""
             if !messageID.isEmpty {
-                guard seen.insert(messageID).inserted else { continue }
+                guard seen.insert(messageID).inserted else {
+                    removed.append(email)
+                    continue
+                }
             } else {
                 let fingerprint = "\(email.headers["From"] ?? "")\(email.headers["Date"] ?? "")\(email.headers["Subject"] ?? "")"
-                guard seen.insert(fingerprint).inserted else { continue }
+                guard seen.insert(fingerprint).inserted else {
+                    removed.append(email)
+                    continue
+                }
             }
 
             let subject = (email.headers["Subject"] ?? "").lowercased()
@@ -565,11 +593,14 @@ class ContentViewModel: ObservableObject {
                 isDuplicate = false
             }
 
-            guard !isDuplicate else { continue }
+            guard !isDuplicate else {
+                removed.append(email)
+                continue
+            }
             fuzzyIndex[fuzzyKey, default: []].append(date)
             result.append(email)
         }
-        return result
+        return (result, removed)
     }
 
     // MARK: - Annotate parsed emails (sent/received/normalize)
@@ -638,12 +669,14 @@ class ContentViewModel: ObservableObject {
     func clearParsedData() {
         cleanupTempDirs()
         parsedEmails = []
+        removedDuplicates = []
         isParsed = false
         subjectList = []
         detectedDateRange = (nil, nil)
         loadingProgress = 0.0
         loadingText = ""
         parseErrors = []
+        duplicatesRemoved = 0
         statusMessage = "Data cleared. Select a new file to begin."
         statusColor = .gray
     }
@@ -657,6 +690,21 @@ class ContentViewModel: ObservableObject {
             statusMessage = "Restored \(emails.count) emails from previous session."
             statusColor = .green
         }
+    }
+
+    // MARK: - Body Rehydration (for compacted emails)
+    func rehydrateBody(for emailID: UUID) -> MBOXParser.RawEmail? {
+        guard let index = parsedEmails.firstIndex(where: { $0.id == emailID }),
+              parsedEmails[index].isBodyCompacted else {
+            return parsedEmails.first(where: { $0.id == emailID })
+        }
+        if let body = EmailPersistence.loadBody(for: emailID) {
+            parsedEmails[index].plainBody = body.plainBody
+            parsedEmails[index].htmlBody = body.htmlBody
+            parsedEmails[index].rawSource = body.rawSource
+            parsedEmails[index].isBodyCompacted = false
+        }
+        return parsedEmails[index]
     }
 
     nonisolated static func formatByteCount(_ bytes: Int64) -> String {

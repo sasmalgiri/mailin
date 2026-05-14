@@ -1,13 +1,23 @@
 import CoreSpotlight
 import UniformTypeIdentifiers
+import Contacts
 
 @MainActor
-class SpotlightIndexer {
+class SpotlightIndexer: NSObject, CSSearchableIndexDelegate {
     static let shared = SpotlightIndexer()
     private let searchableIndex = CSSearchableIndex.default()
 
-    /// Index emails into CoreSpotlight in batches of 100 to avoid memory spikes.
-    /// Processing happens on a background thread via Task.detached.
+    private var aiSummaries: [String: String] = [:]
+    private var aiPriorities: Set<String> = []
+
+    override init() {
+        super.init()
+        searchableIndex.indexDelegate = self
+    }
+
+    /// Index emails into CoreSpotlight in batches of 100.
+    /// Uses CSPerson for authors, full textContent for AI summarization,
+    /// and updateListenerOptions for Apple Intelligence summaries + priority.
     func indexEmails(_ emails: [MBOXParser.RawEmail]) {
         let emailsCopy = emails
         Task.detached(priority: .utility) {
@@ -20,37 +30,41 @@ class SpotlightIndexer {
                 for email in batch {
                     let attributeSet = CSSearchableItemAttributeSet(contentType: UTType.emailMessage)
 
-                    // Title = subject
                     attributeSet.title = email.headers["Subject"] ?? "(No Subject)"
+                    attributeSet.contentType = UTType.emailMessage.identifier
 
-                    // Content description = body snippet (first 500 chars, strip HTML)
-                    let bodySnippet: String
+                    // Full text content for Apple Intelligence summarization (needs 200+ chars)
+                    let fullText: String
                     if !email.plainBody.isEmpty {
-                        bodySnippet = String(email.plainBody.prefix(500))
+                        fullText = email.plainBody
                     } else if !email.htmlBody.isEmpty {
-                        let stripped = email.htmlBody
+                        fullText = email.htmlBody
                             .replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
                             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
                             .trimmingCharacters(in: .whitespacesAndNewlines)
-                        bodySnippet = String(stripped.prefix(500))
                     } else {
-                        bodySnippet = ""
+                        fullText = ""
                     }
-                    attributeSet.contentDescription = bodySnippet
+                    attributeSet.textContent = fullText
 
-                    // Author info
-                    let from = email.headers["From"] ?? ""
-                    attributeSet.authorNames = [from]
-                    if let emailStart = from.range(of: "<"), let emailEnd = from.range(of: ">"),
-                       emailStart.upperBound <= emailEnd.lowerBound {
-                        attributeSet.authorEmailAddresses = [String(from[emailStart.upperBound..<emailEnd.lowerBound])]
-                    } else if from.contains("@") {
-                        attributeSet.authorEmailAddresses = [from.trimmingCharacters(in: .whitespacesAndNewlines)]
-                    } else {
-                        attributeSet.authorEmailAddresses = [from]
+                    // Short description for Spotlight results UI
+                    attributeSet.contentDescription = String(fullText.prefix(500))
+
+                    // CSPerson author — enables Apple Intelligence to distinguish conversation participants
+                    let fromRaw = email.headers["From"] ?? ""
+                    let (displayName, emailAddr) = Self.parseFromHeader(fromRaw)
+                    let author = CSPerson(
+                        displayName: displayName,
+                        handles: emailAddr.isEmpty ? [fromRaw] : [emailAddr],
+                        handleIdentifier: CNContactEmailAddressesKey
+                    )
+                    attributeSet.authors = [author]
+                    attributeSet.authorNames = [displayName]
+                    if !emailAddr.isEmpty {
+                        attributeSet.authorEmailAddresses = [emailAddr]
                     }
 
-                    // Recipient info
+                    // Recipients
                     if let toField = email.headers["To"], !toField.isEmpty {
                         let recipients = toField.components(separatedBy: ",")
                             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -58,25 +72,34 @@ class SpotlightIndexer {
                         attributeSet.recipientEmailAddresses = recipients
                     }
 
-                    // Mailbox identifier (source file if available)
-                    if let sourceFile = email.headers["sourceFile"], !sourceFile.isEmpty {
-                        attributeSet.mailboxIdentifiers = [sourceFile]
+                    // Thread domain ID — Apple Intelligence uses this to group conversation threads
+                    let threadID: String
+                    if let msgID = email.headers["In-Reply-To"], !msgID.isEmpty {
+                        threadID = msgID
+                    } else if let refs = email.headers["References"]?.components(separatedBy: " ").first, !refs.isEmpty {
+                        threadID = refs
+                    } else {
+                        threadID = email.headers["Subject"]?
+                            .replacingOccurrences(of: "^(Re|Fwd|Fw):\\s*", with: "", options: .regularExpression)
+                            .trimmingCharacters(in: .whitespacesAndNewlines) ?? email.id.uuidString
                     }
+                    attributeSet.domainIdentifier = threadID
 
                     // Content creation date
                     if let date = MBOXParser.parseDate(email.headers["Date"]) {
                         attributeSet.contentCreationDate = date
                     }
 
-                    // Content type
-                    attributeSet.contentType = UTType.emailMessage.identifier
+                    // Source file
+                    if let sourceFile = email.headers["sourceFile"], !sourceFile.isEmpty {
+                        attributeSet.mailboxIdentifiers = [sourceFile]
+                    }
 
-                    // Keywords from tags and domains
+                    // Keywords
                     var keywords: [String] = []
                     keywords.append(contentsOf: email.tags)
                     keywords.append(contentsOf: email.domains)
                     if let subject = email.headers["Subject"] {
-                        // Extract meaningful words from subject as keywords
                         let subjectWords = subject
                             .components(separatedBy: .whitespaces)
                             .map { $0.trimmingCharacters(in: .punctuationCharacters).lowercased() }
@@ -90,34 +113,140 @@ class SpotlightIndexer {
                         domainIdentifier: "com.ecosanskriti.mailin.emails",
                         attributeSet: attributeSet
                     )
+
+                    // Enable Apple Intelligence summarization + priority classification
+                    if #available(macOS 15.4, iOS 18.4, *) {
+                        item.updateListenerOptions = [.summarization, .priority]
+                    }
+
                     items.append(item)
                 }
 
                 do {
                     try await CSSearchableIndex.default().indexSearchableItems(items)
                 } catch {
-                    // Silently continue on indexing errors to avoid blocking the import flow
+                    // Silently continue on indexing errors
                 }
             }
         }
     }
 
-    /// Remove all indexed emails from Spotlight.
+    // MARK: - CSSearchableIndexDelegate (receive AI-generated summaries & priority)
+
+    nonisolated func searchableIndex(_ searchableIndex: CSSearchableIndex, reindexAllSearchableItemsWithAcknowledgementHandler acknowledgementHandler: @escaping () -> Void) {
+        acknowledgementHandler()
+    }
+
+    nonisolated func searchableIndex(_ searchableIndex: CSSearchableIndex, reindexSearchableItemsWithIdentifiers identifiers: [String], acknowledgementHandler: @escaping () -> Void) {
+        acknowledgementHandler()
+    }
+
+    nonisolated func searchableItemsDidUpdate(_ items: [CSSearchableItem]) {
+        if #available(macOS 15.4, iOS 18.4, *) {
+            Task { @MainActor in
+                for item in items {
+                    let id = item.uniqueIdentifier
+                    if let summary = item.attributeSet.textContentSummary, !summary.isEmpty {
+                        aiSummaries[id] = summary
+                    }
+                    if let isPriority = item.attributeSet.isPriority, isPriority.boolValue {
+                        aiPriorities.insert(id)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Get Apple Intelligence generated summary for an email (if available)
+    func aiSummary(for emailID: UUID) -> String? {
+        aiSummaries[emailID.uuidString]
+    }
+
+    /// Check if Apple Intelligence flagged an email as priority
+    func isAIPriority(_ emailID: UUID) -> Bool {
+        aiPriorities.contains(emailID.uuidString)
+    }
+
+    // MARK: - CSUserQuery Semantic Search (Apple Intelligence powered)
+
+    func semanticSearch(query: String, limit: Int = 10) async -> [(id: String, title: String, snippet: String)] {
+        let context = CSUserQueryContext()
+        context.fetchAttributes = ["title", "textContent", "authorNames", "contentDescription", "textContentSummary"]
+        context.maxResultCount = limit
+        context.enableRankedResults = true
+
+        let userQuery = CSUserQuery(userQueryString: query, userQueryContext: context)
+
+        var results: [(id: String, title: String, snippet: String)] = []
+        do {
+            for try await element in userQuery.responses {
+                switch element {
+                case .item(let item):
+                    let attrs = item.item.attributeSet
+                    let title = attrs.title ?? "(No Subject)"
+                    let snippet: String
+                    if #available(macOS 15.4, iOS 18.4, *) {
+                        snippet = attrs.textContentSummary ?? attrs.contentDescription ?? ""
+                    } else {
+                        snippet = attrs.contentDescription ?? ""
+                    }
+                    results.append((id: item.item.uniqueIdentifier, title: title, snippet: snippet))
+                case .suggestion:
+                    break
+                @unknown default:
+                    break
+                }
+            }
+        } catch {
+            // Fall through — return whatever results we got
+        }
+        return results
+    }
+
+    // MARK: - Removal
+
     func removeAllIndexedEmails() {
-        searchableIndex.deleteSearchableItems(withDomainIdentifiers: ["com.ecosanskriti.mailin.emails"]) { _ in }
+        searchableIndex.deleteSearchableItems(withDomainIdentifiers: ["com.ecosanskriti.mailin.emails"]) { [weak self] _ in
+            Task { @MainActor in
+                self?.aiSummaries.removeAll()
+                self?.aiPriorities.removeAll()
+            }
+        }
     }
 
-    /// Remove specific emails from Spotlight by their UUIDs.
     func removeEmails(withIDs ids: [UUID]) {
-        searchableIndex.deleteSearchableItems(withIdentifiers: ids.map(\.uuidString)) { _ in }
+        let idStrings = ids.map(\.uuidString)
+        searchableIndex.deleteSearchableItems(withIdentifiers: idStrings) { [weak self] _ in
+            Task { @MainActor in
+                for id in idStrings {
+                    self?.aiSummaries.removeValue(forKey: id)
+                    self?.aiPriorities.remove(id)
+                }
+            }
+        }
     }
 
-    /// Handle Spotlight continuation - when user taps a Spotlight result.
-    /// Returns the UUID of the email that was tapped, or nil if invalid.
     func handleSpotlightActivity(_ activity: NSUserActivity) -> UUID? {
         guard activity.activityType == CSSearchableItemActionType,
               let identifier = activity.userInfo?[CSSearchableItemActivityIdentifier] as? String,
               let uuid = UUID(uuidString: identifier) else { return nil }
         return uuid
+    }
+
+    // MARK: - Helpers
+
+    private nonisolated static func parseFromHeader(_ from: String) -> (displayName: String, email: String) {
+        if let angleBracketStart = from.range(of: "<"),
+           let angleBracketEnd = from.range(of: ">"),
+           angleBracketStart.upperBound <= angleBracketEnd.lowerBound {
+            let email = String(from[angleBracketStart.upperBound..<angleBracketEnd.lowerBound])
+            let name = from[from.startIndex..<angleBracketStart.lowerBound]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+            return (name.isEmpty ? email : name, email)
+        } else if from.contains("@") {
+            return (from.trimmingCharacters(in: .whitespacesAndNewlines), from.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return (from, "")
     }
 }

@@ -61,6 +61,19 @@ class StoreManager: ObservableObject {
 
     nonisolated static let freeEmailLimit = 500
 
+    // MARK: - Daily Usage Reset
+
+    static func resetDailyCountersIfNeeded() {
+        let defaults = UserDefaults.standard
+        let today = Calendar.current.startOfDay(for: Date())
+        let lastReset = defaults.object(forKey: "freeLimitsLastResetDate") as? Date ?? .distantPast
+        guard Calendar.current.startOfDay(for: lastReset) < today else { return }
+        defaults.set(0, forKey: "freeAIQueryCount")
+        defaults.set(0, forKey: "freeAIFilterUsageCount")
+        defaults.set(0, forKey: "freeAttachmentDownloadCount")
+        defaults.set(today, forKey: "freeLimitsLastResetDate")
+    }
+
     // MARK: - Professional-Only Features
 
     enum ProFeature {

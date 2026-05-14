@@ -20,6 +20,8 @@ struct MBOXParser {
         var references: [String]?
         var tags: [String] = []
         var anomalies: [String] = []
+        var isBodyCompacted: Bool = false
+        var bodyPreview: String = ""
 
         var bodyLines: [String] {
             (plainBody.isEmpty ? htmlBody : plainBody).components(separatedBy: .newlines)
@@ -34,7 +36,7 @@ struct MBOXParser {
             case id, headers, rawSource, messageType, attachments, timestamp
             case domains, plainBody, htmlBody, mimeRoot, mimeSummary
             case mimeDiagnostics, threadID, inReplyTo, references, tags, anomalies
-            case bodyLines, fullText
+            case bodyLines, fullText, isBodyCompacted, bodyPreview
         }
 
         init(id: UUID = UUID(), headers: [String: String], bodyLines: [String] = [], rawSource: String, messageType: String, attachments: [AttachmentMetadata], timestamp: String, fullText: String = "", domains: [String], plainBody: String, htmlBody: String, mimeRoot: MIMEPart? = nil, mimeSummary: String? = nil, mimeDiagnostics: [String] = [], threadID: String? = nil, inReplyTo: String? = nil, references: [String]? = nil, tags: [String] = [], anomalies: [String] = []) {
@@ -76,6 +78,8 @@ struct MBOXParser {
             references = try container.decodeIfPresent([String].self, forKey: .references)
             tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
             anomalies = try container.decodeIfPresent([String].self, forKey: .anomalies) ?? []
+            isBodyCompacted = try container.decodeIfPresent(Bool.self, forKey: .isBodyCompacted) ?? false
+            bodyPreview = try container.decodeIfPresent(String.self, forKey: .bodyPreview) ?? ""
         }
 
         func encode(to encoder: Encoder) throws {
@@ -97,6 +101,21 @@ struct MBOXParser {
             try container.encodeIfPresent(references, forKey: .references)
             try container.encode(tags, forKey: .tags)
             try container.encode(anomalies, forKey: .anomalies)
+            try container.encode(isBodyCompacted, forKey: .isBodyCompacted)
+            try container.encode(bodyPreview, forKey: .bodyPreview)
+        }
+
+        mutating func compact() {
+            guard !isBodyCompacted else { return }
+            let body = plainBody.isEmpty ? htmlBody : plainBody
+            bodyPreview = String(body.prefix(200))
+            plainBody = ""
+            htmlBody = ""
+            rawSource = ""
+            mimeRoot = nil
+            mimeSummary = nil
+            mimeDiagnostics = []
+            isBodyCompacted = true
         }
     }
 
@@ -206,6 +225,8 @@ struct MBOXParser {
     }
 
     // MARK: - Streaming Parser for Large Files
+    private static let compactionBatchSize = 5000
+
     static func parseStreaming(
         fileURL: URL,
         senderEmail: String,
@@ -220,8 +241,10 @@ struct MBOXParser {
         var buffer = Data()
         var eof = false
         var currentLines: [String] = []
+        var failedCount = 0
         var inMessage = false
         var parsedEmails: [RawEmail] = []
+        var lastCompactionIndex = 0
 
         func nextLine() -> String? {
             while true {
@@ -247,17 +270,38 @@ struct MBOXParser {
             }
         }
 
-        func flushCurrentMessage() throws {
+        func compactIfNeeded() {
+            let newCount = parsedEmails.count
+            guard newCount - lastCompactionIndex >= compactionBatchSize else { return }
+            let (_, pressure) = ContentViewModel.checkMemoryPressure()
+            guard pressure != .normal else { return }
+
+            let rangeToCompact = lastCompactionIndex..<newCount
+            let batch = Array(parsedEmails[rangeToCompact])
+            EmailPersistence.persistBodies(batch)
+            for i in rangeToCompact {
+                parsedEmails[i].compact()
+            }
+            lastCompactionIndex = newCount
+        }
+
+        func flushCurrentMessage() {
             guard !currentLines.isEmpty else { return }
             let raw = currentLines.joined(separator: "\n")
-            let email = try processRawMessage(raw, senderEmail: senderEmail)
-            parsedEmails.append(email)
+            do {
+                let email = try processRawMessage(raw, senderEmail: senderEmail)
+                parsedEmails.append(email)
+            } catch {
+                failedCount += 1
+            }
 
             if fileSize > 0, let onProgress = onProgress {
                 let offset = Double((try? handle.offset()) ?? 0)
                 let progress = min(offset / Double(fileSize), 1.0)
                 onProgress(progress)
             }
+
+            compactIfNeeded()
         }
 
         while let line = nextLine() {
@@ -265,7 +309,7 @@ struct MBOXParser {
                 && line.range(of: #"\d{4}"#, options: .regularExpression) != nil
             if isFromLine {
                 if inMessage {
-                    try flushCurrentMessage()
+                    flushCurrentMessage()
                     currentLines = []
                 }
                 inMessage = true
@@ -273,7 +317,7 @@ struct MBOXParser {
                 currentLines.append(line)
             }
         }
-        try flushCurrentMessage()
+        flushCurrentMessage()
 
         let summary = summarize(emails: parsedEmails)
         try saveSessionJSON(exportable: ExportableParsedMBOXFile(emails: parsedEmails.map { $0.asExportable() }, summary: summary))
@@ -285,7 +329,15 @@ struct MBOXParser {
         let fullRaw = raw.hasPrefix("From ") ? raw : "From " + raw
         let (headers, mimeParts) = MIMEParser.parseEmail(rawEmail: fullRaw)
         let rootPart = mimeParts.first
-        let extraction = try EmailBodyExtractor.extractContents(from: fullRaw)
+        let extraction: (plainBody: String, htmlBody: String, attachments: [AttachmentMetadata])
+        do {
+            extraction = try EmailBodyExtractor.extractContents(from: fullRaw)
+        } catch {
+            let bodyLines = fullRaw.components(separatedBy: "\n")
+            let blankIdx = bodyLines.firstIndex(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) ?? 0
+            let rawBody = bodyLines.dropFirst(blankIdx + 1).joined(separator: "\n")
+            extraction = (plainBody: rawBody, htmlBody: "", attachments: [])
+        }
 
         var mappedHeaders = headers.mapValues { decodeMIMEHeader($0) }
         if mappedHeaders["From"] == nil {

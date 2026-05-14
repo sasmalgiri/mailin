@@ -49,15 +49,17 @@ struct EmailHTMLView: View {
             didParse = true
             return
         }
-        cachedAttributed = try? NSAttributedString(
-            data: data,
-            options: [
-                .documentType: NSAttributedString.DocumentType.html,
-                .characterEncoding: String.Encoding.utf8.rawValue
-            ],
-            documentAttributes: nil
-        )
-        didParse = true
+        Task { @MainActor in
+            cachedAttributed = try? NSAttributedString(
+                data: data,
+                options: [
+                    .documentType: NSAttributedString.DocumentType.html,
+                    .characterEncoding: String.Encoding.utf8.rawValue
+                ],
+                documentAttributes: nil
+            )
+            didParse = true
+        }
     }
 
     private func resolveInlineImages(in html: String, attachments: [AttachmentMetadata]) -> String {

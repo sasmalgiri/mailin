@@ -111,7 +111,7 @@ BUILT FOR PRIVACY
 - All AI features run on-device — your email data never leaves your device
 
 FLEXIBLE PLANS
-- Free tier: browse up to 200 emails with basic filtering and NLP
+- Free tier: browse up to 500 emails with basic filtering and NLP
 - Personal: unlimited emails, AI assistant, analytics, and exports
 - Professional: all Personal features plus audit trail, chain of custody, Bates numbering, batch processing, predictive coding, and priority support
 - Subscribe monthly or yearly, or buy once for lifetime access

@@ -68,7 +68,7 @@ struct ParsedEmailListView: View {
     @AppStorage("showAdvancedFeatures") private var showAdvancedFeatures = false
     @AppStorage("personaFiltersInitialized") private var personaFiltersInitialized = false
     @State private var showAIPaywall = false
-    private static let freeAIFilterLimit = 3
+    private static let freeAIFilterLimit = 5
     @AppStorage("freeAIFilterUsageCount") private var aiFilterUsageCount: Int = 0
     @State private var listExportError: String?
     #if os(iOS)
@@ -935,11 +935,24 @@ struct ParsedEmailListView: View {
         } else {
             let emails = quickFilteredEmails
             if emails.isEmpty {
-                EmptyStateView(
-                    icon: "line.3.horizontal.decrease.circle",
-                    title: "No matching emails",
-                    message: "No emails match your current filters. Try widening the date range, selecting more senders, or reducing the minimum reply count."
-                )
+                VStack(spacing: Spacing.medium) {
+                    EmptyStateView(
+                        icon: "line.3.horizontal.decrease.circle",
+                        title: "No matching emails",
+                        message: hasAnyQuickFilterActive
+                            ? "Active filter chips are hiding all emails. Clear them to see your \(model.filteredEmails.count) emails."
+                            : "No emails match your current filters. Try widening the date range, selecting more senders, or reducing the minimum reply count."
+                    )
+                    if hasAnyQuickFilterActive {
+                        Button {
+                            clearAllQuickFilters()
+                        } label: {
+                            Label("Clear All Quick Filters", systemImage: "xmark.circle.fill")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.regular)
+                    }
+                }
             } else if model.groupByThread {
                 threadedListView
             } else {
@@ -1150,7 +1163,7 @@ struct ParsedEmailListView: View {
 
             Spacer(minLength: Spacing.xSmall)
 
-            emailTagPill(for: email)
+            emailTagPills(for: email)
 
             Button {
                 let rawData = email.rawSource.data(using: .utf8) ?? Data()
@@ -1189,8 +1202,10 @@ struct ParsedEmailListView: View {
         .contextMenu {
             #if os(macOS)
             Button {
-                EmailDetailView(email: email)
-                    .openInWindow(title: decodeMIMEHeader(email.headers["Subject"] ?? "Email"), storeManager: storeManager)
+                model.rehydrateIfNeeded(email.id)
+                let rehydrated = model.filteredEmails.first(where: { $0.id == email.id }) ?? email
+                EmailDetailView(email: rehydrated)
+                    .openInWindow(title: decodeMIMEHeader(rehydrated.headers["Subject"] ?? "Email"), storeManager: storeManager)
             } label: {
                 Label("Open in Window", systemImage: "macwindow")
             }
@@ -1358,6 +1373,8 @@ struct ParsedEmailListView: View {
     private func aiTags(for email: MBOXParser.RawEmail) -> [EmailQuickTag] {
         var tags: [EmailQuickTag] = []
 
+        let isPhishing = model.phishingEmailIDs.contains(email.id)
+
         let forensicTag = forensicManager.tagForEmail(email.id)
         if forensicTag != .none {
             switch forensicTag {
@@ -1374,22 +1391,27 @@ struct ParsedEmailListView: View {
         if priority == .high { tags.append(.highPriority) }
         else if priority == .medium { tags.append(.mediumPriority) }
 
-        if model.phishingEmailIDs.contains(email.id) { tags.append(.phishing) }
-
-        if let score = model.sentimentScores[email.id] {
-            if score > 0.4 { tags.append(.positive) }
-            else if score < -0.4 { tags.append(.negative) }
-            else { tags.append(.neutral) }
+        if isPhishing {
+            tags.append(.phishing)
+            tags.append(.suspicious)
         }
 
-        if let category = model.emailClassifications[email.id] {
-            switch category {
-            case .personal: tags.append(.personal)
-            case .transactional: tags.append(.transactional)
-            case .newsletter: tags.append(.newsletter)
-            case .promotional: tags.append(.promotional)
-            case .automated: tags.append(.automated)
-            case .unknown: break
+        if !isPhishing {
+            if let score = model.sentimentScores[email.id] {
+                if score > 0.4 { tags.append(.positive) }
+                else if score < -0.4 { tags.append(.negative) }
+                else { tags.append(.neutral) }
+            }
+
+            if let category = model.emailClassifications[email.id] {
+                switch category {
+                case .personal: tags.append(.personal)
+                case .transactional: tags.append(.transactional)
+                case .newsletter: tags.append(.newsletter)
+                case .promotional: tags.append(.promotional)
+                case .automated: tags.append(.automated)
+                case .unknown: break
+                }
             }
         }
 
@@ -1423,10 +1445,28 @@ struct ParsedEmailListView: View {
     }
 
     private func activeTags(for email: MBOXParser.RawEmail) -> [EmailQuickTag] {
-        if let manual = manualOverrideTags[email.id], !manual.isEmpty {
-            return Array(manual).sorted { $0.rawValue < $1.rawValue }
+        var all: [EmailQuickTag] = []
+        if enableAIFeatures && aiTagsApplied {
+            all.append(contentsOf: aiTags(for: email))
+        } else {
+            all.append(contentsOf: basicTags(for: email))
         }
-        return aiTagsApplied ? aiTags(for: email) : basicTags(for: email)
+        if let manual = manualOverrideTags[email.id], !manual.isEmpty {
+            all.append(contentsOf: manual.sorted { $0.rawValue < $1.rawValue })
+        }
+        return all
+    }
+
+    private func autoTagsOnly(for email: MBOXParser.RawEmail) -> [EmailQuickTag] {
+        let auto = aiTagsApplied ? aiTags(for: email) : basicTags(for: email)
+        let manual = manualOverrideTags[email.id] ?? []
+        guard !manual.isEmpty else { return auto }
+        return auto.filter { !manual.contains($0) }
+    }
+
+    private func manualTagsOnly(for email: MBOXParser.RawEmail) -> [EmailQuickTag] {
+        guard let manual = manualOverrideTags[email.id], !manual.isEmpty else { return [] }
+        return Array(manual).sorted { $0.rawValue < $1.rawValue }
     }
 
     private func hasManualOverride(for emailID: UUID) -> Bool {
@@ -1438,123 +1478,171 @@ struct ParsedEmailListView: View {
         activeTags(for: email).first ?? .none
     }
 
-    // MARK: - Tag Pill (compact: 1 tag + "+N")
+    // MARK: - Tag Pills (AI/BS/MN badges, dynamic dedup)
 
-    private func emailTagPill(for email: MBOXParser.RawEmail) -> some View {
-        let active = activeTags(for: email)
-        let isManual = hasManualOverride(for: email.id)
-        let primary = active.first ?? .none
-        let extra = max(0, active.count - 1)
+    private func tagBadge(_ code: String, color: Color) -> some View {
+        Text(code)
+            .font(.system(size: 7, weight: .bold))
+            .foregroundColor(.white)
+            .padding(.horizontal, 3)
+            .padding(.vertical, 1)
+            .background(color)
+            .clipShape(Capsule())
+    }
 
-        return Menu {
-            let sectionTitle = isManual ? "Manual Tags (Active)" : aiTagsApplied ? "AI Tags (Active)" : "Basic Tags"
-            Section(sectionTitle) {
-                ForEach(active, id: \.self) { tag in
-                    Label(tag.rawValue, systemImage: tag.icon)
-                }
+    private func tagPillLabel(badge: String, badgeColor: Color, tags: [EmailQuickTag]) -> some View {
+        let primary = tags.first ?? .none
+        let extra = max(0, tags.count - 1)
+        return HStack(spacing: 2) {
+            tagBadge(badge, color: badgeColor)
+            Image(systemName: primary.icon)
+                .font(.system(size: 9))
+            Text(primary.rawValue)
+                .font(.system(size: 9, weight: .medium))
+                .lineLimit(1)
+            if extra > 0 {
+                Text("+\(extra)")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(AppColors.secondary.opacity(0.6))
+                    .clipShape(Capsule())
             }
+        }
+        .foregroundColor(primary.color)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 2)
+        .background(primary.color.opacity(0.1))
+        .cornerRadius(4)
+    }
 
-            if isManual && aiTagsApplied {
-                let ai = aiTags(for: email)
-                if !ai.isEmpty {
-                    Section("AI Tags (Overridden)") {
-                        ForEach(ai, id: \.self) { tag in
-                            Label {
-                                Text(tag.rawValue)
-                                    .strikethrough()
-                            } icon: {
-                                Image(systemName: tag.icon)
+    @ViewBuilder
+    private func emailTagPills(for email: MBOXParser.RawEmail) -> some View {
+        let autoTags = autoTagsOnly(for: email)
+        let manualTags = manualTagsOnly(for: email)
+
+        HStack(spacing: 3) {
+            if enableAIFeatures && aiTagsApplied && !autoTags.isEmpty {
+                Menu {
+                    Section("AI Tags") {
+                        ForEach(autoTags, id: \.self) { tag in
+                            Label(tag.rawValue, systemImage: tag.icon)
+                        }
+                    }
+                    Divider()
+                    Section {
+                        Label("AI can make mistakes. Verify important tags.", systemImage: "exclamationmark.triangle")
+                            .font(.caption2)
+                    }
+                } label: {
+                    tagPillLabel(badge: "AI", badgeColor: AppColors.primary.opacity(0.7), tags: autoTags)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .accessibilityLabel("AI tags: \(autoTags.map(\.rawValue).joined(separator: ", "))")
+            } else if !aiTagsApplied && !autoTags.isEmpty {
+                Menu {
+                    Section("Basic Tags") {
+                        ForEach(autoTags, id: \.self) { tag in
+                            Label(tag.rawValue, systemImage: tag.icon)
+                        }
+                    }
+                    if enableAIFeatures {
+                        Section {
+                            Button {
+                                aiTagsApplied = true
+                            } label: {
+                                Label("Apply AI for smarter tags", systemImage: "brain")
                             }
                         }
                     }
+                    Divider()
+                    Section {
+                        Label("Auto-tags may be inaccurate. Use manual tags to correct.", systemImage: "exclamationmark.triangle")
+                            .font(.caption2)
+                    }
+                } label: {
+                    tagPillLabel(badge: "BS", badgeColor: .gray, tags: autoTags)
                 }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .accessibilityLabel("Basic tags: \(autoTags.map(\.rawValue).joined(separator: ", "))")
             }
 
-            if !aiTagsApplied && !isManual {
-                Section {
+            if !manualTags.isEmpty {
+                Menu {
+                    Section("Manual Tags") {
+                        ForEach(manualTags, id: \.self) { tag in
+                            Label(tag.rawValue, systemImage: tag.icon)
+                        }
+                    }
+                    Divider()
                     Button {
-                        aiTagsApplied = true
+                        manualOverrideTags[email.id] = nil
                     } label: {
-                        Label("Apply AI to see more tags", systemImage: "brain")
+                        Label("Clear Manual Tags", systemImage: "xmark.circle")
                     }
+                } label: {
+                    tagPillLabel(badge: "MN", badgeColor: .purple, tags: manualTags)
                 }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .accessibilityLabel("Manual tags: \(manualTags.map(\.rawValue).joined(separator: ", "))")
             }
 
-            Divider()
+            manualTagButton(for: email)
+        }
+    }
 
-            Section("Set Manual Tags") {
-                let currentManual = manualOverrideTags[email.id] ?? []
-                Section("Category") {
-                    manualTagToggle(.personal, current: currentManual, email: email)
-                    manualTagToggle(.transactional, current: currentManual, email: email)
-                    manualTagToggle(.newsletter, current: currentManual, email: email)
-                    manualTagToggle(.promotional, current: currentManual, email: email)
-                    manualTagToggle(.automated, current: currentManual, email: email)
-                }
-                Section("Sentiment") {
-                    manualTagToggle(.positive, current: currentManual, email: email)
-                    manualTagToggle(.negative, current: currentManual, email: email)
-                    manualTagToggle(.neutral, current: currentManual, email: email)
-                }
-                if showAdvancedFeatures {
-                    Section("Evidence") {
-                        manualTagToggle(.relevant, current: currentManual, email: email)
-                        manualTagToggle(.privileged, current: currentManual, email: email)
-                        manualTagToggle(.irrelevant, current: currentManual, email: email)
-                        manualTagToggle(.flagged, current: currentManual, email: email)
-                        manualTagToggle(.suspicious, current: currentManual, email: email)
-                    }
-                }
-                Section("Other") {
-                    manualTagToggle(.highPriority, current: currentManual, email: email)
-                    manualTagToggle(.mediumPriority, current: currentManual, email: email)
-                    manualTagToggle(.phishing, current: currentManual, email: email)
+    private func manualTagButton(for email: MBOXParser.RawEmail) -> some View {
+        let currentManual = manualOverrideTags[email.id] ?? []
+        return Menu {
+            Section("Category") {
+                manualTagToggle(.personal, current: currentManual, email: email)
+                manualTagToggle(.transactional, current: currentManual, email: email)
+                manualTagToggle(.newsletter, current: currentManual, email: email)
+                manualTagToggle(.promotional, current: currentManual, email: email)
+                manualTagToggle(.automated, current: currentManual, email: email)
+            }
+            Section("Sentiment") {
+                manualTagToggle(.positive, current: currentManual, email: email)
+                manualTagToggle(.negative, current: currentManual, email: email)
+                manualTagToggle(.neutral, current: currentManual, email: email)
+            }
+            if showAdvancedFeatures {
+                Section("Evidence") {
+                    manualTagToggle(.relevant, current: currentManual, email: email)
+                    manualTagToggle(.privileged, current: currentManual, email: email)
+                    manualTagToggle(.irrelevant, current: currentManual, email: email)
+                    manualTagToggle(.flagged, current: currentManual, email: email)
+                    manualTagToggle(.suspicious, current: currentManual, email: email)
                 }
             }
-
-            Divider()
-
-            if isManual {
+            Section("Other") {
+                manualTagToggle(.highPriority, current: currentManual, email: email)
+                manualTagToggle(.mediumPriority, current: currentManual, email: email)
+                manualTagToggle(.phishing, current: currentManual, email: email)
+            }
+            if !currentManual.isEmpty {
+                Divider()
                 Button {
                     manualOverrideTags[email.id] = nil
                 } label: {
-                    Label(aiTagsApplied ? "Reset to AI Tags" : "Reset to Basic Tags", systemImage: "arrow.uturn.backward")
+                    Label("Clear All Manual Tags", systemImage: "xmark.circle")
                 }
             }
         } label: {
-            HStack(spacing: 2) {
-                if isManual {
-                    Image(systemName: "person.fill")
-                        .font(.system(size: 7))
-                        .foregroundColor(.white)
-                        .padding(2)
-                        .background(primary.color)
-                        .clipShape(Circle())
-                }
-                Image(systemName: primary.icon)
-                    .font(.system(size: 9))
-                Text(primary.rawValue)
-                    .font(.system(size: 9, weight: .medium))
-                    .lineLimit(1)
-                if extra > 0 {
-                    Text("+\(extra)")
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(AppColors.secondary.opacity(0.6))
-                        .clipShape(Capsule())
-                }
-            }
-            .foregroundColor(primary.color)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
-            .background(primary.color.opacity(0.1))
-            .cornerRadius(4)
+            Image(systemName: "tag.fill")
+                .font(.system(size: 10))
+                .foregroundColor(currentManual.isEmpty ? AppColors.secondary.opacity(0.5) : .purple)
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .accessibilityLabel("Tags: \(active.map(\.rawValue).joined(separator: ", "))")
+        #if os(macOS)
+        .help("Set manual tags")
+        #endif
+        .accessibilityLabel("Set manual tags")
     }
 
     @ViewBuilder
@@ -1618,7 +1706,7 @@ struct ParsedEmailListView: View {
     private var totalAttachments: Int {
         model.filteredEmails.map { $0.attachments.count }.reduce(0, +)
     }
-    private static let freeAttachmentLimit = 5
+    private static let freeAttachmentLimit = 10
     @AppStorage("freeAttachmentDownloadCount") private var freeAttachmentDownloadCount: Int = 0
 
     private func downloadAllAttachments() {
@@ -1790,7 +1878,8 @@ struct EmailRowView: View {
                     .lineLimit(1)
 
                 if showPreviews && sizeClass != .compact {
-                    let preview = String(email.plainBody.prefix(100)).replacingOccurrences(of: "\n", with: " ")
+                    let previewSource = email.isBodyCompacted ? email.bodyPreview : String(email.plainBody.prefix(100))
+                    let preview = previewSource.replacingOccurrences(of: "\n", with: " ")
                     if !preview.trimmingCharacters(in: .whitespaces).isEmpty {
                         Text(highlightedText(preview))
                             .font(.caption)

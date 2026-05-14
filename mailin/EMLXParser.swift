@@ -80,7 +80,9 @@ struct EMLXParser {
         }
 
         let byteCountLine = lines[0].trimmingCharacters(in: .whitespacesAndNewlines)
-        let byteCount = Int(byteCountLine) ?? 0
+        guard let byteCount = Int(byteCountLine), byteCount > 0 else {
+            throw EMLXError.invalidFormat("Invalid byte count line: \(byteCountLine.prefix(20))")
+        }
 
         let afterFirstLine = lines.dropFirst().joined(separator: "\n")
         guard !afterFirstLine.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {

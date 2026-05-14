@@ -40,6 +40,12 @@
 	<key>NSFaceIDUsageDescription</key>
 	<string>mailin uses Face ID or Touch ID to unlock the app and protect your email archives.</string>
 
+	<key>NSContactsUsageDescription</key>
+	<string>mailin uses your Contacts to identify email senders and enrich AI-powered analysis. All lookups happen on-device — no data leaves your Mac.</string>
+
+	<key>NSCalendarsUsageDescription</key>
+	<string>mailin checks your Calendar to correlate meetings with email discussions. All checks happen on-device — no data leaves your Mac.</string>
+
 	<!-- iOS Document Browser Support -->
 	<key>UISupportsDocumentBrowser</key>
 	<true/>

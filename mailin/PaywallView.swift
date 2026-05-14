@@ -6,7 +6,10 @@ struct PaywallView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var selectedProduct: Product?
     @State private var selectedPeriod: BillingPeriod = .yearly
+    @State private var selectedTier: SelectedTier?
     @State private var errorMessage: String?
+
+    private enum SelectedTier { case personal, professional }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -66,10 +69,16 @@ struct PaywallView: View {
     }
 
     private func updateSelectedProduct() {
-        if let pro = store.professionalProduct(for: selectedPeriod) {
+        if selectedTier == .personal, let personal = store.personalProduct(for: selectedPeriod) {
+            selectedProduct = personal
+        } else if selectedTier == .professional, let pro = store.professionalProduct(for: selectedPeriod) {
             selectedProduct = pro
+        } else if let pro = store.professionalProduct(for: selectedPeriod) {
+            selectedProduct = pro
+            selectedTier = .professional
         } else if let personal = store.personalProduct(for: selectedPeriod) {
             selectedProduct = personal
+            selectedTier = .personal
         } else {
             selectedProduct = store.products.first
         }
@@ -149,17 +158,17 @@ struct PaywallView: View {
             featureRow("View & filter emails", free: true, personal: true, pro: true)
             featureRow("Boolean/regex/proximity search", free: true, personal: true, pro: true)
             featureRow("Conversation threading", free: true, personal: true, pro: true)
-            featureRow("AI Assistant", free: "3", personal: true, pro: true)
-            featureRow("AI Smart Filters", free: "3", personal: true, pro: true)
+            featureRow("AI Assistant", free: "5/day", personal: true, pro: true)
+            featureRow("AI Smart Filters", free: "5/day", personal: true, pro: true)
             featureRow("Analytics & charts", free: true, personal: true, pro: true)
-            featureRow("Export (EML/CSV/PDF)", free: "10", personal: true, pro: true)
-            featureRow("Download attachments", free: "5", personal: true, pro: true)
+            featureRow("Export (EML/CSV)", free: "10", personal: true, pro: true)
+            featureRow("Download attachments", free: "10", personal: true, pro: true)
 
             Divider().padding(.vertical, Spacing.xxxSmall)
 
             featureRow("S/MIME verify & decrypt", free: false, personal: true, pro: true)
             featureRow("Deduplication", free: false, personal: true, pro: true)
-            featureRow("Export (PST/MSG/vCard/ICS)", free: false, personal: true, pro: true)
+            featureRow("Export (PDF/PST/MSG/vCard/ICS)", free: false, personal: true, pro: true)
 
             Divider().padding(.vertical, Spacing.xxxSmall)
 
@@ -309,6 +318,7 @@ struct PaywallView: View {
         return Button {
             withAnimation(AnimationTiming.fast) {
                 selectedProduct = product
+                selectedTier = StoreManager.professionalProductIDs.contains(product.id) ? .professional : .personal
             }
         } label: {
             HStack(spacing: Spacing.small) {

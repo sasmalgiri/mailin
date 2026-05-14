@@ -57,7 +57,7 @@ struct AIDigestGenerator {
         period: TimePeriod,
         customStart: Date? = nil,
         customEnd: Date? = nil
-    ) -> [DigestSection] {
+    ) async -> [DigestSection] {
         let filtered = filterEmails(emails, period: period, customStart: customStart, customEnd: customEnd)
         guard !filtered.isEmpty else { return [] }
 
@@ -92,6 +92,30 @@ struct AIDigestGenerator {
         if let attachments = attachmentsSection(filtered) {
             sections.append(attachments)
         }
+
+        // 7. AI Insights (optional — enhances digest with Apple AI when available)
+        #if canImport(FoundationModels)
+        if #available(macOS 26, iOS 26, *) {
+            if let aiInsights = await FoundationModelEngine.enhanceWithAI(
+                scope: .digest,
+                emails: filtered,
+                context: "Generate insights for email digest"
+            ) {
+                let insightLines = aiInsights.components(separatedBy: "\n").filter { !$0.isEmpty }
+                let items = insightLines.map { line in
+                    DigestItem(
+                        headline: line,
+                        detail: "",
+                        emailIDs: [],
+                        priority: line.hasPrefix("▲") ? .high : (line.hasPrefix("●") ? .medium : .low)
+                    )
+                }
+                if !items.isEmpty {
+                    sections.append(DigestSection(title: "AI Insights", icon: "sparkles", items: items))
+                }
+            }
+        }
+        #endif
 
         return sections
     }
@@ -438,8 +462,10 @@ struct AIDigestGenerator {
         var s = subject.trimmingCharacters(in: .whitespacesAndNewlines)
         let prefixes = ["re:", "fw:", "fwd:", "re: re:", "fw: fw:"]
         var changed = true
-        while changed {
+        var iterations = 0
+        while changed && iterations < 50 {
             changed = false
+            iterations += 1
             for prefix in prefixes {
                 if s.lowercased().hasPrefix(prefix) {
                     s = String(s.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)

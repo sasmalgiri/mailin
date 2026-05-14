@@ -116,18 +116,30 @@ class EncryptedStorageManager {
 
     // MARK: - Encryption Key Management
 
-    private func getOrCreateKey() throws -> SymmetricKey {
-        // Try to load existing key from Keychain
-        if let existingKey = loadKeyFromKeychain() {
-            return existingKey
-        }
-        // Generate a new key
-        let newKey = SymmetricKey(size: .bits256)
-        try saveKeyToKeychain(newKey)
-        return newKey
+    enum KeychainError: Error {
+        case accessFailed(OSStatus)
     }
 
-    private func loadKeyFromKeychain() -> SymmetricKey? {
+    private func getOrCreateKey() throws -> SymmetricKey {
+        switch loadKeyFromKeychain() {
+        case .success(let key):
+            return key
+        case .notFound:
+            let newKey = SymmetricKey(size: .bits256)
+            try saveKeyToKeychain(newKey)
+            return newKey
+        case .error(let status):
+            throw KeychainError.accessFailed(status)
+        }
+    }
+
+    private enum KeychainResult {
+        case success(SymmetricKey)
+        case notFound
+        case error(OSStatus)
+    }
+
+    private func loadKeyFromKeychain() -> KeychainResult {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainTag,
@@ -137,10 +149,13 @@ class EncryptedStorageManager {
         ]
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let keyData = result as? Data, keyData.count == 32 else {
-            return nil
+        if status == errSecItemNotFound {
+            return .notFound
         }
-        return SymmetricKey(data: keyData)
+        guard status == errSecSuccess, let keyData = result as? Data, keyData.count == 32 else {
+            return .error(status)
+        }
+        return .success(SymmetricKey(data: keyData))
     }
 
     private func saveKeyToKeychain(_ key: SymmetricKey) throws {
@@ -150,16 +165,23 @@ class EncryptedStorageManager {
             kSecAttrService as String: keychainTag,
             kSecAttrAccount as String: "encryptionKey"
         ]
-        // Remove any existing item
-        SecItemDelete(query as CFDictionary)
 
-        var addQuery = query
-        addQuery[kSecValueData as String] = keyData
-        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        let updateAttrs: [String: Any] = [
+            kSecValueData as String: keyData,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        ]
+        let updateStatus = SecItemUpdate(query as CFDictionary, updateAttrs as CFDictionary)
 
-        let status = SecItemAdd(addQuery as CFDictionary, nil)
-        guard status == errSecSuccess else {
-            throw EncryptedStorageError.keychainError(status)
+        if updateStatus == errSecItemNotFound {
+            var addQuery = query
+            addQuery[kSecValueData as String] = keyData
+            addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+            guard addStatus == errSecSuccess else {
+                throw EncryptedStorageError.keychainError(addStatus)
+            }
+        } else if updateStatus != errSecSuccess {
+            throw EncryptedStorageError.keychainError(updateStatus)
         }
     }
 

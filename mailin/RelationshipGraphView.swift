@@ -312,6 +312,8 @@ struct RelationshipGraphView: View {
     @State private var graphLayout = GraphLayout()
     @State private var selectedNodeID: String?
     @State private var graphSize: CGSize = CGSize(width: 600, height: 450)
+    @State private var aiInsights: String?
+    @State private var isLoadingAI = false
     @Environment(\.dismiss) private var dismiss
 
     // MARK: - Computed
@@ -412,6 +414,7 @@ struct RelationshipGraphView: View {
                 if let selectedNode {
                     nodeDetailSection(node: selectedNode)
                 }
+                aiInsightsSection
                 topContactsSection
             }
             .padding(Spacing.large)
@@ -434,6 +437,7 @@ struct RelationshipGraphView: View {
                     if let selectedNode {
                         nodeDetailSection(node: selectedNode)
                     }
+                    aiInsightsSection
                     topContactsSection
                 }
                 .padding(Spacing.medium)
@@ -636,6 +640,69 @@ struct RelationshipGraphView: View {
             Text(value)
                 .font(Typography.callout)
                 .fontWeight(.medium)
+        }
+    }
+
+    // MARK: - AI Insights
+
+    private var aiInsightsSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.xSmall) {
+            HStack {
+                Text("AI Analysis")
+                    .font(Typography.callout)
+                    .fontWeight(.semibold)
+                Spacer()
+                if isLoadingAI {
+                    ProgressView()
+                        .controlSize(.small)
+                } else if aiInsights == nil {
+                    Button {
+                        loadAIInsights()
+                    } label: {
+                        Label("Enhance with AI", systemImage: "sparkles")
+                            .font(Typography.caption1)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.purple)
+                    .controlSize(.small)
+                }
+            }
+
+            if let insights = aiInsights {
+                Text(insights)
+                    .font(Typography.caption1)
+                    .foregroundColor(AppColors.secondary)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(Spacing.small)
+        .adaptiveCard(cornerRadius: CornerRadius.medium)
+    }
+
+    private func loadAIInsights() {
+        isLoadingAI = true
+        let topNames = topContacts.prefix(5).map { "\($0.name) (\($0.emailCount))" }.joined(separator: ", ")
+        let context = """
+        Relationship graph for \(emails.count) emails with \(totalContacts) contacts. \
+        Top contacts: \(topNames).
+        """
+        let emailsCopy = emails
+        Task {
+            #if canImport(FoundationModels)
+            if #available(macOS 26, iOS 26, *) {
+                let result = await FoundationModelEngine.enhanceWithAI(
+                    scope: .entity,
+                    emails: emailsCopy,
+                    context: context
+                )
+                aiInsights = result ?? "AI analysis unavailable."
+            } else {
+                aiInsights = "Requires macOS 26 or later."
+            }
+            #else
+            aiInsights = "AI features not available on this platform."
+            #endif
+            isLoadingAI = false
         }
     }
 

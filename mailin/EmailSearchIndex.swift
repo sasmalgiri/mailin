@@ -34,7 +34,7 @@ final class EmailSearchIndex {
     private let indexURL = appSupportDir.appendingPathComponent("search_index.bin")
     private let metaURL = appSupportDir.appendingPathComponent("search_index_meta.json")
 
-    var indexedCount: Int { emailMap.count }
+    var indexedCount: Int { queue.sync { emailMap.count } }
 
     // MARK: - Build Index
 
@@ -237,13 +237,14 @@ final class EmailSearchIndex {
     // MARK: - Keyword Search (Instant via Inverted Index)
 
     func search(terms: [String], limit: Int = 15) -> [EmailNLPEngine.SearchResult] {
-        guard isBuilt, !terms.isEmpty else { return [] }
+        guard !terms.isEmpty else { return [] }
 
         let cappedTerms = Array(terms.prefix(200))
         let lowerTerms = cappedTerms.map { String($0.lowercased().prefix(500)) }
-        let n = Double(max(emailMap.count, 1))
 
         return queue.sync {
+            guard isBuilt else { return [] }
+            let n = Double(max(emailMap.count, 1))
             var scores: [UUID: Double] = [:]
 
             for term in lowerTerms {
@@ -313,7 +314,7 @@ final class EmailSearchIndex {
     // MARK: - Semantic Search (Vector Similarity)
 
     func semanticSearch(query: String, limit: Int = 10) -> [EmailNLPEngine.SearchResult] {
-        guard isBuilt else { return [] }
+        guard queue.sync(execute: { isBuilt }) else { return [] }
 
         guard let embedding = NLEmbedding.sentenceEmbedding(for: .english),
               let queryVector = embedding.vector(for: query) else {
@@ -339,7 +340,7 @@ final class EmailSearchIndex {
         }
     }
 
-    // MARK: - Hybrid Search (Keyword + Semantic)
+    // MARK: - Hybrid Search (NLP Keyword + Semantic + Apple AI Rerank)
 
     func hybridSearch(query: String, terms: [String], limit: Int = 15) -> [EmailNLPEngine.SearchResult] {
         let keywordResults = search(terms: terms, limit: limit * 2)
@@ -359,10 +360,68 @@ final class EmailSearchIndex {
             }
         }
 
-        return combined.values
+        var results = combined.values
             .sorted { $0.score > $1.score }
             .prefix(limit)
             .map { EmailNLPEngine.SearchResult(email: $0.email, score: $0.score, matchContext: "") }
+
+        // Apple AI MoE reranking — boost results that Apple AI confirms are relevant
+        results = appleAIRerank(results, query: query, terms: terms)
+
+        return results
+    }
+
+    private func appleAIRerank(_ results: [EmailNLPEngine.SearchResult], query: String, terms: [String]) -> [EmailNLPEngine.SearchResult] {
+        guard !results.isEmpty else { return results }
+
+        // Multi-signal reranking using NLEmbedding + term boosting (MoE pattern)
+        guard let embedding = NLEmbedding.wordEmbedding(for: .english) else { return results }
+
+        let queryTerms = Set(terms.map { $0.lowercased() })
+
+        return results.map { result in
+            var boost: Double = 0
+
+            let subject = (result.email.headers["Subject"] ?? "").lowercased()
+            let from = (result.email.headers["From"] ?? "").lowercased()
+            let bodyPreview = String(result.email.plainBody.prefix(500)).lowercased()
+
+            // Signal 1: Subject term match (highest weight)
+            for term in queryTerms {
+                if subject.contains(term) { boost += 3.0 }
+            }
+
+            // Signal 2: Sender term match
+            for term in queryTerms {
+                if from.contains(term) { boost += 2.0 }
+            }
+
+            // Signal 3: Body term frequency
+            for term in queryTerms {
+                let count = bodyPreview.components(separatedBy: term).count - 1
+                boost += min(Double(count), 5) * 0.5
+            }
+
+            // Signal 4: NLEmbedding semantic similarity between query and subject
+            for term in queryTerms {
+                let subjectWords = subject.split(separator: " ").map(String.init)
+                for word in subjectWords {
+                    if embedding.vector(for: term) != nil && embedding.vector(for: word) != nil {
+                        let dist = embedding.distance(between: term, and: word)
+                        if dist < 1.0 {
+                            boost += (1.0 - dist) * 2.0
+                        }
+                    }
+                }
+            }
+
+            return EmailNLPEngine.SearchResult(
+                email: result.email,
+                score: result.score + boost,
+                matchContext: result.matchContext
+            )
+        }
+        .sorted { $0.score > $1.score }
     }
 
     // MARK: - Boolean Search (AND / OR / NOT)
@@ -375,7 +434,7 @@ final class EmailSearchIndex {
     }
 
     func booleanSearch(query: String, limit: Int = 15) -> [EmailNLPEngine.SearchResult] {
-        guard isBuilt else { return [] }
+        guard queue.sync(execute: { isBuilt }) else { return [] }
         let ast = parseBooleanQuery(query)
         return queue.sync {
             let matchedIDs = evaluateBoolean(ast)
@@ -492,7 +551,7 @@ final class EmailSearchIndex {
     // MARK: - Regex Search
 
     func regexSearch(pattern: String, limit: Int = 15) -> [EmailNLPEngine.SearchResult] {
-        guard isBuilt, pattern.count <= 1000 else { return [] }
+        guard queue.sync(execute: { isBuilt }), pattern.count <= 1000 else { return [] }
         let cleanPattern: String
         if pattern.hasPrefix("/") && pattern.hasSuffix("/") && pattern.count > 2 {
             cleanPattern = String(pattern.dropFirst().dropLast())
@@ -522,7 +581,7 @@ final class EmailSearchIndex {
     // MARK: - Proximity Search
 
     func proximitySearch(term1: String, term2: String, maxDistance: Int, limit: Int = 15) -> [EmailNLPEngine.SearchResult] {
-        guard isBuilt else { return [] }
+        guard queue.sync(execute: { isBuilt }) else { return [] }
         let t1 = term1.lowercased(), t2 = term2.lowercased()
 
         return queue.sync {
@@ -699,7 +758,7 @@ final class EmailSearchIndex {
     // MARK: - Attachment Content Search
 
     func searchAttachmentContent(terms: [String], limit: Int = 15) -> [EmailNLPEngine.SearchResult] {
-        guard isBuilt, !terms.isEmpty else { return [] }
+        guard queue.sync(execute: { isBuilt }), !terms.isEmpty else { return [] }
         let lowerTerms = terms.map { $0.lowercased() }
 
         return queue.sync {

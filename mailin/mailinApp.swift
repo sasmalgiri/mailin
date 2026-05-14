@@ -16,9 +16,20 @@ import TipKit
 import AppKit
 #endif
 
+#if os(macOS)
+class MailinAppDelegate: NSObject, NSApplicationDelegate {
+    @objc func printDocument(_ sender: Any?) {
+        NotificationCenter.default.post(name: .printCurrentEmail, object: nil)
+    }
+}
+#endif
+
 @main
 struct mailinApp: App {
     // MARK: - App State
+    #if os(macOS)
+    @NSApplicationDelegateAdaptor(MailinAppDelegate.self) var appDelegate
+    #endif
     @State private var appState = AppStateManager()
     @StateObject private var storeManager = StoreManager()
     @ObservedObject private var forensicManager = ForensicManager.shared
@@ -57,6 +68,7 @@ struct mailinApp: App {
                             .interactiveDismissDisabled()
                     }
                     .onAppear {
+                        StoreManager.resetDailyCountersIfNeeded()
                         configureAppearance()
                         ImportProgressNotifier.shared.requestPermission()
                         try? Tips.configure([

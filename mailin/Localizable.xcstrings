@@ -1731,6 +1731,7 @@
       }
     },
     "Export (EML/CSV/PDF)" : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -3524,6 +3525,7 @@
       }
     },
     "Search emails..." : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {

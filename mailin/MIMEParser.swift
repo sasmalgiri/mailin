@@ -145,7 +145,8 @@ public class MIMEParser {
                 if contentType.lowercased().hasPrefix("multipart/"),
                    let nestedBoundary = extractBoundary(contentType) {
                     part.subparts = buildRecursiveParts(part.body, boundary: nestedBoundary, defaultContentType: contentType, depth: depth + 1)
-                } else if contentType.lowercased().hasPrefix("message/rfc822"), depth + 1 < maxRecursionDepth {
+                } else if contentType.lowercased().hasPrefix("message/rfc822"), depth + 1 < maxRecursionDepth,
+                          !part.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     let nested = parseEmail(rawEmail: part.body, depth: depth + 1)
                     part.subparts = nested.parts
                 }

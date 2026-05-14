@@ -75,7 +75,7 @@ struct PSTWriter {
 
     private static let tagSubject: UInt16 = 0x0037, tagMsgClass: UInt16 = 0x001A
     private static let tagSenderAddr: UInt16 = 0x0C1F, tagDisplayTo: UInt16 = 0x0E04
-    private static let tagBody: UInt16 = 0x1000, tagHtml: UInt16 = 0x1035
+    private static let tagBody: UInt16 = 0x1000, tagHtml: UInt16 = 0x1013
     private static let tagDeliveryTime: UInt16 = 0x0E06, tagCreationTime: UInt16 = 0x3007
     private static let tagMsgFlags: UInt16 = 0x0E07
     private static let tagAttachFile: UInt16 = 0x3707, tagAttachData: UInt16 = 0x3701

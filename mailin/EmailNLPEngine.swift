@@ -189,6 +189,116 @@ struct EmailNLPEngine {
             .sorted { $0.count > $1.count }
     }
 
+    static func detectLanguagesHybrid(in emails: [MBOXParser.RawEmail]) async -> [LanguageResult] {
+        let recognizer = NLLanguageRecognizer()
+        var langCounts: [String: Int] = [:]
+        let confidenceThreshold = 0.7
+
+        // Phase 1: NLP pass — collect high-confidence results and low-confidence snippets
+        var lowConfidenceSnippets: [(snippet: String, nlpFallback: String)] = []
+
+        for email in emails {
+            guard let body = bodyText(for: email), !body.isEmpty else { continue }
+            let snippet = String(body.prefix(500))
+            recognizer.reset()
+            recognizer.processString(snippet)
+
+            if let lang = recognizer.dominantLanguage {
+                let hypotheses = recognizer.languageHypotheses(withMaximum: 1)
+                let topConfidence = hypotheses[lang] ?? 0
+
+                if topConfidence >= confidenceThreshold {
+                    let name = Locale.current.localizedString(forLanguageCode: lang.rawValue) ?? lang.rawValue
+                    langCounts[name, default: 0] += 1
+                } else {
+                    let fallback = Locale.current.localizedString(forLanguageCode: lang.rawValue) ?? lang.rawValue
+                    lowConfidenceSnippets.append((snippet: snippet, nlpFallback: fallback))
+                }
+            }
+        }
+
+        // Phase 2: Apple AI fallback for low-confidence detections — parallelism scales with count
+        // Cap AI calls to prevent unbounded processing on huge archives
+        let maxAIFallbacks: Int
+        switch emails.count {
+        case 0...500: maxAIFallbacks = lowConfidenceSnippets.count
+        case 501...5000: maxAIFallbacks = min(lowConfidenceSnippets.count, 200)
+        case 5001...20000: maxAIFallbacks = min(lowConfidenceSnippets.count, 400)
+        default: maxAIFallbacks = min(lowConfidenceSnippets.count, 600)
+        }
+        // NLP-fallback the overflow beyond the cap
+        for i in maxAIFallbacks..<lowConfidenceSnippets.count {
+            langCounts[lowConfidenceSnippets[i].nlpFallback, default: 0] += 1
+        }
+        let cappedSnippets = Array(lowConfidenceSnippets.prefix(maxAIFallbacks))
+
+        if !cappedSnippets.isEmpty {
+            #if canImport(FoundationModels)
+            if #available(macOS 26, iOS 26, *) {
+                let count = cappedSnippets.count
+                let avgSnippetLen = cappedSnippets.reduce(0) { $0 + $1.snippet.count } / max(count, 1)
+                let maxConcurrent: Int
+                let concurrencyScale = avgSnippetLen < 200 ? 2 : (avgSnippetLen < 400 ? 1 : 0)
+                switch count {
+                case 1: maxConcurrent = 1
+                case 2...5: maxConcurrent = min(2 + concurrencyScale, 4)
+                case 6...15: maxConcurrent = min(3 + concurrencyScale, 5)
+                case 16...40: maxConcurrent = min(4 + concurrencyScale, 7)
+                default: maxConcurrent = min(5 + concurrencyScale, 10)
+                }
+
+                if count == 1 {
+                    if let aiLang = await FoundationModelEngine.detectLanguage(text: cappedSnippets[0].snippet) {
+                        langCounts[aiLang, default: 0] += 1
+                    } else {
+                        langCounts[cappedSnippets[0].nlpFallback, default: 0] += 1
+                    }
+                } else {
+                    for groupStart in stride(from: 0, to: count, by: maxConcurrent) {
+                        let groupEnd = min(groupStart + maxConcurrent, count)
+                        let groupSlice = cappedSnippets[groupStart..<groupEnd]
+
+                        let aiResults = await withTaskGroup(of: (Int, String?).self) { group in
+                            for (i, item) in zip(groupStart..<groupEnd, groupSlice) {
+                                group.addTask {
+                                    let result = await FoundationModelEngine.detectLanguage(text: item.snippet)
+                                    return (i, result)
+                                }
+                            }
+                            var resolved: [Int: String?] = [:]
+                            for await (idx, lang) in group {
+                                resolved[idx] = lang
+                            }
+                            return resolved
+                        }
+
+                        for i in groupStart..<groupEnd {
+                            if let aiLang = aiResults[i] ?? nil {
+                                langCounts[aiLang, default: 0] += 1
+                            } else {
+                                langCounts[cappedSnippets[i].nlpFallback, default: 0] += 1
+                            }
+                        }
+                    }
+                }
+            } else {
+                for item in cappedSnippets {
+                    langCounts[item.nlpFallback, default: 0] += 1
+                }
+            }
+            #else
+            for item in cappedSnippets {
+                langCounts[item.nlpFallback, default: 0] += 1
+            }
+            #endif
+        }
+
+        let total = max(langCounts.values.reduce(0, +), 1)
+        return langCounts
+            .map { LanguageResult(language: $0.key, count: $0.value, percentage: Double($0.value) / Double(total) * 100) }
+            .sorted { $0.count > $1.count }
+    }
+
     // MARK: - Topic Extraction (keyword frequency)
 
     static func extractTopics(from emails: [MBOXParser.RawEmail], limit: Int = 10) -> [(word: String, count: Int)] {
@@ -484,8 +594,8 @@ struct EmailNLPEngine {
                 }
             }
 
-            guard !reasons.isEmpty else { continue }
-            let level: PhishingFlag.RiskLevel = riskScore >= 8 ? .high : riskScore >= 4 ? .medium : .low
+            guard !reasons.isEmpty, riskScore >= 4 else { continue }
+            let level: PhishingFlag.RiskLevel = riskScore >= 8 ? .high : .medium
             flagged.append(PhishingFlag(email: email, reasons: reasons, riskLevel: level))
         }
         return flagged
@@ -769,7 +879,7 @@ struct EmailNLPEngine {
             for para in (paragraphs.isEmpty ? [cleanBody] : paragraphs) {
                 tagger.string = para
                 let (tag, _) = tagger.tag(at: para.startIndex, unit: .paragraph, scheme: .sentimentScore)
-                sentimentSum += Double(tag?.rawValue ?? "0") ?? 0 * Double(para.count)
+                sentimentSum += (Double(tag?.rawValue ?? "0") ?? 0) * Double(para.count)
                 sentimentCount += para.count
             }
 
@@ -1233,16 +1343,14 @@ struct EmailNLPEngine {
         ],
     ]
 
-    private static var intentVectors: [QueryIntent: [[Double]]]? = nil
-
-    private static func buildIntentVectors() -> [QueryIntent: [[Double]]] {
+    private static let intentVectors: [QueryIntent: [[Double]]] = {
         guard let embedding = NLEmbedding.sentenceEmbedding(for: .english) else { return [:] }
         var result: [QueryIntent: [[Double]]] = [:]
         for (intent, exemplars) in intentExemplars {
             result[intent] = exemplars.compactMap { embedding.vector(for: $0) }
         }
         return result
-    }
+    }()
 
     static func detectIntent(_ query: String) -> QueryIntent {
         let lower = query.lowercased()
@@ -1261,10 +1369,8 @@ struct EmailNLPEngine {
             return fallbackIntentDetection(lower)
         }
 
-        if intentVectors == nil {
-            intentVectors = buildIntentVectors()
-        }
-        guard let vectors = intentVectors else {
+        let vectors = intentVectors
+        guard !vectors.isEmpty else {
             return fallbackIntentDetection(lower)
         }
 

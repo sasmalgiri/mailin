@@ -88,6 +88,7 @@ class GmailConnector: ObservableObject {
 
     private let config: GmailOAuthConfig
     private let session = URLSession.shared
+    private var authSession: AnyObject?
     private let baseURL = "https://www.googleapis.com/gmail/v1/users/me"
     private let tokenURL = "https://oauth2.googleapis.com/token"
     private let authURL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -105,6 +106,7 @@ class GmailConnector: ObservableObject {
             if let t = TimeInterval(KeychainHelper.load(key: TokenKeys.expiry)) { tokenExpiry = Date(timeIntervalSince1970: t) }
             isAuthenticated = true
             gmailLog.info("Loaded stored Gmail tokens")
+            Task { await fetchUserProfile() }
         }
     }
 
@@ -151,17 +153,19 @@ class GmailConnector: ObservableObject {
         let callbackURL = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<URL, Error>) in
             let scheme = URL(string: config.redirectURI)?.scheme
             let flag = GmailOnceFlag()
-            let authSession = ASWebAuthenticationSession(url: authorizationURL, callbackURLScheme: scheme) { url, err in
+            let session = ASWebAuthenticationSession(url: authorizationURL, callbackURLScheme: scheme) { url, err in
                 guard !flag.done else { return }
                 flag.done = true
                 if let err { cont.resume(throwing: GmailConnectorError.authenticationFailed(err.localizedDescription)) }
                 else if let url { cont.resume(returning: url) }
                 else { cont.resume(throwing: GmailConnectorError.authenticationFailed("No callback URL")) }
             }
-            authSession.prefersEphemeralWebBrowserSession = false
-            authSession.presentationContextProvider = GmailAuthPresentationContext.shared
-            authSession.start()
+            self.authSession = session
+            session.prefersEphemeralWebBrowserSession = false
+            session.presentationContextProvider = GmailAuthPresentationContext.shared
+            session.start()
         }
+        self.authSession = nil
 
         guard let code = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)?
             .queryItems?.first(where: { $0.name == "code" })?.value else {
@@ -173,7 +177,21 @@ class GmailConnector: ObservableObject {
             "grant_type": "authorization_code", "redirect_uri": config.redirectURI,
         ])
         storeTokens(access: tokens.accessToken, refresh: tokens.refreshToken, expiresIn: tokens.expiresIn)
+        await fetchUserProfile()
         gmailLog.info("OAuth authentication completed")
+    }
+
+    private func fetchUserProfile() async {
+        guard let url = URL(string: "\(baseURL)/profile") else { return }
+        do {
+            let (data, _) = try await authorizedRequest(url: url)
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let email = json["emailAddress"] as? String {
+                userEmail = email
+            }
+        } catch {
+            gmailLog.warning("Failed to fetch user profile: \(error.localizedDescription)")
+        }
     }
 
     private func refreshAccessToken() async throws {
@@ -263,12 +281,27 @@ class GmailConnector: ObservableObject {
         let refs = try await listMessageIDs(maxResults: maxResults, query: query)
         guard !refs.isEmpty else { gmailLog.info("No messages found"); return [] }
         gmailLog.info("Fetching \(refs.count) messages")
-        var emails: [MBOXParser.RawEmail] = []
         let total = Double(refs.count)
-        for (i, ref) in refs.enumerated() {
-            emails.append(convertToRawEmail(try await fetchFullMessage(id: ref.id)))
-            fetchProgress = Double(i + 1) / total
-            statusMessage = "Fetched \(i + 1) of \(refs.count)..."
+        let batchSize = 10
+        var emails: [MBOXParser.RawEmail] = []
+        emails.reserveCapacity(refs.count)
+        for batchStart in stride(from: 0, to: refs.count, by: batchSize) {
+            let batchEnd = min(batchStart + batchSize, refs.count)
+            let batch = refs[batchStart..<batchEnd]
+            let batchMessages = try await withThrowingTaskGroup(of: GmailMessage.self) { group in
+                for ref in batch {
+                    group.addTask { [self] in
+                        try await self.fetchFullMessage(id: ref.id)
+                    }
+                }
+                var results: [GmailMessage] = []
+                for try await msg in group { results.append(msg) }
+                return results
+            }
+            let batchResults = batchMessages.map { convertToRawEmail($0) }
+            emails.append(contentsOf: batchResults)
+            fetchProgress = Double(batchEnd) / total
+            statusMessage = "Fetched \(batchEnd) of \(refs.count)..."
             onProgress?(fetchProgress)
         }
         gmailLog.info("Fetched and converted \(emails.count) emails")

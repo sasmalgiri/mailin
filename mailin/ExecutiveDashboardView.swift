@@ -14,6 +14,8 @@ struct ExecutiveDashboardView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var dashboardData: DashboardData?
     @State private var isComputing = false
+    @State private var aiInsights: String?
+    @State private var isLoadingAI = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -31,6 +33,7 @@ struct ExecutiveDashboardView: View {
                 ScrollView {
                     VStack(spacing: Spacing.large) {
                         topStatCards(data: data)
+                        aiInsightsSection(data: data)
                         middleCharts(data: data)
                         bottomSection(data: data)
                     }
@@ -187,6 +190,74 @@ struct ExecutiveDashboardView: View {
             }
         }
         .cardStyle()
+    }
+
+    // MARK: - AI Insights
+
+    private func aiInsightsSection(data: DashboardData) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.small) {
+            HStack {
+                Label("AI-Enhanced Analysis", systemImage: "sparkles")
+                    .font(Typography.headline)
+                Spacer()
+                if isLoadingAI {
+                    ProgressView()
+                        .controlSize(.small)
+                } else if aiInsights == nil {
+                    Button {
+                        loadAIInsights(data: data)
+                    } label: {
+                        Label("Enhance with AI", systemImage: "sparkles")
+                            .font(Typography.caption1)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.purple)
+                    .controlSize(.small)
+                }
+            }
+
+            if let insights = aiInsights {
+                Text(insights)
+                    .font(Typography.body)
+                    .foregroundColor(AppColors.secondary)
+                    .textSelection(.enabled)
+            } else if !isLoadingAI {
+                Text("Tap Enhance with AI for executive-level insights beyond the KPI metrics.")
+                    .font(Typography.caption1)
+                    .foregroundColor(AppColors.secondary)
+            }
+        }
+        .padding(Spacing.medium)
+        .background(AppColors.backgroundPrimary)
+        .cornerRadius(CornerRadius.large)
+        .shadow(color: .black.opacity(0.05), radius: 4, y: 2)
+    }
+
+    private func loadAIInsights(data: DashboardData) {
+        isLoadingAI = true
+        let context = """
+        Executive dashboard: \(data.totalEmails) emails, \(data.uniqueContacts) contacts, \
+        avg sentiment \(String(format: "%.2f", data.averageSentiment)), \
+        response rate \(String(format: "%.0f%%", data.responseRate * 100)).
+        """
+        let emailsCopy = emails
+        Task {
+            #if canImport(FoundationModels)
+            if #available(macOS 26, iOS 26, *) {
+                let result = await FoundationModelEngine.enhanceWithAI(
+                    scope: .all,
+                    emails: emailsCopy,
+                    context: context
+                )
+                aiInsights = result ?? "AI analysis unavailable."
+            } else {
+                aiInsights = "Requires macOS 26 or later."
+            }
+            #else
+            aiInsights = "AI features not available on this platform."
+            #endif
+            isLoadingAI = false
+        }
     }
 
     // MARK: - Bottom Section

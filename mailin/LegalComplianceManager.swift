@@ -59,9 +59,10 @@ class LegalComplianceManager: ObservableObject {
     func checkDataRetention() {
         guard dataRetentionDays > 0 else { return }
         let retentionDate = Calendar.current.date(byAdding: .day, value: -dataRetentionDays, to: Date()) ?? Date()
-        let retentionString = ISO8601DateFormatter().string(from: retentionDate)
 
-        if !termsAcceptedDateString.isEmpty, termsAcceptedDateString < retentionString {
+        if let meta = try? Data(contentsOf: EmailPersistence.metaURLForRetentionCheck),
+           let session = try? JSONDecoder().decode(EmailPersistence.SessionMeta.self, from: meta),
+           session.savedAt < retentionDate {
             EmailPersistence.clear()
         }
     }

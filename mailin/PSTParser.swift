@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let pstLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "mailin", category: "PSTParser")
 
 struct PSTParser {
     enum PSTError: LocalizedError {
@@ -173,6 +176,7 @@ struct PSTReader {
                 messages.append(msg)
             } catch {
                 recoveryErrors += 1
+                pstLog.warning("Skipped message node NID \(node.nid, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
             onProgress?(Double(idx + 1) / total)
         }

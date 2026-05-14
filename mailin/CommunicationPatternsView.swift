@@ -313,6 +313,8 @@ struct CommunicationPatternsView: View {
     @State private var weekdayPatterns: [CommunicationPatternAnalyzer.WeekdayPattern] = []
     @State private var avgResponseTime: Double?
     @State private var isAnalyzing = false
+    @State private var aiInsights: String?
+    @State private var isLoadingAI = false
 
     private let weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 
@@ -342,6 +344,7 @@ struct CommunicationPatternsView: View {
                 ScrollView {
                     VStack(spacing: Spacing.large) {
                         overallStats
+                        aiInsightsSection
                         hourlyChart
                         weekdayChart
                         contactList
@@ -414,6 +417,73 @@ struct CommunicationPatternsView: View {
                 icon: "calendar",
                 color: .green
             )
+        }
+    }
+
+    // MARK: - AI Insights
+
+    private var aiInsightsSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.small) {
+            HStack {
+                Text("AI-Enhanced Analysis")
+                    .font(Typography.headline)
+                Spacer()
+                if isLoadingAI {
+                    ProgressView()
+                        .controlSize(.small)
+                } else if aiInsights == nil {
+                    Button {
+                        loadAIInsights()
+                    } label: {
+                        Label("Enhance with AI", systemImage: "sparkles")
+                            .font(Typography.caption1)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.purple)
+                    .controlSize(.small)
+                }
+            }
+
+            if let insights = aiInsights {
+                Text(insights)
+                    .font(Typography.body)
+                    .foregroundColor(AppColors.secondary)
+                    .textSelection(.enabled)
+            } else if !isLoadingAI {
+                Text("Tap Enhance with AI for deeper communication pattern insights.")
+                    .font(Typography.caption1)
+                    .foregroundColor(AppColors.secondary)
+            }
+        }
+        .padding(Spacing.medium)
+        .adaptiveCard(cornerRadius: CornerRadius.large)
+    }
+
+    private func loadAIInsights() {
+        isLoadingAI = true
+        let topNames = contacts.prefix(5).map { "\($0.displayName) (\($0.totalEmails))" }.joined(separator: ", ")
+        let context = """
+        Communication patterns across \(emails.count) emails with \(contacts.count) contacts. \
+        Top contacts: \(topNames). \
+        Avg response time: \(avgResponseTime.map { String(format: "%.1f hours", $0) } ?? "N/A").
+        """
+        let emailsCopy = emails
+        Task {
+            #if canImport(FoundationModels)
+            if #available(macOS 26, iOS 26, *) {
+                let result = await FoundationModelEngine.enhanceWithAI(
+                    scope: .entity,
+                    emails: emailsCopy,
+                    context: context
+                )
+                aiInsights = result ?? "AI analysis unavailable."
+            } else {
+                aiInsights = "Requires macOS 26 or later."
+            }
+            #else
+            aiInsights = "AI features not available on this platform."
+            #endif
+            isLoadingAI = false
         }
     }
 

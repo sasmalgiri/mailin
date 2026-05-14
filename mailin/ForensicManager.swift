@@ -326,7 +326,10 @@ class ForensicManager: ObservableObject {
     }
 
     nonisolated static func computeEmailHash(rawSource: String) -> EmailHash {
-        let data = rawSource.data(using: .utf8) ?? Data()
+        guard !rawSource.isEmpty else {
+            return EmailHash(md5: "", sha1: "", sha256: "", byteCount: 0)
+        }
+        let data = rawSource.data(using: .utf8) ?? rawSource.data(using: .isoLatin1) ?? Data(rawSource.utf8)
         return EmailHash(
             md5: Insecure.MD5.hash(data: data).map { String(format: "%02x", $0) }.joined(),
             sha1: Insecure.SHA1.hash(data: data).map { String(format: "%02x", $0) }.joined(),

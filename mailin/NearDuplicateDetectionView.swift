@@ -7,6 +7,8 @@ struct NearDuplicateDetectionView: View {
     @State private var groups: [EmailNLPEngine.NearDuplicateGroup] = []
     @State private var isAnalyzing = false
     @State private var removedGroupIDs: Set<UUID> = []
+    @State private var aiInsights: String?
+    @State private var isLoadingAI = false
     @Environment(\.dismiss) private var dismiss
 
     private var visibleGroups: [EmailNLPEngine.NearDuplicateGroup] {
@@ -76,6 +78,9 @@ struct NearDuplicateDetectionView: View {
                 .padding(.horizontal, Spacing.medium)
                 .padding(.top, Spacing.small)
 
+                aiInsightsSection
+                    .padding(.horizontal, Spacing.medium)
+
                 List {
                     ForEach(visibleGroups) { group in
                         groupRow(group)
@@ -130,6 +135,69 @@ struct NearDuplicateDetectionView: View {
                     .font(Typography.caption2)
                     .foregroundColor(AppColors.secondary)
             }
+        }
+    }
+
+    // MARK: - AI Insights
+
+    private var aiInsightsSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.xSmall) {
+            HStack {
+                Text("AI Analysis")
+                    .font(Typography.callout)
+                    .fontWeight(.semibold)
+                Spacer()
+                if isLoadingAI {
+                    ProgressView()
+                        .controlSize(.small)
+                } else if aiInsights == nil {
+                    Button {
+                        loadAIInsights()
+                    } label: {
+                        Label("Enhance with AI", systemImage: "sparkles")
+                            .font(Typography.caption1)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.purple)
+                    .controlSize(.small)
+                }
+            }
+
+            if let insights = aiInsights {
+                Text(insights)
+                    .font(Typography.caption1)
+                    .foregroundColor(AppColors.secondary)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(Spacing.small)
+        .adaptiveCard(cornerRadius: CornerRadius.medium)
+    }
+
+    private func loadAIInsights() {
+        isLoadingAI = true
+        let totalDuplicates = visibleGroups.reduce(0) { $0 + $1.duplicates.count }
+        let context = """
+        Near-duplicate analysis found \(visibleGroups.count) groups with \(totalDuplicates) duplicates \
+        at \(Int(threshold * 100))% similarity threshold across \(emails.count) emails.
+        """
+        let emailsCopy = emails
+        Task {
+            #if canImport(FoundationModels)
+            if #available(macOS 26, iOS 26, *) {
+                let result = await FoundationModelEngine.enhanceWithAI(
+                    scope: .entity,
+                    emails: emailsCopy,
+                    context: context
+                )
+                aiInsights = result ?? "AI analysis unavailable."
+            } else {
+                aiInsights = "Requires macOS 26 or later."
+            }
+            #else
+            aiInsights = "AI features not available on this platform."
+            #endif
+            isLoadingAI = false
         }
     }
 

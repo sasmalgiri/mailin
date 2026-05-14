@@ -377,6 +377,8 @@ struct EDiscoveryWorkflowView: View {
 
     @State private var showResetConfirmation = false
     @State private var actionMessage: String?
+    @State private var aiProcessingInsights: String?
+    @State private var isLoadingAI = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -796,6 +798,36 @@ struct EDiscoveryWorkflowView: View {
             }
             .buttonStyle(PrimaryButtonStyle())
             .accessibilityLabel("Run NLP analysis on all emails")
+
+            Divider()
+
+            HStack {
+                Text("AI-Enhanced Processing")
+                    .font(Typography.caption1)
+                    .fontWeight(.semibold)
+                Spacer()
+                if isLoadingAI {
+                    ProgressView()
+                        .controlSize(.small)
+                } else if aiProcessingInsights == nil {
+                    Button {
+                        loadAIProcessingInsights(categories: categories)
+                    } label: {
+                        Label("Enhance with AI", systemImage: "sparkles")
+                            .font(Typography.caption1)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.purple)
+                    .controlSize(.small)
+                }
+            }
+
+            if let insights = aiProcessingInsights {
+                Text(insights)
+                    .font(Typography.caption1)
+                    .foregroundColor(AppColors.secondary)
+                    .textSelection(.enabled)
+            }
         }
     }
 
@@ -921,6 +953,35 @@ struct EDiscoveryWorkflowView: View {
             Spacer()
         }
         .padding(.top, Spacing.small)
+    }
+
+    // MARK: - AI Enhancement
+
+    private func loadAIProcessingInsights(categories: [(key: EmailNLPEngine.EmailCategory, value: Int)]) {
+        isLoadingAI = true
+        let breakdown = categories.map { "\($0.key.rawValue): \($0.value)" }.joined(separator: ", ")
+        let context = """
+        E-Discovery processing phase for case \(manager.caseInfo.caseNumber). \
+        \(emails.count) emails classified: \(breakdown).
+        """
+        let emailsCopy = emails
+        Task {
+            #if canImport(FoundationModels)
+            if #available(macOS 26, iOS 26, *) {
+                let result = await FoundationModelEngine.enhanceWithAI(
+                    scope: .all,
+                    emails: emailsCopy,
+                    context: context
+                )
+                aiProcessingInsights = result ?? "AI analysis unavailable."
+            } else {
+                aiProcessingInsights = "Requires macOS 26 or later."
+            }
+            #else
+            aiProcessingInsights = "AI features not available on this platform."
+            #endif
+            isLoadingAI = false
+        }
     }
 
     // MARK: - Helpers

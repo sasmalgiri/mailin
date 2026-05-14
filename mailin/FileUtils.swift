@@ -99,7 +99,7 @@ public class FileUtilsAudit {
 // MARK: - Utility / Path / Callers
 
 private func ensureSandbox(_ path: String) throws -> String {
-    let abs = (path as NSString).expandingTildeInPath
+    let abs = ((path as NSString).expandingTildeInPath as NSString).standardizingPath
     if let root = FileUtilsPolicy.sandboxRoot {
         let std = (root as NSString).standardizingPath
         if !abs.hasPrefix(std) {

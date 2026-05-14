@@ -94,7 +94,7 @@ BUILT FOR PRIVACY
 • App Sandbox with minimal permissions
 
 FLEXIBLE PLANS
-• Free: up to 200 emails with basic filtering and NLP
+• Free: up to 500 emails with basic filtering and NLP
 • Personal: unlimited emails, AI assistant, analytics, exports
 • Professional: adds audit trail, chain of custody, Bates numbering, predictive coding
 • Monthly, yearly, or one-time lifetime purchase
@@ -172,7 +172,7 @@ mailin is an email archive analyzer that parses .mbox, .eml, .emlx, .msg, .pst, 
 
 TESTING:
 - A demo file (demo_emails.mbox) is included in the app bundle for testing. On launch, click "Select Files" and choose any supported file, or use the demo data.
-- Free tier allows up to 200 emails. Personal and Professional features require a subscription or one-time purchase.
+- Free tier allows up to 500 emails. Personal and Professional features require a subscription or one-time purchase.
 
 ON-DEVICE AI:
 - The on-device NLP engine uses Apple's NaturalLanguage framework and works entirely offline.
@@ -186,7 +186,7 @@ IN-APP PURCHASES:
 - Professional Monthly: $9.99/month — all Personal features plus forensic tools, audit trail, chain of custody, Bates numbering, batch processing, predictive coding
 - Professional Yearly: $79.99/year — same as monthly, save 40%
 - Professional Lifetime: $149.99 one-time — pay once, own forever
-- Free tier: up to 200 emails with basic features.
+- Free tier: up to 500 emails with basic features.
 
 NETWORK ACCESS:
 - This app has NO network entitlement. All email processing is entirely offline. In-app purchases are handled by StoreKit 2, which operates through Apple's own infrastructure without requiring a network entitlement from the app.

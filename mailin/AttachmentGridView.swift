@@ -20,7 +20,7 @@ struct AttachmentGridView: View {
     }
 
     private struct AttachmentItem: Identifiable {
-        let id = UUID()
+        let id: String
         let attachment: AttachmentMetadata
         let emailSubject: String
         let emailDate: String
@@ -28,8 +28,13 @@ struct AttachmentGridView: View {
 
     private var allItems: [AttachmentItem] {
         emails.flatMap { email in
-            email.attachments.map {
-                AttachmentItem(attachment: $0, emailSubject: email.headers["Subject"] ?? "(No Subject)", emailDate: email.timestamp)
+            email.attachments.enumerated().map { idx, att in
+                AttachmentItem(
+                    id: "\(email.id.uuidString)-\(idx)",
+                    attachment: att,
+                    emailSubject: email.headers["Subject"] ?? "(No Subject)",
+                    emailDate: email.timestamp
+                )
             }
         }
     }

@@ -188,10 +188,14 @@ struct RedactionEngine {
         let (redactedFrom, fromCount) = redact(text: email.headers["From"] ?? "", rules: rules)
         let (redactedTo, toCount) = redact(text: email.headers["To"] ?? "", rules: rules)
 
-        let bodyText = email.plainBody.isEmpty ? email.htmlBody : email.plainBody
-        let (redactedBody, bodyCount) = redact(text: bodyText, rules: rules)
+        let (redactedPlain, plainCount) = redact(text: email.plainBody, rules: rules)
+        let (redactedHtml, htmlCount) = redact(text: email.htmlBody, rules: rules)
+        let redactedBody = redactedPlain.isEmpty ? redactedHtml : redactedPlain
+        let bodyCount = plainCount + htmlCount
 
-        let totalRedactions = subjectCount + fromCount + toCount + bodyCount
+        let ccText = email.headers["Cc"] ?? ""
+        let (_, ccCount) = redact(text: ccText, rules: rules)
+        let totalRedactions = subjectCount + fromCount + toCount + bodyCount + ccCount
 
         return RedactedEmail(
             id: email.id,
@@ -224,10 +228,9 @@ struct RedactionEngine {
         }
 
         func snippet(_ value: String) -> String {
-            guard value.count > 6 else { return String(repeating: "*", count: value.count) }
-            let prefix = String(value.prefix(3))
-            let suffix = String(value.suffix(3))
-            return "\(prefix)...\(suffix)"
+            guard value.count > 4 else { return String(repeating: "*", count: value.count) }
+            let prefix = String(value.prefix(2))
+            return "\(prefix)...\(String(repeating: "*", count: max(1, value.count - 2)))"
         }
 
         let enabledRules = rules.filter(\.isEnabled)

@@ -16,6 +16,7 @@ struct EmailTimelineView: View {
     @State private var granularity: Granularity = .week
     @State private var selectedBucket: DateBucket?
     @State private var selectedTimezone: TimeZone = .current
+    @State private var cachedParsedDates: [(date: Date, email: MBOXParser.RawEmail)] = []
     @Environment(\.dismiss) private var dismiss
 
     // MARK: - Types
@@ -51,8 +52,10 @@ struct EmailTimelineView: View {
 
     // MARK: - Computed Data
 
-    private var parsedDates: [(date: Date, email: MBOXParser.RawEmail)] {
-        emails.compactMap { email in
+    private var parsedDates: [(date: Date, email: MBOXParser.RawEmail)] { cachedParsedDates }
+
+    private func rebuildParsedDates() {
+        cachedParsedDates = emails.compactMap { email in
             guard let date = MBOXParser.parseDate(email.headers["Date"]) else { return nil }
             return (date, email)
         }
@@ -223,6 +226,7 @@ struct EmailTimelineView: View {
             }
         }
         .onChange(of: selectedDate) { _, _ in syncSelection() }
+        .onAppear { rebuildParsedDates() }
         #if os(macOS)
         .frame(minWidth: 700, minHeight: 550)
         #endif

@@ -73,19 +73,33 @@ class iCloudSyncManager: ObservableObject {
 
     // MARK: - iCloud Container
 
+    private var cachedContainerURL: URL?
+    private var hasCheckedContainer = false
+
     private var ubiquityContainerURL: URL? {
-        FileManager.default.url(forUbiquityContainerIdentifier: nil)
+        if hasCheckedContainer { return cachedContainerURL }
+        return cachedContainerURL
     }
 
-    private var syncFolderURL: URL? {
-        guard let container = ubiquityContainerURL else { return nil }
+    private func resolveUbiquityContainer() async -> URL? {
+        if hasCheckedContainer { return cachedContainerURL }
+        let url = await Task.detached {
+            FileManager.default.url(forUbiquityContainerIdentifier: nil)
+        }.value
+        cachedContainerURL = url
+        hasCheckedContainer = true
+        return url
+    }
+
+    private func syncFolderURL() async -> URL? {
+        guard let container = await resolveUbiquityContainer() else { return nil }
         let folder = container.appendingPathComponent("Documents/ForensicSync", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         return folder
     }
 
     var isAvailable: Bool {
-        ubiquityContainerURL != nil
+        hasCheckedContainer ? cachedContainerURL != nil : FileManager.default.ubiquityIdentityToken != nil
     }
 
     private init() {
@@ -153,7 +167,7 @@ class iCloudSyncManager: ObservableObject {
     // MARK: - Sync Operations
 
     func performSync() async {
-        guard isEnabled, let syncFolder = syncFolderURL else { return }
+        guard isEnabled, let syncFolder = await syncFolderURL() else { return }
 
         syncStatus = .syncing
         lastSyncErrors = []

@@ -12,6 +12,8 @@ struct AnomalyDetectionView: View {
     @State private var anomalies: [AnomalyDetectionEngine.Anomaly] = []
     @State private var isAnalyzing = false
     @State private var selectedType: AnomalyDetectionEngine.AnomalyType?
+    @State private var aiInsights: String?
+    @State private var isLoadingAI = false
     @Environment(\.dismiss) private var dismiss
 
     private var filteredAnomalies: [AnomalyDetectionEngine.Anomaly] {
@@ -71,6 +73,10 @@ struct AnomalyDetectionView: View {
                     // Summary bar
                     summaryBar
                         .padding(Spacing.medium)
+
+                    aiInsightsSection
+                        .padding(.horizontal, Spacing.medium)
+                        .padding(.bottom, Spacing.small)
 
                     Divider()
 
@@ -190,6 +196,69 @@ struct AnomalyDetectionView: View {
             .padding(.vertical, 2)
             .background(severityColor(severity))
             .cornerRadius(CornerRadius.small)
+    }
+
+    // MARK: - AI Insights
+
+    private var aiInsightsSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.xSmall) {
+            HStack {
+                Text("AI Analysis")
+                    .font(Typography.caption1)
+                    .fontWeight(.semibold)
+                Spacer()
+                if isLoadingAI {
+                    ProgressView()
+                        .controlSize(.small)
+                } else if aiInsights == nil {
+                    Button {
+                        loadAIInsights()
+                    } label: {
+                        Label("Enhance with AI", systemImage: "sparkles")
+                            .font(Typography.caption1)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.purple)
+                    .controlSize(.small)
+                }
+            }
+
+            if let insights = aiInsights {
+                Text(insights)
+                    .font(Typography.caption1)
+                    .foregroundColor(AppColors.secondary)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(Spacing.small)
+        .adaptiveCard(cornerRadius: CornerRadius.medium)
+    }
+
+    private func loadAIInsights() {
+        isLoadingAI = true
+        let anomalyTypes = typeCounts.map { "\($0.type.rawValue): \($0.count)" }.joined(separator: ", ")
+        let context = """
+        Anomaly detection found \(anomalies.count) anomalies across \(emails.count) emails. \
+        Types: \(anomalyTypes.isEmpty ? "none" : anomalyTypes).
+        """
+        let emailsCopy = emails
+        Task {
+            #if canImport(FoundationModels)
+            if #available(macOS 26, iOS 26, *) {
+                let result = await FoundationModelEngine.enhanceWithAI(
+                    scope: .security,
+                    emails: emailsCopy,
+                    context: context
+                )
+                aiInsights = result ?? "AI analysis unavailable."
+            } else {
+                aiInsights = "Requires macOS 26 or later."
+            }
+            #else
+            aiInsights = "AI features not available on this platform."
+            #endif
+            isLoadingAI = false
+        }
     }
 
     // MARK: - Helpers

@@ -195,7 +195,7 @@ struct AIDigestView: View {
         let emailList = emails
 
         Task.detached {
-            let results = AIDigestGenerator.generateDigest(
+            let results = await AIDigestGenerator.generateDigest(
                 emails: emailList,
                 period: period,
                 customStart: period == .custom ? start : nil,

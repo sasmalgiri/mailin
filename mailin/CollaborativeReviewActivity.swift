@@ -114,7 +114,7 @@ class SharePlayManager: ObservableObject {
             action: action,
             emailID: emailID,
             payload: payload,
-            senderName: "User",
+            senderName: groupSession?.localParticipant.id.description ?? "User",
             timestamp: Date()
         )
         Task {

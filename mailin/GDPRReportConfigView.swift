@@ -92,7 +92,7 @@ struct GDPRReportConfigView: View {
         let subject = dataSubject.trimmingCharacters(in: .whitespacesAndNewlines)
 
         Task.detached(priority: .userInitiated) {
-            let pdfData = GDPRComplianceReport.generate(emails: emails, dataSubject: subject)
+            let pdfData = await GDPRComplianceReport.generate(emails: emails, dataSubject: subject)
 
             await MainActor.run {
                 isGenerating = false

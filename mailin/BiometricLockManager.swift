@@ -96,8 +96,10 @@ class BiometricLockManager: ObservableObject {
             policy = .deviceOwnerAuthentication
         } else {
             isAuthenticating = false
-            authError = biometricUnavailableMessage(for: error)
-            return false
+            isLocked = false
+            isEnabled = false
+            authError = biometricUnavailableMessage(for: error) + " Biometric lock has been disabled to prevent lockout."
+            return true
         }
 
         do {

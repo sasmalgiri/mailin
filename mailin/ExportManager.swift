@@ -613,7 +613,7 @@ struct ExportManager {
         <div class="detail" id="detail"><div class="detail-empty">Select an email to view</div></div>
         </div>
         <script>
-        var DATA=\(emailJSON);
+        var DATA=\(emailJSON.replacingOccurrences(of: "</script>", with: "<\\/script>"));
         var listEl=document.getElementById("list"),detailEl=document.getElementById("detail"),searchEl=document.getElementById("search"),countEl=document.getElementById("count");
         var filtered=DATA.slice(),activeId=null;
         function esc(s){var d=document.createElement("div");d.textContent=s;return d.innerHTML}
@@ -717,7 +717,8 @@ struct ExportManager {
 
         let mutableData = NSMutableData()
         var mediaBox = CGRect(x: 0, y: 0, width: pageWidth, height: pageHeight)
-        guard let context = CGContext(consumer: CGDataConsumer(data: mutableData)!, mediaBox: &mediaBox, nil) else {
+        guard let consumer = CGDataConsumer(data: mutableData),
+              let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
             return Data()
         }
 
@@ -814,11 +815,14 @@ struct ExportManager {
     }
 
     private static func escapeCSV(_ text: String) -> String {
-        let escaped = text.replacingOccurrences(of: "\"", with: "\"\"")
-        if escaped.contains(",") || escaped.contains("\"") || escaped.contains("\n") {
-            return "\"\(escaped)\""
+        var val = text.replacingOccurrences(of: "\"", with: "\"\"")
+        if let first = val.first, "=+@-\t\r".contains(first) {
+            val = "'" + val
         }
-        return escaped
+        if val.contains(",") || val.contains("\"") || val.contains("\n") || val.contains("'") {
+            return "\"\(val)\""
+        }
+        return val
     }
 
     private static func parseEmailAddress(_ raw: String) -> (name: String, email: String) {

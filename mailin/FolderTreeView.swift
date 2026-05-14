@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct FolderNode: Identifiable {
-    let id = UUID()
+    var id: String { filterValue }
     let name: String
     let icon: String
     var children: [FolderNode]
@@ -14,7 +14,7 @@ struct FolderTreeView: View {
     @Binding var selectedFolder: String?
 
     private struct FlatRow: Identifiable {
-        let id = UUID()
+        var id: String { "\(node.filterValue)-\(depth)" }
         let node: FolderNode
         let depth: Int
     }

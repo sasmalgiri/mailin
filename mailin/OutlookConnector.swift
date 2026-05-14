@@ -60,6 +60,7 @@ final class OutlookConnector: ObservableObject {
     private var accessToken: String = ""
     private var refreshToken: String = ""
     private var tokenExpiry: Date = .distantPast
+    private var authSession: AnyObject?
 
     private init() {
         loadTokens()
@@ -167,12 +168,14 @@ final class OutlookConnector: ObservableObject {
                     continuation.resume(throwing: OutlookError.authenticationFailed("No callback received"))
                 }
             }
+            self.authSession = session
             session.prefersEphemeralWebBrowserSession = false
             #if os(macOS)
             session.presentationContextProvider = NSAppPresentationContext.shared
             #endif
             session.start()
         }
+        self.authSession = nil
 
         guard let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false),
               let code = components.queryItems?.first(where: { $0.name == "code" })?.value else {
@@ -200,9 +203,13 @@ final class OutlookConnector: ObservableObject {
             "scope": msScopes.joined(separator: " "),
         ]
         let tokenResponse = try await postTokenRequest(body: body)
+        let newRefresh = tokenResponse.refreshToken ?? refreshToken
+        guard !newRefresh.isEmpty else {
+            throw OutlookError.authenticationFailed("Server did not return a refresh token")
+        }
         saveTokens(
             access: tokenResponse.accessToken,
-            refresh: tokenResponse.refreshToken ?? "",
+            refresh: newRefresh,
             expiresIn: tokenResponse.expiresIn
         )
     }

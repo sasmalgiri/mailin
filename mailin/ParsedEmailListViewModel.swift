@@ -305,6 +305,17 @@ class ParsedEmailListViewModel: ObservableObject {
         _userDataInitialized = true
     }
 
+    func rehydrateIfNeeded(_ emailID: UUID) {
+        guard let idx = filteredEmails.firstIndex(where: { $0.id == emailID }),
+              filteredEmails[idx].isBodyCompacted else { return }
+        if let rehydrated = viewModel.rehydrateBody(for: emailID) {
+            filteredEmails[idx] = rehydrated
+            if let allIdx = allEmails.firstIndex(where: { $0.id == emailID }) {
+                allEmails[allIdx] = rehydrated
+            }
+        }
+    }
+
     func searchTextDidChange() {
         searchDebounceTask?.cancel()
         searchDebounceTask = Task { [weak self] in
@@ -817,18 +828,32 @@ class ParsedEmailListViewModel: ObservableObject {
     @Published var emailClassifications: [UUID: EmailNLPEngine.EmailCategory] = [:]
     @Published var aiFiltersComputed = false
 
+    @AppStorage("enableAIFeatures") private var enableAIFeatures = true
+
     func computeAIFilterData() {
-        guard !aiFiltersComputed, !allEmails.isEmpty else { return }
+        guard !aiFiltersComputed, !allEmails.isEmpty, enableAIFeatures else { return }
         Task.detached(priority: .utility) { [allEmails] in
             let sentiments = EmailNLPEngine.analyzeSentiment(of: allEmails)
             var sentMap: [UUID: Double] = [:]
             for r in sentiments { sentMap[r.email.id] = r.score }
 
-            let phishing = EmailNLPEngine.detectPhishing(in: allEmails)
-            let phishIDs = Set(phishing.map(\.email.id))
-
             var classMap: [UUID: EmailNLPEngine.EmailCategory] = [:]
             for email in allEmails { classMap[email.id] = EmailNLPEngine.classify(email) }
+
+            var phishIDs = Set<UUID>()
+            #if canImport(FoundationModels)
+            if #available(macOS 26, iOS 26, *), FoundationModelEngine.isAvailable {
+                phishIDs = await FoundationModelEngine.classifyPhishing(allEmails) { _, _ in }
+            } else {
+                let phishing = EmailNLPEngine.detectPhishing(in: allEmails)
+                    .filter { $0.riskLevel == .high }
+                phishIDs = Set(phishing.map(\.email.id))
+            }
+            #else
+            let phishing = EmailNLPEngine.detectPhishing(in: allEmails)
+                .filter { $0.riskLevel == .high }
+            phishIDs = Set(phishing.map(\.email.id))
+            #endif
 
             await MainActor.run { [sentMap, phishIDs, classMap] in
                 self.sentimentScores = sentMap
@@ -842,7 +867,7 @@ class ParsedEmailListViewModel: ObservableObject {
 
     // MARK: - Cleanup Mode (sender-grouped data)
     struct SenderGroup: Identifiable {
-        let id = UUID()
+        var id: String { sender }
         let sender: String
         let count: Int
         let totalSizeKB: Int

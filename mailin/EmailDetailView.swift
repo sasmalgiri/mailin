@@ -1114,7 +1114,7 @@ struct EmailDetailView: View {
             replyText = ""
             let tones = FoundationModelEngine.ReplyTone.allCases
             let tone = tones.indices.contains(selectedReplyTone) ? tones[selectedReplyTone] : .professional
-            Task {
+            Task { @MainActor in
                 do {
                     let _ = try await FoundationModelEngine.suggestReply(to: email, tone: tone) { text in
                         replyText = text
@@ -1394,7 +1394,11 @@ struct EmailDetailView: View {
     }
 
     private func exportAsPlainText() {
-        let fileName = "\(subjectLine.replacingOccurrences(of: " ", with: "_")).txt"
+        let sanitized = subjectLine
+            .replacingOccurrences(of: " ", with: "_")
+            .filter { !"/\\:*?\"<>|".contains($0) }
+            .prefix(100)
+        let fileName = "\(sanitized.isEmpty ? "email" : String(sanitized)).txt"
 
         var exportText = ""
         exportText += "Subject: \(subjectLine)\n"
@@ -1782,19 +1786,23 @@ struct EmailDetailView: View {
             """
         }
 
-        guard let data = htmlContent.data(using: .utf8),
-              let attrString = try? NSAttributedString(
-                  data: data,
-                  options: [.documentType: NSAttributedString.DocumentType.html,
-                            .characterEncoding: String.Encoding.utf8.rawValue],
-                  documentAttributes: nil
-              ) else { return }
-
         let printInfo = NSPrintInfo.shared
         let textView = NSTextView(frame: NSRect(x: 0, y: 0,
             width: printInfo.paperSize.width - printInfo.leftMargin - printInfo.rightMargin,
             height: printInfo.paperSize.height - printInfo.topMargin - printInfo.bottomMargin))
-        textView.textStorage?.setAttributedString(attrString)
+
+        if let data = htmlContent.data(using: .utf8),
+           let attrString = try? NSAttributedString(
+               data: data,
+               options: [.documentType: NSAttributedString.DocumentType.html,
+                         .characterEncoding: String.Encoding.utf8.rawValue],
+               documentAttributes: nil
+           ) {
+            textView.textStorage?.setAttributedString(attrString)
+        } else {
+            textView.string = "\(headerText)\n\n\(emailBody)"
+            textView.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        }
 
         let printOp = NSPrintOperation(view: textView, printInfo: printInfo)
         printOp.showsPrintPanel = true
@@ -2049,6 +2057,9 @@ struct EmailDetailView: View {
 
     @ViewBuilder
     private var smimeStatusView: some View {
+        if !storeManager.isPremium {
+            EmptyView()
+        } else {
         let sigResult = SMIMEHandler.verifySignature(of: email)
         let isEncrypted = SMIMEHandler.isEncrypted(email)
         if sigResult.status != .notSigned || isEncrypted {
@@ -2090,6 +2101,7 @@ struct EmailDetailView: View {
                 }
                 Spacer()
             }
+        }
         }
     }
 

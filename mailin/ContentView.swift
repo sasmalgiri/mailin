@@ -54,6 +54,7 @@ struct ContentView: View {
     @AppStorage("enableAIFeatures") private var enableAIFeatures = true
     @AppStorage("autoDetectSender") private var autoDetectSender = true
     @AppStorage("showAdvancedFeatures") private var showAdvancedFeatures = false
+    @AppStorage("removeDuplicates") private var removeDuplicates = true
     @StateObject private var viewModel = ContentViewModel()
     @StateObject private var modelVM: ParsedEmailListViewModel
     @State private var showSpinner = false
@@ -65,6 +66,7 @@ struct ContentView: View {
     @State private var selectedClusterFilter: String?
     @State private var bottomPanelHeight: CGFloat = 250
     @State private var dragStartHeight: CGFloat = 250
+    @State private var showRemovedDuplicates = false
     #if os(iOS)
     @State private var showFileImporter = false
     @State private var showShareSheet = false
@@ -269,6 +271,12 @@ struct ContentView: View {
         ))
         .modifier(V8SheetsModifier(appState: appState, modelVM: modelVM))
         .modifier(V9SheetsModifier(appState: appState, modelVM: modelVM, senderEmail: viewModel.senderEmail))
+        .sheet(isPresented: $showRemovedDuplicates) {
+            RemovedDuplicatesView(emails: viewModel.removedDuplicates)
+                #if os(macOS)
+                .frame(minWidth: 650, minHeight: 450)
+                #endif
+        }
         #if os(iOS)
         .fileImporter(
             isPresented: $showFileImporter,
@@ -347,8 +355,9 @@ struct ContentView: View {
                     emptyPlaceholder
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if selectedEmailIDs.count == 1,
-                   let selectedID = selectedEmailIDs.first,
-                   let email = modelVM.filteredEmails.first(where: { $0.id == selectedID }) {
+                   let selectedID = selectedEmailIDs.first {
+                    let _ = modelVM.rehydrateIfNeeded(selectedID)
+                    if let email = modelVM.filteredEmails.first(where: { $0.id == selectedID }) {
                     EmailDetailView(
                         email: email,
                         allEmails: modelVM.filteredEmails,
@@ -358,6 +367,7 @@ struct ContentView: View {
                     )
                     .id(selectedID)
                     compactToolsStrip
+                    }
                 } else if selectedEmailIDs.count == 2 {
                     let pair = Array(selectedEmailIDs)
                     let emailA = pair.count > 0 ? modelVM.filteredEmails.first(where: { $0.id == pair[0] }) : nil
@@ -461,7 +471,11 @@ struct ContentView: View {
                             Image(systemName: "chart.bar")
                         }
                         .accessibilityLabel("Analytics")
-                        Button { forensicManager.isEnabled.toggle() } label: {
+                        Button {
+                            if forensicManager.isEnabled || storeManager.requireProfessional() {
+                                forensicManager.isEnabled.toggle()
+                            }
+                        } label: {
                             Image(systemName: forensicManager.isEnabled ? "shield.checkered" : "shield")
                         }
                         .accessibilityLabel(forensicManager.isEnabled ? "Disable Forensic Mode" : "Enable Forensic Mode")
@@ -473,6 +487,7 @@ struct ContentView: View {
                 }
             }
             .navigationDestination(for: UUID.self) { emailID in
+                let _ = modelVM.rehydrateIfNeeded(emailID)
                 if let email = modelVM.filteredEmails.first(where: { $0.id == emailID }) {
                     EmailDetailView(
                         email: email,
@@ -528,7 +543,11 @@ struct ContentView: View {
                                 Image(systemName: "chart.bar")
                             }
                             .accessibilityLabel("Analytics")
-                            Button { forensicManager.isEnabled.toggle() } label: {
+                            Button {
+                                if forensicManager.isEnabled || storeManager.requireProfessional() {
+                                    forensicManager.isEnabled.toggle()
+                                }
+                            } label: {
                                 Image(systemName: forensicManager.isEnabled ? "shield.checkered" : "shield")
                             }
                             .accessibilityLabel(forensicManager.isEnabled ? "Disable Forensic Mode" : "Enable Forensic Mode")
@@ -550,8 +569,9 @@ struct ContentView: View {
                 emptyPlaceholder
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if selectedEmailIDs.count == 1,
-               let selectedID = selectedEmailIDs.first,
-               let email = modelVM.filteredEmails.first(where: { $0.id == selectedID }) {
+               let selectedID = selectedEmailIDs.first {
+                let _ = modelVM.rehydrateIfNeeded(selectedID)
+                if let email = modelVM.filteredEmails.first(where: { $0.id == selectedID }) {
                 EmailDetailView(
                     email: email,
                     allEmails: modelVM.filteredEmails,
@@ -560,6 +580,9 @@ struct ContentView: View {
                     searchText: modelVM.searchText
                 )
                 .id(selectedID)
+                } else {
+                    detailPlaceholderWithTools
+                }
             } else {
                 detailPlaceholderWithTools
             }
@@ -925,6 +948,14 @@ struct ContentView: View {
                     #endif
                 }
 
+                Toggle(isOn: $removeDuplicates) {
+                    Label("Remove Duplicates", systemImage: "doc.on.doc")
+                        .font(Typography.caption1)
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .help("When enabled, duplicate emails are automatically removed during import. Disable to keep all emails including duplicates.")
+
                 if modelVM.isParsed {
                     HStack(spacing: Spacing.xSmall) {
                         Button {
@@ -947,19 +978,29 @@ struct ContentView: View {
                         .accessibilityLabel("Add more email files")
                     }
 
-                    if !storeManager.isPremium && modelVM.allEmails.count > StoreManager.freeEmailLimit {
+                    if !storeManager.isPremium && viewModel.totalParsedCount > StoreManager.freeEmailLimit {
                         Button {
                             storeManager.showPaywall = true
                         } label: {
+                            let remaining = viewModel.totalParsedCount - StoreManager.freeEmailLimit
                             HStack(spacing: Spacing.xSmall) {
+                                Image(systemName: "lock.fill")
+                                    .foregroundColor(.orange)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Free limit: \(StoreManager.freeEmailLimit) emails")
+                                        .font(Typography.caption1)
+                                        .fontWeight(.semibold)
+                                    Text("\(remaining) more email\(remaining == 1 ? "" : "s") available with Pro")
+                                        .font(Typography.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
                                 Image(systemName: "crown.fill")
                                     .foregroundColor(.orange)
-                                Text("Showing \(StoreManager.freeEmailLimit) of \(modelVM.allEmails.count) emails — Upgrade to Pro")
-                                    .font(Typography.caption1)
-                                    .fontWeight(.semibold)
                             }
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, Spacing.xSmall)
+                            .padding(.horizontal, Spacing.small)
                             .background(Color.orange.opacity(0.12))
                             .cornerRadius(CornerRadius.medium)
                         }
@@ -1057,7 +1098,7 @@ struct ContentView: View {
                         compactToolIcon("list.bullet.rectangle.portrait", color: .orange) {
                             withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .subjects ? nil : .subjects }
                         }
-                        compactToolIcon("doc.on.doc", color: .indigo) { appState.showDuplicateManager = true }
+                        compactToolIcon("doc.on.doc", color: .indigo) { if storeManager.requirePremium() { appState.showDuplicateManager = true } }
                         compactToolIcon("brain", color: .pink) { appState.showPredictiveCoding = true }
                         if showAdvancedFeatures {
                             compactToolIcon("person.badge.key", color: .cyan) { appState.showCustodianPanel = true }
@@ -1137,7 +1178,7 @@ struct ContentView: View {
                                 withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .subjects ? nil : .subjects }
                             }
                             detailToolButton(title: "Duplicates", icon: "doc.on.doc", color: .indigo) {
-                                appState.showDuplicateManager = true
+                                if storeManager.requirePremium() { appState.showDuplicateManager = true }
                             }
                             detailToolButton(title: "Predictive", icon: "brain", color: .pink) {
                                 appState.showPredictiveCoding = true
@@ -1446,14 +1487,21 @@ struct ContentView: View {
     private var summarySection: some View {
         VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
             if viewModel.duplicatesRemoved > 0 {
-                HStack(spacing: Spacing.xxSmall) {
-                    Image(systemName: "doc.on.doc.fill")
-                        .font(Typography.caption2)
-                        .foregroundColor(AppColors.info)
-                    Text("\(viewModel.duplicatesRemoved) duplicates removed")
-                        .font(Typography.caption2)
-                        .foregroundColor(AppColors.info)
+                Button {
+                    showRemovedDuplicates = true
+                } label: {
+                    HStack(spacing: Spacing.xxSmall) {
+                        Image(systemName: "doc.on.doc.fill")
+                            .font(Typography.caption2)
+                        Text("\(viewModel.duplicatesRemoved) duplicates removed")
+                            .font(Typography.caption2)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 8, weight: .bold))
+                    }
+                    .foregroundColor(AppColors.info)
                 }
+                .buttonStyle(.plain)
+                .help("View removed duplicates")
             }
             HStack(spacing: Spacing.small) {
                 Label("\(modelVM.filteredEmails.count) Emails", systemImage: "chart.bar.fill")
@@ -2189,7 +2237,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
         }
         showSpinner = true
         parseFailed = false
-        viewModel.parseSelectedFiles(validURLs)
+        viewModel.parseSelectedFiles(validURLs, removeDuplicates: removeDuplicates)
     }
 
     private func resolveAndHandleSelectedFile(_ url: URL) {
@@ -2213,14 +2261,16 @@ private func handleMultipleFiles(_ urls: [URL]) {
     private func handleSelectedFile(_ url: URL) {
         showSpinner = true
         parseFailed = false
-        viewModel.parseSelectedFiles([url])
+        viewModel.parseSelectedFiles([url], removeDuplicates: removeDuplicates)
     }
 
     private static let freeExportLimit = 10
 
     private func exportSelectedEmails() {
-        let selected = modelVM.allEmails.filter { selectedEmailIDs.contains($0.id) }
-        guard !selected.isEmpty else { return }
+        let isPro = storeManager.isPremium
+        let allSelected = modelVM.allEmails.filter { selectedEmailIDs.contains($0.id) }
+        guard !allSelected.isEmpty else { return }
+        let selected = isPro ? allSelected : Array(allSelected.prefix(Self.freeExportLimit))
         #if os(macOS)
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -2256,8 +2306,10 @@ private func handleMultipleFiles(_ urls: [URL]) {
     }
 
     private func exportSelectedAsIndividualPDFs() {
-        let selected = modelVM.allEmails.filter { selectedEmailIDs.contains($0.id) }
-        guard !selected.isEmpty else { return }
+        let isPro = storeManager.isPremium
+        let allSelected = modelVM.allEmails.filter { selectedEmailIDs.contains($0.id) }
+        guard !allSelected.isEmpty else { return }
+        let selected = isPro ? allSelected : Array(allSelected.prefix(Self.freeExportLimit))
         #if os(macOS)
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -2885,6 +2937,16 @@ private func handleMultipleFiles(_ urls: [URL]) {
         EmailSearchIndex.shared.buildAsync(from: emails)
         predictiveEngine.buildVectors(from: emails)
         SpotlightIndexer.shared.indexEmails(emails)
+        #if canImport(FoundationModels)
+        if #available(macOS 26, iOS 26, *) {
+            FoundationModelEngine.invalidateProfileCache()
+            FoundationModelEngine.invalidateAnswerCache()
+            FoundationModelEngine.precomputeOnImport(emails: emails)
+        }
+        #endif
+        AIAssistantView.invalidateNLPCache()
+        AIAssistantView.invalidateNLPPrecomputation()
+        AIAssistantView.nlpPrecomputeOnImport(emails: emails)
         EmailPersistence.save(emails: emails, senderEmail: viewModel.senderEmail)
         viewModel.statusMessage = "Imported \(emails.count) emails from cloud."
         viewModel.statusColor = .green
@@ -2937,6 +2999,16 @@ private func handleMultipleFiles(_ urls: [URL]) {
                 EmailSearchIndex.shared.buildAsync(from: viewModel.parsedEmails)
                 predictiveEngine.buildVectors(from: viewModel.parsedEmails)
                 SpotlightIndexer.shared.indexEmails(viewModel.parsedEmails)
+                #if canImport(FoundationModels)
+                if #available(macOS 26, iOS 26, *) {
+                    FoundationModelEngine.invalidateProfileCache()
+                    FoundationModelEngine.invalidateAnswerCache()
+                    FoundationModelEngine.precomputeOnImport(emails: viewModel.parsedEmails)
+                }
+                #endif
+                AIAssistantView.invalidateNLPCache()
+                AIAssistantView.invalidateNLPPrecomputation()
+                AIAssistantView.nlpPrecomputeOnImport(emails: viewModel.parsedEmails)
 
                 // Record successful import and prompt for review if appropriate
                 if !viewModel.parsedEmails.isEmpty {
@@ -2952,6 +3024,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             if !restored.senderEmail.isEmpty {
                 viewModel.senderEmail = restored.senderEmail
             }
+            viewModel.totalParsedCount = restored.emails.count
             let emailsToRestore = storeManager.isPremium ? restored.emails : Array(restored.emails.prefix(StoreManager.freeEmailLimit))
             viewModel.restoreEmails(emailsToRestore)
             modelVM.loadFromContentViewModel()
@@ -2959,6 +3032,14 @@ private func handleMultipleFiles(_ urls: [URL]) {
                 EmailSearchIndex.shared.buildAsync(from: restored.emails)
             }
             predictiveEngine.buildVectors(from: restored.emails)
+            AIAssistantView.invalidateNLPCache()
+            AIAssistantView.invalidateNLPPrecomputation()
+            #if canImport(FoundationModels)
+            if #available(macOS 26, iOS 26, *) {
+                FoundationModelEngine.precomputeOnImport(emails: restored.emails)
+            }
+            #endif
+            AIAssistantView.nlpPrecomputeOnImport(emails: restored.emails)
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -3003,6 +3084,8 @@ private func handleMultipleFiles(_ urls: [URL]) {
         EmailSearchIndex.shared.clear()
         EmailSearchIndex.shared.deleteDiskCache()
         SpotlightIndexer.shared.removeAllIndexedEmails()
+        AIAssistantView.invalidateNLPCache()
+        AIAssistantView.invalidateNLPPrecomputation()
         appState.hasParsedEmails = !heldEmails.isEmpty
         appState.hasFilteredEmails = !heldEmails.isEmpty
     }
@@ -3509,7 +3592,8 @@ struct V9UtilitySheetsModifier: ViewModifier {
             if storeManager.requirePremium() { appState.showAnalytics = true }
         case "topicClusters":
             if storeManager.requirePremium() { withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? nil : .topics } }
-        case "duplicates": appState.showDuplicateManager = true
+        case "duplicates":
+            if storeManager.requirePremium() { appState.showDuplicateManager = true }
         case "predictiveCoding":
             if storeManager.requireProfessional() { appState.showPredictiveCoding = true }
         case "timeline":
@@ -3815,7 +3899,7 @@ struct InvestigationReportConfigSheet: View {
         let investigator = examinerName
 
         Task.detached(priority: .userInitiated) {
-            let pdfData = InvestigationReportGenerator.generateReport(
+            let pdfData = await InvestigationReportGenerator.generateReport(
                 emails: emails,
                 title: title,
                 investigatorName: investigator

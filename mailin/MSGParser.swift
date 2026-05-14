@@ -151,6 +151,7 @@ struct MSGParser {
         let melalMagic: UInt32 = 0x414C454D // "MELA" (uncompressed)
 
         guard compressedSize + 4 <= data.count else { return nil }
+        guard uncompressedSize < 10_000_000 else { return nil }
 
         if magic == melalMagic {
             let start = 16

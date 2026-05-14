@@ -2,7 +2,7 @@
 //  SmartAutoTagger.swift
 //  mailin
 //
-//  NLP-based automatic tag suggestion engine for emails — no AI models required.
+//  Apple AI tag engine with NLP fallback for email classification.
 //
 
 import Foundation
@@ -49,14 +49,42 @@ class SmartAutoTagger: ObservableObject {
             suggestedTags = [:]
         }
 
-        let batchSize = 50
+        // Step 1: Try Apple AI batch tagging
+        var aiTags: [UUID: EmailTagResult] = [:]
+        #if canImport(FoundationModels)
+        if #available(macOS 26, iOS 26, *) {
+            aiTags = await FoundationModelEngine.tagEmails(emails) { done, total in
+                self.processedCount = done
+            }
+        }
+        #endif
+
+        // Step 2: Build tags — Apple AI results + NLP for everything else
+        let batchSize: Int
+        switch emails.count {
+        case 0...500: batchSize = 50
+        case 501...5000: batchSize = 100
+        case 5001...20000: batchSize = 200
+        default: batchSize = 500
+        }
         for startIndex in stride(from: 0, to: emails.count, by: batchSize) {
             let endIndex = min(startIndex + batchSize, emails.count)
             let batch = Array(emails[startIndex..<endIndex])
 
-            let batchResults: [(UUID, [TagSuggestion])] = batch.map { email in
-                (email.id, Self.generateTagsForSingleSync(email))
+            var batchResults: [(UUID, [TagSuggestion])] = batch.map { email in
+                var tags = Self.generateNLPTags(email)
+                if let aiResult = aiTags[email.id] {
+                    tags = Self.mergeAITags(aiResult, into: tags)
+                }
+                return (email.id, tags)
             }
+
+            // Step 3: Apple AI entity enrichment — refine NLP entity tags
+            #if canImport(FoundationModels)
+            if #available(macOS 26, iOS 26, *) {
+                batchResults = await Self.enrichEntityTags(in: batchResults)
+            }
+            #endif
 
             await MainActor.run {
                 for (emailID, tags) in batchResults {
@@ -71,13 +99,107 @@ class SmartAutoTagger: ObservableObject {
         }
     }
 
+    private static func mergeAITags(_ ai: EmailTagResult, into nlpTags: [TagSuggestion]) -> [TagSuggestion] {
+        var merged: [TagSuggestion] = []
+        let nlpCategoryNames: Set<String> = ["personal", "transactional", "newsletter", "promotional", "automated", "unknown", "informational"]
+
+        // Replace NLP category with Apple AI category
+        merged.append(TagSuggestion(
+            tag: ai.category,
+            confidence: 0.95,
+            reason: "Classified by Apple AI"
+        ))
+
+        // Add AI sentiment if present (replaces NLP sentiment)
+        if let sentiment = ai.sentiment {
+            merged.append(TagSuggestion(
+                tag: sentiment,
+                confidence: 0.9,
+                reason: "Sentiment by Apple AI"
+            ))
+        }
+
+        // Add AI priority if present
+        if let priority = ai.priority {
+            merged.append(TagSuggestion(
+                tag: priority,
+                confidence: 0.9,
+                reason: "Priority by Apple AI"
+            ))
+        }
+
+        // Keep NLP tags that aren't category/sentiment/priority (entities, topics, attachments, time)
+        let aiReplacedTags: Set<String> = nlpCategoryNames
+            .union(["positive", "negative", "action required", "high priority", "medium priority", "alert priority"])
+        for tag in nlpTags {
+            if !aiReplacedTags.contains(tag.tag.lowercased()) {
+                merged.append(tag)
+            }
+        }
+
+        return merged
+    }
+
+    // MARK: - Apple AI Entity Enrichment
+
+    #if canImport(FoundationModels)
+    @available(macOS 26, iOS 26, *)
+    private static func enrichEntityTags(in batchResults: [(UUID, [TagSuggestion])]) async -> [(UUID, [TagSuggestion])] {
+        // Collect all entity tags across the batch
+        var entityInputs: [(batchIdx: Int, tagIdx: Int, name: String, type: String)] = []
+        for (batchIdx, (_, tags)) in batchResults.enumerated() {
+            for (tagIdx, tag) in tags.enumerated() {
+                // Entity tags have format "Person: Name", "Org: Name", "Place: Name"
+                for prefix in ["Person: ", "Org: ", "Place: "] {
+                    if tag.tag.hasPrefix(prefix) {
+                        let name = String(tag.tag.dropFirst(prefix.count))
+                        let type = String(prefix.dropLast(2))
+                        entityInputs.append((batchIdx: batchIdx, tagIdx: tagIdx, name: name, type: type))
+                        break
+                    }
+                }
+            }
+        }
+
+        guard !entityInputs.isEmpty else { return batchResults }
+
+        let inputs = entityInputs.map {
+            FoundationModelEngine.EntityInput(name: $0.name, type: $0.type)
+        }
+        let enriched = await FoundationModelEngine.enrichEntities(inputs)
+
+        var updated = batchResults
+        for (i, enrichedEntity) in enriched.enumerated() {
+            guard i < entityInputs.count else { break }
+            let ref = entityInputs[i]
+            guard ref.batchIdx < updated.count else { continue }
+            var tags = updated[ref.batchIdx].1
+            guard ref.tagIdx < tags.count else { continue }
+
+            let contextSuffix = enrichedEntity.contextLabel.isEmpty ? "" : " (\(enrichedEntity.contextLabel))"
+            let typePrefix: String
+            switch enrichedEntity.type {
+            case "Organization": typePrefix = "Org"
+            default: typePrefix = enrichedEntity.type
+            }
+            tags[ref.tagIdx] = TagSuggestion(
+                tag: "\(typePrefix): \(enrichedEntity.name)\(contextSuffix)",
+                confidence: min(1.0, tags[ref.tagIdx].confidence + 0.1),
+                reason: "Entity refined by Apple AI"
+            )
+            updated[ref.batchIdx] = (updated[ref.batchIdx].0, tags)
+        }
+        return updated
+    }
+    #endif
+
     // MARK: - Single Email Tagging
 
     func generateTagsForSingle(_ email: MBOXParser.RawEmail) -> [TagSuggestion] {
-        Self.generateTagsForSingleSync(email)
+        Self.generateNLPTags(email)
     }
 
-    private static func generateTagsForSingleSync(_ email: MBOXParser.RawEmail) -> [TagSuggestion] {
+    private static func generateNLPTags(_ email: MBOXParser.RawEmail) -> [TagSuggestion] {
         var suggestions: [TagSuggestion] = []
 
         // 1. Entity-based tags (Person, Org, Place)

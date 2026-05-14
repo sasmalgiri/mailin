@@ -18,6 +18,7 @@ class PredictiveCodingEngine: ObservableObject {
     private var emailTokens: [UUID: [String: Double]] = [:]
     private var idfWeights: [String: Double] = [:]
     private var allEmailIDs: [UUID] = []
+    private var retrainTask: Task<Void, Never>?
 
     private init() {
         loadPersistedTags()
@@ -120,6 +121,7 @@ class PredictiveCodingEngine: ObservableObject {
         }
 
         isTraining = true
+        retrainTask?.cancel()
 
         let relIDs = relevantIDs
         let irrIDs = irrelevantIDs
@@ -129,7 +131,7 @@ class PredictiveCodingEngine: ObservableObject {
         let allIDs = allEmailIDs
         let taggedIDs = relIDs.union(irrIDs)
 
-        Task.detached(priority: .utility) {
+        retrainTask = Task.detached(priority: .utility) {
             // --- Naive Bayes with TF-IDF ---
             let bayesScores = Self.naiveBayesPredict(
                 relevantIDs: relIDs,
@@ -178,6 +180,7 @@ class PredictiveCodingEngine: ObservableObject {
             }
 
             let finalDistribution = distribution
+            guard !Task.isCancelled else { return }
             await MainActor.run {
                 self.predictions = finalPredictions
                 self.suggestedForReview = suggested
@@ -425,7 +428,9 @@ class PredictiveCodingEngine: ObservableObject {
             let encoded = try JSONEncoder().encode(data)
             try encoded.write(to: Self.tagsURL, options: .atomic)
         } catch {
+            #if DEBUG
             print("[PredictiveCoding] Failed to persist tags: \(error.localizedDescription)")
+            #endif
         }
     }
 

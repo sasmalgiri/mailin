@@ -280,9 +280,10 @@ struct NSFReader {
         let nameLen = Int(readUInt16(at: offset + 2))
         guard nameLen > 0 && nameLen < 256 else { return nil }
 
-        guard offset + 8 + nameLen <= data.count else { return nil }
+        let (headerPlusName, overflow1) = offset.addingReportingOverflow(8 + nameLen)
+        guard !overflow1, headerPlusName <= data.count else { return nil }
         let valueLenRaw = Int(readUInt32(at: offset + 4))
-        let maxValueLen = max(0, data.count - (offset + 8 + nameLen))
+        let maxValueLen = data.count - headerPlusName
         let valueLen = min(valueLenRaw, maxValueLen)
         guard valueLen >= 0 && valueLen < 10_000_000 else { return nil }
 
@@ -344,9 +345,10 @@ struct NSFReader {
         let nameLen = Int(readUInt16(at: offset + 2))
         guard nameLen > 0 && nameLen < 256 else { return nil }
 
-        guard offset + 8 + nameLen <= data.count else { return nil }
+        let (headerPlusName, overflow1) = offset.addingReportingOverflow(8 + nameLen)
+        guard !overflow1, headerPlusName <= data.count else { return nil }
         let valueLenRaw = Int(readUInt32(at: offset + 4))
-        let maxValueLen = max(0, data.count - (offset + 8 + nameLen))
+        let maxValueLen = data.count - headerPlusName
         let valueLen = min(valueLenRaw, maxValueLen)
         guard valueLen >= 0 && valueLen < 10_000_000 else { return nil }
 

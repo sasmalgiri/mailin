@@ -147,7 +147,9 @@ final class IMAPClient: ObservableObject {
         statusMessage = "Connected. Authenticating..."
 
         // Authenticate
-        let loginResp = try await sendCommand("LOGIN \"\(config.username)\" \"\(config.password)\"")
+        let escapedUser = config.username.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        let escapedPass = config.password.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        let loginResp = try await sendCommand("LOGIN \"\(escapedUser)\" \"\(escapedPass)\"")
         guard loginResp.contains("OK") else {
             connectionState = .error("Authentication failed")
             throw IMAPError.authenticationFailed(loginResp)
@@ -193,7 +195,8 @@ final class IMAPClient: ObservableObject {
         guard case .authenticated = connectionState else { throw IMAPError.notConnected }
         statusMessage = "Selecting folder: \(name)..."
 
-        let response = try await sendCommand("SELECT \"\(name)\"")
+        let escapedName = name.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        let response = try await sendCommand("SELECT \"\(escapedName)\"")
         guard response.contains("OK") else {
             throw IMAPError.folderNotFound(name)
         }

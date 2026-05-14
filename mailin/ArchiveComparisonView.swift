@@ -8,6 +8,8 @@ struct ArchiveComparisonView: View {
     @State private var filter: ComparisonFilter = .all
     @State private var comparisonResult: ComparisonResult?
     @State private var isComputing = false
+    @State private var aiInsights: String?
+    @State private var isLoadingAI = false
     @Environment(\.dismiss) private var dismiss
 
     enum ComparisonFilter: String, CaseIterable {
@@ -51,6 +53,7 @@ struct ArchiveComparisonView: View {
                     VStack(alignment: .leading, spacing: Spacing.medium) {
                         summarySection(result: result)
                         statsComparison(result: result)
+                        aiInsightsSection(result: result)
                         filterBar
                         emailList(result: result)
                     }
@@ -312,6 +315,73 @@ struct ArchiveComparisonView: View {
         .padding(Spacing.xSmall)
         .background(AppColors.backgroundSecondary.opacity(0.5))
         .cornerRadius(CornerRadius.small)
+    }
+
+    // MARK: - AI Insights
+
+    private func aiInsightsSection(result: ComparisonResult) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.small) {
+            HStack {
+                Text("AI-Enhanced Analysis")
+                    .font(Typography.headline)
+                    .fontWeight(.semibold)
+                Spacer()
+                if isLoadingAI {
+                    ProgressView()
+                        .controlSize(.small)
+                } else if aiInsights == nil {
+                    Button {
+                        loadAIInsights(result: result)
+                    } label: {
+                        Label("Enhance with AI", systemImage: "sparkles")
+                            .font(Typography.caption1)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.purple)
+                    .controlSize(.small)
+                }
+            }
+
+            if let insights = aiInsights {
+                Text(insights)
+                    .font(Typography.body)
+                    .foregroundColor(AppColors.secondary)
+                    .textSelection(.enabled)
+            } else if !isLoadingAI {
+                Text("Tap Enhance with AI for deeper comparison insights beyond NLP statistics.")
+                    .font(Typography.caption1)
+                    .foregroundColor(AppColors.secondary)
+            }
+        }
+        .padding(Spacing.medium)
+        .adaptiveCard(cornerRadius: CornerRadius.large)
+    }
+
+    private func loadAIInsights(result: ComparisonResult) {
+        isLoadingAI = true
+        let allEmails = archiveA + archiveB
+        let context = """
+        Comparing archive "\(nameA)" (\(archiveA.count) emails, sentiment \(String(format: "%.2f", result.statsA.avgSentiment))) \
+        vs "\(nameB)" (\(archiveB.count) emails, sentiment \(String(format: "%.2f", result.statsB.avgSentiment))). \
+        Common: \(result.common.count), only in A: \(result.onlyInA.count), only in B: \(result.onlyInB.count).
+        """
+        Task {
+            #if canImport(FoundationModels)
+            if #available(macOS 26, iOS 26, *) {
+                let result = await FoundationModelEngine.enhanceWithAI(
+                    scope: .all,
+                    emails: allEmails,
+                    context: context
+                )
+                aiInsights = result ?? "AI analysis unavailable."
+            } else {
+                aiInsights = "Requires macOS 26 or later."
+            }
+            #else
+            aiInsights = "AI features not available on this platform."
+            #endif
+            isLoadingAI = false
+        }
     }
 
     // MARK: - Comparison Logic

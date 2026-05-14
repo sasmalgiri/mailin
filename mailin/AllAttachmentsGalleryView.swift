@@ -26,7 +26,7 @@ struct AllAttachmentsGalleryView: View {
     }
 
     struct AttachmentEntry: Identifiable, Hashable {
-        let id = UUID()
+        let id: String
         let attachment: AttachmentMetadata
         let emailID: UUID
         let emailSubject: String
@@ -39,8 +39,9 @@ struct AllAttachmentsGalleryView: View {
 
     private var allAttachments: [AttachmentEntry] {
         emails.flatMap { email in
-            email.attachments.map { att in
+            email.attachments.enumerated().map { idx, att in
                 AttachmentEntry(
+                    id: "\(email.id.uuidString)-\(idx)",
                     attachment: att,
                     emailID: email.id,
                     emailSubject: email.headers["Subject"] ?? "(No Subject)",
