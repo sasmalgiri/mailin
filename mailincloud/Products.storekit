@@ -1,0 +1,225 @@
+{
+  "identifier" : "mailin_products",
+  "nonRenewableSubscriptions" : [
+
+  ],
+  "products" : [
+    {
+      "displayPrice" : "49.99",
+      "familyShareable" : true,
+      "internalID" : "Personal_Lifetime_001",
+      "localizations" : [
+        {
+          "description" : "Unlimited emails, AI assistant, analytics, and exports. One-time purchase — yours forever.",
+          "displayName" : "mailin Personal — Lifetime",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "mailincloud_personal",
+      "referenceName" : "Personal Lifetime",
+      "type" : "NonConsumable"
+    },
+    {
+      "displayPrice" : "149.99",
+      "familyShareable" : true,
+      "internalID" : "Professional_Lifetime_001",
+      "localizations" : [
+        {
+          "description" : "Everything in Personal plus forensic mode, audit trail, chain of custody, Bates numbering, batch processing, and priority support. One-time purchase — yours forever.",
+          "displayName" : "mailin Professional — Lifetime",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "Professional_Lifetime",
+      "referenceName" : "Professional Lifetime",
+      "type" : "NonConsumable"
+    }
+  ],
+  "settings" : {
+    "_applicationInternalID" : "mailin",
+    "_developerTeamID" : "6TPTCJD42Q",
+    "_failTransactionsEnabled" : false,
+    "_lastVerificationError" : "",
+    "_locale" : "en_US",
+    "_storefront" : "USA",
+    "_storeKitErrors" : [
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Load Products"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Purchase"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Verification"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "App Store Sync"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Subscription Status"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "App Transaction"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Manage Subscriptions Sheet"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Refund Request Sheet"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Offer Code Redeem Sheet"
+      }
+    ]
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "mailincloud_personal_group",
+      "localizations" : [
+        {
+          "description" : "Unlimited emails, AI assistant, analytics, and exports.",
+          "displayName" : "mailin Personal",
+          "locale" : "en_US"
+        }
+      ],
+      "name" : "mailin Personal",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "4.99",
+          "familyShareable" : true,
+          "groupNumber" : 1,
+          "internalID" : "Personal_Monthly_001",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Unlimited emails, AI assistant, analytics, and exports.",
+              "displayName" : "mailin Personal — Monthly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "personal_monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Personal Monthly",
+          "subscriptionGroupID" : "mailincloud_personal_group",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "29.99",
+          "familyShareable" : true,
+          "groupNumber" : 1,
+          "internalID" : "Personal_Yearly_001",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Unlimited emails, AI assistant, analytics, and exports.",
+              "displayName" : "mailin Personal — Yearly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "personal_yearly_01",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "Personal Yearly",
+          "subscriptionGroupID" : "mailincloud_personal_group",
+          "type" : "RecurringSubscription"
+        }
+      ]
+    },
+    {
+      "id" : "mailin_professional_group",
+      "localizations" : [
+        {
+          "description" : "Everything in Personal plus forensic mode, audit trail, chain of custody, Bates numbering, batch processing, and priority support.",
+          "displayName" : "mailin Professional",
+          "locale" : "en_US"
+        }
+      ],
+      "name" : "mailin Professional",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "9.99",
+          "familyShareable" : true,
+          "groupNumber" : 1,
+          "internalID" : "Professional_Monthly_001",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Everything in Personal plus forensic mode, audit trail, chain of custody, Bates numbering, batch processing, and priority support.",
+              "displayName" : "mailin Professional — Monthly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "professional_monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Professional Monthly",
+          "subscriptionGroupID" : "mailin_professional_group",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "79.99",
+          "familyShareable" : true,
+          "groupNumber" : 1,
+          "internalID" : "Professional_Yearly_001",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Everything in Personal plus forensic mode, audit trail, chain of custody, Bates numbering, batch processing, and priority support.",
+              "displayName" : "mailin Professional — Yearly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "professional_yearly",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "Professional Yearly",
+          "subscriptionGroupID" : "mailin_professional_group",
+          "type" : "RecurringSubscription"
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 4,
+    "minor" : 0
+  }
+}

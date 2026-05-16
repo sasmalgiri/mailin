@@ -94,7 +94,7 @@
 
     <section class="page-header">
         <h1>Privacy Policy</h1>
-        <p>Your data stays on your device. Period.</p>
+        <p>Privacy-first. Your data stays on your device by default.</p>
     </section>
 
     <div class="content">
@@ -108,16 +108,37 @@
         <p>mailin collects <strong>zero</strong> user data. We do not collect analytics, usage data, crash reports, device information, or any other personal information.</p>
 
         <h2>Email Processing</h2>
-        <p>All email parsing, analysis, and AI processing happens <strong>entirely on your device</strong>. Your email data is never uploaded to any server, cloud service, or third party. mailin uses Apple's on-device NaturalLanguage framework and FoundationModels framework for AI features &mdash; both run locally on your device.</p>
+        <p>All email parsing, search, filtering, and core analysis happens <strong>entirely on your device</strong>. mailin uses Apple's on-device NaturalLanguage framework and FoundationModels framework for AI features &mdash; both run locally on your device.</p>
+
+        <h2>Optional Cloud AI</h2>
+        <p>mailin offers an <strong>optional</strong> Cloud AI feature that uses third-party AI providers (OpenAI and Anthropic) for enhanced analysis. This feature is:</p>
+        <ul>
+            <li><strong>Disabled by default</strong> &mdash; you must explicitly enable it in Settings and provide your own API key.</li>
+            <li><strong>User-controlled</strong> &mdash; you choose which provider, model, and when to use it.</li>
+            <li><strong>Transparent</strong> &mdash; email context is sent to the selected provider only when you explicitly invoke Cloud AI analysis.</li>
+            <li><strong>Automatically disabled in Forensic Mode</strong> &mdash; forensic investigations never send data externally.</li>
+        </ul>
+        <p>When Cloud AI is used, email excerpts and metadata relevant to your query are sent to the selected provider's API. These providers have their own privacy policies: <a href="https://openai.com/privacy">OpenAI Privacy Policy</a>, <a href="https://www.anthropic.com/privacy">Anthropic Privacy Policy</a>. mailin does not store, log, or retain any data sent to or received from these providers.</p>
+
+        <h2>IMAP &amp; SMTP (Email Fetch &amp; Send)</h2>
+        <p>mailin can optionally connect to email servers via IMAP (to fetch emails) and SMTP (to send emails). These connections are:</p>
+        <ul>
+            <li><strong>User-initiated</strong> &mdash; you configure and connect manually.</li>
+            <li><strong>Direct</strong> &mdash; mailin connects directly to your email server, never through our servers.</li>
+            <li><strong>Credential storage</strong> &mdash; credentials are stored locally on your device using Apple's Keychain or UserDefaults.</li>
+        </ul>
 
         <h2>Network Access</h2>
-        <p>mailin does not require an internet connection to function. Network activity is limited to:</p>
+        <p>mailin does not require an internet connection for core functionality. Network activity is limited to:</p>
         <ul>
-            <li><strong>App Store:</strong> Apple's StoreKit for in-app purchases and subscription verification, handled entirely by Apple's systems.</li>
+            <li><strong>App Store:</strong> Apple's StoreKit for in-app purchases and subscription verification.</li>
+            <li><strong>Cloud AI (optional):</strong> API calls to OpenAI or Anthropic when explicitly enabled by the user.</li>
+            <li><strong>IMAP/SMTP (optional):</strong> Direct connections to your email server when configured.</li>
+            <li><strong>Gmail/Outlook Connect (optional):</strong> OAuth-based connections to Google or Microsoft services when configured.</li>
         </ul>
 
         <h2>Third-Party Services</h2>
-        <p>mailin does not integrate any third-party analytics, advertising, or tracking services.</p>
+        <p>mailin does not integrate any third-party analytics, advertising, or tracking services. The only third-party services are the optional Cloud AI providers (OpenAI, Anthropic) and optional email server connections, all user-initiated.</p>
 
         <h2>In-App Purchases &amp; Subscriptions</h2>
         <p>mailin offers both auto-renewable subscriptions and one-time lifetime purchases. All transactions are processed by Apple through the App Store. Apple's privacy policy governs how purchase and subscription data is handled. mailin does not have access to your payment information. Subscription status is verified locally through Apple's StoreKit framework.</p>

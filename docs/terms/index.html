@@ -96,7 +96,7 @@
         <p>These Terms of Use ("Terms") govern your use of the mailin application ("App") developed by Eco Sanskriti ("Developer", "we", "us"). By downloading, installing, or using the App, you agree to these Terms. If you do not agree, do not use the App.</p>
 
         <h2>1. Description of Service</h2>
-        <p>mailin is an email archive analyzer for Mac, iPhone, and iPad. It allows you to import, view, search, filter, analyze, and export email archives in various formats (MBOX, EML, EMLX, MSG, PST, OST, NSF, and ZIP). All email processing is performed locally on your device. The App does not transmit your data to any external server.</p>
+        <p>mailin is an email archive analyzer for Mac, iPhone, and iPad. It allows you to import, view, search, filter, analyze, and export email archives in various formats (MBOX, EML, EMLX, MSG, PST, OST, NSF, and ZIP). Core email processing is performed locally on your device. The App includes optional features (Cloud AI, IMAP/SMTP, Gmail/Outlook Connect) that transmit data to external services only when explicitly enabled and configured by you.</p>
 
         <h2>2. Eligibility</h2>
         <p>You must be at least 13 years of age to use the App. If you are under 18, you must have your parent or guardian's consent. By using the App, you represent and warrant that you meet these requirements.</p>
@@ -117,7 +117,27 @@
         <p>Refunds are handled by Apple in accordance with their <a href="https://support.apple.com/en-us/118223">refund policy</a>. We do not process refunds directly. To request a refund, visit <a href="https://reportaproblem.apple.com">reportaproblem.apple.com</a>.</p>
 
         <h2>5. Privacy and Data</h2>
-        <p>Your email data is processed entirely on your device. We do not collect, store, or transmit your email content or personal data. All AI and NLP features use on-device processing only. For full details, see our <a href="../privacy/">Privacy Policy</a>, which is incorporated into these Terms by reference.</p>
+        <p>Your email data is processed on your device by default. We do not collect, store, or transmit your email content or personal data. On-device AI and NLP features use local processing only. Optional Cloud AI features, when explicitly enabled by you, send email excerpts to third-party AI providers (OpenAI, Anthropic) using your own API keys. Optional IMAP/SMTP features connect directly to your email servers. For full details, see our <a href="../privacy/">Privacy Policy</a>, which is incorporated into these Terms by reference.</p>
+
+        <h2>5a. Optional Cloud AI</h2>
+        <p>mailin offers optional Cloud AI analysis powered by third-party providers (OpenAI and Anthropic). By enabling Cloud AI, you acknowledge and agree that:</p>
+        <ul>
+            <li><strong>Your API Keys:</strong> You must provide your own API key from the selected provider. mailin does not provide, subsidize, or manage API keys on your behalf.</li>
+            <li><strong>Data Transmission:</strong> When you invoke Cloud AI, email excerpts and metadata relevant to your query are sent to the selected provider's API. This is user-initiated and only occurs when you explicitly request Cloud AI analysis.</li>
+            <li><strong>Third-Party Terms:</strong> Your use of Cloud AI is subject to the terms of the selected provider: <a href="https://openai.com/policies/terms-of-use">OpenAI Terms</a>, <a href="https://www.anthropic.com/legal/consumer-terms">Anthropic Terms</a>. You are responsible for complying with those terms.</li>
+            <li><strong>No Logging:</strong> mailin does not store, log, or retain any data sent to or received from Cloud AI providers.</li>
+            <li><strong>Forensic Mode:</strong> Cloud AI is automatically disabled when Forensic Mode is active. Forensic investigations never send data externally.</li>
+            <li><strong>Accuracy:</strong> Cloud AI results are provided for informational purposes. The Developer makes no guarantees about the accuracy or completeness of Cloud AI analysis.</li>
+        </ul>
+
+        <h2>5b. IMAP, SMTP, and Email Server Connections</h2>
+        <p>mailin offers optional IMAP (email fetch) and SMTP (email send) features, as well as Gmail and Outlook OAuth connections. By using these features, you acknowledge and agree that:</p>
+        <ul>
+            <li><strong>Direct Connection:</strong> mailin connects directly to your email server. No data passes through our servers.</li>
+            <li><strong>Credentials:</strong> Your email credentials are stored locally on your device using Apple Keychain or UserDefaults. We never have access to your credentials.</li>
+            <li><strong>User Responsibility:</strong> You are responsible for the security of your email credentials and for ensuring you have authorization to access the email accounts you connect.</li>
+            <li><strong>Email Sending:</strong> When you send emails via SMTP, the message is delivered directly from your device to your email server. We are not responsible for email delivery, bounces, or content you send.</li>
+        </ul>
 
         <h2>6. Your Content and Data</h2>
         <p>You retain all rights to your email data and any content you import into the App. We do not claim ownership of your data. You are solely responsible for ensuring you have the legal right to access and process any email data you import into the App.</p>

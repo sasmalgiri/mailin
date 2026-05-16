@@ -36,3 +36,6 @@ venv/
 
 # Archives
 *.xcarchive
+
+# Screenshots (store in App Store Connect instead)
+Screenshots/
