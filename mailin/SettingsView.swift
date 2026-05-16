@@ -34,6 +34,7 @@ struct SettingsView: View {
     @State private var showDeleteAllConfirmation = false
     @State private var allDataDeleted = false
     @ObservedObject private var compliance = LegalComplianceManager.shared
+    @State private var showPaywall = false
     #if os(iOS)
     @State private var showFolderPicker = false
     #endif
@@ -89,6 +90,13 @@ struct SettingsView: View {
         #if os(macOS)
         .frame(minWidth: 400, idealWidth: 540, minHeight: 380, idealHeight: 520)
         #endif
+        .sheet(isPresented: $showPaywall) {
+            PaywallView()
+                .environmentObject(storeManager)
+                #if os(iOS)
+                .presentationDetents([.large])
+                #endif
+        }
     }
     
     // MARK: - Profile / Persona Settings
@@ -203,7 +211,7 @@ struct SettingsView: View {
 
                 if storeManager.currentTier < .professional {
                     Button(storeManager.currentTier == .free ? "Upgrade" : "Upgrade to Professional") {
-                        storeManager.showPaywall = true
+                        showPaywall = true
                     }
                 }
 
@@ -276,7 +284,7 @@ struct SettingsView: View {
 
                 if storeManager.currentTier < .professional {
                     Button(storeManager.currentTier == .free ? "Upgrade" : "Upgrade to Professional") {
-                        storeManager.showPaywall = true
+                        showPaywall = true
                     }
                 }
 
@@ -581,8 +589,10 @@ struct SettingsView: View {
                     get: { forensicManager.isEnabled },
                     set: { newValue in
                         if newValue {
-                            if storeManager.requireProfessional() {
+                            if storeManager.isProfessional {
                                 forensicManager.isEnabled = true
+                            } else {
+                                showPaywall = true
                             }
                         } else {
                             forensicManager.isEnabled = false
@@ -776,7 +786,7 @@ struct SettingsView: View {
                         }
                         Spacer()
                         Button("Upgrade") {
-                            storeManager.showPaywall = true
+                            showPaywall = true
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
@@ -951,7 +961,7 @@ struct SettingsView: View {
                         }
                         Spacer()
                         Button("Upgrade") {
-                            storeManager.showPaywall = true
+                            showPaywall = true
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)

@@ -121,7 +121,7 @@
               "locale" : "en_US"
             }
           ],
-          "productID" : "Personal_Monthly",
+          "productID" : "personal_monthly",
           "recurringSubscriptionPeriod" : "P1M",
           "referenceName" : "Personal Monthly",
           "subscriptionGroupID" : "mailin_personal_group",
@@ -146,7 +146,7 @@
               "locale" : "en_US"
             }
           ],
-          "productID" : "Personal_Yearly",
+          "productID" : "personal_yearly_01",
           "recurringSubscriptionPeriod" : "P1Y",
           "referenceName" : "Personal Yearly",
           "subscriptionGroupID" : "mailin_personal_group",
@@ -184,7 +184,7 @@
               "locale" : "en_US"
             }
           ],
-          "productID" : "Professional_Monthly",
+          "productID" : "professional_monthly",
           "recurringSubscriptionPeriod" : "P1M",
           "referenceName" : "Professional Monthly",
           "subscriptionGroupID" : "mailin_professional_group",
@@ -209,7 +209,7 @@
               "locale" : "en_US"
             }
           ],
-          "productID" : "Professional_Yearly",
+          "productID" : "professional_yearly",
           "recurringSubscriptionPeriod" : "P1Y",
           "referenceName" : "Professional Yearly",
           "subscriptionGroupID" : "mailin_professional_group",

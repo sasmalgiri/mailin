@@ -134,6 +134,15 @@ struct EmailAnalyticsView: View {
                     .foregroundColor(AppColors.secondary)
                     .animation(.easeInOut, value: computeStage)
 
+                #if os(iOS)
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: Spacing.xSmall) {
+                    ComputeStageIndicator(label: "Sentiment", isActive: computeStage.contains("Sentiment"), isDone: computeStage.contains("Timeline") || computeStage.contains("Contact") || computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
+                    ComputeStageIndicator(label: "Timeline", isActive: computeStage.contains("Timeline"), isDone: computeStage.contains("Contact") || computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
+                    ComputeStageIndicator(label: "Contacts", isActive: computeStage.contains("Contact"), isDone: computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
+                    ComputeStageIndicator(label: "NLP", isActive: computeStage.contains("Language") || computeStage.contains("Topic"), isDone: computeStage.contains("Compliance") || computeStage.contains("Done"))
+                    ComputeStageIndicator(label: "Compliance", isActive: computeStage.contains("Compliance"), isDone: computeStage.contains("Done"))
+                }
+                #else
                 HStack(spacing: Spacing.small) {
                     ComputeStageIndicator(label: "Sentiment", isActive: computeStage.contains("Sentiment"), isDone: computeStage.contains("Timeline") || computeStage.contains("Contact") || computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
                     ComputeStageIndicator(label: "Timeline", isActive: computeStage.contains("Timeline"), isDone: computeStage.contains("Contact") || computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
@@ -141,6 +150,7 @@ struct EmailAnalyticsView: View {
                     ComputeStageIndicator(label: "NLP", isActive: computeStage.contains("Language") || computeStage.contains("Topic"), isDone: computeStage.contains("Compliance") || computeStage.contains("Done"))
                     ComputeStageIndicator(label: "Compliance", isActive: computeStage.contains("Compliance"), isDone: computeStage.contains("Done"))
                 }
+                #endif
             }
             .padding(Spacing.xLarge)
             .background(
@@ -172,11 +182,10 @@ struct EmailAnalyticsView: View {
 
     private var adaptiveStatColumns: [GridItem] {
         #if os(iOS)
-        if UIScreen.main.bounds.width < 500 {
-            return [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
-        }
-        #endif
+        return [GridItem(.flexible()), GridItem(.flexible())]
+        #else
         return [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+        #endif
     }
 
     // MARK: - Sentiment Chart
@@ -186,6 +195,35 @@ struct EmailAnalyticsView: View {
             Label("Sentiment Distribution", systemImage: "face.smiling")
                 .font(Typography.headline)
 
+            #if os(iOS)
+            VStack(spacing: Spacing.medium) {
+                Chart(data.sentimentBuckets, id: \.label) { bucket in
+                    BarMark(
+                        x: .value("Category", bucket.label),
+                        y: .value("Count", bucket.count)
+                    )
+                    .foregroundStyle(bucket.color)
+                    .cornerRadius(CornerRadius.small)
+                }
+                .chartYAxisLabel("Emails")
+                .frame(height: 200)
+
+                HStack(spacing: Spacing.small) {
+                    VStack(alignment: .leading, spacing: Spacing.xSmall) {
+                        Text("Score: \(String(format: "%.2f", data.avgSentiment))")
+                            .font(Typography.title3)
+                            .fontWeight(.bold)
+                        Text("Range: -1.0 to +1.0")
+                            .font(Typography.caption1)
+                            .foregroundColor(AppColors.secondary)
+                    }
+                    Spacer()
+                    SentimentMeter(score: data.avgSentiment)
+                        .frame(height: 24)
+                        .frame(maxWidth: 160)
+                }
+            }
+            #else
             HStack(spacing: Spacing.large) {
                 Chart(data.sentimentBuckets, id: \.label) { bucket in
                     BarMark(
@@ -211,6 +249,7 @@ struct EmailAnalyticsView: View {
                 }
                 .frame(width: 160)
             }
+            #endif
         }
         .cardStyle()
     }
@@ -339,7 +378,11 @@ struct EmailAnalyticsView: View {
                     Text(truncateEmail(rel.from))
                         .font(.system(.caption, design: .monospaced))
                         .fontWeight(.medium)
+                        #if os(iOS)
+                        .frame(maxWidth: 100, alignment: .trailing)
+                        #else
                         .frame(maxWidth: 160, alignment: .trailing)
+                        #endif
                         .lineLimit(1)
 
                     HStack(spacing: 2) {
@@ -351,7 +394,11 @@ struct EmailAnalyticsView: View {
                     Text(truncateEmail(rel.to))
                         .font(.system(.caption, design: .monospaced))
                         .fontWeight(.medium)
+                        #if os(iOS)
+                        .frame(maxWidth: 100, alignment: .leading)
+                        #else
                         .frame(maxWidth: 160, alignment: .leading)
+                        #endif
                         .lineLimit(1)
 
                     Spacer()
@@ -361,7 +408,12 @@ struct EmailAnalyticsView: View {
                             .fill(LinearGradient(colors: [.purple, .blue], startPoint: .leading, endPoint: .trailing))
                             .frame(width: max(4, geo.size.width * CGFloat(rel.count) / CGFloat(maxCount)))
                     }
+                    #if os(iOS)
+                    .frame(height: 8)
+                    .frame(maxWidth: 60)
+                    #else
                     .frame(width: 80, height: 8)
+                    #endif
 
                     Text("\(rel.count)")
                         .font(.system(.caption, design: .monospaced))
@@ -567,18 +619,31 @@ struct EmailAnalyticsView: View {
                 VStack(spacing: 2) {
                     HStack(spacing: 2) {
                         Text("")
+                            #if os(iOS)
+                            .frame(width: 28)
+                            #else
                             .frame(width: 36)
+                            #endif
                         ForEach(hours, id: \.self) { h in
                             Text("\(h)")
+                                #if os(iOS)
+                                .font(.system(size: 9))
+                                #else
                                 .font(Typography.caption2)
+                                #endif
                                 .frame(maxWidth: .infinity)
                         }
                     }
                     ForEach(0..<7, id: \.self) { day in
                         HStack(spacing: 2) {
                             Text(days[day])
+                                #if os(iOS)
+                                .font(.system(size: 9))
+                                .frame(width: 28, alignment: .trailing)
+                                #else
                                 .font(Typography.caption2)
                                 .frame(width: 36, alignment: .trailing)
+                                #endif
                             ForEach(hours, id: \.self) { h in
                                 let count = data.heatmapData.first(where: { $0.dayOfWeek == day && $0.hour == h })?.count ?? 0
                                 let intensity = maxCount > 0 ? Double(count) / Double(maxCount) : 0
@@ -587,7 +652,11 @@ struct EmailAnalyticsView: View {
                                     .frame(height: 24)
                                     .overlay(
                                         count > 0 ? Text("\(count)")
+                                            #if os(iOS)
+                                            .font(.system(size: 9))
+                                            #else
                                             .font(.caption2)
+                                            #endif
                                             .foregroundColor(intensity > 0.5 ? .white : AppColors.secondary) : nil
                                     )
                                     .help(Text(verbatim: "\(days[day]) \(h):00 — \(count) emails"))
@@ -642,6 +711,38 @@ struct EmailAnalyticsView: View {
             Label("Attachment Types (\(data.totalAttachments) total)", systemImage: "paperclip")
                 .font(Typography.headline)
 
+            #if os(iOS)
+            VStack(spacing: Spacing.medium) {
+                Chart(data.attachmentTypes.prefix(8)) { att in
+                    SectorMark(
+                        angle: .value("Count", att.count),
+                        innerRadius: .ratio(0.5),
+                        angularInset: 2
+                    )
+                    .foregroundStyle(by: .value("Type", att.fileType))
+                    .cornerRadius(CornerRadius.small)
+                }
+                .frame(width: 200, height: 200)
+
+                VStack(alignment: .leading, spacing: Spacing.xxSmall) {
+                    ForEach(data.attachmentTypes.prefix(8)) { att in
+                        HStack(spacing: Spacing.xxSmall) {
+                            Image(systemName: iconForFileType(att.fileType))
+                                .font(Typography.caption2)
+                                .foregroundColor(AppColors.primary)
+                                .frame(width: 14)
+                            Text(att.fileType)
+                                .font(Typography.caption1)
+                            Spacer()
+                            Text("\(att.count)")
+                                .font(Typography.caption1)
+                                .fontWeight(.medium)
+                                .foregroundColor(AppColors.secondary)
+                        }
+                    }
+                }
+            }
+            #else
             HStack(spacing: Spacing.large) {
                 Chart(data.attachmentTypes.prefix(8)) { att in
                     SectorMark(
@@ -673,6 +774,7 @@ struct EmailAnalyticsView: View {
                 }
                 .frame(minWidth: 140)
             }
+            #endif
         }
         .cardStyle()
     }

@@ -147,6 +147,32 @@ struct BatchOperationsView: View {
     // MARK: - Selection Summary
 
     private var selectionSummary: some View {
+        #if os(iOS)
+        VStack(alignment: .leading, spacing: Spacing.xSmall) {
+            HStack(spacing: Spacing.xSmall) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(AppColors.success)
+                Text("\(selectedIDs.count) email\(selectedIDs.count == 1 ? "" : "s") selected")
+                    .font(Typography.headline)
+            }
+
+            if isProcessing {
+                ProgressView(value: progressValue)
+                    .accessibilityLabel("Operation progress")
+                    .accessibilityValue("\(Int(progressValue * 100)) percent")
+            }
+
+            if let message = resultMessage {
+                Text(message)
+                    .font(Typography.caption1)
+                    .foregroundColor(AppColors.success)
+                    .transition(.opacity)
+            }
+        }
+        .padding(Spacing.small)
+        .adaptiveCard(cornerRadius: CornerRadius.medium)
+        .accessibilityElement(children: .combine)
+        #else
         HStack(spacing: Spacing.small) {
             Image(systemName: "checkmark.circle.fill")
                 .foregroundColor(AppColors.success)
@@ -172,6 +198,7 @@ struct BatchOperationsView: View {
         .padding(Spacing.small)
         .adaptiveCard(cornerRadius: CornerRadius.medium)
         .accessibilityElement(children: .combine)
+        #endif
     }
 
     // MARK: - Bulk Tagging
@@ -182,7 +209,21 @@ struct BatchOperationsView: View {
                 .font(Typography.headline)
                 .accessibilityAddTraits(.isHeader)
 
-            // Apply Tag
+            #if os(iOS)
+            VStack(spacing: Spacing.xSmall) {
+                TextField("Tag name", text: $newTagName)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("New tag name")
+
+                Button("Apply Tag") {
+                    performApplyTag()
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .frame(maxWidth: .infinity)
+                .disabled(newTagName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isProcessing)
+                .accessibilityLabel("Apply tag to selected emails")
+            }
+            #else
             HStack(spacing: Spacing.xSmall) {
                 TextField("Tag name", text: $newTagName)
                     .textFieldStyle(.roundedBorder)
@@ -196,6 +237,7 @@ struct BatchOperationsView: View {
                 .accessibilityLabel("Apply tag to selected emails")
                 .accessibilityHint("Tags \(selectedIDs.count) selected emails with the entered tag name")
             }
+            #endif
 
             // Remove Tag
             if !allExistingTags.isEmpty {
@@ -232,15 +274,32 @@ struct BatchOperationsView: View {
                 .font(Typography.headline)
                 .accessibilityAddTraits(.isHeader)
 
+            #if os(iOS)
+            VStack(spacing: Spacing.xSmall) {
+                Picker("Category:", selection: $selectedCategory) {
+                    ForEach(BulkCategory.allCases) { category in
+                        Text(category.rawValue).tag(category)
+                    }
+                }
+                .pickerStyle(.menu)
+                .accessibilityLabel("Classification category")
+
+                Button("Classify Selected") {
+                    performBulkClassification()
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .frame(maxWidth: .infinity)
+                .disabled(isProcessing)
+                .accessibilityLabel("Classify selected emails")
+            }
+            #else
             HStack(spacing: Spacing.xSmall) {
                 Picker("Category:", selection: $selectedCategory) {
                     ForEach(BulkCategory.allCases) { category in
                         Text(category.rawValue).tag(category)
                     }
                 }
-                #if os(macOS)
                 .pickerStyle(.menu)
-                #endif
                 .accessibilityLabel("Classification category")
 
                 Button("Classify Selected") {
@@ -251,6 +310,7 @@ struct BatchOperationsView: View {
                 .accessibilityLabel("Classify selected emails")
                 .accessibilityHint("Classifies \(selectedIDs.count) emails as \(selectedCategory.rawValue)")
             }
+            #endif
         }
         .padding(Spacing.medium)
         .adaptiveCard(cornerRadius: CornerRadius.medium)
@@ -264,17 +324,32 @@ struct BatchOperationsView: View {
                 .font(Typography.headline)
                 .accessibilityAddTraits(.isHeader)
 
+            #if os(iOS)
+            VStack(spacing: Spacing.xSmall) {
+                Picker("Format:", selection: $exportFormat) {
+                    ForEach(ExportFormat.allCases) { format in
+                        Text(format.rawValue).tag(format)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityLabel("Export format")
+
+                Button("Export Selected") {
+                    performBulkExport()
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .frame(maxWidth: .infinity)
+                .disabled(isProcessing)
+                .accessibilityLabel("Export selected emails")
+            }
+            #else
             HStack(spacing: Spacing.xSmall) {
                 Picker("Format:", selection: $exportFormat) {
                     ForEach(ExportFormat.allCases) { format in
                         Text(format.rawValue).tag(format)
                     }
                 }
-                #if os(macOS)
                 .pickerStyle(.segmented)
-                #else
-                .pickerStyle(.segmented)
-                #endif
                 .accessibilityLabel("Export format")
 
                 Button("Export Selected") {
@@ -285,6 +360,7 @@ struct BatchOperationsView: View {
                 .accessibilityLabel("Export selected emails")
                 .accessibilityHint("Exports \(selectedIDs.count) emails in \(exportFormat.rawValue) format")
             }
+            #endif
         }
         .padding(Spacing.medium)
         .adaptiveCard(cornerRadius: CornerRadius.medium)

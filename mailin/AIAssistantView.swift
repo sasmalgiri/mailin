@@ -224,6 +224,123 @@ struct AIAssistantView: View {
 
     private var headerView: some View {
         VStack(spacing: 0) {
+            #if os(iOS)
+            VStack(spacing: 8) {
+                HStack {
+                    aiHeaderIcon
+                    Text("AI Assistant")
+                        .font(.headline)
+                    Spacer()
+                    if isProcessing {
+                        Button {
+                            currentTask?.cancel()
+                            currentTask = nil
+                            isProcessing = false
+                            streamingQuery = ""
+                            streamingAnswer = ""
+                        } label: {
+                            Image(systemName: "stop.circle.fill")
+                                .foregroundColor(AppColors.error)
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    Button(action: exportConversation) {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(conversationHistory.isEmpty)
+                    Button {
+                        conversationHistory.removeAll()
+                        Self.clearSavedConversation()
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(conversationHistory.isEmpty)
+                    Button("Done") { dismiss() }
+                        .fontWeight(.semibold)
+                }
+
+                HStack(spacing: 8) {
+                    Menu {
+                        if foundationModelAvailable {
+                            Button { selectedEngine = .appleAIMoE } label: {
+                                Label("Apple AI MoE", systemImage: selectedEngine == .appleAIMoE ? "checkmark" : "brain")
+                            }
+                            Button { selectedEngine = .appleAI } label: {
+                                Label("Apple AI", systemImage: selectedEngine == .appleAI ? "checkmark" : "cpu")
+                            }
+                            Button { selectedEngine = .hybrid } label: {
+                                Label("Hybrid", systemImage: selectedEngine == .hybrid ? "checkmark" : "sparkles")
+                            }
+                        }
+                        Button { selectedEngine = .nlp } label: {
+                            Label("NLP", systemImage: selectedEngine == .nlp ? "checkmark" : "text.magnifyingglass")
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "cpu")
+                                .font(.caption)
+                            Text(selectedEngine.rawValue)
+                                .font(.subheadline)
+                            Image(systemName: "chevron.down")
+                                .font(.caption2)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color(.tertiarySystemFill))
+                        .cornerRadius(8)
+                    }
+
+                    Menu {
+                        Button { emailScope = .all } label: {
+                            Label("All (\(emailCount(for: .all)))", systemImage: emailScope == .all ? "checkmark" : "tray.full")
+                        }
+                        Button { emailScope = .filtered } label: {
+                            Label("Filtered (\(emailCount(for: .filtered)))", systemImage: emailScope == .filtered ? "checkmark" : "line.3.horizontal.decrease")
+                        }
+                        Button { emailScope = .selected } label: {
+                            Label("Selected (\(emailCount(for: .selected)))", systemImage: emailScope == .selected ? "checkmark" : "checkmark.circle")
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "envelope")
+                                .font(.caption)
+                            Text("\(emails.count) emails")
+                                .font(.subheadline)
+                            Image(systemName: "chevron.down")
+                                .font(.caption2)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color(.tertiarySystemFill))
+                        .cornerRadius(8)
+                    }
+
+                    Spacer()
+
+                    if !storeManager.isPremium {
+                        let remaining = max(0, Self.freeQueryLimit - freeQueryCount)
+                        Text(remaining > 0 ? "\(remaining) free" : "Limit")
+                            .font(.system(.caption2, design: .rounded))
+                            .fontWeight(.semibold)
+                            .foregroundColor(remaining > 0 ? AppColors.secondary : .orange)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(remaining > 0 ? AppColors.backgroundSecondary : Color.orange.opacity(0.12))
+                            .cornerRadius(CornerRadius.round)
+                    }
+                }
+
+                Text(engineDescription)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(AppColors.backgroundPrimary)
+            #else
             HStack(spacing: Spacing.small) {
                 aiHeaderIcon
 
@@ -338,6 +455,7 @@ struct AIAssistantView: View {
             .padding(.horizontal, Spacing.medium)
             .padding(.vertical, Spacing.xSmall)
             .background(AppColors.backgroundSecondary.opacity(0.4))
+            #endif
         }
     }
 
@@ -457,7 +575,11 @@ struct AIAssistantView: View {
                     .accessibilityHint("Send this question to the AI assistant")
                 }
             }
+            #if os(iOS)
+            .frame(maxWidth: .infinity)
+            #else
             .frame(maxWidth: 420)
+            #endif
 
             Spacer(minLength: Spacing.xxLarge)
         }

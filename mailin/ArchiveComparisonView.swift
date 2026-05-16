@@ -100,6 +100,28 @@ struct ArchiveComparisonView: View {
                 .font(Typography.title3)
                 .fontWeight(.bold)
 
+            #if os(iOS)
+            VStack(spacing: Spacing.small) {
+                statCard(
+                    title: "Only in \(nameA)",
+                    count: result.onlyInA.count,
+                    color: .blue,
+                    icon: "a.circle.fill"
+                )
+                statCard(
+                    title: "Common",
+                    count: result.common.count,
+                    color: .green,
+                    icon: "equal.circle.fill"
+                )
+                statCard(
+                    title: "Only in \(nameB)",
+                    count: result.onlyInB.count,
+                    color: .orange,
+                    icon: "b.circle.fill"
+                )
+            }
+            #else
             HStack(spacing: Spacing.large) {
                 statCard(
                     title: "Only in \(nameA)",
@@ -120,6 +142,7 @@ struct ArchiveComparisonView: View {
                     icon: "b.circle.fill"
                 )
             }
+            #endif
 
             Text("\(nameA) has \(result.onlyInA.count) unique email\(result.onlyInA.count == 1 ? "" : "s"), \(nameB) has \(result.onlyInB.count) unique, \(result.common.count) common")
                 .font(Typography.footnote)
@@ -157,11 +180,19 @@ struct ArchiveComparisonView: View {
                 .font(Typography.headline)
                 .fontWeight(.semibold)
 
+            #if os(iOS)
+            VStack(spacing: Spacing.small) {
+                archiveStatsColumn(name: nameA, stats: result.statsA, color: .blue)
+                Divider()
+                archiveStatsColumn(name: nameB, stats: result.statsB, color: .orange)
+            }
+            #else
             HStack(alignment: .top, spacing: Spacing.medium) {
                 archiveStatsColumn(name: nameA, stats: result.statsA, color: .blue)
                 Divider()
                 archiveStatsColumn(name: nameB, stats: result.statsB, color: .orange)
             }
+            #endif
         }
         .padding(Spacing.medium)
         .adaptiveCard(cornerRadius: CornerRadius.large)
@@ -211,7 +242,11 @@ struct ArchiveComparisonView: View {
                     Text(f.rawValue).tag(f)
                 }
             }
+            #if os(iOS)
+            .pickerStyle(.menu)
+            #else
             .pickerStyle(.segmented)
+            #endif
         }
     }
 

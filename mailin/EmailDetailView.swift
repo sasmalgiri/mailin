@@ -139,6 +139,7 @@ struct EmailDetailView: View {
 
     private var topBar: some View {
         HStack(spacing: Spacing.xSmall) {
+            #if os(macOS)
             Image(systemName: "envelope.open.fill")
                 .foregroundColor(AppColors.primary)
                 .accessibilityHidden(true)
@@ -181,6 +182,7 @@ struct EmailDetailView: View {
                     }
                 }
             }
+            #endif
 
             Spacer()
 
@@ -239,13 +241,20 @@ struct EmailDetailView: View {
             .accessibilityLabel("Print email")
             .keyboardShortcut("p", modifiers: .command)
 
-            Button(action: { onClose?() }) {
+            Button(action: {
+                #if os(iOS)
+                dismiss()
+                #endif
+                onClose?()
+            }) {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundColor(AppColors.secondary)
                     .imageScale(.large)
             }
             .buttonStyle(.plain)
+            #if os(macOS)
             .help("Close this email")
+            #endif
             .accessibilityLabel("Close email detail")
         }
         .padding(.horizontal, Spacing.medium)
@@ -326,7 +335,11 @@ struct EmailDetailView: View {
                         Text("Extra Large").tag(CGFloat(2000))
                     }
                     .pickerStyle(.segmented)
+                    #if os(iOS)
+                    .frame(maxWidth: .infinity)
+                    #else
                     .frame(maxWidth: 320)
+                    #endif
                     .padding(.leading, Spacing.xSmall)
                     .accessibilityLabel("HTML view height")
 
@@ -388,7 +401,11 @@ struct EmailDetailView: View {
                     HStack(spacing: 4) {
                         TextField("Add tag...", text: $newTagText)
                             .textFieldStyle(.roundedBorder)
+                            #if os(iOS)
+                            .frame(minWidth: 80, maxWidth: .infinity)
+                            #else
                             .frame(width: 120)
+                            #endif
                             .onSubmit {
                                 let tag = newTagText.trimmingCharacters(in: .whitespaces)
                                 if !tag.isEmpty {
@@ -1195,7 +1212,11 @@ struct EmailDetailView: View {
             platformImage(thumb)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
+                #if os(iOS)
+                .frame(maxWidth: .infinity, maxHeight: 300)
+                #else
                 .frame(maxWidth: 400, maxHeight: 300)
+                #endif
                 .cornerRadius(CornerRadius.medium)
                 .accessibilityLabel("Preview of \(att.filename)")
         } else if mime == "application/pdf" || att.filename.lowercased().hasSuffix(".pdf"),
@@ -1204,7 +1225,11 @@ struct EmailDetailView: View {
             platformImage(thumbnail)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
+                #if os(iOS)
+                .frame(maxWidth: .infinity, maxHeight: 260)
+                #else
                 .frame(maxWidth: 200, maxHeight: 260)
+                #endif
                 .cornerRadius(CornerRadius.medium)
                 .overlay(
                     RoundedRectangle(cornerRadius: CornerRadius.medium)
@@ -1992,6 +2017,15 @@ struct EmailDetailView: View {
     }
 
     private var headerBlock: some View {
+        #if os(iOS)
+        narrowHeaderLayout
+            .padding(Spacing.medium)
+            .adaptiveGlass(in: RoundedRectangle(cornerRadius: CornerRadius.large))
+            .overlay(
+                RoundedRectangle(cornerRadius: CornerRadius.large)
+                    .stroke(AppColors.separatorLight, lineWidth: 0.5)
+            )
+        #else
         ViewThatFits(in: .horizontal) {
             wideHeaderLayout
             narrowHeaderLayout
@@ -2002,6 +2036,7 @@ struct EmailDetailView: View {
             RoundedRectangle(cornerRadius: CornerRadius.large)
                 .stroke(AppColors.separatorLight, lineWidth: 0.5)
         )
+        #endif
     }
 
     private var wideHeaderLayout: some View {
@@ -2120,6 +2155,18 @@ struct EmailDetailView: View {
 struct LabelText: View {
     let title: String, value: String
     var body: some View {
+        #if os(iOS)
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(title):")
+                .fontWeight(.semibold)
+                .font(.caption)
+                .foregroundColor(.secondary)
+            Text(value)
+                .font(.subheadline)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        #else
         HStack(alignment: .top, spacing: Spacing.xxSmall) {
             Text("\(title):")
                 .fontWeight(.semibold)
@@ -2129,6 +2176,7 @@ struct LabelText: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .font(Typography.footnote)
+        #endif
     }
 }
 

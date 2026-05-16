@@ -12,6 +12,9 @@ struct ParsedEmailListView: View {
     @ObservedObject private var custodianManager = CustodianManager.shared
     @AppStorage("enableAIFeatures") private var enableAIFeatures = true
     @FocusState private var isSearchFieldFocused: Bool
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
  
     private enum ActiveSheet: Identifiable {
         case stats
@@ -156,6 +159,143 @@ struct ParsedEmailListView: View {
 
     // MARK: - UI
     var body: some View {
+        #if os(iOS)
+        iOSBody
+        #else
+        macOSBody
+        #endif
+    }
+
+    #if os(iOS)
+    @State private var showIOSFilters = false
+
+    private var iOSBody: some View {
+        VStack(spacing: 0) {
+            iOSSearchBar
+            if showIOSFilters {
+                quickFilterBar
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+            contentView
+        }
+        .background(Color(.systemGroupedBackground))
+        .animation(.easeInOut(duration: 0.25), value: showIOSFilters)
+        .sheet(item: $activeSheet) { sheet in
+            switch sheet {
+            case .stats:
+                ReplyStatsView(replyData: model.replyFrequency(for: model.viewModel.senderEmail))
+            case .rawSource(let rfc822):
+                RawSourceView(rawText: rfc822)
+            }
+        }
+        .sheet(isPresented: $showAnalyticsSheet) {
+            EmailAnalyticsView(emails: model.filteredEmails)
+        }
+        .sheet(isPresented: $showAIPaywall) {
+            PaywallView()
+                .environmentObject(storeManager)
+        }
+        .sheet(isPresented: $showShareSheet) {
+            ShareSheet(items: shareItems)
+        }
+        .alert("Export Error", isPresented: Binding(get: { listExportError != nil }, set: { if !$0 { listExportError = nil } })) {
+            Button("OK") { listExportError = nil }
+        } message: {
+            Text(listExportError ?? "An unknown error occurred.")
+        }
+    }
+
+    private var iOSSearchBar: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                TextField(model.isNaturalLanguageMode ? "Ask naturally..." : "Search emails...", text: $model.searchText)
+                    .font(.subheadline)
+                    .focused($isSearchFieldFocused)
+                    .onChange(of: model.searchText) { _, newValue in
+                        model.searchTextDidChange()
+                        if !newValue.isEmpty {
+                            Task { await SearchSyntaxTip.searchUsed.donate() }
+                        }
+                    }
+                    .onChange(of: model.isSearchFocused) { _, newValue in
+                        if newValue {
+                            isSearchFieldFocused = true
+                            model.isSearchFocused = false
+                        }
+                    }
+                if !model.searchText.isEmpty {
+                    Button {
+                        model.searchText = ""
+                        model.hasAttachmentFilter = false
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Color(.tertiarySystemFill))
+            .cornerRadius(10)
+
+            Button {
+                withAnimation { showIOSFilters.toggle() }
+            } label: {
+                Image(systemName: showIOSFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                    .font(.title3)
+                    .foregroundColor(hasAnyQuickFilterActive ? .accentColor : .secondary)
+            }
+
+            Menu {
+                Button { model.isNaturalLanguageMode.toggle() } label: {
+                    Label(model.isNaturalLanguageMode ? "Keyword Search" : "Natural Language", systemImage: model.isNaturalLanguageMode ? "text.magnifyingglass" : "brain")
+                }
+                Button { model.groupByThread.toggle() } label: {
+                    Label(model.groupByThread ? "Ungroup Threads" : "Group by Thread", systemImage: "bubble.left.and.bubble.right")
+                }
+                Divider()
+                ForEach(ParsedEmailListViewModel.SortOption.allCases, id: \.self) { option in
+                    Button {
+                        model.sortBy = option
+                        model.applyFilters()
+                    } label: {
+                        if model.sortBy == option {
+                            Label(option.label, systemImage: "checkmark")
+                        } else {
+                            Text(option.label)
+                        }
+                    }
+                }
+                Divider()
+                if totalAttachments > 0 {
+                    Button { downloadAllAttachments() } label: {
+                        Label("Export Attachments (\(totalAttachments))", systemImage: "arrow.down.circle")
+                    }
+                }
+                if !model.filteredEmails.isEmpty {
+                    Button { exportFilteredJSON() } label: {
+                        Label("Export as JSON", systemImage: "square.and.arrow.up")
+                    }
+                }
+                Button { showAnalyticsSheet = true } label: {
+                    Label("Analytics", systemImage: "chart.bar.xaxis")
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.title3)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+    #endif
+
+    private var macOSBody: some View {
         VStack(spacing: Spacing.xxSmall) {
             headerView
             quickFilterBar
@@ -352,7 +492,19 @@ struct ParsedEmailListView: View {
                     .font(.footnote)
                     .fontWeight(.medium)
                     .foregroundColor(AppColors.secondary)
-                TextField(model.isNaturalLanguageMode ? "Ask naturally, e.g. \"John's emails from last week with attachments\"" : "Search — try from:name, AND/OR/NOT, \"exact phrase\", or /regex/", text: $model.searchText)
+                TextField(model.isNaturalLanguageMode ? {
+                    #if os(iOS)
+                    return "Ask naturally..."
+                    #else
+                    return "Ask naturally, e.g. \"John's emails from last week with attachments\""
+                    #endif
+                }() : {
+                    #if os(iOS)
+                    return "Search emails..."
+                    #else
+                    return "Search — try from:name, AND/OR/NOT, \"exact phrase\", or /regex/"
+                    #endif
+                }(), text: $model.searchText)
                     .textFieldStyle(.plain)
                     .font(.footnote)
                     .focused($isSearchFieldFocused)
@@ -956,11 +1108,21 @@ struct ParsedEmailListView: View {
             } else if model.groupByThread {
                 threadedListView
             } else {
+                #if os(iOS)
+                List(emails, id: \.id) { email in
+                    NavigationLink(value: email.id) {
+                        emailRow(for: email)
+                    }
+                    .padding(.vertical, Spacing.xxxSmall)
+                }
+                .listStyle(.plain)
+                #else
                 List(emails, id: \.id, selection: $selectedEmailIDs) { email in
                     emailRow(for: email)
                         .padding(.vertical, Spacing.xxxSmall)
                         .tag(email.id)
                 }
+                #endif
             }
         }
     }
@@ -1040,39 +1202,60 @@ struct ParsedEmailListView: View {
         return trimmed.isEmpty ? "email" : trimmed
     }
 
+    @ViewBuilder
     private var threadedListView: some View {
+        #if os(iOS)
+        List {
+            threadedListContent
+        }
+        #else
         List(selection: $selectedEmailIDs) {
-            ForEach(quickFilteredThreads) { thread in
-                if thread.count == 1 {
-                    emailRow(for: thread.root)
-                        .padding(.vertical, Spacing.xxxSmall)
-                        .tag(thread.root.id)
-                } else {
-                    DisclosureGroup {
-                        ForEach(Array(thread.replies.enumerated()), id: \.element.id) { index, reply in
-                            HStack(spacing: 0) {
-                                threadConnector(isLast: index == thread.replies.count - 1)
-                                emailRow(for: reply)
-                                    .padding(.vertical, Spacing.xxxSmall)
-                            }
-                            .tag(reply.id)
-                        }
-                    } label: {
-                        HStack(spacing: Spacing.xSmall) {
-                            emailRow(for: thread.root)
-                            Text("\(thread.count)")
-                                .font(Typography.caption2)
-                                .foregroundColor(.white)
-                                .padding(.horizontal, Spacing.xxSmall)
-                                .padding(.vertical, 2)
-                                .background(AppColors.primary)
-                                .cornerRadius(CornerRadius.round)
+            threadedListContent
+        }
+        #endif
+    }
+
+    private var threadedListContent: some View {
+        ForEach(quickFilteredThreads) { thread in
+            if thread.count == 1 {
+                threadedRow(for: thread.root)
+            } else {
+                DisclosureGroup {
+                    ForEach(Array(thread.replies.enumerated()), id: \.element.id) { index, reply in
+                        HStack(spacing: 0) {
+                            threadConnector(isLast: index == thread.replies.count - 1)
+                            threadedRow(for: reply)
                         }
                     }
-                    .tag(thread.root.id)
+                } label: {
+                    HStack(spacing: Spacing.xSmall) {
+                        emailRow(for: thread.root)
+                        Text("\(thread.count)")
+                            .font(Typography.caption2)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, Spacing.xxSmall)
+                            .padding(.vertical, 2)
+                            .background(AppColors.primary)
+                            .cornerRadius(CornerRadius.round)
+                    }
                 }
+                .tag(thread.root.id)
             }
         }
+    }
+
+    @ViewBuilder
+    private func threadedRow(for email: MBOXParser.RawEmail) -> some View {
+        #if os(iOS)
+        NavigationLink(value: email.id) {
+            emailRow(for: email)
+        }
+        .padding(.vertical, Spacing.xxxSmall)
+        #else
+        emailRow(for: email)
+            .padding(.vertical, Spacing.xxxSmall)
+            .tag(email.id)
+        #endif
     }
 
     private func threadConnector(isLast: Bool) -> some View {
@@ -1098,6 +1281,79 @@ struct ParsedEmailListView: View {
     }
 
     private func emailRow(for email: MBOXParser.RawEmail) -> some View {
+        #if os(iOS)
+        iOSEmailRow(for: email)
+        #else
+        macOSEmailRow(for: email)
+        #endif
+    }
+
+    #if os(iOS)
+    private func iOSEmailRow(for email: MBOXParser.RawEmail) -> some View {
+        EmailRowView(email: email, searchText: model.searchText, showRiskIndicator: forensicManager.isEnabled || personaManager.selectedPersona == .legal)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .contextMenu {
+                Button {
+                    let rawData = email.rawSource.data(using: .utf8) ?? Data()
+                    let kit = SwiftEmailMessage(rawSource: rawData)
+                    let kitString = kit.asRFC822String()
+                    let rawRFC822 = !kitString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? kitString : email.rawSource
+                    activeSheet = .rawSource(rawRFC822)
+                } label: {
+                    Label("View Raw Source", systemImage: "doc.plaintext")
+                }
+
+                Button {
+                    PlatformClipboard.copyString(email.headers["Subject"] ?? "")
+                } label: {
+                    Label("Copy Subject", systemImage: "doc.on.doc")
+                }
+
+                Button {
+                    PlatformClipboard.copyString(email.headers["From"] ?? "")
+                } label: {
+                    Label("Copy Sender", systemImage: "person.crop.circle")
+                }
+
+                Button {
+                    let summary = EmailNLPEngine.summarizeEmail(email)
+                    PlatformClipboard.copyString(summary)
+                } label: {
+                    Label("Summarize", systemImage: "sparkles")
+                }
+
+                if !email.attachments.isEmpty {
+                    Divider()
+                    Button {
+                        saveAttachmentsForEmail(email)
+                    } label: {
+                        Label("Save Attachments (\(email.attachments.count))", systemImage: "arrow.down.circle")
+                    }
+                }
+
+                if forensicManager.isEnabled {
+                    Divider()
+                    Menu("Evidence Tag") {
+                        ForEach(ForensicManager.EvidenceTag.allCases, id: \.self) { tag in
+                            Button {
+                                forensicManager.tag(email.id, as: tag)
+                            } label: {
+                                HStack {
+                                    Label(tag.rawValue, systemImage: tag.icon)
+                                    if forensicManager.tagForEmail(email.id) == tag {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+    }
+    #endif
+
+    private func macOSEmailRow(for email: MBOXParser.RawEmail) -> some View {
         HStack(spacing: Spacing.xSmall) {
             if forensicManager.isEnabled {
                 let tag = forensicManager.tagForEmail(email.id)
@@ -1105,9 +1361,7 @@ struct ParsedEmailListView: View {
                     Image(systemName: tag.icon)
                         .font(.caption2)
                         .foregroundColor(tag.color)
-                        #if os(macOS)
                         .help(Text(verbatim: "Evidence: \(tag.rawValue)"))
-                        #endif
                 }
             }
 
@@ -1115,9 +1369,7 @@ struct ParsedEmailListView: View {
                 Image(systemName: "star.fill")
                     .font(.caption2)
                     .foregroundColor(.yellow)
-                    #if os(macOS)
                     .help("Pinned")
-                    #endif
             }
 
             let priority = model.priorityLevel(for: email.id)
@@ -1125,16 +1377,12 @@ struct ParsedEmailListView: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(Typography.caption2)
                     .foregroundColor(.red)
-                    #if os(macOS)
                     .help("High priority")
-                    #endif
             } else if priority == .medium {
                 Image(systemName: "exclamationmark.circle.fill")
                     .font(Typography.caption2)
                     .foregroundColor(.orange)
-                    #if os(macOS)
                     .help("Medium priority")
-                    #endif
             }
 
             EmailRowView(email: email, searchText: model.searchText, showRiskIndicator: forensicManager.isEnabled || personaManager.selectedPersona == .legal)
@@ -1156,9 +1404,7 @@ struct ParsedEmailListView: View {
                 Image(systemName: "lock.shield.fill")
                     .font(.caption2)
                     .foregroundColor(.orange)
-                    #if os(macOS)
                     .help("Under legal hold")
-                    #endif
             }
 
             Spacer(minLength: Spacing.xSmall)
@@ -1177,9 +1423,7 @@ struct ParsedEmailListView: View {
                     .foregroundColor(AppColors.secondary)
             }
             .buttonStyle(.plain)
-            #if os(macOS)
             .help("View raw RFC 822 source")
-            #endif
             .accessibilityLabel("View raw source")
 
             if !email.attachments.isEmpty {
@@ -1833,11 +2077,15 @@ struct EmailRowView: View {
     @AppStorage("showEmailPreviews") private var showPreviews = true
 
     private var verticalPadding: CGFloat {
+        #if os(iOS)
+        return Spacing.xSmall
+        #else
         switch density {
         case "compact": return Spacing.xxxSmall
         case "spacious": return Spacing.small
         default: return Spacing.xxSmall
         }
+        #endif
     }
 
     private var senderName: String {
@@ -1849,6 +2097,80 @@ struct EmailRowView: View {
     }
 
     var body: some View {
+        #if os(iOS)
+        iOSRow
+        #else
+        macOSRow
+        #endif
+    }
+
+    #if os(iOS)
+    private var iOSRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // Row 1: Sender
+            Text(senderName)
+                .font(.body)
+                .fontWeight(.semibold)
+                .lineLimit(1)
+
+            // Row 2: Subject
+            Text(email.headers["Subject"] ?? "(No Subject)")
+                .font(.subheadline)
+                .foregroundColor(.primary)
+                .lineLimit(2)
+
+            // Row 3: Preview
+            if showPreviews {
+                let previewSource = email.isBodyCompacted ? email.bodyPreview : String(email.plainBody.prefix(150))
+                let preview = previewSource.replacingOccurrences(of: "\n", with: " ")
+                if !preview.trimmingCharacters(in: .whitespaces).isEmpty {
+                    Text(preview)
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                }
+            }
+
+            // Row 4: Date + metadata
+            HStack(spacing: 8) {
+                Text(parseDate(email.headers["Date"]))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                if !email.attachments.isEmpty {
+                    HStack(spacing: 2) {
+                        Image(systemName: "paperclip")
+                            .font(.caption2)
+                        Text("\(email.attachments.count)")
+                            .font(.caption2)
+                    }
+                    .foregroundColor(.secondary)
+                }
+
+                if email.messageType == "sent" {
+                    HStack(spacing: 2) {
+                        Image(systemName: "paperplane.fill")
+                            .font(.system(size: 9))
+                        Text("Sent")
+                            .font(.caption2)
+                    }
+                    .foregroundColor(.blue)
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.caption2)
+                    .foregroundColor(Color(.tertiaryLabel))
+            }
+        }
+        .padding(.vertical, 10)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(email.headers["Subject"] ?? "No Subject"), from \(senderName)")
+    }
+    #endif
+
+    private var macOSRow: some View {
         HStack(alignment: .top, spacing: Spacing.xSmall) {
             ContactAvatar(name: senderName, size: sizeClass == .compact ? 26 : 30)
 
@@ -1862,9 +2184,7 @@ struct EmailRowView: View {
                         Image(systemName: riskScore >= 55 ? "exclamationmark.triangle.fill" : "exclamationmark.shield.fill")
                             .font(.caption2)
                             .foregroundColor(riskScore >= 55 ? .orange : .yellow)
-                            #if os(macOS)
                             .help(Text(verbatim: "Risk score: \(riskScore)/100"))
-                            #endif
                     }
                     Spacer()
                     Text(parseDate(email.headers["Date"]))

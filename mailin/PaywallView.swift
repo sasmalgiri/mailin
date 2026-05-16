@@ -97,12 +97,17 @@ struct PaywallView: View {
             Text("Subscribe monthly, yearly, or buy once for lifetime access.")
                 .font(.subheadline)
                 .foregroundColor(AppColors.secondary)
+                .multilineTextAlignment(.center)
 
             HStack(spacing: Spacing.medium) {
                 Label("Complete Privacy", systemImage: "lock.shield.fill")
                 Label("Native Apple AI", systemImage: "brain.head.profile")
             }
+            #if os(iOS)
+            .font(Typography.caption2)
+            #else
             .font(Typography.caption1)
+            #endif
             .foregroundColor(AppColors.secondary)
         }
         .padding(.vertical, Spacing.large)
@@ -137,6 +142,22 @@ struct PaywallView: View {
                 Text("Feature")
                     .font(Typography.headline)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                #if os(iOS)
+                Text("Free")
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .frame(maxWidth: .infinity)
+                Text("Personal")
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.blue)
+                    .frame(maxWidth: .infinity)
+                Text("Pro")
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.purple)
+                    .frame(maxWidth: .infinity)
+                #else
                 Text("Free")
                     .font(Typography.headline)
                     .frame(width: 50)
@@ -148,6 +169,7 @@ struct PaywallView: View {
                     .font(Typography.headline)
                     .foregroundColor(.purple)
                     .frame(width: 50)
+                #endif
             }
             .padding(.bottom, Spacing.xxSmall)
 
@@ -188,14 +210,27 @@ struct PaywallView: View {
     private func featureRow(_ name: String, free: Bool, personal: Bool, pro: Bool) -> some View {
         HStack {
             Text(name)
+                #if os(iOS)
+                .font(Typography.caption1)
+                #else
                 .font(Typography.callout)
+                #endif
                 .frame(maxWidth: .infinity, alignment: .leading)
+            #if os(iOS)
+            checkIcon(free)
+                .frame(maxWidth: .infinity)
+            checkIcon(personal)
+                .frame(maxWidth: .infinity)
+            checkIcon(pro)
+                .frame(maxWidth: .infinity)
+            #else
             checkIcon(free)
                 .frame(width: 50)
             checkIcon(personal)
                 .frame(width: 65)
             checkIcon(pro)
                 .frame(width: 50)
+            #endif
         }
         .padding(.vertical, Spacing.xxxSmall)
     }
@@ -203,8 +238,22 @@ struct PaywallView: View {
     private func featureRow(_ name: String, free: String, personal: Bool, pro: Bool) -> some View {
         HStack {
             Text(name)
+                #if os(iOS)
+                .font(Typography.caption1)
+                #else
                 .font(Typography.callout)
+                #endif
                 .frame(maxWidth: .infinity, alignment: .leading)
+            #if os(iOS)
+            Text(free)
+                .font(Typography.caption2)
+                .foregroundColor(AppColors.secondary)
+                .frame(maxWidth: .infinity)
+            checkIcon(personal)
+                .frame(maxWidth: .infinity)
+            checkIcon(pro)
+                .frame(maxWidth: .infinity)
+            #else
             Text(free)
                 .font(Typography.caption1)
                 .foregroundColor(AppColors.secondary)
@@ -213,6 +262,7 @@ struct PaywallView: View {
                 .frame(width: 65)
             checkIcon(pro)
                 .frame(width: 50)
+            #endif
         }
         .padding(.vertical, Spacing.xxxSmall)
     }

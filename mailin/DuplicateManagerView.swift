@@ -50,6 +50,15 @@ struct DuplicateManagerView: View {
                 .onChange(of: showNearDuplicates) { _, _ in scanForDuplicates() }
 
             if showNearDuplicates {
+                #if os(iOS)
+                VStack(alignment: .leading, spacing: Spacing.xxSmall) {
+                    Text("Similarity: \(Int(similarityThreshold * 100))%")
+                        .font(Typography.caption1)
+                    Slider(value: $similarityThreshold, in: 0.7...0.99, step: 0.01)
+                        .accessibilityLabel("Similarity threshold")
+                        .accessibilityValue("\(Int(similarityThreshold * 100)) percent")
+                }
+                #else
                 HStack {
                     Text("Similarity: \(Int(similarityThreshold * 100))%")
                         .font(Typography.caption1)
@@ -58,6 +67,7 @@ struct DuplicateManagerView: View {
                         .accessibilityLabel("Similarity threshold")
                         .accessibilityValue("\(Int(similarityThreshold * 100)) percent")
                 }
+                #endif
             }
         }
         .padding(Spacing.medium)

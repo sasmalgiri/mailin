@@ -32,10 +32,10 @@ class StoreManager: ObservableObject {
 
     static let personalLifetimeID = "mailin_personal"
     static let professionalLifetimeID = "Professional_Lifetime"
-    static let personalMonthlyID = "Personal_Monthly"
-    static let personalYearlyID = "Personal_Yearly"
-    static let professionalMonthlyID = "Professional_Monthly"
-    static let professionalYearlyID = "Professional_Yearly"
+    static let personalMonthlyID = "personal_monthly"
+    static let personalYearlyID = "personal_yearly_01"
+    static let professionalMonthlyID = "professional_monthly"
+    static let professionalYearlyID = "professional_yearly"
 
     static let premiumID = personalLifetimeID
     static let professionalID = professionalLifetimeID
