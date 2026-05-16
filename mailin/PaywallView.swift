@@ -97,6 +97,7 @@ struct PaywallView: View {
             Text("Subscribe monthly, yearly, or buy once for lifetime access.")
                 .font(.subheadline)
                 .foregroundColor(AppColors.secondary)
+                .multilineTextAlignment(.center)
 
             HStack(spacing: Spacing.medium) {
                 Label("Complete Privacy", systemImage: "lock.shield.fill")

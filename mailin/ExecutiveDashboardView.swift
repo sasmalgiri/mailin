@@ -85,11 +85,16 @@ struct ExecutiveDashboardView: View {
 
     // MARK: - Top Stat Cards
 
+    private var dashboardStatColumns: [GridItem] {
+        #if os(iOS)
+        [GridItem(.flexible()), GridItem(.flexible())]
+        #else
+        [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+        #endif
+    }
+
     private func topStatCards(data: DashboardData) -> some View {
-        LazyVGrid(columns: [
-            GridItem(.flexible()), GridItem(.flexible()),
-            GridItem(.flexible()), GridItem(.flexible())
-        ], spacing: Spacing.small) {
+        LazyVGrid(columns: dashboardStatColumns, spacing: Spacing.small) {
             AnimatedStatCard(
                 title: "Total Emails",
                 value: "\(data.totalEmails)",
@@ -120,10 +125,17 @@ struct ExecutiveDashboardView: View {
     // MARK: - Middle Charts
 
     private func middleCharts(data: DashboardData) -> some View {
+        #if os(iOS)
+        VStack(spacing: Spacing.medium) {
+            volumeTrendChart(data: data)
+            sentimentTrendChart(data: data)
+        }
+        #else
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: Spacing.medium) {
             volumeTrendChart(data: data)
             sentimentTrendChart(data: data)
         }
+        #endif
     }
 
     private func volumeTrendChart(data: DashboardData) -> some View {
@@ -263,11 +275,19 @@ struct ExecutiveDashboardView: View {
     // MARK: - Bottom Section
 
     private func bottomSection(data: DashboardData) -> some View {
+        #if os(iOS)
+        VStack(spacing: Spacing.medium) {
+            topContactsChart(data: data)
+            categoryDistributionChart(data: data)
+            recentActivityFeed(data: data)
+        }
+        #else
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: Spacing.medium) {
             topContactsChart(data: data)
             categoryDistributionChart(data: data)
             recentActivityFeed(data: data)
         }
+        #endif
     }
 
     private func topContactsChart(data: DashboardData) -> some View {

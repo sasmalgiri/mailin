@@ -61,7 +61,10 @@ struct mailinApp: App {
                             .interactiveDismissDisabled()
                     }
                     .sheet(isPresented: Binding(
-                        get: { !compliance.needsTermsAcceptance && !personaManager.hasCompletedPersonaSelection },
+                        get: {
+                            guard !compliance.needsTermsAcceptance else { return false }
+                            return !personaManager.hasCompletedPersonaSelection
+                        },
                         set: { if !$0 { personaManager.completePersonaSelection() } }
                     )) {
                         PersonaOnboardingView()
