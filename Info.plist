@@ -46,9 +46,6 @@
 	<key>NSCalendarsUsageDescription</key>
 	<string>mailin reads your Calendar to find meetings related to emails in your imported archives. For example, linking a calendar event titled "Budget Review" to emails about the same topic. All lookups happen entirely on your device — no calendar data is collected, stored, or shared externally.</string>
 
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>mailin connects to email servers on your local network when you configure a direct IMAP or SMTP mail account. For example, connecting to a corporate Exchange server or a self-hosted mail server on your office network to fetch or send emails. No data is sent to third parties.</string>
-
 	<!-- iOS Document Browser Support -->
 	<key>UISupportsDocumentBrowser</key>
 	<true/>
