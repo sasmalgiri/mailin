@@ -78,7 +78,7 @@ class LegalComplianceManager: ObservableObject {
 
     Data Storage: Parsed emails and settings are stored locally using Apple's standard frameworks (UserDefaults, file system). No server-side storage. If you enable iCloud Sync, review metadata (tags, annotations, case info) syncs via Apple's iCloud Drive — your email content is never uploaded.
 
-    Third-Party Services: Apple App Store for purchases and optionally Apple iCloud for cross-device sync of review metadata. No advertising SDKs, no analytics frameworks, no third-party cloud APIs.
+    Third-Party Services: Apple App Store for purchases. Optional features (Cloud AI, IMAP/SMTP, Gmail/Outlook Connect) may transmit data to external services only when explicitly enabled by you. No advertising SDKs, no analytics frameworks, no tracking.
 
     Data Deletion: You can delete all data at any time via Settings > Data & Privacy > Delete All Data.
 
@@ -98,7 +98,7 @@ class LegalComplianceManager: ObservableObject {
 
     2. LICENSE: mailin grants you a personal, non-transferable license to use the app on your Apple devices.
 
-    3. PURCHASES: Pro features are available via auto-renewable subscriptions (monthly or yearly) or a one-time lifetime purchase through the App Store. Payment will be charged to your Apple ID account at confirmation of purchase. Subscriptions auto-renew unless cancelled at least 24 hours before the end of the current billing period. You can manage or cancel subscriptions by going to your account settings on the App Store after purchase. Lifetime purchases are permanent and do not auto-renew.
+    3. PURCHASES: Premium features (mailin Personal and mailin Professional) are available via auto-renewable subscriptions (monthly or yearly) or a one-time lifetime purchase through the App Store. Payment will be charged to your Apple ID account at confirmation of purchase. Subscriptions auto-renew unless cancelled at least 24 hours before the end of the current billing period. You can manage or cancel subscriptions in System Settings > Apple ID > Subscriptions (Mac) or Settings > [your name] > Subscriptions (iPhone/iPad). Lifetime purchases are permanent and do not auto-renew.
 
     4. PERMITTED USE: You may use mailin for lawful purposes including personal email management, professional email analysis, legal document review, forensic investigation, and journalism research.
 

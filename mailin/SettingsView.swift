@@ -1444,9 +1444,11 @@ struct SettingsView: View {
         autoAdvanceAfterTag = true
         hasConsentedToCloudAI = false
         KeychainHelper.delete(key: "apiKey")
+        #if !OFFLINE_MODE
         cloudAI.clearAPIKey(for: .openAI)
         cloudAI.clearAPIKey(for: .anthropic)
         cloudAI.isEnabled = false
+        #endif
         customModelName = ""
     }
 }

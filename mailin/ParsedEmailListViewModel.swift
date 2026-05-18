@@ -863,23 +863,54 @@ class ParsedEmailListViewModel: ObservableObject {
     func computeAIFilterData() {
         guard !aiFiltersComputed, !allEmails.isEmpty, enableAIFeatures else { return }
         Task.detached(priority: .utility) { [allEmails] in
-            let sentiments = EmailNLPEngine.analyzeSentiment(of: allEmails)
             var sentMap: [UUID: Double] = [:]
-            for r in sentiments { sentMap[r.email.id] = r.score }
-
             var classMap: [UUID: EmailNLPEngine.EmailCategory] = [:]
-            for email in allEmails { classMap[email.id] = EmailNLPEngine.classify(email) }
-
             var phishIDs = Set<UUID>()
+
             #if canImport(FoundationModels)
             if #available(macOS 26, iOS 26, *), FoundationModelEngine.isAvailable {
+                let tagResults = await FoundationModelEngine.tagEmails(allEmails) { _, _ in }
+
+                for (id, result) in tagResults {
+                    switch result.sentiment {
+                    case "positive": sentMap[id] = 0.8
+                    case "negative": sentMap[id] = -0.8
+                    default: sentMap[id] = 0.0
+                    }
+
+                    switch result.category {
+                    case "personal": classMap[id] = .personal
+                    case "transactional": classMap[id] = .transactional
+                    case "newsletter": classMap[id] = .newsletter
+                    case "promotional": classMap[id] = .promotional
+                    case "automated": classMap[id] = .automated
+                    default: break
+                    }
+                }
+
+                // NLTagger fallback for emails FoundationModels missed
+                let missedSentiment = allEmails.filter { sentMap[$0.id] == nil }
+                if !missedSentiment.isEmpty {
+                    let fallback = EmailNLPEngine.analyzeSentiment(of: missedSentiment)
+                    for r in fallback { sentMap[r.email.id] = r.score }
+                }
+                for email in allEmails where classMap[email.id] == nil {
+                    classMap[email.id] = EmailNLPEngine.classify(email)
+                }
+
                 phishIDs = await FoundationModelEngine.classifyPhishing(allEmails) { _, _ in }
             } else {
+                let sentiments = EmailNLPEngine.analyzeSentiment(of: allEmails)
+                for r in sentiments { sentMap[r.email.id] = r.score }
+                for email in allEmails { classMap[email.id] = EmailNLPEngine.classify(email) }
                 let phishing = EmailNLPEngine.detectPhishing(in: allEmails)
                     .filter { $0.riskLevel == .high }
                 phishIDs = Set(phishing.map(\.email.id))
             }
             #else
+            let sentiments = EmailNLPEngine.analyzeSentiment(of: allEmails)
+            for r in sentiments { sentMap[r.email.id] = r.score }
+            for email in allEmails { classMap[email.id] = EmailNLPEngine.classify(email) }
             let phishing = EmailNLPEngine.detectPhishing(in: allEmails)
                 .filter { $0.riskLevel == .high }
             phishIDs = Set(phishing.map(\.email.id))

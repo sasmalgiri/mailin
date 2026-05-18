@@ -789,9 +789,9 @@ struct RelationshipGraphView: View {
     // MARK: - Styling Helpers
 
     private func nodeColor(for sentiment: Double) -> Color {
-        if sentiment > 0.15 {
+        if sentiment > 0.4 {
             return AppColors.success
-        } else if sentiment < -0.15 {
+        } else if sentiment < -0.4 {
             return AppColors.error
         } else {
             return Color.gray
@@ -799,8 +799,8 @@ struct RelationshipGraphView: View {
     }
 
     private func sentimentLabel(_ sentiment: Double) -> String {
-        if sentiment > 0.15 { return "Positive" }
-        if sentiment < -0.15 { return "Negative" }
+        if sentiment > 0.4 { return "Positive" }
+        if sentiment < -0.4 { return "Negative" }
         return "Neutral"
     }
 

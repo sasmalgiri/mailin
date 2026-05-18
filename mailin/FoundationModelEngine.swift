@@ -1087,8 +1087,9 @@ struct FoundationModelEngine {
         // Layer 1: Run on-device experts + sub-queries + cloud experts in parallel
         var expertFindings: [(ExpertRole, AISessionFindings)] = []
         var subFindings: [(String, AISessionFindings)] = []
-        var cloudExpertResults: [CloudExpertFinding] = []
 
+        #if !OFFLINE_MODE
+        var cloudExpertResults: [CloudExpertFinding] = []
         let cloudAIReady = await CloudAIManager.shared.isReady
         let cloudRoles: [CloudAIManager.CloudExpertRole] = cloudAIReady
             ? [.worldKnowledge, .security]
@@ -1096,7 +1097,6 @@ struct FoundationModelEngine {
         let emailCtxForCloud = cloudAIReady
             ? CloudAIManager.buildEmailContext(from: ragRetrievedEmails.isEmpty ? emails : ragRetrievedEmails, maxEmails: 10)
             : ""
-
         let totalWithCloud = totalParallel + cloudRoles.count
 
         await withTaskGroup(of: (String, Int?, ExpertRole?, AISessionFindings?, CloudExpertFinding?).self) { group in
@@ -1113,7 +1113,6 @@ struct FoundationModelEngine {
                     return ("map", i, nil, findings, nil)
                 }
             }
-
             for role in cloudRoles {
                 let nlpSnippet = String(nlpBaseline.prefix(600))
                 let ctx = emailCtxForCloud
@@ -1140,6 +1139,36 @@ struct FoundationModelEngine {
             }
             subFindings = mapIndexed.sorted { $0.0 < $1.0 }.map { ($0.1, $0.2) }
         }
+        #else
+        let cloudAIReady = false
+        let totalWithCloud = totalParallel
+
+        await withTaskGroup(of: (String, Int?, ExpertRole?, AISessionFindings?).self) { group in
+            for expert in experts {
+                group.addTask {
+                    let findings = await runExpertStructured(role: expert, query: query, emails: ragRetrievedEmails.isEmpty ? emails : ragRetrievedEmails)
+                    return ("expert", nil, expert, findings)
+                }
+            }
+            for (i, subQ) in subQueries.enumerated() {
+                let capturedSubQ = subQ
+                group.addTask {
+                    let findings = await executeSubQueryStructured(subQuery: capturedSubQ, emails: emails, profile: profile)
+                    return ("map", i, nil, findings)
+                }
+            }
+
+            var mapIndexed: [(Int, String, AISessionFindings)] = []
+            for await (type, idx, role, findings) in group {
+                if type == "expert", let r = role, let f = findings {
+                    expertFindings.append((r, f))
+                } else if type == "map", let i = idx, i < subQueries.count, let f = findings {
+                    mapIndexed.append((i, subQueries[i], f))
+                }
+            }
+            subFindings = mapIndexed.sorted { $0.0 < $1.0 }.map { ($0.1, $0.2) }
+        }
+        #endif
 
         // Collect and track evidence
         var allFindings: [(source: String, finding: AIFinding, confidence: Int)] = []
@@ -1158,6 +1187,7 @@ struct FoundationModelEngine {
             }
         }
 
+        #if !OFFLINE_MODE
         // Integrate cloud expert findings into the unified findings list
         for cloudResult in cloudExpertResults {
             for f in cloudResult.findings {
@@ -1166,6 +1196,7 @@ struct FoundationModelEngine {
                 allFindings.append((source: "Cloud: \(cloudResult.role.rawValue)", finding: aiFinding, confidence: cloudResult.confidence))
             }
         }
+        #endif
 
         let linkedCount = trackedFindings.filter { !$0.emailIDs.isEmpty }.count
 
@@ -1248,6 +1279,7 @@ struct FoundationModelEngine {
 
         synthesisContext = String(synthesisContext.prefix(contextCharBudget))
 
+        #if !OFFLINE_MODE
         // Append cloud expert findings to synthesis context
         if !cloudExpertResults.isEmpty {
             synthesisContext += "\nCLOUD EXPERT FINDINGS (world knowledge + advanced analysis):\n"
@@ -1255,8 +1287,10 @@ struct FoundationModelEngine {
                 synthesisContext += cr.asFormattedText() + "\n"
             }
         }
-
         let cloudExpertCount = cloudExpertResults.count
+        #else
+        let cloudExpertCount = 0
+        #endif
         let instructions = """
             You are the AI brain of mailin, a privacy-first email app. \
             A \(layerCount)-layer hybrid pipeline has been deployed: \
@@ -1295,6 +1329,7 @@ struct FoundationModelEngine {
         }
 
         // Cloud cross-validation when available and findings are substantial
+        #if !OFFLINE_MODE
         if cloudAIReady && allFindings.count >= 3 {
             let validationEmailCtx = CloudAIManager.buildEmailContext(
                 from: ragRetrievedEmails.isEmpty ? emails : ragRetrievedEmails, maxEmails: 8
@@ -1314,6 +1349,7 @@ struct FoundationModelEngine {
                 }
             }
         }
+        #endif
 
         recordTurn(query: query, intent: intent, answer: finalContent)
 

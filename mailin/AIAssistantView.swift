@@ -46,7 +46,9 @@ struct AIAssistantView: View {
         case appleAIMoE = "Apple AI MoE"
         case appleAI = "Apple AI"
         case hybrid = "Hybrid"
+        #if !OFFLINE_MODE
         case cloudAI = "Cloud AI"
+        #endif
         case nlp = "NLP"
     }
 
@@ -75,7 +77,11 @@ struct AIAssistantView: View {
     }
 
     private var cloudAIAvailable: Bool {
+        #if !OFFLINE_MODE
         CloudAIManager.shared.isReady && !forensicManager.isEnabled
+        #else
+        false
+        #endif
     }
 
     private enum LLMStatus {
@@ -283,11 +289,13 @@ struct AIAssistantView: View {
                                 Label("Hybrid", systemImage: selectedEngine == .hybrid ? "checkmark" : "sparkles")
                             }
                         }
+                        #if !OFFLINE_MODE
                         if cloudAIAvailable {
                             Button { selectedEngine = .cloudAI } label: {
                                 Label("Cloud AI", systemImage: selectedEngine == .cloudAI ? "checkmark" : "cloud")
                             }
                         }
+                        #endif
                         Button { selectedEngine = .nlp } label: {
                             Label("NLP", systemImage: selectedEngine == .nlp ? "checkmark" : "text.magnifyingglass")
                         }
@@ -446,9 +454,11 @@ struct AIAssistantView: View {
                         Text("Apple AI").tag(AIEngine.appleAI)
                         Text("Hybrid").tag(AIEngine.hybrid)
                     }
+                    #if !OFFLINE_MODE
                     if cloudAIAvailable {
                         Text("Cloud AI").tag(AIEngine.cloudAI)
                     }
+                    #endif
                     Text("NLP").tag(AIEngine.nlp)
                 }
                 .pickerStyle(.segmented)
@@ -498,9 +508,11 @@ struct AIAssistantView: View {
         case .appleAIMoE: return "Apple AI with Mixture of Experts — maximum intelligence, on-device"
         case .appleAI: return "Direct Apple AI — fast single-session, on-device"
         case .hybrid: return "Enhanced NLP + Apple AI synthesis — best of both, on-device"
+        #if !OFFLINE_MODE
         case .cloudAI:
             let mgr = CloudAIManager.shared
             return "\(mgr.selectedProvider.displayName) (\(mgr.selectedModel)) — cloud-powered analysis"
+        #endif
         case .nlp: return "Pure NLP — fast semantic search + deterministic analysis, no AI needed"
         }
     }
@@ -1300,9 +1312,11 @@ struct AIAssistantView: View {
             return "Analyzing \(count) email\(suffix) with Apple Intelligence (on-device)"
         case .hybrid:
             return "Analyzing \(count) email\(suffix) with Hybrid NLP + AI (on-device)"
+        #if !OFFLINE_MODE
         case .cloudAI:
             let mgr = CloudAIManager.shared
             return "Analyzing \(count) email\(suffix) with \(mgr.selectedProvider.displayName) (\(mgr.selectedModel))"
+        #endif
         case .nlp:
             return "Analyzing \(count) email\(suffix) with pure NLP engine (on-device)"
         }
@@ -1314,7 +1328,9 @@ struct AIAssistantView: View {
         case .appleAIMoE: return "Apple AI MoE — multi-session experts, fan-in synthesis, self-correction"
         case .appleAI: return "Apple AI — direct single-session, fast and private"
         case .hybrid: return "Hybrid — NLP foundation + RAG + MoE experts + cloud experts + dynamic fan-in synthesis"
+        #if !OFFLINE_MODE
         case .cloudAI: return "Cloud AI — \(CloudAIManager.shared.selectedProvider.displayName) powered analysis with NLP + RAG"
+        #endif
         case .nlp: return "NLP — pure semantic search + deterministic analysis, no AI"
         }
     }
@@ -1344,7 +1360,10 @@ struct AIAssistantView: View {
 
         // Complex but no Apple AI → Cloud AI if available, else NLP
         if isComplex && !hasAppleAI {
-            return hasCloudAI ? .cloudAI : .nlp
+            #if !OFFLINE_MODE
+            if hasCloudAI { return .cloudAI }
+            #endif
+            return .nlp
         }
 
         // Medium complexity or moderate email count → Apple AI MoE if available
@@ -1357,10 +1376,12 @@ struct AIAssistantView: View {
             return .appleAI
         }
 
+        #if !OFFLINE_MODE
         // Simple with cloud → Cloud AI
         if hasCloudAI {
             return .cloudAI
         }
+        #endif
 
         // Apple AI available → Direct
         if hasAppleAI {
@@ -1709,6 +1730,7 @@ struct AIAssistantView: View {
                 }
             }
 
+        #if !OFFLINE_MODE
         // ━━━ Engine 4: Cloud AI (Enhanced with NLP + RAG) ━━━
         case .cloudAI:
             let priorCtxCloud = conversationHistory.suffix(3).map { "Q: \($0.query)\nA: \($0.answer)" }.joined(separator: "\n\n")
@@ -1772,6 +1794,7 @@ struct AIAssistantView: View {
                     if !storeManager.isPremium { freeQueryCount += 1 }
                 }
             }
+        #endif
 
         // ━━━ Engine: Auto (resolved above, should not reach here) ━━━
         case .auto:
