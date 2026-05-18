@@ -19,7 +19,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
-	<string>4</string>
+	<string>6</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2025-2026 mailin. All rights reserved.</string>
 
@@ -45,6 +45,9 @@
 
 	<key>NSCalendarsUsageDescription</key>
 	<string>mailin checks your Calendar to correlate meetings with email discussions. All checks happen on-device — no data is shared externally.</string>
+
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>mailin uses local network access to connect to email servers (IMAP/SMTP) when you configure a direct mail account connection. For example, connecting to a local Exchange or mail server on your network. No data is sent to third parties.</string>
 
 	<!-- iOS Document Browser Support -->
 	<key>UISupportsDocumentBrowser</key>

@@ -118,6 +118,12 @@ FLEXIBLE PLANS
 
 mailin is built natively with SwiftUI for a fast, fluid experience on Mac, iPhone, and iPad. Whether you're a journalist investigating a story, a lawyer reviewing evidence, a researcher analyzing communications, or just someone who wants to understand their email history — mailin gives you the tools to do it privately, in your language.
 
+LEGAL
+- Terms of Use: https://sasmalgiri.github.io/mailin/terms/
+- Privacy Policy: https://sasmalgiri.github.io/mailin/privacy/
+
+Subscriptions automatically renew unless cancelled at least 24 hours before the end of the current period. Payment is charged to your Apple ID account at confirmation of purchase. You can manage and cancel subscriptions in your Account Settings.
+
 ------------------------------------
 KEYWORDS (100 characters max)
 ------------------------------------
@@ -147,6 +153,12 @@ MARKETING URL
 ------------------------------------
 
 https://sasmalgiri.github.io/mailin/
+
+------------------------------------
+TERMS OF USE (EULA) URL
+------------------------------------
+
+https://sasmalgiri.github.io/mailin/terms/
 
 ------------------------------------
 PRIVACY POLICY URL
