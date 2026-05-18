@@ -393,52 +393,12 @@ struct ContentView: View {
 
                 if appState.inlineComposeMode != nil {
                     inlineComposePanel
-                } else
-                #endif
-                if !modelVM.showParsedList {
-                    emptyPlaceholder
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if selectedEmailIDs.count == 1,
-                   let selectedID = selectedEmailIDs.first {
-                    let _ = modelVM.rehydrateIfNeeded(selectedID)
-                    if let email = modelVM.filteredEmails.first(where: { $0.id == selectedID }) {
-                    EmailDetailView(
-                        email: email,
-                        allEmails: modelVM.filteredEmails,
-                        onNavigate: { newID in selectedEmailIDs = [newID] },
-                        onClose: { withAnimation { selectedEmailIDs = [] } },
-                        searchText: modelVM.searchText
-                    )
-                    .id(selectedID)
-                    .onAppear { modelVM.markRead(selectedID) }
-                    compactToolsStrip
-                    }
-                } else if selectedEmailIDs.count == 2 {
-                    let pair = Array(selectedEmailIDs)
-                    let emailA = pair.count > 0 ? modelVM.filteredEmails.first(where: { $0.id == pair[0] }) : nil
-                    let emailB = pair.count > 1 ? modelVM.filteredEmails.first(where: { $0.id == pair[1] }) : nil
-                    if let a = emailA, let b = emailB {
-                        VStack(spacing: 0) {
-                            HStack {
-                                Text("Comparing 2 emails")
-                                    .font(Typography.headline)
-                                Spacer()
-                                Button("Show Batch Actions") {
-                                    appState.showBatchOperations = true
-                                }
-                                .buttonStyle(CompactSecondaryButtonStyle())
-                            }
-                            .padding(Spacing.small)
-                            EmailComparisonView(emailA: a, emailB: b)
-                        }
-                    } else {
-                        batchOperationsView
-                    }
-                } else if selectedEmailIDs.count > 1 {
-                    batchOperationsView
                 } else {
-                    detailPlaceholderWithTools
+                    detailContentView
                 }
+                #else
+                detailContentView
+                #endif
 
                 if appState.dockedBottomPanel != nil && modelVM.showParsedList && !currentEmailsForDock.isEmpty {
                     dockedBottomPanelView
@@ -2440,6 +2400,55 @@ struct ContentView: View {
         .padding(.vertical, Spacing.small)
         .padding(.horizontal, Spacing.xSmall)
         .adaptiveToolbarBackground()
+    }
+
+    @ViewBuilder
+    private var detailContentView: some View {
+        @Bindable var appState = appState
+        if !modelVM.showParsedList {
+            emptyPlaceholder
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if selectedEmailIDs.count == 1,
+                  let selectedID = selectedEmailIDs.first {
+            let _ = modelVM.rehydrateIfNeeded(selectedID)
+            if let email = modelVM.filteredEmails.first(where: { $0.id == selectedID }) {
+                EmailDetailView(
+                    email: email,
+                    allEmails: modelVM.filteredEmails,
+                    onNavigate: { newID in selectedEmailIDs = [newID] },
+                    onClose: { withAnimation { selectedEmailIDs = [] } },
+                    searchText: modelVM.searchText
+                )
+                .id(selectedID)
+                .onAppear { modelVM.markRead(selectedID) }
+                compactToolsStrip
+            }
+        } else if selectedEmailIDs.count == 2 {
+            let pair = Array(selectedEmailIDs)
+            let emailA = pair.count > 0 ? modelVM.filteredEmails.first(where: { $0.id == pair[0] }) : nil
+            let emailB = pair.count > 1 ? modelVM.filteredEmails.first(where: { $0.id == pair[1] }) : nil
+            if let a = emailA, let b = emailB {
+                VStack(spacing: 0) {
+                    HStack {
+                        Text("Comparing 2 emails")
+                            .font(Typography.headline)
+                        Spacer()
+                        Button("Show Batch Actions") {
+                            appState.showBatchOperations = true
+                        }
+                        .buttonStyle(CompactSecondaryButtonStyle())
+                    }
+                    .padding(Spacing.small)
+                    EmailComparisonView(emailA: a, emailB: b)
+                }
+            } else {
+                batchOperationsView
+            }
+        } else if selectedEmailIDs.count > 1 {
+            batchOperationsView
+        } else {
+            detailPlaceholderWithTools
+        }
     }
 
     private var emptyPlaceholder: some View {

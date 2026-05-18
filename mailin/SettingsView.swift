@@ -41,6 +41,7 @@ struct SettingsView: View {
     #endif
     @State private var openAIKeyInput = ""
     @State private var anthropicKeyInput = ""
+    @State private var showCloudAIConsentAlert = false
     @State private var showAPIKeyAlert = false
     @State private var apiKeyTestResult = ""
     @State private var isTestingAPIKey = false
@@ -741,8 +742,26 @@ struct SettingsView: View {
 
             #if !OFFLINE_MODE
             Section {
-                Toggle("Enable Cloud AI", isOn: $cloudAI.isEnabled)
+                Toggle("Enable Cloud AI", isOn: Binding(
+                    get: { cloudAI.isEnabled },
+                    set: { newValue in
+                        if newValue && !hasConsentedToCloudAI {
+                            showCloudAIConsentAlert = true
+                        } else {
+                            cloudAI.isEnabled = newValue
+                        }
+                    }
+                ))
                     .help("Use cloud AI providers (OpenAI, Anthropic) for enhanced analysis")
+                    .alert("Enable Cloud AI?", isPresented: $showCloudAIConsentAlert) {
+                        Button("Enable Cloud AI") {
+                            hasConsentedToCloudAI = true
+                            cloudAI.isEnabled = true
+                        }
+                        Button("Cancel", role: .cancel) { }
+                    } message: {
+                        Text("Cloud AI sends email excerpts and metadata to third-party AI providers (OpenAI or Anthropic) for analysis. Your data will leave this device and be processed on external servers.\n\nYou provide your own API key. mailin does not collect or store any data sent to these providers.\n\nDo not enable this for sensitive, privileged, or legally protected communications.")
+                    }
 
                 if cloudAI.isEnabled {
                     Toggle("Prefer Cloud AI over on-device", isOn: $cloudAI.preferCloudAI)

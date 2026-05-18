@@ -26,16 +26,8 @@ struct AboutView: View {
                     .shadow(color: .black.opacity(0.1), radius: Shadows.large.radius, y: Shadows.large.y)
 
                 VStack(spacing: Spacing.xxSmall) {
-                    HStack(spacing: Spacing.xSmall) {
-                        Text("mailin")
-                            .font(Typography.largeTitle)
-                        Text("ALPHA")
-                            .font(.system(size: 10, weight: .bold, design: .rounded))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Capsule().fill(Color.orange))
-                    }
+                    Text("mailin")
+                        .font(Typography.largeTitle)
 
                     Text("Email Archive Analyzer")
                         .font(Typography.headline)
@@ -44,7 +36,7 @@ struct AboutView: View {
 
                 if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
                    let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String {
-                    Text("Version \(version) (\(build)) — Public Alpha")
+                    Text("Version \(version) (\(build))")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
                 }

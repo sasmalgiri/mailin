@@ -175,7 +175,7 @@ This is a proprietary project. For bug reports or feature requests, contact [sas
 
 ## Privacy Policy
 
-mailin does not collect, transmit, or store any personal data on external servers. All email parsing and analysis happens entirely on your device. See the full [Privacy Policy](privacy-policy.html).
+mailin does not collect, transmit, or store any personal data on external servers. All email parsing and analysis happens entirely on your device. See the full [Privacy Policy](https://sasmalgiri.github.io/mailin/privacy/).
 
 ---
 

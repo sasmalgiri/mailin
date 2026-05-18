@@ -548,10 +548,17 @@ struct PaywallView: View {
 
     private var legalText: some View {
         VStack(spacing: Spacing.xxSmall) {
-            Text("Subscriptions auto-renew unless cancelled 24 hours before the end of the billing period. Manage subscriptions in System Settings. Lifetime purchases are permanent. All purchases can be restored on your devices signed in with the same Apple ID.")
+            #if os(iOS)
+            Text("Subscriptions auto-renew unless cancelled at least 24 hours before the end of the billing period. Payment will be charged to your Apple ID account at confirmation of purchase. You can manage and cancel subscriptions in Settings > [your name] > Subscriptions. Lifetime purchases are permanent and do not auto-renew.")
                 .font(Typography.caption2)
                 .foregroundColor(AppColors.secondary)
                 .multilineTextAlignment(.center)
+            #else
+            Text("Subscriptions auto-renew unless cancelled at least 24 hours before the end of the billing period. Payment will be charged to your Apple ID account at confirmation of purchase. You can manage and cancel subscriptions in System Settings > Apple ID > Subscriptions. Lifetime purchases are permanent and do not auto-renew.")
+                .font(Typography.caption2)
+                .foregroundColor(AppColors.secondary)
+                .multilineTextAlignment(.center)
+            #endif
 
             HStack(spacing: Spacing.medium) {
                 if let termsURL = URL(string: "https://sasmalgiri.github.io/mailin/terms") {

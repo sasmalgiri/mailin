@@ -98,7 +98,7 @@ class LegalComplianceManager: ObservableObject {
 
     2. LICENSE: mailin grants you a personal, non-transferable license to use the app on your Apple devices.
 
-    3. PURCHASES: Pro features are available via auto-renewable subscriptions (monthly or yearly) or a one-time lifetime purchase through the App Store. Subscriptions auto-renew unless cancelled at least 24 hours before the end of the current billing period. You can manage or cancel subscriptions in System Settings > Apple ID > Subscriptions. Lifetime purchases are permanent and do not auto-renew.
+    3. PURCHASES: Pro features are available via auto-renewable subscriptions (monthly or yearly) or a one-time lifetime purchase through the App Store. Payment will be charged to your Apple ID account at confirmation of purchase. Subscriptions auto-renew unless cancelled at least 24 hours before the end of the current billing period. You can manage or cancel subscriptions by going to your account settings on the App Store after purchase. Lifetime purchases are permanent and do not auto-renew.
 
     4. PERMITTED USE: You may use mailin for lawful purposes including personal email management, professional email analysis, legal document review, forensic investigation, and journalism research.
 

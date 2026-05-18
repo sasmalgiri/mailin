@@ -15,7 +15,7 @@
           "locale" : "en_US"
         }
       ],
-      "productID" : "mailincloud_personal",
+      "productID" : "mailin_personal",
       "referenceName" : "Personal Lifetime",
       "type" : "NonConsumable"
     },
