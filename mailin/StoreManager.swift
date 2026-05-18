@@ -30,7 +30,7 @@ class StoreManager: ObservableObject {
 
     // MARK: - Product IDs
 
-    static let personalLifetimeID = "mailincloud_personal"
+    static let personalLifetimeID = "mailin_personal"
     static let professionalLifetimeID = "Professional_Lifetime"
     static let personalMonthlyID = "personal_monthly"
     static let personalYearlyID = "personal_yearly_01"

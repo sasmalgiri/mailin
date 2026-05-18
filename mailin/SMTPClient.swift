@@ -47,7 +47,7 @@ struct OutgoingEmail: Sendable {
 actor SMTPClient {
     private let config: SMTPConfig
     private var connection: NWConnection?
-    private let logger = Logger(subsystem: "com.ecosanskriti.mailincloud", category: "SMTP")
+    private let logger = Logger(subsystem: "com.ecosanskriti.mailin", category: "SMTP")
 
     enum SMTPError: LocalizedError {
         case connectionFailed(String)

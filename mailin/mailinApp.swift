@@ -581,7 +581,7 @@ struct mailinApp: App {
 
     private func handleIncomingURL(_ url: URL) {
         let scheme = url.scheme ?? ""
-        if scheme == "com.ecosanskriti.mailincloud" || scheme == "msauth.com.ecosanskriti.mailincloud" {
+        if scheme == "com.ecosanskriti.mailin" || scheme == "msauth.com.ecosanskriti.mailin" {
             NotificationCenter.default.post(name: .oauthCallback, object: url)
         } else {
             let ext = url.pathExtension.lowercased()

@@ -60,7 +60,7 @@ struct AboutView: View {
                         description: "Zero data collection. On-device by default. Cloud AI is optional and user-controlled."
                     )
                     featureRow(
-                        icon: "apple.logo",
+                        icon: "swift",
                         title: "Native Apple Technology",
                         description: "Built with SwiftUI and on-device AI. Fast, fluid, and truly native."
                     )

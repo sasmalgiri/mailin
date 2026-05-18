@@ -14,7 +14,7 @@ class EncryptedStorageManager {
 
     // MARK: - Constants
 
-    private let keychainTag = "com.ecosanskriti.mailincloud.encryptionKey"
+    private let keychainTag = "com.ecosanskriti.mailin.encryptionKey"
     private let archiveExtension = "mailinarchive"
     private let metadataExtension = "mailinmeta"
 

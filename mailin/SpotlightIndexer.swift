@@ -110,7 +110,7 @@ class SpotlightIndexer: NSObject, CSSearchableIndexDelegate {
 
                     let item = CSSearchableItem(
                         uniqueIdentifier: email.id.uuidString,
-                        domainIdentifier: "com.ecosanskriti.mailincloud.emails",
+                        domainIdentifier: "com.ecosanskriti.mailin.emails",
                         attributeSet: attributeSet
                     )
 
@@ -206,7 +206,7 @@ class SpotlightIndexer: NSObject, CSSearchableIndexDelegate {
     // MARK: - Removal
 
     func removeAllIndexedEmails() {
-        searchableIndex.deleteSearchableItems(withDomainIdentifiers: ["com.ecosanskriti.mailincloud.emails"]) { [weak self] _ in
+        searchableIndex.deleteSearchableItems(withDomainIdentifiers: ["com.ecosanskriti.mailin.emails"]) { [weak self] _ in
             Task { @MainActor in
                 self?.aiSummaries.removeAll()
                 self?.aiPriorities.removeAll()

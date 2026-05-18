@@ -5,7 +5,7 @@ import os.log
 private let persistLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "mailin", category: "Persistence")
 
 struct EmailPersistence {
-    private static let saveQueue = DispatchQueue(label: "com.ecosanskriti.mailincloud.persistence", qos: .utility)
+    private static let saveQueue = DispatchQueue(label: "com.ecosanskriti.mailin.persistence", qos: .utility)
     private static let currentVersion = 1
 
     private static var storeURL: URL {

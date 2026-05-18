@@ -47,7 +47,7 @@ final class CloudAIManager: ObservableObject {
         didSet { UserDefaults.standard.set(preferCloudAI, forKey: "cloudAIPreferred") }
     }
 
-    private let logger = Logger(subsystem: "com.ecosanskriti.mailincloud", category: "CloudAI")
+    private let logger = Logger(subsystem: "com.ecosanskriti.mailin", category: "CloudAI")
 
     private init() {
         let providerRaw = UserDefaults.standard.string(forKey: "cloudAIProvider") ?? CloudAIProviderType.openAI.rawValue

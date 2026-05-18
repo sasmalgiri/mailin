@@ -321,7 +321,7 @@ struct SettingsView: View {
                 Text("Purchase")
                     .font(.headline)
             } footer: {
-                Text("Buy once, own forever. No subscriptions required.")
+                Text("Lifetime option available — buy once, own forever. Monthly and yearly subscriptions also offered.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }

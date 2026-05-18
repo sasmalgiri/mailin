@@ -28,7 +28,7 @@ struct GmailOAuthConfig {
 
     static let `default` = GmailOAuthConfig(
         clientID: kGmailClientIDPlaceholder,
-        redirectURI: "com.ecosanskriti.mailincloud:/oauth2callback",
+        redirectURI: "com.ecosanskriti.mailin:/oauth2callback",
         scopes: ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.labels"]
     )
 }

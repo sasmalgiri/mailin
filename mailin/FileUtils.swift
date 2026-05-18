@@ -471,7 +471,7 @@ public func appSupportDirectory(appFolder: String = "mailin") throws -> URL {
 import Security
 
 enum KeychainHelper {
-    private static let service = "com.ecosanskriti.mailincloud"
+    private static let service = "com.ecosanskriti.mailin"
 
     static func save(key: String, value: String) {
         guard let data = value.data(using: .utf8) else { return }

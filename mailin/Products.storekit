@@ -92,7 +92,7 @@
   },
   "subscriptionGroups" : [
     {
-      "id" : "mailincloud_personal_group",
+      "id" : "mailin_personal_group",
       "localizations" : [
         {
           "description" : "Unlimited emails, AI assistant, analytics, and exports.",
@@ -124,7 +124,7 @@
           "productID" : "personal_monthly",
           "recurringSubscriptionPeriod" : "P1M",
           "referenceName" : "Personal Monthly",
-          "subscriptionGroupID" : "mailincloud_personal_group",
+          "subscriptionGroupID" : "mailin_personal_group",
           "type" : "RecurringSubscription"
         },
         {
@@ -149,7 +149,7 @@
           "productID" : "personal_yearly_01",
           "recurringSubscriptionPeriod" : "P1Y",
           "referenceName" : "Personal Yearly",
-          "subscriptionGroupID" : "mailincloud_personal_group",
+          "subscriptionGroupID" : "mailin_personal_group",
           "type" : "RecurringSubscription"
         }
       ]

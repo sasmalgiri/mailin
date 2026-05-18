@@ -20,10 +20,10 @@ private final class OutlookOnceFlag: @unchecked Sendable {
 
 /// Register an app in Azure AD (Entra ID) and paste the Application (client) ID here.
 /// Portal: https://entra.microsoft.com  ->  App registrations  ->  New registration
-/// Set redirect URI to: msauth.com.ecosanskriti.mailincloud://auth
+/// Set redirect URI to: msauth.com.ecosanskriti.mailin://auth
 private let msClientID = "YOUR_AZURE_CLIENT_ID"
 private let msTenantID = "common"
-private let msRedirectURI = "msauth.com.ecosanskriti.mailincloud://auth"
+private let msRedirectURI = "msauth.com.ecosanskriti.mailin://auth"
 private let msScopes = ["Mail.Read", "Mail.ReadBasic", "User.Read", "offline_access"]
 
 private let msAuthorizeURL = "https://login.microsoftonline.com/\(msTenantID)/oauth2/v2.0/authorize"

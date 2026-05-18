@@ -5,7 +5,7 @@ import Combine
 // MARK: - GroupActivity for sharing email review sessions
 
 struct EmailReviewActivity: GroupActivity {
-    static let activityIdentifier = "com.ecosanskriti.mailincloud.review"
+    static let activityIdentifier = "com.ecosanskriti.mailin.review"
 
     var metadata: GroupActivityMetadata {
         var meta = GroupActivityMetadata()
