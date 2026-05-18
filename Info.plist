@@ -29,25 +29,25 @@
 
 	<!-- Privacy Usage Descriptions -->
 	<key>NSDocumentsFolderUsageDescription</key>
-	<string>mailin needs access to your Documents folder to import and export email archives (.mbox and .eml files).</string>
+	<string>mailin accesses your Documents folder to open email archive files you select for import and to save exported results. For example, opening a Gmail Takeout .mbox file stored in Documents, or saving a PDF export of analyzed emails. Only files you explicitly choose are accessed.</string>
 
 	<key>NSDesktopFolderUsageDescription</key>
-	<string>mailin needs access to your Desktop to import email archives and export analysis results.</string>
+	<string>mailin accesses your Desktop to open email archive files you select for import and to save exported results. For example, opening an .eml file saved on your Desktop, or exporting a forensic report as CSV. Only files you explicitly choose are accessed.</string>
 
 	<key>NSDownloadsFolderUsageDescription</key>
-	<string>mailin needs access to your Downloads folder to import email archives downloaded from email providers.</string>
+	<string>mailin accesses your Downloads folder to open email archive files you have downloaded. For example, opening a Google Takeout .mbox archive or an Outlook .pst file downloaded from your email provider. Only files you explicitly choose are accessed.</string>
 
 	<key>NSFaceIDUsageDescription</key>
-	<string>mailin uses Face ID or Touch ID to unlock the app and protect your email archives.</string>
+	<string>mailin uses Face ID to verify your identity before unlocking the app. For example, when you have enabled biometric lock in Settings, Face ID is required each time you open the app to protect your email archives from unauthorized access.</string>
 
 	<key>NSContactsUsageDescription</key>
-	<string>mailin uses your Contacts to identify email senders and enrich AI-powered analysis. All lookups happen on-device — no data is shared externally.</string>
+	<string>mailin reads your Contacts to match email addresses with contact names in your imported email archives. For example, displaying "John Smith" instead of "john@example.com" in the email list. All lookups happen entirely on your device — no contact data is collected, stored, or shared externally.</string>
 
 	<key>NSCalendarsUsageDescription</key>
-	<string>mailin checks your Calendar to correlate meetings with email discussions. All checks happen on-device — no data is shared externally.</string>
+	<string>mailin reads your Calendar to find meetings related to emails in your imported archives. For example, linking a calendar event titled "Budget Review" to emails about the same topic. All lookups happen entirely on your device — no calendar data is collected, stored, or shared externally.</string>
 
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>mailin uses local network access to connect to email servers (IMAP/SMTP) when you configure a direct mail account connection. For example, connecting to a local Exchange or mail server on your network. No data is sent to third parties.</string>
+	<string>mailin connects to email servers on your local network when you configure a direct IMAP or SMTP mail account. For example, connecting to a corporate Exchange server or a self-hosted mail server on your office network to fetch or send emails. No data is sent to third parties.</string>
 
 	<!-- iOS Document Browser Support -->
 	<key>UISupportsDocumentBrowser</key>
