@@ -342,6 +342,20 @@
             .pricing-grid { grid-template-columns: 1fr; }
             .cta-row { flex-direction: column; align-items: stretch; }
         }
+
+        /* Scroll-reveal */
+        .reveal {
+            opacity: 0;
+            transform: translateY(24px);
+            transition: opacity 0.6s cubic-bezier(0.22, 1, 0.36, 1),
+                        transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+            will-change: opacity, transform;
+        }
+        .reveal.is-visible { opacity: 1; transform: none; }
+        /* Respect users who prefer less motion — show everything, no transitions */
+        @media (prefers-reduced-motion: reduce) {
+            .reveal { opacity: 1 !important; transform: none !important; transition: none !important; }
+        }
     </style>
 </head>
 <body>
@@ -560,7 +574,7 @@
             </ul>
         </div>
         <div class="showcase-image">
-<img src="shot-inbox.png" alt="mailin inbox with an email archive loaded">
+<img src="shot-inbox.png" alt="mailin inbox with an email archive loaded" loading="lazy" decoding="async">
         </div>
     </div>
 
@@ -576,7 +590,7 @@
             </ul>
         </div>
         <div class="showcase-image">
-<img src="shot-search.png" alt="mailin search and tools">
+<img src="shot-search.png" alt="mailin search and tools" loading="lazy" decoding="async">
         </div>
     </div>
 
@@ -592,7 +606,7 @@
             </ul>
         </div>
         <div class="showcase-image">
-<img src="shot-analytics.png" alt="mailin analytics dashboard">
+<img src="shot-analytics.png" alt="mailin analytics dashboard" loading="lazy" decoding="async">
         </div>
     </div>
 
@@ -608,7 +622,7 @@
             </ul>
         </div>
         <div class="showcase-image">
-<img src="shot-ai.png" alt="mailin on-device AI assistant">
+<img src="shot-ai.png" alt="mailin on-device AI assistant" loading="lazy" decoding="async">
         </div>
     </div>
 </section>
@@ -847,6 +861,63 @@
         All software, including AI features, can produce inaccurate or incomplete results. AI-powered features in mailin (assistant, digest, sentiment, topic extraction, anomaly detection, predictive coding, visualizations) use statistical models that may make mistakes — always verify important outputs before relying on them. Advanced integrity features (chain-of-custody artifacts, Bates numbering, signed exports, HMAC-chained audit logs) are designed to support common records-integrity and eDiscovery workflows. Admissibility of digital evidence is jurisdiction-specific and depends on factors beyond any single software tool. Consult qualified legal counsel for evidentiary use. mailin makes no warranty of fitness for any specific legal or regulatory purpose. &middot; Apple, iPhone, iPad, and Mac are trademarks of Apple Inc. Gmail is a trademark of Google LLC. Outlook and Microsoft 365 are trademarks of Microsoft Corporation. Lotus Notes is a trademark of HCL Technologies. All other trademarks are property of their respective owners. &middot; mailin is an independent product and is not affiliated with, endorsed by, or sponsored by Apple Inc., Google LLC, Microsoft Corporation, or HCL Technologies.
     </p>
 </footer>
+
+<script>
+(function () {
+    var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    // Elements to reveal on scroll
+    var selectors = [
+        '.section h2', '.section .subtitle',
+        '.feature-card', '.format-card', '.engine-card', '.hybrid-bullets .b',
+        '.showcase-row', '.persona', '.platform-card', '.price-card',
+        '.universal-note', '.trust-banner .badge', '#v2 .section-inner > div'
+    ];
+    var els = [];
+    selectors.forEach(function (s) {
+        Array.prototype.forEach.call(document.querySelectorAll(s), function (el) { els.push(el); });
+    });
+
+    if (reduce || !('IntersectionObserver' in window)) {
+        // No motion: make sure everything is visible
+        els.forEach(function (el) { el.classList.add('is-visible'); });
+        return;
+    }
+
+    els.forEach(function (el, i) {
+        el.classList.add('reveal');
+        // Small stagger for items in the same row/grid
+        el.style.transitionDelay = ((i % 6) * 60) + 'ms';
+    });
+
+    var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+            if (entry.isIntersecting) {
+                entry.target.classList.add('is-visible');
+                io.unobserve(entry.target);
+            }
+        });
+    }, { threshold: 0.12, rootMargin: '0px 0px -8% 0px' });
+
+    els.forEach(function (el) { io.observe(el); });
+
+    // Subtle parallax on the hero screenshot
+    var heroShot = document.querySelector('img[src="shot-hero.png"]');
+    if (heroShot) {
+        var ticking = false;
+        window.addEventListener('scroll', function () {
+            if (ticking) return;
+            ticking = true;
+            requestAnimationFrame(function () {
+                var rect = heroShot.getBoundingClientRect();
+                var offset = Math.max(-30, Math.min(30, (window.innerHeight / 2 - rect.top) * 0.03));
+                heroShot.style.transform = 'translateY(' + (-offset) + 'px)';
+                ticking = false;
+            });
+        }, { passive: true });
+    }
+})();
+</script>
 
 </body>
 </html>
