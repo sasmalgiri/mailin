@@ -1809,7 +1809,6 @@ struct AIAssistantView: View {
         let engine: AIEngine = rawEngine == .auto
             ? resolveAutoEngine(query: currentQuery, emailCount: emailsCopy.count)
             : rawEngine
-        let useAppleAIClassifier = foundationModelAvailable
 
         switch engine {
         // ━━━ Engine 1: Apple AI MoE ━━━
@@ -1823,21 +1822,12 @@ struct AIAssistantView: View {
                     streamingAnswer = ""
                 }
 
-                async let aiConversational = Self.generateAppleAIConversationalResponse(currentQuery, emailCount: emailsCopy.count, enabled: useAppleAIClassifier)
-
                 streamingQuery = currentQuery
                 streamingAnswer = ""
                 let retrieved = Self.retrieveRelevantEmails(query: currentQuery, emails: emailsCopy, priorContext: "", predictions: [:])
                 let retrievedIDs = Array(retrieved.prefix(5).map(\.id))
                 var answer = await askFoundationModelStreaming(currentQuery)
                 guard !Task.isCancelled else { return }
-
-                if let conversationalAnswer = await aiConversational {
-                    withAnimation(AnimationTiming.normal) {
-                        conversationHistory.append((query: currentQuery, answer: conversationalAnswer, timestamp: Date(), relatedEmailIDs: []))
-                    }
-                    return
-                }
 
                 if !context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     answer = "Scoped to search: \"\(context)\" (\(emailsCopy.count) matches)\n\n" + answer
@@ -1860,21 +1850,12 @@ struct AIAssistantView: View {
                     streamingAnswer = ""
                 }
 
-                async let aiConversational = Self.generateAppleAIConversationalResponse(currentQuery, emailCount: emailsCopy.count, enabled: useAppleAIClassifier)
-
                 streamingQuery = currentQuery
                 streamingAnswer = ""
                 let retrieved = Self.retrieveRelevantEmails(query: currentQuery, emails: emailsCopy, priorContext: "", predictions: [:])
                 let retrievedIDs = Array(retrieved.prefix(5).map(\.id))
                 var answer = await askFoundationModelDirect(currentQuery)
                 guard !Task.isCancelled else { return }
-
-                if let conversationalAnswer = await aiConversational {
-                    withAnimation(AnimationTiming.normal) {
-                        conversationHistory.append((query: currentQuery, answer: conversationalAnswer, timestamp: Date(), relatedEmailIDs: []))
-                    }
-                    return
-                }
 
                 if !context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     answer = "Scoped to search: \"\(context)\" (\(emailsCopy.count) matches)\n\n" + answer
@@ -1900,8 +1881,6 @@ struct AIAssistantView: View {
                     streamingAnswer = ""
                 }
 
-                async let aiConversational = Self.generateAppleAIConversationalResponse(currentQuery, emailCount: emailsCopy.count, enabled: useAppleAIClassifier)
-
                 // Layer 1: NLP foundation (deterministic, instant — always runs as safety net)
                 let enhanced = await Task.detached(priority: .userInitiated) {
                     Self.enhancedNLPPipeline(
@@ -1912,13 +1891,6 @@ struct AIAssistantView: View {
                     )
                 }.value
                 guard !Task.isCancelled else { return }
-
-                if let conversationalAnswer = await aiConversational {
-                    withAnimation(AnimationTiming.normal) {
-                        conversationHistory.append((query: currentQuery, answer: conversationalAnswer, timestamp: Date(), relatedEmailIDs: []))
-                    }
-                    return
-                }
 
                 var answer = enhanced.answer
                 var retrievedIDs = enhanced.retrievedIDs
