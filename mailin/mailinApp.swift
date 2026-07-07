@@ -51,7 +51,7 @@ struct mailinApp: App {
                     .environmentObject(storeManager)
                     .adaptiveLayout()
                     #if os(macOS)
-                    .frame(minWidth: 700, idealWidth: 1100, minHeight: 500, idealHeight: 750)
+                    .frame(minWidth: 800, idealWidth: 1200, minHeight: 600, idealHeight: 820)
                     #endif
                     .sheet(isPresented: Binding(
                         get: { compliance.needsTermsAcceptance },
@@ -73,7 +73,9 @@ struct mailinApp: App {
                     .onAppear {
                         StoreManager.resetDailyCountersIfNeeded()
                         configureAppearance()
-                        ImportProgressNotifier.shared.requestPermission()
+                        // Notification permission is opt-in via Settings → General
+                        // → Notifications, not auto-prompted at launch.
+                        BackgroundAnalysisManager.shared.scheduleBackgroundAnalysis()
                         try? Tips.configure([
                             .displayFrequency(.weekly)
                         ])
@@ -733,7 +735,7 @@ struct PersonaOnboardingView: View {
 
             ScrollView {
                 VStack(spacing: Spacing.xSmall) {
-                    ForEach(PersonaManager.Persona.allCases, id: \.rawValue) { persona in
+                    ForEach(PersonaManager.Persona.pickableCases, id: \.rawValue) { persona in
                         Button {
                             withAnimation(.easeInOut(duration: 0.2)) { selected = persona }
                         } label: {
@@ -821,7 +823,7 @@ struct PersonaOnboardingView: View {
         }
         .adaptiveHeroBackground(colors: [selected.accentColor, .purple, .indigo, .teal])
         #if os(macOS)
-        .frame(width: 460, height: 480)
+        .frame(minWidth: 360, idealWidth: 460, minHeight: 380, idealHeight: 480)
         #endif
     }
 }

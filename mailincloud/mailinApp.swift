@@ -51,7 +51,7 @@ struct mailinApp: App {
                     .environmentObject(storeManager)
                     .adaptiveLayout()
                     #if os(macOS)
-                    .frame(minWidth: 700, idealWidth: 1100, minHeight: 500, idealHeight: 750)
+                    .frame(minWidth: 520, idealWidth: 1100, minHeight: 400, idealHeight: 750)
                     #endif
                     .sheet(isPresented: Binding(
                         get: { compliance.needsTermsAcceptance },
@@ -61,7 +61,10 @@ struct mailinApp: App {
                             .interactiveDismissDisabled()
                     }
                     .sheet(isPresented: Binding(
-                        get: { !compliance.needsTermsAcceptance && !personaManager.hasCompletedPersonaSelection },
+                        get: {
+                            guard !compliance.needsTermsAcceptance else { return false }
+                            return !personaManager.hasCompletedPersonaSelection
+                        },
                         set: { if !$0 { personaManager.completePersonaSelection() } }
                     )) {
                         PersonaOnboardingView()
@@ -71,6 +74,7 @@ struct mailinApp: App {
                         StoreManager.resetDailyCountersIfNeeded()
                         configureAppearance()
                         ImportProgressNotifier.shared.requestPermission()
+                        BackgroundAnalysisManager.shared.scheduleBackgroundAnalysis()
                         try? Tips.configure([
                             .displayFrequency(.weekly)
                         ])
@@ -231,6 +235,7 @@ struct mailinApp: App {
             }
         }
 
+        #if !OFFLINE_MODE
         CommandMenu("Mail") {
             Button("Compose New Email...") {
                 #if os(macOS)
@@ -260,6 +265,7 @@ struct mailinApp: App {
             }
             .keyboardShortcut("l", modifiers: [.command, .shift])
         }
+        #endif
 
         CommandMenu("Analysis") {
             Button("Reply Statistics...") {
@@ -576,7 +582,7 @@ struct mailinApp: App {
 
     private func handleIncomingURL(_ url: URL) {
         let scheme = url.scheme ?? ""
-        if scheme == "com.ecosanskriti.mailincloud" || scheme == "msauth.com.ecosanskriti.mailincloud" {
+        if scheme == "com.ecosanskriti.mailin" || scheme == "msauth.com.ecosanskriti.mailin" {
             NotificationCenter.default.post(name: .oauthCallback, object: url)
         } else {
             let ext = url.pathExtension.lowercased()
@@ -676,11 +682,13 @@ class AppStateManager {
     var exportProgressMessage: String = ""
     var dockedBottomPanel: DockedPanel? = nil
     // v11: Send/Receive & Cloud AI
+    #if !OFFLINE_MODE
     var showIMAPConfig = false
     var showComposeEmail = false
     var showCloudConnect = false
     var triggerFetchMail = false
     var inlineComposeMode: ComposeMode? = nil
+    #endif
 
     enum DockedPanel: String {
         case topics, subjects
@@ -814,7 +822,7 @@ struct PersonaOnboardingView: View {
         }
         .adaptiveHeroBackground(colors: [selected.accentColor, .purple, .indigo, .teal])
         #if os(macOS)
-        .frame(width: 460, height: 480)
+        .frame(minWidth: 360, idealWidth: 460, minHeight: 380, idealHeight: 480)
         #endif
     }
 }

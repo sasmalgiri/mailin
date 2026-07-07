@@ -68,6 +68,7 @@ struct IntegrityReport {
     let totalChecked: Int
     let passed: Int
     let failed: Int
+    let newlySealed: Int
     let failedIDs: [UUID]
     let timestamp: Date
 
@@ -96,10 +97,19 @@ final class ChainOfCustodyManager: ObservableObject {
     }
 
     func verifyIntegrity(of emails: [MBOXParser.RawEmail]) -> IntegrityReport {
+        let forensic = ForensicManager.shared
         var failedIDs: [UUID] = []
+        var newlySealed = 0
+
+        // Auto-seal emails that don't have stored hashes yet
+        let unsealed = emails.filter { forensic.perEmailHashes[$0.id] == nil }
+        if !unsealed.isEmpty {
+            forensic.storeEmailHashes(unsealed)
+            newlySealed = unsealed.count
+        }
 
         for email in emails {
-            let result = ForensicManager.shared.verifyEmailIntegrity(email)
+            let result = forensic.verifyEmailIntegrity(email)
             if !result.passed {
                 failedIDs.append(email.id)
             }
@@ -109,6 +119,7 @@ final class ChainOfCustodyManager: ObservableObject {
             totalChecked: emails.count,
             passed: emails.count - failedIDs.count,
             failed: failedIDs.count,
+            newlySealed: newlySealed,
             failedIDs: failedIDs,
             timestamp: Date()
         )
@@ -149,11 +160,11 @@ final class ChainOfCustodyManager: ObservableObject {
         let captionFont = PlatformFont.systemFont(ofSize: 8, weight: .medium)
 
         #if os(macOS)
-        let labelColor = PlatformColor.labelColor
-        let secondaryColor = PlatformColor.secondaryLabelColor
+        let labelColor = NSColor(white: 0.1, alpha: 1.0)
+        let secondaryColor = NSColor(white: 0.4, alpha: 1.0)
         #else
-        let labelColor = PlatformColor.label
-        let secondaryColor = PlatformColor.secondaryLabel
+        let labelColor = UIColor(white: 0.1, alpha: 1.0)
+        let secondaryColor = UIColor(white: 0.4, alpha: 1.0)
         #endif
 
         let titleAttrs: [NSAttributedString.Key: Any] = [.font: titleFont, .foregroundColor: labelColor]
@@ -260,11 +271,13 @@ final class ChainOfCustodyManager: ObservableObject {
 
 struct ChainOfCustodyView: View {
     let emails: [MBOXParser.RawEmail]
+    var isPresented: Binding<Bool>?
     @ObservedObject private var custodyManager = ChainOfCustodyManager.shared
     @State private var showRecordEvent = false
     @State private var integrityReport: IntegrityReport?
     @State private var isVerifying = false
-    @Environment(\.dismiss) private var dismiss
+    @State private var showTutorial = false
+    @Environment(\.dismiss) private var envDismiss
 
     var body: some View {
         VStack(spacing: 0) {
@@ -280,11 +293,12 @@ struct ChainOfCustodyView: View {
                 .padding(Spacing.medium)
             }
         }
+        .featureTutorial(.chainOfCustody, key: "chain_of_custody_tutorial_seen", isPresented: $showTutorial)
         .sheet(isPresented: $showRecordEvent) {
             RecordEventSheet()
         }
         #if os(macOS)
-        .frame(minWidth: 600, minHeight: 500)
+        .frame(minWidth: 460, minHeight: 360)
         #endif
     }
 
@@ -298,10 +312,17 @@ struct ChainOfCustodyView: View {
             Text("\(custodyManager.events.count) events")
                 .font(Typography.caption1)
                 .foregroundColor(AppColors.secondary)
-            Button("Done") { dismiss() }
-                .keyboardShortcut(.cancelAction)
+            TutorialHelpButton(showTutorial: $showTutorial)
+            if isPresented != nil {
+                Button("Done") { closeSheet() }
+                    .keyboardShortcut(.cancelAction)
+            }
         }
         .padding(Spacing.medium)
+    }
+
+    private func closeSheet() {
+        if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
     }
 
     private var integritySection: some View {
@@ -329,6 +350,17 @@ struct ChainOfCustodyView: View {
                             .font(Typography.caption2)
                             .foregroundColor(AppColors.secondary)
                     }
+                    if report.newlySealed > 0 {
+                        VStack {
+                            Text("\(report.newlySealed)")
+                                .font(Typography.title3)
+                                .fontWeight(.bold)
+                                .foregroundColor(.blue)
+                            Text("Sealed")
+                                .font(Typography.caption2)
+                                .foregroundColor(AppColors.secondary)
+                        }
+                    }
                     VStack {
                         Text("\(report.failed)")
                             .font(Typography.title3)
@@ -340,6 +372,8 @@ struct ChainOfCustodyView: View {
                     }
                 }
                 .frame(maxWidth: .infinity)
+
+                verificationExplanation(report)
             }
 
             Button {
@@ -431,6 +465,47 @@ struct ChainOfCustodyView: View {
         .accessibilityLabel("\(event.eventType.rawValue) by \(event.actor): \(event.description)")
     }
 
+    @ViewBuilder
+    private func verificationExplanation(_ report: IntegrityReport) -> some View {
+        if report.failed == 0 && report.newlySealed == 0 {
+            Label {
+                Text("All emails verified — SHA-256 hashes match the sealed originals. No tampering detected.")
+                    .font(Typography.caption1)
+            } icon: {
+                Image(systemName: "checkmark.seal.fill")
+                    .foregroundColor(AppColors.success)
+            }
+            .padding(Spacing.xSmall)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(AppColors.success.opacity(0.1))
+            .cornerRadius(CornerRadius.small)
+        } else if report.failed == 0 && report.newlySealed > 0 {
+            Label {
+                Text("\(report.newlySealed) email\(report.newlySealed == 1 ? " was" : "s were") sealed for the first time — SHA-256 hashes computed and stored as baseline. Run verification again to confirm integrity against these baselines.")
+                    .font(Typography.caption1)
+            } icon: {
+                Image(systemName: "lock.shield.fill")
+                    .foregroundColor(.blue)
+            }
+            .padding(Spacing.xSmall)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.blue.opacity(0.1))
+            .cornerRadius(CornerRadius.small)
+        } else {
+            Label {
+                Text("\(report.failed) email\(report.failed == 1 ? "" : "s") failed — SHA-256 hash does not match the sealed original. This may indicate the email content was modified after import.")
+                    .font(Typography.caption1)
+            } icon: {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(AppColors.error)
+            }
+            .padding(Spacing.xSmall)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(AppColors.error.opacity(0.1))
+            .cornerRadius(CornerRadius.small)
+        }
+    }
+
     private func verifyIntegrity() {
         isVerifying = true
         let emailsCopy = emails
@@ -449,10 +524,9 @@ struct ChainOfCustodyView: View {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "chain_of_custody_audit.csv"
         panel.allowedContentTypes = [.commaSeparatedText]
-        panel.begin { result in
-            if result == .OK, let url = panel.url {
-                try? data.write(to: url, options: .atomic)
-            }
+        let result = panel.runModal()
+        if result == .OK, let url = panel.url {
+            try? data.write(to: url, options: .atomic)
         }
         #else
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("chain_of_custody_audit.csv")
@@ -466,10 +540,9 @@ struct ChainOfCustodyView: View {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "chain_of_custody_report.pdf"
         panel.allowedContentTypes = [.pdf]
-        panel.begin { result in
-            if result == .OK, let url = panel.url {
-                try? data.write(to: url, options: .atomic)
-            }
+        let result = panel.runModal()
+        if result == .OK, let url = panel.url {
+            try? data.write(to: url, options: .atomic)
         }
         #else
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("chain_of_custody_report.pdf")

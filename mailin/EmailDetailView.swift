@@ -28,7 +28,6 @@ struct EmailDetailView: View {
     @State private var isHTMLReady = false
     @State private var showForensicHeaders = false
     @State private var annotationText: String = ""
-    @State private var showSpoofIndicators = false
     @State private var showHexViewer = false
     @State private var newTagText = ""
 
@@ -1468,13 +1467,12 @@ struct EmailDetailView: View {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = suggestedName
         panel.canCreateDirectories = true
-        panel.begin { result in
-            if result == .OK, let destinationURL = panel.url {
-                do {
-                    try FileUtils.copyFile(from: fileURL, to: destinationURL)
-                } catch {
-                    exportError = "Failed to save attachment: \(error.localizedDescription)"
-                }
+        let result = panel.runModal()
+        if result == .OK, let destinationURL = panel.url {
+            do {
+                try FileUtils.copyFile(from: fileURL, to: destinationURL)
+            } catch {
+                exportError = "Failed to save attachment: \(error.localizedDescription)"
             }
         }
         #else
@@ -1497,10 +1495,9 @@ struct EmailDetailView: View {
         panel.canCreateDirectories = true
         panel.message = "Select a folder to save all attachments"
         panel.prompt = "Save All"
-        panel.begin { result in
-            if result == .OK, let folderURL = panel.url {
-                saveAllAttachments(to: folderURL)
-            }
+        let result = panel.runModal()
+        if result == .OK, let folderURL = panel.url {
+            saveAllAttachments(to: folderURL)
         }
         #else
         let folderURL = FileManager.default.temporaryDirectory.appendingPathComponent("attachments_\(UUID().uuidString)")
@@ -1557,13 +1554,12 @@ struct EmailDetailView: View {
         panel.nameFieldStringValue = fileName
         panel.canCreateDirectories = true
 
-        panel.begin { result in
-            if result == .OK, let url = panel.url {
-                do {
-                    try FileUtils.writeString(exportText, to: url)
-                } catch {
-                    exportError = "Failed to export as TXT: \(error.localizedDescription)"
-                }
+        let result = panel.runModal()
+        if result == .OK, let url = panel.url {
+            do {
+                try FileUtils.writeString(exportText, to: url)
+            } catch {
+                exportError = "Failed to export as TXT: \(error.localizedDescription)"
             }
         }
         #else
@@ -1601,13 +1597,12 @@ struct EmailDetailView: View {
         panel.nameFieldStringValue = fileName
         panel.canCreateDirectories = true
 
-        panel.begin { result in
-            if result == .OK, let url = panel.url {
-                do {
-                    try FileUtils.writeString(csvContent, to: url)
-                } catch {
-                    exportError = "Failed to export CSV: \(error.localizedDescription)"
-                }
+        let result = panel.runModal()
+        if result == .OK, let url = panel.url {
+            do {
+                try FileUtils.writeString(csvContent, to: url)
+            } catch {
+                exportError = "Failed to export CSV: \(error.localizedDescription)"
             }
         }
         #else
@@ -2112,13 +2107,12 @@ struct EmailDetailView: View {
         panel.canCreateDirectories = true
         panel.allowedContentTypes = [.tiff]
 
-        panel.begin { result in
-            if result == .OK, let url = panel.url {
-                do {
-                    try tiffData.write(to: url)
-                } catch {
-                    exportError = "Failed to export TIFF: \(error.localizedDescription)"
-                }
+        let result = panel.runModal()
+        if result == .OK, let url = panel.url {
+            do {
+                try tiffData.write(to: url)
+            } catch {
+                exportError = "Failed to export TIFF: \(error.localizedDescription)"
             }
         }
         #else

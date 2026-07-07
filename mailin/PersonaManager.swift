@@ -13,9 +13,17 @@ import SwiftUI
 class PersonaManager: ObservableObject {
     static let shared = PersonaManager()
 
-    @AppStorage("selectedPersona") var selectedPersona: Persona = .general
+    @AppStorage("selectedPersona") var selectedPersona: Persona = .personal
 
     @Published var hasCompletedPersonaSelection = UserDefaults.standard.bool(forKey: "hasCompletedPersonaSelection")
+
+    init() {
+        // Migrate users whose previously-stored persona was `.general` (now retired)
+        // to `.personal` so the picker remains valid.
+        if selectedPersona == .general {
+            selectedPersona = .personal
+        }
+    }
 
     func switchPersona(to persona: Persona) {
         guard persona != selectedPersona else { return }
@@ -38,6 +46,13 @@ class PersonaManager: ObservableObject {
         case journalist = "journalist"
         case personal = "personal"
         case general = "general"
+
+        /// Personas shown in pickers. `.general` is retained in the enum for
+        /// backward compatibility with previously-stored preferences, but is
+        /// no longer offered as a selectable workspace.
+        static var pickableCases: [Persona] {
+            [.forensic, .legal, .itAdmin, .journalist, .personal]
+        }
 
         var displayName: String {
             switch self {
@@ -63,7 +78,7 @@ class PersonaManager: ObservableObject {
 
         var tagline: String {
             switch self {
-            case .forensic: return "Evidence integrity, chain of custody, court-ready exports"
+            case .forensic: return "Evidence integrity, chain-of-custody artifacts, forensic exports"
             case .legal: return "Privilege review, keyword search, production sets"
             case .itAdmin: return "Technical headers, MIME analysis, server routing"
             case .journalist: return "Pattern discovery, timelines, contact networks"
@@ -152,6 +167,37 @@ class PersonaManager: ObservableObject {
         case evidenceTags = "Evidence Tags"
         case replyFrequency = "Reply Frequency"
         case domains = "Domains"
+    }
+
+    /// Top-level navigation groups shown in the main app sidebar.
+    /// Each persona shows only the groups relevant to its workflow.
+    enum SidebarGroup: String, CaseIterable {
+        case browse
+        case analysis
+        case security
+        case legalForensic
+        case exportReports
+        case aiIntelligence
+    }
+
+    /// Returns which sidebar groups a persona exposes. Manage, Persona, and
+    /// Home are always visible — those are defined in the UI directly.
+    static func sidebarGroups(for persona: Persona) -> Set<SidebarGroup> {
+        switch persona {
+        case .personal:
+            // Minimal: just essential email browsing.
+            return [.browse]
+        case .forensic:
+            return [.browse, .analysis, .security, .legalForensic, .exportReports, .aiIntelligence]
+        case .legal:
+            return [.browse, .analysis, .legalForensic, .exportReports, .aiIntelligence]
+        case .itAdmin:
+            return [.browse, .analysis, .security, .exportReports, .aiIntelligence]
+        case .journalist:
+            return [.browse, .analysis, .security, .exportReports, .aiIntelligence]
+        case .general:
+            return Set(SidebarGroup.allCases)
+        }
     }
 
     enum ExportFormat: String {
@@ -313,6 +359,118 @@ class PersonaManager: ObservableObject {
                 welcomeTitle: "Email Explorer"
             )
         }
+    }
+
+    // MARK: - AI Persona Configuration (v4.3.1)
+
+    struct AIPersonaConfig {
+        let expertWeights: [String: Double]
+        let systemInstruction: String
+        let focusKeywords: [String]
+        let reportStyle: ReportStyle
+        let synthesisGuidance: String
+
+        enum ReportStyle: String {
+            case formal
+            case analytical
+            case technical
+            case investigative
+            case conversational
+            case balanced
+        }
+    }
+
+    nonisolated static func aiConfig(for persona: Persona) -> AIPersonaConfig {
+        switch persona {
+        case .forensic:
+            return AIPersonaConfig(
+                expertWeights: [
+                    "securityExpert": 1.5,
+                    "entityExpert": 1.2,
+                    "timelineExpert": 1.3,
+                    "sentimentExpert": 0.8,
+                    "topicExpert": 0.9
+                ],
+                systemInstruction: "You are a digital forensics analyst. Focus on evidence integrity, chain of custody, and anomalies. Be precise and cite specific emails. Use formal forensic language.",
+                focusKeywords: ["evidence", "anomaly", "suspicious", "forensic", "chain of custody", "artifact", "metadata", "hash", "header"],
+                reportStyle: .formal,
+                synthesisGuidance: "Present findings in evidentiary format. Lead with the most forensically significant findings. Always note confidence level and cite specific email evidence."
+            )
+        case .legal:
+            return AIPersonaConfig(
+                expertWeights: [
+                    "entityExpert": 1.4,
+                    "timelineExpert": 1.3,
+                    "topicExpert": 1.2,
+                    "sentimentExpert": 1.0,
+                    "securityExpert": 0.8
+                ],
+                systemInstruction: "You are a legal review assistant. Focus on privilege, responsive documents, and communication patterns between custodians. Use precise legal terminology.",
+                focusKeywords: ["privilege", "attorney-client", "responsive", "custodian", "production", "hold", "compliance", "contract"],
+                reportStyle: .formal,
+                synthesisGuidance: "Organize findings by legal relevance. Flag potential privilege issues. Note custodian relationships and document timelines chronologically."
+            )
+        case .itAdmin:
+            return AIPersonaConfig(
+                expertWeights: [
+                    "securityExpert": 1.5,
+                    "topicExpert": 0.7,
+                    "entityExpert": 0.9,
+                    "timelineExpert": 1.1,
+                    "sentimentExpert": 0.5
+                ],
+                systemInstruction: "You are an IT security analyst. Focus on technical email headers, authentication failures, suspicious routing, MIME analysis, and infrastructure patterns. Use technical language.",
+                focusKeywords: ["SPF", "DKIM", "DMARC", "header", "routing", "server", "IP", "MIME", "authentication", "domain"],
+                reportStyle: .technical,
+                synthesisGuidance: "Lead with technical findings: authentication results, routing anomalies, infrastructure patterns. Include specific header values and server names."
+            )
+        case .journalist:
+            return AIPersonaConfig(
+                expertWeights: [
+                    "entityExpert": 1.4,
+                    "topicExpert": 1.3,
+                    "sentimentExpert": 1.2,
+                    "timelineExpert": 1.3,
+                    "securityExpert": 0.7
+                ],
+                systemInstruction: "You are an investigative research assistant. Focus on patterns, connections between people, contradictions, and newsworthy findings. Tell the story the data reveals.",
+                focusKeywords: ["pattern", "connection", "contradiction", "timeline", "key player", "decision", "network", "relationship"],
+                reportStyle: .investigative,
+                synthesisGuidance: "Frame findings as a narrative. Highlight surprising connections, contradictions, and pivotal moments. Identify key players and their roles."
+            )
+        case .personal:
+            return AIPersonaConfig(
+                expertWeights: [
+                    "topicExpert": 1.2,
+                    "sentimentExpert": 1.1,
+                    "entityExpert": 1.0,
+                    "timelineExpert": 0.9,
+                    "securityExpert": 0.8
+                ],
+                systemInstruction: "You are a helpful email assistant. Explain things in plain, friendly language. Focus on what matters most to the user. Be concise and clear.",
+                focusKeywords: ["important", "personal", "family", "friend", "photo", "attachment", "reminder"],
+                reportStyle: .conversational,
+                synthesisGuidance: "Use simple, friendly language. Highlight what's personally relevant: important contacts, memorable conversations, key attachments."
+            )
+        case .general:
+            return AIPersonaConfig(
+                expertWeights: [
+                    "securityExpert": 1.0,
+                    "entityExpert": 1.0,
+                    "topicExpert": 1.0,
+                    "sentimentExpert": 1.0,
+                    "timelineExpert": 1.0
+                ],
+                systemInstruction: "You are an intelligent email analysis assistant. Provide balanced, comprehensive analysis covering security, people, topics, and patterns.",
+                focusKeywords: [],
+                reportStyle: .balanced,
+                synthesisGuidance: "Provide balanced analysis across all dimensions. Lead with the most significant findings regardless of category."
+            )
+        }
+    }
+
+    var aiPersonaConfig: AIPersonaConfig {
+        Self.aiConfig(for: selectedPersona)
     }
 
     // MARK: - Convenience Accessors

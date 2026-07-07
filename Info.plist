@@ -2,65 +2,16 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleDevelopmentRegion</key>
-	<string>$(DEVELOPMENT_LANGUAGE)</string>
-	<key>CFBundleExecutable</key>
-	<string>$(EXECUTABLE_NAME)</string>
-	<key>CFBundleIdentifier</key>
-	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
-	<key>CFBundleInfoDictionaryVersion</key>
-	<string>6.0</string>
-	<key>CFBundleDisplayName</key>
-	<string>mailin</string>
-	<key>CFBundleName</key>
-	<string>$(PRODUCT_NAME)</string>
-	<key>CFBundlePackageType</key>
-	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
-	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
-	<key>CFBundleVersion</key>
-	<string>7</string>
-	<key>NSHumanReadableCopyright</key>
-	<string>Copyright © 2025-2026 mailin. All rights reserved.</string>
-
-	<!-- Encryption: only Apple frameworks (CryptoKit, Security.framework, HTTPS) -->
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.ecosanskriti.mailin.backgroundAnalysis</string>
+	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
-
-	<!-- Privacy Usage Descriptions -->
-	<key>NSDocumentsFolderUsageDescription</key>
-	<string>mailin accesses your Documents folder to open email archive files you select for import and to save exported results. For example, opening a Gmail Takeout .mbox file stored in Documents, or saving a PDF export of analyzed emails. Only files you explicitly choose are accessed.</string>
-
-	<key>NSDesktopFolderUsageDescription</key>
-	<string>mailin accesses your Desktop to open email archive files you select for import and to save exported results. For example, opening an .eml file saved on your Desktop, or exporting a forensic report as CSV. Only files you explicitly choose are accessed.</string>
-
-	<key>NSDownloadsFolderUsageDescription</key>
-	<string>mailin accesses your Downloads folder to open email archive files you have downloaded. For example, opening a Google Takeout .mbox archive or an Outlook .pst file downloaded from your email provider. Only files you explicitly choose are accessed.</string>
-
-	<key>NSFaceIDUsageDescription</key>
-	<string>mailin uses Face ID to verify your identity before unlocking the app. For example, when you have enabled biometric lock in Settings, Face ID is required each time you open the app to protect your email archives from unauthorized access.</string>
-
-	<key>NSContactsUsageDescription</key>
-	<string>mailin reads your Contacts to match email addresses with contact names in your imported email archives. For example, displaying "John Smith" instead of "john@example.com" in the email list. All lookups happen entirely on your device — no contact data is collected, stored, or shared externally.</string>
-
-	<key>NSCalendarsUsageDescription</key>
-	<string>mailin reads your Calendar to find meetings related to emails in your imported archives. For example, linking a calendar event titled "Budget Review" to emails about the same topic. All lookups happen entirely on your device — no calendar data is collected, stored, or shared externally.</string>
-
-	<!-- iOS Document Browser Support -->
-	<key>UISupportsDocumentBrowser</key>
-	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
-
-	<!-- iOS Launch Screen (required for iOS submission) -->
-	<key>UILaunchScreen</key>
-	<dict/>
-
-	<!-- App Category -->
-	<key>LSApplicationCategoryType</key>
-	<string>public.app-category.productivity</string>
-
-	<!-- iOS Supported Interface Orientations -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>mailin connects to email servers (such as imap.gmail.com on port 993) only when you opt in by entering IMAP credentials in Settings → Email Accounts. This permission is requested by iOS so mailin can establish that secure connection to fetch your emails. mailin does not scan, browse, or advertise itself on your local network, and no data is transmitted unless you initiate an IMAP fetch.</string>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
@@ -74,8 +25,6 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-
-	<!-- Document Types -->
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
@@ -148,8 +97,8 @@
 			<string>Default</string>
 		</dict>
 	</array>
-
-	<!-- Exported Type Identifiers -->
+	<key>UILaunchScreen</key>
+	<dict/>
 	<key>UTImportedTypeDeclarations</key>
 	<array>
 		<dict>
@@ -171,6 +120,5 @@
 			</dict>
 		</dict>
 	</array>
-
 </dict>
 </plist>

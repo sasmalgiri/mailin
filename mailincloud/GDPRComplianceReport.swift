@@ -77,25 +77,25 @@ struct GDPRComplianceReport {
 
     private static var labelColor: PlatformColor {
         #if os(macOS)
-        return .labelColor
+        return NSColor(white: 0.1, alpha: 1.0)
         #else
-        return .label
+        return UIColor(white: 0.1, alpha: 1.0)
         #endif
     }
 
     private static var secondaryColor: PlatformColor {
         #if os(macOS)
-        return .secondaryLabelColor
+        return NSColor(white: 0.4, alpha: 1.0)
         #else
-        return .secondaryLabel
+        return UIColor(white: 0.4, alpha: 1.0)
         #endif
     }
 
     private static var separatorColor: PlatformColor {
         #if os(macOS)
-        return .separatorColor
+        return NSColor(white: 0.8, alpha: 1.0)
         #else
-        return .separator
+        return UIColor(white: 0.8, alpha: 1.0)
         #endif
     }
 

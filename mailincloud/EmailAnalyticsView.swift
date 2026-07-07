@@ -17,6 +17,7 @@ struct EmailAnalyticsView: View {
     @State private var showShareSheet = false
     @State private var shareItems: [Any] = []
     #endif
+    @State private var showTutorial = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -61,9 +62,10 @@ struct EmailAnalyticsView: View {
             }
         }
         #if os(macOS)
-        .frame(minWidth: 700, idealWidth: 900, minHeight: 550, idealHeight: 700)
+        .frame(minWidth: 480, idealWidth: 900, minHeight: 380, idealHeight: 700)
         #endif
         .background(AppColors.backgroundTertiary)
+        .featureTutorial(.emailAnalytics, key: "email_analytics_tutorial_seen", isPresented: $showTutorial)
         .task { await computeAnalytics() }
         .alert("Export Failed", isPresented: Binding(get: { exportError != nil }, set: { if !$0 { exportError = nil } })) {
             Button("OK") { exportError = nil }
@@ -107,6 +109,8 @@ struct EmailAnalyticsView: View {
                 .accessibilityLabel("Export analytics report")
                 .accessibilityHint("Save analytics as a text file")
             }
+
+            TutorialHelpButton(showTutorial: $showTutorial)
 
             Button("Close") { dismiss() }
                 .buttonStyle(.borderedProminent)
@@ -177,6 +181,18 @@ struct EmailAnalyticsView: View {
                 StatCard(title: "Attachments", value: "\(data.totalAttachments)", icon: "paperclip", color: .purple)
                 StatCard(title: "Storage", value: String(format: "%.1f MB", data.totalStorageMB), icon: "internaldrive", color: .teal)
             }
+
+            Label {
+                Text("Statistics computed from email headers and content. Priority levels are determined by NLP analysis of urgency indicators in subject lines and body text.")
+                    .font(Typography.caption1)
+            } icon: {
+                Image(systemName: "chart.bar.fill")
+                    .foregroundColor(.blue)
+            }
+            .padding(Spacing.xSmall)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.blue.opacity(0.1))
+            .cornerRadius(CornerRadius.small)
         }
     }
 
@@ -220,6 +236,18 @@ struct EmailAnalyticsView: View {
                 }
                 .frame(width: 160)
             }
+
+            Label {
+                Text("Sentiment ranges from -1.0 (very negative) to +1.0 (very positive). Scores near 0 indicate neutral tone. Computed using Natural Language framework analysis of email body text.")
+                    .font(Typography.caption1)
+            } icon: {
+                Image(systemName: "face.smiling")
+                    .foregroundColor(.blue)
+            }
+            .padding(Spacing.xSmall)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.blue.opacity(0.1))
+            .cornerRadius(CornerRadius.small)
         }
         .cardStyle()
     }
@@ -788,6 +816,18 @@ struct EmailAnalyticsView: View {
                     Text("Use \"Redacted Export\" in email detail to strip PII before sharing.")
                         .font(Typography.caption2)
                         .foregroundColor(AppColors.secondary)
+
+                    Label {
+                        Text("Personally Identifiable Information (PII) detected using pattern matching — includes phone numbers, email addresses, SSNs, and credit card numbers. Consider redacting PII before producing documents for e-discovery.")
+                            .font(Typography.caption1)
+                    } icon: {
+                        Image(systemName: "exclamationmark.shield.fill")
+                            .foregroundColor(.orange)
+                    }
+                    .padding(Spacing.xSmall)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.orange.opacity(0.1))
+                    .cornerRadius(CornerRadius.small)
                 }
             }
         }

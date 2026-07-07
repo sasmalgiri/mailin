@@ -17,6 +17,15 @@ struct RawEmail: Codable {
     var attachments: [AttachmentMetadata]?
 }
 
+// MARK: - ChunkType
+enum ChunkType: String, Codable, CaseIterable {
+    case header
+    case body
+    case signature
+    case quotedReply
+    case attachment
+}
+
 // MARK: - ChunkedEmail
 struct ChunkedEmail: Identifiable, Codable, @unchecked Sendable {
     var id = UUID()
@@ -30,6 +39,7 @@ struct ChunkedEmail: Identifiable, Codable, @unchecked Sendable {
     var date: String
     var threadID: String?
     var bodyChunk: String
+    var chunkType: ChunkType = .body
     var attachmentFilenames: [String] = []
     var embedding: [Float]? = nil
     var isRelevant: Bool = true
@@ -91,14 +101,6 @@ struct EmailChunker {
         let body = email.plainBody ?? email.htmlBody ?? ""
         let cleanedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let paragraphs = cleanedBody
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty && !$0.hasPrefix(">") && !$0.lowercased().hasPrefix("content-type:") && !$0.lowercased().hasPrefix("content-transfer-encoding:") && !$0.lowercased().hasPrefix("content-disposition:") }
-
-        let sentences: [String] = paragraphs.flatMap { splitIntoSentences($0) }
-
-        // Extract headers
         let subject = email.headers["Subject"] ?? "(No Subject)"
         let from = email.headers["From"] ?? "(Unknown Sender)"
         let to = email.headers["To"]
@@ -108,91 +110,141 @@ struct EmailChunker {
         let threadID = email.headers["References"] ?? emailID
         let isReply = detectIsReply(email)
 
-        // Inline attachment validation (no need for global func)
         let attachments = (email.attachments ?? []).compactMap { attachment -> String? in
             let valid = !attachment.filename.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
                         attachment.size > 0 &&
                         (attachment.base64 != nil || attachment.fileURL != nil)
-            if valid {
-                return attachment.filename
-            } else {
-                return nil
-            }
+            return valid ? attachment.filename : nil
         }
 
         var chunks: [ChunkedEmail] = []
-        let builder = ChunkBuilder(maxTokens: maxTokensPerChunk)
         var chunkIndex = 0
 
-        for sentence in sentences {
-            if !builder.add(sentence) {
-                let chunk = builder.flush()
-                if !chunk.isEmpty {
-                    chunks.append(
-                        ChunkedEmail(
-                            chunkIndex: chunkIndex,
-                            emailIndex: emailIndex,
-                            emailID: emailID,
-                            subject: subject,
-                            from: from,
-                            to: to,
-                            cc: cc,
-                            date: date,
-                            threadID: threadID,
-                            bodyChunk: chunk,
-                            attachmentFilenames: attachments,
-                            isRelevant: isRelevantChunk(chunk),
-                            isReply: isReply
-                        )
-                    )
-                    chunkIndex += 1
-                }
-                if !builder.add(sentence) {
-                    let truncated = String(sentence.prefix(maxTokensPerChunk * 4))
-                    chunks.append(
-                        ChunkedEmail(
-                            chunkIndex: chunkIndex,
-                            emailIndex: emailIndex,
-                            emailID: emailID,
-                            subject: subject,
-                            from: from,
-                            to: to,
-                            cc: cc,
-                            date: date,
-                            threadID: threadID,
-                            bodyChunk: truncated,
-                            attachmentFilenames: attachments,
-                            isRelevant: isRelevantChunk(truncated),
-                            isReply: isReply
-                        )
-                    )
-                    chunkIndex += 1
-                }
+        func makeChunk(_ text: String, type: ChunkType) -> ChunkedEmail {
+            let c = ChunkedEmail(
+                chunkIndex: chunkIndex,
+                emailIndex: emailIndex,
+                emailID: emailID,
+                subject: subject,
+                from: from,
+                to: to,
+                cc: cc,
+                date: date,
+                threadID: threadID,
+                bodyChunk: text,
+                chunkType: type,
+                attachmentFilenames: attachments,
+                isRelevant: type == .header || type == .attachment || isRelevantChunk(text),
+                isReply: isReply
+            )
+            chunkIndex += 1
+            return c
+        }
+
+        // 1. Header chunk — routing info, authentication, metadata
+        let headerChunk = buildHeaderChunk(email)
+        if !headerChunk.isEmpty {
+            chunks.append(makeChunk(headerChunk, type: .header))
+        }
+
+        // 2. Body and quoted-reply chunks
+        let lines = cleanedBody.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !$0.lowercased().hasPrefix("content-type:") &&
+                      !$0.lowercased().hasPrefix("content-transfer-encoding:") &&
+                      !$0.lowercased().hasPrefix("content-disposition:") }
+
+        var bodyLines: [String] = []
+        var quotedLines: [String] = []
+        var signatureLines: [String] = []
+        var inSignature = false
+
+        for line in lines {
+            if !inSignature && isSignatureMarker(line) {
+                inSignature = true
+                signatureLines.append(line)
+            } else if inSignature {
+                signatureLines.append(line)
+            } else if line.hasPrefix(">") {
+                quotedLines.append(String(line.dropFirst()).trimmingCharacters(in: .whitespaces))
+            } else {
+                bodyLines.append(line)
             }
         }
 
-        let finalChunk = builder.flush()
-        if !finalChunk.isEmpty {
-            chunks.append(
-                ChunkedEmail(
-                    chunkIndex: chunkIndex,
-                    emailIndex: emailIndex,
-                    emailID: emailID,
-                    subject: subject,
-                    from: from,
-                    to: to,
-                    cc: cc,
-                    date: date,
-                    threadID: threadID,
-                    bodyChunk: finalChunk,
-                    attachmentFilenames: attachments,
-                    isRelevant: isRelevantChunk(finalChunk),
-                    isReply: isReply
-                )
-            )
+        // Build body chunks
+        let bodySentences = bodyLines.flatMap { splitIntoSentences($0) }
+        let bodyBuilder = ChunkBuilder(maxTokens: maxTokensPerChunk)
+        for sentence in bodySentences {
+            if !bodyBuilder.add(sentence) {
+                let chunk = bodyBuilder.flush()
+                if !chunk.isEmpty { chunks.append(makeChunk(chunk, type: .body)) }
+                if !bodyBuilder.add(sentence) {
+                    let truncated = String(sentence.prefix(maxTokensPerChunk * 4))
+                    chunks.append(makeChunk(truncated, type: .body))
+                }
+            }
+        }
+        let finalBody = bodyBuilder.flush()
+        if !finalBody.isEmpty { chunks.append(makeChunk(finalBody, type: .body)) }
+
+        // Build quoted-reply chunks (if substantial)
+        if quotedLines.count >= 2 {
+            let quotedText = quotedLines.joined(separator: " ")
+            if quotedText.count > 20 {
+                let capped = String(quotedText.prefix(maxTokensPerChunk * 4))
+                chunks.append(makeChunk(capped, type: .quotedReply))
+            }
+        }
+
+        // Build signature chunk (if present)
+        if !signatureLines.isEmpty {
+            let sigText = signatureLines.joined(separator: "\n")
+            if sigText.count > 5 {
+                let capped = String(sigText.prefix(maxTokensPerChunk * 4))
+                chunks.append(makeChunk(capped, type: .signature))
+            }
+        }
+
+        // 3. Attachment metadata chunk
+        if !attachments.isEmpty {
+            let attachText = "Attachments: " + attachments.joined(separator: ", ")
+            chunks.append(makeChunk(attachText, type: .attachment))
         }
 
         return chunks
+    }
+
+    private static func buildHeaderChunk(_ email: RawEmail) -> String {
+        var parts: [String] = []
+        let headerKeys = [
+            "From", "To", "Cc", "Bcc", "Date", "Subject", "Message-ID",
+            "In-Reply-To", "References", "Reply-To",
+            "Authentication-Results", "Received-SPF", "DKIM-Signature",
+            "X-Originating-IP", "X-Mailer", "User-Agent",
+            "List-Unsubscribe", "List-Id", "Precedence",
+            "Return-Path", "X-Spam-Status", "X-Spam-Score"
+        ]
+        for key in headerKeys {
+            if let value = email.headers[key], !value.isEmpty {
+                parts.append("\(key): \(value)")
+            }
+        }
+        let received = email.headers.filter { $0.key.lowercased() == "received" || $0.key.lowercased().hasPrefix("received") }
+        for (key, value) in received.prefix(3) {
+            parts.append("\(key): \(value)")
+        }
+        return parts.joined(separator: "\n")
+    }
+
+    private static func isSignatureMarker(_ line: String) -> Bool {
+        let lower = line.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if lower == "--" || lower == "-- " { return true }
+        if lower.hasPrefix("sent from my") { return true }
+        if lower.hasPrefix("get outlook for") { return true }
+        let signoffs = ["regards,", "best regards,", "sincerely,", "thanks,", "thank you,",
+                        "cheers,", "best,", "warm regards,", "kind regards,", "yours truly,"]
+        return signoffs.contains(where: { lower.hasPrefix($0) })
     }
 
     private static func splitIntoSentences(_ text: String) -> [String] {

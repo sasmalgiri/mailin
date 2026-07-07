@@ -6,11 +6,13 @@ import AppKit
 struct CustodianPanelView: View {
     let emails: [MBOXParser.RawEmail]
     @ObservedObject var manager: CustodianManager
-    @Environment(\.dismiss) private var dismiss
+    var isPresented: Binding<Bool>?
+    @Environment(\.dismiss) private var envDismiss
     @State private var newCustodianName = ""
     @State private var selectedCustodian: String?
     @State private var showAssignSheet = false
     @State private var showDetailOnIOS = false
+    @State private var showTutorial = false
     #if os(iOS)
     @State private var showShareSheet = false
     @State private var shareItems: [Any] = []
@@ -45,6 +47,7 @@ struct CustodianPanelView: View {
             }
             #endif
         }
+        .featureTutorial(.custodianPanel, key: "custodian_panel_tutorial_seen", isPresented: $showTutorial)
     }
 
     private var header: some View {
@@ -64,15 +67,22 @@ struct CustodianPanelView: View {
             }
             .buttonStyle(CompactSecondaryButtonStyle())
             .accessibilityLabel("Export custodian report")
-            Button { dismiss() } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundColor(AppColors.secondary)
-                    .imageScale(.large)
+            TutorialHelpButton(showTutorial: $showTutorial)
+            if isPresented != nil {
+                Button { closeSheet() } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(AppColors.secondary)
+                        .imageScale(.large)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close custodian manager")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Close custodian manager")
         }
         .padding(Spacing.medium)
+    }
+
+    private func closeSheet() {
+        if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
     }
 
     private var custodianList: some View {

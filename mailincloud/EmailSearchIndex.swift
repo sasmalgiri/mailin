@@ -611,22 +611,39 @@ final class EmailSearchIndex {
     struct ChunkResult {
         let email: MBOXParser.RawEmail
         let chunk: String
+        let chunkType: ChunkType
         let score: Double
     }
 
-    func chunkSearch(terms: [String], in emails: [MBOXParser.RawEmail], maxChunksPerEmail: Int = 2, limit: Int = 10) -> [ChunkResult] {
+    func chunkSearch(
+        terms: [String],
+        in emails: [MBOXParser.RawEmail],
+        maxChunksPerEmail: Int = 2,
+        limit: Int = 10,
+        preferredTypes: [ChunkType]? = nil
+    ) -> [ChunkResult] {
         guard !terms.isEmpty else { return [] }
         let lowerTerms = terms.map { $0.lowercased() }
         var results: [ChunkResult] = []
 
         for email in emails {
-            let body = bodyText(for: email)
-            guard !body.isEmpty else { continue }
-            let chunks = splitIntoChunks(body, maxTokens: 200)
+            let rawEmail: RawEmail
+            if !email.plainBody.isEmpty || !email.htmlBody.isEmpty {
+                rawEmail = RawEmail(
+                    headers: email.headers,
+                    plainBody: email.plainBody.isEmpty ? nil : email.plainBody,
+                    htmlBody: email.htmlBody.isEmpty ? nil : email.htmlBody,
+                    attachments: nil
+                )
+            } else {
+                continue
+            }
 
-            var scored: [(chunk: String, score: Double)] = []
-            for chunk in chunks {
-                let lower = chunk.lowercased()
+            let typedChunks = EmailChunker.chunkEmail(rawEmail, emailIndex: 0, maxTokensPerChunk: 200)
+
+            var scored: [(chunk: String, chunkType: ChunkType, score: Double)] = []
+            for tc in typedChunks {
+                let lower = tc.bodyChunk.lowercased()
                 var score = 0.0
                 var hitCount = 0
 
@@ -648,14 +665,18 @@ final class EmailSearchIndex {
                 if lower.contains("?") { score *= 1.15 }
                 if lower.range(of: #"\d"#, options: .regularExpression) != nil { score *= 1.1 }
 
-                let wordCount = chunk.split(separator: " ").count
+                let wordCount = tc.bodyChunk.split(separator: " ").count
                 if wordCount >= 15 && wordCount <= 200 { score *= 1.1 }
 
-                if score > 0 { scored.append((chunk, score)) }
+                if let preferred = preferredTypes, preferred.contains(tc.chunkType) {
+                    score *= 2.0
+                }
+
+                if score > 0 { scored.append((tc.bodyChunk, tc.chunkType, score)) }
             }
 
-            for (chunk, score) in scored.sorted(by: { $0.score > $1.score }).prefix(maxChunksPerEmail) {
-                results.append(ChunkResult(email: email, chunk: chunk, score: score))
+            for (chunk, type, score) in scored.sorted(by: { $0.score > $1.score }).prefix(maxChunksPerEmail) {
+                results.append(ChunkResult(email: email, chunk: chunk, chunkType: type, score: score))
             }
         }
 

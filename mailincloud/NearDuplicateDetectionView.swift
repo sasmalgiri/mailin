@@ -2,6 +2,7 @@ import SwiftUI
 
 struct NearDuplicateDetectionView: View {
     let emails: [MBOXParser.RawEmail]
+    var isPresented: Binding<Bool>?
 
     @State private var threshold: Double = 0.85
     @State private var groups: [EmailNLPEngine.NearDuplicateGroup] = []
@@ -9,7 +10,8 @@ struct NearDuplicateDetectionView: View {
     @State private var removedGroupIDs: Set<UUID> = []
     @State private var aiInsights: String?
     @State private var isLoadingAI = false
-    @Environment(\.dismiss) private var dismiss
+    @State private var showTutorial = false
+    @Environment(\.dismiss) private var envDismiss
 
     private var visibleGroups: [EmailNLPEngine.NearDuplicateGroup] {
         groups.filter { !removedGroupIDs.contains($0.id) }
@@ -71,6 +73,19 @@ struct NearDuplicateDetectionView: View {
                             .font(Typography.caption1)
                             .foregroundColor(AppColors.secondary)
                     }
+
+                    Label {
+                        Text("Similarity scores indicate how closely emails match based on content analysis. Scores above 90% are near-identical; 70-90% share significant content. Groups are ranked by similarity — review the lowest-scoring groups most carefully.")
+                            .font(Typography.caption1)
+                    } icon: {
+                        Image(systemName: "info.circle.fill")
+                            .foregroundColor(.blue)
+                    }
+                    .padding(Spacing.xSmall)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.blue.opacity(0.1))
+                    .cornerRadius(CornerRadius.small)
+
                     Button("Re-analyze") { analyze() }
                         .buttonStyle(SecondaryButtonStyle())
                         .controlSize(.small)
@@ -89,8 +104,9 @@ struct NearDuplicateDetectionView: View {
             }
         }
         .onAppear { analyze() }
+        .featureTutorial(.nearDuplicates, key: "near_duplicates_tutorial_seen", isPresented: $showTutorial)
         #if os(macOS)
-        .frame(minWidth: 600, minHeight: 500)
+        .frame(minWidth: 460, minHeight: 360)
         #endif
         .resizableSheet()
     }
@@ -102,8 +118,11 @@ struct NearDuplicateDetectionView: View {
             Text("Near-Duplicate Detection")
                 .font(Typography.headline)
             Spacer()
-            Button("Done") { dismiss() }
-                .keyboardShortcut(.cancelAction)
+            TutorialHelpButton(showTutorial: $showTutorial)
+            if isPresented != nil {
+                Button("Done") { closeSheet() }
+                    .keyboardShortcut(.cancelAction)
+            }
         }
         .padding(Spacing.medium)
     }
@@ -266,6 +285,7 @@ struct NearDuplicateDetectionView: View {
                         .padding(.vertical, 2)
                         .background(similarityColor(group.similarityScore).opacity(0.12))
                         .cornerRadius(CornerRadius.small)
+                        .help(group.similarityScore >= 0.9 ? "Near-identical content — safe to remove duplicates" : "Significant overlap — review differences before removing")
 
                     Text("\(group.duplicates.count) duplicate\(group.duplicates.count == 1 ? "" : "s")")
                         .font(Typography.caption2)
@@ -302,6 +322,10 @@ struct NearDuplicateDetectionView: View {
         if score >= 0.95 { return AppColors.error }
         if score >= 0.90 { return AppColors.warning }
         return AppColors.info
+    }
+
+    private func closeSheet() {
+        if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
     }
 
     private func analyze() {

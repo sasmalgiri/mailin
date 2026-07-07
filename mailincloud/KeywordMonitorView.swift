@@ -185,7 +185,8 @@ struct KeywordMonitor {
 
 struct KeywordMonitorView: View {
     let emails: [MBOXParser.RawEmail]
-    @Environment(\.dismiss) private var dismiss
+    var isPresented: Binding<Bool>?
+    @Environment(\.dismiss) private var envDismiss
 
     @State private var keywords: [KeywordMonitor.WatchedKeyword] = []
     @State private var newKeywordText = ""
@@ -195,6 +196,7 @@ struct KeywordMonitorView: View {
     @State private var isScanning = false
     @State private var hasScanned = false
     @State private var selectedKeywordID: UUID?
+    @State private var showTutorial = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -216,9 +218,10 @@ struct KeywordMonitorView: View {
             #endif
         }
         #if os(macOS)
-        .frame(minWidth: 650, minHeight: 500)
+        .frame(minWidth: 480, minHeight: 360)
         #endif
         .background(AppColors.backgroundTertiary)
+        .featureTutorial(.keywordMonitor, key: "keyword_monitor_tutorial_seen", isPresented: $showTutorial)
         .onAppear {
             keywords = KeywordMonitor.loadKeywords()
         }
@@ -241,8 +244,11 @@ struct KeywordMonitorView: View {
                 }
             }
             Spacer()
-            Button("Done") { dismiss() }
-                .keyboardShortcut(.cancelAction)
+            TutorialHelpButton(showTutorial: $showTutorial)
+            if isPresented != nil {
+                Button("Done") { closeSheet() }
+                    .keyboardShortcut(.cancelAction)
+            }
         }
         .padding(.horizontal, Spacing.medium)
         .padding(.vertical, Spacing.small)
@@ -436,6 +442,18 @@ struct KeywordMonitorView: View {
                     )
                 }
 
+                Label {
+                    Text("Total Matches counts every keyword occurrence across all emails. Emails Matched counts unique emails containing at least one keyword. A single email may contain multiple keyword matches.")
+                        .font(Typography.caption1)
+                } icon: {
+                    Image(systemName: "text.magnifyingglass")
+                        .foregroundColor(.blue)
+                }
+                .padding(Spacing.xSmall)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.blue.opacity(0.1))
+                .cornerRadius(CornerRadius.small)
+
                 // Grouped results
                 let displayedMatches: [KeywordMonitor.KeywordMatch] = {
                     if let selected = selectedKeywordID {
@@ -504,6 +522,10 @@ struct KeywordMonitorView: View {
     }
 
     // MARK: - Actions
+
+    private func closeSheet() {
+        if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
+    }
 
     private func addKeyword() {
         let trimmed = newKeywordText.trimmingCharacters(in: .whitespacesAndNewlines)

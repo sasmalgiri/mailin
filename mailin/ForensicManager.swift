@@ -545,6 +545,10 @@ class ForensicManager: ObservableObject {
         return (spf, dkim, dmarc)
     }
 
+    nonisolated static func extractDetailedAuthResults(_ email: MBOXParser.RawEmail) -> EmailNLPEngine.EmailAuthenticationResult {
+        EmailNLPEngine.parseAuthenticationResults(email.headers)
+    }
+
     // MARK: - Spoofing Detection
 
     struct SpoofIndicator: Identifiable {
@@ -1116,5 +1120,154 @@ class ForensicManager: ObservableObject {
         caseNumber = ""
         examinerName = ""
         organization = ""
+    }
+
+    // MARK: - Privilege Auto-Detection
+
+    private static let privilegeKeywords = [
+        "attorney-client", "attorney client", "work product", "privileged",
+        "confidential communication", "legal advice", "legally privileged",
+        "protected by", "do not forward", "without prejudice",
+        "litigation hold", "legal hold", "settlement", "deposition",
+        "subpoena", "discovery request", "court order", "mediation",
+        "arbitration", "indemnification", "non-disclosure", "nda"
+    ]
+
+    private static let legalSubjectTerms = [
+        "patent", "trademark", "copyright", "intellectual property",
+        "infringement", "litigation", "lawsuit", "legal review", "legal matter",
+        "legal opinion", "legal hold", "legal counsel", "compliance review",
+        "regulatory filing", "contract review", "contract dispute",
+        "agreement draft", "amendment to", "terms and conditions",
+        "privacy policy", "liability claim", "indemnif", "settlement offer",
+        "settlement agreement", "court order", "court filing", "hearing notice",
+        "motion to", "petition for", "appeal of", "deposition notice",
+        "subpoena", "privilege log", "discovery request"
+    ]
+
+    private static let legalDomainPatterns = [
+        "law.com", "lawfirm", "legalcounsel", "legalservices",
+        "solicitor", "barrister", ".esq",
+        "& associates", "&associates", ".llp", "law office",
+        "law firm", "attorneys", "advocates"
+    ]
+
+    private static let legalSenderPatterns = [
+        "advocate", "attorney", "lawyer", "counsel", "solicitor",
+        "barrister", "notary", "paralegal", "law clerk"
+    ]
+
+    static func detectPrivilege(for email: MBOXParser.RawEmail) -> (isLikelyPrivileged: Bool, indicators: [String]) {
+        var indicators: [String] = []
+        let body = email.plainBody.lowercased()
+        let subject = (email.headers["Subject"] ?? "").lowercased()
+        let from = (email.headers["From"] ?? "").lowercased()
+        let to = (email.headers["To"] ?? "").lowercased()
+        let allParties = from + " " + to
+
+        for keyword in privilegeKeywords {
+            if body.contains(keyword) || subject.contains(keyword) {
+                indicators.append("Contains: \"\(keyword)\"")
+            }
+        }
+
+        for term in legalSubjectTerms {
+            if subject.contains(term) {
+                indicators.append("Legal subject: \"\(term)\"")
+            }
+        }
+
+        for pattern in legalDomainPatterns {
+            if allParties.contains(pattern) {
+                indicators.append("Legal domain: \"\(pattern)\"")
+            }
+        }
+
+        for pattern in legalSenderPatterns {
+            if from.contains(pattern) {
+                indicators.append("Legal sender: \"\(pattern)\"")
+                break
+            }
+        }
+
+        if subject.contains("re:") && legalSubjectTerms.contains(where: { subject.contains($0) }) {
+            indicators.append("Legal thread subject")
+        }
+
+        if body.contains("this email is confidential") || body.contains("intended recipient") ||
+           body.contains("delete this email") || body.contains("privileged and confidential") ||
+           body.contains("attorney-client privilege") || body.contains("legally privileged") {
+            indicators.append("Confidentiality disclaimer")
+        }
+
+        let patentPattern = try? NSRegularExpression(pattern: #"\b(patent|case|docket|matter)\s*(no\.?|number|#)\s*[:\s]?\s*\w+"#, options: .caseInsensitive)
+        if let regex = patentPattern {
+            let range = NSRange(body.startIndex..., in: body)
+            if regex.firstMatch(in: body, range: range) != nil {
+                indicators.append("Legal reference number detected")
+            }
+        }
+
+        return (isLikelyPrivileged: !indicators.isEmpty, indicators: indicators)
+    }
+
+    @Published var privilegeFlags: [UUID: [String]] = [:]
+
+    func runPrivilegeScan(on emails: [MBOXParser.RawEmail]) {
+        var flags: [UUID: [String]] = [:]
+        for email in emails {
+            let result = Self.detectPrivilege(for: email)
+            if result.isLikelyPrivileged {
+                flags[email.id] = result.indicators
+            }
+        }
+        privilegeFlags = flags
+        logAction("Privilege Scan", detail: "Scanned \(emails.count) emails, flagged \(flags.count) as potentially privileged")
+    }
+
+    // MARK: - QC Sampling
+
+    func qcSample(from emails: [MBOXParser.RawEmail], percentage: Double = 0.1) -> [UUID] {
+        let tagged = emails.filter { evidenceTags[$0.id] != nil && evidenceTags[$0.id] != EvidenceTag.none }
+        let sampleSize = max(1, Int(ceil(Double(tagged.count) * percentage)))
+        let shuffled = tagged.shuffled()
+        let sample = Array(shuffled.prefix(sampleSize))
+        logAction("QC Sample", detail: "Sampled \(sample.count) of \(tagged.count) tagged emails (\(Int(percentage * 100))%)")
+        return sample.map(\.id)
+    }
+
+    // MARK: - Reviewer Statistics
+
+    struct ReviewerStats {
+        let totalTagged: Int
+        let tagDistribution: [EvidenceTag: Int]
+        let avgSecondsPerTag: Double
+        let codingSessionStart: Date?
+        let privilegeFlagged: Int
+    }
+
+    func computeReviewerStats() -> ReviewerStats {
+        var distribution: [EvidenceTag: Int] = [:]
+        for tag in evidenceTags.values where tag != .none {
+            distribution[tag, default: 0] += 1
+        }
+
+        let timestamps = tagTimestamps.values.sorted()
+        var avgSeconds: Double = 0
+        if timestamps.count > 1 {
+            let intervals = zip(timestamps, timestamps.dropFirst()).map { $1.timeIntervalSince($0) }
+            let reasonable = intervals.filter { $0 > 0 && $0 < 600 }
+            if !reasonable.isEmpty {
+                avgSeconds = reasonable.reduce(0, +) / Double(reasonable.count)
+            }
+        }
+
+        return ReviewerStats(
+            totalTagged: evidenceTags.values.filter { $0 != .none }.count,
+            tagDistribution: distribution,
+            avgSecondsPerTag: avgSeconds,
+            codingSessionStart: timestamps.first,
+            privilegeFlagged: privilegeFlags.count
+        )
     }
 }

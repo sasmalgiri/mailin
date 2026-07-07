@@ -95,7 +95,7 @@ struct KeyboardShortcutOverlayView: View {
             shortcutGrid
         }
         #if os(macOS)
-        .frame(width: 600, height: 500)
+        .frame(minWidth: 480, idealWidth: 620, maxWidth: 800, minHeight: 400, idealHeight: 540, maxHeight: .infinity)
         #endif
     }
 

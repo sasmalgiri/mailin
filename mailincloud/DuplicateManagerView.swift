@@ -2,7 +2,8 @@ import SwiftUI
 
 struct DuplicateManagerView: View {
     @ObservedObject var model: ParsedEmailListViewModel
-    @Environment(\.dismiss) private var dismiss
+    var isPresented: Binding<Bool>?
+    @Environment(\.dismiss) private var envDismiss
     @State private var duplicateGroups: [[MBOXParser.RawEmail]] = []
     @State private var nearDuplicateGroups: [[MBOXParser.RawEmail]] = []
     @State private var selectedForRemoval: Set<UUID> = []
@@ -10,6 +11,7 @@ struct DuplicateManagerView: View {
     @State private var showNearDuplicates = false
     @State private var similarityThreshold: Double = 0.85
     @State private var legalHoldWarning: String?
+    @State private var showTutorial = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,9 +28,10 @@ struct DuplicateManagerView: View {
             actionBar
         }
         #if os(macOS)
-        .frame(minWidth: 600, idealWidth: 700, minHeight: 500, idealHeight: 600)
+        .frame(minWidth: 460, idealWidth: 700, minHeight: 360, idealHeight: 600)
         #endif
         .onAppear { scanForDuplicates() }
+        .featureTutorial(.duplicateManager, key: "duplicate_manager_tutorial_seen", isPresented: $showTutorial)
         .alert("Legal Hold", isPresented: Binding(
             get: { legalHoldWarning != nil },
             set: { if !$0 { legalHoldWarning = nil } }
@@ -41,15 +44,28 @@ struct DuplicateManagerView: View {
 
     private var header: some View {
         VStack(spacing: Spacing.small) {
-            Label("Duplicate Manager", systemImage: "doc.on.doc")
-                .font(Typography.title3)
-                .fontWeight(.bold)
+            HStack {
+                Label("Duplicate Manager", systemImage: "doc.on.doc")
+                    .font(Typography.title3)
+                    .fontWeight(.bold)
+                Spacer()
+                TutorialHelpButton(showTutorial: $showTutorial)
+            }
 
             Toggle("Include near-duplicates", isOn: $showNearDuplicates)
                 .font(Typography.callout)
                 .onChange(of: showNearDuplicates) { _, _ in scanForDuplicates() }
 
             if showNearDuplicates {
+                #if os(iOS)
+                VStack(alignment: .leading, spacing: Spacing.xxSmall) {
+                    Text("Similarity: \(Int(similarityThreshold * 100))%")
+                        .font(Typography.caption1)
+                    Slider(value: $similarityThreshold, in: 0.7...0.99, step: 0.01)
+                        .accessibilityLabel("Similarity threshold")
+                        .accessibilityValue("\(Int(similarityThreshold * 100)) percent")
+                }
+                #else
                 HStack {
                     Text("Similarity: \(Int(similarityThreshold * 100))%")
                         .font(Typography.caption1)
@@ -58,6 +74,7 @@ struct DuplicateManagerView: View {
                         .accessibilityLabel("Similarity threshold")
                         .accessibilityValue("\(Int(similarityThreshold * 100)) percent")
                 }
+                #endif
             }
         }
         .padding(Spacing.medium)
@@ -99,6 +116,19 @@ struct DuplicateManagerView: View {
                         .font(Typography.headline)
                         .padding(.horizontal, Spacing.medium)
 
+                    Label {
+                        Text("Exact duplicates have identical content (subject, body, and headers). Removing duplicates reduces archive size without losing information.")
+                            .font(Typography.caption1)
+                    } icon: {
+                        Image(systemName: "doc.on.doc.fill")
+                            .foregroundColor(.blue)
+                    }
+                    .padding(Spacing.xSmall)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.blue.opacity(0.1))
+                    .cornerRadius(CornerRadius.small)
+                    .padding(.horizontal, Spacing.medium)
+
                     ForEach(Array(duplicateGroups.enumerated()), id: \.offset) { _, group in
                         duplicateGroupView(group, isExact: true)
                     }
@@ -109,6 +139,19 @@ struct DuplicateManagerView: View {
                         .font(Typography.headline)
                         .padding(.horizontal, Spacing.medium)
                         .padding(.top, Spacing.small)
+
+                    Label {
+                        Text("Near duplicates share similar content but may differ in forwarding headers, signatures, or minor edits. Review before removing to avoid losing unique information.")
+                            .font(Typography.caption1)
+                    } icon: {
+                        Image(systemName: "doc.on.doc")
+                            .foregroundColor(.orange)
+                    }
+                    .padding(Spacing.xSmall)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.orange.opacity(0.1))
+                    .cornerRadius(CornerRadius.small)
+                    .padding(.horizontal, Spacing.medium)
 
                     ForEach(Array(nearDuplicateGroups.enumerated()), id: \.offset) { _, group in
                         duplicateGroupView(group, isExact: false)
@@ -179,17 +222,18 @@ struct DuplicateManagerView: View {
                 .foregroundColor(AppColors.secondary)
                 .accessibilityLabel("\(selectedForRemoval.count) emails selected for removal")
             Spacer()
-            Button("Cancel") { dismiss() }
+            Button("Cancel") { closeSheet() }
                 .buttonStyle(.bordered)
             Button("Remove Selected") {
                 let (allowed, blocked) = CustodianManager.shared.filterProtected(selectedForRemoval)
-                model.allEmails.removeAll { allowed.contains($0.id) }
-                model.applyFilters()
+                if !allowed.isEmpty {
+                    model.removeDuplicateEmails(ids: allowed)
+                }
                 if !blocked.isEmpty {
                     legalHoldWarning = "\(blocked.count) email(s) skipped — under legal hold with evidence seal."
+                    return
                 }
-                if allowed.isEmpty && !blocked.isEmpty { return }
-                dismiss()
+                closeSheet()
             }
             .buttonStyle(.borderedProminent)
             .tint(AppColors.error)
@@ -198,6 +242,10 @@ struct DuplicateManagerView: View {
             .accessibilityHint("Permanently removes selected duplicate emails")
         }
         .padding(Spacing.medium)
+    }
+
+    private func closeSheet() {
+        if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
     }
 
     private func scanForDuplicates() {
@@ -223,7 +271,7 @@ struct DuplicateManagerView: View {
         }
     }
 
-    nonisolated private static func findExactDuplicates(in emails: [MBOXParser.RawEmail]) -> [[MBOXParser.RawEmail]] {
+    nonisolated static func findExactDuplicates(in emails: [MBOXParser.RawEmail]) -> [[MBOXParser.RawEmail]] {
         var byMessageID: [String: [MBOXParser.RawEmail]] = [:]
         var byHash: [String: [MBOXParser.RawEmail]] = [:]
 

@@ -57,7 +57,7 @@ struct PaywallView: View {
             }
         }
         #if os(macOS)
-        .frame(minWidth: 500, idealWidth: 640, minHeight: 500, idealHeight: 700)
+        .frame(minWidth: 380, idealWidth: 640, minHeight: 380, idealHeight: 700)
         #endif
         .background(AppColors.backgroundPrimary)
         .onAppear {
@@ -287,7 +287,7 @@ struct PaywallView: View {
                             .font(Typography.callout)
                             .fontWeight(selectedPeriod == period ? .semibold : .regular)
                         if period == .yearly {
-                            Text(verbatim: "Save 40%")
+                            Text(verbatim: "Best Value")
                                 .font(.system(size: 9, weight: .bold))
                                 .foregroundColor(.green)
                         } else if period == .lifetime {
@@ -430,7 +430,7 @@ struct PaywallView: View {
     private var pricingSubtitle: String {
         switch selectedPeriod {
         case .monthly: return "Auto-renewable subscription"
-        case .yearly: return "Auto-renewable subscription — save 40%"
+        case .yearly: return "Auto-renewable subscription — save vs monthly"
         case .lifetime: return "One-time purchase — best value"
         }
     }
@@ -549,12 +549,12 @@ struct PaywallView: View {
     private var legalText: some View {
         VStack(spacing: Spacing.xxSmall) {
             #if os(iOS)
-            Text("Subscriptions auto-renew unless cancelled at least 24 hours before the end of the billing period. Payment will be charged to your Apple ID account at confirmation of purchase. You can manage and cancel subscriptions in Settings > [your name] > Subscriptions. Lifetime purchases are permanent and do not auto-renew.")
+            Text("Subscriptions auto-renew unless cancelled at least 24 hours before the end of the billing period. Your account will be charged for renewal within 24 hours prior to the end of the current period. Payment will be charged to your Apple ID account at confirmation of purchase. You can manage and cancel subscriptions in Settings > [your name] > Subscriptions. Lifetime purchases are permanent and do not auto-renew.")
                 .font(Typography.caption2)
                 .foregroundColor(AppColors.secondary)
                 .multilineTextAlignment(.center)
             #else
-            Text("Subscriptions auto-renew unless cancelled at least 24 hours before the end of the billing period. Payment will be charged to your Apple ID account at confirmation of purchase. You can manage and cancel subscriptions in System Settings > Apple ID > Subscriptions. Lifetime purchases are permanent and do not auto-renew.")
+            Text("Subscriptions auto-renew unless cancelled at least 24 hours before the end of the billing period. Your account will be charged for renewal within 24 hours prior to the end of the current period. Payment will be charged to your Apple ID account at confirmation of purchase. You can manage and cancel subscriptions in System Settings > Apple ID > Subscriptions. Lifetime purchases are permanent and do not auto-renew.")
                 .font(Typography.caption2)
                 .foregroundColor(AppColors.secondary)
                 .multilineTextAlignment(.center)

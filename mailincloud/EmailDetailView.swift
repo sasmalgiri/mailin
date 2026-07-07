@@ -49,9 +49,11 @@ struct EmailDetailView: View {
     @State private var selectedReplyTone: Int = 0
 
     // Compose / Reply / Forward
+    #if !OFFLINE_MODE
     @State private var showComposeReply = false
     @State private var showComposeReplyAll = false
     @State private var showComposeForward = false
+    #endif
 
     // Translation
     @State private var showTranslation = false
@@ -140,6 +142,7 @@ struct EmailDetailView: View {
         .sheet(isPresented: $showReplySheet) {
             replySheetView
         }
+        #if !OFFLINE_MODE
         .sheet(isPresented: $showComposeReply) {
             ComposeEmailView(mode: .reply(original: email))
                 #if os(iOS)
@@ -158,12 +161,14 @@ struct EmailDetailView: View {
                 .presentationDetents([.large])
                 #endif
         }
+        #endif
     }
 
     private var topBar: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
                 #if os(macOS)
+                #if !OFFLINE_MODE
                 mailActionGroup(
                     actions: [
                         ("arrowshape.turn.up.left.fill", "Reply", { showComposeReply = true }),
@@ -173,6 +178,7 @@ struct EmailDetailView: View {
                 )
 
                 mailActionDivider
+                #endif
 
                 mailActionGroup(
                     actions: [
@@ -223,6 +229,7 @@ struct EmailDetailView: View {
                     .keyboardShortcut("p", modifiers: .command)
                 }
                 #else
+                #if !OFFLINE_MODE
                 Button { showComposeReply = true } label: {
                     Image(systemName: "arrowshape.turn.up.left.fill")
                 }
@@ -240,6 +247,7 @@ struct EmailDetailView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Forward")
+                #endif
 
                 Spacer()
 
@@ -1460,13 +1468,12 @@ struct EmailDetailView: View {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = suggestedName
         panel.canCreateDirectories = true
-        panel.begin { result in
-            if result == .OK, let destinationURL = panel.url {
-                do {
-                    try FileUtils.copyFile(from: fileURL, to: destinationURL)
-                } catch {
-                    exportError = "Failed to save attachment: \(error.localizedDescription)"
-                }
+        let result = panel.runModal()
+        if result == .OK, let destinationURL = panel.url {
+            do {
+                try FileUtils.copyFile(from: fileURL, to: destinationURL)
+            } catch {
+                exportError = "Failed to save attachment: \(error.localizedDescription)"
             }
         }
         #else
@@ -1489,10 +1496,9 @@ struct EmailDetailView: View {
         panel.canCreateDirectories = true
         panel.message = "Select a folder to save all attachments"
         panel.prompt = "Save All"
-        panel.begin { result in
-            if result == .OK, let folderURL = panel.url {
-                saveAllAttachments(to: folderURL)
-            }
+        let result = panel.runModal()
+        if result == .OK, let folderURL = panel.url {
+            saveAllAttachments(to: folderURL)
         }
         #else
         let folderURL = FileManager.default.temporaryDirectory.appendingPathComponent("attachments_\(UUID().uuidString)")
@@ -1549,13 +1555,12 @@ struct EmailDetailView: View {
         panel.nameFieldStringValue = fileName
         panel.canCreateDirectories = true
 
-        panel.begin { result in
-            if result == .OK, let url = panel.url {
-                do {
-                    try FileUtils.writeString(exportText, to: url)
-                } catch {
-                    exportError = "Failed to export as TXT: \(error.localizedDescription)"
-                }
+        let result = panel.runModal()
+        if result == .OK, let url = panel.url {
+            do {
+                try FileUtils.writeString(exportText, to: url)
+            } catch {
+                exportError = "Failed to export as TXT: \(error.localizedDescription)"
             }
         }
         #else
@@ -1593,13 +1598,12 @@ struct EmailDetailView: View {
         panel.nameFieldStringValue = fileName
         panel.canCreateDirectories = true
 
-        panel.begin { result in
-            if result == .OK, let url = panel.url {
-                do {
-                    try FileUtils.writeString(csvContent, to: url)
-                } catch {
-                    exportError = "Failed to export CSV: \(error.localizedDescription)"
-                }
+        let result = panel.runModal()
+        if result == .OK, let url = panel.url {
+            do {
+                try FileUtils.writeString(csvContent, to: url)
+            } catch {
+                exportError = "Failed to export CSV: \(error.localizedDescription)"
             }
         }
         #else
@@ -2104,13 +2108,12 @@ struct EmailDetailView: View {
         panel.canCreateDirectories = true
         panel.allowedContentTypes = [.tiff]
 
-        panel.begin { result in
-            if result == .OK, let url = panel.url {
-                do {
-                    try tiffData.write(to: url)
-                } catch {
-                    exportError = "Failed to export TIFF: \(error.localizedDescription)"
-                }
+        let result = panel.runModal()
+        if result == .OK, let url = panel.url {
+            do {
+                try tiffData.write(to: url)
+            } catch {
+                exportError = "Failed to export TIFF: \(error.localizedDescription)"
             }
         }
         #else

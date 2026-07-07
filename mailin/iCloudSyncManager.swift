@@ -190,6 +190,14 @@ class iCloudSyncManager: ObservableObject {
             syncLog.error("Download failed: \(error.localizedDescription)")
         }
 
+        // v4.4.1: Sync KnowledgeGraph
+        do {
+            try await syncKnowledgeGraph(folder: syncFolder)
+        } catch {
+            errors.append("KG sync: \(error.localizedDescription)")
+            syncLog.error("KG sync failed: \(error.localizedDescription)")
+        }
+
         let kvErrors = syncKVStore()
         errors.append(contentsOf: kvErrors)
 
@@ -224,8 +232,16 @@ class iCloudSyncManager: ObservableObject {
             tagTimestamps[uuid.uuidString] = forensic.tagTimestamps[uuid] ?? Date.distantPast
         }
 
+        // v4.4.1: Collect feedback weights
+        let feedbackWeights = FeedbackManager.shared.allWeights()
+
+        // v4.4.1: Collect custom expert definitions
+        let customExperts = CustomExpertManager.shared.experts.map {
+            SyncableCustomExpert(name: $0.name, instructions: $0.instructions, keywords: $0.keywords, enabled: $0.enabled)
+        }
+
         let state = SyncableState(
-            version: 2,
+            version: 3,
             deviceID: deviceID,
             syncDate: Date(),
             evidenceTags: forensic.evidenceTags.reduce(into: [:]) { $0[$1.key.uuidString] = $1.value.rawValue },
@@ -233,7 +249,9 @@ class iCloudSyncManager: ObservableObject {
             annotations: forensic.annotations.reduce(into: [:]) { $0[$1.key.uuidString] = AnnotationDTO(text: $1.value.text, examiner: $1.value.examiner, timestamp: $1.value.timestamp) },
             caseNumber: forensic.caseNumber,
             examinerName: forensic.examinerName,
-            organization: forensic.organization
+            organization: forensic.organization,
+            feedbackWeights: feedbackWeights,
+            customExperts: customExperts.isEmpty ? nil : customExperts
         )
 
         let encoder = JSONEncoder()
@@ -347,6 +365,22 @@ class iCloudSyncManager: ObservableObject {
                     }
                 }
             }
+
+            // v4.4.1: Merge feedback weights (union merge, keep higher values)
+            if let remoteWeights = remote.feedbackWeights {
+                FeedbackManager.shared.mergeWeights(remoteWeights)
+            }
+
+            // v4.4.1: Merge custom experts (add missing ones from remote)
+            if let remoteExperts = remote.customExperts {
+                let existingNames = Set(CustomExpertManager.shared.experts.map(\.name))
+                for re in remoteExperts {
+                    if !existingNames.contains(re.name) {
+                        let expert = CustomExpert(name: re.name, instructions: re.instructions, keywords: re.keywords, enabled: re.enabled)
+                        CustomExpertManager.shared.addExpert(expert)
+                    }
+                }
+            }
         }
 
         if !skippedFiles.isEmpty {
@@ -451,6 +485,15 @@ class iCloudSyncManager: ObservableObject {
         let caseNumber: String
         let examinerName: String
         let organization: String
+        var feedbackWeights: [String: Double]?
+        var customExperts: [SyncableCustomExpert]?
+    }
+
+    struct SyncableCustomExpert: Codable {
+        let name: String
+        let instructions: String
+        let keywords: [String]
+        let enabled: Bool
     }
 
     struct AnnotationDTO: Codable {
@@ -467,6 +510,47 @@ class iCloudSyncManager: ObservableObject {
             case .downloadFailed(let msg): return msg
             }
         }
+    }
+
+    // MARK: - Knowledge Graph Sync (v4.4.1)
+
+    private func syncKnowledgeGraph(folder: URL) async throws {
+        let deviceID = deviceIdentifier
+        let kgFile = folder.appendingPathComponent("kg_\(deviceID).json")
+
+        // Upload local KG
+        let localGraph = KnowledgeGraph.load()
+        guard localGraph.nodeCount > 0 else { return }
+
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(localGraph)
+        try data.write(to: kgFile, options: .atomic)
+
+        // Download and merge remote KGs (union merge)
+        let fm = FileManager.default
+        let contents = (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+        let remoteKGFiles = contents.filter {
+            $0.lastPathComponent.hasPrefix("kg_") &&
+            $0.pathExtension == "json" &&
+            !$0.lastPathComponent.contains(deviceID)
+        }
+
+        let decoder = JSONDecoder()
+        for remoteFile in remoteKGFiles {
+            guard let remoteData = try? Data(contentsOf: remoteFile),
+                  let remoteGraph = try? decoder.decode(KnowledgeGraph.self, from: remoteData) else { continue }
+
+            // Union merge: add all remote nodes and edges
+            for node in remoteGraph.allNodes {
+                localGraph.addNode(node)
+            }
+            for edge in remoteGraph.allEdges {
+                localGraph.addEdge(edge)
+            }
+        }
+
+        localGraph.save()
+        syncLog.info("KG sync: \(localGraph.nodeCount) nodes, \(localGraph.edgeCount) edges after merge")
     }
 
     // MARK: - Manual Trigger

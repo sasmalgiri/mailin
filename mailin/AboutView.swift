@@ -129,7 +129,7 @@ struct AboutView: View {
                 .buttonStyle(.borderless)
                 #endif
 
-                Text("\u{00A9} 2025-2026 mailin. All rights reserved.")
+                Text("\u{00A9} 2025-2026 EcoSanskriti Innovation Pvt Ltd. All rights reserved.")
                     .font(Typography.caption2)
                     .foregroundColor(AppColors.secondary)
             }

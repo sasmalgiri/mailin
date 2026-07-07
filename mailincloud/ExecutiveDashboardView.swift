@@ -11,11 +11,13 @@ import NaturalLanguage
 
 struct ExecutiveDashboardView: View {
     let emails: [MBOXParser.RawEmail]
-    @Environment(\.dismiss) private var dismiss
+    var isPresented: Binding<Bool>?
+    @Environment(\.dismiss) private var envDismiss
     @State private var dashboardData: DashboardData?
     @State private var isComputing = false
     @State private var aiInsights: String?
     @State private var isLoadingAI = false
+    @State private var showTutorial = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -52,9 +54,10 @@ struct ExecutiveDashboardView: View {
             }
         }
         #if os(macOS)
-        .frame(minWidth: 800, minHeight: 600)
+        .frame(minWidth: 480, minHeight: 380)
         #endif
         .background(AppColors.backgroundTertiary)
+        .featureTutorial(.executiveDashboard, key: "executive_dashboard_tutorial_seen", isPresented: $showTutorial)
         .task { await computeDashboard() }
     }
 
@@ -75,21 +78,33 @@ struct ExecutiveDashboardView: View {
                 }
             }
             Spacer()
-            Button("Done") { dismiss() }
-                .keyboardShortcut(.cancelAction)
+            TutorialHelpButton(showTutorial: $showTutorial)
+            if isPresented != nil {
+                Button("Done") { closeSheet() }
+                    .keyboardShortcut(.cancelAction)
+            }
         }
         .padding(.horizontal, Spacing.medium)
         .padding(.vertical, Spacing.small)
         .background(AppColors.backgroundPrimary)
     }
 
+    private func closeSheet() {
+        if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
+    }
+
     // MARK: - Top Stat Cards
 
+    private var dashboardStatColumns: [GridItem] {
+        #if os(iOS)
+        [GridItem(.flexible()), GridItem(.flexible())]
+        #else
+        [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+        #endif
+    }
+
     private func topStatCards(data: DashboardData) -> some View {
-        LazyVGrid(columns: [
-            GridItem(.flexible()), GridItem(.flexible()),
-            GridItem(.flexible()), GridItem(.flexible())
-        ], spacing: Spacing.small) {
+        LazyVGrid(columns: dashboardStatColumns, spacing: Spacing.small) {
             AnimatedStatCard(
                 title: "Total Emails",
                 value: "\(data.totalEmails)",
@@ -120,10 +135,17 @@ struct ExecutiveDashboardView: View {
     // MARK: - Middle Charts
 
     private func middleCharts(data: DashboardData) -> some View {
+        #if os(iOS)
+        VStack(spacing: Spacing.medium) {
+            volumeTrendChart(data: data)
+            sentimentTrendChart(data: data)
+        }
+        #else
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: Spacing.medium) {
             volumeTrendChart(data: data)
             sentimentTrendChart(data: data)
         }
+        #endif
     }
 
     private func volumeTrendChart(data: DashboardData) -> some View {
@@ -263,11 +285,19 @@ struct ExecutiveDashboardView: View {
     // MARK: - Bottom Section
 
     private func bottomSection(data: DashboardData) -> some View {
+        #if os(iOS)
+        VStack(spacing: Spacing.medium) {
+            topContactsChart(data: data)
+            categoryDistributionChart(data: data)
+            recentActivityFeed(data: data)
+        }
+        #else
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: Spacing.medium) {
             topContactsChart(data: data)
             categoryDistributionChart(data: data)
             recentActivityFeed(data: data)
         }
+        #endif
     }
 
     private func topContactsChart(data: DashboardData) -> some View {

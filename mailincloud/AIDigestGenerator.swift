@@ -78,6 +78,15 @@ struct AIDigestGenerator {
             sections.append(actions)
         }
 
+        // 3.5 What's New — proactive findings from background analysis (v3.4.1)
+        #if canImport(FoundationModels)
+        if #available(macOS 26, iOS 26, *) {
+            if let whatsNew = whatsNewSection() {
+                sections.append(whatsNew)
+            }
+        }
+        #endif
+
         // 4. New Contacts
         if let contacts = newContactsSection(filtered, allEmails: emails) {
             sections.append(contacts)
@@ -91,6 +100,11 @@ struct AIDigestGenerator {
         // 6. Attachments Overview
         if let attachments = attachmentsSection(filtered) {
             sections.append(attachments)
+        }
+
+        // 6.5 Predictions — urgency, thread outcomes, security forecasts (v3.7.1)
+        if let predictions = predictionsSection(filtered) {
+            sections.append(predictions)
         }
 
         // 7. AI Insights (optional — enhances digest with Apple AI when available)
@@ -504,4 +518,70 @@ struct AIDigestGenerator {
         if bytes < 1024 * 1024 { return "\(bytes / 1024) KB" }
         return String(format: "%.1f MB", Double(bytes) / (1024.0 * 1024.0))
     }
+
+    // MARK: - Predictions (v3.7.1)
+
+    private static func predictionsSection(_ emails: [MBOXParser.RawEmail]) -> DigestSection? {
+        let items = PredictiveEngine.digestItems(emails: emails)
+        guard !items.isEmpty else { return nil }
+
+        let digestItems = items.map { item in
+            let priority: DigestItem.Priority
+            if item.priority >= 2 { priority = .high }
+            else if item.priority >= 1 { priority = .medium }
+            else { priority = .low }
+
+            return DigestItem(
+                headline: item.title,
+                detail: item.detail,
+                emailIDs: [],
+                priority: priority
+            )
+        }
+
+        return DigestSection(title: "Predictions & Alerts", icon: "chart.line.uptrend.xyaxis", items: digestItems)
+    }
+
+    // MARK: - What's New (v3.4.1)
+
+    #if canImport(FoundationModels)
+    @available(macOS 26, iOS 26, *)
+    private static func whatsNewSection() -> DigestSection? {
+        var items: [DigestItem] = []
+
+        // Proactive findings from import-time analysis
+        let findings = FoundationModelEngine.getProactiveFindings()
+        for finding in findings.prefix(5) {
+            let priority: DigestItem.Priority
+            if finding.severity >= 0.7 { priority = .high }
+            else if finding.severity >= 0.4 { priority = .medium }
+            else { priority = .low }
+            items.append(DigestItem(
+                headline: finding.title,
+                detail: finding.detail,
+                emailIDs: finding.emailIDs,
+                priority: priority
+            ))
+        }
+
+        // v4.5.1: Background analysis findings
+        let bgFindings = BackgroundAnalysisManager.cachedFindingsForDigest()
+        for bg in bgFindings.prefix(5) {
+            let priority: DigestItem.Priority
+            if bg.severity >= 0.7 { priority = .high }
+            else if bg.severity >= 0.4 { priority = .medium }
+            else { priority = .low }
+            items.append(DigestItem(
+                headline: "[\(bg.category)] \(bg.title)",
+                detail: bg.detail,
+                emailIDs: [],
+                priority: priority
+            ))
+        }
+
+        guard !items.isEmpty else { return nil }
+        items.sort { $0.priority > $1.priority }
+        return DigestSection(title: "What's New", icon: "bell.badge", items: Array(items.prefix(8)))
+    }
+    #endif
 }

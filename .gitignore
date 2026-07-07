@@ -39,3 +39,6 @@ venv/
 
 # Screenshots (store in App Store Connect instead)
 Screenshots/
+
+# Custom build output folders
+build-*/

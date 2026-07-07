@@ -9,12 +9,14 @@ import SwiftUI
 
 struct AnomalyDetectionView: View {
     let emails: [MBOXParser.RawEmail]
+    var isPresented: Binding<Bool>?
     @State private var anomalies: [AnomalyDetectionEngine.Anomaly] = []
     @State private var isAnalyzing = false
     @State private var selectedType: AnomalyDetectionEngine.AnomalyType?
     @State private var aiInsights: String?
     @State private var isLoadingAI = false
-    @Environment(\.dismiss) private var dismiss
+    @State private var showTutorial = false
+    @Environment(\.dismiss) private var envDismiss
 
     private var filteredAnomalies: [AnomalyDetectionEngine.Anomaly] {
         guard let selected = selectedType else { return anomalies }
@@ -41,8 +43,11 @@ struct AnomalyDetectionView: View {
                 Text("Anomaly Detection")
                     .font(Typography.headline)
                 Spacer()
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
+                TutorialHelpButton(showTutorial: $showTutorial)
+                if isPresented != nil {
+                    Button("Done") { closeSheet() }
+                        .keyboardShortcut(.cancelAction)
+                }
             }
             .padding(Spacing.medium)
 
@@ -74,6 +79,10 @@ struct AnomalyDetectionView: View {
                     summaryBar
                         .padding(Spacing.medium)
 
+                    anomalyExplanationBanner
+                        .padding(.horizontal, Spacing.medium)
+                        .padding(.bottom, Spacing.small)
+
                     aiInsightsSection
                         .padding(.horizontal, Spacing.medium)
                         .padding(.bottom, Spacing.small)
@@ -90,8 +99,9 @@ struct AnomalyDetectionView: View {
             }
         }
         .onAppear { analyze() }
+        .featureTutorial(.anomalyDetection, key: "anomaly_detection_tutorial_seen", isPresented: $showTutorial)
         #if os(macOS)
-        .frame(minWidth: 600, minHeight: 500)
+        .frame(minWidth: 460, minHeight: 360)
         #endif
     }
 
@@ -111,7 +121,8 @@ struct AnomalyDetectionView: View {
 
                     ForEach(typeCounts, id: \.type) { item in
                         filterChip(
-                            label: "\(item.type.icon) \(item.type.rawValue) (\(item.count))",
+                            icon: item.type.icon,
+                            label: "\(item.type.rawValue) (\(item.count))",
                             isSelected: selectedType == item.type
                         ) {
                             selectedType = selectedType == item.type ? nil : item.type
@@ -122,21 +133,57 @@ struct AnomalyDetectionView: View {
         }
     }
 
-    private func filterChip(label: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+    private var anomalyExplanationBanner: some View {
+        Group {
+            if anomalies.isEmpty {
+                Label {
+                    Text("No anomalies detected — email patterns appear normal across timing, frequency, and content analysis.")
+                        .font(Typography.caption1)
+                } icon: {
+                    Image(systemName: "checkmark.shield")
+                        .foregroundColor(AppColors.success)
+                }
+                .padding(Spacing.xSmall)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(AppColors.success.opacity(0.1))
+                .cornerRadius(CornerRadius.small)
+            } else {
+                Label {
+                    Text("Anomalies indicate unusual patterns in email timing, frequency, or content that deviate from the baseline. Review flagged items — not all anomalies are threats, but they warrant investigation.")
+                        .font(Typography.caption1)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundColor(.orange)
+                }
+                .padding(Spacing.xSmall)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.orange.opacity(0.1))
+                .cornerRadius(CornerRadius.small)
+            }
+        }
+    }
+
+    private func filterChip(icon: String? = nil, label: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(label)
-                .font(Typography.caption1)
-                .fontWeight(isSelected ? .semibold : .regular)
-                .padding(.horizontal, Spacing.small)
-                .padding(.vertical, Spacing.xxSmall)
-                .background(
-                    RoundedRectangle(cornerRadius: CornerRadius.round)
-                        .fill(isSelected ? AppColors.primary.opacity(0.15) : AppColors.backgroundSecondary)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: CornerRadius.round)
-                        .stroke(isSelected ? AppColors.primary.opacity(0.5) : Color.clear, lineWidth: 1)
-                )
+            HStack(spacing: 4) {
+                if let icon {
+                    Image(systemName: icon)
+                        .font(.system(size: 10))
+                }
+                Text(label)
+            }
+            .font(Typography.caption1)
+            .fontWeight(isSelected ? .semibold : .regular)
+            .padding(.horizontal, Spacing.small)
+            .padding(.vertical, Spacing.xxSmall)
+            .background(
+                RoundedRectangle(cornerRadius: CornerRadius.round)
+                    .fill(isSelected ? AppColors.primary.opacity(0.15) : AppColors.backgroundSecondary)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: CornerRadius.round)
+                    .stroke(isSelected ? AppColors.primary.opacity(0.5) : Color.clear, lineWidth: 1)
+            )
         }
         .buttonStyle(.plain)
     }
@@ -262,6 +309,10 @@ struct AnomalyDetectionView: View {
     }
 
     // MARK: - Helpers
+
+    private func closeSheet() {
+        if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
+    }
 
     private func severityColor(_ severity: Double) -> Color {
         if severity >= 0.7 { return AppColors.error }

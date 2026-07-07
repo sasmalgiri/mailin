@@ -429,6 +429,13 @@ class ParsedEmailListViewModel: ObservableObject {
         applyFilters()
     }
 
+    func removeDuplicateEmails(ids: Set<UUID>) {
+        allEmails.removeAll { ids.contains($0.id) }
+        emailCount = allEmails.count
+        viewModel.removeEmails(ids: ids)
+        applyFilters()
+    }
+
     // MARK: - Load Emails from ContentViewModel
     func loadFromContentViewModel() {
         allEmails = viewModel.parsedEmails

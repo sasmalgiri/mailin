@@ -14,6 +14,7 @@ struct AutomationRulesView: View {
     @State private var showingRunConfirmation = false
     @State private var runResults: [UUID: [AutomationAction]]?
     @State private var showingResults = false
+    @State private var showTutorial = false
 
     let emails: [MBOXParser.RawEmail]
 
@@ -45,6 +46,7 @@ struct AutomationRulesView: View {
             RunResultsSheet(results: runResults ?? [:], emails: emails)
                 .resizableSheet()
         }
+        .featureTutorial(.automationRules, key: "automation_rules_tutorial_seen", isPresented: $showTutorial)
     }
 
     // MARK: - Header
@@ -88,6 +90,8 @@ struct AutomationRulesView: View {
                 }
                 .buttonStyle(PrimaryButtonStyle())
                 .accessibilityLabel("Add a new automation rule")
+
+                TutorialHelpButton(showTutorial: $showTutorial)
             }
         }
         .padding(.horizontal, Spacing.medium)

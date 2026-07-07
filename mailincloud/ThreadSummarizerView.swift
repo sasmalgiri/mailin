@@ -318,12 +318,14 @@ struct ThreadSummarizer {
 
 struct ThreadSummarizerView: View {
     let threadEmails: [MBOXParser.RawEmail]
+    var isPresented: Binding<Bool>?
 
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.dismiss) private var envDismiss
     @State private var summary: ThreadSummary?
     @State private var isComputing = false
     @State private var checkedActionItems: Set<Int> = []
     @State private var isEmailListExpanded = false
+    @State private var showTutorial = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -348,6 +350,7 @@ struct ThreadSummarizerView: View {
             }
         }
         .background(AppColors.backgroundPrimary)
+        .featureTutorial(.threadSummarizer, key: "thread_summarizer_tutorial_seen", isPresented: $showTutorial)
         #if os(macOS)
         .frame(minWidth: 500, idealWidth: 640, maxWidth: 800,
                minHeight: 480, idealHeight: 680, maxHeight: 900)
@@ -381,17 +384,25 @@ struct ThreadSummarizerView: View {
                 .accessibilityLabel("Recompute summary")
             }
 
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundColor(AppColors.secondary)
-                    .imageScale(.large)
+            TutorialHelpButton(showTutorial: $showTutorial)
+
+            if isPresented != nil {
+                Button {
+                    closeSheet()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(AppColors.secondary)
+                        .imageScale(.large)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close thread summary")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Close thread summary")
         }
         .padding(Spacing.medium)
+    }
+
+    private func closeSheet() {
+        if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
     }
 
     // MARK: - Summary Content

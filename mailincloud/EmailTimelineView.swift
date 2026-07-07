@@ -13,11 +13,13 @@ import AppKit
 
 struct EmailTimelineView: View {
     let emails: [MBOXParser.RawEmail]
+    var isPresented: Binding<Bool>?
     @State private var granularity: Granularity = .week
     @State private var selectedBucket: DateBucket?
     @State private var selectedTimezone: TimeZone = .current
     @State private var cachedParsedDates: [(date: Date, email: MBOXParser.RawEmail)] = []
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.dismiss) private var envDismiss
+    @State private var showTutorial = false
 
     // MARK: - Types
 
@@ -227,8 +229,9 @@ struct EmailTimelineView: View {
         }
         .onChange(of: selectedDate) { _, _ in syncSelection() }
         .onAppear { rebuildParsedDates() }
+        .featureTutorial(.emailTimeline, key: "email_timeline_tutorial_seen", isPresented: $showTutorial)
         #if os(macOS)
-        .frame(minWidth: 700, minHeight: 550)
+        .frame(minWidth: 480, minHeight: 380)
         #endif
     }
 
@@ -244,10 +247,17 @@ struct EmailTimelineView: View {
                     .foregroundColor(AppColors.secondary)
             }
             Spacer()
-            Button("Done") { dismiss() }
-                .keyboardShortcut(.cancelAction)
+            TutorialHelpButton(showTutorial: $showTutorial)
+            if isPresented != nil {
+                Button("Done") { closeSheet() }
+                    .keyboardShortcut(.cancelAction)
+            }
         }
         .padding(Spacing.medium)
+    }
+
+    private func closeSheet() {
+        if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
     }
 
     // MARK: - Empty State

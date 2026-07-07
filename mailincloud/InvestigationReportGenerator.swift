@@ -74,25 +74,25 @@ struct InvestigationReportGenerator {
 
     private static var labelColor: PlatformColor {
         #if os(macOS)
-        return .labelColor
+        return NSColor(white: 0.1, alpha: 1.0)
         #else
-        return .label
+        return UIColor(white: 0.1, alpha: 1.0)
         #endif
     }
 
     private static var secondaryColor: PlatformColor {
         #if os(macOS)
-        return .secondaryLabelColor
+        return NSColor(white: 0.4, alpha: 1.0)
         #else
-        return .secondaryLabel
+        return UIColor(white: 0.4, alpha: 1.0)
         #endif
     }
 
     private static var separatorColor: PlatformColor {
         #if os(macOS)
-        return .separatorColor
+        return NSColor(white: 0.8, alpha: 1.0)
         #else
-        return .separator
+        return UIColor(white: 0.8, alpha: 1.0)
         #endif
     }
 
@@ -274,6 +274,14 @@ struct InvestigationReportGenerator {
         // === Flagged / Important Emails ===
         finishAndStartNewPage(state: state)
         drawFlaggedEmails(state: state, flaggedEmails: flaggedEmails)
+
+        // === Communication Heatmap ===
+        finishAndStartNewPage(state: state)
+        drawCommunicationHeatmap(state: state, emails: emails)
+
+        // === Sentiment Timeline ===
+        ensureSpace(state: state, needed: 200)
+        drawSentimentTimeline(state: state, emails: emails)
 
         // === AI-Enhanced Analysis (optional, non-deterministic) ===
         if let aiInsights = aiInsights, !aiInsights.isEmpty {
@@ -983,6 +991,160 @@ struct InvestigationReportGenerator {
 
             state.currentY -= 6
         }
+    }
+
+    // MARK: - Communication Heatmap (PDF)
+
+    private static func drawCommunicationHeatmap(
+        state: DrawingState,
+        emails: [MBOXParser.RawEmail]
+    ) {
+        drawSectionHeader("Communication Activity Heatmap", state: state)
+
+        let heatmapData = CommunicationHeatmapData.generate(from: emails)
+        guard heatmapData.maxCount > 0 else {
+            drawText("No dated emails available for heatmap.", attrs: bodyAttrs, state: state)
+            return
+        }
+
+        drawText("Email activity by day of week and hour (darker = more active):", attrs: bodyAttrs, state: state)
+        state.currentY -= 8
+
+        let cellW: CGFloat = 18
+        let cellH: CGFloat = 14
+        let labelW: CGFloat = 36
+        let startX = margin + labelW + 4
+        let hourStep = 3
+
+        ensureSpace(state: state, needed: 7 * (cellH + 2) + 30)
+
+        // Hour labels
+        for h in stride(from: 0, to: 24, by: hourStep) {
+            let label = h == 0 ? "12a" : h < 12 ? "\(h)a" : h == 12 ? "12p" : "\(h-12)p"
+            let x = startX + CGFloat(h) * cellW
+            (label as NSString).draw(
+                at: CGPoint(x: x, y: state.currentY),
+                withAttributes: captionAttrs
+            )
+        }
+        state.currentY -= 14
+
+        let dayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        for day in 0..<7 {
+            let rowY = state.currentY - CGFloat(day) * (cellH + 2)
+            (dayLabels[day] as NSString).draw(
+                at: CGPoint(x: margin, y: rowY),
+                withAttributes: captionAttrs
+            )
+
+            for hour in 0..<24 {
+                let cell = heatmapData.cells.first { $0.dayOfWeek == day && $0.hour == hour }
+                let intensity = cell?.normalizedIntensity ?? 0
+                let x = startX + CGFloat(hour) * cellW
+                let rect = CGRect(x: x, y: rowY, width: cellW - 1, height: cellH)
+                let green: CGFloat = intensity > 0 ? CGFloat(0.3 + 0.7 * intensity) : 0.0
+                let alpha: CGFloat = intensity > 0 ? CGFloat(0.15 + 0.85 * intensity) : 0.05
+                #if os(macOS)
+                let color = PlatformColor(red: 0, green: green, blue: 0, alpha: alpha)
+                #else
+                let color = PlatformColor(red: 0, green: green, blue: 0, alpha: alpha)
+                #endif
+                drawFilledRect(state: state, rect: rect, color: color)
+            }
+        }
+
+        state.currentY -= CGFloat(7) * (cellH + 2) + 8
+        drawText("Peak hour: \(heatmapData.maxCount) emails in a single slot", attrs: captionAttrs, state: state)
+    }
+
+    // MARK: - Sentiment Timeline (PDF)
+
+    private static func drawSentimentTimeline(
+        state: DrawingState,
+        emails: [MBOXParser.RawEmail]
+    ) {
+        drawSectionHeader("Sentiment Timeline", state: state)
+
+        let timelineData = SentimentTimelineData.generate(from: emails)
+        guard timelineData.dataPoints.count >= 2 else {
+            drawText("Not enough time periods for sentiment timeline.", attrs: bodyAttrs, state: state)
+            return
+        }
+
+        drawText("Average sentiment per month (-1 = negative, +1 = positive):", attrs: bodyAttrs, state: state)
+        state.currentY -= 8
+
+        let chartX = margin + 30
+        let chartWidth = contentWidth - 60
+        let chartHeight: CGFloat = 100
+        let midY = state.currentY - chartHeight / 2
+
+        ensureSpace(state: state, needed: chartHeight + 30)
+
+        // Draw zero line
+        state.context.setStrokeColor(separatorColor.cgColor)
+        state.context.setLineWidth(0.5)
+        state.context.move(to: CGPoint(x: chartX, y: midY))
+        state.context.addLine(to: CGPoint(x: chartX + chartWidth, y: midY))
+        state.context.strokePath()
+
+        // Y-axis labels
+        ("+1" as NSString).draw(at: CGPoint(x: margin, y: state.currentY - 4), withAttributes: captionAttrs)
+        ("0" as NSString).draw(at: CGPoint(x: margin + 8, y: midY - 4), withAttributes: captionAttrs)
+        ("-1" as NSString).draw(at: CGPoint(x: margin + 4, y: state.currentY - chartHeight - 4), withAttributes: captionAttrs)
+
+        // Plot data points and connect with line
+        let count = timelineData.dataPoints.count
+        let stepX = chartWidth / CGFloat(count - 1)
+        let scaleY = chartHeight / 2 * 0.85
+
+        state.context.setStrokeColor(accentBlue.cgColor)
+        state.context.setLineWidth(1.5)
+
+        for (idx, point) in timelineData.dataPoints.enumerated() {
+            let x = chartX + CGFloat(idx) * stepX
+            let y = midY + CGFloat(point.averageSentiment) * scaleY
+
+            if idx == 0 {
+                state.context.move(to: CGPoint(x: x, y: y))
+            } else {
+                state.context.addLine(to: CGPoint(x: x, y: y))
+            }
+        }
+        state.context.strokePath()
+
+        // Draw dots
+        for (idx, point) in timelineData.dataPoints.enumerated() {
+            let x = chartX + CGFloat(idx) * stepX
+            let y = midY + CGFloat(point.averageSentiment) * scaleY
+            let dotColor: PlatformColor = point.averageSentiment > 0.2 ? chartGreen : point.averageSentiment < -0.2 ? chartRed : separatorColor
+            let dotRect = CGRect(x: x - 3, y: y - 3, width: 6, height: 6)
+            state.context.setFillColor(dotColor.cgColor)
+            state.context.fillEllipse(in: dotRect)
+        }
+
+        state.currentY -= chartHeight + 4
+
+        // Period labels
+        let labelStep = max(1, count / 8)
+        for idx in stride(from: 0, to: count, by: labelStep) {
+            let x = chartX + CGFloat(idx) * stepX
+            let period = timelineData.dataPoints[idx].period
+            (period as NSString).draw(
+                at: CGPoint(x: x - 12, y: state.currentY),
+                withAttributes: captionAttrs
+            )
+        }
+        state.currentY -= 14
+
+        // Summary stats
+        let allSentiments = timelineData.dataPoints.map(\.averageSentiment)
+        let avg = allSentiments.reduce(0, +) / Double(allSentiments.count)
+        drawText(
+            "Average sentiment: \(String(format: "%.3f", avg)) across \(count) periods",
+            attrs: captionAttrs,
+            state: state
+        )
     }
 
     // MARK: - AI-Enhanced Analysis Section

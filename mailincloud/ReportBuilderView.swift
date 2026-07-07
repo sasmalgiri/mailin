@@ -428,7 +428,8 @@ struct ReportGenerator {
 
 struct ReportBuilderView: View {
     let emails: [MBOXParser.RawEmail]
-    @Environment(\.dismiss) private var dismiss
+    var isPresented: Binding<Bool>?
+    @Environment(\.dismiss) private var envDismiss
 
     @State private var reportTitle = "Email Archive Report"
     @State private var authorName = ""
@@ -473,7 +474,7 @@ struct ReportBuilderView: View {
             #endif
         }
         #if os(macOS)
-        .frame(minWidth: 700, minHeight: 550)
+        .frame(minWidth: 480, minHeight: 380)
         #endif
         .background(AppColors.backgroundTertiary)
         .alert("Export Failed", isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } })) {
@@ -512,12 +513,18 @@ struct ReportBuilderView: View {
                     .padding(.trailing, Spacing.xSmall)
             }
 
-            Button("Done") { dismiss() }
-                .keyboardShortcut(.cancelAction)
+            if isPresented != nil {
+                Button("Done") { closeSheet() }
+                    .keyboardShortcut(.cancelAction)
+            }
         }
         .padding(.horizontal, Spacing.medium)
         .padding(.vertical, Spacing.small)
         .background(AppColors.backgroundPrimary)
+    }
+
+    private func closeSheet() {
+        if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
     }
 
     // MARK: - Config Panel
@@ -729,14 +736,13 @@ struct ReportBuilderView: View {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.pdf]
         panel.nameFieldStringValue = "\(reportTitle).pdf"
-        panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
-            do {
-                try pdf.write(to: url, options: .atomic)
-                showSaveSuccess = true
-            } catch {
-                saveError = error.localizedDescription
-            }
+        let response = panel.runModal()
+        guard response == .OK, let url = panel.url else { return }
+        do {
+            try pdf.write(to: url, options: .atomic)
+            showSaveSuccess = true
+        } catch {
+            saveError = error.localizedDescription
         }
         #endif
     }

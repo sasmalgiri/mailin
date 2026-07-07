@@ -15,7 +15,8 @@ struct BatchOperationsView: View {
     var onTagApplied: (String, [UUID]) -> Void
     var onExportRequested: ([MBOXParser.RawEmail], String) -> Void
 
-    @Environment(\.dismiss) private var dismiss
+    var isPresented: Binding<Bool>?
+    @Environment(\.dismiss) private var envDismiss
 
     // MARK: - Tagging State
 
@@ -55,6 +56,7 @@ struct BatchOperationsView: View {
 
     @State private var showDeleteConfirmation = false
     @State private var deletedIDs: Set<UUID> = []
+    @State private var showTutorial = false
 
     // MARK: - Computed Helpers
 
@@ -79,6 +81,18 @@ struct BatchOperationsView: View {
             } else {
                 ScrollView {
                     VStack(spacing: Spacing.medium) {
+                        Label {
+                            Text("Batch operations apply changes to all selected emails at once. Tags and exports can be undone; deletions are permanent. Review your selection before applying.")
+                                .font(Typography.caption1)
+                        } icon: {
+                            Image(systemName: "gearshape.2.fill")
+                                .foregroundColor(.blue)
+                        }
+                        .padding(Spacing.xSmall)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.blue.opacity(0.1))
+                        .cornerRadius(CornerRadius.small)
+
                         selectionSummary
                         bulkTaggingSection
                         bulkClassificationSection
@@ -102,6 +116,7 @@ struct BatchOperationsView: View {
         ) {
             performBulkDelete()
         }
+        .featureTutorial(.batchOperations, key: "batch_operations_tutorial_seen", isPresented: $showTutorial)
     }
 
     // MARK: - Header
@@ -120,8 +135,10 @@ struct BatchOperationsView: View {
 
             Spacer()
 
+            TutorialHelpButton(showTutorial: $showTutorial)
+
             Button {
-                dismiss()
+                closeSheet()
             } label: {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundColor(AppColors.secondary)
@@ -147,6 +164,32 @@ struct BatchOperationsView: View {
     // MARK: - Selection Summary
 
     private var selectionSummary: some View {
+        #if os(iOS)
+        VStack(alignment: .leading, spacing: Spacing.xSmall) {
+            HStack(spacing: Spacing.xSmall) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(AppColors.success)
+                Text("\(selectedIDs.count) email\(selectedIDs.count == 1 ? "" : "s") selected")
+                    .font(Typography.headline)
+            }
+
+            if isProcessing {
+                ProgressView(value: progressValue)
+                    .accessibilityLabel("Operation progress")
+                    .accessibilityValue("\(Int(progressValue * 100)) percent")
+            }
+
+            if let message = resultMessage {
+                Text(message)
+                    .font(Typography.caption1)
+                    .foregroundColor(AppColors.success)
+                    .transition(.opacity)
+            }
+        }
+        .padding(Spacing.small)
+        .adaptiveCard(cornerRadius: CornerRadius.medium)
+        .accessibilityElement(children: .combine)
+        #else
         HStack(spacing: Spacing.small) {
             Image(systemName: "checkmark.circle.fill")
                 .foregroundColor(AppColors.success)
@@ -172,6 +215,7 @@ struct BatchOperationsView: View {
         .padding(Spacing.small)
         .adaptiveCard(cornerRadius: CornerRadius.medium)
         .accessibilityElement(children: .combine)
+        #endif
     }
 
     // MARK: - Bulk Tagging
@@ -182,7 +226,21 @@ struct BatchOperationsView: View {
                 .font(Typography.headline)
                 .accessibilityAddTraits(.isHeader)
 
-            // Apply Tag
+            #if os(iOS)
+            VStack(spacing: Spacing.xSmall) {
+                TextField("Tag name", text: $newTagName)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("New tag name")
+
+                Button("Apply Tag") {
+                    performApplyTag()
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .frame(maxWidth: .infinity)
+                .disabled(newTagName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isProcessing)
+                .accessibilityLabel("Apply tag to selected emails")
+            }
+            #else
             HStack(spacing: Spacing.xSmall) {
                 TextField("Tag name", text: $newTagName)
                     .textFieldStyle(.roundedBorder)
@@ -196,6 +254,7 @@ struct BatchOperationsView: View {
                 .accessibilityLabel("Apply tag to selected emails")
                 .accessibilityHint("Tags \(selectedIDs.count) selected emails with the entered tag name")
             }
+            #endif
 
             // Remove Tag
             if !allExistingTags.isEmpty {
@@ -232,15 +291,32 @@ struct BatchOperationsView: View {
                 .font(Typography.headline)
                 .accessibilityAddTraits(.isHeader)
 
+            #if os(iOS)
+            VStack(spacing: Spacing.xSmall) {
+                Picker("Category:", selection: $selectedCategory) {
+                    ForEach(BulkCategory.allCases) { category in
+                        Text(category.rawValue).tag(category)
+                    }
+                }
+                .pickerStyle(.menu)
+                .accessibilityLabel("Classification category")
+
+                Button("Classify Selected") {
+                    performBulkClassification()
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .frame(maxWidth: .infinity)
+                .disabled(isProcessing)
+                .accessibilityLabel("Classify selected emails")
+            }
+            #else
             HStack(spacing: Spacing.xSmall) {
                 Picker("Category:", selection: $selectedCategory) {
                     ForEach(BulkCategory.allCases) { category in
                         Text(category.rawValue).tag(category)
                     }
                 }
-                #if os(macOS)
                 .pickerStyle(.menu)
-                #endif
                 .accessibilityLabel("Classification category")
 
                 Button("Classify Selected") {
@@ -250,6 +326,18 @@ struct BatchOperationsView: View {
                 .disabled(isProcessing)
                 .accessibilityLabel("Classify selected emails")
                 .accessibilityHint("Classifies \(selectedIDs.count) emails as \(selectedCategory.rawValue)")
+            }
+            #endif
+
+            // Clear Classification
+            HStack(spacing: Spacing.xSmall) {
+                Button("Clear Classification") {
+                    performClearClassification()
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .disabled(isProcessing)
+                .accessibilityLabel("Clear classification from selected emails")
+                .accessibilityHint("Removes category classification from \(selectedIDs.count) selected emails")
             }
         }
         .padding(Spacing.medium)
@@ -264,17 +352,32 @@ struct BatchOperationsView: View {
                 .font(Typography.headline)
                 .accessibilityAddTraits(.isHeader)
 
+            #if os(iOS)
+            VStack(spacing: Spacing.xSmall) {
+                Picker("Format:", selection: $exportFormat) {
+                    ForEach(ExportFormat.allCases) { format in
+                        Text(format.rawValue).tag(format)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityLabel("Export format")
+
+                Button("Export Selected") {
+                    performBulkExport()
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .frame(maxWidth: .infinity)
+                .disabled(isProcessing)
+                .accessibilityLabel("Export selected emails")
+            }
+            #else
             HStack(spacing: Spacing.xSmall) {
                 Picker("Format:", selection: $exportFormat) {
                     ForEach(ExportFormat.allCases) { format in
                         Text(format.rawValue).tag(format)
                     }
                 }
-                #if os(macOS)
                 .pickerStyle(.segmented)
-                #else
-                .pickerStyle(.segmented)
-                #endif
                 .accessibilityLabel("Export format")
 
                 Button("Export Selected") {
@@ -285,6 +388,7 @@ struct BatchOperationsView: View {
                 .accessibilityLabel("Export selected emails")
                 .accessibilityHint("Exports \(selectedIDs.count) emails in \(exportFormat.rawValue) format")
             }
+            #endif
         }
         .padding(Spacing.medium)
         .adaptiveCard(cornerRadius: CornerRadius.medium)
@@ -316,6 +420,10 @@ struct BatchOperationsView: View {
     }
 
     // MARK: - Operations
+
+    private func closeSheet() {
+        if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
+    }
 
     private func performApplyTag() {
         let tag = newTagName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -409,6 +517,36 @@ struct BatchOperationsView: View {
 
             withAnimation(AnimationTiming.fast) {
                 resultMessage = "Classified \(ids.count) email\(ids.count == 1 ? "" : "s") as \(classificationTag)"
+                isProcessing = false
+            }
+
+            clearResultAfterDelay()
+        }
+    }
+
+    private func performClearClassification() {
+        isProcessing = true
+        progressValue = 0
+        resultMessage = nil
+
+        let ids = Array(selectedIDs)
+        let total = Double(ids.count)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            for (index, _) in ids.enumerated() {
+                progressValue = Double(index + 1) / total
+            }
+            progressValue = 1.0
+
+            onTagApplied("", ids) // Empty tag signals removal
+
+            ForensicManager.shared.logAction(
+                "Bulk Classification Cleared",
+                detail: "Classification removed from \(ids.count) email(s)"
+            )
+
+            withAnimation(AnimationTiming.fast) {
+                resultMessage = "Cleared classification from \(ids.count) email\(ids.count == 1 ? "" : "s")"
                 isProcessing = false
             }
 

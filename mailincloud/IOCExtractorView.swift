@@ -69,6 +69,9 @@ struct IOCExtractor {
                 guard let range = Range(match.range, in: text) else { continue }
                 let ip = String(text[range])
                 if ip == "0.0.0.0" || ip == "127.0.0.1" || ip.hasPrefix("255.") { continue }
+                let octets = ip.split(separator: ".").compactMap { Int($0) }
+                if octets.count == 4 && octets.allSatisfy({ $0 <= 31 }) { continue }
+                if ip.hasPrefix("10.") || ip.hasPrefix("192.168.") || ip.hasPrefix("172.16.") { continue }
                 let key = "ipv4:\(ip)"
                 if !seen.contains(key) {
                     seen.insert(key)
@@ -155,6 +158,7 @@ struct IOCExtractorView: View {
     @State private var isExtracting = false
     @State private var filterType: IOCEntry.IOCType?
     @State private var searchText = ""
+    @State private var showTutorial = false
     @Environment(\.dismiss) private var dismiss
 
     private var filteredEntries: [IOCEntry] {
@@ -184,6 +188,7 @@ struct IOCExtractorView: View {
                     Button("Export CSV") { exportCSV() }
                         .buttonStyle(.bordered)
                 }
+                TutorialHelpButton(showTutorial: $showTutorial)
                 Button { dismiss() } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.plain)
             }
@@ -214,10 +219,24 @@ struct IOCExtractorView: View {
                                 .font(.system(.callout, design: .monospaced))
                                 .lineLimit(1)
                                 .textSelection(.enabled)
-                            Text("\(entry.type.rawValue) • \(entry.emailSubject)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
+                            HStack(spacing: 4) {
+                                Text(entry.type.rawValue)
+                                    .font(.caption2)
+                                    .fontWeight(.medium)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 1)
+                                    .background(Color.accentColor.opacity(0.15))
+                                    .cornerRadius(3)
+                                Text(entry.source)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                Text("·")
+                                    .foregroundColor(.secondary)
+                                Text("from: \(entry.emailSubject)")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                            }
                         }
                         Spacer()
                         Button { copyToClipboard(entry.value) } label: {
@@ -230,24 +249,41 @@ struct IOCExtractorView: View {
             }
         }
         .task { await extract() }
+        .featureTutorial(.iocExtractor, key: "ioc_extractor_tutorial_seen", isPresented: $showTutorial)
         #if os(macOS)
-        .frame(minWidth: 600, minHeight: 400)
+        .frame(minWidth: 460, minHeight: 340)
         #endif
     }
 
     private var filterChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                chipButton("All", count: entries.count, selected: filterType == nil) { filterType = nil }
-                ForEach(IOCEntry.IOCType.allCases, id: \.self) { type in
-                    let count = entries.filter { $0.type == type }.count
-                    if count > 0 {
-                        chipButton("\(type.rawValue)", count: count, selected: filterType == type) { filterType = type }
+        VStack(spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    chipButton("All", count: entries.count, selected: filterType == nil) { filterType = nil }
+                    ForEach(IOCEntry.IOCType.allCases, id: \.self) { type in
+                        let count = entries.filter { $0.type == type }.count
+                        if count > 0 {
+                            chipButton("\(type.rawValue)", count: count, selected: filterType == type) { filterType = type }
+                        }
                     }
                 }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
             }
+
+            Label {
+                Text("Indicators of Compromise (IOCs) extracted from email headers and content — includes suspicious IPs, domains, URLs, file hashes, and email addresses. Higher counts may indicate targeted phishing or malware campaigns.")
+                    .font(.caption)
+            } icon: {
+                Image(systemName: "shield.lefthalf.filled")
+                    .foregroundColor(.orange)
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.orange.opacity(0.1))
+            .cornerRadius(4)
             .padding(.horizontal)
-            .padding(.vertical, 8)
+            .padding(.bottom, 8)
         }
     }
 

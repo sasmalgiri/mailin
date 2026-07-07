@@ -3,9 +3,11 @@ import SwiftUI
 struct ReviewBatchPanelView: View {
     let emails: [MBOXParser.RawEmail]
     @ObservedObject var manager: ReviewBatchManager
-    @Environment(\.dismiss) private var dismiss
+    var isPresented: Binding<Bool>?
+    @Environment(\.dismiss) private var envDismiss
     @State private var batchSize = 50
     @State private var hasCreatedBatches = false
+    @State private var showTutorial = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,6 +19,7 @@ struct ReviewBatchPanelView: View {
                 batchReviewView
             }
         }
+        .featureTutorial(.reviewBatches, key: "review_batches_tutorial_seen", isPresented: $showTutorial)
     }
 
     private var header: some View {
@@ -41,15 +44,22 @@ struct ReviewBatchPanelView: View {
                 .accessibilityLabel("Overall review progress")
                 .accessibilityValue("\(Int(manager.totalProgress * 100)) percent complete")
             }
-            Button { dismiss() } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundColor(AppColors.secondary)
-                    .imageScale(.large)
+            TutorialHelpButton(showTutorial: $showTutorial)
+            if isPresented != nil {
+                Button { closeSheet() } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(AppColors.secondary)
+                        .imageScale(.large)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close review batches")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Close review batches")
         }
         .padding(Spacing.medium)
+    }
+
+    private func closeSheet() {
+        if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
     }
 
     private var setupView: some View {

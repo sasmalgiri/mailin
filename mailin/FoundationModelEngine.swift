@@ -1,7 +1,5 @@
 import Foundation
 import NaturalLanguage
-import Contacts
-import EventKit
 
 struct EmailTagResult {
     let category: String
@@ -422,117 +420,6 @@ struct GetThreadInfoTool: Tool {
 
 // MARK: - MoE Expert Tools
 
-@available(macOS 26, iOS 26, *)
-struct ContactLookupTool: Tool {
-    let name = "lookupContact"
-    let description = "Look up a person in the user's Contacts by name or email to get their real identity, organization, and phone"
-
-    @Generable
-    struct Arguments {
-        @Guide(description: "Name or email address to look up")
-        var query: String
-    }
-
-    func call(arguments: Arguments) async throws -> String {
-        let store = CNContactStore()
-        let status = CNContactStore.authorizationStatus(for: .contacts)
-
-        if status == .notDetermined {
-            let granted = try await store.requestAccess(for: .contacts)
-            if !granted { return "Contacts access not granted" }
-        } else if status != .authorized {
-            return "Contacts access not available"
-        }
-
-        let keys: [CNKeyDescriptor] = [
-            CNContactGivenNameKey as CNKeyDescriptor,
-            CNContactFamilyNameKey as CNKeyDescriptor,
-            CNContactOrganizationNameKey as CNKeyDescriptor,
-            CNContactJobTitleKey as CNKeyDescriptor,
-            CNContactEmailAddressesKey as CNKeyDescriptor,
-            CNContactPhoneNumbersKey as CNKeyDescriptor,
-        ]
-
-        var contacts: [CNContact] = []
-        if arguments.query.contains("@") {
-            let predicate = CNContact.predicateForContacts(matchingEmailAddress: arguments.query)
-            contacts = (try? store.unifiedContacts(matching: predicate, keysToFetch: keys)) ?? []
-        }
-        if contacts.isEmpty {
-            let predicate = CNContact.predicateForContacts(matchingName: arguments.query)
-            contacts = (try? store.unifiedContacts(matching: predicate, keysToFetch: keys)) ?? []
-        }
-
-        if contacts.isEmpty { return "No contact found for '\(arguments.query)'" }
-
-        var output = ""
-        for contact in contacts.prefix(3) {
-            output += "Name: \(contact.givenName) \(contact.familyName)\n"
-            if !contact.organizationName.isEmpty { output += "Org: \(contact.organizationName)\n" }
-            if !contact.jobTitle.isEmpty { output += "Title: \(contact.jobTitle)\n" }
-            for email in contact.emailAddresses { output += "Email: \(email.value as String)\n" }
-            for phone in contact.phoneNumbers { output += "Phone: \(phone.value.stringValue)\n" }
-            output += "\n"
-        }
-        return output
-    }
-}
-
-@available(macOS 26, iOS 26, *)
-struct CalendarCheckTool: Tool {
-    let name = "checkCalendar"
-    let description = "Check the user's calendar for events or meetings with a specific person or topic"
-
-    @Generable
-    struct Arguments {
-        @Guide(description: "Person name, topic, or keyword to search calendar events")
-        var query: String
-    }
-
-    func call(arguments: Arguments) async throws -> String {
-        let store = EKEventStore()
-        do {
-            let granted = try await store.requestFullAccessToEvents()
-            if !granted { return "Calendar access not granted" }
-        } catch {
-            return "Calendar access unavailable"
-        }
-
-        let cal = Calendar.current
-        guard let start = cal.date(byAdding: .month, value: -1, to: Date()),
-              let end = cal.date(byAdding: .month, value: 1, to: Date()) else {
-            return "Unable to compute date range"
-        }
-        let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)
-        let events = store.events(matching: predicate)
-
-        let q = arguments.query.lowercased()
-        let matching = events.filter { event in
-            let title = (event.title ?? "").lowercased()
-            let notes = (event.notes ?? "").lowercased()
-            let attendees = event.attendees?.compactMap { $0.name?.lowercased() } ?? []
-            return title.contains(q) || notes.contains(q) || attendees.contains(where: { $0.contains(q) })
-        }
-
-        if matching.isEmpty { return "No calendar events found for '\(arguments.query)'" }
-
-        let fmt = DateFormatter()
-        fmt.dateStyle = .medium
-        fmt.timeStyle = .short
-
-        var output = "Found \(matching.count) event(s):\n\n"
-        for event in matching.prefix(5) {
-            output += "\(event.title ?? "(No title)")\n"
-            output += "  When: \(fmt.string(from: event.startDate)) – \(fmt.string(from: event.endDate))\n"
-            if let attendees = event.attendees, !attendees.isEmpty {
-                output += "  With: \(attendees.compactMap(\.name).joined(separator: ", "))\n"
-            }
-            if let loc = event.location, !loc.isEmpty { output += "  Where: \(loc)\n" }
-            output += "\n"
-        }
-        return output
-    }
-}
 
 @available(macOS 26, iOS 26, *)
 struct NLPAnalysisTool: Tool {
@@ -761,6 +648,170 @@ struct TopicDrillTool: Tool {
     }
 }
 
+// MARK: - Attachment Analysis Tool (v4.1.1)
+
+@available(macOS 26, iOS 26, *)
+struct AttachmentAnalysisTool: Tool {
+    let name = "analyzeAttachments"
+    let description = "Search and analyze attachment content (PDFs, images via OCR, documents) across the email archive"
+
+    @Generable
+    struct Arguments {
+        @Guide(description: "Search query for attachment content, or email subject/sender to get specific attachment details")
+        var query: String
+    }
+
+    let emails: [MBOXParser.RawEmail]
+
+    func call(arguments: Arguments) async throws -> String {
+        let terms = EmailNLPEngine.extractSearchTerms(from: arguments.query)
+
+        // Search attachment content
+        let attachResults = EmailSearchIndex.shared.searchAttachmentContent(terms: terms.isEmpty ? [arguments.query] : terms, limit: 5)
+        if !attachResults.isEmpty {
+            var output = "ATTACHMENT CONTENT MATCHES (\(attachResults.count)):\n"
+            for r in attachResults {
+                let subj = r.email.headers["Subject"] ?? "(No Subject)"
+                let from = r.email.headers["From"] ?? "Unknown"
+                let attachList = r.email.attachments.map(\.filename).joined(separator: ", ")
+                output += "Email: \(subj) from \(from)\n"
+                output += "Attachments: \(attachList)\n"
+                let text = EmailSearchIndex.shared.getAttachmentText(for: r.email.id) ?? ""
+                output += "Content: \(String(text.prefix(300)))\n\n"
+            }
+            return output
+        }
+
+        // Fallback: find emails with attachments matching the query
+        let qLower = arguments.query.lowercased()
+        let withAttachments = emails.filter { email in
+            !email.attachments.isEmpty && (
+                email.attachments.contains(where: { $0.filename.lowercased().contains(qLower) }) ||
+                (email.headers["Subject"] ?? "").lowercased().contains(qLower) ||
+                (email.headers["From"] ?? "").lowercased().contains(qLower)
+            )
+        }
+
+        if !withAttachments.isEmpty {
+            var output = "EMAILS WITH ATTACHMENTS (\(withAttachments.count)):\n"
+            for email in withAttachments.prefix(5) {
+                output += EmailSearchIndex.shared.getAttachmentSummary(for: email) + "\n"
+            }
+            return output
+        }
+
+        // Last resort: show attachment statistics
+        let totalWithAttachments = emails.filter { !$0.attachments.isEmpty }.count
+        let allAttachments = emails.flatMap(\.attachments)
+        let types = Dictionary(grouping: allAttachments, by: \.mimeType).mapValues(\.count).sorted { $0.value > $1.value }
+        var output = "No specific matches for '\(arguments.query)'. Archive attachment overview:\n"
+        output += "\(totalWithAttachments) emails with attachments (\(allAttachments.count) total files)\n"
+        output += "Types: " + types.prefix(5).map { "\($0.key): \($0.value)" }.joined(separator: ", ") + "\n"
+        return output
+    }
+}
+
+@available(macOS 26, iOS 26, *)
+struct VisualizationRecommendTool: Tool {
+    let name = "recommendVisualization"
+    let description = "Recommend the best visualization type for a user query about their email data: topicFlow, communicationHeatmap, sentimentTimeline, or relationshipMap"
+
+    @Generable
+    struct Arguments {
+        @Guide(description: "The user's visualization or analysis query")
+        var query: String
+    }
+
+    func call(arguments: Arguments) async throws -> String {
+        let vizType = AIVisualizationGenerator.recommendVisualization(for: arguments.query)
+        return "RECOMMENDED: \(vizType.rawValue) — \(vizType.title). This visualization best answers queries about \(vizDescription(vizType))."
+    }
+
+    private func vizDescription(_ type: VisualizationType) -> String {
+        switch type {
+        case .topicFlow: return "how discussion topics change over time periods"
+        case .communicationHeatmap: return "when email activity peaks by day of week and hour"
+        case .sentimentTimeline: return "how communication tone and mood trends evolve"
+        case .relationshipMap: return "contact networks, key connectors, and relationship patterns"
+        }
+    }
+}
+
+// MARK: - Knowledge Graph Query Tool (v3.1.3)
+
+@available(macOS 26, iOS 26, *)
+struct KnowledgeGraphQueryTool: Tool {
+    let name = "queryKnowledgeGraph"
+    let description = "Query the email knowledge graph to find relationships between people, organizations, topics, and domains. Use this to answer questions about who communicates with whom, what topics connect people, and how entities are related."
+
+    @Generable
+    struct Arguments {
+        @Guide(description: "The entity name, email address, topic, or domain to look up in the knowledge graph")
+        var query: String
+        @Guide(description: "Type of query: 'relationships' to find connections, 'path' to find how two entities connect (use 'entity1 -> entity2' format), 'overview' for graph statistics")
+        var queryType: String?
+    }
+
+    func call(arguments: Arguments) async throws -> String {
+        guard let graph = FoundationModelEngine.getKnowledgeGraph(), graph.nodeCount > 0 else {
+            return "Knowledge graph not available. Import emails first to build the graph."
+        }
+
+        let qt = arguments.queryType?.lowercased() ?? "relationships"
+
+        if qt == "overview" {
+            return graph.summaryForAI(focus: arguments.query, limit: 15)
+        }
+
+        if qt == "path", arguments.query.contains("->") {
+            let parts = arguments.query.components(separatedBy: "->").map { $0.trimmingCharacters(in: .whitespaces) }
+            if parts.count == 2 {
+                let nodesA = graph.findNodes(matching: parts[0])
+                let nodesB = graph.findNodes(matching: parts[1])
+                if let a = nodesA.first, let b = nodesB.first {
+                    if let path = graph.shortestPath(from: a.id, to: b.id) {
+                        let labels = path.compactMap { graph.findNode(id: $0)?.label }
+                        let strength = graph.connectionStrength(between: a.id, nodeB: b.id)
+                        return "PATH: \(labels.joined(separator: " → "))\nConnection strength: \(String(format: "%.0f", strength))\nHops: \(path.count - 1)"
+                    }
+                    return "No path found between '\(parts[0])' and '\(parts[1])'"
+                }
+                return "Could not find nodes matching '\(parts[0])' or '\(parts[1])'"
+            }
+        }
+
+        let matches = graph.findNodes(matching: arguments.query)
+        if matches.isEmpty {
+            return "No entities found matching '\(arguments.query)' in the knowledge graph."
+        }
+
+        var output = ""
+        for node in matches.prefix(3) {
+            output += "\(node.type.rawValue.uppercased()): \(node.label) (weight: \(String(format: "%.0f", node.weight)))\n"
+
+            let neighborsByType: [KGEdgeType: [KGNode]] = {
+                var grouped: [KGEdgeType: [KGNode]] = [:]
+                for edge in graph.edgesFrom(node.id) + graph.edgesTo(node.id) {
+                    let neighborID = edge.sourceID == node.id ? edge.targetID : edge.sourceID
+                    if let n = graph.findNode(id: neighborID) {
+                        grouped[edge.type, default: []].append(n)
+                    }
+                }
+                return grouped
+            }()
+
+            for (edgeType, neighbors) in neighborsByType.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
+                let sorted = neighbors.sorted { $0.weight > $1.weight }
+                let labels = sorted.prefix(5).map { "\($0.label) (\($0.type.rawValue))" }
+                output += "  \(edgeType.rawValue): \(labels.joined(separator: ", "))\n"
+            }
+            output += "\n"
+        }
+
+        return output
+    }
+}
+
 // MARK: - Foundation Model Engine
 
 @available(macOS 26, iOS 26, *)
@@ -794,6 +845,12 @@ struct FoundationModelEngine {
         SystemLanguageModel.default.isAvailable
     }
 
+    // v4.3.1: Current persona for AI behavior
+    @MainActor
+    static var personaForCurrentSession: PersonaManager.Persona {
+        PersonaManager.shared.selectedPersona
+    }
+
     private static func prepareSession(query: String, emails: [MBOXParser.RawEmail]) -> (session: LanguageModelSession, prompt: String) {
         let searchTerms = EmailNLPEngine.extractSearchTerms(from: query)
         let contextEmails: [MBOXParser.RawEmail]
@@ -811,23 +868,10 @@ struct FoundationModelEngine {
         let emailContext = buildContext(from: contextEmails, allEmails: emails)
 
         let instructions = """
-            You are an expert email analyst. The user imported their email archive into mailin, \
-            a privacy-first Mac app. All processing is 100% on-device.
-
-            Your role:
-            - Answer thoroughly with specific evidence from the emails
-            - ALWAYS refer to emails by their actual **Subject** line (in bold), never as \
-              "Email 1" or "Email 2". For example say "**Q1 Product Launch Strategy** from \
-              **Sarah Johnson**" not "Email 1"
-            - Use **bold** for names, dates, and key terms
-            - Quote relevant email content directly
-            - Synthesize information across multiple emails into coherent insights
-            - Note patterns, trends, and connections you observe
-            - If data is insufficient, state what you can determine and what's uncertain
-            - Be conversational and insightful — like a colleague who read every email
-            - Use bullet points and clear structure for complex answers
-            - If the user asks about something not in the provided emails, use the searchEmails \
-              tool to find more relevant emails
+            You are an email analyst in mailin (on-device, private). \
+            First identify what the user is asking, then answer with evidence from the emails. \
+            Refer to emails by **Subject** and **sender** in bold. Use bullet points. \
+            If emails shown don't cover the question, use searchEmails tool.
             """
 
         let session = LanguageModelSession(
@@ -905,8 +949,10 @@ struct FoundationModelEngine {
             emailChars += entry.count
         }
 
+        let personaConfig = await PersonaManager.aiConfig(for: personaForCurrentSession)
         let instructions = """
-            You are an expert email analyst in mailin, a privacy-first Mac app. \
+            \(personaConfig.systemInstruction) \
+            You work in mailin, a privacy-first Mac app. \
             The NLP engine has already retrieved the most relevant emails and computed \
             verified statistics. Your job is to synthesize these into a natural, \
             insightful answer.
@@ -919,11 +965,10 @@ struct FoundationModelEngine {
               **Sarah Johnson**" not "Email 1"
             - Quote specific email content to support your points
             - Use **bold** for names, dates, and key terms
-            - Be conversational like a colleague who read every email
             - Connect dots across emails — identify patterns and insights
-            - If you notice something interesting the user didn't ask about, mention it briefly
             - Keep responses focused and evidence-based
             - Use the searchEmails tool if you need more context beyond the provided emails
+            - Synthesis guidance: \(personaConfig.synthesisGuidance)
             """
 
         let session = LanguageModelSession(
@@ -1003,8 +1048,10 @@ struct FoundationModelEngine {
             emailChars += entry.count
         }
 
+        let personaConfig = await PersonaManager.aiConfig(for: personaForCurrentSession)
         let instructions = """
-            You are an expert email analyst in mailin, a privacy-first Mac app. \
+            \(personaConfig.systemInstruction) \
+            You work in mailin, a privacy-first Mac app. \
             An agentic retrieval pipeline has already: searched with BM25 + semantic vectors, \
             expanded conversation threads for full context, extracted the most relevant \
             passages via chunk-level scoring, and computed verified NLP statistics.
@@ -1019,11 +1066,10 @@ struct FoundationModelEngine {
             - Use the CONVERSATION THREADS timeline to narrate how discussions evolved over time
             - Connect dots across emails — identify patterns, outcomes, turning points, and insights
             - Use **bold** for names, dates, and key terms
-            - Be conversational and insightful — like a colleague who read every email carefully
             - Structure complex answers with bullet points or numbered lists
-            - If you notice something interesting the user didn't ask about, mention it briefly
             - Keep responses focused and evidence-based — every claim should trace to an email
             - Use the searchEmails tool if you need more context beyond the provided emails
+            - Synthesis guidance: \(personaConfig.synthesisGuidance)
             """
 
         let session = LanguageModelSession(
@@ -1206,11 +1252,11 @@ struct FoundationModelEngine {
             return aScore > bScore
         }
 
-        // Dynamic fan-in
+        // Dynamic intent-aware fan-in
         let findingsText = serializeFindings(allFindings)
-        let profileBudget = min(profile.count, contextCharBudget / 4)
-        let ragBudget = contextCharBudget / 4
-        let availableBudget = contextCharBudget - profileBudget - ragBudget - 500
+        let hybridBudget = contextBudget(for: intent)
+        let profileBudget = min(profile.count, hybridBudget.profileChars)
+        let availableBudget = hybridBudget.findingsChars + hybridBudget.emailBodyChars
 
         var finalFindingsText: String
         var layerCount: Int
@@ -1258,6 +1304,12 @@ struct FoundationModelEngine {
 
         synthesisContext += "\n" + finalFindingsText + "\n\n"
 
+        // v4.3.3: Inject plugin findings into synthesis context
+        let pluginText = await PluginManager.shared.allFindingsForAI()
+        if !pluginText.isEmpty {
+            synthesisContext += "PLUGIN FINDINGS:\n\(String(pluginText.prefix(600)))\n\n"
+        }
+
         let convoCtx = conversationContext()
         if !convoCtx.isEmpty {
             synthesisContext = String(convoCtx.prefix(400)) + "\n" + synthesisContext
@@ -1291,27 +1343,19 @@ struct FoundationModelEngine {
         #else
         let cloudExpertCount = 0
         #endif
+        let personaConfig = await PersonaManager.aiConfig(for: personaForCurrentSession)
+        let usedKGExpert = experts.contains(.kgExpert)
+        let kgCitationDirective = usedKGExpert
+            ? "When the knowledge-graph expert provided node IDs (person:<email>, topic:<id>, domain:<host>), preserve those IDs verbatim alongside subject/sender citations so claims remain verifiable. "
+            : ""
         let instructions = """
-            You are the AI brain of mailin, a privacy-first email app. \
-            A \(layerCount)-layer hybrid pipeline has been deployed: \
-            NLP computed a deterministic baseline answer, agentic RAG retrieved \(ragRetrievedEmails.count) emails \
-            with chunk-level evidence, \(totalWithCloud) parallel expert sessions (\(experts.count) on-device + \(cloudExpertCount) cloud) produced \
-            \(allFindings.count) structured findings (\(highCount) high-relevance, \(linkedCount) linked to source emails). \
-            \
-            Your job: synthesize ALL of this into one coherent, evidence-rich answer that IMPROVES on the NLP baseline. \
-            The NLP baseline has verified numbers — use them as ground truth. \
-            Expert findings (marked ▲/●/▽) add depth and insight beyond what NLP can compute. \
-            Cloud expert findings bring world knowledge and external context that on-device models lack. \
-            KEY PASSAGES are the most relevant email excerpts — quote them directly. \
-            \
-            Rules: \
-            - Refer to emails by **Subject** and **sender** in bold, never as "Email 1" \
-            - Every claim must trace to an email or finding \
-            - Use the NLP baseline numbers as-is (they are deterministic truth) \
-            - Add expert insights that go beyond what the baseline found \
-            - Integrate cloud expert world-knowledge insights where they add unique value \
-            - Be conversational, like a colleague who analyzed everything thoroughly \
-            - Structure with bullet points or numbered lists for complex answers
+            \(personaConfig.systemInstruction) \
+            Synthesize \(allFindings.count) findings (\(highCount) high-relevance) \
+            from \(experts.count) experts into one answer. NLP baseline numbers are ground truth. \
+            ▲=high ●=medium ▽=low relevance. Cite emails by **Subject** and **sender**. \
+            \(kgCitationDirective)\
+            Answer the user's exact question first, then add insights. Use bullet points. \
+            \(personaConfig.synthesisGuidance)
             """
 
         let tools = selectTools(for: intent, emails: targetEmails)
@@ -1319,7 +1363,7 @@ struct FoundationModelEngine {
             ? LanguageModelSession(instructions: instructions)
             : LanguageModelSession(tools: tools, instructions: instructions)
 
-        let prompt = "User question: \(query)\n\n\(synthesisContext)"
+        let prompt = "\(synthesisContext)\n\nAnswer this question: \(query)"
 
         let stream = session.streamResponse(to: prompt)
         var finalContent = ""
@@ -1353,6 +1397,44 @@ struct FoundationModelEngine {
 
         recordTurn(query: query, intent: intent, answer: finalContent)
 
+        // Capture provenance so this answer can be audited later. Stays
+        // on-device; HMAC-chained via ForensicManager when forensic mode
+        // is on. Done as a fire-and-forget MainActor task so we don't
+        // block the streaming return.
+        let kgSnapshotIDs: [String] = {
+            let graph = KnowledgeGraph.load()
+            guard graph.nodeCount > 0 else { return [] }
+            return graph.findNodes(type: .person).map(\.id) + graph.findNodes(type: .topic).map(\.id)
+        }()
+        let citedKGNodes = extractKGNodeIDs(from: finalContent)
+        var provenanceBuilder = AIProvenanceBuilder()
+        provenanceBuilder.query = String(query.prefix(500))
+        provenanceBuilder.intent = "\(intent)"
+        provenanceBuilder.persona = UserDefaults.standard.string(forKey: "selectedPersona") ?? "personal"
+        provenanceBuilder.modelGeneration = FoundationModelEngine.isAvailable ? "AppleFoundationModel" : "ExtractiveFallback"
+        provenanceBuilder.modelAvailable = FoundationModelEngine.isAvailable
+        provenanceBuilder.cloudCrossValidated = cloudExpertCount > 0
+        provenanceBuilder.expertsRun = experts.map(\.rawValue)
+        provenanceBuilder.subQueries = subQueries
+        provenanceBuilder.toolsUsed = tools.map { $0.name }
+        provenanceBuilder.archiveEmailCount = allEmailCount
+        provenanceBuilder.retrievedEmailIDs = (ragRetrievedEmails.isEmpty ? emails : ragRetrievedEmails).map(\.id)
+        provenanceBuilder.ragKeyChunkCount = ragKeyChunks.count
+        provenanceBuilder.kgNodeIDs = citedKGNodes
+        provenanceBuilder.kgEdgeCount = KnowledgeGraph.load().edgeCount
+        provenanceBuilder.totalFindings = allFindings.count
+        provenanceBuilder.highRelevanceCount = highCount
+        provenanceBuilder.linkedFindings = linkedCount
+        provenanceBuilder.synthesisLayerCount = layerCount + (cloudExpertCount > 0 ? 1 : 0)
+        provenanceBuilder.contextCharCount = synthesisContext.count
+        provenanceBuilder.answerCharCount = finalContent.count
+        provenanceBuilder.archiveHash = AIProvenance.hash(ofUUIDs: emails.map(\.id))
+        provenanceBuilder.kgSnapshotHash = AIProvenance.hash(of: kgSnapshotIDs)
+        let provenance = provenanceBuilder.build()
+        Task { @MainActor in
+            AIProvenanceStore.shared.record(provenance)
+        }
+
         return HybridExpertResult(
             answer: finalContent,
             intent: intent,
@@ -1360,6 +1442,27 @@ struct FoundationModelEngine {
             highRelevanceCount: highCount,
             layerCount: layerCount + (cloudExpertCount > 0 ? 1 : 0)
         )
+    }
+
+    /// Pulls bracketed KG node ids out of the final synthesis output so
+    /// provenance records exactly which graph entities the answer cited.
+    /// Recognises person:<email>, topic:<id>, domain:<host>, organization:<id>.
+    nonisolated static func extractKGNodeIDs(from text: String) -> [String] {
+        let pattern = #"(person|topic|domain|organization|email):[A-Za-z0-9._%+\-@/]+"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(text.startIndex..., in: text)
+        var seen = Set<String>()
+        var found: [String] = []
+        regex.enumerateMatches(in: text, range: range) { match, _, _ in
+            if let match, let r = Range(match.range, in: text) {
+                let id = String(text[r])
+                if !seen.contains(id) {
+                    seen.insert(id)
+                    found.append(id)
+                }
+            }
+        }
+        return found
     }
 
     static func summarize(emails: [MBOXParser.RawEmail]) async throws -> String {
@@ -1440,6 +1543,7 @@ struct FoundationModelEngine {
                 case .topicExpert: label = "Topics & Content"
                 case .timelineExpert: label = "Timeline Patterns"
                 case .securityExpert: label = "Security"
+                case .kgExpert: label = "Knowledge Graph"
                 }
                 output += "**\(label):**\n"
                 for finding in relevant {
@@ -2602,7 +2706,7 @@ struct FoundationModelEngine {
         // Apple AI always gets tools — it's the brain that decides what to call
     }
 
-    // MARK: - Conversation Memory (on-device, in-memory only)
+    // MARK: - Semantic Conversation Memory (v2.2.3)
 
     struct ConversationTurn {
         let query: String
@@ -2613,12 +2717,31 @@ struct FoundationModelEngine {
         let queryTerms: [String]
     }
 
+    struct SemanticFact {
+        let key: String
+        let value: String
+        let source: String
+        let timestamp: Date
+        let embedding: [Double]?
+    }
+
     private nonisolated static let fmStateQueue = DispatchQueue(label: "com.mailin.fmState")
     nonisolated(unsafe) private static var conversationHistory: [ConversationTurn] = []
-    private static let maxHistoryTurns = 5
+    nonisolated(unsafe) private static var semanticFacts: [SemanticFact] = []
+    private static let maxHistoryTurns = 10
+    private static let maxSemanticFacts = 50
 
     static func clearConversationMemory() {
-        fmStateQueue.sync { conversationHistory.removeAll() }
+        fmStateQueue.sync {
+            conversationHistory.removeAll()
+            semanticFacts.removeAll()
+        }
+    }
+
+    // v3.2.1: Record user feedback for expert routing learning
+    static func recordUserFeedback(query: String, intent: QueryIntent, isPositive: Bool) {
+        let experts = semanticSelectExperts(query, intent: intent).map(\.rawValue)
+        FeedbackManager.shared.recordFeedback(intent: "\(intent)", experts: experts, isPositive: isPositive)
     }
 
     private static func recordTurn(query: String, intent: QueryIntent, answer: String) {
@@ -2631,6 +2754,10 @@ struct FoundationModelEngine {
             if !entities.contains(name) { entities.append(name) }
         }
         let topicTerms = terms.filter { $0.count > 3 && !$0.contains("@") }
+
+        // Extract 2-5 key facts from the answer using sentence scoring
+        let facts = extractKeyFacts(from: answer, query: query, source: "\(intent)")
+
         fmStateQueue.sync {
             conversationHistory.append(ConversationTurn(
                 query: query, intent: intent, answerSnippet: snippet,
@@ -2641,34 +2768,177 @@ struct FoundationModelEngine {
             if conversationHistory.count > maxHistoryTurns {
                 conversationHistory.removeFirst(conversationHistory.count - maxHistoryTurns)
             }
+
+            semanticFacts.append(contentsOf: facts)
+            if semanticFacts.count > maxSemanticFacts {
+                semanticFacts.removeFirst(semanticFacts.count - maxSemanticFacts)
+            }
         }
+    }
+
+    private static func extractKeyFacts(from answer: String, query: String, source: String) -> [SemanticFact] {
+        let sentences = answer.components(separatedBy: CharacterSet(charactersIn: ".!?\n"))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.count > 20 && $0.count < 300 }
+
+        guard !sentences.isEmpty else { return [] }
+
+        let scored = sentences.map { sentence -> (String, Double) in
+            var score = 0.0
+            let lower = sentence.lowercased()
+
+            if lower.contains("**") { score += 2.0 }
+            let numberCount = lower.filter(\.isNumber).count
+            if numberCount > 0 { score += min(Double(numberCount) / 3.0, 2.0) }
+            let namePattern = /[A-Z][a-z]+ [A-Z][a-z]+/
+            if sentence.firstMatch(of: namePattern) != nil { score += 1.5 }
+            if lower.contains("@") || lower.contains("from ") || lower.contains("sent ") { score += 1.0 }
+            let actionWords = ["found", "detected", "identified", "shows", "indicates", "reveals", "total", "average"]
+            for word in actionWords where lower.contains(word) { score += 0.5 }
+            if lower.contains("?") { score -= 1.0 }
+
+            return (sentence, score)
+        }
+
+        let topFacts = scored.sorted { $0.1 > $1.1 }.prefix(5)
+
+        return topFacts.map { sentence, _ in
+            let embedding = computeFactEmbedding(sentence)
+            return SemanticFact(
+                key: String(sentence.prefix(60)),
+                value: sentence,
+                source: source,
+                timestamp: Date(),
+                embedding: embedding
+            )
+        }
+    }
+
+    private static func computeFactEmbedding(_ text: String) -> [Double]? {
+        guard let embeddingModel = NLEmbedding.sentenceEmbedding(for: .english) else { return nil }
+        return embeddingModel.vector(for: text)
+    }
+
+    static func recallFacts(about query: String, limit: Int = 3) -> [SemanticFact] {
+        let factsCopy = fmStateQueue.sync { semanticFacts }
+        guard !factsCopy.isEmpty else { return [] }
+        guard let embeddingModel = NLEmbedding.sentenceEmbedding(for: .english) else {
+            return Array(factsCopy.suffix(limit))
+        }
+        guard let queryVector = embeddingModel.vector(for: query) else {
+            return Array(factsCopy.suffix(limit))
+        }
+
+        let scored = factsCopy.compactMap { fact -> (SemanticFact, Double)? in
+            guard let factVector = fact.embedding else { return nil }
+            guard factVector.count == queryVector.count else { return nil }
+            var dot = 0.0, normA = 0.0, normB = 0.0
+            for i in 0..<queryVector.count {
+                dot += queryVector[i] * factVector[i]
+                normA += queryVector[i] * queryVector[i]
+                normB += factVector[i] * factVector[i]
+            }
+            let denom = sqrt(normA) * sqrt(normB)
+            let similarity = denom > 0 ? dot / denom : 0
+            return (fact, similarity)
+        }
+
+        return scored.sorted { $0.1 > $1.1 }.prefix(limit).map(\.0)
     }
 
     private static func conversationContext() -> String {
         let historyCopy = fmStateQueue.sync { conversationHistory }
-        guard !historyCopy.isEmpty else { return "" }
-        var ctx = "CONVERSATION MEMORY:\n"
-        for (i, turn) in historyCopy.enumerated() {
-            ctx += "Turn \(i + 1): \(turn.query) [\(turn.intent)]\n"
-            if !turn.entities.isEmpty {
-                ctx += "  People/Orgs: \(turn.entities.joined(separator: ", "))\n"
+        let factsCopy = fmStateQueue.sync { semanticFacts }
+        guard !historyCopy.isEmpty && !factsCopy.isEmpty else {
+            // Fallback to simple turn-based context
+            guard !historyCopy.isEmpty else { return "" }
+            var ctx = "CONVERSATION MEMORY:\n"
+            for (i, turn) in historyCopy.suffix(5).enumerated() {
+                ctx += "Turn \(i + 1): \(turn.query) [\(turn.intent)]\n"
+                if !turn.entities.isEmpty {
+                    ctx += "  People/Orgs: \(turn.entities.joined(separator: ", "))\n"
+                }
+                ctx += "  Answer: \(turn.answerSnippet)\n\n"
             }
-            if !turn.topics.isEmpty {
-                ctx += "  Topics: \(turn.topics.joined(separator: ", "))\n"
-            }
-            ctx += "  Answer: \(turn.answerSnippet)\n\n"
+            return ctx
         }
+
+        // Use last turn for recency, then semantic facts for relevance
+        var ctx = "CONVERSATION MEMORY:\n"
+
+        // Last 2 turns for immediate context
+        for (i, turn) in historyCopy.suffix(2).enumerated() {
+            ctx += "Recent [\(i + 1)]: \(turn.query) → \(turn.answerSnippet)\n"
+        }
+
+        // Top semantic facts relevant to the recent query
+        if let lastQuery = historyCopy.last?.query {
+            let relevantFacts = recallFacts(about: lastQuery, limit: 3)
+            if !relevantFacts.isEmpty {
+                ctx += "RELEVANT FACTS:\n"
+                for fact in relevantFacts {
+                    ctx += "• \(fact.value)\n"
+                }
+            }
+        }
+
         return ctx
     }
 
-    // MARK: - AI Intent Classification
+    // MARK: - Dual-Classification with Consensus
+
+    struct IntentClassification {
+        let intent: QueryIntent
+        let confidence: ClassificationConfidence
+        let embeddingIntent: QueryIntent
+        let aiIntent: QueryIntent?
+        let isAmbiguous: Bool
+        let embeddingScores: [QueryIntent: Double]
+
+        enum ClassificationConfidence {
+            case high      // both agree, or embedding very strong
+            case medium    // one source confident
+            case low       // disagreement or weak scores
+        }
+    }
 
     static func classifyIntent(_ query: String) async -> QueryIntent {
-        // Try Apple AI structured classification first
-        if let aiIntent = await classifyIntentWithAI(query) {
-            return aiIntent
+        let result = await classifyIntentDual(query)
+        return result.intent
+    }
+
+    static func classifyIntentDual(_ query: String) async -> IntentClassification {
+        let (embeddingIntent, embeddingScores) = semanticClassifyIntent(query)
+        let embeddingTopScore = embeddingScores[embeddingIntent] ?? 0
+
+        let aiIntent = await classifyIntentWithAI(query)
+
+        // Consensus logic
+        if let ai = aiIntent {
+            if ai == embeddingIntent {
+                // Both agree → high confidence
+                return IntentClassification(
+                    intent: ai, confidence: .high,
+                    embeddingIntent: embeddingIntent, aiIntent: ai,
+                    isAmbiguous: false, embeddingScores: embeddingScores
+                )
+            } else {
+                // Disagree → Apple AI wins, but mark as ambiguous
+                return IntentClassification(
+                    intent: ai, confidence: .low,
+                    embeddingIntent: embeddingIntent, aiIntent: ai,
+                    isAmbiguous: true, embeddingScores: embeddingScores
+                )
+            }
         }
-        return classifyIntentKeyword(query)
+
+        // Apple AI unavailable → NLEmbedding only
+        let confidence: IntentClassification.ClassificationConfidence = embeddingTopScore > 0.45 ? .high : .medium
+        return IntentClassification(
+            intent: embeddingIntent, confidence: confidence,
+            embeddingIntent: embeddingIntent, aiIntent: nil,
+            isAmbiguous: false, embeddingScores: embeddingScores
+        )
     }
 
     private static func classifyIntentWithAI(_ query: String) async -> QueryIntent? {
@@ -2733,30 +3003,9 @@ struct FoundationModelEngine {
         guard isAvailable else { return nil }
         do {
             let instructions = """
-                You are an AI email assistant built into mailin, a privacy-first Mac app for email archives. \
-                You run entirely on-device using Apple Intelligence — no data leaves the device. \
-                \
-                Your capabilities: \
-                - Search emails by keyword, sender, date, topic, or natural language \
-                - Analyze sentiment, tone, and communication patterns \
-                - Detect phishing, scams, and sensitive data (PII) \
-                - Summarize email threads and generate insights \
-                - Triage emails by priority and urgency \
-                - Topic clustering and trend analysis \
-                - Export, print, and forensic analysis \
-                \
-                You have a 4-engine AI architecture: Apple AI MoE (multi-expert), Apple AI Direct, \
-                Hybrid (NLP + Apple AI), and NLP Pure. You use NLP for fast deterministic analysis \
-                and Apple AI for nuanced understanding. \
-                \
-                The user currently has \(emailCount) emails loaded. \
-                \
-                If the user's message is conversational (greeting, about-you, capability question, \
-                chit-chat, acknowledgment), respond naturally and helpfully. Keep it concise — \
-                2-4 sentences max. Use markdown bold for emphasis. \
-                \
-                If the message is actually asking about their emails (search, analyze, filter, etc.), \
-                set isConversational to false and leave response empty.
+                Email assistant in mailin (on-device, private). \(emailCount) emails loaded. \
+                If conversational (greeting, about-you), respond in 2-3 sentences. \
+                If asking about emails, set isConversational=false, response empty.
                 """
             let session = LanguageModelSession(instructions: instructions)
             let response = try await session.respond(to: query, generating: AIConversationalResponse.self)
@@ -2774,58 +3023,458 @@ struct FoundationModelEngine {
         let q = query.lowercased()
 
         if q.contains("how many") || q.contains("count") || q.contains("total number") ||
-           q.contains("percentage") || q.contains("ratio") {
+           q.contains("percentage") || q.contains("ratio") || q.contains("statistics") ||
+           q.contains("breakdown") || q.contains("distribution") {
             if !q.contains("sentiment") && !q.contains("tone") { return .statistics }
         }
 
         if q.contains("phishing") || q.contains("suspicious") || q.contains("scam") ||
            q.contains("spam") || q.contains("fraud") || q.contains("pii") ||
-           q.contains("sensitive data") || (q.contains("security") && q.contains("email")) {
+           q.contains("sensitive data") || q.contains("malware") || q.contains("threat") ||
+           q.contains("dangerous") || q.contains("safe") || q.contains("legitimate") ||
+           (q.contains("security") && q.contains("email")) {
             return .security
         }
 
         if q.contains("sentiment") || q.contains("tone") || q.contains("mood") ||
-           q.contains("feeling") || q.contains("emotion") {
-            return .sentiment
+           q.contains("feeling") || q.contains("emotion") || q.contains("angry") ||
+           q.contains("happy") || q.contains("upset") || q.contains("frustrated") ||
+           q.contains("positive") || q.contains("negative") {
+            if q.contains("positive") || q.contains("negative") {
+                if q.contains("email") || q.contains("message") || q.contains("tone") { return .sentiment }
+            } else {
+                return .sentiment
+            }
         }
 
         if q.contains("thread") || q.contains("conversation about") || q.contains("discussion about") ||
-           q.contains("what happened with") {
+           q.contains("what happened with") || q.contains("reply chain") || q.contains("replies") {
             return .thread
         }
 
         if q.contains("triage") || q.contains("priority") || q.contains("urgent") ||
+           q.contains("deadline") || q.contains("overdue") || q.contains("action item") ||
+           q.contains("follow up") || q.contains("respond to") ||
            ((q.contains("important") || q.contains("action")) && q.contains("email")) {
             return .triage
         }
 
-        if (q.contains("who") && (q.contains("most") || q.contains("frequently") || q.contains("contact"))) ||
-           q.contains("people") || q.contains("contacts") {
+        if (q.contains("who") && (q.contains("most") || q.contains("frequently") || q.contains("contact") || q.contains("sent") || q.contains("email"))) ||
+           q.contains("people") || q.contains("contacts") || q.contains("sender") ||
+           q.contains("person") || q.contains("organization") {
             return .entity
         }
 
         if q.contains("topic") || q.contains("theme") || q.contains("keyword") ||
-           q.contains("discuss") || q.contains("about what") || q.contains("talk about") {
+           q.contains("discuss") || q.contains("about what") || q.contains("talk about") ||
+           q.contains("categories") || q.contains("categorize") || q.contains("classify") {
             return .topicAnalysis
         }
 
         if q.contains("trend") || q.contains("over time") || q.contains("pattern") ||
-           q.contains("weekly") || q.contains("monthly") || q.contains("daily") {
-            return .temporal
+           q.contains("weekly") || q.contains("monthly") || q.contains("daily") ||
+           q.contains("timeline") || q.contains("chronolog") || q.contains("when") {
+            if q.contains("when") && !q.contains("when did") && !q.contains("when was") {
+                return .temporal
+            } else if q.contains("when") {
+                return .temporal
+            } else {
+                return .temporal
+            }
         }
 
         if q.contains("summarize") || q.contains("summary") || q.contains("overview") ||
-           q.contains("digest") || q.contains("brief me") {
+           q.contains("digest") || q.contains("brief me") || q.contains("recap") ||
+           q.contains("key takeaway") || q.contains("highlight") {
             return .summary
         }
 
         if q.contains("find") || q.contains("search") || q.contains("show me") ||
            q.contains("look for") || q.contains("emails about") || q.contains("emails from") ||
-           q.contains("messages from") {
+           q.contains("messages from") || q.contains("locate") || q.contains("where is") {
             return .search
         }
 
         return .general
+    }
+
+    // MARK: - Query Understanding Layer
+    // Uses Apple NLP (NLEmbedding, NLTagger) to understand user intent BEFORE the AI model.
+    // Apple's on-device model is small (~3B params) — this NLP layer does the understanding;
+    // the model does the synthesis.
+
+    struct ParsedQuery {
+        let original: String
+        let action: QueryAction
+        let entities: [String]
+        let timeRef: String?
+        let senderRef: String?
+        let topicRef: String?
+        let semanticIntent: QueryIntent
+        let expertScores: [ExpertRole: Double]
+        let rewrittenPrompt: String
+    }
+
+    enum QueryAction: String {
+        case check, find, count, analyze, compare, list, scan, summarize, explain, ask
+    }
+
+    // MARK: - Semantic Intent Classification via NLEmbedding
+
+    private static let intentEmbeddingPhrases: [QueryIntent: [String]] = [
+        .sentiment: [
+            "emotional tone mood feeling angry happy upset positive negative",
+            "how does someone feel about this",
+            "tone of the conversation relationship warmth hostility",
+            "are they angry frustrated pleased satisfied",
+            "sentiment analysis emotional state"
+        ],
+        .entity: [
+            "who is this person contact sender receiver",
+            "people organizations companies mentioned",
+            "who sent the most emails key contacts",
+            "relationship between people communication partners",
+            "names people involved participants"
+        ],
+        .security: [
+            "phishing scam suspicious fraud spam malware",
+            "is this email safe legitimate trustworthy",
+            "sensitive data exposure personal information leak",
+            "security threat risk dangerous links",
+            "social engineering impersonation fake"
+        ],
+        .topicAnalysis: [
+            "what topics themes subjects are discussed",
+            "main themes keywords categories",
+            "what are they talking about discussing",
+            "subject matter content analysis themes",
+            "categorize classify emails by topic"
+        ],
+        .temporal: [
+            "when over time trend pattern timeline",
+            "email volume frequency daily weekly monthly",
+            "busiest period peak quiet time",
+            "date range oldest newest chronological",
+            "how has it changed over time"
+        ],
+        .statistics: [
+            "how many count total number percentage",
+            "statistics breakdown distribution ratio",
+            "quantify measure numbers data figures",
+            "average median volume amount",
+            "email count metrics analytics"
+        ],
+        .summary: [
+            "summarize overview digest brief recap",
+            "give me a summary of what is happening",
+            "key takeaways highlights important points",
+            "what should I know overall picture",
+            "brief me on the situation"
+        ],
+        .triage: [
+            "urgent priority action items important",
+            "what needs attention immediately",
+            "which emails are most important",
+            "deadline overdue follow up required",
+            "what should I respond to first"
+        ],
+        .thread: [
+            "conversation thread discussion chain replies",
+            "what happened in this thread",
+            "follow the conversation flow",
+            "reply chain discussion history",
+            "how did this conversation evolve"
+        ],
+        .search: [
+            "find search look for locate show me",
+            "emails about emails from emails containing",
+            "where is the email with specific content",
+            "filter emails matching criteria",
+            "search for specific emails"
+        ],
+        .general: [
+            "tell me about help explain what",
+            "general question about my emails",
+            "analyze my email archive"
+        ]
+    ]
+
+    private static let expertDomainPhrases: [ExpertRole: [String]] = [
+        .sentimentExpert: [
+            "emotional tone feeling mood sentiment positive negative angry happy",
+            "relationship warmth cooling hostility passive aggressive",
+            "how does someone feel satisfaction frustration",
+            "tone shift emotional change attitude"
+        ],
+        .entityExpert: [
+            "people person contact sender who organization company",
+            "names relationships connections communication partners",
+            "key contacts decision makers influential people",
+            "who is involved participants team members",
+            "domain distribution sender analysis"
+        ],
+        .topicExpert: [
+            "topic theme subject keyword category discussion",
+            "what are they talking about content analysis",
+            "main themes categorize classify emails",
+            "subject matter topics covered areas discussed"
+        ],
+        .timelineExpert: [
+            "when time date trend pattern chronological timeline",
+            "over time daily weekly monthly volume frequency",
+            "busiest period peak quiet date range",
+            "temporal pattern schedule rhythm cadence"
+        ],
+        .securityExpert: [
+            "phishing scam suspicious fraud spam malware security",
+            "safe legitimate trustworthy dangerous threat risk",
+            "sensitive data personal information exposure PII",
+            "social engineering impersonation fake deception"
+        ]
+    ]
+
+    private static func semanticClassifyIntent(_ query: String) -> (intent: QueryIntent, scores: [QueryIntent: Double]) {
+        guard let embedding = NLEmbedding.sentenceEmbedding(for: .english) else {
+            return (classifyIntentKeyword(query), [:])
+        }
+
+        var intentScores: [QueryIntent: Double] = [:]
+        for (intent, phrases) in intentEmbeddingPhrases {
+            var bestSim = -1.0
+            for phrase in phrases {
+                let distance = embedding.distance(between: query.lowercased(), and: phrase)
+                let similarity = 1.0 - distance
+                bestSim = max(bestSim, similarity)
+            }
+            intentScores[intent] = bestSim
+        }
+
+        let sorted = intentScores.sorted { $0.value > $1.value }
+        let topIntent = sorted.first?.key ?? .general
+        let topScore = sorted.first?.value ?? 0
+
+        if topScore < 0.3 {
+            return (classifyIntentKeyword(query), intentScores)
+        }
+
+        return (topIntent, intentScores)
+    }
+
+    private static func semanticSelectExperts(_ query: String, intent: QueryIntent) -> [ExpertRole] {
+        guard let embedding = NLEmbedding.sentenceEmbedding(for: .english) else {
+            return selectExperts(for: intent)
+        }
+
+        var expertScores: [ExpertRole: Double] = [:]
+        for (role, phrases) in expertDomainPhrases {
+            var bestSim = -1.0
+            for phrase in phrases {
+                let distance = embedding.distance(between: query.lowercased(), and: phrase)
+                let similarity = 1.0 - distance
+                bestSim = max(bestSim, similarity)
+            }
+            expertScores[role] = bestSim
+        }
+
+        // v3.2.1: Apply feedback-driven weight multipliers
+        let intentKey = "\(intent)"
+        for role in expertScores.keys {
+            let multiplier = FeedbackManager.shared.weightMultiplier(intent: intentKey, expert: role.rawValue)
+            expertScores[role] = (expertScores[role] ?? 0) * multiplier
+        }
+
+        // v4.3.1: Apply persona-specific expert weight multipliers
+        let currentPersona = PersonaManager.Persona(rawValue: UserDefaults.standard.string(forKey: "selectedPersona") ?? "general") ?? .general
+        let personaWeights = PersonaManager.aiConfig(for: currentPersona).expertWeights
+        for role in expertScores.keys {
+            if let personaWeight = personaWeights[role.rawValue] {
+                expertScores[role] = (expertScores[role] ?? 0) * personaWeight
+            }
+        }
+
+        let sorted = expertScores.sorted { $0.value > $1.value }
+        var selected: [ExpertRole] = []
+        for (role, score) in sorted {
+            if score > 0.25 && selected.count < 4 {
+                selected.append(role)
+            }
+        }
+
+        if selected.isEmpty {
+            return selectExperts(for: intent)
+        }
+        return selected
+    }
+
+    // v3.5.1: Get custom experts that match the query
+    static func matchingCustomExperts(for query: String, maxCount: Int = 2) -> [CustomExpert] {
+        let scored = CustomExpertManager.shared.scoreExperts(query: query)
+        return scored.filter { $0.score > 0.25 }.prefix(maxCount).map(\.expert)
+    }
+
+    // v3.5.1: Run a custom expert with user-defined instructions
+    private static func runCustomExpertStructured(
+        expert: CustomExpert,
+        query: String,
+        emails: [MBOXParser.RawEmail]
+    ) async -> AISessionFindings {
+        let terms = expert.keywords + EmailNLPEngine.extractSearchTerms(from: query)
+        let relevant = EmailSearchIndex.shared.hybridSearch(query: terms.joined(separator: " "), terms: terms, limit: 15).map(\.email)
+        let emailsToUse = relevant.isEmpty ? Array(emails.prefix(15)) : relevant
+
+        var context = "CUSTOM EXPERT: \(expert.name)\n"
+        context += "KEYWORDS: \(expert.keywords.joined(separator: ", "))\n"
+        context += "EMAILS (\(emailsToUse.count)):\n"
+        for email in emailsToUse.prefix(10) {
+            let subj = email.headers["Subject"] ?? "(No Subject)"
+            let from = email.headers["From"] ?? "Unknown"
+            let date = email.headers["Date"] ?? ""
+            let body = bodySnippet(for: email, maxLength: 200)
+            context += "--- \(subj) ---\nFrom: \(from)\nDate: \(date)\nBody: \(body)\n\n"
+        }
+
+        guard isAvailable else {
+            return AISessionFindings(
+                findings: [AIFinding(finding: "Custom expert '\(expert.name)' analyzed \(emailsToUse.count) emails.", evidence: "", relevance: .medium)],
+                summary: "\(expert.name): \(context.prefix(100))",
+                confidence: 2
+            )
+        }
+
+        do {
+            let session = LanguageModelSession(instructions:
+                expert.instructions + " " +
+                "Analyze the data and produce structured findings. " +
+                "Each finding must be one specific, evidence-backed sentence. " +
+                "Rate relevance: high = directly answers the question, medium = useful context, low = tangential."
+            )
+            let truncatedContext = String(context.prefix(3000))
+            let response = try await session.respond(
+                to: "Question: \(query)\n\nData:\n\(truncatedContext)",
+                generating: AISessionFindings.self
+            )
+            return response.content
+        } catch {
+            return AISessionFindings(
+                findings: [AIFinding(finding: "\(expert.name): \(String(context.prefix(200)))", evidence: "", relevance: .medium)],
+                summary: "\(expert.name) analysis",
+                confidence: 2
+            )
+        }
+    }
+
+    static func understandQuery(_ query: String, emails: [MBOXParser.RawEmail]) -> ParsedQuery {
+        let lower = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let words = lower.split(separator: " ").map(String.init)
+
+        // 1. Extract ACTION
+        let action: QueryAction
+        if words.first(where: { ["check", "verify", "validate", "inspect", "audit"].contains($0) }) != nil {
+            action = .check
+        } else if words.first(where: { ["find", "search", "look", "locate", "show", "get", "give"].contains($0) }) != nil {
+            action = .find
+        } else if words.first(where: { ["how many", "count", "total", "number"].contains($0) }) != nil || lower.contains("how many") {
+            action = .count
+        } else if words.first(where: { ["analyze", "analyse", "assess", "evaluate", "review"].contains($0) }) != nil {
+            action = .analyze
+        } else if words.first(where: { ["compare", "versus", "vs", "difference", "between"].contains($0) }) != nil {
+            action = .compare
+        } else if words.first(where: { ["list", "all", "every", "each"].contains($0) }) != nil {
+            action = .list
+        } else if words.first(where: { ["scan", "detect", "flag", "identify"].contains($0) }) != nil {
+            action = .scan
+        } else if words.first(where: { ["summarize", "summary", "overview", "brief", "digest"].contains($0) }) != nil {
+            action = .summarize
+        } else if words.first(where: { ["explain", "why", "what", "how", "tell"].contains($0) }) != nil {
+            action = .explain
+        } else {
+            action = .ask
+        }
+
+        // 2. Extract ENTITIES using NLTagger
+        var entities: [String] = []
+        let tagger = NLTagger(tagSchemes: [.nameType])
+        tagger.string = query
+        tagger.enumerateTags(in: query.startIndex..<query.endIndex, unit: .word, scheme: .nameType) { tag, range in
+            if let tag, tag == .personalName || tag == .organizationName || tag == .placeName {
+                let entity = String(query[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if entity.count > 1 { entities.append(entity) }
+            }
+            return true
+        }
+
+        // 3. Extract TIME references
+        let timePatterns = ["last week", "last month", "last year", "this week", "this month", "this year",
+                           "yesterday", "today", "recent", "latest", "oldest", "newest",
+                           "january", "february", "march", "april", "may", "june",
+                           "july", "august", "september", "october", "november", "december",
+                           "q1", "q2", "q3", "q4", "2023", "2024", "2025", "2026"]
+        let timeRef = timePatterns.first(where: { lower.contains($0) })
+
+        // 4. Extract SENDER references ("from X", "by X", "sent by X")
+        var senderRef: String?
+        let senderPatterns = [
+            try? NSRegularExpression(pattern: "(?:from|by|sent by|emails? from|messages? from)\\s+([\\w.@]+(?:\\s+\\w+)?)", options: .caseInsensitive)
+        ].compactMap { $0 }
+        for regex in senderPatterns {
+            if let match = regex.firstMatch(in: query, range: NSRange(query.startIndex..., in: query)) {
+                if let range = Range(match.range(at: 1), in: query) {
+                    senderRef = String(query[range]).trimmingCharacters(in: .whitespaces)
+                }
+            }
+        }
+
+        // 5. Extract TOPIC references ("about X", "regarding X", "related to X")
+        var topicRef: String?
+        let topicPatterns = [
+            try? NSRegularExpression(pattern: "(?:about|regarding|related to|concerning|on the topic of)\\s+(.+?)(?:\\s*\\?|$)", options: .caseInsensitive)
+        ].compactMap { $0 }
+        for regex in topicPatterns {
+            if let match = regex.firstMatch(in: query, range: NSRange(query.startIndex..., in: query)) {
+                if let range = Range(match.range(at: 1), in: query) {
+                    topicRef = String(query[range]).trimmingCharacters(in: .whitespaces)
+                }
+            }
+        }
+
+        // 6. Semantic intent classification via NLEmbedding
+        let (semanticIntent, _) = semanticClassifyIntent(query)
+
+        // 7. Semantic expert scoring via NLEmbedding
+        var expertScores: [ExpertRole: Double] = [:]
+        if let embedding = NLEmbedding.sentenceEmbedding(for: .english) {
+            for (role, phrases) in expertDomainPhrases {
+                var bestSim = -1.0
+                for phrase in phrases {
+                    let distance = embedding.distance(between: lower, and: phrase)
+                    let similarity = 1.0 - distance
+                    bestSim = max(bestSim, similarity)
+                }
+                expertScores[role] = bestSim
+            }
+        }
+
+        // 8. Rewrite query as structured prompt enriched with semantic understanding
+        var parts: [String] = []
+        parts.append("Task: \(action.rawValue)")
+        parts.append("Intent: \(semanticIntent)")
+        if let sender = senderRef { parts.append("Sender: \(sender)") }
+        if let topic = topicRef { parts.append("Topic: \(topic)") }
+        if let time = timeRef { parts.append("Time: \(time)") }
+        if !entities.isEmpty { parts.append("Entities: \(entities.joined(separator: ", "))") }
+        parts.append("Question: \(query)")
+
+        return ParsedQuery(
+            original: query,
+            action: action,
+            entities: entities,
+            timeRef: timeRef,
+            senderRef: senderRef,
+            topicRef: topicRef,
+            semanticIntent: semanticIntent,
+            expertScores: expertScores,
+            rewrittenPrompt: parts.joined(separator: "\n")
+        )
     }
 
     private static func estimateTokens(_ text: String) -> Int {
@@ -2834,6 +3483,115 @@ struct FoundationModelEngine {
 
     // The usable context budget: 4096 total minus instructions, tools, query, and response space
     private static let contextCharBudget = 9000
+
+    // MARK: - Dynamic Intent-Aware Context Budget (v2.1.2)
+
+    struct ContextBudget {
+        let profileChars: Int
+        let emailBodyChars: Int
+        let headerChars: Int
+        let findingsChars: Int
+        let ragChars: Int
+        let conversationChars: Int
+
+        var total: Int { profileChars + emailBodyChars + headerChars + findingsChars + ragChars + conversationChars }
+    }
+
+    private static func contextBudget(for intent: QueryIntent) -> ContextBudget {
+        let total = contextCharBudget
+        switch intent {
+        case .security:
+            // Security needs deep header analysis, moderate body for phishing content
+            return ContextBudget(
+                profileChars: total / 8,        // 1125
+                emailBodyChars: total / 4,       // 2250
+                headerChars: total * 3 / 10,     // 2700 — headers are primary evidence
+                findingsChars: total / 5,        // 1800
+                ragChars: total / 10,            // 900
+                conversationChars: 400
+            )
+        case .sentiment:
+            // Sentiment needs maximal body text for tone/emotion analysis
+            return ContextBudget(
+                profileChars: total / 8,         // 1125
+                emailBodyChars: total * 2 / 5,   // 3600 — body is primary evidence
+                headerChars: total / 15,         // 600
+                findingsChars: total / 5,        // 1800
+                ragChars: total / 8,             // 1125
+                conversationChars: 400
+            )
+        case .entity:
+            // Entity needs balanced body + headers for people/org extraction
+            return ContextBudget(
+                profileChars: total / 8,         // 1125
+                emailBodyChars: total * 3 / 10,  // 2700
+                headerChars: total / 5,          // 1800 — From/To/Cc are critical
+                findingsChars: total / 5,        // 1800
+                ragChars: total / 10,            // 900
+                conversationChars: 400
+            )
+        case .temporal:
+            // Timeline needs header dates, weekly/hourly patterns
+            return ContextBudget(
+                profileChars: total / 8,         // 1125
+                emailBodyChars: total / 6,       // 1500
+                headerChars: total * 3 / 10,     // 2700 — dates and routing info
+                findingsChars: total / 4,        // 2250 — timeline findings are dense
+                ragChars: total / 12,            // 750
+                conversationChars: 400
+            )
+        case .topicAnalysis:
+            // Topics need maximal body text for theme extraction
+            return ContextBudget(
+                profileChars: total / 8,         // 1125
+                emailBodyChars: total * 2 / 5,   // 3600 — body is primary
+                headerChars: total / 15,         // 600
+                findingsChars: total / 5,        // 1800
+                ragChars: total / 8,             // 1125
+                conversationChars: 400
+            )
+        case .thread:
+            // Threading needs body for conversation context, moderate headers
+            return ContextBudget(
+                profileChars: total / 10,        // 900
+                emailBodyChars: total * 3 / 10,  // 2700 — thread body content
+                headerChars: total / 6,          // 1500 — References/In-Reply-To
+                findingsChars: total / 5,        // 1800
+                ragChars: total / 8,             // 1125
+                conversationChars: 400
+            )
+        case .triage:
+            // Triage needs balanced view — urgency from body + headers
+            return ContextBudget(
+                profileChars: total / 8,         // 1125
+                emailBodyChars: total * 3 / 10,  // 2700
+                headerChars: total / 6,          // 1500
+                findingsChars: total / 5,        // 1800
+                ragChars: total / 10,            // 900
+                conversationChars: 400
+            )
+        case .statistics:
+            // Stats need minimal body, maximal findings space
+            return ContextBudget(
+                profileChars: total / 6,         // 1500
+                emailBodyChars: 0,
+                headerChars: 0,
+                findingsChars: total * 2 / 5,    // 3600 — NLP stats are the context
+                ragChars: total / 10,            // 900
+                conversationChars: 400
+            )
+        case .search, .summary, .general:
+            // Balanced defaults
+            return ContextBudget(
+                profileChars: total / 6,         // 1500
+                emailBodyChars: total * 3 / 10,  // 2700
+                headerChars: total / 10,         // 900
+                findingsChars: total / 5,        // 1800
+                ragChars: total / 10,            // 900
+                conversationChars: 400
+            )
+        }
+    }
 
     private static func selectTools(
         for intent: QueryIntent,
@@ -2844,13 +3602,14 @@ struct FoundationModelEngine {
         switch intent {
         case .entity:
             tools.append(SenderProfileTool(emails: emails))
-            tools.append(ContactLookupTool())
-            tools.append(CalendarCheckTool())
+
+
             tools.append(SpotlightSearchTool())
             tools.append(SearchEmailsTool(emails: emails))
+            tools.append(KnowledgeGraphQueryTool())
 
         case .triage:
-            tools.append(CalendarCheckTool())
+
             tools.append(SenderProfileTool(emails: emails))
             tools.append(SearchEmailsTool(emails: emails))
             tools.append(NLPAnalysisTool(emails: emails))
@@ -2860,19 +3619,23 @@ struct FoundationModelEngine {
             tools.append(SenderProfileTool(emails: emails))
             tools.append(SearchEmailsTool(emails: emails))
             tools.append(NLPAnalysisTool(emails: emails))
+            tools.append(AttachmentAnalysisTool(emails: emails))
 
         case .search:
             tools.append(SpotlightSearchTool())
             tools.append(SearchEmailsTool(emails: emails))
             tools.append(GetThreadInfoTool(emails: emails))
-            tools.append(ContactLookupTool())
+
             tools.append(TopicDrillTool(emails: emails))
+            tools.append(AttachmentAnalysisTool(emails: emails))
+            tools.append(KnowledgeGraphQueryTool())
 
         case .thread:
             tools.append(GetThreadInfoTool(emails: emails))
             tools.append(SearchEmailsTool(emails: emails))
             tools.append(SenderProfileTool(emails: emails))
             tools.append(SpotlightSearchTool())
+            tools.append(KnowledgeGraphQueryTool())
 
         case .summary:
             tools.append(TopicDrillTool(emails: emails))
@@ -2880,6 +3643,7 @@ struct FoundationModelEngine {
             tools.append(NLPAnalysisTool(emails: emails))
             tools.append(SpotlightSearchTool())
             tools.append(SearchEmailsTool(emails: emails))
+            tools.append(KnowledgeGraphQueryTool())
 
         case .sentiment:
             tools.append(SenderProfileTool(emails: emails))
@@ -2890,6 +3654,7 @@ struct FoundationModelEngine {
             tools.append(TopicDrillTool(emails: emails))
             tools.append(NLPAnalysisTool(emails: emails))
             tools.append(SearchEmailsTool(emails: emails))
+            tools.append(KnowledgeGraphQueryTool())
 
         case .general:
             tools.append(SpotlightSearchTool())
@@ -2897,10 +3662,13 @@ struct FoundationModelEngine {
             tools.append(GetThreadInfoTool(emails: emails))
             tools.append(SenderProfileTool(emails: emails))
             tools.append(TopicDrillTool(emails: emails))
-            tools.append(ContactLookupTool())
-            tools.append(CalendarCheckTool())
+
+
             tools.append(NLPAnalysisTool(emails: emails))
             tools.append(PhishingAnalysisTool(emails: emails))
+            tools.append(AttachmentAnalysisTool(emails: emails))
+            tools.append(VisualizationRecommendTool())
+            tools.append(KnowledgeGraphQueryTool())
 
         case .statistics:
             tools.append(NLPAnalysisTool(emails: emails))
@@ -3044,6 +3812,26 @@ struct FoundationModelEngine {
     nonisolated(unsafe) private static var precomputedTopicClusters: [(topic: String, count: Int, senders: [String])] = []
     nonisolated(unsafe) private static var precomputedTimeline: [(month: String, count: Int)] = []
     nonisolated(unsafe) private static var precomputationDone = false
+    nonisolated(unsafe) private static var knowledgeGraph: KnowledgeGraph?
+
+    // v3.4.1: Proactive findings from background import analysis
+    struct ProactiveFinding: Sendable {
+        let category: String
+        let severity: Double
+        let title: String
+        let detail: String
+        let emailIDs: [UUID]
+    }
+    nonisolated(unsafe) private static var proactiveFindings: [ProactiveFinding] = []
+
+    static func getProactiveFindings() -> [ProactiveFinding] {
+        fmStateQueue.sync { proactiveFindings }
+    }
+
+    // v4.5.1: Allow background analysis to update knowledge graph
+    static func setKnowledgeGraph(_ graph: KnowledgeGraph) {
+        fmStateQueue.sync { knowledgeGraph = graph }
+    }
 
     static func precomputeOnImport(emails: [MBOXParser.RawEmail]) {
         guard !emails.isEmpty else { return }
@@ -3105,7 +3893,145 @@ struct FoundationModelEngine {
                 precomputedSecurityScan = secScan
                 precomputationDone = true
             }
+
+            // v3.1.2: Build knowledge graph alongside existing precomputation
+            let graph = KnowledgeGraph.load()
+            KnowledgeGraphBuilder.build(from: emails, into: graph)
+            fmStateQueue.sync {
+                knowledgeGraph = graph
+            }
+
+            // v3.4.1: Proactive background analysis — anomalies, phishing, sentiment shifts, PII
+            let findings = runProactiveScan(emails: emails, phishingResults: phishing, piiResults: pii)
+            fmStateQueue.sync {
+                proactiveFindings = findings
+            }
+
+            // Send local notifications for high-severity findings
+            let notifiable = findings.filter { $0.severity >= 0.5 }
+            if !notifiable.isEmpty {
+                Task { @MainActor in
+                    // Notifications are opt-in via Settings; if the user hasn't
+                    // granted permission, sendLocalNotification silently no-ops.
+                    let manager = SmartNotificationManager()
+                    for finding in notifiable {
+                        let alertType: SmartAlertType
+                        switch finding.category {
+                        case "phishing": alertType = .phishingDetected
+                        case "pii": alertType = .piiExposure
+                        case "sentiment": alertType = .sentimentShift
+                        case "volume": alertType = .unusualVolume
+                        default: alertType = .newSenderBurst
+                        }
+                        let severity: SmartAlertSeverity = finding.severity >= 0.8 ? .high : .medium
+                        let alert = SmartAlert(
+                            type: alertType, severity: severity,
+                            title: finding.title, message: finding.detail,
+                            emailIDs: finding.emailIDs
+                        )
+                        manager.sendLocalNotification(for: alert)
+                    }
+                }
+            }
         }
+    }
+
+    // v3.4.1: Proactive scan runs during import, surfaces noteworthy findings
+    private static func runProactiveScan(
+        emails: [MBOXParser.RawEmail],
+        phishingResults: [EmailNLPEngine.PhishingFlag],
+        piiResults: [EmailNLPEngine.PIIType: Int]
+    ) -> [ProactiveFinding] {
+        var findings: [ProactiveFinding] = []
+
+        // 1. Anomaly detection
+        let anomalies = AnomalyDetectionEngine.detectAnomalies(in: emails)
+        for anomaly in anomalies where anomaly.severity >= 0.4 {
+            findings.append(ProactiveFinding(
+                category: anomaly.type.rawValue.lowercased().replacingOccurrences(of: " ", with: "_"),
+                severity: anomaly.severity,
+                title: anomaly.title,
+                detail: anomaly.detail,
+                emailIDs: anomaly.affectedEmails
+            ))
+        }
+
+        // 2. Phishing summary
+        let highRisk = phishingResults.filter { $0.riskLevel == .high }
+        let medRisk = phishingResults.filter { $0.riskLevel == .medium }
+        if !highRisk.isEmpty {
+            findings.append(ProactiveFinding(
+                category: "phishing",
+                severity: 0.9,
+                title: "\(highRisk.count) High-Risk Phishing Email\(highRisk.count == 1 ? "" : "s") Detected",
+                detail: "Subjects: \(highRisk.prefix(3).compactMap { $0.email.headers["Subject"] }.joined(separator: ", "))",
+                emailIDs: highRisk.map(\.email.id)
+            ))
+        }
+        if medRisk.count >= 3 {
+            findings.append(ProactiveFinding(
+                category: "phishing",
+                severity: 0.6,
+                title: "\(medRisk.count) Suspicious Emails Found",
+                detail: "Medium-risk emails from: \(Set(medRisk.prefix(5).compactMap { $0.email.headers["From"] }).joined(separator: ", "))",
+                emailIDs: medRisk.map(\.email.id)
+            ))
+        }
+
+        // 3. PII exposure
+        let piiTotal = piiResults.values.reduce(0, +)
+        if piiTotal > 0 {
+            let types = piiResults.filter { $0.value > 0 }.keys.map(\.rawValue).joined(separator: ", ")
+            findings.append(ProactiveFinding(
+                category: "pii",
+                severity: piiTotal >= 5 ? 0.8 : 0.5,
+                title: "\(piiTotal) PII Exposure\(piiTotal == 1 ? "" : "s") Detected",
+                detail: "Types found: \(types). Review for sensitive data compliance.",
+                emailIDs: []
+            ))
+        }
+
+        // 4. Sentiment shifts
+        let sentiments = EmailNLPEngine.analyzeSentiment(of: Array(emails.prefix(100)))
+        if sentiments.count >= 10 {
+            let half = sentiments.count / 2
+            let firstHalf = sentiments.prefix(half)
+            let secondHalf = sentiments.suffix(half)
+            let avgFirst = firstHalf.reduce(0.0) { $0 + $1.score } / Double(firstHalf.count)
+            let avgSecond = secondHalf.reduce(0.0) { $0 + $1.score } / Double(secondHalf.count)
+            let shift = avgSecond - avgFirst
+            if abs(shift) > 0.3 {
+                let direction = shift > 0 ? "positive" : "negative"
+                findings.append(ProactiveFinding(
+                    category: "sentiment",
+                    severity: min(abs(shift), 1.0),
+                    title: "Significant Sentiment Shift Detected",
+                    detail: "Overall tone shifted \(direction) by \(String(format: "%.1f", abs(shift) * 100))%. Earlier: \(String(format: "%.2f", avgFirst)), Later: \(String(format: "%.2f", avgSecond))",
+                    emailIDs: []
+                ))
+            }
+        }
+
+        // 5. New domain burst (first-time senders with multiple emails)
+        var domainFirstSeen: [String: Int] = [:]
+        for email in emails {
+            guard let from = email.headers["From"],
+                  let atIdx = from.lastIndex(of: "@") else { continue }
+            let domain = String(from[from.index(after: atIdx)...]).trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: ">")))
+            domainFirstSeen[domain, default: 0] += 1
+        }
+        let burstDomains = domainFirstSeen.filter { $0.value >= 5 }.sorted { $0.value > $1.value }
+        if burstDomains.count > 2 {
+            findings.append(ProactiveFinding(
+                category: "new_domains",
+                severity: 0.4,
+                title: "\(burstDomains.count) Active External Domains",
+                detail: "Top: \(burstDomains.prefix(5).map { "\($0.key)(\($0.value))" }.joined(separator: ", "))",
+                emailIDs: []
+            ))
+        }
+
+        return findings.sorted { $0.severity > $1.severity }
     }
 
     static func invalidatePrecomputation() {
@@ -3115,7 +4041,13 @@ struct FoundationModelEngine {
             precomputedTopicClusters = []
             precomputedTimeline = []
             precomputationDone = false
+            knowledgeGraph = nil
+            proactiveFindings = []
         }
+    }
+
+    static func getKnowledgeGraph() -> KnowledgeGraph? {
+        fmStateQueue.sync { knowledgeGraph }
     }
 
     // MARK: - 2. Answer Caching with Semantic Similarity
@@ -3205,12 +4137,65 @@ struct FoundationModelEngine {
         query: String,
         terms: [String],
         emails: [MBOXParser.RawEmail],
-        limit: Int
-    ) -> [(email: MBOXParser.RawEmail, bestChunk: String)] {
+        limit: Int,
+        preferredTypes: [ChunkType]? = nil
+    ) -> [(email: MBOXParser.RawEmail, bestChunk: String, chunkType: ChunkType)] {
         let chunkResults = EmailSearchIndex.shared.chunkSearch(
-            terms: terms, in: emails, maxChunksPerEmail: 1, limit: limit
+            terms: terms, in: emails, maxChunksPerEmail: 1, limit: limit,
+            preferredTypes: preferredTypes
         )
-        return chunkResults.map { (email: $0.email, bestChunk: $0.chunk) }
+        return chunkResults.map { (email: $0.email, bestChunk: $0.chunk, chunkType: $0.chunkType) }
+    }
+
+    static let expertChunkPreferences: [ExpertRole: [ChunkType]] = [
+        .securityExpert: [.header],
+        .sentimentExpert: [.body],
+        .entityExpert: [.body, .header],
+        .timelineExpert: [.header],
+        .topicExpert: [.body]
+    ]
+
+    // MARK: - v2.2.4: Anomaly-Aware Expert Enrichment
+
+    nonisolated(unsafe) private static var cachedAnomalies: [AnomalyDetectionEngine.Anomaly]?
+    nonisolated(unsafe) private static var cachedAnomalyEmailCount: Int = 0
+
+    private static func getCachedAnomalies(for emails: [MBOXParser.RawEmail]) -> [AnomalyDetectionEngine.Anomaly] {
+        fmStateQueue.sync {
+            if let cached = cachedAnomalies, cachedAnomalyEmailCount == emails.count {
+                return cached
+            }
+            let anomalies = AnomalyDetectionEngine.detectAnomalies(in: emails)
+            cachedAnomalies = anomalies
+            cachedAnomalyEmailCount = emails.count
+            return anomalies
+        }
+    }
+
+    static let expertAnomalyPreferences: [ExpertRole: [AnomalyDetectionEngine.AnomalyType]] = [
+        .securityExpert: [.newDomain, .recipientAnomaly, .largeAttachment],
+        .sentimentExpert: [.toneShift],
+        .entityExpert: [.recipientAnomaly, .newDomain],
+        .timelineExpert: [.frequencySpike, .unusualHour],
+        .topicExpert: [.toneShift, .frequencySpike]
+    ]
+
+    private static func anomalyEnrichment(for role: ExpertRole, emails: [MBOXParser.RawEmail]) -> String {
+        let anomalies = getCachedAnomalies(for: emails)
+        guard let preferredTypes = expertAnomalyPreferences[role] else { return "" }
+
+        let relevant = anomalies.filter { preferredTypes.contains($0.type) && $0.severity >= 0.3 }
+        guard !relevant.isEmpty else { return "" }
+
+        var text = "BEHAVIORAL ANOMALIES (auto-detected):\n"
+        for anomaly in relevant.prefix(4) {
+            text += "  [\(anomaly.type.rawValue)] \(anomaly.title) (severity: \(String(format: "%.0f%%", anomaly.severity * 100)))"
+            if !anomaly.detail.isEmpty {
+                text += " — \(String(anomaly.detail.prefix(100)))"
+            }
+            text += "\n"
+        }
+        return text
     }
 
     // MARK: - 4. Self-Correction Loop
@@ -3223,36 +4208,78 @@ struct FoundationModelEngine {
         var missingInfo: String
         @Guide(description: "Should we retrieve more data and try again?")
         var needsRetry: Bool
+        @Guide(description: "Which expert domain is missing: sentiment, entity, topic, timeline, security, or none")
+        var missingExpertDomain: String
+    }
+
+    struct ValidationResult {
+        let confident: Bool
+        let gap: String?
+        let missingExpert: ExpertRole?
     }
 
     static func validateAnswer(
         answer: String,
         query: String,
         intent: QueryIntent
-    ) async -> (confident: Bool, gap: String?) {
-        // Quick NLP-based check first (no AI cost)
+    ) async -> ValidationResult {
         let nlpRating = rateResult(answer: answer, query: query, source: "synthesizer")
-        if nlpRating.stars >= 4 { return (true, nil) }
+        if nlpRating.stars >= 4 { return ValidationResult(confident: true, gap: nil, missingExpert: nil) }
 
-        // If NLP says weak, ask Apple AI for specific gap identification
-        guard isAvailable else { return (nlpRating.stars >= 3, nil) }
+        guard isAvailable else {
+            return ValidationResult(confident: nlpRating.stars >= 3, gap: nil, missingExpert: nil)
+        }
 
         do {
             let session = LanguageModelSession(instructions:
                 "You are a quality checker. Assess if an answer properly addresses the question. " +
-                "Rate confidence 1-5. If missing key info, say exactly what's missing."
+                "Rate confidence 1-5. If missing key info, say exactly what's missing. " +
+                "Identify which expert domain is needed: sentiment (emotions/tone), entity (people/organizations), " +
+                "topic (themes/subjects), timeline (dates/patterns), security (threats/phishing), or none."
             )
             let prompt = "Question: \(query)\n\nAnswer:\n\(String(answer.prefix(1500)))"
             let response = try await session.respond(to: prompt, generating: AIAnswerValidation.self)
             let validation = response.content
 
             if validation.confidence >= 4 || !validation.needsRetry {
-                return (true, nil)
+                return ValidationResult(confident: true, gap: nil, missingExpert: nil)
             }
-            return (false, validation.missingInfo)
+
+            let missingExpert = mapDomainToExpert(validation.missingExpertDomain)
+            return ValidationResult(confident: false, gap: validation.missingInfo, missingExpert: missingExpert)
         } catch {
-            return (nlpRating.stars >= 3, nil)
+            return ValidationResult(confident: nlpRating.stars >= 3, gap: nil, missingExpert: nil)
         }
+    }
+
+    private static func mapDomainToExpert(_ domain: String) -> ExpertRole? {
+        let lower = domain.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if lower.contains("sentiment") || lower.contains("emotion") || lower.contains("tone") { return .sentimentExpert }
+        if lower.contains("entity") || lower.contains("people") || lower.contains("person") || lower.contains("contact") { return .entityExpert }
+        if lower.contains("topic") || lower.contains("theme") || lower.contains("subject") || lower.contains("content") { return .topicExpert }
+        if lower.contains("timeline") || lower.contains("time") || lower.contains("date") || lower.contains("temporal") { return .timelineExpert }
+        if lower.contains("security") || lower.contains("phishing") || lower.contains("threat") || lower.contains("risk") { return .securityExpert }
+        return nil
+    }
+
+    // MARK: - v2.3.3: Query Reformulation with Synonym Expansion
+
+    private static func expandQueryTerms(_ terms: [String], maxExpansion: Int = 3) -> [String] {
+        guard let embedding = NLEmbedding.wordEmbedding(for: .english) else { return terms }
+
+        var expanded = terms
+        for term in terms {
+            var neighbors: [String] = []
+            embedding.enumerateNeighbors(for: term.lowercased(), maximumCount: maxExpansion) { neighbor, distance in
+                if distance < 0.6 && !terms.contains(neighbor) && !expanded.contains(neighbor) {
+                    neighbors.append(neighbor)
+                }
+                return true
+            }
+            expanded.append(contentsOf: neighbors)
+        }
+
+        return Array(Set(expanded))
     }
 
     // MARK: - 5. NLP-Based Query Decomposition (deterministic, replaces AI planning for reliability)
@@ -3331,25 +4358,61 @@ struct FoundationModelEngine {
         else if emails.count < 5000 { archiveScale = 2 }
         else { archiveScale = 3 }
 
-        let totalScale = complexity + archiveScale
+        // Persona bonus: accuracy-first personas widen fan-out, speed-first
+        // personas narrow it. Read off UserDefaults to stay nonisolated.
+        let personaRaw = UserDefaults.standard.string(forKey: "selectedPersona") ?? "personal"
+        let personaBonus: Int
+        switch personaRaw {
+        case "forensic", "legal":      personaBonus = 2
+        case "it_admin", "journalist": personaBonus = 1
+        case "personal":               personaBonus = -1
+        default:                       personaBonus = 0
+        }
+
+        // Feedback bonus: if the user gave a thumbs-down recently on this
+        // intent, widen the fan-out so the next answer has more shots at
+        // being correct. Fades automatically within ~20 minutes.
+        let feedbackBonus = FeedbackManager.shared.hadRecentNegativeFeedback(intent: "\(intent)") ? 1 : 0
+
+        let totalScale = complexity + archiveScale + personaBonus + feedbackBonus
 
         let expertCount: Int
         let maxSubs: Int
 
         switch totalScale {
-        case 0...2:
-            expertCount = 1; maxSubs = 1
-        case 3...4:
-            expertCount = 2; maxSubs = 2
-        case 5...6:
-            expertCount = 3; maxSubs = 3
-        default:
-            expertCount = 4; maxSubs = 4
+        case ...0:    expertCount = 1; maxSubs = 1
+        case 1...2:   expertCount = 2; maxSubs = 2
+        case 3...4:   expertCount = 3; maxSubs = 2
+        case 5...6:   expertCount = 4; maxSubs = 3
+        case 7...8:   expertCount = 5; maxSubs = 4
+        default:      expertCount = 6; maxSubs = 5
+        }
+
+        // Thermal throttle. Apple Foundation Model + parallel sessions are
+        // Neural-Engine heavy; back off when the device is already hot to
+        // avoid the user feeling the AI made their phone sluggish.
+        let thermal = ProcessInfo.processInfo.thermalState
+        var thermalCappedExperts = expertCount
+        var thermalCappedSubs = maxSubs
+        switch thermal {
+        case .nominal, .fair:
+            break
+        case .serious:
+            thermalCappedExperts = min(thermalCappedExperts, 3)
+            thermalCappedSubs = min(thermalCappedSubs, 2)
+        case .critical:
+            thermalCappedExperts = min(thermalCappedExperts, 2)
+            thermalCappedSubs = min(thermalCappedSubs, 1)
+        @unknown default:
+            break
         }
 
         // Cap experts to what's available for this intent
         let availableExperts = selectExperts(for: intent).count
-        return (experts: min(expertCount, availableExperts), maxSubQueries: maxSubs)
+        return (
+            experts: min(thermalCappedExperts, availableExperts),
+            maxSubQueries: thermalCappedSubs
+        )
     }
 
     // MARK: - 7. Evidence Chain Tracking (email IDs linked to findings)
@@ -3389,7 +4452,7 @@ struct FoundationModelEngine {
 
     // MARK: - Multi-Session Chain (Plan → Map → Reduce)
 
-    private static let multiSessionThreshold = 500
+    private static let multiSessionThreshold = 50
 
     private static func planQuery(query: String, profile: String) async -> AIQueryPlan? {
         guard isAvailable else { return nil }
@@ -3415,7 +4478,7 @@ struct FoundationModelEngine {
         profile: String
     ) async -> String {
         let terms = EmailNLPEngine.extractSearchTerms(from: subQuery)
-        let intent = classifyIntentKeyword(subQuery)
+        let (subIntent, _) = semanticClassifyIntent(subQuery)
 
         var results: [MBOXParser.RawEmail] = []
         if !terms.isEmpty {
@@ -3434,7 +4497,7 @@ struct FoundationModelEngine {
             results = Array(emails.prefix(8))
         }
 
-        let nlpStats = gatherTargetedAnalysis(intent: intent, relevant: results, all: emails)
+        let nlpStats = gatherTargetedAnalysis(intent: subIntent, relevant: results, all: emails)
 
         var context = nlpStats.isEmpty ? "" : nlpStats + "\n\n"
         for email in results.prefix(8) {
@@ -3461,12 +4524,141 @@ struct FoundationModelEngine {
         }
     }
 
+    // MARK: - Multi-Model Router (v4.4.2)
+
+    enum ModelRoute {
+        case onDeviceOnly
+        case cloudPrimary
+        case onDevicePlusCloudVerify
+        case hybridParallel
+    }
+
+    static func routeModel(
+        query: String,
+        emailCount: Int,
+        intent: QueryIntent
+    ) -> ModelRoute {
+        #if OFFLINE_MODE
+        return .onDeviceOnly
+        #else
+        let cloudReady: Bool = {
+            let enabled = UserDefaults.standard.bool(forKey: "cloudAIEnabled")
+            let preferred = UserDefaults.standard.bool(forKey: "cloudAIPreferred")
+            return enabled && preferred
+        }()
+
+        guard cloudReady else { return .onDeviceOnly }
+
+        let queryLen = query.count
+        let isComplex = queryLen > 200 || query.contains(" and ") || query.contains(" then ")
+        let isLargeArchive = emailCount > 5000
+        let isForensic = UserDefaults.standard.bool(forKey: "forensicModeEnabled")
+
+        let complexIntents: Set<QueryIntent> = [.security, .triage, .entity]
+        let isComplexIntent = complexIntents.contains(intent)
+
+        if isForensic && isComplexIntent {
+            return .onDevicePlusCloudVerify
+        }
+
+        if isComplex && isLargeArchive {
+            return .cloudPrimary
+        }
+
+        if isComplexIntent || isLargeArchive {
+            return .hybridParallel
+        }
+
+        return .onDeviceOnly
+        #endif
+    }
+
+    // v4.4.2: Apply cloud routing to an on-device answer
+    private static func applyCloudRouting(
+        route: ModelRoute,
+        onDeviceAnswer: String,
+        query: String,
+        intent: QueryIntent,
+        emails: [MBOXParser.RawEmail],
+        onUpdate: @MainActor @Sendable @escaping (String) -> Void
+    ) async -> String {
+        #if OFFLINE_MODE
+        return onDeviceAnswer
+        #else
+        switch route {
+        case .onDeviceOnly:
+            return onDeviceAnswer
+
+        case .cloudPrimary:
+            do {
+                let emailCtx = CloudAIManager.buildEmailContext(from: emails, maxEmails: 15)
+                let systemPrompt = "You are an expert email analyst. The on-device AI produced an initial answer. " +
+                    "Improve it with deeper analysis. Keep your response concise and well-structured."
+                let userMsg = "Question: \(query)\n\nOn-device answer:\n\(onDeviceAnswer)\n\nEmails:\n\(emailCtx)"
+                await onUpdate(onDeviceAnswer + "\n\n*Enhancing with cloud AI...*")
+                let cloudAnswer = try await CloudAIManager.shared.sendMessage(
+                    systemPrompt: systemPrompt, userMessage: userMsg
+                )
+                let final = cloudAnswer.isEmpty ? onDeviceAnswer : cloudAnswer
+                await onUpdate(final)
+                return final
+            } catch {
+                return onDeviceAnswer
+            }
+
+        case .onDevicePlusCloudVerify:
+            do {
+                let emailCtx = CloudAIManager.buildEmailContext(from: emails, maxEmails: 10)
+                await onUpdate(onDeviceAnswer + "\n\n*Cloud verification in progress...*")
+                let validation = try await CloudAIManager.shared.crossValidate(
+                    answer: onDeviceAnswer, query: query, emailContext: emailCtx
+                )
+                if !validation.isAccurate && validation.confidence >= 3 {
+                    var enhanced = onDeviceAnswer
+                    if validation.missing != "none" && !validation.missing.isEmpty {
+                        enhanced += "\n\n---\n**Additional context** (cloud-verified): \(validation.missing)"
+                    }
+                    if validation.issues != "none" && !validation.issues.isEmpty {
+                        enhanced += "\n\n> ⚠️ Note: \(validation.issues)"
+                    }
+                    await onUpdate(enhanced)
+                    return enhanced
+                }
+                return onDeviceAnswer
+            } catch {
+                return onDeviceAnswer
+            }
+
+        case .hybridParallel:
+            do {
+                let emailCtx = CloudAIManager.buildEmailContext(from: emails, maxEmails: 12)
+                let systemPrompt = "You are an email analyst providing a parallel perspective. " +
+                    "Answer the question based on the emails. Be concise."
+                let userMsg = "Question: \(query)\n\nEmails:\n\(emailCtx)"
+                await onUpdate(onDeviceAnswer + "\n\n*Running parallel cloud analysis...*")
+                let cloudAnswer = try await CloudAIManager.shared.sendMessage(
+                    systemPrompt: systemPrompt, userMessage: userMsg
+                )
+                if !cloudAnswer.isEmpty {
+                    let merged = onDeviceAnswer + "\n\n---\n**Cloud AI perspective:** " + cloudAnswer
+                    await onUpdate(merged)
+                    return merged
+                }
+                return onDeviceAnswer
+            } catch {
+                return onDeviceAnswer
+            }
+        }
+        #endif
+    }
+
     // MARK: - respondSmart (unified entry point — all 7 improvements integrated)
 
     static func respondSmart(
         to query: String,
         emails: [MBOXParser.RawEmail],
-        onUpdate: @MainActor @Sendable @escaping (String) -> Void
+        onUpdate: @MainActor @Sendable @escaping (String) -> Void,
+        onConfirmAction: (@MainActor @Sendable (String) async -> Bool)? = nil
     ) async throws -> String {
         guard !emails.isEmpty else {
             let msg = "No emails available. Import emails first to use AI analysis."
@@ -3480,42 +4672,88 @@ struct FoundationModelEngine {
             return cached
         }
 
-        let intent = await classifyIntent(query)
+        // ── Dual Classification: NLEmbedding + Apple AI with consensus ──
+        let parsed = understandQuery(query, emails: emails)
+        let classification = await classifyIntentDual(query)
+        let intent = classification.intent
         let searchTerms = EmailNLPEngine.extractSearchTerms(from: query)
         let profile = archiveProfile(emails: emails)
+        let effectiveQuery = parsed.rewrittenPrompt
 
         // ── Improvement 6: Adaptive Session Count ──
         let sessionConfig = computeSessionCount(query: query, emails: emails, intent: intent)
 
+        // ── v4.4.2: Multi-Model Routing ──
+        let modelRoute = routeModel(query: query, emailCount: emails.count, intent: intent)
+
+        // ── v3.3.1: Agentic Planner for sequential multi-step queries ──
+        if AgenticPlanner.isAgenticQuery(query) {
+            if let agenticPlan = await AgenticPlanner.generatePlan(query: query, emails: emails, profile: profile) {
+                let answer = try await AgenticPlanner.executePlan(
+                    plan: agenticPlan, query: effectiveQuery, emails: emails,
+                    profile: profile, onUpdate: onUpdate,
+                    onConfirmAction: onConfirmAction
+                )
+                cacheAnswer(query: query, answer: answer, intent: intent, emailCount: emails.count)
+                recordTurn(query: query, intent: intent, answer: answer)
+                return answer
+            }
+        }
+
         // For large archives, try multi-session chain for complex queries
         if emails.count >= multiSessionThreshold {
-            // ── Improvement 5: Try NLP decomposition first (deterministic), then AI planning ──
             let nlpSubQueries = decomposeQueryNLP(query, emails: emails)
             let plan: AIQueryPlan?
 
             if nlpSubQueries.count >= 2 {
-                // NLP found clear structure — use it directly (skip AI planning)
                 let capped = Array(nlpSubQueries.prefix(sessionConfig.maxSubQueries))
                 plan = AIQueryPlan(needsMultiStep: true, subQueries: capped, synthesisGoal: "Answer: \(query)")
             } else {
-                // Fall back to AI-based planning
                 plan = await planQuery(query: query, profile: profile)
             }
 
             if let plan, plan.needsMultiStep, !plan.subQueries.isEmpty {
                 let answer = try await respondMultiSession(
-                    query: query, plan: plan, intent: intent,
-                    emails: emails, profile: profile, onUpdate: onUpdate
+                    query: effectiveQuery, plan: plan, intent: intent,
+                    classification: classification, emails: emails, profile: profile, onUpdate: onUpdate
                 )
 
-                // ── Improvement 4: Self-Correction Loop ──
-                let (confident, gap) = await validateAnswer(answer: answer, query: query, intent: intent)
-                if !confident, let gap, !gap.isEmpty {
+                // ── Improvement 4: Self-Correction with Expert Re-Routing (v2.1.4) ──
+                let validation = await validateAnswer(answer: answer, query: query, intent: intent)
+                if !validation.confident, let gap = validation.gap, !gap.isEmpty {
                     let truncatedGap = String(gap.prefix(200))
-                    let retryTerms = EmailNLPEngine.extractSearchTerms(from: truncatedGap)
+
+                    if let missingExpert = validation.missingExpert {
+                        // Re-route to the specific missing expert — targeted fix
+                        await onUpdate(answer + "\n\n*Supplementing with \(missingExpert.rawValue) analysis...*")
+                        let supplementFindings = await runExpertStructured(
+                            role: missingExpert, query: "\(query) — gap: \(truncatedGap)", emails: emails
+                        )
+                        let supplementText = supplementFindings.findings
+                            .filter { $0.relevance == .high || $0.relevance == .medium }
+                            .map { $0.finding }
+                            .joined(separator: "\n")
+                        if !supplementText.isEmpty {
+                            let corrected = answer + "\n\n---\n**Additional \(missingExpert.rawValue) analysis:** " + supplementText
+                            await onUpdate(corrected)
+                            cacheAnswer(query: query, answer: corrected, intent: intent, emailCount: emails.count)
+                            recordTurn(query: query, intent: intent, answer: corrected)
+                            return corrected
+                        }
+                    }
+
+                    // v2.3.3: Query Reformulation — expand search terms with NLEmbedding synonyms
+                    let originalTerms = EmailNLPEngine.extractSearchTerms(from: query)
+                    let expandedTerms = expandQueryTerms(originalTerms)
+                    let retryTerms = expandedTerms.isEmpty
+                        ? EmailNLPEngine.extractSearchTerms(from: truncatedGap)
+                        : expandedTerms
                     if !retryTerms.isEmpty {
+                        let reformulatedQuery = retryTerms.count > originalTerms.count
+                            ? "\(query) (also considering: \(retryTerms.filter { !originalTerms.contains($0) }.joined(separator: ", ")))"
+                            : "\(query) — specifically: \(truncatedGap)"
                         let supplement = try await respondSingleSession(
-                            query: "\(query) — specifically: \(truncatedGap)",
+                            query: reformulatedQuery,
                             intent: intent, searchTerms: retryTerms,
                             emails: emails, profile: profile, onUpdate: { _ in }
                         )
@@ -3527,48 +4765,119 @@ struct FoundationModelEngine {
                     }
                 }
 
-                // ── Cache the answer ──
-                cacheAnswer(query: query, answer: answer, intent: intent, emailCount: emails.count)
-                return answer
+                // ── v4.4.2: Apply cloud routing to multi-session answer ──
+                let routed = await applyCloudRouting(
+                    route: modelRoute, onDeviceAnswer: answer, query: query,
+                    intent: intent, emails: emails, onUpdate: onUpdate
+                )
+                cacheAnswer(query: query, answer: routed, intent: intent, emailCount: emails.count)
+                return routed
             }
         }
 
         // Single-session path (small archives or simple queries)
         let answer = try await respondSingleSession(
-            query: query, intent: intent, searchTerms: searchTerms,
+            query: effectiveQuery, intent: intent, searchTerms: searchTerms,
             emails: emails, profile: profile, onUpdate: onUpdate
         )
 
-        // Cache single-session answers too
-        cacheAnswer(query: query, answer: answer, intent: intent, emailCount: emails.count)
-        return answer
+        // ── v4.4.2: Apply cloud routing to single-session answer ──
+        let routed = await applyCloudRouting(
+            route: modelRoute, onDeviceAnswer: answer, query: query,
+            intent: intent, emails: emails, onUpdate: onUpdate
+        )
+        cacheAnswer(query: query, answer: routed, intent: intent, emailCount: emails.count)
+        return routed
     }
 
     // MARK: - Multi-Session Chain (Plan → Map → Reduce → Stream)
 
     // MARK: - Parallel Expert Sessions
 
-    private enum ExpertRole: String, CaseIterable {
+    enum ExpertRole: String, CaseIterable {
         case sentimentExpert
         case entityExpert
         case topicExpert
         case timelineExpert
         case securityExpert
+        /// First-class graph expert. Sources its findings from the
+        /// KnowledgeGraph (people, orgs, topics, relationships) rather than
+        /// from raw email bodies. Lets every other expert defer to a
+        /// graph-grounded source of truth.
+        case kgExpert
+
+        var correspondingIntent: QueryIntent {
+            switch self {
+            case .sentimentExpert: return .sentiment
+            case .entityExpert: return .entity
+            case .topicExpert: return .topicAnalysis
+            case .timelineExpert: return .temporal
+            case .securityExpert: return .security
+            case .kgExpert: return .entity
+            }
+        }
     }
 
     private static func selectExperts(for intent: QueryIntent) -> [ExpertRole] {
         switch intent {
-        case .sentiment: return [.sentimentExpert, .entityExpert]
-        case .entity: return [.entityExpert, .sentimentExpert, .topicExpert]
-        case .security: return [.securityExpert, .entityExpert]
+        case .sentiment: return [.sentimentExpert, .entityExpert, .kgExpert]
+        case .entity: return [.kgExpert, .entityExpert, .sentimentExpert, .topicExpert]
+        case .security: return [.securityExpert, .entityExpert, .kgExpert]
         case .triage: return [.sentimentExpert, .timelineExpert]
-        case .topicAnalysis: return [.topicExpert, .entityExpert]
+        case .topicAnalysis: return [.topicExpert, .kgExpert, .entityExpert]
         case .temporal: return [.timelineExpert, .sentimentExpert, .topicExpert]
-        case .summary: return [.sentimentExpert, .topicExpert, .entityExpert, .timelineExpert]
-        case .general: return [.sentimentExpert, .topicExpert, .entityExpert]
-        case .search, .thread: return [.entityExpert]
+        case .summary: return [.kgExpert, .sentimentExpert, .topicExpert, .entityExpert, .timelineExpert]
+        case .general: return [.sentimentExpert, .topicExpert, .entityExpert, .kgExpert]
+        case .search, .thread: return [.entityExpert, .kgExpert]
         case .statistics: return [.sentimentExpert, .topicExpert, .entityExpert]
         }
+    }
+
+    // MARK: - Cross-Email Threading Context (v2.1.3)
+
+    private static func buildThreadContext(for emails: [MBOXParser.RawEmail], query: String, maxChars: Int) -> String {
+        let threads = ThreadGrouper.group(emails).filter { $0.count > 1 }
+        guard !threads.isEmpty else { return "" }
+
+        let queryTerms = Set(EmailNLPEngine.extractSearchTerms(from: query).map { $0.lowercased() })
+
+        let rankedThreads = threads.sorted { a, b in
+            let aRelevance = queryTerms.isEmpty ? 0 : a.allEmails.reduce(0) { acc, email in
+                let text = (email.headers["Subject"] ?? "") + " " + email.plainBody
+                return acc + queryTerms.filter { text.lowercased().contains($0) }.count
+            }
+            let bRelevance = queryTerms.isEmpty ? 0 : b.allEmails.reduce(0) { acc, email in
+                let text = (email.headers["Subject"] ?? "") + " " + email.plainBody
+                return acc + queryTerms.filter { text.lowercased().contains($0) }.count
+            }
+            if aRelevance != bRelevance { return aRelevance > bRelevance }
+            return a.count > b.count
+        }
+
+        var result = "THREAD CONTEXT (reply chains):\n"
+        var charCount = result.count
+
+        for thread in rankedThreads.prefix(3) {
+            let participants = Set(thread.allEmails.compactMap { $0.headers["From"] })
+            var threadSection = "── Thread: \"\(thread.subject)\" (\(thread.count) msgs, \(participants.count) participants) ──\n"
+            threadSection += "Participants: \(participants.prefix(5).joined(separator: ", "))\n"
+
+            for (i, email) in thread.allEmails.enumerated() {
+                let from = email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "?"
+                let date = email.headers["Date"] ?? "?"
+                let sentiment = EmailNLPEngine.analyzeSentiment(of: [email]).first
+                let sentimentLabel = sentiment.map { $0.score > 0.2 ? "+" : $0.score < -0.2 ? "-" : "~" } ?? "~"
+                let body = bodySnippet(for: email, maxLength: 120)
+                threadSection += "  [\(i+1)] \(from) (\(date)) [\(sentimentLabel)]: \(body)\n"
+            }
+            threadSection += "\n"
+
+            if charCount + threadSection.count > maxChars { break }
+            result += threadSection
+            charCount += threadSection.count
+        }
+
+        return result
     }
 
     private static func runExpertStructured(
@@ -3762,9 +5071,8 @@ struct FoundationModelEngine {
             }
             d += "BY TIME: " + hourBuckets.sorted { $0.value > $1.value }.map { "\($0.key): \($0.value)" }.joined(separator: ", ") + "\n"
 
-            // Anomalies from AnomalyDetectionEngine
-            let anomalies = AnomalyDetectionEngine.detectAnomalies(in: emails)
-            let timeAnomalies = anomalies.filter { $0.type == .frequencySpike || $0.type == .unusualHour }
+            // Anomalies from cached detection (v2.2.4)
+            let timeAnomalies = getCachedAnomalies(for: emails).filter { $0.type == .frequencySpike || $0.type == .unusualHour }
             if !timeAnomalies.isEmpty {
                 d += "ANOMALIES: " + timeAnomalies.prefix(3).map { "\($0.title) (severity: \(String(format: "%.0f%%", $0.severity * 100)))" }.joined(separator: "; ") + "\n"
             }
@@ -3798,19 +5106,27 @@ struct FoundationModelEngine {
                 }
             }
 
-            // PII findings with detail
+            // PII findings with contextual risk (v2.2.2)
             if !piiSummary.isEmpty {
                 d += "PII EXPOSURE: " + piiSummary.map { "\($0.key.rawValue): \($0.value) instance(s)" }.joined(separator: ", ") + "\n"
             }
             if !piiFindings.isEmpty {
-                d += "PII DETAIL: " + piiFindings.prefix(3).map {
-                    "\($0.type.rawValue) in \"\($0.emailSubject)\""
-                }.joined(separator: "; ") + "\n"
+                let highRiskPII = piiFindings.filter { $0.contextualRiskScore >= 5.0 }
+                let medRiskPII = piiFindings.filter { $0.contextualRiskScore >= 2.0 && $0.contextualRiskScore < 5.0 }
+                if !highRiskPII.isEmpty {
+                    d += "HIGH-RISK PII: " + highRiskPII.prefix(3).map {
+                        "\($0.type.rawValue) in \($0.riskContext.rawValue) of \"\($0.emailSubject)\" (risk: \(String(format: "%.1f", $0.contextualRiskScore)))"
+                    }.joined(separator: "; ") + "\n"
+                }
+                if !medRiskPII.isEmpty {
+                    d += "MODERATE PII: " + medRiskPII.prefix(3).map {
+                        "\($0.type.rawValue) in \($0.riskContext.rawValue) of \"\($0.emailSubject)\""
+                    }.joined(separator: "; ") + "\n"
+                }
             }
 
-            // Anomalies from AnomalyDetectionEngine
-            let anomalies = AnomalyDetectionEngine.detectAnomalies(in: emails)
-            let securityAnomalies = anomalies.filter { $0.type == .newDomain || $0.type == .recipientAnomaly || $0.type == .largeAttachment }
+            // Anomalies from cached detection (v2.2.4)
+            let securityAnomalies = getCachedAnomalies(for: emails).filter { $0.type == .newDomain || $0.type == .recipientAnomaly || $0.type == .largeAttachment }
             if !securityAnomalies.isEmpty {
                 d += "BEHAVIORAL ANOMALIES:\n"
                 for a in securityAnomalies.prefix(4) {
@@ -3832,80 +5148,200 @@ struct FoundationModelEngine {
                 d += "ONE-TIME DOMAINS (\(rareDomains.count)): " + rareDomains.keys.sorted().prefix(5).joined(separator: ", ") + "\n"
             }
 
+            // v2.2.1: Enhanced authentication analysis
+            var authFailCount = 0
+            var authPassCount = 0
+            for email in emails.prefix(50) {
+                let auth = EmailNLPEngine.parseAuthenticationResults(email.headers)
+                if auth.failureCount > 0 { authFailCount += 1 }
+                if auth.isFullyAuthenticated { authPassCount += 1 }
+            }
+            let authChecked = min(emails.count, 50)
+            if authChecked > 0 {
+                d += "AUTH STATUS: \(authPassCount)/\(authChecked) fully authenticated, \(authFailCount) with failures\n"
+            }
+
             nlpData = d
             expertType = "cybersecurity and data protection"
+
+        case .kgExpert:
+            // Source findings primarily from the KnowledgeGraph so the LM
+            // reasons over canonical entities and relationships, not raw
+            // email blobs. Heavily reduces hallucination.
+            var d = "KNOWLEDGE GRAPH OVERVIEW:\n"
+            if let graph = getKnowledgeGraph(), graph.nodeCount > 0 {
+                let summary = graph.summaryForAI(focus: query, limit: 18)
+                d += summary
+
+                // Top people by centrality (frequent correspondents)
+                let topPeople = graph.topNodes(by: .person, limit: 6)
+                if !topPeople.isEmpty {
+                    d += "\nTOP CORRESPONDENTS:\n"
+                    for person in topPeople {
+                        let outgoing = graph.edgesFrom(person.id).count
+                        let incoming = graph.edgesTo(person.id).count
+                        let address = person.properties["email"] ?? person.label
+                        d += "  • [person:\(address)] \(person.label) — \(outgoing) outgoing, \(incoming) incoming\n"
+                    }
+                }
+
+                // Top topics + their key people
+                let topTopics = graph.topNodes(by: .topic, limit: 5)
+                if !topTopics.isEmpty {
+                    d += "\nTOPIC ↔ PEOPLE MAP:\n"
+                    for topic in topTopics {
+                        let people = graph.neighbors(of: topic.id, type: .discussesTopic)
+                            .filter { $0.type == .person }
+                            .sorted { $0.weight > $1.weight }
+                            .prefix(3)
+                            .map { $0.properties["email"] ?? $0.label }
+                            .joined(separator: ", ")
+                        if !people.isEmpty {
+                            d += "  • [topic:\(topic.id)] \(topic.label) — discussed by: \(people)\n"
+                        }
+                    }
+                }
+
+                // Domain distribution (organizations the user interacts with)
+                let topDomains = graph.topNodes(by: .domain, limit: 5)
+                if !topDomains.isEmpty {
+                    d += "\nFREQUENT DOMAINS: " + topDomains.map { "\($0.label) (\(Int($0.weight)))" }.joined(separator: ", ") + "\n"
+                }
+
+                d += "\nNOTE: cite entities using their bracketed IDs (person:..., topic:..., domain:...) so claims are verifiable.\n"
+            } else {
+                d += "(no graph available yet — falling back to email-only context)\n"
+            }
+            nlpData = d
+            expertType = "knowledge graph and relationship inference"
         }
 
-        // Domain-specific AI instructions per expert
         let expertInstructions: String
         switch role {
         case .sentimentExpert:
             expertInstructions = """
-                You are a senior sentiment and emotional intelligence analyst specializing in email forensics. \
-                Analyze emotional valence (positive/negative/neutral) and arousal (calm to urgent) for each message. \
-                Detect tone escalation chains: trace how sentiment shifts across a thread from polite to confrontational. \
-                Identify passive-aggressive language, sarcasm markers, and veiled hostility that surface-level analysis misses. \
-                Grade relationship health between sender pairs: stable, warming, cooling, or deteriorating. \
-                Flag emotional anomalies: a normally professional sender becoming emotional, or vice versa. \
-                Distinguish professional dissatisfaction from personal conflict. \
-                Note power dynamics revealed by tone: deference, authority, peer equality, or insubordination. \
-                Output format: [HIGH/MEDIUM/LOW] Finding — Evidence: (subject or sender).
+                Sentiment analyst. Find: tone shifts in threads, passive-aggressive language, \
+                relationship health (warming/cooling), emotional anomalies. \
+                Format: [HIGH/MEDIUM/LOW] Finding — Evidence: (subject or sender).
                 """
         case .entityExpert:
             expertInstructions = """
-                You are a senior communication network analyst specializing in organizational intelligence from email. \
-                Map the communication hierarchy: identify decision-makers, gatekeepers, influencers, and information brokers. \
-                Detect organizational structure from email patterns: who reports to whom, team boundaries, cross-team liaisons. \
-                Identify key contacts by influence (not just volume): who triggers action, whose emails get fast replies. \
-                Flag network anomalies: isolated nodes who should be connected, unexpected bridges between groups, sudden disconnections. \
-                Detect role changes: someone who shifts from CC to TO, or stops appearing in threads they previously dominated. \
-                Map domain affiliations to identify external partners, vendors, clients, and competitors. \
-                Note BCC patterns and distribution list usage for hidden communication channels. \
-                Output format: [HIGH/MEDIUM/LOW] Finding — Evidence: (subject or sender).
+                Network analyst. Find: decision-makers, key contacts by influence, \
+                team boundaries, role changes, domain affiliations. \
+                Format: [HIGH/MEDIUM/LOW] Finding — Evidence: (subject or sender).
                 """
         case .topicExpert:
             expertInstructions = """
-                You are a senior content and thematic analyst specializing in email intelligence. \
-                Build a topic taxonomy from the corpus: major themes, sub-topics, and cross-cutting concerns. \
-                Track topic lifecycle: emergence, growth, peak activity, decline, and resolution or abandonment. \
-                Identify decision points: emails where topics shift from discussion to action or from consensus to disagreement. \
-                Detect topic ownership: which senders drive which conversations, and who gets pulled in versus who initiates. \
-                Flag urgency signals: deadline mentions, escalation language, priority markers, and follow-up requests. \
-                Note topic correlation: which subjects tend to co-occur, suggesting linked projects or dependencies. \
-                Identify information gaps: topics mentioned but never resolved, questions asked but never answered. \
-                Output format: [HIGH/MEDIUM/LOW] Finding — Evidence: (subject or sender).
+                Topic analyst. Find: main themes, topic lifecycle, decision points, \
+                urgency signals, unresolved questions, topic ownership. \
+                Format: [HIGH/MEDIUM/LOW] Finding — Evidence: (subject or sender).
                 """
         case .timelineExpert:
             expertInstructions = """
-                You are a senior temporal pattern analyst specializing in behavioral chronology from email metadata. \
-                Map communication rhythms per sender: typical active hours, response latency patterns, and working days. \
-                Detect volume anomalies: sudden spikes (crisis events), prolonged silence (disengagement or absence), and gradual trends. \
-                Measure response latency patterns: which senders get fast replies (priority), which get delayed (avoidance or low priority). \
-                Identify burst patterns: rapid-fire exchanges indicating real-time collaboration or escalating conflict. \
-                Flag out-of-pattern behavior: messages at unusual hours, weekend activity from weekday-only senders, or holiday communication. \
-                Correlate timing with content: do volume spikes coincide with specific topics, deadlines, or external events? \
-                Detect communication cadence changes: weekly check-ins that become daily, or regular updates that stop. \
-                Output format: [HIGH/MEDIUM/LOW] Finding — Evidence: (subject or sender).
+                Timeline analyst. Find: communication rhythms, volume spikes, \
+                response latency, out-of-pattern behavior, cadence changes. \
+                Format: [HIGH/MEDIUM/LOW] Finding — Evidence: (subject or sender).
                 """
         case .securityExpert:
             expertInstructions = """
-                You are a senior cybersecurity and data protection analyst specializing in email threat assessment. \
-                Detect phishing indicators: urgency language, impersonation attempts, mismatched display names vs. addresses, suspicious links. \
-                Identify PII exposure: Social Security numbers, credit card patterns, passwords, API keys, or credentials in plain text. \
-                Flag data exfiltration patterns: large attachments to external domains, forwarding chains to personal addresses, BCC to unknown recipients. \
-                Analyze sender authenticity: first-time senders with executive names, slight domain misspellings (typosquatting), free email domains for business communication. \
-                Detect social engineering: pretexting, authority impersonation, artificial urgency, or unusual requests from known contacts. \
-                Identify compliance risks: GDPR-regulated data sent without encryption, HIPAA-relevant health information, financial data in unprotected channels. \
-                Rate each finding by risk severity (Critical/High/Medium/Low) with specific remediation recommendations. \
-                Output format: [HIGH/MEDIUM/LOW] Finding — Evidence: (subject or sender).
+                Security analyst. Find: phishing indicators, PII exposure, \
+                suspicious senders, data exfiltration, social engineering. \
+                Format: [HIGH/MEDIUM/LOW] Finding — Evidence: (subject or sender).
+                """
+        case .kgExpert:
+            expertInstructions = """
+                Knowledge graph analyst. Reason ONLY from the supplied graph \
+                summary. Find: central people, dominant topics, who discusses \
+                what with whom, cross-domain bridges, isolated nodes worth \
+                attention. Always cite using bracketed node IDs from the \
+                summary (person:<email>, topic:<id>, domain:<host>). Do not \
+                invent IDs. \
+                Format: [HIGH/MEDIUM/LOW] Finding — Evidence: <node IDs>.
                 """
         }
 
-        // Try structured generation — compact, parseable output
+        // Retrieve domain-specific chunks with intent-aware budget
+        let queryTerms = EmailNLPEngine.extractSearchTerms(from: query)
+        let preferredTypes = expertChunkPreferences[role]
+        let expertBudget = contextBudget(for: role.correspondingIntent)
+        let nlpDataBudget = expertBudget.findingsChars
+        var enrichedData = String(nlpData.prefix(nlpDataBudget))
+        if !queryTerms.isEmpty {
+            let ragSlotBudget = expertBudget.ragChars
+            let domainChunks = chunkLevelRetrieve(
+                query: query, terms: queryTerms, emails: emails, limit: 3,
+                preferredTypes: preferredTypes
+            )
+            if !domainChunks.isEmpty {
+                var ragText = "\nRELEVANT \(preferredTypes?.first?.rawValue.uppercased() ?? "CONTENT") PASSAGES:\n"
+                for dc in domainChunks {
+                    let subj = dc.email.headers["Subject"] ?? "?"
+                    let from = dc.email.headers["From"] ?? "?"
+                    ragText += "[\(dc.chunkType.rawValue)] \(subj) (from \(from)): \(String(dc.bestChunk.prefix(300)))\n"
+                }
+                enrichedData += String(ragText.prefix(ragSlotBudget))
+            }
+        }
+
+        // Cross-email threading context — reply chain awareness (v2.1.3)
+        let threadBudget = expertBudget.headerChars / 2
+        let threadCtx = buildThreadContext(for: emails, query: query, maxChars: threadBudget)
+        if !threadCtx.isEmpty {
+            enrichedData += "\n" + threadCtx
+        }
+
+        // Anomaly-aware enrichment — feed relevant anomalies into expert (v2.2.4)
+        let anomalyText = anomalyEnrichment(for: role, emails: emails)
+        if !anomalyText.isEmpty {
+            enrichedData += "\n" + anomalyText
+        }
+
+        // v3.7.1: Predictive enrichment for triage-relevant experts
+        if role == .sentimentExpert || role == .timelineExpert {
+            let predictiveText = PredictiveEngine.summaryForAI(emails: emails)
+            if !predictiveText.isEmpty {
+                enrichedData += "\n" + String(predictiveText.prefix(600))
+            }
+        }
+
+        // v3.1.3: Knowledge graph enrichment for entity and topic experts
+        if let graph = getKnowledgeGraph(), graph.nodeCount > 0 {
+            let kgText: String
+            switch role {
+            case .entityExpert:
+                kgText = graph.summaryForAI(focus: query, limit: 10)
+            case .topicExpert:
+                let topTopics = graph.topNodes(by: .topic, limit: 5)
+                var text = "TOPIC-PERSON MAP:\n"
+                for topic in topTopics {
+                    let people = graph.neighbors(of: topic.id, type: .discussesTopic)
+                        .filter { $0.type == .person }
+                        .sorted { $0.weight > $1.weight }
+                        .prefix(3)
+                    if !people.isEmpty {
+                        text += "  \(topic.label): \(people.map(\.label).joined(separator: ", "))\n"
+                    }
+                }
+                kgText = text
+            case .securityExpert:
+                let oneTimeDomains = graph.findNodes(type: .domain).filter { $0.weight <= 1 }
+                if !oneTimeDomains.isEmpty {
+                    kgText = "KG ONE-TIME DOMAINS: \(oneTimeDomains.prefix(5).map(\.label).joined(separator: ", "))\n"
+                } else {
+                    kgText = ""
+                }
+            default:
+                kgText = ""
+            }
+            if !kgText.isEmpty {
+                enrichedData += "\n" + String(kgText.prefix(500))
+            }
+        }
+
         guard isAvailable else {
             return AISessionFindings(
-                findings: [AIFinding(finding: nlpData, evidence: "", relevance: .medium)],
-                summary: "\(expertType): \(nlpData.prefix(100))",
+                findings: [AIFinding(finding: enrichedData, evidence: "", relevance: .medium)],
+                summary: "\(expertType): \(enrichedData.prefix(100))",
                 confidence: 3
             )
         }
@@ -3918,14 +5354,14 @@ struct FoundationModelEngine {
                 "Rate relevance: high = directly answers the question, medium = useful context, low = tangential."
             )
             let response = try await session.respond(
-                to: "Question: \(query)\n\nData:\n\(nlpData)",
+                to: "Question: \(query)\n\nData:\n\(enrichedData)",
                 generating: AISessionFindings.self
             )
             return response.content
         } catch {
             return AISessionFindings(
-                findings: [AIFinding(finding: nlpData, evidence: "", relevance: .medium)],
-                summary: "\(expertType): \(nlpData.prefix(100))",
+                findings: [AIFinding(finding: enrichedData, evidence: "", relevance: .medium)],
+                summary: "\(expertType): \(enrichedData.prefix(100))",
                 confidence: 2
             )
         }
@@ -4030,40 +5466,95 @@ struct FoundationModelEngine {
         query: String,
         plan: AIQueryPlan,
         intent: QueryIntent,
+        classification: IntentClassification? = nil,
         emails: [MBOXParser.RawEmail],
         profile: String,
         onUpdate: @MainActor @Sendable @escaping (String) -> Void
     ) async throws -> String {
-        // ── Improvement 6: Adaptive expert count ──
+        // ── Semantic expert selection — ambiguous queries activate more experts ──
         let sessionConfig = computeSessionCount(query: query, emails: emails, intent: intent)
-        let allExperts = selectExperts(for: intent)
-        let experts = Array(allExperts.prefix(sessionConfig.experts))
-        let totalParallel = plan.subQueries.count + experts.count
-        await onUpdate("*Layer 1: Deploying \(totalParallel) parallel AI sessions across \(emails.count) emails...*\n\n")
+        let allExperts = semanticSelectExperts(query, intent: intent)
+        let maxExperts: Int
+        if classification?.isAmbiguous == true {
+            maxExperts = min(allExperts.count, sessionConfig.experts + 1)
+        } else {
+            maxExperts = sessionConfig.experts
+        }
+        let experts = Array(allExperts.prefix(maxExperts))
+        // v3.5.1: Include matching custom experts
+        let customExperts = matchingCustomExperts(for: query, maxCount: 2)
+        let totalParallel = plan.subQueries.count + experts.count + customExperts.count
+        // v2.3.2: Progressive streaming with expert progress indicator
+        let expertNames = experts.map { $0.rawValue.replacingOccurrences(of: "Expert", with: "") }
+            + customExperts.map(\.name)
+        var progressStatus = experts.map { "[ ] \($0.rawValue.replacingOccurrences(of: "Expert", with: ""))" }
+            + customExperts.map { "[ ] \($0.name)" }
+        let progressLine = progressStatus.joined(separator: " ")
+        await onUpdate("*Layer 1: Deploying \(totalParallel) parallel AI sessions across \(emails.count) emails...*\n\(progressLine)\n\n")
 
-        // ── Layer 1: Parallel structured extraction ──
+        // ── Layer 1: Parallel structured extraction with progressive updates ──
         var expertFindings: [(ExpertRole, AISessionFindings)] = []
+        var customExpertFindings: [(String, AISessionFindings)] = []
         var subFindings: [(String, AISessionFindings)] = []
+        var completedExperts = 0
+        var partialUpdates: [String] = []
 
-        await withTaskGroup(of: (String, Int?, ExpertRole?, AISessionFindings).self) { group in
+        await withTaskGroup(of: (String, Int?, ExpertRole?, String?, AISessionFindings).self) { group in
             for expert in experts {
                 group.addTask {
                     let findings = await runExpertStructured(role: expert, query: query, emails: emails)
-                    return ("expert", nil, expert, findings)
+                    return ("expert", nil, expert, nil, findings)
+                }
+            }
+            // v3.5.1: Custom expert parallel tasks
+            for customExpert in customExperts {
+                let captured = customExpert
+                group.addTask {
+                    let findings = await runCustomExpertStructured(expert: captured, query: query, emails: emails)
+                    return ("custom", nil, nil, captured.name, findings)
                 }
             }
             for (i, subQ) in plan.subQueries.enumerated() {
                 let capturedSubQ = subQ
                 group.addTask {
                     let findings = await executeSubQueryStructured(subQuery: capturedSubQ, emails: emails, profile: profile)
-                    return ("map", i, nil, findings)
+                    return ("map", i, nil, nil, findings)
                 }
             }
 
             var mapIndexed: [(Int, String, AISessionFindings)] = []
-            for await (type, idx, role, findings) in group {
+            for await (type, idx, role, customName, findings) in group {
                 if type == "expert", let r = role {
                     expertFindings.append((r, findings))
+                    completedExperts += 1
+
+                    if let expertIdx = experts.firstIndex(of: r) {
+                        progressStatus[expertIdx] = "[x] \(expertNames[expertIdx])"
+                    }
+
+                    if let topFinding = findings.findings.first(where: { $0.relevance == .high }) ?? findings.findings.first {
+                        partialUpdates.append("**\(r.rawValue)**: \(String(topFinding.finding.prefix(120)))")
+                    }
+
+                    let updatedProgress = progressStatus.joined(separator: " ")
+                    let partialText = partialUpdates.joined(separator: "\n")
+                    await onUpdate("*Layer 1: \(completedExperts)/\(totalParallel) complete*\n\(updatedProgress)\n\n\(partialText)\n\n")
+
+                } else if type == "custom", let name = customName {
+                    customExpertFindings.append((name, findings))
+                    completedExperts += 1
+
+                    let customIdx = experts.count + (customExperts.firstIndex(where: { $0.name == name }) ?? 0)
+                    progressStatus[customIdx] = "[x] \(name)"
+
+                    if let topFinding = findings.findings.first(where: { $0.relevance == .high }) ?? findings.findings.first {
+                        partialUpdates.append("**\(name)**: \(String(topFinding.finding.prefix(120)))")
+                    }
+
+                    let updatedProgress = progressStatus.joined(separator: " ")
+                    let partialText = partialUpdates.joined(separator: "\n")
+                    await onUpdate("*Layer 1: \(completedExperts)/\(totalParallel) complete*\n\(updatedProgress)\n\n\(partialText)\n\n")
+
                 } else if type == "map", let i = idx, i < plan.subQueries.count {
                     mapIndexed.append((i, plan.subQueries[i], findings))
                 }
@@ -4079,6 +5570,13 @@ struct FoundationModelEngine {
             for finding in sessionF.findings {
                 allFindings.append((source: role.rawValue, finding: finding, confidence: sessionF.confidence))
                 trackedFindings.append(trackEvidence(finding: finding, source: role.rawValue, confidence: sessionF.confidence, emails: emails))
+            }
+        }
+        // v3.5.1: Custom expert findings
+        for (name, sessionF) in customExpertFindings {
+            for finding in sessionF.findings {
+                allFindings.append((source: "custom:\(name)", finding: finding, confidence: sessionF.confidence))
+                trackedFindings.append(trackEvidence(finding: finding, source: "custom:\(name)", confidence: sessionF.confidence, emails: emails))
             }
         }
         for (subQ, sessionF) in subFindings {
@@ -4099,8 +5597,8 @@ struct FoundationModelEngine {
 
         // ── Dynamic Fan-In: check if findings fit in context budget ──
         let findingsText = serializeFindings(allFindings)
-        let profileBudget = min(profile.count, contextCharBudget / 3)
-        let availableBudget = contextCharBudget - profileBudget - 500 // reserve for instructions/query
+        let budget = contextBudget(for: intent)
+        let availableBudget = budget.findingsChars + budget.ragChars + budget.emailBodyChars
 
         if findingsText.count <= availableBudget {
             // ✅ Fits! Skip merge layer — go straight to synthesizer (2 layers total)
@@ -4171,7 +5669,7 @@ struct FoundationModelEngine {
         profile: String
     ) async -> AISessionFindings {
         let terms = EmailNLPEngine.extractSearchTerms(from: subQuery)
-        let intent = classifyIntentKeyword(subQuery)
+        let (intent, _) = semanticClassifyIntent(subQuery)
 
         var results: [MBOXParser.RawEmail] = []
         if !terms.isEmpty {
@@ -4242,7 +5740,8 @@ struct FoundationModelEngine {
                 "Extract specific, evidence-backed findings. Each finding must reference an email subject or sender. " +
                 "Rate relevance: high = directly answers the question, medium = useful context, low = tangential."
             )
-            let truncatedContext = String(context.prefix(contextCharBudget))
+            let subBudget = contextBudget(for: intent)
+            let truncatedContext = String(context.prefix(subBudget.emailBodyChars + subBudget.headerChars + subBudget.findingsChars + subBudget.ragChars))
             let response = try await session.respond(
                 to: "Question: \(subQuery)\n\n\(truncatedContext)",
                 generating: AISessionFindings.self
@@ -4259,16 +5758,19 @@ struct FoundationModelEngine {
 
     // MARK: - Serialize Structured Findings (compact text for context)
 
+    // v2.3.1: Confidence-weighted serialization
     private static func serializeFindings(_ findings: [(source: String, finding: AIFinding, confidence: Int)]) -> String {
         guard !findings.isEmpty else { return "" }
-        var text = "RANKED FINDINGS (\(findings.count) total, sorted by relevance):\n\n"
+        var text = "RANKED FINDINGS (\(findings.count) total, sorted by relevance+confidence):\n"
+        text += "Legend: ▲=high relevance ●=medium ▽=low | conf:5=ground truth, conf:1-2=needs caveat\n\n"
         for (i, entry) in findings.enumerated() {
             let relevanceIcon = entry.finding.relevance == .high ? "▲" : (entry.finding.relevance == .medium ? "●" : "▽")
-            text += "[\(i+1)] \(relevanceIcon) \(entry.finding.finding)"
+            let confIcon = entry.confidence >= 4 ? "▲" : (entry.confidence >= 3 ? "●" : "▽")
+            text += "[\(i+1)] \(relevanceIcon) [conf:\(confIcon)\(entry.confidence)] \(entry.finding.finding)"
             if !entry.finding.evidence.isEmpty {
                 text += " | Evidence: \(entry.finding.evidence)"
             }
-            text += " (from: \(entry.source), confidence: \(entry.confidence)/5)\n"
+            text += " (from: \(entry.source))\n"
         }
         return text
     }
@@ -4332,34 +5834,39 @@ struct FoundationModelEngine {
         plan: AIQueryPlan,
         onUpdate: @MainActor @Sendable @escaping (String) -> Void
     ) async throws -> String {
-        let profileTruncated = String(profile.prefix(contextCharBudget / 3))
-        var reduceContext = profileTruncated + "\n\n" + findingsText
+        let budget = contextBudget(for: intent)
+        let profileTruncated = String(profile.prefix(budget.profileChars))
+        let findingsTruncated = String(findingsText.prefix(budget.findingsChars + budget.ragChars + budget.emailBodyChars))
+        var reduceContext = profileTruncated + "\n\n" + findingsTruncated
+
+        // Thread context for synthesis — helps AI understand reply chains (v2.1.3)
+        let threadCtx = buildThreadContext(for: emails, query: query, maxChars: budget.headerChars / 2)
+        if !threadCtx.isEmpty {
+            reduceContext += "\n" + threadCtx
+        }
 
         let convoCtx = conversationContext()
         if !convoCtx.isEmpty {
-            reduceContext = String(convoCtx.prefix(400)) + "\n" + reduceContext
+            reduceContext = String(convoCtx.prefix(budget.conversationChars)) + "\n" + reduceContext
         }
         reduceContext = String(reduceContext.prefix(contextCharBudget))
 
         let highCount = allFindings.filter { $0.finding.relevance == .high }.count
         let totalFindings = allFindings.count
 
-        let instructions = "You are the AI brain of mailin. " +
-            "You orchestrated a \(layerCount)-layer pipeline: \(totalParallel) parallel AI sessions analyzed \(emails.count) emails, " +
-            "producing \(totalFindings) structured findings (\(highCount) high-relevance). " +
-            "Findings are RANKED — ▲ = high relevance, ● = medium, ▽ = low. " +
-            "Build your answer primarily from ▲ findings. Use ● for supporting context. Ignore ▽ unless unique. " +
-            "Each finding includes evidence (email subjects/senders) — cite them with **bold**. " +
-            "Synthesize into one coherent, evidence-rich answer. " +
-            "Refer to emails by **Subject** and **sender**. " +
-            "Synthesis goal: \(plan.synthesisGoal)"
+        let highConfCount = allFindings.filter { $0.confidence >= 4 }.count
+        let instructions = "Email analyst. Synthesize \(totalFindings) findings (\(highCount) high-relevance, \(highConfCount) high-confidence) from \(totalParallel) experts. " +
+            "▲=high ●=medium ▽=low relevance. conf:5=ground truth (state as fact), conf:4=strong (state confidently), " +
+            "conf:3=moderate (use 'likely' or 'appears to'), conf:1-2=weak (caveat with 'may' or 'possibly'). " +
+            "Focus on ▲ findings with high confidence. Cite emails by **Subject** and **sender**. " +
+            "Answer the user's exact question first, then add supporting insights."
 
         let tools = selectTools(for: intent, emails: emails)
         let session = tools.isEmpty
             ? LanguageModelSession(instructions: instructions)
             : LanguageModelSession(tools: tools, instructions: instructions)
 
-        let prompt = "User question: \(query)\n\n\(reduceContext)"
+        let prompt = "\(reduceContext)\n\nAnswer this question: \(query)"
 
         let stream = session.streamResponse(to: prompt)
         var finalContent = ""
@@ -4399,20 +5906,21 @@ struct FoundationModelEngine {
             }
         }
 
-        // For large archives, always include the archive profile (Apple AI sees the big picture)
+        // Intent-aware context allocation
+        let budget = contextBudget(for: intent)
         var context: String
         if emails.count >= multiSessionThreshold {
-            context = profile + "\n\n"
-            if !chunkEvidence.isEmpty { context += chunkEvidence + "\n" }
+            context = String(profile.prefix(budget.profileChars)) + "\n\n"
+            if !chunkEvidence.isEmpty { context += String(chunkEvidence.prefix(budget.ragChars)) + "\n" }
             let emailContext = buildBudgetedContext(
                 intent: intent, query: query, relevant: relevant,
                 allCount: emails.count, nlpStats: nlpStats
             )
-            let remainingBudget = contextCharBudget - context.count
+            let remainingBudget = budget.emailBodyChars + budget.headerChars
             context += String(emailContext.prefix(remainingBudget))
         } else {
             context = ""
-            if !chunkEvidence.isEmpty { context += chunkEvidence + "\n" }
+            if !chunkEvidence.isEmpty { context += String(chunkEvidence.prefix(budget.ragChars)) + "\n" }
             context += buildBudgetedContext(
                 intent: intent, query: query, relevant: relevant,
                 allCount: emails.count, nlpStats: nlpStats
@@ -4421,7 +5929,7 @@ struct FoundationModelEngine {
 
         let convoCtx = conversationContext()
         if !convoCtx.isEmpty {
-            let convoTruncated = String(convoCtx.prefix(800))
+            let convoTruncated = String(convoCtx.prefix(budget.conversationChars))
             context = convoTruncated + "\n" + context
         }
 
@@ -4685,7 +6193,8 @@ struct FoundationModelEngine {
         nlpStats: String
     ) -> String {
         var context = ""
-        let budget = contextCharBudget
+        let intentBudget = contextBudget(for: intent)
+        let budget = intentBudget.emailBodyChars + intentBudget.headerChars + intentBudget.findingsChars
 
         // NLP stats first — compact, high value
         if !nlpStats.isEmpty {
@@ -4757,75 +6266,163 @@ struct FoundationModelEngine {
     }
 
     private static func focusedInstructions(for intent: QueryIntent) -> String {
-        let base = "You are the AI brain of mailin, a privacy-first Mac email app. All data is on-device. " +
-            "You orchestrate on-device expert tools to build the best answer. " +
-            "Always refer to emails by **Subject** and **sender name**, never by number. " +
-            "Use your tools proactively — do not just answer from the provided context if a tool can give you better data. "
-
+        let base = "Email analyst in mailin (on-device, private). Cite emails by **Subject** and **sender**. Use tools proactively. "
         switch intent {
         case .search:
-            return base + "The user is searching for emails. " +
-                "Use spotlightSearch for semantic/meaning-based search (Apple Intelligence powered). " +
-                "Use searchEmails for keyword matching. Use lookupContact to identify senders. " +
-                "Combine results from both search tools for comprehensive results."
-
+            return base + "Search task. Use spotlightSearch + searchEmails. Show matching emails with evidence."
         case .statistics:
-            return base + "Answer with exact numbers. Use analyzeEmails to get sentiment, entities, " +
-                "topics, classification, or priority breakdowns. The NLP data is deterministic ground truth. " +
-                "Present clearly with percentages and comparisons."
-
+            return base + "Stats task. Use analyzeEmails for exact numbers. Present with percentages."
         case .sentiment:
-            return base + "Analyze emotional tone. Use analyzeEmails with sentiment type for ground truth data. " +
-                "Use searchEmails to find specific examples of positive or negative emails. " +
-                "Note patterns between contacts or topics."
-
+            return base + "Sentiment task. Use analyzeEmails(sentiment). Show tone patterns with examples."
         case .summary:
-            return base + "Give a concise overview. Use spotlightSearch to find AI-generated summaries. " +
-                "Use analyzeEmails for NLP breakdowns (topics, sentiment, categories). " +
-                "Cover main themes, key contacts, patterns, sentiment. Keep to 3-4 paragraphs."
-
+            return base + "Summary task. Use analyzeEmails for topics/sentiment/categories. Cover themes, contacts, patterns in 3-4 paragraphs."
         case .security:
-            return base + "Security analysis. Use analyzePhishing to scan for phishing, scams, and PII. " +
-                "Use analyzeEmails for entity/classification analysis. " +
-                "Use searchEmails to investigate suspicious senders further. " +
-                "Explain each finding in plain language. Rate overall posture."
-
+            return base + "Security task. Use analyzePhishing. Explain each risk in plain language."
         case .triage:
-            return base + "Priority triage. Use analyzeEmails with priority type for scoring. " +
-                "Use checkCalendar to correlate with upcoming meetings. " +
-                "Use searchEmails if you need more context on a priority email. " +
-                "Group by urgency: Act Now, Today, This Week. Be actionable."
-
+            return base + "Triage task. Use analyzeEmails(priority). Group: Act Now, Today, This Week."
         case .thread:
-            return base + "Thread narrative. Use getThread to fetch the full conversation. " +
-                "Use spotlightSearch to find related discussions. " +
-                "Use searchEmails for additional context. " +
-                "Narrate chronologically. Highlight decisions, turning points, unresolved items."
-
+            return base + "Thread task. Use getThread. Narrate chronologically with decisions and turning points."
         case .entity:
-            return base + "Person/organization profile. " +
-                "Use lookupContact to get their real identity, org, title from Contacts. " +
-                "Use checkCalendar to find meetings with them. " +
-                "Use spotlightSearch to find all their emails by meaning. " +
-                "Cover: role, frequency, sentiment, topics, relationship."
-
+            return base + "Person profile. Use lookupContact + spotlightSearch. Cover: role, frequency, sentiment, topics."
         case .topicAnalysis:
-            return base + "Topic analysis. Use analyzeEmails with topics type for NLP topic extraction. " +
-                "Use searchEmails to find example emails for each topic. " +
-                "Explain what each topic covers with evidence. Note connections."
-
+            return base + "Topic task. Use analyzeEmails(topics). List themes with email evidence."
         case .temporal:
-            return base + "Temporal analysis. Use analyzeEmails for sentiment/topic trends. " +
-                "Use dates from headers to anchor observations. " +
-                "Analyze volume trends, topic shifts, sentiment changes over time."
-
+            return base + "Time analysis. Show volume trends, topic shifts, sentiment changes over time."
         case .general:
-            return base + "Answer thoroughly using all available tools: " +
-                "spotlightSearch (AI semantic search), searchEmails (keyword search), " +
-                "getThread (conversations), lookupContact (identity), checkCalendar (meetings), " +
-                "analyzeEmails (NLP analysis), analyzePhishing (security scan). " +
-                "Use multiple tools to build a comprehensive, evidence-based answer."
+            return base + "Answer the question using all tools: spotlightSearch, searchEmails, getThread, lookupContact, analyzeEmails, analyzePhishing."
         }
+    }
+
+    // MARK: - AI-Powered Archive Comparison (v3.6.1)
+
+    struct ArchiveComparisonResult {
+        let communicationPatterns: String
+        let topicDrift: String
+        let sentimentShift: String
+        let relationshipChanges: String
+        let kgComparison: KnowledgeGraph.GraphComparison?
+        let synthesis: String
+    }
+
+    static func compareArchives(
+        archiveA: [MBOXParser.RawEmail],
+        archiveB: [MBOXParser.RawEmail],
+        nameA: String,
+        nameB: String,
+        query: String? = nil,
+        onUpdate: @MainActor @Sendable @escaping (String) -> Void
+    ) async -> ArchiveComparisonResult {
+        await onUpdate("*Comparing archives: analyzing communication patterns...*")
+
+        // Parallel NLP analysis of both archives
+        let topicsA = EmailNLPEngine.extractTopics(from: archiveA, limit: 15)
+        let topicsB = EmailNLPEngine.extractTopics(from: archiveB, limit: 15)
+        let sentA = EmailNLPEngine.averageSentiment(of: archiveA)
+        let sentB = EmailNLPEngine.averageSentiment(of: archiveB)
+        let entitiesA = EmailNLPEngine.extractEntities(from: archiveA, limit: 15)
+        let entitiesB = EmailNLPEngine.extractEntities(from: archiveB, limit: 15)
+
+        // Communication patterns
+        let sendersA = Dictionary(grouping: archiveA, by: { $0.headers["From"]?.lowercased() ?? "?" })
+        let sendersB = Dictionary(grouping: archiveB, by: { $0.headers["From"]?.lowercased() ?? "?" })
+        let uniqueToA = Set(sendersA.keys).subtracting(Set(sendersB.keys))
+        let uniqueToB = Set(sendersB.keys).subtracting(Set(sendersA.keys))
+        let commonSenders = Set(sendersA.keys).intersection(Set(sendersB.keys))
+
+        var commPatterns = "COMMUNICATION PATTERNS:\n"
+        commPatterns += "\(nameA): \(archiveA.count) emails, \(sendersA.count) unique senders\n"
+        commPatterns += "\(nameB): \(archiveB.count) emails, \(sendersB.count) unique senders\n"
+        commPatterns += "Common senders: \(commonSenders.count), Only in \(nameA): \(uniqueToA.count), Only in \(nameB): \(uniqueToB.count)\n"
+
+        let volumeChangePercent = archiveA.isEmpty ? 0 : ((Double(archiveB.count) - Double(archiveA.count)) / Double(archiveA.count)) * 100
+        commPatterns += "Volume change: \(String(format: "%+.0f%%", volumeChangePercent))\n"
+
+        await onUpdate("*Analyzing topic drift...*")
+
+        // Topic drift
+        let topicSetA = Set(topicsA.map { $0.word.lowercased() })
+        let topicSetB = Set(topicsB.map { $0.word.lowercased() })
+        let newTopics = topicSetB.subtracting(topicSetA)
+        let droppedTopics = topicSetA.subtracting(topicSetB)
+
+        var topicDrift = "TOPIC DRIFT:\n"
+        topicDrift += "\(nameA) topics: \(topicsA.prefix(8).map(\.word).joined(separator: ", "))\n"
+        topicDrift += "\(nameB) topics: \(topicsB.prefix(8).map(\.word).joined(separator: ", "))\n"
+        if !newTopics.isEmpty {
+            topicDrift += "NEW topics in \(nameB): \(newTopics.prefix(5).joined(separator: ", "))\n"
+        }
+        if !droppedTopics.isEmpty {
+            topicDrift += "DROPPED topics from \(nameA): \(droppedTopics.prefix(5).joined(separator: ", "))\n"
+        }
+
+        // Sentiment shift
+        let sentShift = sentB.average - sentA.average
+        let sentDirection = sentShift > 0.1 ? "more positive" : sentShift < -0.1 ? "more negative" : "stable"
+        var sentimentText = "SENTIMENT SHIFT:\n"
+        sentimentText += "\(nameA): \(sentA.label) (\(String(format: "%.2f", sentA.average))), +\(sentA.positive)/~\(sentA.neutral)/-\(sentA.negative)\n"
+        sentimentText += "\(nameB): \(sentB.label) (\(String(format: "%.2f", sentB.average))), +\(sentB.positive)/~\(sentB.neutral)/-\(sentB.negative)\n"
+        sentimentText += "Shift: \(sentDirection) (\(String(format: "%+.2f", sentShift)))\n"
+
+        await onUpdate("*Building and comparing knowledge graphs...*")
+
+        // Relationship changes via KG comparison
+        let graphA = KnowledgeGraph()
+        KnowledgeGraphBuilder.build(from: archiveA, into: graphA)
+        let graphB = KnowledgeGraph()
+        KnowledgeGraphBuilder.build(from: archiveB, into: graphB)
+        let kgComp = graphA.compare(to: graphB)
+
+        var relationText = "RELATIONSHIP CHANGES:\n"
+        relationText += kgComp.summaryText()
+        if relationText == "RELATIONSHIP CHANGES:\n" {
+            relationText += "No significant relationship changes detected.\n"
+        }
+
+        // Entity comparison
+        let entitySetA = Set(entitiesA.map { $0.name.lowercased() })
+        let entitySetB = Set(entitiesB.map { $0.name.lowercased() })
+        let newEntities = entitySetB.subtracting(entitySetA)
+        let lostEntities = entitySetA.subtracting(entitySetB)
+        if !newEntities.isEmpty {
+            relationText += "NEW entities in \(nameB): \(newEntities.prefix(5).joined(separator: ", "))\n"
+        }
+        if !lostEntities.isEmpty {
+            relationText += "GONE from \(nameA): \(lostEntities.prefix(5).joined(separator: ", "))\n"
+        }
+
+        await onUpdate("*Synthesizing comparison...*")
+
+        // AI synthesis
+        var synthesis = ""
+        if isAvailable {
+            do {
+                let context = [commPatterns, topicDrift, sentimentText, relationText].joined(separator: "\n")
+                let session = LanguageModelSession(instructions:
+                    "You compare two email archives. Highlight: what changed, what's new, what disappeared, notable trends. " +
+                    "Use markdown headings and bullets. Be specific — cite names, topics, numbers."
+                )
+                let focusClause = query.map { "Focus on: \($0). " } ?? ""
+                let prompt = "\(focusClause)Compare these archives:\n\n\(String(context.prefix(3000)))"
+                let stream = session.streamResponse(to: prompt)
+                for try await snapshot in stream {
+                    synthesis = snapshot.content
+                    await onUpdate(synthesis)
+                }
+            } catch {
+                synthesis = "**\(nameA) vs \(nameB)**\n\n" + commPatterns + "\n" + topicDrift + "\n" + sentimentText + "\n" + relationText
+            }
+        } else {
+            synthesis = "**\(nameA) vs \(nameB)**\n\n" + commPatterns + "\n" + topicDrift + "\n" + sentimentText + "\n" + relationText
+        }
+
+        return ArchiveComparisonResult(
+            communicationPatterns: commPatterns,
+            topicDrift: topicDrift,
+            sentimentShift: sentimentText,
+            relationshipChanges: relationText,
+            kgComparison: kgComp,
+            synthesis: synthesis
+        )
     }
 }
 

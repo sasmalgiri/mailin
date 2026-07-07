@@ -1,11 +1,17 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct GDPRReportConfigView: View {
     let emails: [MBOXParser.RawEmail]
+    var isPresented: Binding<Bool>?
+    @Environment(\.dismiss) private var envDismiss
     @State private var dataSubject = ""
     @State private var isGenerating = false
     @State private var generationError: String?
-    @Environment(\.dismiss) private var dismiss
+    @State private var showTutorial = false
+    @State private var generatedPDFData: Data?
+    @State private var showFileExporter = false
+    @State private var savedSuccessfully = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -15,7 +21,8 @@ struct GDPRReportConfigView: View {
                 Text("GDPR Compliance Report")
                     .font(Typography.headline)
                 Spacer()
-                Button { dismiss() } label: {
+                TutorialHelpButton(showTutorial: $showTutorial)
+                Button { closeSheet() } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(AppColors.secondary)
                         .imageScale(.large)
@@ -56,40 +63,119 @@ struct GDPRReportConfigView: View {
                     }
                 }
 
+                if savedSuccessfully {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                        Text("Report saved successfully.")
+                            .font(Typography.caption1)
+                            .foregroundColor(.green)
+                    }
+                } else if generatedPDFData != nil {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                        Text("Report generated successfully. Click Save PDF to save.")
+                            .font(Typography.caption1)
+                            .foregroundColor(.green)
+                    }
+                }
+
                 HStack {
                     Spacer()
-                    Button("Cancel") { dismiss() }
-                        .buttonStyle(SecondaryButtonStyle())
+                    if savedSuccessfully {
+                        Button("Done") { closeSheet() }
+                            .buttonStyle(PrimaryButtonStyle())
+                    } else {
+                        Button("Cancel") { closeSheet() }
+                            .buttonStyle(SecondaryButtonStyle())
 
-                    Button {
-                        generateReport()
-                    } label: {
-                        HStack(spacing: Spacing.xSmall) {
-                            if isGenerating {
-                                ProgressView()
-                                    .scaleEffect(0.7)
-                                    .frame(width: 16, height: 16)
+                        if generatedPDFData != nil {
+                            Button {
+                                showFileExporter = true
+                            } label: {
+                                HStack(spacing: Spacing.xSmall) {
+                                    Image(systemName: "square.and.arrow.down")
+                                    Text("Save PDF")
+                                }
                             }
-                            Text(isGenerating ? "Generating..." : "Generate GDPR Report")
+                            .buttonStyle(PrimaryButtonStyle())
+                        } else {
+                            Button {
+                                generateReport()
+                            } label: {
+                                HStack(spacing: Spacing.xSmall) {
+                                    if isGenerating {
+                                        ProgressView()
+                                            .scaleEffect(0.7)
+                                            .frame(width: 16, height: 16)
+                                    }
+                                    Text(isGenerating ? "Generating..." : "Generate GDPR Report")
+                                }
+                            }
+                            .buttonStyle(PrimaryButtonStyle())
+                            .disabled(dataSubject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isGenerating)
                         }
                     }
-                    .buttonStyle(PrimaryButtonStyle())
-                    .disabled(dataSubject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isGenerating)
                 }
             }
             .padding(Spacing.medium)
 
             Spacer()
         }
+        .featureTutorial(.gdprCompliance, key: "gdpr_compliance_tutorial_seen", isPresented: $showTutorial)
+        .fileExporter(
+            isPresented: $showFileExporter,
+            document: GDPRPDFExportFile(data: generatedPDFData),
+            contentType: .pdf,
+            defaultFilename: pdfFileName
+        ) { result in
+            switch result {
+            case .success:
+                generatedPDFData = nil
+                savedSuccessfully = true
+            case .failure(let error):
+                generationError = "Failed to save: \(error.localizedDescription)"
+            }
+        }
         #if os(macOS)
         .frame(minWidth: 500, minHeight: 350)
         #endif
     }
 
+    private func closeSheet() {
+        if let isPresented {
+            isPresented.wrappedValue = false
+        } else {
+            envDismiss()
+        }
+    }
+
+    private var pdfFileName: String {
+        let subject = dataSubject.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "GDPR_Report_\(subject.replacingOccurrences(of: "[^A-Za-z0-9]", with: "_", options: .regularExpression))"
+    }
+
     private func generateReport() {
+        let subject = dataSubject.trimmingCharacters(in: .whitespacesAndNewlines)
+        let subjectLower = subject.lowercased()
+
+        let matchingEmails = emails.filter { email in
+            let from = (email.headers["From"] ?? "").lowercased()
+            let to = (email.headers["To"] ?? "").lowercased()
+            let cc = (email.headers["Cc"] ?? "").lowercased()
+            let body = email.plainBody.lowercased()
+            return from.contains(subjectLower) || to.contains(subjectLower) ||
+                   cc.contains(subjectLower) || body.contains(subjectLower)
+        }
+
+        guard !matchingEmails.isEmpty else {
+            generationError = "No emails found mentioning \"\(subject)\". Enter a name or email address that appears in your archive."
+            return
+        }
+
         isGenerating = true
         generationError = nil
-        let subject = dataSubject.trimmingCharacters(in: .whitespacesAndNewlines)
 
         Task.detached(priority: .userInitiated) {
             let pdfData = await GDPRComplianceReport.generate(emails: emails, dataSubject: subject)
@@ -102,33 +188,27 @@ struct GDPRReportConfigView: View {
                     return
                 }
 
-                let fileName = "GDPR_Report_\(subject.replacingOccurrences(of: "[^A-Za-z0-9]", with: "_", options: .regularExpression)).pdf"
-
-                #if os(macOS)
-                let panel = NSSavePanel()
-                panel.nameFieldStringValue = fileName
-                panel.canCreateDirectories = true
-                panel.allowedContentTypes = [.pdf]
-                panel.begin { result in
-                    if result == .OK, let url = panel.url {
-                        do {
-                            try pdfData.write(to: url, options: .atomic)
-                            dismiss()
-                        } catch {
-                            generationError = "Failed to save: \(error.localizedDescription)"
-                        }
-                    }
-                }
-                #else
-                let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
-                do {
-                    try pdfData.write(to: url, options: .atomic)
-                    dismiss()
-                } catch {
-                    generationError = "Failed to save: \(error.localizedDescription)"
-                }
-                #endif
+                generatedPDFData = pdfData
             }
         }
+    }
+}
+
+struct GDPRPDFExportFile: FileDocument {
+    static var readableContentTypes: [UTType] { [.pdf] }
+
+    let data: Data
+
+    init?(data: Data?) {
+        guard let data, !data.isEmpty else { return nil }
+        self.data = data
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        data = configuration.file.regularFileContents ?? Data()
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: data)
     }
 }

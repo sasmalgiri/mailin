@@ -379,6 +379,26 @@ final class EmailSearchIndex {
 
         let queryTerms = Set(terms.map { $0.lowercased() })
 
+        // Signal 5 preparation: Knowledge-graph centrality. Senders who are
+        // hub nodes in the KG (frequent correspondents) get a small ranking
+        // boost. Computed once; empty if the KG isn't built yet.
+        let kgCentralityBySender: [String: Double] = {
+            let graph = KnowledgeGraph.load()
+            guard graph.nodeCount > 0 else { return [:] }
+            let topPeople = graph.topNodes(by: .person, limit: 50)
+            guard !topPeople.isEmpty else { return [:] }
+            let maxWeight = topPeople.map(\.weight).max() ?? 1.0
+            var map: [String: Double] = [:]
+            for node in topPeople {
+                let address = (node.properties["email"] ?? node.label).lowercased()
+                guard !address.isEmpty else { continue }
+                // Normalize to 0...1, then scale by 1.5 so high-centrality
+                // senders contribute up to 1.5 points (less than subject match).
+                map[address] = (node.weight / max(maxWeight, 1)) * 1.5
+            }
+            return map
+        }()
+
         return results.map { result in
             var boost: Double = 0
 
@@ -415,6 +435,14 @@ final class EmailSearchIndex {
                 }
             }
 
+            // Signal 5: KG centrality of the sender (graph-grounded importance)
+            if !kgCentralityBySender.isEmpty {
+                let senderAddress = Self.extractAddress(from: from)
+                if !senderAddress.isEmpty, let centrality = kgCentralityBySender[senderAddress] {
+                    boost += centrality
+                }
+            }
+
             return EmailNLPEngine.SearchResult(
                 email: result.email,
                 score: result.score + boost,
@@ -422,6 +450,17 @@ final class EmailSearchIndex {
             )
         }
         .sorted { $0.score > $1.score }
+    }
+
+    /// Extracts the bare email address from a "Name <user@domain>"-style From
+    /// header so we can match it against KG node ids.
+    private static func extractAddress(from header: String) -> String {
+        if let lt = header.lastIndex(of: "<"),
+           let gt = header[lt...].firstIndex(of: ">"),
+           lt < gt {
+            return String(header[header.index(after: lt)..<gt]).lowercased()
+        }
+        return header.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
     // MARK: - Boolean Search (AND / OR / NOT)
@@ -611,22 +650,39 @@ final class EmailSearchIndex {
     struct ChunkResult {
         let email: MBOXParser.RawEmail
         let chunk: String
+        let chunkType: ChunkType
         let score: Double
     }
 
-    func chunkSearch(terms: [String], in emails: [MBOXParser.RawEmail], maxChunksPerEmail: Int = 2, limit: Int = 10) -> [ChunkResult] {
+    func chunkSearch(
+        terms: [String],
+        in emails: [MBOXParser.RawEmail],
+        maxChunksPerEmail: Int = 2,
+        limit: Int = 10,
+        preferredTypes: [ChunkType]? = nil
+    ) -> [ChunkResult] {
         guard !terms.isEmpty else { return [] }
         let lowerTerms = terms.map { $0.lowercased() }
         var results: [ChunkResult] = []
 
         for email in emails {
-            let body = bodyText(for: email)
-            guard !body.isEmpty else { continue }
-            let chunks = splitIntoChunks(body, maxTokens: 200)
+            let rawEmail: RawEmail
+            if !email.plainBody.isEmpty || !email.htmlBody.isEmpty {
+                rawEmail = RawEmail(
+                    headers: email.headers,
+                    plainBody: email.plainBody.isEmpty ? nil : email.plainBody,
+                    htmlBody: email.htmlBody.isEmpty ? nil : email.htmlBody,
+                    attachments: nil
+                )
+            } else {
+                continue
+            }
 
-            var scored: [(chunk: String, score: Double)] = []
-            for chunk in chunks {
-                let lower = chunk.lowercased()
+            let typedChunks = EmailChunker.chunkEmail(rawEmail, emailIndex: 0, maxTokensPerChunk: 200)
+
+            var scored: [(chunk: String, chunkType: ChunkType, score: Double)] = []
+            for tc in typedChunks {
+                let lower = tc.bodyChunk.lowercased()
                 var score = 0.0
                 var hitCount = 0
 
@@ -648,14 +704,18 @@ final class EmailSearchIndex {
                 if lower.contains("?") { score *= 1.15 }
                 if lower.range(of: #"\d"#, options: .regularExpression) != nil { score *= 1.1 }
 
-                let wordCount = chunk.split(separator: " ").count
+                let wordCount = tc.bodyChunk.split(separator: " ").count
                 if wordCount >= 15 && wordCount <= 200 { score *= 1.1 }
 
-                if score > 0 { scored.append((chunk, score)) }
+                if let preferred = preferredTypes, preferred.contains(tc.chunkType) {
+                    score *= 2.0
+                }
+
+                if score > 0 { scored.append((tc.bodyChunk, tc.chunkType, score)) }
             }
 
-            for (chunk, score) in scored.sorted(by: { $0.score > $1.score }).prefix(maxChunksPerEmail) {
-                results.append(ChunkResult(email: email, chunk: chunk, score: score))
+            for (chunk, type, score) in scored.sorted(by: { $0.score > $1.score }).prefix(maxChunksPerEmail) {
+                results.append(ChunkResult(email: email, chunk: chunk, chunkType: type, score: score))
             }
         }
 
@@ -777,6 +837,29 @@ final class EmailSearchIndex {
             }
             return results.sorted { $0.score > $1.score }
         }
+    }
+
+    // v4.1.1: Public accessor for attachment text cache
+    func getAttachmentText(for emailID: UUID) -> String? {
+        queue.sync { attachmentTextCache[emailID] }
+    }
+
+    func getAttachmentSummary(for email: MBOXParser.RawEmail) -> String {
+        var summary = "ATTACHMENTS (\(email.attachments.count)):\n"
+        for att in email.attachments {
+            let sizeStr: String
+            if att.size < 1024 { sizeStr = "\(att.size) B" }
+            else if att.size < 1024 * 1024 { sizeStr = "\(att.size / 1024) KB" }
+            else { sizeStr = String(format: "%.1f MB", Double(att.size) / (1024.0 * 1024.0)) }
+            summary += "  \(att.filename) (\(att.mimeType), \(sizeStr))\n"
+        }
+        if let text = getAttachmentText(for: email.id), !text.isEmpty {
+            let typeTag: String
+            if text.hasPrefix("ocr:") { typeTag = "ocr" }
+            else { typeTag = "text" }
+            summary += "EXTRACTED [\(typeTag)]:\n\(String(text.prefix(500)))\n"
+        }
+        return summary
     }
 
     // MARK: - Clear

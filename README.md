@@ -74,7 +74,7 @@ Import, search, analyze, and export email archives from Gmail, Outlook, Thunderb
 - Redacted exports with PII removed
 
 ### Forensic & Legal Tools
-- Tamper-proof HMAC audit logging and chain of custody
+- Tamper-evident HMAC-chained audit log and chain-of-custody artifacts
 - Evidence tagging and examiner annotations
 - SPF, DKIM, DMARC authentication analysis
 - S/MIME signature verification and encryption detection
@@ -181,7 +181,7 @@ mailin does not collect, transmit, or store any personal data on external server
 
 ## License
 
-Copyright 2025-2026 mailin. All rights reserved.
+Copyright 2025-2026 EcoSanskriti Innovation Pvt Ltd. All rights reserved.
 
 ---
 

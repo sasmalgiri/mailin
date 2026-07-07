@@ -306,7 +306,8 @@ struct CommunicationPatternAnalyzer {
 struct CommunicationPatternsView: View {
     let emails: [MBOXParser.RawEmail]
     var senderEmail: String = ""
-    @Environment(\.dismiss) private var dismiss
+    var isPresented: Binding<Bool>?
+    @Environment(\.dismiss) private var envDismiss
 
     @State private var contacts: [CommunicationPatternAnalyzer.ContactStats] = []
     @State private var hourlyPatterns: [CommunicationPatternAnalyzer.HourlyPattern] = []
@@ -315,6 +316,7 @@ struct CommunicationPatternsView: View {
     @State private var isAnalyzing = false
     @State private var aiInsights: String?
     @State private var isLoadingAI = false
+    @State private var showTutorial = false
 
     private let weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 
@@ -355,9 +357,10 @@ struct CommunicationPatternsView: View {
             }
         }
         #if os(macOS)
-        .frame(minWidth: 750, minHeight: 600)
+        .frame(minWidth: 480, minHeight: 380)
         #endif
         .background(AppColors.backgroundTertiary)
+        .featureTutorial(.communicationPatterns, key: "communication_patterns_tutorial_seen", isPresented: $showTutorial)
         .task { await analyzePatterns() }
     }
 
@@ -378,8 +381,11 @@ struct CommunicationPatternsView: View {
                 }
             }
             Spacer()
-            Button("Done") { dismiss() }
-                .keyboardShortcut(.cancelAction)
+            TutorialHelpButton(showTutorial: $showTutorial)
+            if isPresented != nil {
+                Button("Done") { closeSheet() }
+                    .keyboardShortcut(.cancelAction)
+            }
         }
         .padding(.horizontal, Spacing.medium)
         .padding(.vertical, Spacing.small)
@@ -746,6 +752,10 @@ struct CommunicationPatternsView: View {
     }
 
     // MARK: - Computation
+
+    private func closeSheet() {
+        if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
+    }
 
     private func analyzePatterns() async {
         guard !emails.isEmpty else { return }

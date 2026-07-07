@@ -5,12 +5,12 @@
   ],
   "products" : [
     {
-      "displayPrice" : "49.99",
+      "displayPrice" : "99.99",
       "familyShareable" : true,
       "internalID" : "Personal_Lifetime_001",
       "localizations" : [
         {
-          "description" : "Unlimited emails, AI assistant, analytics, and exports. One-time purchase — yours forever.",
+          "description" : "Personal plan, one-time. No renewals.",
           "displayName" : "mailin Personal — Lifetime",
           "locale" : "en_US"
         }
@@ -20,12 +20,12 @@
       "type" : "NonConsumable"
     },
     {
-      "displayPrice" : "149.99",
+      "displayPrice" : "249.99",
       "familyShareable" : true,
       "internalID" : "Professional_Lifetime_001",
       "localizations" : [
         {
-          "description" : "Everything in Personal plus forensic mode, audit trail, chain of custody, Bates numbering, batch processing, and priority support. One-time purchase — yours forever.",
+          "description" : "Forensic and AI tools, one-time. No renewals.",
           "displayName" : "mailin Professional — Lifetime",
           "locale" : "en_US"
         }
@@ -95,7 +95,7 @@
       "id" : "mailin_personal_group",
       "localizations" : [
         {
-          "description" : "Unlimited emails, AI assistant, analytics, and exports.",
+          "description" : "Personal tier subscription plans.",
           "displayName" : "mailin Personal",
           "locale" : "en_US"
         }
@@ -116,7 +116,7 @@
           "introductoryOffer" : null,
           "localizations" : [
             {
-              "description" : "Unlimited emails, AI assistant, analytics, and exports.",
+              "description" : "Personal plan, monthly. Exports plus AI.",
               "displayName" : "mailin Personal — Monthly",
               "locale" : "en_US"
             }
@@ -134,14 +134,14 @@
           "codeOffers" : [
 
           ],
-          "displayPrice" : "29.99",
+          "displayPrice" : "44.99",
           "familyShareable" : true,
           "groupNumber" : 1,
           "internalID" : "Personal_Yearly_001",
           "introductoryOffer" : null,
           "localizations" : [
             {
-              "description" : "Unlimited emails, AI assistant, analytics, and exports.",
+              "description" : "Personal plan, yearly. Save 25% vs monthly.",
               "displayName" : "mailin Personal — Yearly",
               "locale" : "en_US"
             }
@@ -158,7 +158,7 @@
       "id" : "mailin_professional_group",
       "localizations" : [
         {
-          "description" : "Everything in Personal plus forensic mode, audit trail, chain of custody, Bates numbering, batch processing, and priority support.",
+          "description" : "Professional tier subscription plans.",
           "displayName" : "mailin Professional",
           "locale" : "en_US"
         }
@@ -179,7 +179,7 @@
           "introductoryOffer" : null,
           "localizations" : [
             {
-              "description" : "Everything in Personal plus forensic mode, audit trail, chain of custody, Bates numbering, batch processing, and priority support.",
+              "description" : "Forensic and AI tools, billed monthly.",
               "displayName" : "mailin Professional — Monthly",
               "locale" : "en_US"
             }
@@ -204,7 +204,7 @@
           "introductoryOffer" : null,
           "localizations" : [
             {
-              "description" : "Everything in Personal plus forensic mode, audit trail, chain of custody, Bates numbering, batch processing, and priority support.",
+              "description" : "Forensic and AI tools, yearly. Save 33%.",
               "displayName" : "mailin Professional — Yearly",
               "locale" : "en_US"
             }

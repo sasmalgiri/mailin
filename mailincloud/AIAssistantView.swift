@@ -28,8 +28,12 @@ struct AIAssistantView: View {
     @State private var streamingAnswer = ""
     @AppStorage("freeAIQueryCount") private var freeQueryCount: Int = 0
     @State private var showUpgradePaywall = false
+    @State private var showActionConfirmation = false
+    @State private var pendingActionDescription = ""
+    @State private var actionConfirmationContinuation: CheckedContinuation<Bool, Never>?
     @State private var priorRetrievedEmailIDs: Set<UUID> = []
     @State private var lastRetrievedEmailIDs: [UUID] = []
+    @State private var showTutorial = false
     @EnvironmentObject private var storeManager: StoreManager
 
     static let freeQueryLimit = 5
@@ -46,7 +50,9 @@ struct AIAssistantView: View {
         case appleAIMoE = "Apple AI MoE"
         case appleAI = "Apple AI"
         case hybrid = "Hybrid"
+        #if !OFFLINE_MODE
         case cloudAI = "Cloud AI"
+        #endif
         case nlp = "NLP"
     }
 
@@ -75,7 +81,11 @@ struct AIAssistantView: View {
     }
 
     private var cloudAIAvailable: Bool {
+        #if !OFFLINE_MODE
         CloudAIManager.shared.isReady && !forensicManager.isEnabled
+        #else
+        false
+        #endif
     }
 
     private enum LLMStatus {
@@ -138,7 +148,7 @@ struct AIAssistantView: View {
             inputArea
         }
         #if os(macOS)
-        .frame(minWidth: 520, idealWidth: 700, minHeight: 500, idealHeight: 650)
+        .frame(minWidth: 460, idealWidth: 700, minHeight: 380, idealHeight: 650)
         #endif
         .background(AppColors.backgroundTertiary)
         .onAppear {
@@ -157,11 +167,24 @@ struct AIAssistantView: View {
             PaywallView()
                 .environmentObject(storeManager)
         }
+        .alert("Confirm Action", isPresented: $showActionConfirmation) {
+            Button("Execute", role: .destructive) {
+                actionConfirmationContinuation?.resume(returning: true)
+                actionConfirmationContinuation = nil
+            }
+            Button("Skip", role: .cancel) {
+                actionConfirmationContinuation?.resume(returning: false)
+                actionConfirmationContinuation = nil
+            }
+        } message: {
+            Text("The AI wants to: \(pendingActionDescription)\n\nThis action will modify your data. Proceed?")
+        }
         #if os(iOS)
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(items: shareItems)
         }
         #endif
+        .featureTutorial(.aiAssistant, key: "ai_assistant_tutorial_seen", isPresented: $showTutorial)
     }
 
     // MARK: - LLM Status Banners
@@ -263,6 +286,7 @@ struct AIAssistantView: View {
                     }
                     .buttonStyle(.borderless)
                     .disabled(conversationHistory.isEmpty)
+                    TutorialHelpButton(showTutorial: $showTutorial)
                     Button("Done") { dismiss() }
                         .fontWeight(.semibold)
                 }
@@ -283,11 +307,13 @@ struct AIAssistantView: View {
                                 Label("Hybrid", systemImage: selectedEngine == .hybrid ? "checkmark" : "sparkles")
                             }
                         }
+                        #if !OFFLINE_MODE
                         if cloudAIAvailable {
                             Button { selectedEngine = .cloudAI } label: {
                                 Label("Cloud AI", systemImage: selectedEngine == .cloudAI ? "checkmark" : "cloud")
                             }
                         }
+                        #endif
                         Button { selectedEngine = .nlp } label: {
                             Label("NLP", systemImage: selectedEngine == .nlp ? "checkmark" : "text.magnifyingglass")
                         }
@@ -429,6 +455,8 @@ struct AIAssistantView: View {
                 .disabled(conversationHistory.isEmpty)
                 .help("Clear conversation")
 
+                TutorialHelpButton(showTutorial: $showTutorial)
+
                 Button("Done") { dismiss() }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
@@ -446,9 +474,11 @@ struct AIAssistantView: View {
                         Text("Apple AI").tag(AIEngine.appleAI)
                         Text("Hybrid").tag(AIEngine.hybrid)
                     }
+                    #if !OFFLINE_MODE
                     if cloudAIAvailable {
                         Text("Cloud AI").tag(AIEngine.cloudAI)
                     }
+                    #endif
                     Text("NLP").tag(AIEngine.nlp)
                 }
                 .pickerStyle(.segmented)
@@ -498,9 +528,11 @@ struct AIAssistantView: View {
         case .appleAIMoE: return "Apple AI with Mixture of Experts — maximum intelligence, on-device"
         case .appleAI: return "Direct Apple AI — fast single-session, on-device"
         case .hybrid: return "Enhanced NLP + Apple AI synthesis — best of both, on-device"
+        #if !OFFLINE_MODE
         case .cloudAI:
             let mgr = CloudAIManager.shared
             return "\(mgr.selectedProvider.displayName) (\(mgr.selectedModel)) — cloud-powered analysis"
+        #endif
         case .nlp: return "Pure NLP — fast semantic search + deterministic analysis, no AI needed"
         }
     }
@@ -726,6 +758,52 @@ struct AIAssistantView: View {
                             .buttonStyle(.plain)
                             .help("Copy response")
                             .accessibilityLabel("Copy AI response")
+
+                            // v3.2.1: Feedback buttons
+                            Button {
+                                if #available(macOS 26, iOS 26, *) {
+                                    Task {
+                                        let intent = await FoundationModelEngine.classifyIntent(query)
+                                        FoundationModelEngine.recordUserFeedback(query: query, intent: intent, isPositive: true)
+                                    }
+                                }
+                                showActionToast = "Thanks for the feedback!"
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                    if showActionToast == "Thanks for the feedback!" { showActionToast = nil }
+                                }
+                            } label: {
+                                Image(systemName: "hand.thumbsup")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.green)
+                                    .padding(3)
+                                    .background(Color.green.opacity(0.08))
+                                    .cornerRadius(4)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Good answer")
+
+                            Button {
+                                if #available(macOS 26, iOS 26, *) {
+                                    Task {
+                                        let intent = await FoundationModelEngine.classifyIntent(query)
+                                        FoundationModelEngine.recordUserFeedback(query: query, intent: intent, isPositive: false)
+                                    }
+                                }
+                                showActionToast = "We'll improve!"
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                    if showActionToast == "We'll improve!" { showActionToast = nil }
+                                }
+                            } label: {
+                                Image(systemName: "hand.thumbsdown")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.orange)
+                                    .padding(3)
+                                    .background(Color.orange.opacity(0.08))
+                                    .cornerRadius(4)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Needs improvement")
+
                         }
                     }
                     .accessibilityHidden(true)
@@ -1224,7 +1302,6 @@ struct AIAssistantView: View {
                     .onSubmit { askAI() }
                     .accessibilityLabel("Question input")
                     .accessibilityHint("Type a question about your emails, then press Return to send")
-
                 Button(action: askAI) {
                     Group {
                         if isProcessing {
@@ -1300,9 +1377,11 @@ struct AIAssistantView: View {
             return "Analyzing \(count) email\(suffix) with Apple Intelligence (on-device)"
         case .hybrid:
             return "Analyzing \(count) email\(suffix) with Hybrid NLP + AI (on-device)"
+        #if !OFFLINE_MODE
         case .cloudAI:
             let mgr = CloudAIManager.shared
             return "Analyzing \(count) email\(suffix) with \(mgr.selectedProvider.displayName) (\(mgr.selectedModel))"
+        #endif
         case .nlp:
             return "Analyzing \(count) email\(suffix) with pure NLP engine (on-device)"
         }
@@ -1314,7 +1393,9 @@ struct AIAssistantView: View {
         case .appleAIMoE: return "Apple AI MoE — multi-session experts, fan-in synthesis, self-correction"
         case .appleAI: return "Apple AI — direct single-session, fast and private"
         case .hybrid: return "Hybrid — NLP foundation + RAG + MoE experts + cloud experts + dynamic fan-in synthesis"
+        #if !OFFLINE_MODE
         case .cloudAI: return "Cloud AI — \(CloudAIManager.shared.selectedProvider.displayName) powered analysis with NLP + RAG"
+        #endif
         case .nlp: return "NLP — pure semantic search + deterministic analysis, no AI"
         }
     }
@@ -1344,7 +1425,10 @@ struct AIAssistantView: View {
 
         // Complex but no Apple AI → Cloud AI if available, else NLP
         if isComplex && !hasAppleAI {
-            return hasCloudAI ? .cloudAI : .nlp
+            #if !OFFLINE_MODE
+            if hasCloudAI { return .cloudAI }
+            #endif
+            return .nlp
         }
 
         // Medium complexity or moderate email count → Apple AI MoE if available
@@ -1357,10 +1441,12 @@ struct AIAssistantView: View {
             return .appleAI
         }
 
+        #if !OFFLINE_MODE
         // Simple with cloud → Cloud AI
         if hasCloudAI {
             return .cloudAI
         }
+        #endif
 
         // Apple AI available → Direct
         if hasAppleAI {
@@ -1438,6 +1524,216 @@ struct AIAssistantView: View {
         return .notConversational
     }
 
+    // MARK: - Smart Query Handlers
+    // Deterministic handlers for common queries — faster and more accurate than LLM for these tasks.
+    // Apple's on-device model has only 4096 tokens; rule-based handlers avoid wasting context.
+
+    typealias SmartQueryResult = (query: String, answer: String, timestamp: Date, relatedEmailIDs: [UUID])
+    typealias SmartHandler = @Sendable ([MBOXParser.RawEmail]) async -> SmartQueryResult
+
+    nonisolated private static func handleSmartQuery(query: String, emails: [MBOXParser.RawEmail]) -> SmartHandler? {
+        let lower = query.lowercased()
+
+        // Duplicate detection
+        let dupKeywords = ["duplicate", "duplicates", "duplicated", "dedup", "same email", "same emails", "repeated email", "identical email", "copies of"]
+        if dupKeywords.contains(where: { lower.contains($0) }) {
+            return { emails in await smartDuplicate(query: query, emails: emails) }
+        }
+
+        // Statistics / counts
+        let statKeywords = ["how many email", "total email", "email count", "count of email", "number of email", "how many mail", "how many message"]
+        if statKeywords.contains(where: { lower.contains($0) }) {
+            return { emails in smartStatistics(query: query, emails: emails) }
+        }
+
+        // Top senders
+        let senderKeywords = ["who emails me", "who sends me", "top sender", "most email", "most frequent sender", "who contacts me", "who messages me"]
+        if senderKeywords.contains(where: { lower.contains($0) }) {
+            return { emails in smartTopSenders(query: query, emails: emails) }
+        }
+
+        // Phishing / security scan
+        let securityKeywords = ["phishing", "scan for scam", "check for scam", "suspicious email", "is this phishing", "security scan", "scan for phishing", "check phishing"]
+        if securityKeywords.contains(where: { lower.contains($0) }) {
+            return { emails in smartPhishingScan(query: query, emails: emails) }
+        }
+
+        // Sentiment overview
+        let sentimentKeywords = ["sentiment overview", "overall sentiment", "overall tone", "what's the tone", "what is the tone", "mood of my email", "how positive", "how negative", "sentiment analysis", "sentiment of all", "analyze sentiment"]
+        if sentimentKeywords.contains(where: { lower.contains($0) }) {
+            return { emails in smartSentimentOverview(query: query, emails: emails) }
+        }
+
+        // Attachment stats
+        let attachKeywords = ["how many attachment", "attachment count", "emails with attachment", "which emails have attachment", "list attachment", "show attachment"]
+        if attachKeywords.contains(where: { lower.contains($0) }) {
+            return { emails in smartAttachments(query: query, emails: emails) }
+        }
+
+        // Date range / timeline
+        let dateKeywords = ["date range", "oldest email", "newest email", "first email", "last email", "when was the first", "when was the last", "email timeline"]
+        if dateKeywords.contains(where: { lower.contains($0) }) {
+            return { emails in smartDateRange(query: query, emails: emails) }
+        }
+
+        return nil
+    }
+
+    nonisolated private static func smartDuplicate(query: String, emails: [MBOXParser.RawEmail]) async -> SmartQueryResult {
+        let exactGroups = await Task.detached(priority: .utility) {
+            DuplicateManagerView.findExactDuplicates(in: emails)
+        }.value
+        let totalDuplicates = exactGroups.reduce(0) { $0 + $1.count - 1 }
+        var answer: String
+        if exactGroups.isEmpty {
+            answer = "**No duplicates found.** All \(emails.count) emails are unique.\n\n"
+            answer += "Checked by **Message-ID** and **From+Subject+Date+body** fingerprint."
+        } else {
+            answer = "**Found \(totalDuplicates) duplicate\(totalDuplicates == 1 ? "" : "s")** in \(exactGroups.count) group\(exactGroups.count == 1 ? "" : "s"):\n\n"
+            for (i, group) in exactGroups.prefix(10).enumerated() {
+                let subject = group.first?.headers["Subject"] ?? "(No Subject)"
+                let from = group.first?.headers["From"] ?? "Unknown"
+                answer += "\(i + 1). **\(subject)** from \(from) — \(group.count) copies\n"
+            }
+            if exactGroups.count > 10 { answer += "\n...and \(exactGroups.count - 10) more groups.\n" }
+            answer += "\nUse **Duplicate Manager** (toolbar) to review and remove them."
+        }
+        let relatedIDs = Array(exactGroups.prefix(3).flatMap { $0.map(\.id) }.prefix(5))
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: relatedIDs)
+    }
+
+    nonisolated private static func smartStatistics(query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        let sent = emails.filter { $0.messageType == "sent" }.count
+        let received = emails.filter { $0.messageType == "received" }.count
+        let withAttachments = emails.filter { !$0.attachments.isEmpty }.count
+        let uniqueSenders = Set(emails.compactMap { $0.headers["From"] }).count
+        let uniqueDomains = Set(emails.flatMap(\.domains)).count
+        let answer = """
+            **Email Archive Statistics:**
+
+            - **Total emails:** \(emails.count)
+            - **Sent:** \(sent) | **Received:** \(received)
+            - **With attachments:** \(withAttachments)
+            - **Unique senders:** \(uniqueSenders)
+            - **Unique domains:** \(uniqueDomains)
+            """
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: [])
+    }
+
+    nonisolated private static func smartTopSenders(query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        var senderCounts: [String: Int] = [:]
+        for email in emails {
+            let from = email.headers["From"] ?? "Unknown"
+            senderCounts[from, default: 0] += 1
+        }
+        let sorted = senderCounts.sorted { $0.value > $1.value }
+        var answer = "**Top Senders** (out of \(Set(senderCounts.keys).count) unique):\n\n"
+        for (i, entry) in sorted.prefix(15).enumerated() {
+            let pct = emails.isEmpty ? 0 : Int(Double(entry.value) / Double(emails.count) * 100)
+            answer += "\(i + 1). **\(entry.key)** — \(entry.value) email\(entry.value == 1 ? "" : "s") (\(pct)%)\n"
+        }
+        if sorted.count > 15 { answer += "\n...and \(sorted.count - 15) more senders." }
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: [])
+    }
+
+    nonisolated private static func smartPhishingScan(query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        let phishing = EmailNLPEngine.detectPhishing(in: emails)
+        let high = phishing.filter { $0.riskLevel == .high }
+        let medium = phishing.filter { $0.riskLevel == .medium }
+        var answer: String
+        if high.isEmpty && medium.isEmpty {
+            answer = "**Security scan complete — no phishing detected.**\n\n"
+            answer += "Scanned \(emails.count) emails. No high or medium risk emails found."
+        } else {
+            answer = "**Security Scan Results:**\n\n"
+            answer += "- 🔴 **High risk:** \(high.count) email\(high.count == 1 ? "" : "s")\n"
+            answer += "- 🟡 **Medium risk:** \(medium.count) email\(medium.count == 1 ? "" : "s")\n\n"
+            if !high.isEmpty {
+                answer += "**High-risk emails:**\n"
+                for (i, flag) in high.prefix(10).enumerated() {
+                    let subject = flag.email.headers["Subject"] ?? "(No Subject)"
+                    let from = flag.email.headers["From"] ?? "Unknown"
+                    let reasons = flag.reasons.prefix(2).joined(separator: ", ")
+                    answer += "\(i + 1). **\(subject)** from \(from) — \(reasons)\n"
+                }
+            }
+        }
+        let relatedIDs = Array(high.prefix(5).map(\.email.id))
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: relatedIDs)
+    }
+
+    nonisolated private static func smartSentimentOverview(query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        let results = EmailNLPEngine.analyzeSentiment(of: emails)
+        var positive = 0, negative = 0, neutral = 0
+        for r in results {
+            if r.score > 0.4 { positive += 1 }
+            else if r.score < -0.4 { negative += 1 }
+            else { neutral += 1 }
+        }
+        let avgScore = results.isEmpty ? 0.0 : results.map(\.score).reduce(0, +) / Double(results.count)
+        let overallTone = avgScore > 0.4 ? "Positive" : avgScore < -0.4 ? "Negative" : "Neutral"
+        let topNeg = results.filter { $0.score < -0.4 }.sorted { $0.score < $1.score }.prefix(5)
+        var answer = "**Sentiment Analysis of \(emails.count) emails:**\n\n"
+        answer += "- Overall tone: **\(overallTone)** (avg score: \(String(format: "%.2f", avgScore)))\n"
+        answer += "- ✅ Positive: **\(positive)** (\(emails.isEmpty ? 0 : positive * 100 / emails.count)%)\n"
+        answer += "- ⚪ Neutral: **\(neutral)** (\(emails.isEmpty ? 0 : neutral * 100 / emails.count)%)\n"
+        answer += "- ❌ Negative: **\(negative)** (\(emails.isEmpty ? 0 : negative * 100 / emails.count)%)\n"
+        if !topNeg.isEmpty {
+            answer += "\n**Most negative emails:**\n"
+            for (i, r) in topNeg.enumerated() {
+                let subject = r.email.headers["Subject"] ?? "(No Subject)"
+                answer += "\(i + 1). **\(subject)** (score: \(String(format: "%.2f", r.score)))\n"
+            }
+        }
+        let relatedIDs = Array(topNeg.map(\.email.id))
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: relatedIDs)
+    }
+
+    nonisolated private static func smartAttachments(query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        let withAttach = emails.filter { !$0.attachments.isEmpty }
+        var typeCounts: [String: Int] = [:]
+        for email in withAttach {
+            for att in email.attachments {
+                let ext = (att.filename as NSString).pathExtension.lowercased()
+                typeCounts[ext.isEmpty ? "unknown" : ext, default: 0] += 1
+            }
+        }
+        let totalAttachments = emails.flatMap(\.attachments).count
+        var answer = "**Attachment Summary:**\n\n"
+        answer += "- **\(withAttach.count)** of \(emails.count) emails have attachments (\(totalAttachments) total files)\n\n"
+        if !typeCounts.isEmpty {
+            answer += "**By type:**\n"
+            for (ext, count) in typeCounts.sorted(by: { $0.value > $1.value }).prefix(10) {
+                answer += "- .\(ext): \(count) file\(count == 1 ? "" : "s")\n"
+            }
+        }
+        let relatedIDs = Array(withAttach.prefix(5).map(\.id))
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: relatedIDs)
+    }
+
+    nonisolated private static func smartDateRange(query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        let dates = emails.compactMap { MBOXParser.parseDate($0.headers["Date"]) }.sorted()
+        let fmt = DateFormatter()
+        fmt.dateStyle = .long
+        fmt.timeStyle = .short
+        var answer: String
+        if let first = dates.first, let last = dates.last {
+            let days = Calendar.current.dateComponents([.day], from: first, to: last).day ?? 0
+            answer = "**Email Timeline:**\n\n"
+            answer += "- **Oldest:** \(fmt.string(from: first))\n"
+            answer += "- **Newest:** \(fmt.string(from: last))\n"
+            answer += "- **Span:** \(days) days\n"
+            answer += "- **Total:** \(emails.count) emails\n"
+            if days > 0 {
+                let perDay = Double(emails.count) / Double(days)
+                answer += "- **Average:** \(String(format: "%.1f", perDay)) emails/day"
+            }
+        } else {
+            answer = "No parseable dates found in the email headers."
+        }
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: [])
+    }
+
     nonisolated private static func generateAppleAIConversationalResponse(_ query: String, emailCount: Int, enabled: Bool) async -> String? {
         guard enabled else { return nil }
         #if canImport(FoundationModels)
@@ -1479,6 +1775,22 @@ struct AIAssistantView: View {
             return
         case .notConversational:
             break
+        }
+
+        if let smartResult = Self.handleSmartQuery(query: query, emails: emails) {
+            prompt = ""
+            isProcessing = true
+            let emailsCopy = emails
+            currentTask = Task {
+                defer { isProcessing = false }
+                let result = await smartResult(emailsCopy)
+                await MainActor.run {
+                    withAnimation(AnimationTiming.normal) {
+                        conversationHistory.append(result)
+                    }
+                }
+            }
+            return
         }
 
         if !storeManager.isPremium && freeQueryCount >= Self.freeQueryLimit {
@@ -1666,10 +1978,10 @@ struct AIAssistantView: View {
                             streamingAnswer = ""
                             guard !Task.isCancelled else { return }
 
-                            let (confident, gap) = await FoundationModelEngine.validateAnswer(
+                            let validationResult = await FoundationModelEngine.validateAnswer(
                                 answer: answer, query: currentQuery, intent: hybridResult.intent
                             )
-                            if !confident, let gap, !gap.isEmpty {
+                            if !validationResult.confident, let gap = validationResult.gap, !gap.isEmpty {
                                 let gapTerms = EmailNLPEngine.extractSearchTerms(from: gap)
                                 if !gapTerms.isEmpty {
                                     let supplementEmails = Self.retrieveRelevantEmails(
@@ -1709,6 +2021,7 @@ struct AIAssistantView: View {
                 }
             }
 
+        #if !OFFLINE_MODE
         // ━━━ Engine 4: Cloud AI (Enhanced with NLP + RAG) ━━━
         case .cloudAI:
             let priorCtxCloud = conversationHistory.suffix(3).map { "Q: \($0.query)\nA: \($0.answer)" }.joined(separator: "\n\n")
@@ -1772,6 +2085,7 @@ struct AIAssistantView: View {
                     if !storeManager.isPremium { freeQueryCount += 1 }
                 }
             }
+        #endif
 
         // ━━━ Engine: Auto (resolved above, should not reach here) ━━━
         case .auto:
@@ -1859,6 +2173,12 @@ struct AIAssistantView: View {
                         case .general:
                             return try await FoundationModelEngine.respondSmart(to: query, emails: self.emails) { partial in
                                 self.streamingAnswer = partial
+                            } onConfirmAction: { description in
+                                await withCheckedContinuation { continuation in
+                                    self.pendingActionDescription = description
+                                    self.actionConfirmationContinuation = continuation
+                                    self.showActionConfirmation = true
+                                }
                             }
                         }
                     }

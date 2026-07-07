@@ -45,7 +45,18 @@ class LegalComplianceManager: ObservableObject {
         }
         defaults.synchronize()
 
-        KeychainHelper.delete(key: "apiKey")
+        let keychainKeys = [
+            "apiKey",
+            "forensicHMACKey",
+            "gmail_access_token", "gmail_refresh_token", "gmail_token_expiry",
+            "outlookAccessToken", "outlookRefreshToken", "outlookTokenExpiry",
+            "settings_imapPassword", "imap_password",
+            "settings_smtpPassword",
+            "cloudAI_openAI_apiKey", "cloudAI_anthropic_apiKey"
+        ]
+        for key in keychainKeys {
+            KeychainHelper.delete(key: key)
+        }
 
         let kvStore = NSUbiquitousKeyValueStore.default
         for key in ["sync_caseNumber", "sync_examinerName", "sync_organization"] {
@@ -155,8 +166,11 @@ class LegalComplianceManager: ObservableObject {
 struct TermsAcceptanceView: View {
     @ObservedObject private var compliance = LegalComplianceManager.shared
     @Environment(\.dismiss) private var dismiss
-    @State private var scrolledToBottom = false
+    @State private var termsRead = false
+    @State private var privacyRead = false
     @State private var activeTab = 0
+
+    private var canAccept: Bool { termsRead && privacyRead }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -197,9 +211,6 @@ struct TermsAcceptanceView: View {
                     .font(.system(.caption, design: .monospaced))
                     .padding(Spacing.medium)
                     .frame(maxWidth: .infinity, alignment: .leading)
-
-                Color.clear.frame(height: 1)
-                    .onAppear { scrolledToBottom = true }
             }
             .background(AppColors.backgroundSecondary)
 
@@ -217,6 +228,12 @@ struct TermsAcceptanceView: View {
                     }
                 }
 
+                checkboxRow("I have read the Terms of Use", isOn: $termsRead)
+                    .padding(.horizontal, Spacing.medium)
+
+                checkboxRow("I have read the Privacy Policy", isOn: $privacyRead)
+                    .padding(.horizontal, Spacing.medium)
+
                 Button {
                     compliance.acceptTerms()
                     dismiss()
@@ -229,22 +246,34 @@ struct TermsAcceptanceView: View {
                         .foregroundColor(.white)
                         .background(
                             RoundedRectangle(cornerRadius: CornerRadius.medium)
-                                .fill(scrolledToBottom ? Color.blue : Color.gray)
+                                .fill(canAccept ? Color.blue : Color.gray)
                         )
                 }
                 .buttonStyle(.plain)
-                .disabled(!scrolledToBottom)
+                .disabled(!canAccept)
                 .padding(.horizontal, Spacing.medium)
-
-                Text("You must scroll through the terms before accepting.")
-                    .font(Typography.caption2)
-                    .foregroundColor(.secondary)
-                    .opacity(scrolledToBottom ? 0 : 1)
             }
             .padding(.vertical, Spacing.medium)
         }
         #if os(macOS)
         .frame(width: 500, height: 520)
         #endif
+    }
+
+    private func checkboxRow(_ title: String, isOn: Binding<Bool>) -> some View {
+        Button {
+            isOn.wrappedValue.toggle()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: isOn.wrappedValue ? "checkmark.square.fill" : "square")
+                    .foregroundColor(isOn.wrappedValue ? .blue : .secondary)
+                Text(title)
+                    .font(Typography.caption1)
+                    .foregroundColor(.primary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }

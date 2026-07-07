@@ -11,11 +11,13 @@ import NaturalLanguage
 
 struct ExecutiveDashboardView: View {
     let emails: [MBOXParser.RawEmail]
-    @Environment(\.dismiss) private var dismiss
+    var isPresented: Binding<Bool>?
+    @Environment(\.dismiss) private var envDismiss
     @State private var dashboardData: DashboardData?
     @State private var isComputing = false
     @State private var aiInsights: String?
     @State private var isLoadingAI = false
+    @State private var showTutorial = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -52,9 +54,10 @@ struct ExecutiveDashboardView: View {
             }
         }
         #if os(macOS)
-        .frame(minWidth: 800, minHeight: 600)
+        .frame(minWidth: 480, minHeight: 380)
         #endif
         .background(AppColors.backgroundTertiary)
+        .featureTutorial(.executiveDashboard, key: "executive_dashboard_tutorial_seen", isPresented: $showTutorial)
         .task { await computeDashboard() }
     }
 
@@ -75,12 +78,19 @@ struct ExecutiveDashboardView: View {
                 }
             }
             Spacer()
-            Button("Done") { dismiss() }
-                .keyboardShortcut(.cancelAction)
+            TutorialHelpButton(showTutorial: $showTutorial)
+            if isPresented != nil {
+                Button("Done") { closeSheet() }
+                    .keyboardShortcut(.cancelAction)
+            }
         }
         .padding(.horizontal, Spacing.medium)
         .padding(.vertical, Spacing.small)
         .background(AppColors.backgroundPrimary)
+    }
+
+    private func closeSheet() {
+        if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
     }
 
     // MARK: - Top Stat Cards

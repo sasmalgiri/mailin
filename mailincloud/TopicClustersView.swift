@@ -10,6 +10,7 @@ struct TopicClustersView: View {
     @State private var sortOrder: TopicSortOrder = .emailsDesc
     @Binding var selectedClusterFilter: String?
     @Binding var clusterFilterIDs: Set<UUID>?
+    @State private var showTutorial = false
 
     enum TopicSortOrder: String, CaseIterable {
         case emailsDesc = "Emails (Most)"
@@ -40,6 +41,7 @@ struct TopicClustersView: View {
             }
         }
         .background(AppColors.backgroundTertiary)
+        .featureTutorial(.topicClusters, key: "topic_clusters_tutorial_seen", isPresented: $showTutorial)
         .onAppear {
             if clusters.isEmpty {
                 computeClusters()
@@ -211,6 +213,8 @@ struct TopicClustersView: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
+
+            TutorialHelpButton(showTutorial: $showTutorial)
 
             Button {
                 clusters = []

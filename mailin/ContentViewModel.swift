@@ -224,7 +224,7 @@ class ContentViewModel: ObservableObject {
     }
 
 // MARK: - MBOX Parsing with fine-grained progress
-    func parseSelectedFiles(_ urls: [URL], removeDuplicates: Bool = true) {
+    func parseSelectedFiles(_ urls: [URL], removeDuplicates: Bool = true, maxEmails: Int? = nil) {
         guard !isParsing else { return }
 
         statusMessage = "Parsing files..."
@@ -367,8 +367,13 @@ class ContentViewModel: ObservableObject {
                     ForensicManager.shared.registerFileHash(hash)
                 }
 
+                var cappedEmails = finalAllEmails
+                if let cap = maxEmails, cappedEmails.count > cap {
+                    cappedEmails = Array(cappedEmails.prefix(cap))
+                }
+                var emailsToKeep: [MBOXParser.RawEmail]
                 if removeDuplicates {
-                    let dedupResult = Self.deduplicate(finalAllEmails)
+                    let dedupResult = Self.deduplicate(cappedEmails)
                     self.duplicatesRemoved = dedupResult.removed.count
                     var seenDupIDs = Set<String>()
                     self.removedDuplicates = dedupResult.removed.filter { email in
@@ -376,12 +381,13 @@ class ContentViewModel: ObservableObject {
                             ?? "\(email.headers["From"] ?? "")\(email.headers["Date"] ?? "")\(email.headers["Subject"] ?? "")"
                         return seenDupIDs.insert(key).inserted
                     }
-                    self.parsedEmails = self.annotate(dedupResult.kept)
+                    emailsToKeep = dedupResult.kept
                 } else {
                     self.duplicatesRemoved = 0
                     self.removedDuplicates = []
-                    self.parsedEmails = self.annotate(finalAllEmails)
+                    emailsToKeep = cappedEmails
                 }
+                self.parsedEmails = self.annotate(emailsToKeep)
                 self.totalParsedCount = self.parsedEmails.count
                 self.isParsed = true
                 self.updateMetadataDisplay()
@@ -474,8 +480,8 @@ class ContentViewModel: ObservableObject {
         #endif
     }
 
-    func importThunderbirdProfile(_ urls: [URL], removeDuplicates: Bool = true) {
-        parseSelectedFiles(urls, removeDuplicates: removeDuplicates)
+    func importThunderbirdProfile(_ urls: [URL], removeDuplicates: Bool = true, maxEmails: Int? = nil) {
+        parseSelectedFiles(urls, removeDuplicates: removeDuplicates, maxEmails: maxEmails)
     }
 
     // MARK: - Apple Mail Auto-Import
@@ -679,6 +685,14 @@ class ContentViewModel: ObservableObject {
         duplicatesRemoved = 0
         statusMessage = "Data cleared. Select a new file to begin."
         statusColor = .gray
+    }
+
+    func removeEmails(ids: Set<UUID>) {
+        let removed = parsedEmails.filter { ids.contains($0.id) }
+        parsedEmails.removeAll { ids.contains($0.id) }
+        totalParsedCount = parsedEmails.count
+        duplicatesRemoved += removed.count
+        removedDuplicates.append(contentsOf: removed)
     }
 
     // MARK: - Restore persisted emails

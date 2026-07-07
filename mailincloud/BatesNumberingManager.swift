@@ -15,6 +15,8 @@ private let batesLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "mailin
 
 @MainActor
 class BatesNumberingManager: ObservableObject {
+    static let shared = BatesNumberingManager()
+
     @Published var prefix: String = "MAILIN" {
         didSet { if _initialized { persistAssignments() } }
     }
@@ -79,6 +81,21 @@ class BatesNumberingManager: ObservableObject {
 
     func getBatesNumber(for emailID: UUID) -> String? {
         assignments[emailID]
+    }
+
+    /// Removes all Bates number assignments. This is typically irreversible
+    /// in legal proceedings — use with caution.
+    func removeAllNumbers() {
+        let count = assignments.count
+        assignments.removeAll()
+        persistAssignments()
+
+        ForensicManager.shared.logAction(
+            "Bates Numbers Removed",
+            detail: "Removed \(count) Bates number assignment(s)"
+        )
+
+        batesLog.warning("All \(count) Bates number assignments removed")
     }
 
     // MARK: - Export
@@ -171,14 +188,20 @@ struct BatesConfigView: View {
     @State private var assignmentComplete = false
     @State private var exportMessage: String?
     @State private var showExportMessage = false
+    @State private var showTutorial = false
+    @State private var showRemoveConfirmation = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.medium) {
             // Header
-            Label("Bates Numbering", systemImage: "number.square")
-                .font(Typography.title3)
-                .foregroundColor(AppColors.primary)
-                .accessibilityAddTraits(.isHeader)
+            HStack {
+                Label("Bates Numbering", systemImage: "number.square")
+                    .font(Typography.title3)
+                    .foregroundColor(AppColors.primary)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer()
+                TutorialHelpButton(showTutorial: $showTutorial)
+            }
 
             Text("Assign sequential Bates numbers to emails for legal discovery and document production.")
                 .font(Typography.caption1)
@@ -290,6 +313,17 @@ struct BatesConfigView: View {
                 .buttonStyle(SecondaryButtonStyle())
                 .disabled(manager.assignments.isEmpty)
                 .accessibilityHint("Exports a CSV file mapping Bates numbers to email metadata")
+
+                Button {
+                    showRemoveConfirmation = true
+                } label: {
+                    Label("Remove Bates Numbers", systemImage: "trash")
+                        .foregroundColor(AppColors.error)
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .disabled(manager.assignments.isEmpty)
+                .accessibilityLabel("Remove all Bates numbers")
+                .accessibilityHint("Shows a warning before permanently removing all Bates number assignments")
             }
 
             // Status
@@ -301,6 +335,18 @@ struct BatesConfigView: View {
                 .font(Typography.callout)
                 .foregroundColor(AppColors.success)
                 .accessibilityLabel("Assignment complete. \(manager.assignments.count) Bates numbers assigned.")
+
+                Label {
+                    Text("Bates numbers provide unique sequential identifiers for each document in legal proceedings. These numbers are permanent — once assigned, they create a fixed reference for production and court citation.")
+                        .font(Typography.caption1)
+                } icon: {
+                    Image(systemName: "number.circle.fill")
+                        .foregroundColor(.blue)
+                }
+                .padding(Spacing.xSmall)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.blue.opacity(0.1))
+                .cornerRadius(CornerRadius.small)
             }
 
             if let message = exportMessage, showExportMessage {
@@ -310,6 +356,16 @@ struct BatesConfigView: View {
             }
         }
         .padding(Spacing.medium)
+        .featureTutorial(.batesNumbering, key: "bates_numbering_tutorial_seen", isPresented: $showTutorial)
+        .adaptiveDestructiveConfirmation(
+            "Remove Bates Numbers",
+            isPresented: $showRemoveConfirmation,
+            message: "This will permanently remove all Bates number assignments. In legal proceedings, Bates numbers are typically permanent once assigned. This action is logged in the forensic audit trail and cannot be undone.",
+            actionTitle: "Remove All"
+        ) {
+            manager.removeAllNumbers()
+            assignmentComplete = false
+        }
         .adaptiveCard(cornerRadius: CornerRadius.large)
         #if os(macOS)
         .frame(minWidth: 400, maxWidth: 600)

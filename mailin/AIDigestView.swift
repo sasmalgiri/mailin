@@ -9,12 +9,14 @@ import SwiftUI
 
 struct AIDigestView: View {
     let emails: [MBOXParser.RawEmail]
+    var isPresented: Binding<Bool>?
     @State private var selectedPeriod: AIDigestGenerator.TimePeriod = .lastWeek
     @State private var sections: [AIDigestGenerator.DigestSection] = []
     @State private var isGenerating = false
     @State private var customStart = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
     @State private var customEnd = Date()
-    @Environment(\.dismiss) private var dismiss
+    @State private var showTutorial = false
+    @Environment(\.dismiss) private var envDismiss
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,12 +27,17 @@ struct AIDigestView: View {
                 Text("Email Digest")
                     .font(Typography.headline)
                 Spacer()
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
+                TutorialHelpButton(showTutorial: $showTutorial)
+                if isPresented != nil {
+                    Button("Done") { closeSheet() }
+                        .keyboardShortcut(.cancelAction)
+                }
             }
             .padding(Spacing.medium)
 
             Divider()
+
+            AIDisclaimerBanner()
 
             // Period picker + generate
             VStack(spacing: Spacing.small) {
@@ -97,8 +104,13 @@ struct AIDigestView: View {
             }
         }
         #if os(macOS)
-        .frame(minWidth: 650, minHeight: 600)
+        .frame(minWidth: 480, minHeight: 380)
         #endif
+        .featureTutorial(.aiDigest, key: "ai_digest_tutorial_seen", isPresented: $showTutorial)
+    }
+
+    private func closeSheet() {
+        if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
     }
 
     // MARK: - Section View

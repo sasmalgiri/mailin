@@ -3,8 +3,10 @@ import SwiftUI
 struct PredictiveCodingView: View {
     let emails: [MBOXParser.RawEmail]
     @ObservedObject var engine: PredictiveCodingEngine
-    @Environment(\.dismiss) private var dismiss
+    var isPresented: Binding<Bool>?
+    @Environment(\.dismiss) private var envDismiss
     @State private var initialized = false
+    @State private var showTutorial = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -14,6 +16,7 @@ struct PredictiveCodingView: View {
             Divider()
             emailList
         }
+        .featureTutorial(.predictiveCoding, key: "predictive_coding_tutorial_seen", isPresented: $showTutorial)
         .onAppear {
             if !initialized {
                 engine.buildVectors(from: emails)
@@ -38,15 +41,22 @@ struct PredictiveCodingView: View {
                     .padding(.trailing, Spacing.small)
                     .accessibilityLabel("Training predictive model")
             }
-            Button { dismiss() } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundColor(AppColors.secondary)
-                    .imageScale(.large)
+            TutorialHelpButton(showTutorial: $showTutorial)
+            if isPresented != nil {
+                Button { closeSheet() } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(AppColors.secondary)
+                        .imageScale(.large)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close predictive coding")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Close predictive coding")
         }
         .padding(Spacing.medium)
+    }
+
+    private func closeSheet() {
+        if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
     }
 
     private var statsBar: some View {

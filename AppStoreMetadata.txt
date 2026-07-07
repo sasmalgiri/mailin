@@ -4,9 +4,9 @@ MAILIN - APP STORE LISTING METADATA
 
 APP NAME: mailin
 
-SUBTITLE: Private Email Archive Analyzer
+SUBTITLE: Forensic Email Analyzer — Mac, iPhone & iPad
 
-CATEGORY: Productivity
+CATEGORY: Productivity (secondary: Business)
 
 PRICE: Free (with In-App Purchases)
 
@@ -26,7 +26,11 @@ BUNDLE ID: com.ecosanskriti.mailin
 DESCRIPTION
 ------------------------------------
 
-mailin is a powerful, privacy-first email archive analyzer for Mac, iPhone, and iPad. Import your .mbox, .eml, .emlx, .msg, .pst, .ost, or .nsf files from Gmail Takeout, Thunderbird, Apple Mail, Outlook, or Lotus Notes — and instantly search, filter, analyze, and export your email history. Available in 11 languages. Everything runs on your device. Nothing leaves your device.
+mailin is the only forensic-grade email archive analyzer that runs natively on iPhone, iPad, AND Mac — with zero cloud, zero tracking, and zero third-party SDKs.
+
+Open Gmail Takeout .mbox, Outlook .pst/.msg, Apple Mail .emlx, Lotus Notes .nsf, or any RFC 822 .eml file. Search across millions of messages with sub-second full-text search. Analyze with on-device Apple Intelligence. Export with forensic chain-of-custody artifacts, Bates numbering, and cryptographic signatures.
+
+Other email tools force you to choose: Mac-only (MailSteward), Windows-only (Aid4Mail, Intella, MailXaminer), or cloud upload (Relativity, Logikcull). mailin is none of those. Universal Apple-native. Strictly on-device. Verifiable in App Sandbox.
 
 IMPORT & BROWSE
 - Open .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, and .zip archives from any email provider
@@ -73,7 +77,7 @@ EXPORT ANYWHERE
 - Redacted exports with PII automatically removed
 
 FORENSIC & LEGAL TOOLS
-- Tamper-proof HMAC audit logging and chain of custody
+- Tamper-evident HMAC-chained audit logging and chain-of-custody artifacts
 - Evidence tagging and examiner annotations
 - SPF, DKIM, and DMARC authentication analysis
 - S/MIME signature verification and encryption detection
@@ -116,11 +120,41 @@ FLEXIBLE PLANS
 - Professional: all Personal features plus audit trail, chain of custody, Bates numbering, batch processing, predictive coding, and priority support
 - Subscribe monthly or yearly, or buy once for lifetime access
 
-mailin is built natively with SwiftUI for a fast, fluid experience on Mac, iPhone, and iPad. Whether you're a journalist investigating a story, a lawyer reviewing evidence, a researcher analyzing communications, or just someone who wants to understand their email history — mailin gives you the tools to do it privately, in your language.
+WHO IT'S FOR
+- Lawyers & eDiscovery teams: Bates numbering, Concordance/Relativity export, predictive coding, privilege detection
+- Journalists & OSINT: Knowledge graph, timeline analysis, source-protected offline operation
+- Forensic investigators: SPF/DKIM/DMARC analysis, S/MIME verification, HMAC-chained custody
+- IT & compliance: GDPR reports, PII scanner, custodian holds, archive comparison
+- Personal archivists: Open decades of Gmail Takeout on your iPhone while traveling
+
+VERIFIABLE PRIVACY
+- Zero analytics, zero third-party SDKs, zero cloud calls in offline mode
+- Apple App Sandbox enforced — Apple's own runtime verifies the privacy claim
+- Privacy Manifest declares: no tracking, no data collection
+- All AI runs on-device using Apple NaturalLanguage and Foundation Models
+- File Protection (Complete class) on persistent storage — files unreadable when device locked
+- Ed25519 cryptographic signatures on exports (forensic chain anchor)
+
+mailin is built natively with SwiftUI for a fast, fluid experience on Mac, iPhone, and iPad. Universal Purchase — buy once, use everywhere across your Apple devices.
+
+PRICING
+mailin Personal — Monthly: USD 4.99 / month
+mailin Personal — Yearly: USD 44.99 / year (save 25%)
+mailin Personal — Lifetime: USD 99.99 one-time
+mailin Professional — Monthly: USD 9.99 / month
+mailin Professional — Yearly: USD 79.99 / year (save 33%)
+mailin Professional — Lifetime: USD 249.99 one-time
+Subscriptions auto-renew unless cancelled at least 24 hours before the end of the billing period. Payment is charged to your Apple ID at purchase confirmation. Manage subscriptions in Settings > [your name] > Subscriptions. Lifetime purchases are permanent and do not auto-renew.
+
+Terms of Use (EULA): https://sasmalgiri.github.io/mailin/terms/
+Privacy Policy: https://sasmalgiri.github.io/mailin/privacy/
 
 LEGAL
 - Terms of Use: https://sasmalgiri.github.io/mailin/terms/
 - Privacy Policy: https://sasmalgiri.github.io/mailin/privacy/
+
+DISCLAIMER
+mailin is provided as-is. All software, including AI features, can produce inaccurate or incomplete results. AI-powered features (assistant, digest, sentiment, topic extraction, anomaly detection, predictive coding, visualizations) use statistical models that may make mistakes — always verify important outputs before relying on them. Forensic features (chain-of-custody artifacts, Bates numbering, signed exports, HMAC-chained audit logs) are designed to support common forensic and eDiscovery workflows, but the admissibility of digital evidence is jurisdiction-specific and depends on factors beyond any single software tool. Consult qualified legal counsel for evidentiary use. mailin makes no warranty of fitness for any specific legal or regulatory purpose.
 
 Subscriptions automatically renew unless cancelled at least 24 hours before the end of the current period. Payment is charged to your Apple ID account at confirmation of purchase. You can manage and cancel subscriptions in your Account Settings.
 
@@ -128,19 +162,28 @@ Subscriptions automatically renew unless cancelled at least 24 hours before the 
 KEYWORDS (100 characters max)
 ------------------------------------
 
-mbox,eml,pst,msg,email,archive,analyzer,gmail,takeout,forensic,nlp,sentiment,export,privacy,search
+mbox viewer,pst viewer,gmail takeout,email forensic,ediscovery,bates,email archive,nlp,offline email
 
 ------------------------------------
 WHAT'S NEW (Version 1.0)
 ------------------------------------
 
-Initial release of mailin — your private, on-device email archive analyzer. Import MBOX, EML, EMLX, MSG, PST, OST, and NSF archives. 11 languages, forensic tools, on-device AI, analytics dashboard. Subscribe monthly, yearly, or buy once for lifetime access.
+mailin v1.0 — the first forensic-grade email archive analyzer native to iPhone, iPad, and Mac.
+
+✓ 7 archive formats: .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf
+✓ HMAC chain of custody, Bates numbering, IOC extraction
+✓ On-device Apple Intelligence — no cloud, no tracking
+✓ Sub-second full-text search
+✓ 11 languages
+✓ Universal Purchase across all your Apple devices
+
+Free to try. Subscribe monthly, yearly, or buy once for lifetime access.
 
 ------------------------------------
 PROMOTIONAL TEXT (170 characters max)
 ------------------------------------
 
-Analyze email archives privately on Mac, iPhone & iPad. 7 formats, on-device AI, forensic tools, 11 languages. No cloud, no data collection. Free to try.
+Forensic-grade email archive analyzer. Open .mbox, .pst, .nsf, .msg on iPhone, iPad & Mac. On-device AI. Bates, IOC, custody. Zero cloud, zero tracking. Free to try.
 
 ------------------------------------
 SUPPORT URL
@@ -170,7 +213,7 @@ https://sasmalgiri.github.io/mailin/privacy/
 COPYRIGHT
 ------------------------------------
 
-2025-2026 mailin. All rights reserved.
+2025-2026 EcoSanskriti Innovation Pvt Ltd. All rights reserved.
 
 ------------------------------------
 AGE RATING

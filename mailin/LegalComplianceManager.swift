@@ -45,7 +45,18 @@ class LegalComplianceManager: ObservableObject {
         }
         defaults.synchronize()
 
-        KeychainHelper.delete(key: "apiKey")
+        let keychainKeys = [
+            "apiKey",
+            "forensicHMACKey",
+            "gmail_access_token", "gmail_refresh_token", "gmail_token_expiry",
+            "outlookAccessToken", "outlookRefreshToken", "outlookTokenExpiry",
+            "settings_imapPassword", "imap_password",
+            "settings_smtpPassword",
+            "cloudAI_openAI_apiKey", "cloudAI_anthropic_apiKey"
+        ]
+        for key in keychainKeys {
+            KeychainHelper.delete(key: key)
+        }
 
         let kvStore = NSUbiquitousKeyValueStore.default
         for key in ["sync_caseNumber", "sync_examinerName", "sync_organization"] {
@@ -100,13 +111,15 @@ class LegalComplianceManager: ObservableObject {
 
     3. PURCHASES: Premium features (mailin Personal and mailin Professional) are available via auto-renewable subscriptions (monthly or yearly) or a one-time lifetime purchase through the App Store. Payment will be charged to your Apple ID account at confirmation of purchase. Subscriptions auto-renew unless cancelled at least 24 hours before the end of the current billing period. You can manage or cancel subscriptions in System Settings > Apple ID > Subscriptions (Mac) or Settings > [your name] > Subscriptions (iPhone/iPad). Lifetime purchases are permanent and do not auto-renew.
 
+    3a. REFUNDS: All purchases are processed by Apple under Apple's standard payment terms. The developer of mailin cannot issue refunds directly. To request a refund, visit https://reportaproblem.apple.com, sign in with the Apple ID used for the purchase, choose the purchase, and follow Apple's refund request process. Apple decides whether to grant the refund according to its policies and applicable consumer protection laws in your region (including the EU "right of withdrawal" where applicable). Cancellation of a subscription stops future renewals but does not retroactively refund prior periods unless Apple separately approves a refund.
+
     4. PERMITTED USE: You may use mailin for lawful purposes including personal email management, professional email analysis, legal document review, forensic investigation, and journalism research.
 
     5. PROHIBITED USE: You may not reverse-engineer, redistribute, or use mailin to violate any law, infringe on privacy rights, or engage in unauthorized surveillance.
 
     6. FORENSIC DISCLAIMER: mailin's forensic features (hash verification, audit logging, Bates stamping, chain of custody) are provided as analytical tools. They have NOT been independently validated for court admissibility. Users relying on mailin for legal proceedings should independently verify all forensic outputs. mailin makes no representations about the legal admissibility of its outputs in any jurisdiction.
 
-    7. AI DISCLAIMER: AI-powered features (sentiment analysis, topic extraction, smart filters, predictive coding) use statistical models and may produce inaccurate results. AI outputs should be verified by qualified professionals before being relied upon for legal, forensic, or investigative decisions.
+    7. AI AND SOFTWARE LIMITATIONS: All software, including artificial intelligence (AI) features, can produce inaccurate, incomplete, or misleading results. AI-powered features in mailin (including but not limited to sentiment analysis, topic extraction, anomaly detection, smart filters, AI digest, predictive coding, AI assistant, and visualizations) use statistical and probabilistic models that may make mistakes, hallucinate information, or fail to detect relevant content. NLP, search, parsing, and analytical outputs may also contain errors. You must independently verify any output before relying on it for any legal, forensic, investigative, business, or personal decision. The developer disclaims all responsibility for decisions or actions taken based on the app's output.
 
     8. NO WARRANTY: mailin is provided "AS IS" without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose, and noninfringement.
 
@@ -150,13 +163,41 @@ class LegalComplianceManager: ObservableObject {
     """
 }
 
+// MARK: - AI Disclaimer Banner
+
+/// Compact, always-visible banner shown above AI-powered features.
+/// Reminds users that AI/software output can be inaccurate and must be
+/// verified — a standard liability mitigation pattern.
+struct AIDisclaimerBanner: View {
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.bubble")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+            Text("AI and software can make mistakes. Verify important results before relying on them.")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .lineLimit(2)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.secondary.opacity(0.08))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("AI disclaimer: AI and software can make mistakes. Verify important results before relying on them.")
+    }
+}
+
 // MARK: - Terms Acceptance View
 
 struct TermsAcceptanceView: View {
     @ObservedObject private var compliance = LegalComplianceManager.shared
     @Environment(\.dismiss) private var dismiss
-    @State private var scrolledToBottom = false
+    @State private var termsRead = false
+    @State private var privacyRead = false
     @State private var activeTab = 0
+
+    private var canAccept: Bool { termsRead && privacyRead }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -197,9 +238,6 @@ struct TermsAcceptanceView: View {
                     .font(.system(.caption, design: .monospaced))
                     .padding(Spacing.medium)
                     .frame(maxWidth: .infinity, alignment: .leading)
-
-                Color.clear.frame(height: 1)
-                    .onAppear { scrolledToBottom = true }
             }
             .background(AppColors.backgroundSecondary)
 
@@ -217,6 +255,12 @@ struct TermsAcceptanceView: View {
                     }
                 }
 
+                checkboxRow("I have read the Terms of Use", isOn: $termsRead)
+                    .padding(.horizontal, Spacing.medium)
+
+                checkboxRow("I have read the Privacy Policy", isOn: $privacyRead)
+                    .padding(.horizontal, Spacing.medium)
+
                 Button {
                     compliance.acceptTerms()
                     dismiss()
@@ -229,22 +273,34 @@ struct TermsAcceptanceView: View {
                         .foregroundColor(.white)
                         .background(
                             RoundedRectangle(cornerRadius: CornerRadius.medium)
-                                .fill(scrolledToBottom ? Color.blue : Color.gray)
+                                .fill(canAccept ? Color.blue : Color.gray)
                         )
                 }
                 .buttonStyle(.plain)
-                .disabled(!scrolledToBottom)
+                .disabled(!canAccept)
                 .padding(.horizontal, Spacing.medium)
-
-                Text("You must scroll through the terms before accepting.")
-                    .font(Typography.caption2)
-                    .foregroundColor(.secondary)
-                    .opacity(scrolledToBottom ? 0 : 1)
             }
             .padding(.vertical, Spacing.medium)
         }
         #if os(macOS)
-        .frame(width: 500, height: 520)
+        .frame(minWidth: 480, idealWidth: 560, maxWidth: 720, minHeight: 500, idealHeight: 600, maxHeight: .infinity)
         #endif
+    }
+
+    private func checkboxRow(_ title: String, isOn: Binding<Bool>) -> some View {
+        Button {
+            isOn.wrappedValue.toggle()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: isOn.wrappedValue ? "checkmark.square.fill" : "square")
+                    .foregroundColor(isOn.wrappedValue ? .blue : .secondary)
+                Text(title)
+                    .font(Typography.caption1)
+                    .foregroundColor(.primary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }

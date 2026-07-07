@@ -308,13 +308,16 @@ class GraphLayout {
 struct RelationshipGraphView: View {
     let emails: [MBOXParser.RawEmail]
     let senderEmail: String
+    var isPresented: Binding<Bool>?
 
     @State private var graphLayout = GraphLayout()
     @State private var selectedNodeID: String?
     @State private var graphSize: CGSize = CGSize(width: 600, height: 450)
     @State private var aiInsights: String?
     @State private var isLoadingAI = false
-    @Environment(\.dismiss) private var dismiss
+    @State private var kgAnnotations: [RelationshipMapAnnotation] = []
+    @State private var showTutorial = false
+    @Environment(\.dismiss) private var envDismiss
 
     // MARK: - Computed
 
@@ -352,9 +355,13 @@ struct RelationshipGraphView: View {
                 content
             }
         }
-        .onAppear { buildAndSimulate() }
+        .onAppear {
+            buildAndSimulate()
+            loadAnnotations()
+        }
+        .featureTutorial(.relationshipGraph, key: "relationship_graph_tutorial_seen", isPresented: $showTutorial)
         #if os(macOS)
-        .frame(minWidth: 800, minHeight: 600)
+        .frame(minWidth: 480, minHeight: 380)
         #endif
     }
 
@@ -373,10 +380,17 @@ struct RelationshipGraphView: View {
             Button("Rebuild") { buildAndSimulate() }
                 .buttonStyle(.bordered)
                 .accessibilityLabel("Rebuild the relationship graph")
-            Button("Done") { dismiss() }
-                .keyboardShortcut(.cancelAction)
+            TutorialHelpButton(showTutorial: $showTutorial)
+            if isPresented != nil {
+                Button("Done") { closeSheet() }
+                    .keyboardShortcut(.cancelAction)
+            }
         }
         .padding(Spacing.medium)
+    }
+
+    private func closeSheet() {
+        if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
     }
 
     // MARK: - Empty / Loading
@@ -415,6 +429,7 @@ struct RelationshipGraphView: View {
                     nodeDetailSection(node: selectedNode)
                 }
                 aiInsightsSection
+                kgAnnotationsSection
                 topContactsSection
             }
             .padding(Spacing.large)
@@ -438,6 +453,7 @@ struct RelationshipGraphView: View {
                         nodeDetailSection(node: selectedNode)
                     }
                     aiInsightsSection
+                    kgAnnotationsSection
                     topContactsSection
                 }
                 .padding(Spacing.medium)
@@ -498,6 +514,13 @@ struct RelationshipGraphView: View {
                             .foregroundColor(.primary),
                         at: textPoint
                     )
+
+                    // KG annotation badge
+                    if kgAnnotations.contains(where: { $0.nodeID.lowercased() == node.id.lowercased() && $0.annotationType == .keyConnector }) {
+                        let badgeRect = CGRect(x: node.position.x + baseRadius - 2, y: node.position.y - baseRadius - 2, width: 10, height: 10)
+                        context.fill(Path(ellipseIn: badgeRect), with: .color(.purple))
+                        context.draw(Text("★").font(.system(size: 7)).foregroundColor(.white), at: CGPoint(x: badgeRect.midX, y: badgeRect.midY))
+                    }
                 }
             }
             .onAppear {
@@ -710,6 +733,57 @@ struct RelationshipGraphView: View {
         }
     }
 
+    // MARK: - KG Annotations
+
+    @ViewBuilder
+    private var kgAnnotationsSection: some View {
+        if !kgAnnotations.isEmpty {
+            VStack(alignment: .leading, spacing: Spacing.xSmall) {
+                Text("AI Annotations")
+                    .font(Typography.callout)
+                    .fontWeight(.semibold)
+
+                ForEach(kgAnnotations.prefix(8)) { ann in
+                    HStack(spacing: Spacing.xxSmall) {
+                        Circle()
+                            .fill(annotationColor(ann.annotationType))
+                            .frame(width: 6, height: 6)
+                        Text(ann.label)
+                            .font(Typography.caption1)
+                            .fontWeight(.medium)
+                            .lineLimit(1)
+                    }
+                    Text(ann.annotation)
+                        .font(Typography.caption2)
+                        .foregroundColor(AppColors.secondary)
+                        .lineLimit(2)
+                }
+            }
+            .padding(Spacing.small)
+            .adaptiveCard(cornerRadius: CornerRadius.medium)
+        }
+    }
+
+    private func annotationColor(_ type: RelationshipMapAnnotation.AnnotationType) -> Color {
+        switch type {
+        case .keyConnector: return .purple
+        case .topicExpert: return .blue
+        case .sentimentOutlier: return .pink
+        case .highVolume: return .orange
+        case .recentActive: return .green
+        }
+    }
+
+    private func loadAnnotations() {
+        let emailsCopy = emails
+        Task.detached {
+            let graph = KnowledgeGraph.load()
+            guard graph.nodeCount > 0 else { return }
+            let anns = AIVisualizationGenerator.annotateRelationshipMap(emails: emailsCopy, graph: graph)
+            await MainActor.run { kgAnnotations = anns }
+        }
+    }
+
     // MARK: - Top Contacts List
 
     private var topContactsSection: some View {
@@ -789,9 +863,9 @@ struct RelationshipGraphView: View {
     // MARK: - Styling Helpers
 
     private func nodeColor(for sentiment: Double) -> Color {
-        if sentiment > 0.15 {
+        if sentiment > 0.4 {
             return AppColors.success
-        } else if sentiment < -0.15 {
+        } else if sentiment < -0.4 {
             return AppColors.error
         } else {
             return Color.gray
@@ -799,8 +873,8 @@ struct RelationshipGraphView: View {
     }
 
     private func sentimentLabel(_ sentiment: Double) -> String {
-        if sentiment > 0.15 { return "Positive" }
-        if sentiment < -0.15 { return "Negative" }
+        if sentiment > 0.4 { return "Positive" }
+        if sentiment < -0.4 { return "Negative" }
         return "Neutral"
     }
 

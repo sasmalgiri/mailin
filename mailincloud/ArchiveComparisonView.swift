@@ -10,7 +10,9 @@ struct ArchiveComparisonView: View {
     @State private var isComputing = false
     @State private var aiInsights: String?
     @State private var isLoadingAI = false
-    @Environment(\.dismiss) private var dismiss
+    @State private var showTutorial = false
+    var isPresented: Binding<Bool>?
+    @Environment(\.dismiss) private var envDismiss
 
     enum ComparisonFilter: String, CaseIterable {
         case all = "All"
@@ -67,8 +69,9 @@ struct ArchiveComparisonView: View {
                 )
             }
         }
+        .featureTutorial(.archiveComparison, key: "archive_comparison_tutorial_seen", isPresented: $showTutorial)
         #if os(macOS)
-        .frame(minWidth: 700, idealWidth: 850, minHeight: 500, idealHeight: 650)
+        .frame(minWidth: 480, idealWidth: 850, minHeight: 360, idealHeight: 650)
         #endif
         .onAppear {
             computeComparison()
@@ -83,14 +86,21 @@ struct ArchiveComparisonView: View {
             Text("Archive Comparison")
                 .font(Typography.headline)
             Spacer()
-            Button { dismiss() } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundColor(AppColors.secondary)
-                    .imageScale(.large)
+            TutorialHelpButton(showTutorial: $showTutorial)
+            if isPresented != nil {
+                Button { closeSheet() } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(AppColors.secondary)
+                        .imageScale(.large)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .padding(Spacing.medium)
+    }
+
+    private func closeSheet() {
+        if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
     }
 
     // MARK: - Summary
@@ -100,6 +110,28 @@ struct ArchiveComparisonView: View {
                 .font(Typography.title3)
                 .fontWeight(.bold)
 
+            #if os(iOS)
+            VStack(spacing: Spacing.small) {
+                statCard(
+                    title: "Only in \(nameA)",
+                    count: result.onlyInA.count,
+                    color: .blue,
+                    icon: "a.circle.fill"
+                )
+                statCard(
+                    title: "Common",
+                    count: result.common.count,
+                    color: .green,
+                    icon: "equal.circle.fill"
+                )
+                statCard(
+                    title: "Only in \(nameB)",
+                    count: result.onlyInB.count,
+                    color: .orange,
+                    icon: "b.circle.fill"
+                )
+            }
+            #else
             HStack(spacing: Spacing.large) {
                 statCard(
                     title: "Only in \(nameA)",
@@ -120,6 +152,7 @@ struct ArchiveComparisonView: View {
                     icon: "b.circle.fill"
                 )
             }
+            #endif
 
             Text("\(nameA) has \(result.onlyInA.count) unique email\(result.onlyInA.count == 1 ? "" : "s"), \(nameB) has \(result.onlyInB.count) unique, \(result.common.count) common")
                 .font(Typography.footnote)
@@ -157,11 +190,19 @@ struct ArchiveComparisonView: View {
                 .font(Typography.headline)
                 .fontWeight(.semibold)
 
+            #if os(iOS)
+            VStack(spacing: Spacing.small) {
+                archiveStatsColumn(name: nameA, stats: result.statsA, color: .blue)
+                Divider()
+                archiveStatsColumn(name: nameB, stats: result.statsB, color: .orange)
+            }
+            #else
             HStack(alignment: .top, spacing: Spacing.medium) {
                 archiveStatsColumn(name: nameA, stats: result.statsA, color: .blue)
                 Divider()
                 archiveStatsColumn(name: nameB, stats: result.statsB, color: .orange)
             }
+            #endif
         }
         .padding(Spacing.medium)
         .adaptiveCard(cornerRadius: CornerRadius.large)
@@ -211,7 +252,11 @@ struct ArchiveComparisonView: View {
                     Text(f.rawValue).tag(f)
                 }
             }
+            #if os(iOS)
+            .pickerStyle(.menu)
+            #else
             .pickerStyle(.segmented)
+            #endif
         }
     }
 
@@ -359,21 +404,18 @@ struct ArchiveComparisonView: View {
 
     private func loadAIInsights(result: ComparisonResult) {
         isLoadingAI = true
-        let allEmails = archiveA + archiveB
-        let context = """
-        Comparing archive "\(nameA)" (\(archiveA.count) emails, sentiment \(String(format: "%.2f", result.statsA.avgSentiment))) \
-        vs "\(nameB)" (\(archiveB.count) emails, sentiment \(String(format: "%.2f", result.statsB.avgSentiment))). \
-        Common: \(result.common.count), only in A: \(result.onlyInA.count), only in B: \(result.onlyInB.count).
-        """
         Task {
             #if canImport(FoundationModels)
             if #available(macOS 26, iOS 26, *) {
-                let result = await FoundationModelEngine.enhanceWithAI(
-                    scope: .all,
-                    emails: allEmails,
-                    context: context
+                // v3.6.1: AI-powered archive comparison with KG diff
+                let compResult = await FoundationModelEngine.compareArchives(
+                    archiveA: archiveA, archiveB: archiveB,
+                    nameA: nameA, nameB: nameB,
+                    onUpdate: { text in
+                        aiInsights = text
+                    }
                 )
-                aiInsights = result ?? "AI analysis unavailable."
+                aiInsights = compResult.synthesis
             } else {
                 aiInsights = "Requires macOS 26 or later."
             }

@@ -594,11 +594,194 @@ struct EmailNLPEngine {
                 }
             }
 
+            // v2.2.1: TLD risk scoring
+            let tldRisk = assessTLDRisk(domain: addrDomain)
+            if tldRisk.score > 0 {
+                reasons.append(tldRisk.reason)
+                riskScore += tldRisk.score
+            }
+
+            // v2.2.1: Encoded/obfuscated URL detection
+            let encodedURLs = detectEncodedURLs(in: body + " " + htmlBody)
+            for finding in encodedURLs {
+                reasons.append(finding)
+                riskScore += 2
+            }
+
+            // v2.2.1: Redirect chain detection in HTML
+            let redirectChains = detectRedirectChains(in: htmlBody)
+            for finding in redirectChains {
+                reasons.append(finding)
+                riskScore += 3
+            }
+
+            // v2.2.1: Full authentication results parsing
+            let authDetail = parseAuthenticationResults(headers)
+            if authDetail.spfResult == .fail || authDetail.spfResult == .softfail {
+                if !reasons.contains(where: { $0.contains("SPF") }) {
+                    reasons.append("SPF \(authDetail.spfResult.rawValue) for domain \(authDetail.spfDomain ?? "unknown")")
+                    riskScore += authDetail.spfResult == .fail ? 3 : 2
+                }
+            }
+            if authDetail.dkimResult == .fail {
+                if !reasons.contains(where: { $0.contains("DKIM") }) {
+                    reasons.append("DKIM fail (selector: \(authDetail.dkimSelector ?? "unknown"), domain: \(authDetail.dkimDomain ?? "unknown"))")
+                    riskScore += 3
+                }
+            }
+            if authDetail.dmarcResult == .fail {
+                reasons.append("DMARC policy failure for \(authDetail.dmarcDomain ?? "unknown")")
+                riskScore += 3
+            }
+
             guard !reasons.isEmpty, riskScore >= 4 else { continue }
             let level: PhishingFlag.RiskLevel = riskScore >= 8 ? .high : .medium
             flagged.append(PhishingFlag(email: email, reasons: reasons, riskLevel: level))
         }
         return flagged
+    }
+
+    // MARK: - v2.2.1: Enhanced URL/Header Forensic Analysis
+
+    enum AuthResult: String {
+        case pass, fail, softfail, neutral, none, temperror, permerror, bestguesspass
+        init(from string: String) {
+            let lower = string.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            self = AuthResult(rawValue: lower) ?? .none
+        }
+    }
+
+    struct EmailAuthenticationResult {
+        var spfResult: AuthResult = .none
+        var spfDomain: String?
+        var dkimResult: AuthResult = .none
+        var dkimDomain: String?
+        var dkimSelector: String?
+        var dmarcResult: AuthResult = .none
+        var dmarcDomain: String?
+        var hasARC: Bool = false
+
+        var isFullyAuthenticated: Bool {
+            spfResult == .pass && dkimResult == .pass && dmarcResult == .pass
+        }
+
+        var failureCount: Int {
+            [spfResult, dkimResult, dmarcResult].filter { $0 == .fail || $0 == .softfail }.count
+        }
+    }
+
+    static func parseAuthenticationResults(_ headers: [String: String]) -> EmailAuthenticationResult {
+        var result = EmailAuthenticationResult()
+        let authHeader = (headers["Authentication-Results"] ?? headers["authentication-results"] ?? "").lowercased()
+        guard !authHeader.isEmpty else { return result }
+
+        if let spfMatch = authHeader.range(of: #"spf=(\w+)"#, options: .regularExpression) {
+            let value = String(authHeader[spfMatch]).replacingOccurrences(of: "spf=", with: "")
+            result.spfResult = AuthResult(from: value)
+        }
+        if let spfDomainMatch = authHeader.range(of: #"smtp\.mailfrom=([^\s;]+)"#, options: .regularExpression) {
+            result.spfDomain = String(authHeader[spfDomainMatch]).replacingOccurrences(of: "smtp.mailfrom=", with: "")
+        }
+
+        if let dkimMatch = authHeader.range(of: #"dkim=(\w+)"#, options: .regularExpression) {
+            let value = String(authHeader[dkimMatch]).replacingOccurrences(of: "dkim=", with: "")
+            result.dkimResult = AuthResult(from: value)
+        }
+        if let dkimDomainMatch = authHeader.range(of: #"header\.d=([^\s;]+)"#, options: .regularExpression) {
+            result.dkimDomain = String(authHeader[dkimDomainMatch]).replacingOccurrences(of: "header.d=", with: "")
+        }
+        if let selectorMatch = authHeader.range(of: #"header\.s=([^\s;]+)"#, options: .regularExpression) {
+            result.dkimSelector = String(authHeader[selectorMatch]).replacingOccurrences(of: "header.s=", with: "")
+        }
+
+        if let dmarcMatch = authHeader.range(of: #"dmarc=(\w+)"#, options: .regularExpression) {
+            let value = String(authHeader[dmarcMatch]).replacingOccurrences(of: "dmarc=", with: "")
+            result.dmarcResult = AuthResult(from: value)
+        }
+        if let dmarcDomainMatch = authHeader.range(of: #"header\.from=([^\s;]+)"#, options: .regularExpression) {
+            result.dmarcDomain = String(authHeader[dmarcDomainMatch]).replacingOccurrences(of: "header.from=", with: "")
+        }
+
+        let arcHeader = headers["ARC-Authentication-Results"] ?? headers["arc-authentication-results"] ?? ""
+        result.hasARC = !arcHeader.isEmpty
+
+        return result
+    }
+
+    private static let suspiciousTLDs: [String: Int] = [
+        "xyz": 3, "top": 3, "click": 4, "link": 3, "work": 2, "date": 3,
+        "racing": 3, "download": 4, "stream": 3, "gdn": 3, "bid": 3,
+        "loan": 3, "trade": 2, "win": 3, "review": 3, "science": 2,
+        "party": 3, "faith": 3, "accountant": 3, "cricket": 3,
+        "zip": 4, "mov": 4, "py": 2, "tk": 3, "ml": 3, "ga": 3, "cf": 3, "gq": 3,
+        "buzz": 2, "icu": 3, "monster": 2, "rest": 2, "hair": 2, "quest": 2,
+    ]
+
+    private static func assessTLDRisk(domain: String) -> (score: Int, reason: String) {
+        let parts = domain.components(separatedBy: ".")
+        guard let tld = parts.last?.lowercased(), !tld.isEmpty else { return (0, "") }
+
+        if let score = suspiciousTLDs[tld] {
+            return (score, "Suspicious TLD: .\(tld) (commonly used in phishing)")
+        }
+
+        if parts.count > 3 {
+            return (2, "Excessive subdomain depth (\(parts.count) levels): \(domain)")
+        }
+
+        return (0, "")
+    }
+
+    private static func detectEncodedURLs(in text: String) -> [String] {
+        var findings: [String] = []
+
+        if let _ = text.range(of: #"%[0-9a-fA-F]{2}.*%[0-9a-fA-F]{2}.*%[0-9a-fA-F]{2}"#, options: .regularExpression) {
+            let decoded = text.removingPercentEncoding ?? text
+            if decoded.contains("http") || decoded.contains("://") {
+                findings.append("URL with heavy percent-encoding (potential obfuscation)")
+            }
+        }
+
+        if text.range(of: #"&#x?[0-9a-fA-F]+;"#, options: .regularExpression) != nil &&
+           text.range(of: #"https?://"#, options: .regularExpression) != nil {
+            findings.append("HTML entity-encoded URL (potential obfuscation)")
+        }
+
+        if text.range(of: #"data:text/html"#, options: .regularExpression) != nil {
+            findings.append("Data URI with HTML content (potential phishing payload)")
+        }
+
+        if text.range(of: #"javascript:"#, options: .caseInsensitive) != nil {
+            findings.append("JavaScript URI detected")
+        }
+
+        return findings
+    }
+
+    private static func detectRedirectChains(in htmlBody: String) -> [String] {
+        var findings: [String] = []
+
+        if htmlBody.range(of: #"<meta\s+http-equiv\s*=\s*[\"']?refresh"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            findings.append("Meta refresh redirect detected (auto-redirect)")
+        }
+
+        let redirectDomains = ["redirect", "click.track", "trk.", "go.", "redir.", "forward.", "bounce."]
+        let urlPattern = #"href="https?://([^"]+)""#
+        if let regex = try? NSRegularExpression(pattern: urlPattern, options: .caseInsensitive) {
+            let range = NSRange(htmlBody.startIndex..<htmlBody.endIndex, in: htmlBody)
+            let matches = regex.matches(in: htmlBody, range: range)
+            for match in matches {
+                if let urlRange = Range(match.range(at: 1), in: htmlBody) {
+                    let url = String(htmlBody[urlRange]).lowercased()
+                    for redir in redirectDomains where url.contains(redir) {
+                        findings.append("Multi-hop redirect URL detected (\(redir))")
+                        break
+                    }
+                }
+            }
+        }
+
+        return findings
     }
 
     // MARK: - Per-Email Summarization
@@ -664,12 +847,38 @@ struct EmailNLPEngine {
 
     // MARK: - PII Detection (GDPR/Compliance)
 
+    // v2.2.2: PII Contextual Risk Scoring
+    enum PIIRiskContext: String {
+        case plainBody = "Plain Body"
+        case quotedReply = "Quoted Reply"
+        case header = "Header"
+        case attachment = "Attachment"
+        case signature = "Signature"
+        case encryptedBody = "Encrypted"
+
+        var riskMultiplier: Double {
+            switch self {
+            case .plainBody: return 1.0
+            case .quotedReply: return 0.8
+            case .header: return 0.6
+            case .attachment: return 0.5
+            case .signature: return 0.4
+            case .encryptedBody: return 0.2
+            }
+        }
+    }
+
     struct PIIFinding: Identifiable {
         let id = UUID()
         let type: PIIType
         let value: String
         let emailID: UUID
         let emailSubject: String
+        var riskContext: PIIRiskContext = .plainBody
+
+        var contextualRiskScore: Double {
+            type.baseRisk * riskContext.riskMultiplier
+        }
     }
 
     enum PIIType: String, CaseIterable {
@@ -682,6 +891,20 @@ struct EmailNLPEngine {
         case dateOfBirth = "Date of Birth"
         case driversLicense = "Driver's License"
         case iban = "IBAN"
+
+        var baseRisk: Double {
+            switch self {
+            case .ssnPattern: return 10.0
+            case .creditCard: return 9.0
+            case .passportNumber: return 8.0
+            case .driversLicense: return 7.0
+            case .iban: return 7.0
+            case .dateOfBirth: return 5.0
+            case .phoneNumber: return 4.0
+            case .ipAddress: return 3.0
+            case .emailAddress: return 2.0
+            }
+        }
     }
 
     static func detectPII(in emails: [MBOXParser.RawEmail]) -> [PIIFinding] {
@@ -689,11 +912,9 @@ struct EmailNLPEngine {
         let patterns: [(PIIType, String)] = [
             (.emailAddress, #"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"#),
             (.phoneNumber, #"(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}"#),
-            // SSN: area (001-899, not 666) - group (01-99) - serial (0001-9999)
             (.ssnPattern, #"\b(?!000|666|9\d{2})\d{3}[-\s](?!00)\d{2}[-\s](?!0000)\d{4}\b"#),
             (.creditCard, #"\b(?:\d{4}[-\s]?){3}\d{4}\b"#),
             (.ipAddress, #"\b(?:(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\b"#),
-            // US passport: letter + 8 digits (context-gated)
             (.passportNumber, #"(?i)(?:passport)\s*#?\s*:?\s*[A-Z]\d{8}\b"#),
             (.dateOfBirth, #"(?i)(?:d\.?o\.?b\.?|date\s*of\s*birth|born|birthday)\s*:?\s*\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4}"#),
             (.driversLicense, #"(?i)(?:driver'?s?\s*(?:license|lic|licence)|DL)\s*#?\s*:?\s*[A-Z]?\d{6,14}\b"#),
@@ -705,33 +926,100 @@ struct EmailNLPEngine {
         }
 
         for email in emails {
-            let body = bodyText(for: email) ?? ""
             let subject = email.headers["Subject"] ?? "(No Subject)"
-            let searchText = body + " " + (email.headers.values.joined(separator: " "))
-            let nsText = searchText as NSString
 
+            // v2.2.2: Scan each section separately for contextual risk
+            let sections: [(String, PIIRiskContext)] = determinePIISections(email)
+
+            for (sectionText, context) in sections {
+                let nsText = sectionText as NSString
+                guard nsText.length > 0 else { continue }
+
+                for (type, regex) in compiledPatterns {
+                    let matches = regex.matches(in: sectionText, range: NSRange(location: 0, length: nsText.length))
+                    var seen = Set<String>()
+                    for match in matches.prefix(5) {
+                        let value = nsText.substring(with: match.range)
+                        if type == .creditCard {
+                            let digits = value.filter(\.isNumber)
+                            guard digits.count >= 13 && digits.count <= 19 && luhnCheck(digits) else { continue }
+                        }
+                        if type == .ipAddress {
+                            let octets = value.split(separator: ".").compactMap { Int($0) }
+                            guard octets.count == 4 && !octets.allSatisfy({ $0 == 0 }) else { continue }
+                            if octets[0] == 127 || octets[0] == 10 || (octets[0] == 192 && octets[1] == 168) { continue }
+                            if octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31 { continue }
+                        }
+                        if seen.insert(value).inserted {
+                            var finding = PIIFinding(type: type, value: value, emailID: email.id, emailSubject: subject)
+                            finding.riskContext = context
+                            findings.append(finding)
+                        }
+                    }
+                }
+            }
+
+            // Also scan combined text with headers as fallback for coverage
+            let headerText = email.headers.values.joined(separator: " ")
+            let nsHeader = headerText as NSString
             for (type, regex) in compiledPatterns {
-                let matches = regex.matches(in: searchText, range: NSRange(location: 0, length: nsText.length))
-                var seen = Set<String>()
-                for match in matches.prefix(5) {
-                    let value = nsText.substring(with: match.range)
-                    if type == .creditCard {
-                        let digits = value.filter(\.isNumber)
-                        guard digits.count >= 13 && digits.count <= 19 && luhnCheck(digits) else { continue }
-                    }
-                    if type == .ipAddress {
-                        let octets = value.split(separator: ".").compactMap { Int($0) }
-                        guard octets.count == 4 && !octets.allSatisfy({ $0 == 0 }) else { continue }
-                        if octets[0] == 127 || octets[0] == 10 || (octets[0] == 192 && octets[1] == 168) { continue }
-                        if octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31 { continue }
-                    }
-                    if seen.insert(value).inserted {
-                        findings.append(PIIFinding(type: type, value: value, emailID: email.id, emailSubject: subject))
+                let matches = regex.matches(in: headerText, range: NSRange(location: 0, length: nsHeader.length))
+                for match in matches.prefix(3) {
+                    let value = nsHeader.substring(with: match.range)
+                    if !findings.contains(where: { $0.value == value && $0.emailID == email.id }) {
+                        var finding = PIIFinding(type: type, value: value, emailID: email.id, emailSubject: subject)
+                        finding.riskContext = .header
+                        findings.append(finding)
                     }
                 }
             }
         }
         return findings
+    }
+
+    private static func determinePIISections(_ email: MBOXParser.RawEmail) -> [(String, PIIRiskContext)] {
+        var sections: [(String, PIIRiskContext)] = []
+        let body = email.plainBody.isEmpty ? email.htmlBody : email.plainBody
+        let lines = body.components(separatedBy: .newlines)
+
+        var bodyLines: [String] = []
+        var quotedLines: [String] = []
+        var signatureLines: [String] = []
+        var inSignature = false
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if !inSignature && isSignatureMarker(trimmed) {
+                inSignature = true
+                signatureLines.append(trimmed)
+            } else if inSignature {
+                signatureLines.append(trimmed)
+            } else if trimmed.hasPrefix(">") {
+                quotedLines.append(String(trimmed.dropFirst()))
+            } else {
+                bodyLines.append(trimmed)
+            }
+        }
+
+        if !bodyLines.isEmpty {
+            sections.append((bodyLines.joined(separator: " "), .plainBody))
+        }
+        if !quotedLines.isEmpty {
+            sections.append((quotedLines.joined(separator: " "), .quotedReply))
+        }
+        if !signatureLines.isEmpty {
+            sections.append((signatureLines.joined(separator: " "), .signature))
+        }
+
+        return sections
+    }
+
+    private static func isSignatureMarker(_ line: String) -> Bool {
+        let lower = line.lowercased()
+        if lower == "--" || lower == "-- " { return true }
+        if lower.hasPrefix("sent from my") { return true }
+        let signoffs = ["regards,", "best regards,", "sincerely,", "thanks,", "thank you,", "cheers,", "best,"]
+        return signoffs.contains(where: { lower.hasPrefix($0) })
     }
 
     private static func luhnCheck(_ digits: String) -> Bool {

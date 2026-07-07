@@ -28,7 +28,7 @@ struct RemovedDuplicatesView: View {
             }
         }
         #if os(macOS)
-        .frame(minWidth: 650, idealWidth: 750, minHeight: 500, idealHeight: 600)
+        .frame(minWidth: 480, idealWidth: 750, minHeight: 360, idealHeight: 600)
         #endif
     }
 

@@ -14,6 +14,7 @@ struct AttachmentGridView: View {
     @State private var searchText = ""
     @State private var sortOrder: SortOrder = .name
     @State private var previewURL: URL?
+    @State private var showTutorial = false
 
     enum SortOrder: String, CaseIterable {
         case name = "Name", size = "Size", type = "Type", date = "Date"
@@ -66,6 +67,7 @@ struct AttachmentGridView: View {
                 gridContent
             }
         }
+        .featureTutorial(.attachmentGallery, key: "attachment_gallery_tutorial_seen", isPresented: $showTutorial)
         #if os(iOS)
         .quickLookPreview($previewURL)
         #endif
@@ -99,6 +101,7 @@ struct AttachmentGridView: View {
                     .foregroundColor(AppColors.secondary)
                     .accessibilityLabel("\(filteredItems.count) attachments, \(formattedSize(totalSize)) total size")
                 Spacer()
+                TutorialHelpButton(showTutorial: $showTutorial)
                 Picker("Sort", selection: $sortOrder) {
                     ForEach(SortOrder.allCases, id: \.self) { order in
                         Text(order.rawValue).tag(order)

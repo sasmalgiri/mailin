@@ -9,7 +9,8 @@ import SwiftUI
 
 struct WorkspaceManagerView: View {
     @ObservedObject private var manager = WorkspaceManager.shared
-    @Environment(\.dismiss) private var dismiss
+    var isPresented: Binding<Bool>?
+    @Environment(\.dismiss) private var envDismiss
     @State private var showNewWorkspaceSheet = false
     @State private var workspaceToDelete: WorkspaceManager.Workspace?
     @State private var showDeleteConfirmation = false
@@ -25,7 +26,7 @@ struct WorkspaceManagerView: View {
             content
         }
         #if os(macOS)
-        .frame(minWidth: 650, minHeight: 500)
+        .frame(minWidth: 480, minHeight: 360)
         #endif
         .sheet(isPresented: $showNewWorkspaceSheet) {
             NewWorkspaceSheet()
@@ -69,10 +70,16 @@ struct WorkspaceManagerView: View {
                 Label("New Workspace", systemImage: "plus")
             }
             .buttonStyle(CompactPrimaryButtonStyle())
-            Button("Done") { dismiss() }
-                .keyboardShortcut(.cancelAction)
+            if isPresented != nil {
+                Button("Done") { closeSheet() }
+                    .keyboardShortcut(.cancelAction)
+            }
         }
         .padding(Spacing.medium)
+    }
+
+    private func closeSheet() {
+        if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
     }
 
     // MARK: - Content

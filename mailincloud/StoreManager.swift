@@ -30,7 +30,7 @@ class StoreManager: ObservableObject {
 
     // MARK: - Product IDs
 
-    static let personalLifetimeID = "mailincloud_personal"
+    static let personalLifetimeID = "mailin_personal"
     static let professionalLifetimeID = "Professional_Lifetime"
     static let personalMonthlyID = "personal_monthly"
     static let personalYearlyID = "personal_yearly_01"
@@ -89,7 +89,7 @@ class StoreManager: ObservableObject {
     // MARK: - Published State
 
     @Published private(set) var products: [Product] = []
-    @Published private(set) var currentTier: PurchaseTier = .free
+    @Published private(set) var currentTier: PurchaseTier = .professional // TODO: revert to .free before release
     @Published private(set) var purchaseInProgress = false
     @Published private(set) var purchasePending = false
     @Published private(set) var productLoadError: String?
@@ -169,6 +169,9 @@ class StoreManager: ObservableObject {
     // MARK: - Entitlement Check
 
     func checkEntitlements() async {
+        // TODO: revert before release — testing bypass
+        currentTier = .professional; isLifetimePurchase = true; return
+
         var highestTier: PurchaseTier = .free
         var hasLifetime = false
         var latestExpiration: Date?

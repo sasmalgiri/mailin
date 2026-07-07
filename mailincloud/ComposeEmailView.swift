@@ -1,3 +1,4 @@
+#if !OFFLINE_MODE
 import SwiftUI
 #if canImport(AppKit)
 import AppKit
@@ -328,7 +329,7 @@ struct ComposeEmailView: View {
             }
         }
         #if os(macOS)
-        .frame(minWidth: 520, idealWidth: 640, minHeight: 450, idealHeight: 600)
+        .frame(minWidth: 420, idealWidth: 640, minHeight: 350, idealHeight: 600)
         #endif
         .background(AppColors.backgroundPrimary)
         .onAppear { vm.loadDraft() }
@@ -778,3 +779,5 @@ struct ComposeEmailView: View {
         }
     }
 }
+
+#endif

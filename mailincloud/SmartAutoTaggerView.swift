@@ -9,9 +9,10 @@ import SwiftUI
 
 struct SmartAutoTaggerView: View {
     let emails: [MBOXParser.RawEmail]
+    var isPresented: Binding<Bool>?
     @StateObject private var tagger = SmartAutoTagger()
     @State private var selectedTag: String?
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.dismiss) private var envDismiss
 
     private var allUniqueTags: [(tag: String, count: Int)] {
         var tagCounts: [String: Int] = [:]
@@ -44,8 +45,10 @@ struct SmartAutoTaggerView: View {
                 Text("Smart Auto-Tagger")
                     .font(Typography.headline)
                 Spacer()
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
+                if isPresented != nil {
+                    Button("Done") { closeSheet() }
+                        .keyboardShortcut(.cancelAction)
+                }
             }
             .padding(Spacing.medium)
 
@@ -95,8 +98,12 @@ struct SmartAutoTaggerView: View {
         }
         .onAppear { startTagging() }
         #if os(macOS)
-        .frame(minWidth: 650, minHeight: 550)
+        .frame(minWidth: 480, minHeight: 380)
         #endif
+    }
+
+    private func closeSheet() {
+        if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
     }
 
     // MARK: - Tag Cloud
@@ -115,6 +122,18 @@ struct SmartAutoTaggerView: View {
                         .foregroundColor(AppColors.primary)
                 }
             }
+
+            Label {
+                Text("Tags are suggested using NLP analysis of email content, subjects, and metadata. Review and approve suggestions before applying — automated tags should be verified for accuracy.")
+                    .font(Typography.caption1)
+            } icon: {
+                Image(systemName: "tag.fill")
+                    .foregroundColor(.blue)
+            }
+            .padding(Spacing.xSmall)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.blue.opacity(0.1))
+            .cornerRadius(CornerRadius.small)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: Spacing.xxSmall) {

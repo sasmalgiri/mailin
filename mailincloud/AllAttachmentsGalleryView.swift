@@ -118,7 +118,7 @@ struct AllAttachmentsGalleryView: View {
             }
         }
         #if os(macOS)
-        .frame(minWidth: 700, minHeight: 500)
+        .frame(minWidth: 480, minHeight: 360)
         #endif
     }
 

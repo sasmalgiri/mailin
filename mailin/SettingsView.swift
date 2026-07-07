@@ -7,6 +7,7 @@
 
 import SwiftUI
 import TipKit
+import UserNotifications
 
 struct SettingsView: View {
     @EnvironmentObject var storeManager: StoreManager
@@ -58,6 +59,7 @@ struct SettingsView: View {
     #if os(iOS)
     @State private var showFolderPicker = false
     #endif
+    @State private var notificationStatus: UNAuthorizationStatus = .notDetermined
 
     var body: some View {
         TabView {
@@ -122,13 +124,17 @@ struct SettingsView: View {
         #if os(macOS)
         .frame(minWidth: 400, idealWidth: 540, minHeight: 380, idealHeight: 520)
         #endif
+        .sheet(isPresented: $storeManager.showPaywall) {
+            PaywallView()
+                .environmentObject(storeManager)
+        }
     }
-    
+
     // MARK: - Profile / Persona Settings
     private var profileSettings: some View {
         Form {
             Section {
-                ForEach(PersonaManager.Persona.allCases, id: \.rawValue) { persona in
+                ForEach(PersonaManager.Persona.pickableCases, id: \.rawValue) { persona in
                     Button {
                         personaManager.switchPersona(to: persona)
                     } label: {
@@ -225,6 +231,39 @@ struct SettingsView: View {
                     .font(.headline)
             }
 
+            #if os(iOS)
+            Section {
+                HStack {
+                    Text("Status")
+                    Spacer()
+                    Text(notificationStatusLabel)
+                        .foregroundColor(.secondary)
+                }
+
+                switch notificationStatus {
+                case .notDetermined:
+                    Button("Enable Notifications") {
+                        requestNotificationsOptIn()
+                    }
+                case .denied:
+                    Button("Open System Settings") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) {
+                            UIApplication.shared.open(url)
+                        }
+                    }
+                default:
+                    EmptyView()
+                }
+            } header: {
+                Text("Notifications")
+                    .font(.headline)
+            } footer: {
+                Text("Optional. Lets mailin alert you about import progress and high-severity findings (phishing, PII exposure, anomalies). The app works fully without notifications.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            #endif
+
             Section {
                 HStack {
                     Text("Status")
@@ -240,6 +279,12 @@ struct SettingsView: View {
                     }
                 }
 
+                if storeManager.isPremium && !storeManager.isLifetimePurchase {
+                    Button("Manage Subscription") {
+                        Task { await storeManager.manageSubscriptions() }
+                    }
+                }
+
                 Button("Restore Purchases") {
                     Task { await storeManager.restorePurchases() }
                 }
@@ -251,7 +296,32 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
+        #if os(iOS)
+        .task { await refreshNotificationStatus() }
+        #endif
     }
+
+    #if os(iOS)
+    private var notificationStatusLabel: String {
+        switch notificationStatus {
+        case .authorized, .provisional, .ephemeral: return "Enabled"
+        case .denied: return "Blocked in System Settings"
+        case .notDetermined: return "Not Enabled"
+        @unknown default: return "Unknown"
+        }
+    }
+
+    private func refreshNotificationStatus() async {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        await MainActor.run { notificationStatus = settings.authorizationStatus }
+    }
+
+    private func requestNotificationsOptIn() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in
+            Task { await refreshNotificationStatus() }
+        }
+    }
+    #endif
     
     // MARK: - Parsing Settings
     private var parsingSettings: some View {
@@ -311,6 +381,13 @@ struct SettingsView: View {
                     Button(storeManager.currentTier == .free ? "Upgrade" : "Upgrade to Professional") {
                         storeManager.showPaywall = true
                     }
+                }
+
+                if storeManager.isPremium && !storeManager.isLifetimePurchase {
+                    Button("Manage Subscription") {
+                        Task { await storeManager.manageSubscriptions() }
+                    }
+                    .accessibilityLabel("Manage or cancel subscription")
                 }
 
                 Button("Restore Purchases") {
