@@ -260,6 +260,12 @@ struct SettingsView: View {
                     }
                 }
 
+                if storeManager.isPremium && !storeManager.isLifetimePurchase {
+                    Button("Manage Subscription") {
+                        Task { await storeManager.manageSubscriptions() }
+                    }
+                }
+
                 Button("Restore Purchases") {
                     Task { await storeManager.restorePurchases() }
                 }
@@ -356,6 +362,13 @@ struct SettingsView: View {
                     Button(storeManager.currentTier == .free ? "Upgrade" : "Upgrade to Professional") {
                         storeManager.showPaywall = true
                     }
+                }
+
+                if storeManager.isPremium && !storeManager.isLifetimePurchase {
+                    Button("Manage Subscription") {
+                        Task { await storeManager.manageSubscriptions() }
+                    }
+                    .accessibilityLabel("Manage or cancel subscription")
                 }
 
                 Button("Restore Purchases") {
