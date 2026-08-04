@@ -63,7 +63,13 @@ The `#if DEBUG` hooks the 2a/2b tests depend on are landed and compiling. **This
 - `FTSSearchIndex.debugSearchCallCount` + `resetDebugSearchCallCount()` — observe the FTS dispatch (2a). Reset immediately before the observed `applyFilters()`, assert `== 1`.
 - `ParsedEmailListViewModel.lastFTSSearchTask` — retained handle so 2a awaits the async FTS pass deterministically (no poll).
 
-**Still owner/next-session actions:** add the test bundle → write 2b (hardcoded-90 independent expected, `S ≥ E`) and 2a (reset → `applyFilters()` → `await lastFTSSearchTask?.value` → assert `== 1`) → run red-then-green (wrong-path `loadLegacyArchive` reds 2b with `S < E`; stub-search-to-in-RAM reds 2a with counter `0`).
+**Test target created + tests written + compiling (via `xcodeproj` gem, no hand-edited pbxproj):**
+- `maxmailinTests` unit-test target added to `maxmailin.xcodeproj`, wired into the `maxmailin` scheme test action. `ENABLE_HARDENED_RUNTIME=NO` for Debug (needed for test-bundle injection).
+- `maxmailinTests/V2VerificationTests.swift` — **2b** `testMigrationFromRealV1Store` (temp-dir v1 store, 100 rows / **90 distinct MIDs hardcoded**, in-memory EmailStore, asserts `stored ≥ 90`) and **2a** `testLiveSearchDispatchesToFTS` (populate FTS → reset counter → `applyFilters()` → `await lastFTSSearchTask?.value` → assert `debugSearchCallCount == 1`). Both **compile** (confirmed: `GetTestList` enumerates them, which requires a successful build-for-testing).
+
+**BLOCKED: cannot execute here.** `RunSomeTests` returns "No result" (host app won't launch in this headless agent environment — 2× confirmed, unchanged by disabling hardened runtime; `RunCodeSnippet` likewise hung on any `EmailStore`/SwiftData call). So the **red-then-green run is NOT done** — it needs an interactive Xcode session.
+
+**Owner action — run the net (`⌘U` in Xcode):** open `maxmailin.xcodeproj`, `⌘U`. Expect both green. To satisfy the red-then-green contract, red each first: (2b) temporarily point `MigrationService.loadLegacyArchive` at the old `email_archive.json` path → expect `S < E` fail; (2a) stub the `FTSSearchIndex.search` call out of `applyFilters` → expect `counter == 0` fail. Restore, re-run green. These tests are **written + compiling but not executed by me** — treat as unverified-by-me until that run.
 
 ## Business decisions (not code — need owner sign-off)
 - **"Now live on the App Store"** copy on `docs/index.html` — leave or change depends on actual release state (only the owner knows).
