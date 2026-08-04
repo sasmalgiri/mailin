@@ -133,7 +133,7 @@ struct SecurityAnalysisFeatures {
                 totalScore += sev * 2
             }
             if authResult.dkimResult == .fail {
-                signals.append(ThreatSignal(category: .authentication, severity: 0.7, detail: "DKIM verification failed"))
+                signals.append(ThreatSignal(category: .authentication, severity: 0.7, detail: "DKIM reported as failing (per Authentication-Results header)"))
                 totalScore += 1.4
             }
             if authResult.dmarcResult == .fail {

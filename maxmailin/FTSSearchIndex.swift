@@ -99,9 +99,20 @@ actor FTSSearchIndex {
         }
     }
 
+    #if DEBUG
+    /// Test-only: counts calls to `search` so a wiring test can assert the live
+    /// search path actually reached FTS5 (vs. the in-RAM fallback). Reset
+    /// immediately before the dispatch under observation, then assert `== 1`.
+    private(set) var debugSearchCallCount = 0
+    func resetDebugSearchCallCount() { debugSearchCallCount = 0 }
+    #endif
+
     /// Full-text query across every shard. Returns matched email UUIDs in
     /// relevance order, truncated to `limit`.
     func search(_ query: String, limit: Int = 50) throws -> [UUID] {
+        #if DEBUG
+        debugSearchCallCount += 1
+        #endif
         try migrateLegacyIfNeeded()
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
@@ -160,6 +171,24 @@ actor FTSSearchIndex {
     func rebuild(from emails: [MBOXParser.RawEmail]) throws {
         try clear()
         try indexBatch(emails)
+    }
+
+    /// Remove a single email from every shard by its UUID. Call on delete /
+    /// redaction so search never returns rows for content no longer present in
+    /// the store (otherwise deleted/redacted emails linger as searchable
+    /// "ghost rows").
+    func delete(id: UUID) throws {
+        try migrateLegacyIfNeeded()
+        let idString = id.uuidString
+        for year in try discoverAllShardYears() {
+            let db = try ensureShard(year: year)
+            let stmt = try prepare(db, "DELETE FROM email_search WHERE email_id = ?;")
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, idString)
+            guard sqlite3_step(stmt) == SQLITE_DONE else {
+                throw FTSError.execFailed(lastError(db))
+            }
+        }
     }
 
     /// Total rows summed across every shard.
@@ -390,9 +419,24 @@ actor FTSSearchIndex {
         return String(cString: cstr)
     }
 
+    /// Quote individual terms so punctuation can't break FTS5, while letting
+    /// the boolean operators AND / OR / NOT survive as operators rather than
+    /// being swallowed into a single quoted phrase. (Proximity `NEAR(...)` is
+    /// built upstream by the query builder, not here.)
     private func escapeForFTS(_ raw: String) -> String {
-        let escaped = raw.replacingOccurrences(of: "\"", with: "\"\"")
-        return "\"\(escaped)\""
+        let operators: Set<String> = ["AND", "OR", "NOT"]
+        let tokens = raw.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+        guard !tokens.isEmpty else { return "\"\"" }
+        // Make the last leaf term a prefix query (`"budg"*` matches "budget") so
+        // partial / search-as-you-type words match inside FTS5 — this removes
+        // the main reason a substring fallback would otherwise be needed.
+        let lastTermIndex = tokens.lastIndex(where: { !operators.contains($0.uppercased()) })
+        return tokens.enumerated().map { idx, tok in
+            if operators.contains(tok.uppercased()) { return tok.uppercased() }
+            let esc = tok.replacingOccurrences(of: "\"", with: "\"\"")
+            let quoted = "\"\(esc)\""
+            return idx == lastTermIndex ? quoted + "*" : quoted
+        }.joined(separator: " ")
     }
 
     private func stripHTML(_ html: String) -> String {

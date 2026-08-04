@@ -10,8 +10,6 @@
 	<false/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>mailin connects to email servers (such as imap.gmail.com on port 993) only when you opt in by entering IMAP credentials in Settings → Email Accounts. This permission is requested by iOS so mailin can establish that secure connection to fetch your emails. mailin does not scan, browse, or advertise itself on your local network, and no data is transmitted unless you initiate an IMAP fetch.</string>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

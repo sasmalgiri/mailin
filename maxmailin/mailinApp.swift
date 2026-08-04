@@ -43,6 +43,7 @@ struct mailinApp: App {
     @ObservedObject private var forensicManager = ForensicManager.shared
     @ObservedObject private var personaManager = PersonaManager.shared
     @ObservedObject private var compliance = LegalComplianceManager.shared
+    @ObservedObject private var biometricLock = BiometricLockManager.shared
     @AppStorage("enableAIFeatures") private var enableAIFeatures = true
     @AppStorage("hasSeenLaunchAnimation") private var hasSeenLaunchAnimation = false
     @State private var showLaunchAnimation = false
@@ -199,6 +200,7 @@ struct mailinApp: App {
                         _ = HMACChainAuditLog.shared.verifyChain()
                     }
                     .onChange(of: scenePhase) { _, newPhase in
+                        biometricLock.handleScenePhaseChange(newPhase)
                         if newPhase == .active {
                             Task { await storeManager.checkEntitlements() }
                         }
@@ -223,6 +225,16 @@ struct mailinApp: App {
                         hasSeenLaunchAnimation = true
                     }
                     .zIndex(999)
+                }
+
+                // Biometric lock gate. Topmost overlay so the archive is never
+                // visible until the user authenticates (Touch ID / Face ID /
+                // passcode). Driven by the "biometricLockEnabled" setting; the
+                // manager starts locked at launch when the setting is on.
+                if biometricLock.isLocked {
+                    BiometricLockView(manager: biometricLock)
+                        .zIndex(1000)
+                        .transition(.opacity)
                 }
             }
         }

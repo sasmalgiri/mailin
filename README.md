@@ -65,7 +65,7 @@ Import, search, analyze, and export email archives from Gmail, Outlook, Thunderb
 - Exportable analytics reports
 
 ### Export
-- EML, JSON, CSV, PDF, MSG, PST formats
+- EML, JSON, CSV, PDF formats (plus MSG; PST export is experimental and not guaranteed to open in Outlook)
 - Bates-stamped PDF for legal compliance
 - Forensic reports with SHA-256, SHA-1, MD5 hashes
 - Concordance/Relativity load files
@@ -88,8 +88,8 @@ Import, search, analyze, and export email archives from Gmail, Outlook, Thunderb
 - Email comparison — side-by-side diff view
 - Keyword monitoring and smart alerts
 - Automation rules — auto-tag by custom rules
-- Encrypted storage (AES-256) and biometric lock
-- Spotlight search integration and iCloud sync
+- Biometric lock (Touch ID / Face ID); on-device storage protected by OS file protection
+- Spotlight search integration
 - Command palette (Cmd+Shift+P)
 - Duplicate detection and removal
 - Available in 11 languages

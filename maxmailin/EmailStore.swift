@@ -37,6 +37,21 @@ enum EmailStoreError: LocalizedError {
 
 /// Actor-isolated facade over SwiftData. All persistence I/O goes through here
 /// so we get Swift-enforced concurrency safety and a single audit point.
+/// Versioned schema so future model changes have a defined migration path
+/// instead of throwing at launch on an incompatible store. When the model
+/// changes, add `MailinSchemaV2` and a `MigrationStage` to the plan below.
+enum MailinSchemaV1: VersionedSchema {
+    static var versionIdentifier = Schema.Version(1, 0, 0)
+    static var models: [any PersistentModel.Type] {
+        [StoredEmail.self, StoredAttachment.self]
+    }
+}
+
+enum EmailStoreMigrationPlan: SchemaMigrationPlan {
+    static var schemas: [any VersionedSchema.Type] { [MailinSchemaV1.self] }
+    static var stages: [MigrationStage] { [] }
+}
+
 actor EmailStore {
 
     // MARK: - Container
@@ -47,24 +62,38 @@ actor EmailStore {
 
     private init() {}
 
+    #if DEBUG
+    /// Test-only: build an in-memory store so unit tests don't touch the real
+    /// on-disk store. Set before first container use.
+    nonisolated(unsafe) static var testInMemory = false
+    /// Test-only: drop the cached container so the next use rebuilds it.
+    func resetForTesting() { container = nil }
+    #endif
+
     /// Lazy container initialization. Called once on first use; safe to call
     /// repeatedly. Container path lives in Application Support so iOS Data
     /// Protection applies automatically.
     func ensureContainer() throws -> ModelContainer {
         if let container { return container }
 
-        let schema = Schema([
-            StoredEmail.self,
-            StoredAttachment.self
-        ])
+        let schema = Schema(versionedSchema: MailinSchemaV1.self)
+        #if DEBUG
+        let inMemory = EmailStore.testInMemory
+        #else
+        let inMemory = false
+        #endif
         let config = ModelConfiguration(
             schema: schema,
-            isStoredInMemoryOnly: false,
+            isStoredInMemoryOnly: inMemory,
             allowsSave: true,
             cloudKitDatabase: .none      // strictly offline, no iCloud sync
         )
         do {
-            let c = try ModelContainer(for: schema, configurations: [config])
+            let c = try ModelContainer(
+                for: schema,
+                migrationPlan: EmailStoreMigrationPlan.self,
+                configurations: [config]
+            )
             self.container = c
             return c
         } catch {
@@ -187,6 +216,14 @@ actor EmailStore {
             processed += chunk.count
             progress?(processed, total)
         }
+    }
+
+    /// Total number of stored emails. Used by migration to verify the write
+    /// actually landed before marking the migration complete.
+    func count() throws -> Int {
+        let container = try ensureContainer()
+        let context = ModelContext(container)
+        return try context.fetchCount(FetchDescriptor<StoredEmail>())
     }
 
     // MARK: - Queries

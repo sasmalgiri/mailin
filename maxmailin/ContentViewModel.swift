@@ -170,7 +170,10 @@ class ContentViewModel: ObservableObject {
             guard dataStart >= nameStart, dataStart + compressedSize <= bytes.count else { break }
 
             let ext = (name as NSString).pathExtension.lowercased()
-            if (ext == "mbox" || ext == "eml") && !name.hasSuffix("/") {
+            // Extract every archive format the app can parse — not just
+            // mbox/eml (the landing page advertises PST/OST/NSF/MSG too).
+            let supported: Set<String> = ["mbox", "eml", "emlx", "msg", "pst", "ost", "nsf"]
+            if supported.contains(ext) && !name.hasSuffix("/") {
                 let compressedData = Data(bytes[dataStart..<dataStart+compressedSize])
                 var fileData: Data?
 
@@ -181,9 +184,15 @@ class ContentViewModel: ObservableObject {
                 }
 
                 if let data = fileData {
-                    let safeName = name.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "..", with: "_")
+                    // Flatten to the base filename, then verify the resolved
+                    // path stays inside tempDir (zip-slip defense).
+                    let safeName = (name as NSString).lastPathComponent
+                        .replacingOccurrences(of: "/", with: "_")
+                        .replacingOccurrences(of: "..", with: "_")
                     let destURL = tempDir.appendingPathComponent(safeName)
-                    if let _ = try? data.write(to: destURL) {
+                    let resolved = destURL.standardizedFileURL.path
+                    if resolved.hasPrefix(tempDir.standardizedFileURL.path + "/"),
+                       let _ = try? data.write(to: destURL) {
                         mailFiles.append(destURL)
                     }
                 }
@@ -410,8 +419,8 @@ class ContentViewModel: ObservableObject {
                         progress: nil
                     )
                     try? await FTSSearchIndex.shared.indexBatch(v2Emails)
-                    _ = try? await MainActor.run {
-                        try? HMACChainAuditLog.shared.append(
+                    await MainActor.run {
+                        _ = try? HMACChainAuditLog.shared.append(
                             action: "v2.dualWrite",
                             detail: "Mirrored \(v2Emails.count) emails to SwiftData + FTS5"
                         )

@@ -365,7 +365,11 @@ struct NSFReader {
 
         let value: String
         if valueLen > 0 {
-            let valueData = data[valueStart..<(valueStart + valueLen)]
+            // Re-wrap the slice in a fresh Data so downstream byte-subscripting
+            // consumers (lzssDecompress, stripCompositeHeader) get a 0-based
+            // index. A Data slice keeps its parent's non-zero startIndex, so
+            // `input[0]` on the raw slice traps with index-out-of-bounds.
+            let valueData = Data(data[valueStart..<(valueStart + valueLen)])
             if name == "Body" || name == "$HtmlBody" || name == "Body_HTML" {
                 value = decodeBodyValue(valueData)
             } else {

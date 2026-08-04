@@ -602,7 +602,7 @@ class ForensicManager: ObservableObject {
             indicators.append(SpoofIndicator(severity: .high, type: "SPF Fail", detail: "Sender not authorized by domain's SPF record"))
         }
         if auth.dkim == "fail" {
-            indicators.append(SpoofIndicator(severity: .high, type: "DKIM Fail", detail: "Email signature verification failed"))
+            indicators.append(SpoofIndicator(severity: .high, type: "DKIM Fail", detail: "DKIM reported as failing by the receiving server (Authentication-Results header; not independently verified)"))
         }
         if auth.dmarc == "fail" {
             indicators.append(SpoofIndicator(severity: .high, type: "DMARC Fail", detail: "Domain-based message authentication failed"))
@@ -708,7 +708,7 @@ class ForensicManager: ObservableObject {
 
         let auth = extractAuthResults(email)
         if auth.spf == "fail" { score += 15; factors.append("SPF authentication failed") }
-        if auth.dkim == "fail" { score += 15; factors.append("DKIM verification failed") }
+        if auth.dkim == "fail" { score += 15; factors.append("DKIM reported fail (per receiving server)") }
         if auth.dmarc == "fail" { score += 15; factors.append("DMARC policy failed") }
 
         let piiFindings = EmailNLPEngine.detectPII(in: [email])

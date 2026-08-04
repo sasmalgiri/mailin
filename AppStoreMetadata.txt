@@ -68,7 +68,7 @@ ANALYTICS DASHBOARD
 - Exportable analytics reports
 
 EXPORT ANYWHERE
-- Export as EML, JSON, CSV, PDF, MSG, or PST
+- Export as EML, JSON, CSV, PDF, or MSG (PST export is experimental)
 - Bates-stamped PDF for legal and compliance
 - Forensic reports with SHA-256, SHA-1, and MD5 hashes
 - Concordance load files for legal review platforms
