@@ -66,6 +66,66 @@ enum FTSQueryBuilder {
     }
 }
 
+/// Bounded, restartable store→FTS reconciliation. Pages `EmailStore` by keyset
+/// cursor, checks the FTS registry per batch, indexes only genuinely-missing
+/// rows, and persists a cursor after each page. No archive-wide `Set<UUID>`, no
+/// fixed record ceiling; safe to interrupt and resume.
+enum FTSReconciler {
+    private static let cursorDateKey = "fts.reconcile.cursor.date"
+    private static let cursorIDKey = "fts.reconcile.cursor.id"
+
+    @discardableResult
+    static func reconcile(pageSize: Int = 5_000, maxPages: Int? = nil) async -> Int {
+        var beforeDate = loadCursorDate()
+        var beforeID = loadCursorID()
+        var indexed = 0
+        var pages = 0
+        while true {
+            if Task.isCancelled { break }
+            if let maxPages, pages >= maxPages { break }
+            let page: [(id: UUID, date: Date)]
+            do {
+                page = try await EmailStore.shared.reconcilePage(beforeDate: beforeDate, beforeID: beforeID, limit: pageSize)
+            } catch { break }
+            if page.isEmpty { clearCursor(); break }               // exhausted
+            let ids = page.map(\.id)
+            let already = (try? await FTSSearchIndex.shared.indexedSubset(of: ids)) ?? Set(ids)
+            let missing = ids.filter { !already.contains($0) }
+            if !missing.isEmpty,
+               let emails = try? await EmailStore.shared.emails(withIDs: missing),
+               (try? await FTSSearchIndex.shared.indexBatch(emails)) != nil {
+                indexed += emails.count
+            }
+            if let last = page.last {
+                beforeDate = last.date
+                beforeID = last.id
+                saveCursor(date: last.date, id: last.id)           // restartable
+            }
+            pages += 1
+            if page.count < pageSize { clearCursor(); break }      // exhausted
+        }
+        return indexed
+    }
+
+    static func resetCursorForTesting() { clearCursor() }
+
+    private static func loadCursorDate() -> Date? {
+        guard let d = UserDefaults.standard.object(forKey: cursorDateKey) as? Double else { return nil }
+        return Date(timeIntervalSinceReferenceDate: d)
+    }
+    private static func loadCursorID() -> UUID? {
+        UserDefaults.standard.string(forKey: cursorIDKey).flatMap(UUID.init(uuidString:))
+    }
+    private static func saveCursor(date: Date, id: UUID) {
+        UserDefaults.standard.set(date.timeIntervalSinceReferenceDate, forKey: cursorDateKey)
+        UserDefaults.standard.set(id.uuidString, forKey: cursorIDKey)
+    }
+    private static func clearCursor() {
+        UserDefaults.standard.removeObject(forKey: cursorDateKey)
+        UserDefaults.standard.removeObject(forKey: cursorIDKey)
+    }
+}
+
 actor FTSSearchIndex {
 
     static let shared = FTSSearchIndex()
@@ -81,6 +141,20 @@ actor FTSSearchIndex {
     /// handles to close under memory pressure.
     private var shardLastAccess: [Int: UInt64] = [:]
     private var didMigrateLegacy: Bool = false
+
+    #if DEBUG
+    /// Test-only: redirect FTS shards to a temp dir so tests are isolated from
+    /// the real (sandbox-container) index.
+    nonisolated(unsafe) static var testShardsDirectoryOverride: URL?
+    /// Test-only: close open shard handles + reset in-memory state so the next
+    /// access re-opens from the (possibly newly-overridden) directory.
+    func resetForTesting() {
+        for (_, handle) in shards { sqlite3_close(handle) }
+        shards.removeAll()
+        shardLastAccess.removeAll()
+        didMigrateLegacy = false
+    }
+    #endif
 
     private init() {}
 
@@ -207,6 +281,9 @@ actor FTSSearchIndex {
         for year in years {
             let db = try ensureShard(year: year)
             try exec(db, "DELETE FROM email_search;")
+            // Reset the registry too, or it would falsely report rows as indexed
+            // after the FTS content is gone (store↔registry drift).
+            try exec(db, "DELETE FROM indexed_message;")
             try exec(db, "VACUUM;")
         }
     }
@@ -227,11 +304,24 @@ actor FTSSearchIndex {
         let idString = id.uuidString
         for year in try discoverAllShardYears() {
             let db = try ensureShard(year: year)
-            let stmt = try prepare(db, "DELETE FROM email_search WHERE email_id = ?;")
-            defer { sqlite3_finalize(stmt) }
-            bindText(stmt, 1, idString)
-            guard sqlite3_step(stmt) == SQLITE_DONE else {
-                throw FTSError.execFailed(lastError(db))
+            try exec(db, "BEGIN TRANSACTION;")
+            do {
+                let stmt = try prepare(db, "DELETE FROM email_search WHERE email_id = ?;")
+                bindText(stmt, 1, idString)
+                let ok1 = sqlite3_step(stmt) == SQLITE_DONE
+                sqlite3_finalize(stmt)
+                guard ok1 else { throw FTSError.execFailed(lastError(db)) }
+
+                let reg = try prepare(db, "DELETE FROM indexed_message WHERE email_id = ?;")
+                bindText(reg, 1, idString)
+                let ok2 = sqlite3_step(reg) == SQLITE_DONE
+                sqlite3_finalize(reg)
+                guard ok2 else { throw FTSError.execFailed(lastError(db)) }
+
+                try exec(db, "COMMIT;")
+            } catch {
+                try? exec(db, "ROLLBACK;")
+                throw error
             }
         }
     }
@@ -267,6 +357,41 @@ actor FTSSearchIndex {
             }
         }
         return ids
+    }
+
+    private func hasAnyRow(_ db: OpaquePointer, _ table: String) throws -> Bool {
+        let stmt = try prepare(db, "SELECT EXISTS(SELECT 1 FROM \(table) LIMIT 1);")
+        defer { sqlite3_finalize(stmt) }
+        return sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_int(stmt, 0) == 1
+    }
+
+    /// Of the given ids, which are already indexed (present in any shard's
+    /// registry). Bounded — the `IN (...)` clause is chunked; no archive-wide
+    /// Set is built. Used by paged reconciliation.
+    func indexedSubset(of ids: [UUID]) throws -> Set<UUID> {
+        try migrateLegacyIfNeeded()
+        guard !ids.isEmpty else { return [] }
+        var found = Set<UUID>()
+        let idStrings = ids.map { $0.uuidString }
+        for year in try discoverAllShardYears() {
+            let db = try ensureShard(year: year)
+            var start = 0
+            while start < idStrings.count {
+                let end = min(start + 900, idStrings.count)
+                let chunk = Array(idStrings[start..<end])
+                start = end
+                let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+                let stmt = try prepare(db, "SELECT email_id FROM indexed_message WHERE email_id IN (\(placeholders));")
+                defer { sqlite3_finalize(stmt) }
+                for (i, s) in chunk.enumerated() { bindText(stmt, Int32(i + 1), s) }
+                while sqlite3_step(stmt) == SQLITE_ROW {
+                    if let c = sqlite3_column_text(stmt, 0), let u = UUID(uuidString: String(cString: c)) {
+                        found.insert(u)
+                    }
+                }
+            }
+        }
+        return found
     }
 
     /// Index only the emails not already present — repairs store↔FTS drift
@@ -334,6 +459,23 @@ actor FTSSearchIndex {
                 tokenize='porter unicode61 remove_diacritics 1'
             );
         """)
+        // Registry beside the FTS shard: which email_ids are indexed and at what
+        // revision. Written in the SAME transaction as FTS mutations. Lets
+        // reconciliation check membership in bounded batches instead of building
+        // an archive-wide Set<UUID>. `indexed_revision`/`content_hash` are the
+        // future-proof scaffold for stale-content reindex (redaction etc.).
+        try exec(db, """
+            CREATE TABLE IF NOT EXISTS indexed_message(
+                email_id TEXT PRIMARY KEY,
+                indexed_revision INTEGER NOT NULL DEFAULT 1,
+                content_hash TEXT,
+                indexed_at INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        // One-time backfill for shards indexed before the registry existed.
+        if try !hasAnyRow(db, "indexed_message"), try hasAnyRow(db, "email_search") {
+            try exec(db, "INSERT OR IGNORE INTO indexed_message(email_id, indexed_revision, indexed_at) SELECT email_id, 1, 0 FROM email_search;")
+        }
         shards[year] = db
         lruCounter &+= 1
         shardLastAccess[year] = lruCounter
@@ -391,6 +533,19 @@ actor FTSSearchIndex {
         guard sqlite3_step(stmt) == SQLITE_DONE else {
             throw FTSError.execFailed(lastError(db))
         }
+
+        // Registry upsert — same transaction as the FTS insert (indexBatch wraps
+        // the shard group in BEGIN/COMMIT), so the two never drift.
+        let reg = try prepare(db, """
+            INSERT OR REPLACE INTO indexed_message(email_id, indexed_revision, content_hash, indexed_at)
+            VALUES (?, 1, NULL, ?);
+        """)
+        defer { sqlite3_finalize(reg) }
+        bindText(reg, 1, idString)
+        sqlite3_bind_int64(reg, 2, Int64(Date().timeIntervalSince1970))
+        guard sqlite3_step(reg) == SQLITE_DONE else {
+            throw FTSError.execFailed(lastError(db))
+        }
     }
 
     // MARK: - Legacy single-file migration
@@ -440,6 +595,12 @@ actor FTSSearchIndex {
     // MARK: - URLs
 
     private func shardsDirectory() throws -> URL {
+        #if DEBUG
+        if let override = FTSSearchIndex.testShardsDirectoryOverride {
+            try? FileManager.default.createDirectory(at: override, withIntermediateDirectories: true)
+            return override
+        }
+        #endif
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
         ).first ?? FileManager.default.temporaryDirectory

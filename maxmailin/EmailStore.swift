@@ -403,6 +403,43 @@ actor EmailStore {
         }
     }
 
+    /// Lightweight keyset page of (id, date), most-recent first, for bounded FTS
+    /// reconciliation. No bodies — used to check registry membership cheaply.
+    func reconcilePage(beforeDate: Date?, beforeID: UUID?, limit: Int) throws -> [(id: UUID, date: Date)] {
+        let container = try ensureContainer()
+        let context = ModelContext(container)
+        var descriptor: FetchDescriptor<StoredEmail>
+        if let beforeDate, let beforeID {
+            descriptor = FetchDescriptor<StoredEmail>(
+                predicate: #Predicate { $0.date < beforeDate || ($0.date == beforeDate && $0.id < beforeID) },
+                sortBy: [SortDescriptor(\.date, order: .reverse), SortDescriptor(\.id, order: .reverse)]
+            )
+        } else if let beforeDate {
+            descriptor = FetchDescriptor<StoredEmail>(
+                predicate: #Predicate { $0.date < beforeDate },
+                sortBy: [SortDescriptor(\.date, order: .reverse), SortDescriptor(\.id, order: .reverse)]
+            )
+        } else {
+            descriptor = FetchDescriptor<StoredEmail>(
+                sortBy: [SortDescriptor(\.date, order: .reverse), SortDescriptor(\.id, order: .reverse)]
+            )
+        }
+        descriptor.fetchLimit = limit
+        let stored = try context.fetch(descriptor)
+        return stored.map { (id: $0.id, date: $0.date) }
+    }
+
+    /// Full emails (with bodies) for the given ids — for reconcile reindex.
+    func emails(withIDs ids: [UUID]) throws -> [MBOXParser.RawEmail] {
+        guard !ids.isEmpty else { return [] }
+        let container = try ensureContainer()
+        let context = ModelContext(container)
+        let idArray = ids
+        let descriptor = FetchDescriptor<StoredEmail>(predicate: #Predicate { idArray.contains($0.id) })
+        let stored = try context.fetch(descriptor)
+        return stored.map { rawEmail(from: $0, includeBodies: true) }
+    }
+
     /// Emails with full bodies, most-recent first, for FTS reconcile. Capped
     /// so a launch-time reconcile can't load an unbounded archive into memory.
     func emailsForReindex(limit: Int) throws -> [MBOXParser.RawEmail] {

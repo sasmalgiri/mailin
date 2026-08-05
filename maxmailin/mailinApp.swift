@@ -176,8 +176,9 @@ struct mailinApp: App {
                             let storeCount = (try? await EmailStore.shared.totalCount()) ?? 0
                             let ftsCount = (try? await FTSSearchIndex.shared.rowCount()) ?? 0
                             if storeCount > ftsCount {
-                                let emails = (try? await EmailStore.shared.emailsForReindex(limit: 100_000)) ?? []
-                                _ = try? await FTSSearchIndex.shared.indexMissing(from: emails)
+                                // Bounded, paged, restartable — no archive-wide
+                                // Set<UUID>, no 100k ceiling.
+                                await FTSReconciler.reconcile()
                             }
                         }
 

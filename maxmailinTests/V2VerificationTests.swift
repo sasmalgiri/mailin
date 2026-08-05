@@ -32,6 +32,14 @@ final class V2VerificationTests: XCTestCase {
         )
     }
 
+    /// Fixture with a distinct calendar date so keyset paging is deterministic.
+    private func makeEmailDated(mid: String, subject: String, body: String, dayOffset: Int) -> MBOXParser.RawEmail {
+        var e = makeEmail(mid: mid, subject: subject, body: body)
+        let day = String(format: "%02d", 1 + (dayOffset % 28))
+        e.headers["Date"] = "Wed, \(day) Jan 2025 14:30:00 +0000"
+        return e
+    }
+
     // MARK: - 2b — Migration (R1)
 
     /// Builds a v1 store in a temp dir with a KNOWN duplicate-Message-ID
@@ -242,5 +250,74 @@ final class V2VerificationTests: XCTestCase {
         let dispatched = await FTSSearchIndex.shared.debugSearchCallCount
         XCTAssertEqual(dispatched, 1, "live proximity must dispatch to FTS5 (not in-RAM)")
         try await FTSSearchIndex.shared.clear()
+    }
+
+    // MARK: - P0-S2 — bounded, restartable reconciliation
+
+    private func seedReconcileFixtures() async throws -> [MBOXParser.RawEmail] {
+        var fixtures: [MBOXParser.RawEmail] = []
+        for i in 0..<12 {
+            fixtures.append(makeEmailDated(mid: "<rec-\(i)@test>", subject: "S\(i)", body: "reconcile alpha \(i)", dayOffset: i))
+        }
+        try await EmailStore.shared.insertBatch(fixtures, sourceFileHash: nil, batchSize: 200, progress: nil)
+        try await FTSSearchIndex.shared.clear()
+        // Index only the 3 newest (largest dayOffset) → the rest are missing,
+        // several beyond the first reconciliation page.
+        try await FTSSearchIndex.shared.indexBatch(Array(fixtures.suffix(3)))
+        return fixtures
+    }
+
+    /// Reconcile reaches records beyond the first page (no fixed ceiling).
+    func testBoundedReconcile_indexesMissingBeyondFirstPage() async throws {
+        let savedInMemory = EmailStore.testInMemory
+        EmailStore.testInMemory = true
+        await EmailStore.shared.resetForTesting()
+        let ftsDir = FileManager.default.temporaryDirectory.appendingPathComponent("fts_\(UUID().uuidString)")
+        FTSSearchIndex.testShardsDirectoryOverride = ftsDir
+        await FTSSearchIndex.shared.resetForTesting()
+        FTSReconciler.resetCursorForTesting()
+        defer { EmailStore.testInMemory = savedInMemory; FTSSearchIndex.testShardsDirectoryOverride = nil }
+
+        let fixtures = try await seedReconcileFixtures()
+
+        let n = await FTSReconciler.reconcile(pageSize: 5)   // oldest are on page 2/3
+        XCTAssertEqual(n, 9, "indexes the 9 missing, including beyond the first page")
+
+        let hits = try await FTSSearchIndex.shared.search("alpha", limit: 50)
+        XCTAssertTrue(hits.contains(fixtures[0].id), "oldest (page 3) record must be reachable")
+        let ftsCount = try await FTSSearchIndex.shared.rowCount()
+        XCTAssertEqual(ftsCount, 12, "all store rows indexed after reconcile")
+
+        try await FTSSearchIndex.shared.clear()
+        await EmailStore.shared.resetForTesting()
+        FTSReconciler.resetCursorForTesting()
+    }
+
+    /// Reconcile is restartable: interrupt after one page, resume via the saved
+    /// cursor, and it completes without re-doing the whole scan.
+    func testBoundedReconcile_resumesFromCursor() async throws {
+        let savedInMemory = EmailStore.testInMemory
+        EmailStore.testInMemory = true
+        await EmailStore.shared.resetForTesting()
+        let ftsDir = FileManager.default.temporaryDirectory.appendingPathComponent("fts_\(UUID().uuidString)")
+        FTSSearchIndex.testShardsDirectoryOverride = ftsDir
+        await FTSSearchIndex.shared.resetForTesting()
+        FTSReconciler.resetCursorForTesting()
+        defer { EmailStore.testInMemory = savedInMemory; FTSSearchIndex.testShardsDirectoryOverride = nil }
+
+        _ = try await seedReconcileFixtures()
+
+        let first = await FTSReconciler.reconcile(pageSize: 5, maxPages: 1)   // interrupt
+        XCTAssertGreaterThan(first, 0, "first page made progress")
+        XCTAssertLessThan(first, 9, "partial — not everything indexed yet")
+
+        let rest = await FTSReconciler.reconcile(pageSize: 5)                 // resume
+        XCTAssertEqual(first + rest, 9, "resume completes the reconcile")
+        let ftsCount = try await FTSSearchIndex.shared.rowCount()
+        XCTAssertEqual(ftsCount, 12, "all rows indexed after resume")
+
+        try await FTSSearchIndex.shared.clear()
+        await EmailStore.shared.resetForTesting()
+        FTSReconciler.resetCursorForTesting()
     }
 }
