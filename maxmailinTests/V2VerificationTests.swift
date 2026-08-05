@@ -564,6 +564,42 @@ final class V2VerificationTests: XCTestCase {
         await EmailStore.shared.resetForTesting()
     }
 
+    // MARK: - Phase 15/24 — architecture guards (forbidden patterns absent)
+
+    /// Production source must never (re)introduce unbounded / corpus-reconstructing
+    /// or non-offline patterns. Complements the whole-corpus ratchet. Fails with
+    /// the offending file:line if any reappears.
+    func testArchitectureGuards_forbiddenProductionPatternsAbsent() throws {
+        let src = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("maxmailin")
+        let fm = FileManager.default
+        guard let items = try? fm.contentsOfDirectory(at: src, includingPropertiesForKeys: nil) else {
+            throw XCTSkip("app source not found at \(src.path)")
+        }
+        // Substrings chosen to avoid false positives (e.g. downloadAllAttachments
+        // does NOT contain "loadAll(").
+        let forbidden = [
+            "loadEverything",
+            "loadEntireArchive",
+            "repository.loadAll",
+            ".loadAll(",
+            "PrivateCloudComputeLanguageModel",
+            "limit: Int.max",
+        ]
+        var violations: [String] = []
+        for f in items where f.pathExtension == "swift" {
+            guard let text = try? String(contentsOf: f, encoding: .utf8) else { continue }
+            for (i, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+                if line.contains("//") { continue }   // ignore comments/docs
+                for pat in forbidden where line.contains(pat) {
+                    violations.append("\(f.lastPathComponent):\(i + 1)  \(pat)")
+                }
+            }
+        }
+        XCTAssertTrue(violations.isEmpty, "Forbidden production pattern(s) reintroduced:\n" + violations.joined(separator: "\n"))
+    }
+
     // MARK: - Stage 5C.0 — migration firewall ratchet guard
 
     /// The number of legacy whole-corpus references (parsedEmails / .allEmails /
