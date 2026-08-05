@@ -8,6 +8,33 @@ class ParsedEmailListViewModel: ObservableObject {
 
     private var isResettingFilters = false
 
+    // FTS5-backed match cache. `ftsMatchKey` is the query string the cached IDs
+    // correspond to. Free-text / boolean searches are resolved by the SQLite
+    // FTS5 engine (FTSSearchIndex, async); the in-RAM EmailSearchIndex stays as
+    // the synchronous fallback so results appear instantly and there's no
+    // regression when the FTS index is empty.
+    private var ftsMatchIDs: Set<UUID>? = nil
+    private var ftsMatchKey: String? = nil
+    /// Bumped on any content mutation (delete / redact / reindex) so the search
+    /// cache key tracks mutations, not just cardinality — a redaction changes
+    /// content without changing count and must invalidate cached hits.
+    private var corpusVersion = 0
+
+    /// Invalidate the FTS result cache. Call after delete/redact/reindex so a
+    /// stale hit isn't served for content that changed in place.
+    func invalidateSearchCache() {
+        corpusVersion &+= 1
+        ftsMatchKey = nil
+        ftsMatchIDs = nil
+    }
+
+    #if DEBUG
+    /// Test-only: retains the most recent FTS search Task so a wiring test can
+    /// await it deterministically (`await lastFTSSearchTask?.value`) instead of
+    /// polling a timeout.
+    var lastFTSSearchTask: Task<Void, Never>?
+    #endif
+
     // MARK: - UI State
     @Published var isParsed = false
     @Published var isParsing = false
@@ -631,20 +658,73 @@ class ParsedEmailListViewModel: ObservableObject {
 
         var advancedMatchIDs: Set<UUID>?
 
-        if parsed.isBooleanQuery && !parsed.freeText.isEmpty {
-            let results = EmailSearchIndex.shared.booleanSearch(query: parsed.freeText, limit: allEmails.count)
-            advancedMatchIDs = Set(results.map(\.email.id))
-        } else if parsed.isRegexQuery && !parsed.freeText.isEmpty {
-            let results = EmailSearchIndex.shared.regexSearch(pattern: parsed.freeText, limit: allEmails.count)
-            advancedMatchIDs = Set(results.map(\.email.id))
+        // Compile the parsed query into valid FTS5 grammar (FTSQueryBuilder).
+        // Regex has no FTS5 form and stays in-RAM. Proximity compiles to a
+        // native NEAR(...) and is routed through FTS5 with NO in-RAM fallback
+        // (removes the whole-array `EmailSearchIndex.proximitySearch` scale
+        // violation). Free-text/Boolean use FTS when the index isn't mid-build,
+        // else the in-RAM engine (which holds the parsed-so-far set).
+        let ftsQuery: String?
+        let allowInRAMFallback: Bool
+        if parsed.isRegexQuery {
+            ftsQuery = nil
+            allowInRAMFallback = true
         } else if parsed.isProximityQuery {
-            let results = EmailSearchIndex.shared.proximitySearch(
+            ftsQuery = FTSQueryBuilder.proximity(
                 term1: parsed.proximityTerm1,
                 term2: parsed.proximityTerm2,
-                maxDistance: parsed.proximityDistance,
-                limit: allEmails.count
+                distance: parsed.proximityDistance
             )
-            advancedMatchIDs = Set(results.map(\.email.id))
+            allowInRAMFallback = false   // proximity is FTS5-only now
+        } else {
+            let t = parsed.freeText.trimmingCharacters(in: .whitespaces)
+            ftsQuery = t.isEmpty ? nil : FTSQueryBuilder.freeTextOrBoolean(t)
+            allowInRAMFallback = true
+        }
+
+        // Proximity always routes through FTS (partial-during-import is the real
+        // index, not an in-memory answer presented as authoritative). Free-text/
+        // Boolean route through FTS only once the index isn't mid-build.
+        let useFTS = (ftsQuery != nil) && (!isParsing || !allowInRAMFallback)
+        if let ftsQuery, useFTS {
+            let cacheKey = "\(ftsQuery)\u{1}\(allEmails.count)\u{1}\(corpusVersion)"
+            if cacheKey != ftsMatchKey {
+                let searchTask = Task { [weak self] in
+                    guard let self else { return }
+                    let populated = ((try? await FTSSearchIndex.shared.rowCount()) ?? 0) > 0
+                    if populated {
+                        let ids = (try? await FTSSearchIndex.shared.searchRaw(ftsQuery, limit: 100_000)) ?? []
+                        self.ftsMatchIDs = Set(ids)   // empty set = authoritative zero matches
+                    } else {
+                        // Nothing indexed yet. Free-text/Boolean fall back to
+                        // in-RAM; proximity has no fallback → authoritative empty.
+                        self.ftsMatchIDs = allowInRAMFallback ? nil : Set<UUID>()
+                    }
+                    self.ftsMatchKey = cacheKey
+                    self.applyFilters()
+                }
+                #if DEBUG
+                lastFTSSearchTask = searchTask
+                #endif
+            }
+            if ftsMatchKey == cacheKey, let ids = ftsMatchIDs {
+                advancedMatchIDs = ids
+            }
+        } else {
+            ftsMatchKey = nil
+            ftsMatchIDs = nil
+        }
+
+        // In-RAM fallback — Boolean/regex only (NOT proximity, which is now
+        // FTS5-only). Used while FTS hasn't produced an authoritative answer.
+        if advancedMatchIDs == nil && allowInRAMFallback {
+            if parsed.isBooleanQuery && !parsed.freeText.isEmpty {
+                let results = EmailSearchIndex.shared.booleanSearch(query: parsed.freeText, limit: allEmails.count)
+                advancedMatchIDs = Set(results.map(\.email.id))
+            } else if parsed.isRegexQuery && !parsed.freeText.isEmpty {
+                let results = EmailSearchIndex.shared.regexSearch(pattern: parsed.freeText, limit: allEmails.count)
+                advancedMatchIDs = Set(results.map(\.email.id))
+            }
         }
 
         if parsed.searchInAttachments && !parsed.freeText.isEmpty {

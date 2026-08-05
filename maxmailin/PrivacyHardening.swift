@@ -44,7 +44,7 @@ enum PrivacyHardening {
 
     /// Cryptographically secure random bytes via CryptoKit's CSPRNG.
     static func secureRandomBytes(count: Int) -> Data {
-        var key = SymmetricKey(size: SymmetricKeySize(bitCount: count * 8))
+        let key = SymmetricKey(size: SymmetricKeySize(bitCount: count * 8))
         return key.withUnsafeBytes { Data($0) }
     }
 }

@@ -365,7 +365,11 @@ struct NSFReader {
 
         let value: String
         if valueLen > 0 {
-            let valueData = data[valueStart..<(valueStart + valueLen)]
+            // Re-wrap the slice in a fresh Data so downstream byte-subscripting
+            // consumers (lzssDecompress, stripCompositeHeader) get a 0-based
+            // index. A Data slice keeps its parent's non-zero startIndex, so
+            // `input[0]` on the raw slice traps with index-out-of-bounds.
+            let valueData = Data(data[valueStart..<(valueStart + valueLen)])
             if name == "Body" || name == "$HtmlBody" || name == "Body_HTML" {
                 value = decodeBodyValue(valueData)
             } else {
@@ -492,6 +496,14 @@ struct NSFReader {
         // Scan the raw bytes for recognizable email-like text patterns
         // This is a fallback for NSF files where the structured parse fails
         var notes: [NSFNote] = []
+
+        // The scan fallback materialises the entire file as a String. Cap it so
+        // a multi-GB NSF that fails structured parse fails cleanly rather than
+        // OOM'ing (structured parse handles large files via mmap; this doesn't).
+        let maxScanBytes = 200 * 1024 * 1024
+        guard data.count <= maxScanBytes else {
+            throw NSFParser.NSFError.invalidFormat("File too large for scan fallback (\(data.count) bytes)")
+        }
 
         guard let text = String(data: data, encoding: .utf8)
                 ?? String(data: data, encoding: .isoLatin1)

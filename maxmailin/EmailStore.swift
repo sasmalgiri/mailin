@@ -13,6 +13,9 @@
 
 import Foundation
 import SwiftData
+import os.log
+
+private let emailStoreLog = Logger(subsystem: "com.ecosanskriti.mailin", category: "EmailStore")
 
 /// Errors that can surface during persistence operations.
 enum EmailStoreError: LocalizedError {
@@ -37,6 +40,21 @@ enum EmailStoreError: LocalizedError {
 
 /// Actor-isolated facade over SwiftData. All persistence I/O goes through here
 /// so we get Swift-enforced concurrency safety and a single audit point.
+/// Versioned schema so future model changes have a defined migration path
+/// instead of throwing at launch on an incompatible store. When the model
+/// changes, add `MailinSchemaV2` and a `MigrationStage` to the plan below.
+enum MailinSchemaV1: VersionedSchema {
+    static var versionIdentifier = Schema.Version(1, 0, 0)
+    static var models: [any PersistentModel.Type] {
+        [StoredEmail.self, StoredAttachment.self]
+    }
+}
+
+enum EmailStoreMigrationPlan: SchemaMigrationPlan {
+    static var schemas: [any VersionedSchema.Type] { [MailinSchemaV1.self] }
+    static var stages: [MigrationStage] { [] }
+}
+
 actor EmailStore {
 
     // MARK: - Container
@@ -47,24 +65,38 @@ actor EmailStore {
 
     private init() {}
 
+    #if DEBUG
+    /// Test-only: build an in-memory store so unit tests don't touch the real
+    /// on-disk store. Set before first container use.
+    nonisolated(unsafe) static var testInMemory = false
+    /// Test-only: drop the cached container so the next use rebuilds it.
+    func resetForTesting() { container = nil }
+    #endif
+
     /// Lazy container initialization. Called once on first use; safe to call
     /// repeatedly. Container path lives in Application Support so iOS Data
     /// Protection applies automatically.
     func ensureContainer() throws -> ModelContainer {
         if let container { return container }
 
-        let schema = Schema([
-            StoredEmail.self,
-            StoredAttachment.self
-        ])
+        let schema = Schema(versionedSchema: MailinSchemaV1.self)
+        #if DEBUG
+        let inMemory = EmailStore.testInMemory
+        #else
+        let inMemory = false
+        #endif
         let config = ModelConfiguration(
             schema: schema,
-            isStoredInMemoryOnly: false,
+            isStoredInMemoryOnly: inMemory,
             allowsSave: true,
             cloudKitDatabase: .none      // strictly offline, no iCloud sync
         )
         do {
-            let c = try ModelContainer(for: schema, configurations: [config])
+            let c = try ModelContainer(
+                for: schema,
+                migrationPlan: EmailStoreMigrationPlan.self,
+                configurations: [config]
+            )
             self.container = c
             return c
         } catch {
@@ -150,7 +182,14 @@ actor EmailStore {
                     let descriptor = FetchDescriptor<StoredEmail>(
                         predicate: #Predicate { $0.messageID == mid }
                     )
-                    if let _ = try? context.fetch(descriptor).first { continue }
+                    do {
+                        if try context.fetch(descriptor).first != nil { continue }
+                    } catch {
+                        // Don't silently treat a transient dedup-fetch failure as
+                        // "no duplicate". Log and proceed to insert — a possible
+                        // duplicate is recoverable; silent data loss is not.
+                        emailStoreLog.error("dedup fetch failed; inserting anyway: \(error.localizedDescription, privacy: .public)")
+                    }
                 }
                 let date = parsedDate(from: email.headers["Date"]) ?? Date.distantPast
                 let stored = StoredEmail(
@@ -186,6 +225,34 @@ actor EmailStore {
             }
             processed += chunk.count
             progress?(processed, total)
+        }
+    }
+
+    /// Total number of stored emails. Used by migration to verify the write
+    /// actually landed before marking the migration complete.
+    func count() throws -> Int {
+        let container = try ensureContainer()
+        let context = ModelContext(container)
+        return try context.fetchCount(FetchDescriptor<StoredEmail>())
+    }
+
+    /// Delete emails (cascading their attachments) from the store by id.
+    /// Pairs with `FTSSearchIndex.delete(id:)` at the call site so a removed
+    /// or redacted email doesn't linger as a searchable ghost row.
+    func delete(ids: Set<UUID>) throws {
+        guard !ids.isEmpty else { return }
+        let container = try ensureContainer()
+        let context = ModelContext(container)
+        let idArray = Array(ids)
+        let descriptor = FetchDescriptor<StoredEmail>(
+            predicate: #Predicate { idArray.contains($0.id) }
+        )
+        let matches = try context.fetch(descriptor)
+        for m in matches { context.delete(m) }
+        do {
+            try context.save()
+        } catch {
+            throw EmailStoreError.insertFailed(error.localizedDescription)
         }
     }
 
@@ -334,6 +401,56 @@ actor EmailStore {
         } catch {
             throw EmailStoreError.fetchFailed(error.localizedDescription)
         }
+    }
+
+    /// Lightweight keyset page of (id, date), most-recent first, for bounded FTS
+    /// reconciliation. No bodies — used to check registry membership cheaply.
+    func reconcilePage(beforeDate: Date?, beforeID: UUID?, limit: Int) throws -> [(id: UUID, date: Date)] {
+        let container = try ensureContainer()
+        let context = ModelContext(container)
+        var descriptor: FetchDescriptor<StoredEmail>
+        if let beforeDate, let beforeID {
+            descriptor = FetchDescriptor<StoredEmail>(
+                predicate: #Predicate { $0.date < beforeDate || ($0.date == beforeDate && $0.id < beforeID) },
+                sortBy: [SortDescriptor(\.date, order: .reverse), SortDescriptor(\.id, order: .reverse)]
+            )
+        } else if let beforeDate {
+            descriptor = FetchDescriptor<StoredEmail>(
+                predicate: #Predicate { $0.date < beforeDate },
+                sortBy: [SortDescriptor(\.date, order: .reverse), SortDescriptor(\.id, order: .reverse)]
+            )
+        } else {
+            descriptor = FetchDescriptor<StoredEmail>(
+                sortBy: [SortDescriptor(\.date, order: .reverse), SortDescriptor(\.id, order: .reverse)]
+            )
+        }
+        descriptor.fetchLimit = limit
+        let stored = try context.fetch(descriptor)
+        return stored.map { (id: $0.id, date: $0.date) }
+    }
+
+    /// Full emails (with bodies) for the given ids — for reconcile reindex.
+    func emails(withIDs ids: [UUID]) throws -> [MBOXParser.RawEmail] {
+        guard !ids.isEmpty else { return [] }
+        let container = try ensureContainer()
+        let context = ModelContext(container)
+        let idArray = ids
+        let descriptor = FetchDescriptor<StoredEmail>(predicate: #Predicate { idArray.contains($0.id) })
+        let stored = try context.fetch(descriptor)
+        return stored.map { rawEmail(from: $0, includeBodies: true) }
+    }
+
+    /// Emails with full bodies, most-recent first, for FTS reconcile. Capped
+    /// so a launch-time reconcile can't load an unbounded archive into memory.
+    func emailsForReindex(limit: Int) throws -> [MBOXParser.RawEmail] {
+        let container = try ensureContainer()
+        let context = ModelContext(container)
+        var descriptor = FetchDescriptor<StoredEmail>(
+            sortBy: [SortDescriptor(\.date, order: .reverse)]
+        )
+        descriptor.fetchLimit = limit
+        let stored = try context.fetch(descriptor)
+        return stored.map { rawEmail(from: $0, includeBodies: true) }
     }
 
     /// Fetch a single email with full bodies (called when user opens an email).

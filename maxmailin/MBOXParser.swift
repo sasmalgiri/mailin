@@ -179,6 +179,15 @@ struct MBOXParser {
         senderEmail: String,
         onProgress: ((Double) -> Void)? = nil
     ) throws -> [RawEmail] {
+        // Ceiling on the non-streaming path: this reads the whole file into a
+        // String. Files above the cap must use the streaming parser, not be
+        // materialised whole (OOM). 500 MB is well above any single .eml or a
+        // small mbox; larger archives go through parseStreamingCallback.
+        let maxNonStreamingBytes = 500 * 1024 * 1024
+        if let size = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size]) as? Int,
+           size > maxNonStreamingBytes {
+            throw ExtractionError.fileTooLarge(filename: fileURL.lastPathComponent, size: size)
+        }
         let content = try FileUtils.readTextFile(url: fileURL)
         let rawMessages = splitMBOX(content: content)
         var parsedEmails: [RawEmail] = []
@@ -351,6 +360,7 @@ struct MBOXParser {
         var currentLines: [String] = []
         var inMessage = false
         var totalParsed = 0
+        var skippedCount = 0
         var batch: [RawEmail] = []
         batch.reserveCapacity(batchSize)
 
@@ -392,7 +402,9 @@ struct MBOXParser {
                 let email = try processRawMessage(raw, senderEmail: senderEmail)
                 batch.append(email)
             } catch {
-                // Skipped on parse error; counted neither toward batch nor total.
+                // Count the drop so it's surfaced (lastRecoveryReport), not
+                // silently vanished — critical for a forensic tool.
+                skippedCount += 1
             }
             if fileSize > 0, let onProgress {
                 let offset = Double((try? handle.offset()) ?? 0)
@@ -422,6 +434,14 @@ struct MBOXParser {
             totalParsed += batch.count
             batch.removeAll(keepingCapacity: true)
         }
+        // Surface skipped/damaged counts on the streaming path too (was
+        // silently dropped) via the same channel the array path uses.
+        MBOXParser.lastRecoveryReport = ParseRecoveryReport(
+            totalMessages: totalParsed + skippedCount,
+            successfullyParsed: totalParsed,
+            failed: skippedCount,
+            errorCategories: skippedCount > 0 ? ["streaming parse error": skippedCount] : [:]
+        )
         return totalParsed
     }
 

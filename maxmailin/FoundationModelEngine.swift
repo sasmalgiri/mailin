@@ -367,18 +367,21 @@ struct SearchEmailsTool: Tool {
         var query: String
     }
 
-    let emails: [MBOXParser.RawEmail]
-
     func call(arguments: Arguments) async throws -> String {
-        let terms = EmailNLPEngine.extractSearchTerms(from: arguments.query)
-        let results = EmailSearchIndex.shared.hybridSearch(query: arguments.query, terms: terms, limit: 5)
-        if results.isEmpty { return "No emails found for '\(arguments.query)'" }
+        // Bounded retrieval: FTS5 → IDs → EmailStore. The AI tool never receives
+        // or scans the whole archive (was EmailSearchIndex.hybridSearch over an
+        // in-memory [RawEmail]).
+        let fts = FTSQueryBuilder.freeTextOrBoolean(arguments.query) ?? FTSQueryBuilder.escapeTerm(arguments.query)
+        let ids = (try? await FTSSearchIndex.shared.searchRaw(fts, limit: 5)) ?? []
+        guard !ids.isEmpty else { return "No emails found for '\(arguments.query)'" }
+        let evidence = (try? await EmailStore.shared.emails(withIDs: ids)) ?? []
+        guard !evidence.isEmpty else { return "No emails found for '\(arguments.query)'" }
         var output = ""
-        for r in results {
-            let subj = r.email.headers["Subject"] ?? "(No Subject)"
-            let from = r.email.headers["From"] ?? "Unknown"
-            let date = r.email.headers["Date"] ?? ""
-            let body = FoundationModelEngine.sanitizeForSafetyFilter(String(r.email.plainBody.prefix(300)))
+        for e in evidence {
+            let subj = e.headers["Subject"] ?? "(No Subject)"
+            let from = e.headers["From"] ?? "Unknown"
+            let date = e.headers["Date"] ?? ""
+            let body = FoundationModelEngine.sanitizeForSafetyFilter(String(e.plainBody.prefix(300)))
             output += "Subject: \(subj)\nFrom: \(from)\nDate: \(date)\nBody: \(body)\n\n"
         }
         return output
@@ -396,10 +399,13 @@ struct GetThreadInfoTool: Tool {
         var subject: String
     }
 
-    let emails: [MBOXParser.RawEmail]
-
     func call(arguments: Arguments) async throws -> String {
-        let threads = ThreadGrouper.group(emails)
+        // Bounded: FTS5 finds candidate emails by subject, EmailStore hydrates
+        // that bounded set, and we group only those — not the whole archive.
+        let fts = FTSQueryBuilder.freeTextOrBoolean(arguments.subject) ?? FTSQueryBuilder.escapeTerm(arguments.subject)
+        let ids = (try? await FTSSearchIndex.shared.searchRaw(fts, limit: 50)) ?? []
+        let candidates = (try? await EmailStore.shared.emails(withIDs: ids)) ?? []
+        let threads = ThreadGrouper.group(candidates)
         let lower = arguments.subject.lowercased()
         guard let thread = threads.first(where: { $0.subject.lowercased().contains(lower) }) else {
             return "No thread found for '\(arguments.subject)'"
@@ -875,7 +881,7 @@ struct FoundationModelEngine {
             """
 
         let session = LanguageModelSession(
-            tools: [SearchEmailsTool(emails: emails), GetThreadInfoTool(emails: emails)],
+            tools: [SearchEmailsTool(), GetThreadInfoTool()],
             instructions: instructions
         )
 
@@ -972,7 +978,7 @@ struct FoundationModelEngine {
             """
 
         let session = LanguageModelSession(
-            tools: [SearchEmailsTool(emails: retrievedEmails)],
+            tools: [SearchEmailsTool()],
             instructions: instructions
         )
         let prompt = "User question: \(query)\n\n\(context)"
@@ -1073,7 +1079,7 @@ struct FoundationModelEngine {
             """
 
         let session = LanguageModelSession(
-            tools: [SearchEmailsTool(emails: retrievedEmails)],
+            tools: [SearchEmailsTool()],
             instructions: instructions
         )
         let prompt = "User question: \(query)\n\n\(context)"
@@ -3625,34 +3631,34 @@ struct FoundationModelEngine {
 
 
             tools.append(SpotlightSearchTool())
-            tools.append(SearchEmailsTool(emails: emails))
+            tools.append(SearchEmailsTool())
             tools.append(KnowledgeGraphQueryTool())
 
         case .triage:
 
             tools.append(SenderProfileTool(emails: emails))
-            tools.append(SearchEmailsTool(emails: emails))
+            tools.append(SearchEmailsTool())
             tools.append(NLPAnalysisTool(emails: emails))
 
         case .security:
             tools.append(PhishingAnalysisTool(emails: emails))
             tools.append(SenderProfileTool(emails: emails))
-            tools.append(SearchEmailsTool(emails: emails))
+            tools.append(SearchEmailsTool())
             tools.append(NLPAnalysisTool(emails: emails))
             tools.append(AttachmentAnalysisTool(emails: emails))
 
         case .search:
             tools.append(SpotlightSearchTool())
-            tools.append(SearchEmailsTool(emails: emails))
-            tools.append(GetThreadInfoTool(emails: emails))
+            tools.append(SearchEmailsTool())
+            tools.append(GetThreadInfoTool())
 
             tools.append(TopicDrillTool(emails: emails))
             tools.append(AttachmentAnalysisTool(emails: emails))
             tools.append(KnowledgeGraphQueryTool())
 
         case .thread:
-            tools.append(GetThreadInfoTool(emails: emails))
-            tools.append(SearchEmailsTool(emails: emails))
+            tools.append(GetThreadInfoTool())
+            tools.append(SearchEmailsTool())
             tools.append(SenderProfileTool(emails: emails))
             tools.append(SpotlightSearchTool())
             tools.append(KnowledgeGraphQueryTool())
@@ -3662,24 +3668,24 @@ struct FoundationModelEngine {
             tools.append(SenderProfileTool(emails: emails))
             tools.append(NLPAnalysisTool(emails: emails))
             tools.append(SpotlightSearchTool())
-            tools.append(SearchEmailsTool(emails: emails))
+            tools.append(SearchEmailsTool())
             tools.append(KnowledgeGraphQueryTool())
 
         case .sentiment:
             tools.append(SenderProfileTool(emails: emails))
             tools.append(NLPAnalysisTool(emails: emails))
-            tools.append(SearchEmailsTool(emails: emails))
+            tools.append(SearchEmailsTool())
 
         case .topicAnalysis:
             tools.append(TopicDrillTool(emails: emails))
             tools.append(NLPAnalysisTool(emails: emails))
-            tools.append(SearchEmailsTool(emails: emails))
+            tools.append(SearchEmailsTool())
             tools.append(KnowledgeGraphQueryTool())
 
         case .general:
             tools.append(SpotlightSearchTool())
-            tools.append(SearchEmailsTool(emails: emails))
-            tools.append(GetThreadInfoTool(emails: emails))
+            tools.append(SearchEmailsTool())
+            tools.append(GetThreadInfoTool())
             tools.append(SenderProfileTool(emails: emails))
             tools.append(TopicDrillTool(emails: emails))
 

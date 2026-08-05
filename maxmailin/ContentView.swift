@@ -157,7 +157,7 @@ struct ContentView: View {
                         guard ParserFactory.allSupportedExtensions.contains(ext) || ext == "zip" else { return }
                         Task { @MainActor in
                             if ext == "zip" {
-                                let extracted = viewModel.extractMailFilesFromZip(at: url)
+                                let extracted = await viewModel.extractMailFilesFromZipAsync(at: url)
                                 if extracted.isEmpty {
                                     parseFailed = true
                                 } else {

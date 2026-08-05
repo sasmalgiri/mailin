@@ -8,17 +8,41 @@ struct EmailPersistence {
     private static let saveQueue = DispatchQueue(label: "com.ecosanskriti.mailin.persistence", qos: .utility)
     private static let currentVersion = 1
 
-    private static var storeURL: URL {
-        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
-            return FileManager.default.temporaryDirectory.appendingPathComponent("mailin").appendingPathComponent("saved_emails.json")
+    #if DEBUG
+    /// Test-only override for the base directory, so unit tests isolate the v1
+    /// store to a temp dir instead of the real Application Support location.
+    nonisolated(unsafe) static var testBaseDirectoryOverride: URL?
+    #endif
+
+    private static var baseDirectory: URL {
+        #if DEBUG
+        if let override = testBaseDirectoryOverride {
+            try? FileManager.default.createDirectory(at: override, withIntermediateDirectories: true)
+            return override
         }
+        #endif
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory.appendingPathComponent("mailin")
         let appDir = appSupport.appendingPathComponent("mailin", isDirectory: true)
         try? FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
-        return appDir.appendingPathComponent("saved_emails.json")
+        return appDir
+    }
+
+    private static var storeURL: URL {
+        baseDirectory.appendingPathComponent("saved_emails.json")
     }
 
     private static var compressedStoreURL: URL {
         storeURL.deletingLastPathComponent().appendingPathComponent("saved_emails.json.lz")
+    }
+
+    /// True if a v1 archive file exists on disk (compressed or plain), regardless
+    /// of whether it currently decodes. Lets migration distinguish "no previous
+    /// data" from "previous data present but unreadable" — the latter must never
+    /// be treated as a completed migration.
+    static var legacyStoreExists: Bool {
+        FileManager.default.fileExists(atPath: compressedStoreURL.path)
+            || FileManager.default.fileExists(atPath: storeURL.path)
     }
 
     static var metaURLForRetentionCheck: URL { metaURL }

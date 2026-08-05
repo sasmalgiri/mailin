@@ -75,7 +75,7 @@ final class MemoryPressureHandler {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.handlePressure(level: .warning)
+            Task { @MainActor in self?.handlePressure(level: .warning) }
         }
         #endif
 
@@ -86,7 +86,9 @@ final class MemoryPressureHandler {
         ) { [weak self] _ in
             let state = ProcessInfo.processInfo.thermalState
             if state == .serious || state == .critical {
-                self?.handlePressure(level: .thermal)
+                // Hop to the main actor: handlePressure is @MainActor-isolated
+                // and the notification closure is nonisolated.
+                Task { @MainActor in self?.handlePressure(level: .thermal) }
             }
         }
     }

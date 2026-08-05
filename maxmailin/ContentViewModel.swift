@@ -140,12 +140,29 @@ class ContentViewModel: ObservableObject {
     }
 
     // MARK: - Zip Import Support (sandbox-safe, no Process)
+
+    /// Synchronous extraction. Records the temp dir for later cleanup.
     func extractMailFilesFromZip(at zipURL: URL) -> [URL] {
+        let (files, tempDir) = Self.extractZipCore(at: zipURL)
+        pendingTempDirs.append(tempDir)
+        return files
+    }
+
+    /// Off-main extraction — runs the heavy parse/inflate on a background
+    /// executor so a large zip doesn't block (beachball) the main thread.
+    func extractMailFilesFromZipAsync(at zipURL: URL) async -> [URL] {
+        let (files, tempDir) = await Task.detached { Self.extractZipCore(at: zipURL) }.value
+        pendingTempDirs.append(tempDir)
+        return files
+    }
+
+    /// Pure, nonisolated extraction core so it can run off the main actor.
+    /// Returns the extracted files and the temp dir they were written to.
+    nonisolated static func extractZipCore(at zipURL: URL) -> (files: [URL], tempDir: URL) {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("mailin_zip_\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        pendingTempDirs.append(tempDir)
 
-        guard let archive = try? Data(contentsOf: zipURL) else { return [] }
+        guard let archive = try? Data(contentsOf: zipURL) else { return ([], tempDir) }
 
         var mailFiles: [URL] = []
         var offset = 0
@@ -170,20 +187,29 @@ class ContentViewModel: ObservableObject {
             guard dataStart >= nameStart, dataStart + compressedSize <= bytes.count else { break }
 
             let ext = (name as NSString).pathExtension.lowercased()
-            if (ext == "mbox" || ext == "eml") && !name.hasSuffix("/") {
+            // Extract every archive format the app can parse — not just
+            // mbox/eml (the landing page advertises PST/OST/NSF/MSG too).
+            let supported: Set<String> = ["mbox", "eml", "emlx", "msg", "pst", "ost", "nsf"]
+            if supported.contains(ext) && !name.hasSuffix("/") {
                 let compressedData = Data(bytes[dataStart..<dataStart+compressedSize])
                 var fileData: Data?
 
                 if method == 0 {
                     fileData = compressedData
                 } else if method == 8 {
-                    fileData = decompressDeflate(compressedData, uncompressedSize: uncompressedSize)
+                    fileData = Self.decompressDeflate(compressedData, uncompressedSize: uncompressedSize)
                 }
 
                 if let data = fileData {
-                    let safeName = name.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "..", with: "_")
+                    // Flatten to the base filename, then verify the resolved
+                    // path stays inside tempDir (zip-slip defense).
+                    let safeName = (name as NSString).lastPathComponent
+                        .replacingOccurrences(of: "/", with: "_")
+                        .replacingOccurrences(of: "..", with: "_")
                     let destURL = tempDir.appendingPathComponent(safeName)
-                    if let _ = try? data.write(to: destURL) {
+                    let resolved = destURL.standardizedFileURL.path
+                    if resolved.hasPrefix(tempDir.standardizedFileURL.path + "/"),
+                       let _ = try? data.write(to: destURL) {
                         mailFiles.append(destURL)
                     }
                 }
@@ -192,10 +218,10 @@ class ContentViewModel: ObservableObject {
             offset = dataStart + compressedSize
         }
 
-        return mailFiles
+        return (mailFiles, tempDir)
     }
 
-    private func decompressDeflate(_ data: Data, uncompressedSize: Int) -> Data? {
+    nonisolated private static func decompressDeflate(_ data: Data, uncompressedSize: Int) -> Data? {
         guard !data.isEmpty else { return nil }
         let maxDecompressedSize = 500_000_000 // 500MB safety cap
         guard uncompressedSize >= 0 && uncompressedSize <= maxDecompressedSize else { return nil }
@@ -410,8 +436,8 @@ class ContentViewModel: ObservableObject {
                         progress: nil
                     )
                     try? await FTSSearchIndex.shared.indexBatch(v2Emails)
-                    _ = try? await MainActor.run {
-                        try? HMACChainAuditLog.shared.append(
+                    await MainActor.run {
+                        _ = try? HMACChainAuditLog.shared.append(
                             action: "v2.dualWrite",
                             detail: "Mirrored \(v2Emails.count) emails to SwiftData + FTS5"
                         )
@@ -714,6 +740,15 @@ class ContentViewModel: ObservableObject {
         totalParsedCount = parsedEmails.count
         duplicatesRemoved += removed.count
         removedDuplicates.append(contentsOf: removed)
+        // Durably delete from the v2 store AND the FTS index so removed emails
+        // don't linger as searchable ghost rows (store↔FTS drift).
+        let idList = ids
+        Task {
+            try? await EmailStore.shared.delete(ids: idList)
+            for id in idList {
+                try? await FTSSearchIndex.shared.delete(id: id)
+            }
+        }
     }
 
     // MARK: - Restore persisted emails

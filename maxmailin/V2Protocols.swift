@@ -54,6 +54,11 @@ protocol EmailParserProtocol {
 
 // MARK: - Audit log
 
+// @MainActor because the concrete conformer (HMACChainAuditLog) is
+// @MainActor-isolated. Marking the protocol matches that isolation so the
+// conformance doesn't cross actor boundaries (an error under the Swift 6
+// language mode).
+@MainActor
 protocol AuditLogProtocol {
     func recordEvent(action: String, detail: String) throws
     func verifyChain() -> Bool
@@ -67,6 +72,9 @@ extension HMACChainAuditLog: AuditLogProtocol {
 
 // MARK: - Export signing
 
+// @MainActor to match the concrete conformer (ExportSigner), same reasoning
+// as AuditLogProtocol above.
+@MainActor
 protocol ExportSignerProtocol {
     func sign(_ data: Data) throws -> Data
     func signFile(_ url: URL) throws -> URL

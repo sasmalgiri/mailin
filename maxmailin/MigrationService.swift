@@ -74,20 +74,22 @@ final class MigrationService: ObservableObject {
         migratedCount = 0
         totalCount = 0
 
-        let legacyEmails: [MBOXParser.RawEmail]
-        do {
-            legacyEmails = try loadLegacyArchive()
-        } catch {
-            logger.info("No legacy archive found or unreadable: \(error.localizedDescription)")
-            status = .completed
-            UserDefaults.standard.set(true, forKey: completionKey)
-            return
-        }
+        // Read the REAL v1 store. EmailPersistence.load() already resolves the
+        // correct path (…/mailin/saved_emails.json[.lz]) and decompresses LZFSE.
+        let (legacyEmails, _) = EmailPersistence.load()
 
         guard !legacyEmails.isEmpty else {
-            logger.info("Legacy archive is empty; nothing to migrate.")
-            status = .completed
+            // Distinguish "no v1 data" (safe to mark complete) from "v1 data is
+            // present but could not be read" (must NOT mark complete — otherwise
+            // a transient/corrupt read silently orphans the user's archive).
+            if EmailPersistence.legacyStoreExists {
+                logger.error("Legacy v1 store exists but yielded 0 emails — not marking complete; will retry next launch.")
+                status = .failed("Could not read your previous data. Will retry on next launch.")
+                return
+            }
+            logger.info("No legacy archive found; nothing to migrate.")
             UserDefaults.standard.set(true, forKey: completionKey)
+            status = .completed
             return
         }
 
@@ -103,73 +105,34 @@ final class MigrationService: ObservableObject {
                     self.progressFraction = Double(processed) / Double(max(total, 1))
                 }
             }
-            try archiveLegacyAsBackup()
+            // Verify the write actually landed before marking complete. The v1
+            // store is left UNTOUCHED on disk (non-destructive); the completion
+            // flag is the sole idempotency guard.
+            // Meaningful count-verification: EmailStore dedupes by Message-ID,
+            // so the expected post-migration count is (distinct Message-IDs) +
+            // (emails that have no Message-ID, which are never deduped). Compare
+            // against that, NOT against legacyEmails.count — a Gmail export with
+            // the same message under multiple labels legitimately lands fewer
+            // rows, and comparing to the raw count would fail forever.
+            let distinctMIDs = Set(legacyEmails.compactMap { m -> String? in
+                let mid = m.headers["Message-ID"] ?? ""
+                return mid.isEmpty ? nil : mid
+            }).count
+            let noMIDCount = legacyEmails.filter { ($0.headers["Message-ID"] ?? "").isEmpty }.count
+            let expected = distinctMIDs + noMIDCount
+            let stored = try await EmailStore.shared.count()
+            guard stored >= expected else {
+                logger.error("Post-migration count \(stored) < expected \(expected) — not marking complete; will retry next launch.")
+                status = .failed("Migrated \(stored) of \(expected) emails — will retry on next launch.")
+                return
+            }
             UserDefaults.standard.set(true, forKey: completionKey)
             status = .completed
-            logger.info("Migration complete: \(legacyEmails.count) emails imported.")
+            logger.info("Migration complete: \(legacyEmails.count) legacy emails; expected \(expected) after dedup; store now holds \(stored).")
         } catch {
             logger.error("Migration failed: \(error.localizedDescription)")
             status = .failed(error.localizedDescription)
         }
     }
 
-    // MARK: - Legacy JSON archive I/O
-
-    /// Read the legacy `EmailPersistence` JSON archive, if present.
-    private func loadLegacyArchive() throws -> [MBOXParser.RawEmail] {
-        let url = try legacyArchiveURL()
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            throw MigrationError.notFound
-        }
-        let data = try Data(contentsOf: url)
-        let decoder = JSONDecoder()
-        if let direct = try? decoder.decode([MBOXParser.RawEmail].self, from: data) {
-            return direct
-        }
-        // Some EmailPersistence variants wrap the array in a top-level dict.
-        if let envelope = try? decoder.decode(LegacyEnvelope.self, from: data) {
-            return envelope.emails
-        }
-        throw MigrationError.unrecognizedFormat
-    }
-
-    /// Rename the legacy JSON to `.backup` so we don't accidentally migrate
-    /// the same data twice if the user clears UserDefaults.
-    private func archiveLegacyAsBackup() throws {
-        let url = try legacyArchiveURL()
-        let backup = url.appendingPathExtension("backup")
-        if FileManager.default.fileExists(atPath: backup.path) {
-            try? FileManager.default.removeItem(at: backup)
-        }
-        try FileManager.default.moveItem(at: url, to: backup)
-        logger.info("Archived legacy JSON to \(backup.lastPathComponent)")
-    }
-
-    private func legacyArchiveURL() throws -> URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory,
-                                                  in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
-        let dir = appSupport.appendingPathComponent("com.ecosanskriti.mailin", isDirectory: true)
-        return dir.appendingPathComponent("email_archive.json")
-    }
-
-    // MARK: - Supporting types
-
-    private struct LegacyEnvelope: Codable {
-        let emails: [MBOXParser.RawEmail]
-    }
-
-    enum MigrationError: LocalizedError {
-        case notFound
-        case unrecognizedFormat
-
-        var errorDescription: String? {
-            switch self {
-            case .notFound:
-                return "No legacy archive was found to migrate."
-            case .unrecognizedFormat:
-                return "Legacy archive format is not recognized."
-            }
-        }
-    }
 }

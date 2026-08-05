@@ -90,9 +90,18 @@ struct SMIMEHandler {
         var resultStatus: SignatureStatus
         switch signerStatus {
         case .valid:
-            resultStatus = .valid
+            // Honor the trust-chain result. A cryptographically-valid signature
+            // that does NOT chain to a trusted anchor (certVerifyResult != ok)
+            // must not be reported as "Valid" — that would be a false forensic
+            // conclusion. Downgrade to unknown signer.
+            resultStatus = (certVerifyResult == errSecSuccess) ? .valid : .unknownSigner
         case .needsDetachedContent:
-            resultStatus = .invalid
+            // multipart/signed (detached) signatures require the original signed
+            // bytes to be supplied to CMS (canonicalized). We don't yet
+            // reconstruct them, so we must NOT report "Invalid" (which implies
+            // tampering) for a legitimately-signed detached message. Report as
+            // unverified/unknown instead.
+            resultStatus = .unknownSigner
         default:
             resultStatus = .unknownSigner
         }

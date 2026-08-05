@@ -150,7 +150,9 @@ struct MSGParser {
         let lzfuMagic: UInt32 = 0x75465A4C // "LZFu"
         let melalMagic: UInt32 = 0x414C454D // "MELA" (uncompressed)
 
-        guard compressedSize + 4 <= data.count else { return nil }
+        // Widen to Int before adding: `compressedSize` is UInt32, so
+        // `compressedSize + 4` can overflow-trap on a hostile RTF stream.
+        guard Int(compressedSize) + 4 <= data.count else { return nil }
         guard uncompressedSize < 10_000_000 else { return nil }
 
         if magic == melalMagic {
@@ -330,12 +332,22 @@ struct OLE2Reader {
     }
 
     private func collectTree(_ nodeIndex: Int, into result: inout [DirectoryEntry], visited: inout Set<Int>) {
-        guard nodeIndex >= 0 && nodeIndex < directories.count && visited.insert(nodeIndex).inserted else { return }
-        guard result.count < Self.maxDirCount else { return }
-        let node = directories[nodeIndex]
-        collectTree(node.leftSiblingID, into: &result, visited: &visited)
-        result.append(node)
-        collectTree(node.rightSiblingID, into: &result, visited: &visited)
+        // Iterative in-order traversal with an explicit stack. A recursive walk
+        // could overflow the stack on a degenerate/hostile directory chain
+        // (e.g. 500k right-siblings). `visited` guards cycles; maxDirCount caps
+        // output size.
+        var stack: [Int] = []
+        var current = nodeIndex
+        while true {
+            while current >= 0 && current < directories.count && visited.insert(current).inserted {
+                stack.append(current)
+                current = directories[current].leftSiblingID
+            }
+            guard let node = stack.popLast() else { break }
+            guard result.count < Self.maxDirCount else { return }
+            result.append(directories[node])
+            current = directories[node].rightSiblingID
+        }
     }
 
     // MARK: - Read MAPI Properties
@@ -491,7 +503,9 @@ struct OLE2Reader {
                 let startSector = Int(readInt32(data, offset: offset + 116))
                 let size: Int
                 if sectorSize == 4096 {
-                    size = Int(readUInt64(data, offset: offset + 120))
+                    // clamping: a crafted 64-bit size with the high bit set
+                    // would trap `Int(UInt64)`.
+                    size = Int(clamping: readUInt64(data, offset: offset + 120))
                 } else {
                     size = Int(readUInt32(data, offset: offset + 120))
                 }
