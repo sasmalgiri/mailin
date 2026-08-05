@@ -55,15 +55,12 @@ struct ContentView: View {
     @AppStorage("autoDetectSender") private var autoDetectSender = true
     @AppStorage("showAdvancedFeatures") private var showAdvancedFeatures = false
     @AppStorage("removeDuplicates") private var removeDuplicates = true
-    // Stage 5 Wave 1D: gate the normal browse path onto the repository-backed,
-    // bounded ArchiveListView. Default ON in Debug for qualification; OFF in
-    // Release until the full Wave-1 cutover lands, so the shipping path stays on
-    // the proven legacy view until then.
-    #if DEBUG
+    // Stage 5 Wave 3.1: the repository-backed, bounded ArchiveListView is now
+    // the default browse path in BOTH Debug and Release (shared platform + list/
+    // search/detail are automated-gate green). The flag is retained as a
+    // one-setting rollback valve until the owner's manual UI smoke passes
+    // (MANUAL_UI_SMOKE_PENDING); it is deleted entirely once smoke is green.
     @AppStorage("useV2ArchiveList") private var useV2ArchiveList = true
-    #else
-    @AppStorage("useV2ArchiveList") private var useV2ArchiveList = false
-    #endif
     @StateObject private var viewModel = ContentViewModel()
     @StateObject private var modelVM: ParsedEmailListViewModel
     @State private var showSpinner = false
