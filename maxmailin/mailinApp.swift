@@ -186,13 +186,19 @@ struct mailinApp: App {
                         // detected; bounded so it can't load an unbounded
                         // archive into memory.
                         Task.detached(priority: .utility) {
-                            let storeCount = (try? await EmailStore.shared.totalCount()) ?? 0
+                            // Reconcile against the ACTIVE authority. Once SQLite
+                            // is active (Stage 5A), it is the canonical store the
+                            // FTS index must match; before activation, fall back
+                            // to the SwiftData store.
+                            let active = await StorageActivationCoordinator.shared.isActive
+                            let store: any EmailArchiveStore = active ? SQLiteEmailStore.shared : EmailStore.shared
+                            let storeCount = (try? await store.totalCount()) ?? 0
                             let ftsCount = (try? await FTSSearchIndex.shared.rowCount()) ?? 0
                             if storeCount > ftsCount {
                                 // Bounded, paged, restartable — no archive-wide
                                 // Set<UUID>, no 100k ceiling. Best-effort at
                                 // launch; a failure just retries next launch.
-                                _ = try? await FTSReconciler.reconcile()
+                                _ = try? await FTSReconciler.reconcile(store: store, fts: .shared)
                             }
                         }
 

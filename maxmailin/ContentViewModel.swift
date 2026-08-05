@@ -423,23 +423,29 @@ class ContentViewModel: ObservableObject {
                 }
                 ForensicManager.shared.logAction("Parse Complete", detail: "Parsed \(self.parsedEmails.count) emails from \(urls.count) file(s). \(self.duplicatesRemoved) duplicates removed.")
 
-                // v2 dual-write: also persist into SwiftData and FTS5 index
-                // so the v2 storage stays in sync alongside the legacy
-                // in-memory model. Fire-and-forget: failures don't block the
-                // existing UI flow which still uses parsedEmails.
+                // Stage 5B: persist into the ACTIVATED SQLite store (+ FTS5) —
+                // the single production authority. Writes are gated on storage
+                // activation so nothing lands while migration is unresolved; no
+                // dual-write to SwiftData (SwiftData is the read-only migration
+                // source retained for rollback). The in-memory `parsedEmails`
+                // still backs the current UI until the list cutover (5D).
                 let v2Emails = self.parsedEmails
                 Task.detached(priority: .utility) {
-                    try? await EmailStore.shared.insertBatch(
-                        v2Emails,
-                        sourceFileHash: nil,
-                        batchSize: 500,
-                        progress: nil
-                    )
+                    guard await StorageActivationCoordinator.shared.isActive else {
+                        await MainActor.run {
+                            _ = try? HMACChainAuditLog.shared.append(
+                                action: "v2.import.blocked",
+                                detail: "Import persistence skipped: SQLite storage not yet active"
+                            )
+                        }
+                        return
+                    }
+                    try? await SQLiteEmailStore.shared.insertBatch(v2Emails, batchSize: 500)
                     try? await FTSSearchIndex.shared.indexBatch(v2Emails)
                     await MainActor.run {
                         _ = try? HMACChainAuditLog.shared.append(
-                            action: "v2.dualWrite",
-                            detail: "Mirrored \(v2Emails.count) emails to SwiftData + FTS5"
+                            action: "v2.import.persisted",
+                            detail: "Persisted \(v2Emails.count) emails to SQLite + FTS5"
                         )
                     }
                 }
@@ -740,14 +746,17 @@ class ContentViewModel: ObservableObject {
         totalParsedCount = parsedEmails.count
         duplicatesRemoved += removed.count
         removedDuplicates.append(contentsOf: removed)
-        // Durably delete from the v2 store AND the FTS index so removed emails
-        // don't linger as searchable ghost rows (store↔FTS drift).
+        // Durably delete from the SQLite authority AND the FTS index so removed
+        // emails don't linger as searchable ghost rows (store↔FTS drift).
+        // FTS-first (matches the repository's delete ordering): a mid-delete
+        // failure leaves a canonical row that reconcile can restore, never a
+        // ghost FTS row.
         let idList = ids
         Task {
-            try? await EmailStore.shared.delete(ids: idList)
             for id in idList {
                 try? await FTSSearchIndex.shared.delete(id: id)
             }
+            try? await SQLiteEmailStore.shared.delete(ids: idList)
         }
     }
 

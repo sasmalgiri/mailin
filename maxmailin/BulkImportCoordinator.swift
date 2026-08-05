@@ -138,9 +138,10 @@ final class BulkImportCoordinator {
                             total: processedBefore + batch.count
                         )
                     }
-                    try await EmailStore.shared.insertBatch(
+                    try await SQLiteEmailStore.shared.insertBatch(
                         batch,
                         sourceFileHash: hash,
+                        accountID: nil,
                         batchSize: batchSize,
                         progress: nil
                     )
