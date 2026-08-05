@@ -360,6 +360,7 @@ struct MBOXParser {
         var currentLines: [String] = []
         var inMessage = false
         var totalParsed = 0
+        var skippedCount = 0
         var batch: [RawEmail] = []
         batch.reserveCapacity(batchSize)
 
@@ -401,7 +402,9 @@ struct MBOXParser {
                 let email = try processRawMessage(raw, senderEmail: senderEmail)
                 batch.append(email)
             } catch {
-                // Skipped on parse error; counted neither toward batch nor total.
+                // Count the drop so it's surfaced (lastRecoveryReport), not
+                // silently vanished — critical for a forensic tool.
+                skippedCount += 1
             }
             if fileSize > 0, let onProgress {
                 let offset = Double((try? handle.offset()) ?? 0)
@@ -431,6 +434,14 @@ struct MBOXParser {
             totalParsed += batch.count
             batch.removeAll(keepingCapacity: true)
         }
+        // Surface skipped/damaged counts on the streaming path too (was
+        // silently dropped) via the same channel the array path uses.
+        MBOXParser.lastRecoveryReport = ParseRecoveryReport(
+            totalMessages: totalParsed + skippedCount,
+            successfullyParsed: totalParsed,
+            failed: skippedCount,
+            errorCategories: skippedCount > 0 ? ["streaming parse error": skippedCount] : [:]
+        )
         return totalParsed
     }
 
