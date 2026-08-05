@@ -175,4 +175,23 @@ final class V2VerificationTests: XCTestCase {
 
         try await FTSSearchIndex.shared.clear()
     }
+
+    // MARK: - 3.5 — Redaction actually strips content (text-level, not eyeball)
+
+    /// The highest-liability claim: a redacted output must not *contain* the
+    /// secret string (content removed, not visually boxed). Asserts on the
+    /// extracted text of the redaction output, not its appearance.
+    func testRedactionStripsContentFromOutput() throws {
+        let secret = "SuperSecretPassword123"
+        let body = "The key is \(secret) and nothing else."
+        let rule = RedactionEngine.RedactionRule(
+            type: .custom,
+            pattern: NSRegularExpression.escapedPattern(for: secret),
+            replacement: "[REDACTED]"
+        )
+        let (redacted, count) = RedactionEngine.redact(text: body, rules: [rule])
+        XCTAssertGreaterThan(count, 0, "should redact at least once")
+        XCTAssertFalse(redacted.contains(secret), "redacted output must NOT contain the secret string")
+        XCTAssertTrue(redacted.contains("[REDACTED]"), "replacement token should be present")
+    }
 }
