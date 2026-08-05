@@ -55,6 +55,15 @@ struct ContentView: View {
     @AppStorage("autoDetectSender") private var autoDetectSender = true
     @AppStorage("showAdvancedFeatures") private var showAdvancedFeatures = false
     @AppStorage("removeDuplicates") private var removeDuplicates = true
+    // Stage 5 Wave 1D: gate the normal browse path onto the repository-backed,
+    // bounded ArchiveListView. Default ON in Debug for qualification; OFF in
+    // Release until the full Wave-1 cutover lands, so the shipping path stays on
+    // the proven legacy view until then.
+    #if DEBUG
+    @AppStorage("useV2ArchiveList") private var useV2ArchiveList = true
+    #else
+    @AppStorage("useV2ArchiveList") private var useV2ArchiveList = false
+    #endif
     @StateObject private var viewModel = ContentViewModel()
     @StateObject private var modelVM: ParsedEmailListViewModel
     @State private var showSpinner = false
@@ -921,21 +930,33 @@ struct ContentView: View {
                 leftSidebar
             }
             .frame(minWidth: 200, idealWidth: 260, maxWidth: 360)
-            ParsedEmailListView(model: modelVM, selectedEmailIDs: $selectedEmailIDs)
-                .frame(minWidth: 280, idealWidth: 400)
-            VStack(spacing: 0) {
-                detailContentView
-                if appState.dockedBottomPanel != nil && !currentEmailsForDock.isEmpty {
-                    dockedBottomPanelView
+            if useV2ArchiveList {
+                // Repository-backed bounded browse (its own list+detail split).
+                ArchiveListView()
+                    .frame(minWidth: 580)
+            } else {
+                ParsedEmailListView(model: modelVM, selectedEmailIDs: $selectedEmailIDs)
+                    .frame(minWidth: 280, idealWidth: 400)
+                VStack(spacing: 0) {
+                    detailContentView
+                    if appState.dockedBottomPanel != nil && !currentEmailsForDock.isEmpty {
+                        dockedBottomPanelView
+                    }
                 }
+                .frame(minWidth: 300)
             }
-            .frame(minWidth: 300)
         }
     }
     #else
     private var emailInboxDestination: some View {
-        ParsedEmailListView(model: modelVM, selectedEmailIDs: $selectedEmailIDs)
-            .navigationTitle("Email Inbox")
+        Group {
+            if useV2ArchiveList {
+                ArchiveListView()
+            } else {
+                ParsedEmailListView(model: modelVM, selectedEmailIDs: $selectedEmailIDs)
+            }
+        }
+        .navigationTitle("Email Inbox")
     }
     #endif
 
@@ -945,7 +966,9 @@ struct ContentView: View {
         @Bindable var appState = appState
         return NavigationStack {
             Group {
-                if modelVM.showParsedList {
+                if useV2ArchiveList {
+                    ArchiveListView()
+                } else if modelVM.showParsedList {
                     ParsedEmailListView(model: modelVM, selectedEmailIDs: $selectedEmailIDs)
                 } else if modelVM.isParsing || viewModel.loadingProgress > 0 {
                     iPhoneLoadingView

@@ -716,6 +716,33 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertEqual(appended.count, 500, "no duplicates")
     }
 
+    /// Bounded bidirectional page window: forward scroll drops the head page,
+    /// backward scroll re-fetches it EXACTLY via its remembered start cursor,
+    /// and the resident window never exceeds `windowPages * pageSize`.
+    func testArchiveListVM_bidirectionalPageWindow() async throws {
+        let fixtures = (0..<300).map { makeEmailDated(mid: "<bd-\($0)@t>", subject: "S\($0)", body: "b \($0)", dayOffset: $0) }
+        let oracle = oracleOrder(fixtures)
+        let vm = try await makeListVM(fixtures, pageSize: 50, maxRetained: 100)   // windowPages = 2
+
+        await vm.loadInitial()
+        XCTAssertEqual(vm.summaries.map(\.id), Array(oracle[0..<50]))
+        XCTAssertFalse(vm.hasPrevious)
+        await vm.loadNextPage()                                   // [0,1]
+        XCTAssertEqual(vm.summaries.map(\.id), Array(oracle[0..<100]))
+        await vm.loadNextPage()                                   // drop 0 → [1,2]
+        XCTAssertEqual(vm.summaries.map(\.id), Array(oracle[50..<150]))
+        XCTAssertTrue(vm.hasPrevious, "pages exist before the window head")
+        await vm.loadNextPage()                                   // [2,3]
+        XCTAssertEqual(vm.summaries.map(\.id), Array(oracle[100..<200]))
+
+        await vm.loadPreviousPage()                               // [1,2]
+        XCTAssertEqual(vm.summaries.map(\.id), Array(oracle[50..<150]), "backward refetch reproduces the earlier page exactly")
+        await vm.loadPreviousPage()                               // [0,1]
+        XCTAssertEqual(vm.summaries.map(\.id), Array(oracle[0..<100]))
+        XCTAssertFalse(vm.hasPrevious, "back at the top")
+        XCTAssertLessThanOrEqual(vm.maxRetainedObserved, 100, "window stays bounded through bidirectional browsing")
+    }
+
     /// Query-revision guard: a slow superseded load must NOT overwrite the newer
     /// query's results, even if it completes last (deterministic via a gated mock).
     func testArchiveListVM_revisionGuardDropsStale() async throws {
@@ -737,6 +764,73 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertEqual(vm.summaries.map(\.id), [c.id], "only the latest query's results are visible")
         XCTAssertEqual(vm.totalCount, 1)
         XCTAssertFalse(vm.isLoading, "loading state settled")
+    }
+
+    // MARK: - Stage 5 Wave 1C/1E — detail hydration + selection scope
+
+    /// ID→fullEmail detail: hydrates the right email, reports missing, and a
+    /// stale selection load cannot replace a newer selection.
+    func testArchiveDetailVM_hydrationMissingAndRace() async throws {
+        // Hydration + missing over a real store.
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-dvm-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        let fixtures = (0..<5).map { makeEmail(mid: "<d-\($0)@t>", subject: "S\($0)", body: "body \($0)") }
+        try await store.insertBatch(fixtures, batchSize: 100)
+        let svc = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+        let dvm = ArchiveDetailViewModel(archive: svc, cacheLimit: 4)
+
+        await dvm.select(fixtures[0].id)
+        XCTAssertEqual(dvm.loadedID, fixtures[0].id, "hydrates the selected email")
+        await dvm.select(UUID())
+        if case .failed = dvm.state {} else { XCTFail("missing id should fail") }
+
+        // Race: stale selection (via gated mock) completing last must not win.
+        let mock = GatedRepository()
+        let dvm2 = ArchiveDetailViewModel(archive: ArchiveDataService(repository: mock), cacheLimit: 4)
+        let idA = UUID(), idB = UUID()
+        let tA = Task { await dvm2.select(idA) }
+        await waitUntil { await mock.pending == 1 }
+        let tB = Task { await dvm2.select(idB) }
+        await waitUntil { await mock.pending == 2 }
+        await mock.release()   // A resumes first → stale → discarded
+        await mock.release()   // B resumes → wins
+        _ = await tA.value; _ = await tB.value
+        XCTAssertEqual(dvm2.loadedID, idB, "only the latest selection is shown")
+    }
+
+    /// Selection scope resolves counts symbolically — Select All is never a
+    /// materialized id set — and streams the selected emails in bounded batches.
+    func testArchiveSelectionScope_countAndStream() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-sel-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        let fixtures = (0..<30).map { makeEmail(mid: "<s-\($0)@t>", subject: "S\($0)", body: "body \($0)") }
+        try await store.insertBatch(fixtures, batchSize: 100)
+        let svc = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+
+        let all = ArchiveSelectionScope.query(.all, exclusions: [])
+        let allCount = try await svc.count(scope: all)
+        XCTAssertEqual(allCount, 30, "whole-query Select All resolves count without a materialized set")
+
+        let excluded = Set(fixtures.prefix(3).map(\.id))
+        let minus = ArchiveSelectionScope.query(.all, exclusions: excluded)
+        let minusCount = try await svc.count(scope: minus)
+        XCTAssertEqual(minusCount, 27)
+
+        var streamed = 0, maxBatch = 0
+        for try await batch in svc.streamSelected(scope: minus, batchSize: 7) {
+            streamed += batch.count; maxBatch = max(maxBatch, batch.count)
+            XCTAssertTrue(batch.allSatisfy { !excluded.contains($0.id) }, "exclusions honored in stream")
+        }
+        XCTAssertEqual(streamed, 27, "stream yields exactly the selected emails")
+        XCTAssertLessThanOrEqual(maxBatch, 7, "bounded batches")
+
+        let explicit = ArchiveSelectionScope.explicit(Set(fixtures.prefix(5).map(\.id)))
+        let exCount = try await svc.count(scope: explicit)
+        XCTAssertEqual(exCount, 5)
     }
 
     private func waitUntil(_ condition: @escaping () async -> Bool, timeout: TimeInterval = 3) async {
@@ -1000,7 +1094,17 @@ actor GatedRepository: EmailRepository {
         return EmailPage(summaries: Array(data.prefix(limit)), nextCursor: nil)
     }
     func summaries(ids: [EmailID]) async throws -> [EmailSummary] { [] }
-    func fullEmail(id: EmailID) async throws -> MBOXParser.RawEmail? { nil }
+    /// Gated like `page()`: suspends until `release()`, then returns a minimal
+    /// email carrying the requested id (so a stale detail load is observable).
+    func fullEmail(id: EmailID) async throws -> MBOXParser.RawEmail? {
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            gates.append(c); _pending += 1
+        }
+        return MBOXParser.RawEmail(
+            id: id, headers: ["Subject": id.uuidString], rawSource: "", messageType: "stored",
+            attachments: [], timestamp: "", domains: [], plainBody: "body", htmlBody: ""
+        )
+    }
     func fullEmails(ids: [EmailID]) async throws -> [MBOXParser.RawEmail] { [] }
     func exists(ids: [EmailID]) async throws -> Set<EmailID> { [] }
     func count(query: EmailQuery) async throws -> Int { (datasets[key(query)] ?? []).count }
