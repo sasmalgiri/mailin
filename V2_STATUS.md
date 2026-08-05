@@ -1,117 +1,66 @@
-# mailin v2 — Status: Goal · Implemented · Remaining
+# mailin v2.0 — Status (reconciled to actual executed state)
 
 **Target:** `maxmailin` (ships as `com.ecosanskriti.mailin`, "mailin 2.0")
-**Branch:** `v2-honesty-pass` (11 commits) · **PR #3** open → `main` (mergeable, not merged)
-**Ship state:** **NOT shipped. Merge ≠ release** — 2 non-code gates open (§4)
-**Tests:** 6 executed, green (R1/R2 red-then-green)
-**Source of truth for claims:** `docs/index.html` (the deployed landing page)
+**Branch:** `v2-core-cutover` (ahead of `main`; the earlier PR #3 honesty-pass is merged to `main`)
+**Ship state:** **NOT shipped. ENGINEERING IN PROGRESS** — not yet even "engineering complete."
+**Tests:** `maxmailinTests/V2VerificationTests.swift` — **37 tests, 36 pass + 1 heavy stress test skipped by default**, deterministic; Debug + Release build clean.
+**Source of truth for claims:** `docs/index.html`.
 
-Legend: ✅ verified by executed test · 🔨 build-verified (compiles/integrated, not fixture-tested) · 🟡 partial/relabeled · ⏸️ deferred (explicit plan call) · 🧑‍⚖️ owner decision (not code)
-
----
-
-## 1. The goal (what the landing page promises for v2)
-
-**"mailin 2.0 — a foundation rewrite, now shipping, under the same UI."** Rebuild storage/ingest/search so archives that were never realistic on v1 work, while keeping every v1 feature, strictly on-device.
-
-Landing-page headline claims:
-- **Streaming ingest** — drop a 200 GB archive, peak memory stays flat
-- **Resumable from any crash** — per-file SHA-256 + per-batch checkpoints
-- **Year-sharded FTS5 search** — bm25, "a real search engine, instant across your whole archive," Boolean/regex/proximity
-- **Keyset pagination** — jump to email #1,000,000 instantly
-- **Larger PST/NSF** — mmap; PST/OST ≤50 GB, NSF ≤64 GB
-- **In-place upgrade** — existing v1 users keep their data
-- **Strictly offline** — no IMAP/SMTP/network in the shipped binary; on-device AI only
-- **Formats:** MBOX, EML, EMLX, MSG, PST, OST, NSF, ZIP
-- **Forensic/legal:** tamper-evident audit log, chain-of-custody, Bates, SPF/DKIM/DMARC, S/MIME, redaction, signed exports
-- **Export:** EML/JSON/CSV/PDF/Bates-PDF/Concordance, Ed25519-signed
-
-The v2 gap this branch fixes: the audit found several of these were **built but not wired**, **false**, or **overstated**. This branch reconciles code ↔ claims.
+Legend: ✅ done + test/measurement · 🟡 partial · ⬜ not started · 👤 owner/Apple-only (no agent can do it).
 
 ---
 
-## 2. Implemented (this branch)
+## 1. Storage / scale — DONE and measured
 
-### ✅ Verified by executed tests (`maxmailinTests/V2VerificationTests.swift`)
-| Item | What | Test |
-|---|---|---|
-| **R1 in-place upgrade** | migration reads the REAL v1 store, non-destructive, dedup-aware count gate (never marks complete on read failure) | `testMigrationFromRealV1Store` (red-then-green: forced `S<E` data-loss) |
-| **R2 real search engine** | live search now routes free-text + boolean through the FTS5 engine (was using an in-RAM engine); population-gated fallback; prefix match; mutation-versioned cache | `testLiveSearchDispatchesToFTS` (red-then-green: counter 0) |
-| **Delete integrity** | `EmailStore.delete` + FTS delete — deleted emails no longer linger as searchable ghost rows | `testDeleteRemovesFromStoreAndSearch` |
-| **Store↔FTS reconcile** | `indexMissing` repairs drift (crash between store + FTS commit); guarded launch reindex | `testReconcileIndexesMissing` |
-| **Redaction** | exported redaction actually strips content (secret absent from output), not a visual box | `testRedactionStripsContentFromOutput` |
+- ✅ **Direct SQLite is the production store**, chosen after the `mailin-v2-stress` harness proved SwiftData's import was O(N²) and keyset paging O(N) on the macOS 14.6 / iOS 17.6 target (no expressible secondary indexes). See `V2_STORAGE_DECISION.md`.
+- ✅ **`SQLiteEmailStore`** — compact `emails` table + separate `email_bodies` blob table; partial-unique `message_id` index (O(1) dedup); `(date,id)` keyset index; 128 MB cache + 256 MB mmap; read loops throw on `sqlite3_step` errors.
+- ✅ **1,000,000-email qualification** (`V2_SCALE_RESULTS.md`): import ~3.7 min, keyset paging 37–43 ms, RSS bounded 173–486 MB across 100K→1M, correctness perfect. **ENGINE qualification — not yet production-path.**
+- ✅ **Non-destructive SwiftData→SQLite migration** (`MailinStoreMigration`) — bounded, resumable, count-gated, idempotent; **synthetic-tested only** (real device migration is 👤).
+- ✅ **`StorageActivationCoordinator`** — durable states; `.active` only after count + fresh-reopen gate; stale-marker re-migration; wired at launch. Production writes go to the activated SQLite store (no SwiftData dual-write).
 
-### 🔨 Build-verified (compiles + integrated; not fixture-tested)
-- **S/MIME** — honors cert-trust (no false "Valid" on untrusted chains); detached `multipart/signed` no longer false-"Invalid". *High-liability; stays build-verified until untrusted-CA + genuine-detached fixtures added.*
-- **Crash hardening** — NSF slice crash, MSG integer overflows, OLE2 recursion → iterative
-- **OOM ceilings** — 500 MB MBOX / 200 MB NSF-scan caps → clean error, not OOM
-- **No silent drops** — streaming import now counts skipped messages (forensic completeness)
-- **Schema versioning** — SwiftData `VersionedSchema` + migration plan (future changes won't brick launch)
-- **Biometric lock** — wired into app launch (was dead code)
-- **ZIP** — extracts all advertised formats + zip-slip guard + off-main extraction
-- **Dedup errors** — stop silently swallowing dedup-fetch failures
+## 2. Bounded UI platform — DONE (browse/search/detail) · Release default
 
-### 🟡 Relabeled to match reality (honesty fixes)
-- **SPF/DKIM/DMARC** — copy changed from "Verify" → "as reported by the receiving server" (it reads headers; it does not cryptographically verify)
-- **AES-256 storage** — claim dropped (manager was dead code; store uses OS file protection)
-- **iCloud sync** — claim dropped (compiled out of the offline build)
-- **PST export** — marked experimental / not guaranteed loadable in Outlook
-- **Info.plist** — removed the misleading IMAP/network usage key
+- ✅ `EmailRepository` / `ArchiveDataService` firewall (no `loadAll`); `ArchiveListViewModel` (bounded **bidirectional** page window + `queryRevision` race guard); `ArchiveDetailViewModel` (ID→hydrate, LRU, token guard); `ArchiveListView` + subviews.
+- ✅ Repository-backed **text + date search**, date-scope UI, delete mutation (no page corruption).
+- ✅ `ArchiveSelectionScope` (symbolic Select-All) + scoped count/stream.
+- ✅ **Release now defaults to the v2 browse path** (`useV2ArchiveList`); flag retained until owner UI smoke, then deleted.
 
-### ✅ Already-true claims (audit confirmed, no change needed)
-Streaming mbox ingest, resumable checkpoints, keyset pagination, year-sharded FTS5 engine (now actually queried), strictly-offline / no-network entitlement, on-device AI (sentiment, topics, predictive coding, AI assistant, anomaly), 11-language localization, Vision OCR, Spotlight, Ed25519 signed exports, HMAC audit log, Bates, chain-of-custody.
+## 3. Shared derived-data platform — DONE (directive Phase 4)
 
----
+- ✅ `ArchiveAggregateService` · `ArchiveDerivedStateStore` + durable corpus revision + `ArchiveBackgroundJobRunner` · `ArchiveEvidenceService` · `ArchiveExportService` (streaming) · `EvidenceVerifier` (grounded-answer + prompt-injection resistance). All oracle/differential-tested.
 
-## 3. Remaining (deferred — explicit plan calls, not hidden gaps)
+## 4. Consumer migration ledger (`V2_CONSUMER_LEDGER.md`)
 
-| Item | Status | Why |
-|---|---|---|
-| **Real DKIM/DMARC crypto** | ⏸️ deferred | Weeks of work (DNS + canonicalization + verify); archived selectors often gone from DNS anyway. Honest relabel shipped in its place. |
-| **True ZIP streaming** | ⏸️ partial | Extraction moved **off-main** (beachball fix) but still reads whole zip into RAM; central-directory streaming is a separate rewrite. |
-| **Loadable PST writer** | ⏸️ deferred | Real PST writing is weeks; relabeled "experimental" instead. |
-| **Full RecoveryReport UI** | 🟡 partial | Worst silent-drop (streaming MBOX) fixed + counts recorded; per-parser UI surfacing is incremental. |
-| **S/MIME fixtures** | 🔨 | Promote 3.3 from build-verified to executed with untrusted-CA + detached-signature fixtures. |
-| **>50 GB PST / >2 GB MSG / >500 MB EMLX** | ⏸️ | Per-format hard ceilings remain (plan-known); large PST is a v2.1 streaming-walker item. |
+Whole-corpus references (`parsedEmails`/`allEmails`/`filteredEmails`): **260 → 252** (one-way ratchet guard).
+
+- ✅ Migrated (7): main list · search/date/count · detail · Spotlight · metadata · widget · duplicate review.
+- 🟡 AI Assistant — grounding infra + bounded FTS tools done; `AIAssistantView` still corpus-fed.
+- ⬜ Analytics/reply-stats · NLP/topics · predictive · threads · forensic/legal/export views.
+
+## 5. Guards
+
+- ✅ Whole-corpus ratchet (only decreases) · forbidden-pattern guard (`loadEverything`/`loadEntireArchive`/`repository.loadAll`/`.loadAll(`/`PrivateCloudComputeLanguageModel`/`limit:Int.max` — all absent).
 
 ---
 
-## 4. 🚦 Release gates (block shipping — NOT code, can't be pushed)
+## Remaining engineering (mine, NOT done)
 
-1. **Device smoke test = the real R1 gate.** The XCTest used a *synthetic* temp-dir v1 store; a real v1→v2 upgrade on hardware (real Application Support paths, interrupted-then-resumed) is **unrun**. Run `V2_SMOKE_TEST.md` on a device before shipping.
-2. **Step 9 = business decisions.** Pricing must be reconciled (landing page vs `AppStoreMetadata.txt` differ) and the "Now live on the App Store" copy made accurate. Decided-and-applied, not a code task.
+⬜ AI Assistant corpus removal + wire evidence/verifier/token budget · analytics/NLP/predictive/threads/forensic/legal/export migrations → **ratchet to 0** · **W3**: streaming `BulkImportCoordinator` as sole importer + persistent dedup + signed receipts → **delete legacy `[RawEmail]` architecture** + remove `useV2ArchiveList` · **W4**: production-path stress (10K/100K/1M through real import→list→detail), S/MIME executed fixtures, security/privacy audit, `V2_IMPLEMENTATION_COMPLETE.md`.
 
-**Merge is safe (strict improvement over `main`); shipping is blocked on the two gates above.**
+## Remaining owner / Apple gates (👤 — no agent can complete)
+
+Manual macOS + iOS UI smoke · real v1→v2 **device** migration · pricing / StoreKit / App Store Connect products · screenshots / privacy answers · submission · **Apple review** · public release · public-build smoke.
+
+## Honest claim posture (until final measurement)
+
+- "Instant search across the whole archive": measured — rare/NEAR sub-ms; common-term p95 grows with N (bm25 ranks all matches). Use measured wording.
+- ZIP is still read whole into memory — do **not** claim flat-memory arbitrary-size ZIP.
+- SPF/DKIM/DMARC = "as reported by server" (not cryptographic DNS verification). S/MIME = build-verified, executed fixtures pending.
+
+**Bottom line:** the storage / bounded-architecture core is proven (incl. 1M) and shipping-default for browse/search/detail; **v2.0 is NOT engineering-complete** — the AI/analytics/import-rewrite/legacy-deletion/qualification remainder is outstanding, then the owner/Apple release gates.
 
 ---
 
-## 6. Production Wiring Matrix — "class exists ≠ feature ships"
+## Earlier honesty-pass record (PR #3, merged to main — historical)
 
-The cure for the recurring "built but not wired" pattern: a claim ships only when the **production path** is wired, **bounded-memory**, and tested. Verified against `v2-honesty-pass`.
-
-| Capability | Engine exists | Prod path wired | Bounded memory | Fixture test | Scale test | Claim allowed |
-|---|---|---|---|---|---|---|
-| Streaming ingest | ✅ | ⚠️ UI retains whole `[RawEmail]` | ❌ | ✅ (mbox) | ❌ | ❌ strong scale claim |
-| FTS free-text | ✅ | ✅ | ✅ | ✅ | ❌ | ⚠️ (not "instant @ 10M") |
-| FTS Boolean | ✅ | ✅ | ✅ | ✅ | ❌ | ⚠️ |
-| Proximity (NEAR) | ✅ | ✅ FTS5 `NEAR()` **[P0-S1]** | ✅ | ✅ | ❌ | ⚠️ (not "instant @ 10M") |
-| Regex | ✅ | ❌ in-RAM scan (by design) | ❌ | ❌ | ❌ | ❌ scale claim |
-| AI search/thread | ✅ tools | ✅ FTS5→EmailStore (bounded) **[P0-#3]** | ✅ | ✅ | ❌ | ⚠️ (analytics tools still array-backed) |
-| Keyset pagination | ✅ | ⚠️ partial (UI still array-backed) | ✅ (engine) | ❌ | ❌ | ⚠️ |
-| Migration (R1) | ✅ | ✅ | ✅ | ✅ | device pending | device gate |
-| Delete / reconcile | ✅ | ✅ | ✅ paged registry, no whole-set **[P0-S2]** | ✅ | ❌ | ⚠️ |
-| Redaction (export) | ✅ | ✅ | ✅ | ✅ | n/a | ✅ (export-scoped) |
-| S/MIME | ✅ | ✅ | ✅ | ❌ | n/a | build-verified only |
-
-**Systemic rule:** a "scale" claim (millions of messages / instant / bounded memory) requires the **Bounded memory** *and* **Scale test** columns green — not just "Engine exists." See `V2_ROADMAP.md` for the completion plan that turns the ⚠️/❌ rows green.
-
-**Still NOT green (deliberately):** *Streaming ingest* and *Keyset pagination* remain ⚠️/❌ because `ContentViewModel.parsedEmails` / `ParsedEmailListViewModel.allEmails/filteredEmails` still hold the whole archive in the UI. That whole-UI `[RawEmail]` → paged `EmailSummary/EmailID` cutover is **`v2-core-cutover`**, gated by a production stress harness (`mailin-v2-stress`) proving RSS doesn't grow linearly with corpus. No "bounded memory regardless of archive size" claim until that branch lands. The **Scale test** column is `❌` everywhere until that harness exists.
-
-**Done on `v2-honesty-pass` since this matrix was written:** P0-S1 (FTS5 NEAR proximity), P0-S2 (bounded paged reconciliation + registry), P0-#3 (AI search/thread tools → FTS5/EmailStore) — each with executed tests.
-
-## 5. Reference docs in repo
-- `V2_CLAIMS_AUDIT_AND_ACTION_PLAN.md` — full claims-vs-code audit + plan
-- `V2_IMPLEMENTATION_LOG.md` — chronological record of every change + corrections
-- `V2_SMOKE_TEST.md` — device test matrix + directional pass rule (S≥E)
-- `V2_ROADMAP.md` — bounded-memory + evidence-grounded-AI completion plan (v2.0 scope vs 2.1/2.2)
-- **PR #3** — four-tier ledger + "merge ≠ release" banner
+The prior `v2-honesty-pass` branch (now merged) reconciled code↔landing-page claims: R1 in-place migration (reads real v1 store, non-destructive, count-gated), R2 search routed through FTS5, delete integrity, store↔FTS reconcile, redaction actually strips content; S/MIME/crash-hardening/OOM-ceilings build-verified; SPF/DKIM/DMARC + AES/iCloud/PST relabeled honestly. That work is the baseline this branch builds on.
