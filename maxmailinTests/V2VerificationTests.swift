@@ -491,6 +491,80 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertFalse(envA.isProduction, "disposable environment is never marked production")
     }
 
+    // MARK: - Stage 4B.3 — SwiftData → SQLite migration
+
+    /// Non-destructive, count-gated migration copies every distinct email into
+    /// SQLite, leaves the SwiftData source intact, and is idempotent.
+    func testMigration_swiftDataToSQLite_nonDestructiveAndCountGated() async throws {
+        let saved = EmailStore.testInMemory
+        EmailStore.testInMemory = true
+        await EmailStore.shared.resetForTesting()
+        defer { EmailStore.testInMemory = saved }
+
+        // 40 distinct + 10 duplicate Message-IDs → source dedups to 40.
+        var fixtures = (0..<40).map { makeEmail(mid: "<m-\($0)@t>", subject: "S\($0)", body: "token body \($0)") }
+        fixtures += (0..<10).map { makeEmail(mid: "<m-\($0)@t>", subject: "dup", body: "dup") }
+        try await EmailStore.shared.insertBatch(fixtures, batchSize: 100)
+        let srcCount = try await EmailStore.shared.totalCount()
+        XCTAssertEqual(srcCount, 40, "source deduped to 40")
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-mig-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let dest = SQLiteEmailStore(directory: root)
+
+        let r = try await MailinStoreMigration.migrate(from: EmailStore.shared, to: dest, markCompleteFlag: false)
+        XCTAssertTrue(r.completed, "count-gated completion")
+        XCTAssertEqual(r.destCount, 40, "all distinct rows copied")
+        XCTAssertEqual(r.copied, 40)
+        let destCount = try await dest.totalCount()
+        XCTAssertEqual(destCount, 40)
+        // Non-destructive: source untouched.
+        let srcAfter = try await EmailStore.shared.totalCount()
+        XCTAssertEqual(srcAfter, 40, "SwiftData source not modified")
+        // Content actually landed (not just counts).
+        let dpage = try await dest.summaryPage(after: nil, before: nil, cursorDate: nil, cursorID: nil, limit: 100)
+        XCTAssertEqual(dpage.count, 40)
+        let one = dpage.first!
+        let full = try await dest.fullEmail(id: one.id)
+        XCTAssertNotNil(full, "bodies migrated, fetchable by id")
+
+        // Idempotent: a second run copies nothing.
+        let r2 = try await MailinStoreMigration.migrate(from: EmailStore.shared, to: dest, markCompleteFlag: false)
+        XCTAssertEqual(r2.copied, 0)
+        XCTAssertTrue(r2.completed)
+
+        await EmailStore.shared.resetForTesting()
+    }
+
+    /// An interrupted migration resumes and completes without re-copying.
+    func testMigration_resumesAfterInterruption() async throws {
+        let saved = EmailStore.testInMemory
+        EmailStore.testInMemory = true
+        await EmailStore.shared.resetForTesting()
+        defer { EmailStore.testInMemory = saved }
+
+        let fixtures = (0..<30).map { makeEmailDated(mid: "<r-\($0)@t>", subject: "S\($0)", body: "body \($0)", dayOffset: $0) }
+        try await EmailStore.shared.insertBatch(fixtures, batchSize: 100)
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-mig-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let dest = SQLiteEmailStore(directory: root)
+
+        let first = try await MailinStoreMigration.migrate(from: EmailStore.shared, to: dest, pageSize: 5, maxPages: 2, markCompleteFlag: false)
+        XCTAssertFalse(first.completed, "interrupted partway")
+        XCTAssertLessThan(first.destCount, 30)
+        XCTAssertGreaterThan(first.copied, 0)
+
+        let rest = try await MailinStoreMigration.migrate(from: EmailStore.shared, to: dest, pageSize: 5, markCompleteFlag: false)
+        XCTAssertTrue(rest.completed, "resume completes")
+        XCTAssertEqual(rest.destCount, 30)
+        XCTAssertEqual(first.copied + rest.copied, 30, "no row copied twice")
+
+        await EmailStore.shared.resetForTesting()
+    }
+
     // MARK: - Stage 4 — mailin-v2-stress harness
 
     /// Drives the REAL engine (EmailStore + FTS5 + repository + reconcile) over

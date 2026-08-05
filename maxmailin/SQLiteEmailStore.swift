@@ -39,9 +39,22 @@ actor SQLiteEmailStore: EmailArchiveStore {
     private let directory: URL
     private var db: OpaquePointer?
 
-    /// Isolated on-disk store under `directory`. There is intentionally no
-    /// shared production singleton yet — production cutover + migration is a
-    /// separate, tested step (Stage 4B.3).
+    /// The production store, under Application Support (Data Protection applies).
+    /// Kept in its own `sqlite/` subdir, separate from the SwiftData store so a
+    /// non-destructive migration can read the old store while writing the new.
+    static let shared = SQLiteEmailStore(directory: SQLiteEmailStore.productionDirectory)
+
+    static var productionDirectory: URL {
+        let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask
+        ).first ?? FileManager.default.temporaryDirectory
+        return appSupport
+            .appendingPathComponent("com.ecosanskriti.mailin", isDirectory: true)
+            .appendingPathComponent("sqlite", isDirectory: true)
+    }
+
+    /// Isolated on-disk store under `directory` (harness/test), or the shared
+    /// production store via `.shared`.
     init(directory: URL) {
         self.directory = directory
     }
