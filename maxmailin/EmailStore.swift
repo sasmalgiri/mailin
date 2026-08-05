@@ -446,28 +446,45 @@ actor EmailStore {
         )
     }
 
-    /// Keyset page of lightweight summaries, most-recent first. No bodies.
-    func summaryPage(beforeDate: Date?, beforeID: UUID?, limit: Int) throws -> [EmailSummary] {
+    /// Keyset page of lightweight summaries, most-recent first, with optional
+    /// user date bounds (`after ≤ date < before`) applied at the DB predicate
+    /// level and combined with the keyset cursor. No bodies.
+    func summaryPage(after: Date?, before: Date?, cursorDate: Date?, cursorID: UUID?, limit: Int) throws -> [EmailSummary] {
         let container = try ensureContainer()
         let context = ModelContext(container)
+        let lo = after ?? Date.distantPast
+        let hi = before ?? Date.distantFuture
         var descriptor: FetchDescriptor<StoredEmail>
-        if let beforeDate, let beforeID {
+        if let cursorDate, let cursorID {
             descriptor = FetchDescriptor<StoredEmail>(
-                predicate: #Predicate { $0.date < beforeDate || ($0.date == beforeDate && $0.id < beforeID) },
-                sortBy: [SortDescriptor(\.date, order: .reverse), SortDescriptor(\.id, order: .reverse)]
-            )
-        } else if let beforeDate {
-            descriptor = FetchDescriptor<StoredEmail>(
-                predicate: #Predicate { $0.date < beforeDate },
+                predicate: #Predicate {
+                    $0.date >= lo && $0.date < hi &&
+                    ($0.date < cursorDate || ($0.date == cursorDate && $0.id < cursorID))
+                },
                 sortBy: [SortDescriptor(\.date, order: .reverse), SortDescriptor(\.id, order: .reverse)]
             )
         } else {
             descriptor = FetchDescriptor<StoredEmail>(
+                predicate: #Predicate { $0.date >= lo && $0.date < hi },
                 sortBy: [SortDescriptor(\.date, order: .reverse), SortDescriptor(\.id, order: .reverse)]
             )
         }
         descriptor.fetchLimit = limit
         return try context.fetch(descriptor).map { Self.summary(from: $0) }
+    }
+
+    /// Count of stored rows within optional date bounds — O(1)-memory aggregate.
+    func count(after: Date?, before: Date?) throws -> Int {
+        let container = try ensureContainer()
+        let context = ModelContext(container)
+        if after == nil && before == nil {
+            return try context.fetchCount(FetchDescriptor<StoredEmail>())
+        }
+        let lo = after ?? Date.distantPast
+        let hi = before ?? Date.distantFuture
+        return try context.fetchCount(
+            FetchDescriptor<StoredEmail>(predicate: #Predicate { $0.date >= lo && $0.date < hi })
+        )
     }
 
     /// Lightweight summaries for specific ids. No bodies.

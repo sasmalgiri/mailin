@@ -298,7 +298,7 @@ final class V2VerificationTests: XCTestCase {
 
         let fixtures = try await seedReconcileFixtures()
 
-        let n = await FTSReconciler.reconcile(pageSize: 5)   // oldest are on page 2/3
+        let n = try await FTSReconciler.reconcile(pageSize: 5).rowsIndexed   // oldest are on page 2/3
         XCTAssertEqual(n, 9, "indexes the 9 missing, including beyond the first page")
 
         let hits = try await FTSSearchIndex.shared.search("alpha", limit: 50)
@@ -325,11 +325,11 @@ final class V2VerificationTests: XCTestCase {
 
         _ = try await seedReconcileFixtures()
 
-        let first = await FTSReconciler.reconcile(pageSize: 5, maxPages: 1)   // interrupt
+        let first = try await FTSReconciler.reconcile(pageSize: 5, maxPages: 1).rowsIndexed   // interrupt
         XCTAssertGreaterThan(first, 0, "first page made progress")
         XCTAssertLessThan(first, 9, "partial — not everything indexed yet")
 
-        let rest = await FTSReconciler.reconcile(pageSize: 5)                 // resume
+        let rest = try await FTSReconciler.reconcile(pageSize: 5).rowsIndexed                 // resume
         XCTAssertEqual(first + rest, 9, "resume completes the reconcile")
         let ftsCount = try await FTSSearchIndex.shared.rowCount()
         XCTAssertEqual(ftsCount, 12, "all rows indexed after resume")
@@ -382,6 +382,65 @@ final class V2VerificationTests: XCTestCase {
 
         await EmailStore.shared.resetForTesting()
         try await FTSSearchIndex.shared.clear()
+    }
+
+    // MARK: - Stage 3.1 — repository hardening
+
+    /// count() is an exact aggregate, independent of the page/search limit
+    /// (does not materialize result IDs).
+    func testCountIsAggregateNotMaterialized() async throws {
+        let savedInMemory = EmailStore.testInMemory
+        EmailStore.testInMemory = true
+        await EmailStore.shared.resetForTesting()
+        defer { EmailStore.testInMemory = savedInMemory }
+
+        let fixtures = (0..<30).map { makeEmail(mid: "<c-\($0)@t>", subject: "S\($0)", body: "common token \($0)") }
+        try await EmailStore.shared.insertBatch(fixtures, sourceFileHash: nil, batchSize: 200, progress: nil)
+        try await FTSSearchIndex.shared.clear()
+        try await FTSSearchIndex.shared.indexBatch(fixtures)
+
+        let repo = EmailStoreRepository.shared
+        let c = try await repo.count(query: EmailQuery(text: "common"))
+        XCTAssertEqual(c, 30, "exact count, independent of any page/search limit")
+        let p = try await repo.page(query: EmailQuery(text: "common"), cursor: nil, limit: 5)
+        XCTAssertLessThanOrEqual(p.summaries.count, 5, "page stays bounded while count is full")
+
+        await EmailStore.shared.resetForTesting()
+    }
+
+    /// Date bounds are applied at the DB level; text + exact date range is
+    /// rejected explicitly rather than silently ignored.
+    func testDateBoundsHonoredAndTextPlusDateRejected() async throws {
+        let savedInMemory = EmailStore.testInMemory
+        EmailStore.testInMemory = true
+        await EmailStore.shared.resetForTesting()
+        defer { EmailStore.testInMemory = savedInMemory }
+
+        // dayOffset i → "1+i Jan 2025 14:30 UTC". 10 emails, days 01..10.
+        let fixtures = (0..<10).map { makeEmailDated(mid: "<d-\($0)@t>", subject: "S\($0)", body: "body \($0)", dayOffset: $0) }
+        try await EmailStore.shared.insertBatch(fixtures, sourceFileHash: nil, batchSize: 200, progress: nil)
+        let repo = EmailStoreRepository.shared
+
+        // Boundary between day05 (14:30) and day06 (14:30): includes days 06..10 = 5.
+        var comps = DateComponents()
+        comps.year = 2025; comps.month = 1; comps.day = 5; comps.hour = 20; comps.minute = 0
+        comps.timeZone = TimeZone(identifier: "UTC")
+        let after = Calendar(identifier: .gregorian).date(from: comps)!
+
+        let page = try await repo.page(query: EmailQuery(afterDate: after), cursor: nil, limit: 50)
+        XCTAssertEqual(page.summaries.count, 5, "afterDate bound applied at DB level")
+        let cnt = try await repo.count(query: EmailQuery(afterDate: after))
+        XCTAssertEqual(cnt, 5, "date-filtered count matches")
+
+        var rejected = false
+        do {
+            _ = try await repo.page(query: EmailQuery(text: "body", afterDate: after), cursor: nil, limit: 10)
+        } catch is EmailRepositoryError {
+            rejected = true
+        }
+        XCTAssertTrue(rejected, "text + exact date range must be rejected, not silently ignored")
+
+        await EmailStore.shared.resetForTesting()
     }
 
     #if canImport(FoundationModels)

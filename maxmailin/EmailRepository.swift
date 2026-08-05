@@ -16,6 +16,13 @@ import Foundation
 
 typealias EmailID = UUID
 
+/// Errors a repository may return instead of silently ignoring a request.
+enum EmailRepositoryError: Error, Sendable, Equatable {
+    /// A query field combination isn't implemented yet — returned rather than
+    /// accepting the query and ignoring part of it.
+    case unsupportedQueryCombination(String)
+}
+
 /// Lightweight row for lists — no bodies, no attachment bytes.
 struct EmailSummary: Identifiable, Sendable, Equatable {
     let id: EmailID
@@ -68,10 +75,15 @@ struct EmailStoreRepository: EmailRepository {
     static let shared = EmailStoreRepository()
 
     func page(query: EmailQuery, cursor: EmailPageCursor?, limit: Int) async throws -> EmailPage {
-        if let text = query.text, !text.isEmpty {
-            // Text query → FTS5 → bounded IDs → summaries (bm25 order). Single
-            // bounded page (ranked); cursor pagination of ranked results is a
-            // later refinement.
+        let hasText = !(query.text?.isEmpty ?? true)
+        let hasDates = query.afterDate != nil || query.beforeDate != nil
+        // Text + exact date range needs a time-scoped FTS planner (later stage).
+        // Reject explicitly rather than silently ignoring the date bounds.
+        if hasText && hasDates {
+            throw EmailRepositoryError.unsupportedQueryCombination("text + exact date range")
+        }
+        if hasText, let text = query.text {
+            // Text query → FTS5 → bounded IDs → summaries (bm25 order).
             let fts = FTSQueryBuilder.freeTextOrBoolean(text) ?? FTSQueryBuilder.escapeTerm(text)
             let ids = (try? await FTSSearchIndex.shared.searchRaw(fts, limit: limit)) ?? []
             let sums = try await EmailStore.shared.summaries(ids: ids)
@@ -79,8 +91,10 @@ struct EmailStoreRepository: EmailRepository {
             let ordered = sums.sorted { (rank[$0.id] ?? .max) < (rank[$1.id] ?? .max) }
             return EmailPage(summaries: ordered, nextCursor: nil)
         }
+        // Non-text: keyset page with the query's date bounds applied in the DB.
         let sums = try await EmailStore.shared.summaryPage(
-            beforeDate: cursor?.beforeDate, beforeID: cursor?.beforeID, limit: limit
+            after: query.afterDate, before: query.beforeDate,
+            cursorDate: cursor?.beforeDate, cursorID: cursor?.beforeID, limit: limit
         )
         let next = (sums.count == limit) ? sums.last.map { EmailPageCursor(beforeDate: $0.date, beforeID: $0.id) } : nil
         return EmailPage(summaries: sums, nextCursor: next)
@@ -99,15 +113,25 @@ struct EmailStoreRepository: EmailRepository {
     }
 
     func count(query: EmailQuery) async throws -> Int {
-        if let text = query.text, !text.isEmpty {
-            let fts = FTSQueryBuilder.freeTextOrBoolean(text) ?? FTSQueryBuilder.escapeTerm(text)
-            return ((try? await FTSSearchIndex.shared.searchRaw(fts, limit: 1_000_000)) ?? []).count
+        let hasText = !(query.text?.isEmpty ?? true)
+        let hasDates = query.afterDate != nil || query.beforeDate != nil
+        if hasText && hasDates {
+            throw EmailRepositoryError.unsupportedQueryCombination("text + exact date range")
         }
-        return try await EmailStore.shared.totalCount()
+        if hasText, let text = query.text {
+            // O(1)-memory FTS COUNT(*) — never materializes result IDs.
+            let fts = FTSQueryBuilder.freeTextOrBoolean(text) ?? FTSQueryBuilder.escapeTerm(text)
+            return try await FTSSearchIndex.shared.countRaw(fts)
+        }
+        return try await EmailStore.shared.count(after: query.afterDate, before: query.beforeDate)
     }
 
     func delete(ids: [EmailID]) async throws {
+        guard !ids.isEmpty else { return }
+        // FTS first, then store: if the store delete fails afterward, the
+        // canonical row still exists and bounded reconcile restores search —
+        // no ghost FTS row. Errors propagate (no silent try?).
+        for id in ids { try await FTSSearchIndex.shared.delete(id: id) }
         try await EmailStore.shared.delete(ids: Set(ids))
-        for id in ids { try? await FTSSearchIndex.shared.delete(id: id) }
     }
 }

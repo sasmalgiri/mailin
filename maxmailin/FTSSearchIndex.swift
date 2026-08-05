@@ -74,37 +74,49 @@ enum FTSReconciler {
     private static let cursorDateKey = "fts.reconcile.cursor.date"
     private static let cursorIDKey = "fts.reconcile.cursor.id"
 
+    struct ReconcileResult: Sendable {
+        var pagesProcessed = 0
+        var rowsChecked = 0
+        var rowsIndexed = 0
+        var completed = false
+        var cursor: EmailPageCursor?
+    }
+
+    /// Cursor progress means: everything before the cursor has been successfully
+    /// examined and repaired — nothing weaker. Any failure (registry lookup,
+    /// store fetch, FTS index) throws WITHOUT advancing the cursor, so a retry
+    /// reprocesses that page. Never treats a lookup failure as "all indexed".
     @discardableResult
-    static func reconcile(pageSize: Int = 5_000, maxPages: Int? = nil) async -> Int {
+    static func reconcile(pageSize: Int = 5_000, maxPages: Int? = nil) async throws -> ReconcileResult {
         var beforeDate = loadCursorDate()
         var beforeID = loadCursorID()
-        var indexed = 0
-        var pages = 0
+        var result = ReconcileResult()
         while true {
             if Task.isCancelled { break }
-            if let maxPages, pages >= maxPages { break }
-            let page: [(id: UUID, date: Date)]
-            do {
-                page = try await EmailStore.shared.reconcilePage(beforeDate: beforeDate, beforeID: beforeID, limit: pageSize)
-            } catch { break }
-            if page.isEmpty { clearCursor(); break }               // exhausted
+            if let maxPages, result.pagesProcessed >= maxPages { break }
+            let page = try await EmailStore.shared.reconcilePage(beforeDate: beforeDate, beforeID: beforeID, limit: pageSize)
+            if page.isEmpty { clearCursor(); result.completed = true; break }
             let ids = page.map(\.id)
-            let already = (try? await FTSSearchIndex.shared.indexedSubset(of: ids)) ?? Set(ids)
+            result.rowsChecked += ids.count
+            // Propagate registry-lookup failures — do NOT assume "all indexed".
+            let already = try await FTSSearchIndex.shared.indexedSubset(of: ids)
             let missing = ids.filter { !already.contains($0) }
-            if !missing.isEmpty,
-               let emails = try? await EmailStore.shared.emails(withIDs: missing),
-               (try? await FTSSearchIndex.shared.indexBatch(emails)) != nil {
-                indexed += emails.count
+            if !missing.isEmpty {
+                let emails = try await EmailStore.shared.emails(withIDs: missing)
+                try await FTSSearchIndex.shared.indexBatch(emails)
+                result.rowsIndexed += emails.count
             }
+            // Only advance the cursor after ALL page work succeeded.
             if let last = page.last {
                 beforeDate = last.date
                 beforeID = last.id
-                saveCursor(date: last.date, id: last.id)           // restartable
+                saveCursor(date: last.date, id: last.id)
+                result.cursor = EmailPageCursor(beforeDate: last.date, beforeID: last.id)
             }
-            pages += 1
-            if page.count < pageSize { clearCursor(); break }      // exhausted
+            result.pagesProcessed += 1
+            if page.count < pageSize { clearCursor(); result.completed = true; break }
         }
-        return indexed
+        return result
     }
 
     static func resetCursorForTesting() { clearCursor() }
@@ -179,8 +191,18 @@ actor FTSSearchIndex {
     // MARK: - Public API (stable shape — preserves pre-sharded surface)
 
     func index(_ email: MBOXParser.RawEmail) throws {
-        let year = Self.year(for: email)
-        try insert(email, into: year)
+        try migrateLegacyIfNeeded()
+        let db = try ensureShard(year: Self.year(for: email))
+        // Wrap the FTS row + registry upsert in ONE transaction (same guarantee
+        // as indexBatch) so the two can never drift on a mid-write failure.
+        try exec(db, "BEGIN TRANSACTION;")
+        do {
+            try insertWithHandle(email, db: db)
+            try exec(db, "COMMIT;")
+        } catch {
+            try? exec(db, "ROLLBACK;")
+            throw error
+        }
     }
 
     /// Batched index. Groups emails by year so each shard runs a single
@@ -273,6 +295,25 @@ actor FTSSearchIndex {
             .map(\.id)
     }
 
+    /// Count matches for an already-valid FTS5 query via O(1)-memory
+    /// `COUNT(*)` per shard — never materializes result UUIDs.
+    func countRaw(_ ftsQuery: String) throws -> Int {
+        try migrateLegacyIfNeeded()
+        let trimmed = ftsQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return 0 }
+        var total = 0
+        for year in try discoverAllShardYears() {
+            let db = try ensureShard(year: year)
+            let stmt = try prepare(db, "SELECT COUNT(*) FROM email_search WHERE email_search MATCH ?;")
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, trimmed)
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                total += Int(sqlite3_column_int64(stmt, 0))
+            }
+        }
+        return total
+    }
+
     /// Remove every row from every shard. Files are kept (lighter than a
     /// full unlink, and the next insert re-uses the open handles).
     func clear() throws {
@@ -341,7 +382,9 @@ actor FTSSearchIndex {
         return total
     }
 
-    /// All email UUIDs currently in the index (across every shard).
+    /// LEGACY / test-only — materializes every indexed UUID (unbounded memory).
+    /// Production reconciliation must use `indexedSubset(of:)` + `FTSReconciler`
+    /// instead. Do not reintroduce this on a production path.
     func allIndexedIDs() throws -> Set<UUID> {
         try migrateLegacyIfNeeded()
         var ids = Set<UUID>()

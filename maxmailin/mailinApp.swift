@@ -177,8 +177,9 @@ struct mailinApp: App {
                             let ftsCount = (try? await FTSSearchIndex.shared.rowCount()) ?? 0
                             if storeCount > ftsCount {
                                 // Bounded, paged, restartable — no archive-wide
-                                // Set<UUID>, no 100k ceiling.
-                                await FTSReconciler.reconcile()
+                                // Set<UUID>, no 100k ceiling. Best-effort at
+                                // launch; a failure just retries next launch.
+                                _ = try? await FTSReconciler.reconcile()
                             }
                         }
 
