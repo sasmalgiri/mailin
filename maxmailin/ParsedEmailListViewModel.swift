@@ -658,38 +658,47 @@ class ParsedEmailListViewModel: ObservableObject {
 
         var advancedMatchIDs: Set<UUID>?
 
-        // Route free-text + boolean queries through the advertised SQLite FTS5
-        // engine (FTSSearchIndex). Regex and proximity keep using the in-RAM
-        // engine (no clean FTS5 form / avoids NEAR() escaping edge cases).
-        // `escapeForFTS` preserves AND/OR/NOT and prefix-matches the last term.
-        let ftsQuery: String? = {
-            if parsed.isRegexQuery || parsed.isProximityQuery { return nil }
+        // Compile the parsed query into valid FTS5 grammar (FTSQueryBuilder).
+        // Regex has no FTS5 form and stays in-RAM. Proximity compiles to a
+        // native NEAR(...) and is routed through FTS5 with NO in-RAM fallback
+        // (removes the whole-array `EmailSearchIndex.proximitySearch` scale
+        // violation). Free-text/Boolean use FTS when the index isn't mid-build,
+        // else the in-RAM engine (which holds the parsed-so-far set).
+        let ftsQuery: String?
+        let allowInRAMFallback: Bool
+        if parsed.isRegexQuery {
+            ftsQuery = nil
+            allowInRAMFallback = true
+        } else if parsed.isProximityQuery {
+            ftsQuery = FTSQueryBuilder.proximity(
+                term1: parsed.proximityTerm1,
+                term2: parsed.proximityTerm2,
+                distance: parsed.proximityDistance
+            )
+            allowInRAMFallback = false   // proximity is FTS5-only now
+        } else {
             let t = parsed.freeText.trimmingCharacters(in: .whitespaces)
-            return t.isEmpty ? nil : t
-        }()
+            ftsQuery = t.isEmpty ? nil : FTSQueryBuilder.freeTextOrBoolean(t)
+            allowInRAMFallback = true
+        }
 
-        // Only trust FTS when the index is not mid-build. During import the
-        // year-shards populate incrementally, so a global rowCount()>0 gate
-        // would authoritatively (and wrongly) return empty for a not-yet-
-        // indexed year. While importing, use the in-RAM engine (it holds the
-        // parsed-so-far set); FTS engages once import completes.
-        if let ftsQuery, !isParsing {
-            // Composite cache key: re-query when the query, corpus size, OR a
-            // content mutation (delete/redact/reindex → corpusVersion) changes.
+        // Proximity always routes through FTS (partial-during-import is the real
+        // index, not an in-memory answer presented as authoritative). Free-text/
+        // Boolean route through FTS only once the index isn't mid-build.
+        let useFTS = (ftsQuery != nil) && (!isParsing || !allowInRAMFallback)
+        if let ftsQuery, useFTS {
             let cacheKey = "\(ftsQuery)\u{1}\(allEmails.count)\u{1}\(corpusVersion)"
             if cacheKey != ftsMatchKey {
                 let searchTask = Task { [weak self] in
                     guard let self else { return }
-                    // Gate on index POPULATION, not result count. An empty
-                    // result from a populated index is an authoritative "zero
-                    // matches" (no fallback). Empty because nothing is indexed
-                    // must fall back to the in-RAM engine.
                     let populated = ((try? await FTSSearchIndex.shared.rowCount()) ?? 0) > 0
                     if populated {
-                        let ids = (try? await FTSSearchIndex.shared.search(ftsQuery, limit: 100_000)) ?? []
+                        let ids = (try? await FTSSearchIndex.shared.searchRaw(ftsQuery, limit: 100_000)) ?? []
                         self.ftsMatchIDs = Set(ids)   // empty set = authoritative zero matches
                     } else {
-                        self.ftsMatchIDs = nil         // not indexed → in-RAM fallback
+                        // Nothing indexed yet. Free-text/Boolean fall back to
+                        // in-RAM; proximity has no fallback → authoritative empty.
+                        self.ftsMatchIDs = allowInRAMFallback ? nil : Set<UUID>()
                     }
                     self.ftsMatchKey = cacheKey
                     self.applyFilters()
@@ -698,9 +707,6 @@ class ParsedEmailListViewModel: ObservableObject {
                 lastFTSSearchTask = searchTask
                 #endif
             }
-            // Authoritative FTS answer (including a genuine empty set) when the
-            // index is populated; nil means "not indexed / not yet run" → fall
-            // back below.
             if ftsMatchKey == cacheKey, let ids = ftsMatchIDs {
                 advancedMatchIDs = ids
             }
@@ -709,23 +715,14 @@ class ParsedEmailListViewModel: ObservableObject {
             ftsMatchIDs = nil
         }
 
-        // In-RAM fallback: used only while FTS hasn't produced an authoritative
-        // answer (index empty, first async pass) and for the regex / proximity
-        // paths FTS doesn't handle. Preserves the pre-FTS behaviour exactly.
-        if advancedMatchIDs == nil {
+        // In-RAM fallback — Boolean/regex only (NOT proximity, which is now
+        // FTS5-only). Used while FTS hasn't produced an authoritative answer.
+        if advancedMatchIDs == nil && allowInRAMFallback {
             if parsed.isBooleanQuery && !parsed.freeText.isEmpty {
                 let results = EmailSearchIndex.shared.booleanSearch(query: parsed.freeText, limit: allEmails.count)
                 advancedMatchIDs = Set(results.map(\.email.id))
             } else if parsed.isRegexQuery && !parsed.freeText.isEmpty {
                 let results = EmailSearchIndex.shared.regexSearch(pattern: parsed.freeText, limit: allEmails.count)
-                advancedMatchIDs = Set(results.map(\.email.id))
-            } else if parsed.isProximityQuery {
-                let results = EmailSearchIndex.shared.proximitySearch(
-                    term1: parsed.proximityTerm1,
-                    term2: parsed.proximityTerm2,
-                    maxDistance: parsed.proximityDistance,
-                    limit: allEmails.count
-                )
                 advancedMatchIDs = Set(results.map(\.email.id))
             }
         }

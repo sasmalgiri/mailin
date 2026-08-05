@@ -194,4 +194,53 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertFalse(redacted.contains(secret), "redacted output must NOT contain the secret string")
         XCTAssertTrue(redacted.contains("[REDACTED]"), "replacement token should be present")
     }
+
+    // MARK: - P0-S1 — native FTS5 proximity (NEAR)
+
+    /// Proximity compiles to a real FTS5 `NEAR(...)`, dispatches to the engine,
+    /// matches within distance and does NOT match beyond it.
+    func testProximityNearMatchesWithinDistanceOnly() async throws {
+        let near = makeEmail(mid: "<p-near@test>", subject: "S", body: "the budget and the deadline are set")
+        let far  = makeEmail(mid: "<p-far@test>", subject: "S", body: "budget one two three four five six seven deadline")
+        try await FTSSearchIndex.shared.clear()
+        try await FTSSearchIndex.shared.indexBatch([near, far])
+
+        let q = try XCTUnwrap(FTSQueryBuilder.proximity(term1: "budget", term2: "deadline", distance: 5))
+        await FTSSearchIndex.shared.resetDebugSearchCallCount()
+        let ids = try await FTSSearchIndex.shared.searchRaw(q, limit: 50)
+        let dispatched = await FTSSearchIndex.shared.debugSearchCallCount
+
+        XCTAssertEqual(dispatched, 1, "proximity must dispatch to FTS5")
+        XCTAssertTrue(ids.contains(near.id), "terms within distance must match")
+        XCTAssertFalse(ids.contains(far.id), "terms beyond distance must not match")
+        try await FTSSearchIndex.shared.clear()
+    }
+
+    /// Quoted / punctuated terms cannot break the FTS5 grammar.
+    func testProximityQuotingCannotBreakFTS() throws {
+        let q = try XCTUnwrap(FTSQueryBuilder.proximity(term1: "bud\"get", term2: "dead-line", distance: 3))
+        XCTAssertTrue(q.hasPrefix("NEAR("))
+        XCTAssertTrue(q.hasSuffix(", 3)"))
+        XCTAssertTrue(q.contains("\"bud\"\"get\""), "internal double-quote must be doubled")
+    }
+
+    /// The LIVE proximity path (applyFilters) dispatches to FTS5, not in-RAM.
+    func testLiveProximityDispatchesToFTS() async throws {
+        let near = makeEmail(mid: "<pp@test>", subject: "S", body: "the budget and the deadline are set")
+        try await FTSSearchIndex.shared.clear()
+        try await FTSSearchIndex.shared.indexBatch([near])
+
+        let vm = ParsedEmailListViewModel(viewModel: ContentViewModel())
+        vm.allEmails = [near]
+        vm.isParsing = false
+        vm.searchText = "budget NEAR/5 deadline"
+
+        await FTSSearchIndex.shared.resetDebugSearchCallCount()
+        vm.applyFilters()
+        await vm.lastFTSSearchTask?.value
+
+        let dispatched = await FTSSearchIndex.shared.debugSearchCallCount
+        XCTAssertEqual(dispatched, 1, "live proximity must dispatch to FTS5 (not in-RAM)")
+        try await FTSSearchIndex.shared.clear()
+    }
 }

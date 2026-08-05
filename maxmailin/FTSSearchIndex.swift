@@ -31,6 +31,41 @@ import Foundation
 import SQLite3
 import os.log
 
+/// Compiles parsed user queries into valid FTS5 grammar. Leaf-term escaping is
+/// separate from grammar generation: `escapeTerm` only quotes a single term;
+/// the grammar methods own Boolean / prefix / `NEAR(...)` syntax. This keeps a
+/// punctuated or quote-bearing term from ever breaking the FTS5 query.
+enum FTSQueryBuilder {
+    /// Quote a single leaf term (doubling any internal double-quotes).
+    static func escapeTerm(_ term: String) -> String {
+        "\"" + term.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+    }
+
+    /// `term1 NEAR/n term2` → `NEAR("term1" "term2", n)`. Nil if either term is
+    /// empty. Distance is clamped to ≥ 1.
+    static func proximity(term1: String, term2: String, distance: Int) -> String? {
+        let a = term1.trimmingCharacters(in: .whitespacesAndNewlines)
+        let b = term2.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !a.isEmpty, !b.isEmpty else { return nil }
+        return "NEAR(\(escapeTerm(a)) \(escapeTerm(b)), \(max(1, distance)))"
+    }
+
+    /// Free-text / Boolean: preserve AND/OR/NOT operators, quote every leaf
+    /// term, and prefix-match the last term (`"budg"*` matches "budget"). Nil if
+    /// there are no tokens.
+    static func freeTextOrBoolean(_ raw: String) -> String? {
+        let operators: Set<String> = ["AND", "OR", "NOT"]
+        let tokens = raw.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+        guard !tokens.isEmpty else { return nil }
+        let lastTermIndex = tokens.lastIndex(where: { !operators.contains($0.uppercased()) })
+        return tokens.enumerated().map { idx, tok in
+            if operators.contains(tok.uppercased()) { return tok.uppercased() }
+            let quoted = escapeTerm(tok)
+            return idx == lastTermIndex ? quoted + "*" : quoted
+        }.joined(separator: " ")
+    }
+}
+
 actor FTSSearchIndex {
 
     static let shared = FTSSearchIndex()
@@ -107,14 +142,24 @@ actor FTSSearchIndex {
     func resetDebugSearchCallCount() { debugSearchCallCount = 0 }
     #endif
 
-    /// Full-text query across every shard. Returns matched email UUIDs in
-    /// relevance order, truncated to `limit`.
+    /// Plain user text → built FTS5 query (leaf terms escaped, prefix on the
+    /// last term, AND/OR/NOT preserved) → `searchRaw`.
     func search(_ query: String, limit: Int = 50) throws -> [UUID] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        let fts = FTSQueryBuilder.freeTextOrBoolean(trimmed) ?? FTSQueryBuilder.escapeTerm(trimmed)
+        return try searchRaw(fts, limit: limit)
+    }
+
+    /// Execute an already-valid FTS5 query across every shard. The grammar
+    /// (Boolean / prefix / `NEAR(...)`) is owned by the caller / FTSQueryBuilder;
+    /// this does NOT escape. Returns matched UUIDs in bm25 order, capped.
+    func searchRaw(_ ftsQuery: String, limit: Int = 50) throws -> [UUID] {
         #if DEBUG
         debugSearchCallCount += 1
         #endif
         try migrateLegacyIfNeeded()
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = ftsQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
 
         let allShardYears = try discoverAllShardYears()
@@ -135,7 +180,7 @@ actor FTSSearchIndex {
                 LIMIT ?;
             """)
             defer { sqlite3_finalize(stmt) }
-            bindText(stmt, 1, escapeForFTS(trimmed))
+            bindText(stmt, 1, trimmed)
             sqlite3_bind_int(stmt, 2, Int32(limit))
             while sqlite3_step(stmt) == SQLITE_ROW {
                 guard let cstr = sqlite3_column_text(stmt, 0) else { continue }
@@ -452,22 +497,6 @@ actor FTSSearchIndex {
     /// the boolean operators AND / OR / NOT survive as operators rather than
     /// being swallowed into a single quoted phrase. (Proximity `NEAR(...)` is
     /// built upstream by the query builder, not here.)
-    private func escapeForFTS(_ raw: String) -> String {
-        let operators: Set<String> = ["AND", "OR", "NOT"]
-        let tokens = raw.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
-        guard !tokens.isEmpty else { return "\"\"" }
-        // Make the last leaf term a prefix query (`"budg"*` matches "budget") so
-        // partial / search-as-you-type words match inside FTS5 — this removes
-        // the main reason a substring fallback would otherwise be needed.
-        let lastTermIndex = tokens.lastIndex(where: { !operators.contains($0.uppercased()) })
-        return tokens.enumerated().map { idx, tok in
-            if operators.contains(tok.uppercased()) { return tok.uppercased() }
-            let esc = tok.replacingOccurrences(of: "\"", with: "\"\"")
-            let quoted = "\"\(esc)\""
-            return idx == lastTermIndex ? quoted + "*" : quoted
-        }.joined(separator: " ")
-    }
-
     private func stripHTML(_ html: String) -> String {
         guard !html.isEmpty else { return "" }
         let pattern = "<[^>]+>"
