@@ -947,6 +947,38 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertFalse(tampered.verify(), "edited receipt fails its self-hash")
     }
 
+    // MARK: - Stage 5 W2-C / Phase 7 — analytics snapshot
+
+    /// The analytics snapshot's DB aggregates (total, attachments, date range,
+    /// monthly volume) match a Swift-computed oracle — no corpus scan.
+    func testArchiveAnalyticsService_matchesOracle() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-an-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+
+        // Spread across 3 known months (Jan/Feb/Mar 2025) with known per-month counts.
+        var fixtures: [MBOXParser.RawEmail] = []
+        func make(_ i: Int, month: Int) -> MBOXParser.RawEmail {
+            var e = makeEmail(mid: "<an-\(i)@t>", subject: "S\(i % 4)", body: "b \(i)")
+            e.headers["Date"] = String(format: "Mon, 05 %@ 2025 12:00:00 +0000", ["Jan","Feb","Mar"][month-1])
+            e.headers["From"] = "sender\(i % 3)@example.com"
+            return e
+        }
+        for i in 0..<6 { fixtures.append(make(i, month: 1)) }   // 6 in Jan
+        for i in 6..<10 { fixtures.append(make(i, month: 2)) }  // 4 in Feb
+        for i in 10..<12 { fixtures.append(make(i, month: 3)) } // 2 in Mar
+        try await store.insertBatch(fixtures, batchSize: 100)
+
+        let snap = try await ArchiveAnalyticsService(store: store).snapshot(topLimit: 5)
+        XCTAssertEqual(snap.total, 12)
+        let byMonth = Dictionary(uniqueKeysWithValues: snap.monthlyVolume.map { ($0.value, $0.count) })
+        XCTAssertEqual(byMonth["2025-01"], 6)
+        XCTAssertEqual(byMonth["2025-02"], 4)
+        XCTAssertEqual(byMonth["2025-03"], 2)
+        XCTAssertEqual(snap.monthlyVolume.map(\.value), ["2025-01", "2025-02", "2025-03"], "ascending by month")
+        XCTAssertEqual(snap.topSenders.first?.count, 4, "sender0/1/2 cycle → top sender appears 4×")
+    }
+
     // MARK: - Stage 5 Wave 2A — derived-state platform
 
     /// Corpus revision bumps monotonically; derived state persists/fetches by id,

@@ -391,6 +391,22 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return try scalarInt(db, "SELECT COUNT(*) FROM emails WHERE has_attach = 1;")
     }
 
+    /// Email volume per calendar month ("YYYY-MM" → count) — a DB GROUP BY, not
+    /// a corpus scan. Powers analytics time-series without streaming bodies.
+    func monthlyCounts() throws -> [AggregateBucket] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT strftime('%Y-%m', date, 'unixepoch') AS m, COUNT(*) AS c
+            FROM emails GROUP BY m ORDER BY m;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        var out: [AggregateBucket] = []
+        while try stepRow(stmt, db) {
+            out.append(AggregateBucket(value: columnText(stmt, 0), count: Int(sqlite3_column_int64(stmt, 1))))
+        }
+        return out
+    }
+
     /// Whitelisted grouping columns — the raw value is the actual column, so no
     /// user string is ever interpolated into SQL.
     enum GroupColumn: String, Sendable { case fromAddr = "from_addr", subject = "subject", toAddr = "to_addr" }
