@@ -25,6 +25,7 @@ final class V2VerificationTests: XCTestCase {
             rawSource: "From a@b.com\n\(body)",
             messageType: "email",
             attachments: [],
+            timestamp: "2025-01-15T14:30:00Z",
             domains: ["b.com"],
             plainBody: body,
             htmlBody: ""
