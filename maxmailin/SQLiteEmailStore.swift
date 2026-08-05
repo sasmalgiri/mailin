@@ -123,8 +123,154 @@ actor SQLiteEmailStore: EmailArchiveStore {
         // Dedup index: unique on Message-ID, but only where present — multiple
         // NULL (no-Message-ID) rows are allowed and never collapsed.
         try exec(handle, "CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_msgid ON emails(message_id) WHERE message_id IS NOT NULL;")
+        // Meta (corpus revision etc.) + per-email derived analysis state.
+        try exec(handle, "CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0);")
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS derived(
+                email_id         TEXT PRIMARY KEY,
+                corpus_revision  INTEGER NOT NULL DEFAULT 0,
+                analysis_version INTEGER NOT NULL DEFAULT 0,
+                sentiment        TEXT,
+                classification   TEXT,
+                priority         INTEGER,
+                phishing         INTEGER,
+                topic            TEXT,
+                thread_id        TEXT,
+                predictive       REAL,
+                smart_tags       TEXT,
+                updated_at       INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_derived_topic ON derived(topic);")
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_derived_thread ON derived(thread_id);")
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_derived_rev ON derived(corpus_revision);")
         self.db = handle
         return handle
+    }
+
+    // MARK: - Corpus revision
+
+    func corpusRevision() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT value FROM meta WHERE key = 'corpus_revision';")
+    }
+
+    @discardableResult
+    func bumpCorpusRevision() throws -> Int {
+        let db = try ensureDB()
+        try exec(db, """
+            INSERT INTO meta(key, value) VALUES ('corpus_revision', 1)
+            ON CONFLICT(key) DO UPDATE SET value = value + 1;
+        """)
+        return try corpusRevision()
+    }
+
+    // MARK: - Derived state (per-email analysis)
+
+    func derivedUpsert(_ records: [DerivedRecord]) throws {
+        guard !records.isEmpty else { return }
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            INSERT INTO derived(email_id, corpus_revision, analysis_version, sentiment, classification,
+                priority, phishing, topic, thread_id, predictive, smart_tags, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(email_id) DO UPDATE SET
+                corpus_revision=excluded.corpus_revision, analysis_version=excluded.analysis_version,
+                sentiment=excluded.sentiment, classification=excluded.classification, priority=excluded.priority,
+                phishing=excluded.phishing, topic=excluded.topic, thread_id=excluded.thread_id,
+                predictive=excluded.predictive, smart_tags=excluded.smart_tags, updated_at=excluded.updated_at;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        try exec(db, "BEGIN TRANSACTION;")
+        do {
+            for r in records {
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, r.emailID.uuidString)
+                sqlite3_bind_int64(stmt, 2, Int64(r.corpusRevision))
+                sqlite3_bind_int64(stmt, 3, Int64(r.analysisVersion))
+                bindTextOrNull(stmt, 4, r.sentiment)
+                bindTextOrNull(stmt, 5, r.classification)
+                if let p = r.priority { sqlite3_bind_int64(stmt, 6, Int64(p)) } else { sqlite3_bind_null(stmt, 6) }
+                if let ph = r.phishing { sqlite3_bind_int(stmt, 7, ph ? 1 : 0) } else { sqlite3_bind_null(stmt, 7) }
+                bindTextOrNull(stmt, 8, r.topic)
+                bindTextOrNull(stmt, 9, r.threadID)
+                if let pv = r.predictiveScore { sqlite3_bind_double(stmt, 10, pv) } else { sqlite3_bind_null(stmt, 10) }
+                bindTextOrNull(stmt, 11, r.smartTags.isEmpty ? nil : r.smartTags.joined(separator: "\u{1F}"))
+                sqlite3_bind_int64(stmt, 12, Int64(r.updatedAt))
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    func derivedFetch(ids: [EmailID]) throws -> [EmailID: DerivedRecord] {
+        guard !ids.isEmpty else { return [:] }
+        let db = try ensureDB()
+        var out: [EmailID: DerivedRecord] = [:]
+        for chunk in ids.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, """
+                SELECT email_id, corpus_revision, analysis_version, sentiment, classification, priority,
+                       phishing, topic, thread_id, predictive, smart_tags, updated_at
+                FROM derived WHERE email_id IN (\(placeholders));
+            """)
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            while try stepRow(stmt, db) {
+                guard let id = columnUUID(stmt, 0) else { continue }
+                out[id] = DerivedRecord(
+                    emailID: id,
+                    corpusRevision: Int(sqlite3_column_int64(stmt, 1)),
+                    analysisVersion: Int(sqlite3_column_int64(stmt, 2)),
+                    sentiment: columnTextOptional(stmt, 3),
+                    classification: columnTextOptional(stmt, 4),
+                    priority: sqlite3_column_type(stmt, 5) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(stmt, 5)),
+                    phishing: sqlite3_column_type(stmt, 6) == SQLITE_NULL ? nil : (sqlite3_column_int(stmt, 6) != 0),
+                    topic: columnTextOptional(stmt, 7),
+                    threadID: columnTextOptional(stmt, 8),
+                    predictiveScore: sqlite3_column_type(stmt, 9) == SQLITE_NULL ? nil : sqlite3_column_double(stmt, 9),
+                    smartTags: columnTextOptional(stmt, 10).map { $0.split(separator: "\u{1F}").map(String.init) } ?? [],
+                    updatedAt: Int(sqlite3_column_int64(stmt, 11))
+                )
+            }
+        }
+        return out
+    }
+
+    /// Email ids whose derived state is missing or stale relative to `revision`
+    /// — the work list for a background analysis job. Joined to `emails` so
+    /// deleted rows never appear.
+    func derivedStaleIDs(below revision: Int, limit: Int) throws -> [EmailID] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT e.id FROM emails e
+            LEFT JOIN derived d ON d.email_id = e.id
+            WHERE d.email_id IS NULL OR d.corpus_revision < ?
+            LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, Int64(revision))
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+        var out: [EmailID] = []
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append(id) } }
+        return out
+    }
+
+    func derivedCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM derived;")
+    }
+
+    func derivedDelete(ids: Set<EmailID>) throws {
+        guard !ids.isEmpty else { return }
+        let db = try ensureDB()
+        for chunk in Array(ids).chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, "DELETE FROM derived WHERE email_id IN (\(placeholders));")
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        }
     }
 
     // MARK: - Insertion
@@ -424,8 +570,9 @@ actor SQLiteEmailStore: EmailArchiveStore {
         do {
             for chunk in Array(ids).chunked(into: 500) {
                 let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
-                for table in ["emails", "email_bodies"] {
-                    let stmt = try prepare(db, "DELETE FROM \(table) WHERE id IN (\(placeholders));")
+                // (table, id column) — derived is keyed by email_id.
+                for (table, col) in [("emails", "id"), ("email_bodies", "id"), ("derived", "email_id")] {
+                    let stmt = try prepare(db, "DELETE FROM \(table) WHERE \(col) IN (\(placeholders));")
                     defer { sqlite3_finalize(stmt) }
                     for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
                     guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }

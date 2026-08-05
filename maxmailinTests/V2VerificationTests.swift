@@ -838,6 +838,59 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertEqual(snap.topSubjects.first?.count, subjectCounts.values.max(), "top subject frequency matches oracle")
     }
 
+    // MARK: - Stage 5 Wave 2A — derived-state platform
+
+    /// Corpus revision bumps monotonically; derived state persists/fetches by id,
+    /// stale-scans below a revision, cascades on delete, and a background job
+    /// processes every stale id in bounded batches until none remain.
+    func testDerivedStatePlatform() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-dv-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fixtures = (0..<25).map { makeEmail(mid: "<dv-\($0)@t>", subject: "S\($0)", body: "b \($0)") }
+        try await store.insertBatch(fixtures, batchSize: 100)
+
+        // Corpus revision monotonic.
+        let rev0 = try await store.corpusRevision()
+        let rev1 = try await store.bumpCorpusRevision()
+        XCTAssertEqual(rev1, rev0 + 1)
+
+        // All ids are stale (no derived rows yet).
+        let stale = try await store.derivedStaleIDs(below: rev1, limit: 1000)
+        XCTAssertEqual(stale.count, 25, "every email is stale before analysis")
+
+        // Background job computes derived state for all, in bounded batches.
+        let runner = ArchiveBackgroundJobRunner(store: store)
+        var batchSizesSeen: [Int] = []
+        let finalState = await runner.run(batchSize: 10) { emails, rev in
+            batchSizesSeen.append(emails.count)
+            return emails.map { DerivedRecord(emailID: $0.id, corpusRevision: rev, sentiment: "neutral", topic: "t\(abs($0.id.hashValue) % 3)") }
+        }
+        XCTAssertEqual(finalState, .completed)
+        let derivedCount1 = try await store.derivedCount()
+        XCTAssertEqual(derivedCount1, 25, "all derived rows persisted")
+        XCTAssertTrue(batchSizesSeen.allSatisfy { $0 <= 10 }, "bounded batches")
+        let noneStale = try await store.derivedStaleIDs(below: rev1, limit: 1000)
+        XCTAssertTrue(noneStale.isEmpty, "nothing stale after the job")
+
+        // Fetch by id round-trips.
+        let fetched = try await store.derivedFetch(ids: [fixtures[0].id, fixtures[1].id])
+        XCTAssertEqual(fetched[fixtures[0].id]?.sentiment, "neutral")
+        XCTAssertEqual(fetched[fixtures[0].id]?.corpusRevision, rev1)
+
+        // Bumping the revision makes everything stale again (invalidation).
+        let rev2 = try await store.bumpCorpusRevision()
+        let staleAfterBump = try await store.derivedStaleIDs(below: rev2, limit: 1000)
+        XCTAssertEqual(staleAfterBump.count, 25, "revision bump invalidates derived state")
+
+        // Deleting an email cascades its derived row.
+        try await store.delete(ids: [fixtures[0].id])
+        let afterDelete = try await store.derivedFetch(ids: [fixtures[0].id])
+        XCTAssertNil(afterDelete[fixtures[0].id], "derived state removed with the email")
+        let derivedCount2 = try await store.derivedCount()
+        XCTAssertEqual(derivedCount2, 24)
+    }
+
     // MARK: - Stage 5 Wave 1C/1E — detail hydration + selection scope
 
     /// ID→fullEmail detail: hydrates the right email, reports missing, and a
