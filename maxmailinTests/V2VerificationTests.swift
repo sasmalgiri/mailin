@@ -408,18 +408,19 @@ final class V2VerificationTests: XCTestCase {
         await EmailStore.shared.resetForTesting()
     }
 
-    /// Date bounds are applied at the DB level; text + exact date range is
-    /// rejected explicitly rather than silently ignored.
-    func testDateBoundsHonoredAndTextPlusDateRejected() async throws {
-        let savedInMemory = EmailStore.testInMemory
-        EmailStore.testInMemory = true
-        await EmailStore.shared.resetForTesting()
-        defer { EmailStore.testInMemory = savedInMemory }
-
+    /// Date bounds are applied in the DB; text + exact date range is now
+    /// SUPPORTED (FTS candidates filtered by exact date, bm25 order).
+    func testDateBoundsHonoredAndTextPlusDateSupported() async throws {
         // dayOffset i → "1+i Jan 2025 14:30 UTC". 10 emails, days 01..10.
         let fixtures = (0..<10).map { makeEmailDated(mid: "<d-\($0)@t>", subject: "S\($0)", body: "body \($0)", dayOffset: $0) }
-        try await EmailStore.shared.insertBatch(fixtures, sourceFileHash: nil, batchSize: 200, progress: nil)
-        let repo = EmailStoreRepository.shared
+
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-td-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        try await store.insertBatch(fixtures, batchSize: 100)
+        try await fts.indexBatch(fixtures)
+        let repo = EmailStoreRepository(store: store, fts: fts)
 
         // Boundary between day05 (14:30) and day06 (14:30): includes days 06..10 = 5.
         var comps = DateComponents()
@@ -427,20 +428,18 @@ final class V2VerificationTests: XCTestCase {
         comps.timeZone = TimeZone(identifier: "UTC")
         let after = Calendar(identifier: .gregorian).date(from: comps)!
 
+        // Date-only (native DB path).
         let page = try await repo.page(query: EmailQuery(afterDate: after), cursor: nil, limit: 50)
         XCTAssertEqual(page.summaries.count, 5, "afterDate bound applied at DB level")
         let cnt = try await repo.count(query: EmailQuery(afterDate: after))
         XCTAssertEqual(cnt, 5, "date-filtered count matches")
 
-        var rejected = false
-        do {
-            _ = try await repo.page(query: EmailQuery(text: "body", afterDate: after), cursor: nil, limit: 10)
-        } catch is EmailRepositoryError {
-            rejected = true
-        }
-        XCTAssertTrue(rejected, "text + exact date range must be rejected, not silently ignored")
-
-        await EmailStore.shared.resetForTesting()
+        // Text + date (FTS candidates + exact date filter). "body" matches all 10.
+        let td = try await repo.page(query: EmailQuery(text: "body", afterDate: after), cursor: nil, limit: 50)
+        XCTAssertEqual(td.summaries.count, 5, "text + date returns date-filtered text matches")
+        XCTAssertTrue(td.summaries.allSatisfy { $0.date >= after }, "all results within the date bound")
+        let tdCount = try await repo.count(query: EmailQuery(text: "body", afterDate: after))
+        XCTAssertEqual(tdCount, 5, "text + date count matches")
     }
 
     // MARK: - Stage 3.1.7 — injectable, Release-safe storage environment
@@ -741,6 +740,41 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertEqual(vm.summaries.map(\.id), Array(oracle[0..<100]))
         XCTAssertFalse(vm.hasPrevious, "back at the top")
         XCTAssertLessThanOrEqual(vm.maxRetainedObserved, 100, "window stays bounded through bidirectional browsing")
+    }
+
+    /// Delete from the list removes the row from the store, FTS and the paged
+    /// results, with no skip/duplicate corruption across page boundaries.
+    func testArchiveListVM_deleteReflectsInPagesAndSearch() async throws {
+        let fixtures = (0..<40).map { makeEmailDated(mid: "<del-\($0)@t>", subject: "S\($0)", body: "token \($0)", dayOffset: $0) }
+        // Build a VM whose archive also has FTS, so search reflects deletion.
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-del-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        try await store.insertBatch(fixtures, batchSize: 100)
+        try await fts.indexBatch(fixtures)
+        let svc = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+        let vm = ArchiveListViewModel(archive: svc, pageSize: 10, maxRetained: 10_000)
+
+        await vm.loadInitial()
+        var guardN = 0
+        while vm.hasMore && guardN < 50 { await vm.loadNextPage(); guardN += 1 }
+        XCTAssertEqual(vm.summaries.count, 40)
+        let victim = vm.summaries[15].id   // a row on a later page
+
+        await vm.delete([victim])
+        // Reloaded pages must not contain the victim, count drops, no dupes.
+        var seen = Set<EmailID>(); var dup = false
+        guardN = 0
+        while vm.hasMore && guardN < 50 { await vm.loadNextPage(); guardN += 1 }
+        for s in vm.summaries { if !seen.insert(s.id).inserted { dup = true } }
+        XCTAssertFalse(seen.contains(victim), "deleted row gone from paged results")
+        XCTAssertFalse(dup, "no duplicates after delete")
+        let count = try await svc.count(query: .all)
+        XCTAssertEqual(count, 39, "store count reflects deletion")
+        // FTS also no longer returns it.
+        let hits = try await fts.searchRaw("token", limit: 100)
+        XCTAssertFalse(hits.contains(victim), "deleted row gone from FTS")
     }
 
     /// Query-revision guard: a slow superseded load must NOT overwrite the newer

@@ -90,22 +90,18 @@ struct EmailStoreRepository: EmailRepository {
         self.fts = fts
     }
 
+    /// Bounded cap on a single ranked text search. A term matching more than this
+    /// many rows is ranked/date-filtered over this bounded candidate window — we
+    /// never materialize the full result set. Deep ranked continuation beyond the
+    /// cap is a later refinement (cross-shard BM25 cursor).
+    static let textSearchCap = 2_000
+
     func page(query: EmailQuery, cursor: EmailPageCursor?, limit: Int) async throws -> EmailPage {
-        let hasText = !(query.text?.isEmpty ?? true)
-        let hasDates = query.afterDate != nil || query.beforeDate != nil
-        // Text + exact date range needs a time-scoped FTS planner (later stage).
-        // Reject explicitly rather than silently ignoring the date bounds.
-        if hasText && hasDates {
-            throw EmailRepositoryError.unsupportedQueryCombination("text + exact date range")
-        }
-        if hasText, let text = query.text {
-            // Text query → FTS5 → bounded IDs → summaries (bm25 order).
-            let ftsQuery = FTSQueryBuilder.freeTextOrBoolean(text) ?? FTSQueryBuilder.escapeTerm(text)
-            let ids = (try? await fts.searchRaw(ftsQuery, limit: limit)) ?? []
-            let sums = try await store.summaries(ids: ids)
-            let rank = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($1, $0) })
-            let ordered = sums.sorted { (rank[$0.id] ?? .max) < (rank[$1.id] ?? .max) }
-            return EmailPage(summaries: ordered, nextCursor: nil)
+        if let text = query.text, !text.isEmpty {
+            // Text (optionally + date): FTS5 ranked candidate ids → summaries →
+            // apply exact date bounds → bm25 order → bounded page.
+            let ordered = try await rankedTextSummaries(text, query: query)
+            return EmailPage(summaries: Array(ordered.prefix(limit)), nextCursor: nil)
         }
         // Non-text: keyset page with the query's date bounds applied in the DB.
         let sums = try await store.summaryPage(
@@ -114,6 +110,20 @@ struct EmailStoreRepository: EmailRepository {
         )
         let next = (sums.count == limit) ? sums.last.map { EmailPageCursor(beforeDate: $0.date, beforeID: $0.id) } : nil
         return EmailPage(summaries: sums, nextCursor: next)
+    }
+
+    /// FTS candidate ids → summaries → exact date filter → bm25 rank order.
+    private func rankedTextSummaries(_ text: String, query: EmailQuery) async throws -> [EmailSummary] {
+        let ftsQuery = FTSQueryBuilder.freeTextOrBoolean(text) ?? FTSQueryBuilder.escapeTerm(text)
+        let ids = (try? await fts.searchRaw(ftsQuery, limit: Self.textSearchCap)) ?? []
+        var sums = try await store.summaries(ids: ids)
+        if query.afterDate != nil || query.beforeDate != nil {
+            let lo = query.afterDate ?? .distantPast
+            let hi = query.beforeDate ?? .distantFuture
+            sums = sums.filter { $0.date >= lo && $0.date < hi }
+        }
+        let rank = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($1, $0) })
+        return sums.sorted { (rank[$0.id] ?? .max) < (rank[$1.id] ?? .max) }
     }
 
     func summaries(ids: [EmailID]) async throws -> [EmailSummary] {
@@ -133,13 +143,14 @@ struct EmailStoreRepository: EmailRepository {
     }
 
     func count(query: EmailQuery) async throws -> Int {
-        let hasText = !(query.text?.isEmpty ?? true)
         let hasDates = query.afterDate != nil || query.beforeDate != nil
-        if hasText && hasDates {
-            throw EmailRepositoryError.unsupportedQueryCombination("text + exact date range")
-        }
-        if hasText, let text = query.text {
-            // O(1)-memory FTS COUNT(*) — never materializes result IDs.
+        if let text = query.text, !text.isEmpty {
+            if hasDates {
+                // Text + date: count the date-filtered candidates (bounded by the
+                // search cap; exact when total text matches ≤ cap).
+                return try await rankedTextSummaries(text, query: query).count
+            }
+            // O(1)-memory FTS COUNT(*) — never materializes result ids.
             let ftsQuery = FTSQueryBuilder.freeTextOrBoolean(text) ?? FTSQueryBuilder.escapeTerm(text)
             return try await fts.countRaw(ftsQuery)
         }

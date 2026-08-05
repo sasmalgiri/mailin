@@ -176,6 +176,19 @@ final class ArchiveListViewModel: ObservableObject {
         try await archive.fullEmail(id: id)
     }
 
+    /// Delete emails, then reload the current query so the bounded pages reflect
+    /// the removal with no skip/duplicate corruption. (Reload-from-top is safe:
+    /// keyset ordering is stable across deletions.)
+    func delete(_ ids: Set<EmailID>) async {
+        guard !ids.isEmpty else { return }
+        do {
+            try await archive.delete(ids: Array(ids))
+        } catch {
+            self.error = error
+        }
+        await loadInitial()
+    }
+
     func reset() {
         queryRevision &+= 1
         residentPages = []

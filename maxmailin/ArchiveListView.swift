@@ -14,10 +14,29 @@
 
 import SwiftUI
 
+enum ArchiveDateScope: String, CaseIterable, Identifiable {
+    case all = "All Time"
+    case days30 = "Last 30 Days"
+    case days90 = "Last 90 Days"
+    case year = "Last Year"
+    var id: String { rawValue }
+    var after: Date? {
+        switch self {
+        case .all: return nil
+        case .days30: return Calendar.current.date(byAdding: .day, value: -30, to: Date())
+        case .days90: return Calendar.current.date(byAdding: .day, value: -90, to: Date())
+        case .year: return Calendar.current.date(byAdding: .year, value: -1, to: Date())
+        }
+    }
+}
+
 struct ArchiveListView: View {
     @StateObject private var model: ArchiveListViewModel
     @StateObject private var detail: ArchiveDetailViewModel
     @State private var selectedID: EmailID?
+    @State private var searchText = ""
+    @State private var scope: ArchiveDateScope = .all
+    @State private var searchTask: Task<Void, Never>?
 
     init(archive: ArchiveDataService = .shared) {
         _model = StateObject(wrappedValue: ArchiveListViewModel(archive: archive, pageSize: 100, maxRetained: 500))
@@ -28,6 +47,19 @@ struct ArchiveListView: View {
         NavigationSplitView {
             listPane
                 .navigationTitle("Archive")
+                .searchable(text: $searchText, prompt: "Search subject, sender, body…")
+                .toolbar {
+                    ToolbarItem {
+                        Menu {
+                            Picker("Date", selection: $scope) {
+                                ForEach(ArchiveDateScope.allCases) { Text($0.rawValue).tag($0) }
+                            }
+                        } label: {
+                            Label(scope.rawValue, systemImage: "calendar")
+                        }
+                        .accessibilityIdentifier("archive.list.dateScope")
+                    }
+                }
         } detail: {
             ArchiveDetailHost(detail: detail)
         }
@@ -36,6 +68,22 @@ struct ArchiveListView: View {
         }
         .onChange(of: selectedID) { _, id in
             Task { await detail.select(id) }
+        }
+        .onChange(of: searchText) { _, _ in scheduleQuery() }
+        .onChange(of: scope) { _, _ in scheduleQuery() }
+    }
+
+    /// Debounced query update. The model's queryRevision guard makes this safe
+    /// even under rapid typing — debounce just avoids redundant fetches.
+    private func scheduleQuery() {
+        searchTask?.cancel()
+        let text = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let after = scope.after
+        searchTask = Task {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            if Task.isCancelled { return }
+            let query = EmailQuery(text: text.isEmpty ? nil : text, beforeDate: nil, afterDate: after)
+            await model.setQuery(query)
         }
     }
 
@@ -70,6 +118,18 @@ struct ArchiveListView: View {
                                 Task { await model.loadNextPage() }
                             }
                         }
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                Task { await model.delete([summary.id]); detail.invalidate(summary.id) }
+                            } label: { Label("Delete", systemImage: "trash") }
+                        }
+                        #if os(iOS)
+                        .swipeActions(edge: .trailing) {
+                            Button(role: .destructive) {
+                                Task { await model.delete([summary.id]); detail.invalidate(summary.id) }
+                            } label: { Label("Delete", systemImage: "trash") }
+                        }
+                        #endif
                 }
 
                 if model.hasMore {
