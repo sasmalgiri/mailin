@@ -123,4 +123,38 @@ final class V2VerificationTests: XCTestCase {
 
         try await FTSSearchIndex.shared.clear()
     }
+
+    // MARK: - 3.4 — Delete removes from store AND search (no ghost rows)
+
+    /// A deleted email must disappear from both the SwiftData store and the
+    /// FTS index. Guards the previously-missing delete path (removeEmails used
+    /// to only mutate the in-memory array, leaving searchable ghost rows).
+    func testDeleteRemovesFromStoreAndSearch() async throws {
+        let savedInMemory = EmailStore.testInMemory
+        EmailStore.testInMemory = true
+        await EmailStore.shared.resetForTesting()
+        defer {
+            EmailStore.testInMemory = savedInMemory
+        }
+
+        let fixtures = (0..<5).map { makeEmail(mid: "<d-\($0)@test>", subject: "Subject \($0)", body: "deletable running \($0)") }
+        try await EmailStore.shared.insertBatch(fixtures, sourceFileHash: nil, batchSize: 200, progress: nil)
+        try await FTSSearchIndex.shared.clear()
+        try await FTSSearchIndex.shared.indexBatch(fixtures)
+
+        let preCount = try await EmailStore.shared.totalCount()
+        XCTAssertEqual(preCount, 5, "precondition: 5 inserted")
+
+        let victim = fixtures[0].id
+        try await EmailStore.shared.delete(ids: [victim])
+        try await FTSSearchIndex.shared.delete(id: victim)
+
+        let postCount = try await EmailStore.shared.totalCount()
+        XCTAssertEqual(postCount, 4, "store delete must drop the row")
+        let hits = try await FTSSearchIndex.shared.search("running", limit: 50)
+        XCTAssertFalse(hits.contains(victim), "deleted email must not appear in FTS results (ghost row)")
+
+        try await FTSSearchIndex.shared.clear()
+        await EmailStore.shared.resetForTesting()
+    }
 }

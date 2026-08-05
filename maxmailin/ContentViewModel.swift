@@ -723,6 +723,15 @@ class ContentViewModel: ObservableObject {
         totalParsedCount = parsedEmails.count
         duplicatesRemoved += removed.count
         removedDuplicates.append(contentsOf: removed)
+        // Durably delete from the v2 store AND the FTS index so removed emails
+        // don't linger as searchable ghost rows (store↔FTS drift).
+        let idList = ids
+        Task {
+            try? await EmailStore.shared.delete(ids: idList)
+            for id in idList {
+                try? await FTSSearchIndex.shared.delete(id: id)
+            }
+        }
     }
 
     // MARK: - Restore persisted emails

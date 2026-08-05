@@ -226,6 +226,26 @@ actor EmailStore {
         return try context.fetchCount(FetchDescriptor<StoredEmail>())
     }
 
+    /// Delete emails (cascading their attachments) from the store by id.
+    /// Pairs with `FTSSearchIndex.delete(id:)` at the call site so a removed
+    /// or redacted email doesn't linger as a searchable ghost row.
+    func delete(ids: Set<UUID>) throws {
+        guard !ids.isEmpty else { return }
+        let container = try ensureContainer()
+        let context = ModelContext(container)
+        let idArray = Array(ids)
+        let descriptor = FetchDescriptor<StoredEmail>(
+            predicate: #Predicate { idArray.contains($0.id) }
+        )
+        let matches = try context.fetch(descriptor)
+        for m in matches { context.delete(m) }
+        do {
+            try context.save()
+        } catch {
+            throw EmailStoreError.insertFailed(error.localizedDescription)
+        }
+    }
+
     // MARK: - Queries
 
     /// Page of emails for list display, ordered by date descending. Memory
