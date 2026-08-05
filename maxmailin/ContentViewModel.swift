@@ -472,12 +472,19 @@ class ContentViewModel: ObservableObject {
                 let importFilename = urls.count == 1 ? urls.first?.lastPathComponent ?? "archive" : "\(urls.count) files"
                 ImportProgressNotifier.shared.completeImport(filename: importFilename, count: self.parsedEmails.count)
 
-                // Update widget data for future WidgetKit extension
-                WidgetDataProvider.shared.updateWidgetData(
-                    totalEmails: self.parsedEmails.count,
-                    importFilename: urls.first?.lastPathComponent,
-                    emails: self.parsedEmails
-                )
+                // Update widget data from bounded services (aggregate top
+                // senders + a few recent summaries) — never the whole corpus.
+                let widgetImportName = urls.first?.lastPathComponent
+                Task { @MainActor in
+                    let snap = try? await ArchiveAggregateService.shared.snapshot(topLimit: 5)
+                    let recent = (try? await ArchiveDataService.shared.page(query: .all, cursor: nil, limit: 5))?.summaries ?? []
+                    WidgetDataProvider.shared.updateWidgetData(
+                        totalEmails: snap?.total ?? 0,
+                        importFilename: widgetImportName,
+                        topSenders: snap?.topSenders.map(\.value) ?? [],
+                        recentSubjects: recent.map(\.subject)
+                    )
+                }
 
                 NotificationCenter.default.post(name: .parsingFinished, object: nil)
 

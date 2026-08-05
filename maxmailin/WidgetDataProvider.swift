@@ -20,34 +20,20 @@ class WidgetDataProvider {
         var unreadHighPriority: Int = 0
     }
 
+    /// Stage 5 W2-B: the widget receives only bounded, already-derived data
+    /// (aggregate top senders + a few recent subjects) — never the corpus.
     func updateWidgetData(
         totalEmails: Int,
         importFilename: String?,
-        emails: [MBOXParser.RawEmail]
+        topSenders: [String],
+        recentSubjects: [String]
     ) {
         var data = WidgetData()
         data.totalEmails = totalEmails
         data.lastImportDate = Date()
         data.lastImportFilename = importFilename
-
-        // Top 5 senders by frequency
-        var senderCounts: [String: Int] = [:]
-        for email in emails {
-            let from = email.headers["From"] ?? ""
-            let sender = from.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? from
-            if !sender.isEmpty {
-                senderCounts[sender, default: 0] += 1
-            }
-        }
-        data.topSenders = senderCounts.sorted { $0.value > $1.value }.prefix(5).map(\.key)
-
-        // Recent 5 subjects sorted by date descending
-        data.recentSubjects = emails
-            .sorted { (MBOXParser.parseDate($0.headers["Date"]) ?? .distantPast) > (MBOXParser.parseDate($1.headers["Date"]) ?? .distantPast) }
-            .prefix(5)
-            .map { $0.headers["Subject"] ?? "(No Subject)" }
-
-        // Save to UserDefaults
+        data.topSenders = Array(topSenders.prefix(5))
+        data.recentSubjects = Array(recentSubjects.prefix(5))
         if let encoded = try? JSONEncoder().encode(data) {
             defaults.set(encoded, forKey: "mailin_widget_data")
         }
