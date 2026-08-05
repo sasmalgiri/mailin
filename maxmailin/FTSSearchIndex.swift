@@ -86,35 +86,78 @@ enum FTSReconciler {
     /// examined and repaired — nothing weaker. Any failure (registry lookup,
     /// store fetch, FTS index) throws WITHOUT advancing the cursor, so a retry
     /// reprocesses that page. Never treats a lookup failure as "all indexed".
+    ///
+    /// Production entry point: reconciles the shared store/index and persists
+    /// its cursor in UserDefaults so it survives process restarts.
     @discardableResult
     static func reconcile(pageSize: Int = 5_000, maxPages: Int? = nil) async throws -> ReconcileResult {
-        var beforeDate = loadCursorDate()
-        var beforeID = loadCursorID()
+        try await reconcileCore(
+            store: .shared, fts: .shared, pageSize: pageSize, maxPages: maxPages,
+            initialDate: loadCursorDate(), initialID: loadCursorID(),
+            onAdvance: { saveCursor(date: $0, id: $1) },
+            onComplete: { clearCursor() }
+        )
+    }
+
+    /// Isolated entry point for harnesses/tests: reconciles explicit store +
+    /// index instances (e.g. a `MailinStorageEnvironment.disposable`) with an
+    /// in-run cursor only — never touches the global UserDefaults cursor, so
+    /// concurrent disposable environments stay independent. Same semantics
+    /// otherwise: a failure throws without losing progress within the run.
+    @discardableResult
+    static func reconcile(
+        store: EmailStore,
+        fts: FTSSearchIndex,
+        pageSize: Int = 5_000,
+        maxPages: Int? = nil
+    ) async throws -> ReconcileResult {
+        try await reconcileCore(
+            store: store, fts: fts, pageSize: pageSize, maxPages: maxPages,
+            initialDate: nil, initialID: nil,
+            onAdvance: { _, _ in }, onComplete: { }
+        )
+    }
+
+    /// Shared reconcile loop. Cursor persistence is injected via `onAdvance` /
+    /// `onComplete` so the production path can use UserDefaults while the
+    /// harness path uses nothing — the page-walk logic is identical for both.
+    private static func reconcileCore(
+        store: EmailStore,
+        fts: FTSSearchIndex,
+        pageSize: Int,
+        maxPages: Int?,
+        initialDate: Date?,
+        initialID: UUID?,
+        onAdvance: @Sendable (Date, UUID) -> Void,
+        onComplete: @Sendable () -> Void
+    ) async throws -> ReconcileResult {
+        var beforeDate = initialDate
+        var beforeID = initialID
         var result = ReconcileResult()
         while true {
             if Task.isCancelled { break }
             if let maxPages, result.pagesProcessed >= maxPages { break }
-            let page = try await EmailStore.shared.reconcilePage(beforeDate: beforeDate, beforeID: beforeID, limit: pageSize)
-            if page.isEmpty { clearCursor(); result.completed = true; break }
+            let page = try await store.reconcilePage(beforeDate: beforeDate, beforeID: beforeID, limit: pageSize)
+            if page.isEmpty { onComplete(); result.completed = true; break }
             let ids = page.map(\.id)
             result.rowsChecked += ids.count
             // Propagate registry-lookup failures — do NOT assume "all indexed".
-            let already = try await FTSSearchIndex.shared.indexedSubset(of: ids)
+            let already = try await fts.indexedSubset(of: ids)
             let missing = ids.filter { !already.contains($0) }
             if !missing.isEmpty {
-                let emails = try await EmailStore.shared.emails(withIDs: missing)
-                try await FTSSearchIndex.shared.indexBatch(emails)
+                let emails = try await store.emails(withIDs: missing)
+                try await fts.indexBatch(emails)
                 result.rowsIndexed += emails.count
             }
             // Only advance the cursor after ALL page work succeeded.
             if let last = page.last {
                 beforeDate = last.date
                 beforeID = last.id
-                saveCursor(date: last.date, id: last.id)
+                onAdvance(last.date, last.id)
                 result.cursor = EmailPageCursor(beforeDate: last.date, beforeID: last.id)
             }
             result.pagesProcessed += 1
-            if page.count < pageSize { clearCursor(); result.completed = true; break }
+            if page.count < pageSize { onComplete(); result.completed = true; break }
         }
         return result
     }

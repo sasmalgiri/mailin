@@ -491,6 +491,84 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertFalse(envA.isProduction, "disposable environment is never marked production")
     }
 
+    // MARK: - Stage 4 — mailin-v2-stress harness
+
+    /// Drives the REAL engine (EmailStore + FTS5 + repository + reconcile) over
+    /// a disposable environment at one or more scales, writing a JSON artifact
+    /// and asserting correctness. Skipped in the normal suite (it is heavy);
+    /// invoke via `MAILIN_STRESS_SCALES=10000,20000` in the test environment.
+    ///   MAILIN_STRESS_SCALES   comma-separated scales (falls back to _SCALE)
+    ///   MAILIN_STRESS_CONFIG   label recorded in the JSON (e.g. "Release")
+    ///   MAILIN_STRESS_NODESTRUCT=1  skip the delete + FTS-rebuild checks
+    ///   MAILIN_STRESS_BODY     body bytes per email (default 600)
+    func testStressHarnessSweep() async throws {
+        // Trigger channel. A sandboxed test host does NOT inherit the shell
+        // environment, so the primary channel is a KEY=VALUE config file the
+        // shell drops into the app container's tmp; env vars override if present.
+        //   SCALES=10000,20000   CONFIG=Release   NODESTRUCT=1   BODY=600
+        let procEnv = ProcessInfo.processInfo.environment
+        let tmp = FileManager.default.temporaryDirectory
+        let configURL = tmp.appendingPathComponent("mailin_stress_config.txt")
+        print("STRESS_CONFIG_PATH=\(configURL.path)")
+
+        var fileCfg: [String: String] = [:]
+        if let text = try? String(contentsOf: configURL, encoding: .utf8) {
+            for line in text.split(whereSeparator: \.isNewline) {
+                let parts = line.split(separator: "=", maxSplits: 1)
+                if parts.count == 2 {
+                    fileCfg[parts[0].trimmingCharacters(in: .whitespaces).uppercased()] =
+                        parts[1].trimmingCharacters(in: .whitespaces)
+                }
+            }
+        }
+        func opt(_ key: String) -> String? {
+            procEnv["MAILIN_STRESS_\(key)"] ?? fileCfg[key]
+        }
+
+        guard let scalesRaw = opt("SCALES") ?? opt("SCALE") else {
+            throw XCTSkip("No stress config. Drop SCALES=10000 into \(configURL.path) (or set MAILIN_STRESS_SCALES).")
+        }
+        let scales = scalesRaw.split(separator: ",").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+        XCTAssertFalse(scales.isEmpty, "SCALES parsed to no integers")
+
+        let label = opt("CONFIG") ?? "Debug"
+        let noDestruct = opt("NODESTRUCT") == "1"
+        let bodyBytes = opt("BODY").flatMap { Int($0) } ?? 600
+
+        let outURL = tmp.appendingPathComponent("mailin_stress_results.json")
+        print("STRESS_OUTPUT_PATH=\(outURL.path)")
+
+        var results: [StressResult] = []
+        for scale in scales {
+            var cfg = StressConfig(scale: scale)
+            cfg.configurationLabel = label
+            cfg.runDestructiveChecks = !noDestruct
+            cfg.bodyBytes = bodyBytes
+
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("mailin-stress-\(scale)-\(UUID().uuidString)", isDirectory: true)
+            let result = try await StressHarness.run(config: cfg, root: root)
+            try? FileManager.default.removeItem(at: root)
+            results.append(result)
+
+            // Incremental write so a mid-sweep failure still leaves evidence.
+            let enc = JSONEncoder()
+            enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+            try enc.encode(results).write(to: outURL)
+
+            print(String(format: "STRESS scale=%d passed=%@ import=%.0f/s index=%.0f/s peakImportRSS=%.0fMB postRSS=%.0fMB firstPage=%.1fms deepPage=%.1fms searchP95=%.2fms coldReopen=%.1fms disk=%.1fMB",
+                         scale, result.passed ? "YES" : "NO",
+                         result.importMsgPerSec, result.indexMsgPerSec,
+                         result.rssPeakImportMB, result.rssPostImportMB,
+                         result.firstPageMs, result.deepPageMs, result.searchP95Ms,
+                         result.coldReopenMs, Double(result.totalDiskBytes) / 1_048_576.0))
+            if !result.notes.isEmpty { print("STRESS scale=\(scale) notes: \(result.notes)") }
+
+            XCTAssertTrue(result.passed, "scale \(scale) correctness failed: \(result.notes)")
+        }
+        print("STRESS_DONE wrote \(results.count) result(s) to \(outURL.path)")
+    }
+
     #if canImport(FoundationModels)
     /// The AI search tool retrieves via FTS5 → EmailStore (bounded evidence),
     /// not by scanning an in-memory `[RawEmail]` corpus.
