@@ -918,6 +918,35 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertTrue(injReport.answer.abstained, "injection content with no evidence is rejected, not obeyed")
     }
 
+    // MARK: - Stage 5 W3 / Phase 12 — import receipt
+
+    /// A finalized receipt verifies; persists + reloads intact; any tamper is
+    /// detected by the self-hash.
+    func testImportReceipt_hashPersistAndTamper() async throws {
+        var receipt = ImportReceipt(startedAt: Date(timeIntervalSince1970: 1000), completedAt: Date(timeIntervalSince1970: 1090))
+        receipt.sources = [.init(filename: "a.mbox", sizeBytes: 12345, sha256: "abc", parser: "mbox", parserVersion: 1)]
+        receipt.discovered = 50; receipt.inserted = 48; receipt.duplicates = 2; receipt.skipped = 0
+        receipt.durationSeconds = 90; receipt.storeCountBefore = 100; receipt.storeCountAfter = 148; receipt.ftsRowCount = 148
+        receipt.finalize()
+        XCTAssertTrue(receipt.verify(), "finalized receipt verifies")
+        XCTAssertFalse(receipt.contentHash.isEmpty)
+
+        // Persist + reload round-trips and still verifies.
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-rcpt-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        let store = ImportReceiptStore(directory: dir)
+        let url = try store.save(receipt)
+        let reloaded = try store.load(url)
+        XCTAssertEqual(reloaded, receipt, "receipt round-trips exactly")
+        XCTAssertTrue(reloaded.verify(), "reloaded receipt still verifies")
+        XCTAssertEqual(store.list().count, 1)
+
+        // Tamper → verify fails.
+        var tampered = reloaded
+        tampered.inserted = 9999
+        XCTAssertFalse(tampered.verify(), "edited receipt fails its self-hash")
+    }
+
     // MARK: - Stage 5 Wave 2A — derived-state platform
 
     /// Corpus revision bumps monotonically; derived state persists/fetches by id,

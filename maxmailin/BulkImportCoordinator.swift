@@ -41,6 +41,8 @@ final class BulkImportCoordinator {
 
     var status: Status = .idle
     var lastFinishedAt: Date?
+    /// The signed receipt from the most recent import run (Phase 12).
+    var lastReceipt: ImportReceipt?
     private var task: Task<Void, Never>?
 
     /// Import one or more archive files into the SwiftData store and FTS5
@@ -77,12 +79,22 @@ final class BulkImportCoordinator {
         var totalImported = 0
         var totalSkipped = 0
 
+        // Phase 12 receipt accounting.
+        let startedAt = Date()
+        let storeBefore = (try? await SQLiteEmailStore.shared.totalCount()) ?? 0
+        var sources: [ImportReceipt.SourceRecord] = []
+
         for url in urls {
             try Task.checkCancellation()
 
             // 1. Hash this file for chain of custody + checkpoint lookup.
             await MainActor.run { self.status = .hashing(file: url.lastPathComponent) }
             let hash = try await Self.sha256(of: url)
+            let sizeBytes: Int = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+            sources.append(ImportReceipt.SourceRecord(
+                filename: url.lastPathComponent, sizeBytes: sizeBytes,
+                sha256: hash, parser: url.pathExtension.lowercased(), parserVersion: 1
+            ))
 
             // 2. Skip if we have already fully ingested this file.
             if await ImportCheckpointStore.shared.isImported(sha256: hash) {
@@ -188,7 +200,26 @@ final class BulkImportCoordinator {
             totalImported += fileCount
         }
 
+        // Phase 12: build, sign (self-hash) and persist the import receipt.
+        let completedAt = Date()
+        let storeAfter = (try? await SQLiteEmailStore.shared.totalCount()) ?? storeBefore
+        let ftsCount = (try? await FTSSearchIndex.shared.rowCount()) ?? 0
+        var receipt = ImportReceipt(startedAt: startedAt, completedAt: completedAt)
+        receipt.sources = sources
+        receipt.discovered = totalImported
+        receipt.inserted = max(0, storeAfter - storeBefore)
+        receipt.duplicates = max(0, totalImported - (storeAfter - storeBefore))
+        receipt.skipped = totalSkipped
+        receipt.durationSeconds = completedAt.timeIntervalSince(startedAt)
+        receipt.storeCountBefore = storeBefore
+        receipt.storeCountAfter = storeAfter
+        receipt.ftsRowCount = ftsCount
+        receipt.finalize()
+        let savedReceipt = receipt
+        _ = try? ImportReceiptStore.production.save(savedReceipt)
+
         await MainActor.run {
+            self.lastReceipt = savedReceipt
             self.status = .completed(count: totalImported, skipped: totalSkipped)
             self.lastFinishedAt = Date()
         }
