@@ -22,7 +22,7 @@ class ContentViewModel: ObservableObject {
     @Published var parseErrors: [String] = []
     @Published var memoryUsageMB: Double = 0.0
     @Published var duplicatesRemoved: Int = 0
-    @Published private(set) var removedDuplicates: [MBOXParser.RawEmail] = []
+    @Published private(set) var removedDuplicates: [DuplicateFinding] = []
 
     @Published private(set) var parsedEmails: [MBOXParser.RawEmail] = []
     @Published var totalParsedCount: Int = 0
@@ -406,7 +406,7 @@ class ContentViewModel: ObservableObject {
                         let key = (email.headers["Message-ID"] ?? email.headers["Message-Id"])
                             ?? "\(email.headers["From"] ?? "")\(email.headers["Date"] ?? "")\(email.headers["Subject"] ?? "")"
                         return seenDupIDs.insert(key).inserted
-                    }
+                    }.map { DuplicateFinding(from: $0) }   // lightweight projection, no bodies retained
                     emailsToKeep = dedupResult.kept
                 } else {
                     self.duplicatesRemoved = 0
@@ -757,7 +757,7 @@ class ContentViewModel: ObservableObject {
         parsedEmails.removeAll { ids.contains($0.id) }
         totalParsedCount = parsedEmails.count
         duplicatesRemoved += removed.count
-        removedDuplicates.append(contentsOf: removed)
+        removedDuplicates.append(contentsOf: removed.map { DuplicateFinding(from: $0, reason: "removed") })
         // Durably delete from the SQLite authority AND the FTS index so removed
         // emails don't linger as searchable ghost rows (store↔FTS drift).
         // FTS-first (matches the repository's delete ordering): a mid-delete

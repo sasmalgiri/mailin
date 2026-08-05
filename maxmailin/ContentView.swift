@@ -325,7 +325,7 @@ struct ContentView: View {
         .modifier(V8SheetsModifier(appState: appState, modelVM: modelVM))
         .modifier(V9SheetsModifier(appState: appState, modelVM: modelVM, senderEmail: viewModel.senderEmail))
         .sheet(isPresented: $showRemovedDuplicates) {
-            RemovedDuplicatesView(emails: viewModel.removedDuplicates)
+            RemovedDuplicatesView(findings: viewModel.removedDuplicates)
                 #if os(macOS)
                 .frame(minWidth: 480, minHeight: 350)
                 #else
