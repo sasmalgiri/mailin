@@ -206,6 +206,35 @@ actor FTSSearchIndex {
         return total
     }
 
+    /// All email UUIDs currently in the index (across every shard).
+    func allIndexedIDs() throws -> Set<UUID> {
+        try migrateLegacyIfNeeded()
+        var ids = Set<UUID>()
+        for year in try discoverAllShardYears() {
+            let db = try ensureShard(year: year)
+            let stmt = try prepare(db, "SELECT email_id FROM email_search;")
+            defer { sqlite3_finalize(stmt) }
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                if let c = sqlite3_column_text(stmt, 0),
+                   let u = UUID(uuidString: String(cString: c)) {
+                    ids.insert(u)
+                }
+            }
+        }
+        return ids
+    }
+
+    /// Index only the emails not already present — repairs store↔FTS drift
+    /// (e.g. a crash between the store commit and the FTS commit leaves a row
+    /// in the store but unsearchable). Idempotent; returns the count newly
+    /// indexed.
+    func indexMissing(from emails: [MBOXParser.RawEmail]) throws -> Int {
+        let existing = try allIndexedIDs()
+        let missing = emails.filter { !existing.contains($0.id) }
+        if !missing.isEmpty { try indexBatch(missing) }
+        return missing.count
+    }
+
     // MARK: - Shard management
 
     /// Soft cap on simultaneously-open shard handles. Each open handle pins

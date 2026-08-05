@@ -157,4 +157,22 @@ final class V2VerificationTests: XCTestCase {
         try await FTSSearchIndex.shared.clear()
         await EmailStore.shared.resetForTesting()
     }
+
+    // MARK: - 3.4 — Store↔FTS reconcile (drift repair)
+
+    /// indexMissing repairs drift: emails present in the store but missing from
+    /// FTS (e.g. a crash between the two commits) get indexed; idempotent.
+    func testReconcileIndexesMissing() async throws {
+        let fixtures = (0..<3).map { makeEmail(mid: "<r-\($0)@test>", subject: "S\($0)", body: "reconcile term \($0)") }
+        try await FTSSearchIndex.shared.clear()
+        try await FTSSearchIndex.shared.indexBatch([fixtures[0]])   // only 1 of 3 indexed
+
+        let firstPass = try await FTSSearchIndex.shared.indexMissing(from: fixtures)
+        XCTAssertEqual(firstPass, 2, "should index the 2 missing")
+
+        let secondPass = try await FTSSearchIndex.shared.indexMissing(from: fixtures)
+        XCTAssertEqual(secondPass, 0, "idempotent — nothing missing the second time")
+
+        try await FTSSearchIndex.shared.clear()
+    }
 }

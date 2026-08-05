@@ -403,6 +403,19 @@ actor EmailStore {
         }
     }
 
+    /// Emails with full bodies, most-recent first, for FTS reconcile. Capped
+    /// so a launch-time reconcile can't load an unbounded archive into memory.
+    func emailsForReindex(limit: Int) throws -> [MBOXParser.RawEmail] {
+        let container = try ensureContainer()
+        let context = ModelContext(container)
+        var descriptor = FetchDescriptor<StoredEmail>(
+            sortBy: [SortDescriptor(\.date, order: .reverse)]
+        )
+        descriptor.fetchLimit = limit
+        let stored = try context.fetch(descriptor)
+        return stored.map { rawEmail(from: $0, includeBodies: true) }
+    }
+
     /// Fetch a single email with full bodies (called when user opens an email).
     func fullEmail(id: UUID) throws -> MBOXParser.RawEmail? {
         let container = try ensureContainer()

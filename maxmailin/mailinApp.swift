@@ -167,6 +167,20 @@ struct mailinApp: App {
                         // launches.
                         await MigrationService.shared.migrateIfNeeded()
 
+                        // Repair any store↔FTS drift (a crash between the
+                        // store commit and the FTS commit can leave a row in
+                        // the store but unsearchable). Only runs when drift is
+                        // detected; bounded so it can't load an unbounded
+                        // archive into memory.
+                        Task.detached(priority: .utility) {
+                            let storeCount = (try? await EmailStore.shared.totalCount()) ?? 0
+                            let ftsCount = (try? await FTSSearchIndex.shared.rowCount()) ?? 0
+                            if storeCount > ftsCount {
+                                let emails = (try? await EmailStore.shared.emailsForReindex(limit: 100_000)) ?? []
+                                _ = try? await FTSSearchIndex.shared.indexMissing(from: emails)
+                            }
+                        }
+
                         // Self-test exercises the v2 storage + search +
                         // import pipeline against the bundled sample once
                         // per install. Logs via os.log "SelfTest".
