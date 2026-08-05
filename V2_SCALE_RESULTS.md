@@ -125,6 +125,60 @@ secondary indexes** (`messageID`, `date`) that the current SwiftData
 configuration on the deployment target cannot express. This is the input to
 `V2_STORAGE_DECISION.md`.
 
+## Stage 4B — direct-SQLite engine (the replacement) results
+
+Per `V2_STORAGE_DECISION.md`, the store was replaced with `SQLiteEmailStore`
+(direct SQLite/blob) behind the unchanged `EmailRepository`, and the **same
+harness** was re-run. Compact `emails` table + separate `email_bodies` blob
+table; partial UNIQUE index on `message_id` (O(1) dedup via `INSERT OR IGNORE`,
+NULLs never collapsed); index on `(date, id)` for keyset; 128 MB page cache +
+256 MB mmap (constant, archive-size-independent).
+
+Results (Debug; 100K–500K at 600 B bodies, 1M at 200 B bodies to stay well
+under the dev machine's 11 GiB free disk):
+
+| Scale | Import msg/s | Index msg/s | Peak-import RSS (MB) | Reconcile RSS (MB) | First page ms | Deep page ms | Cold reopen ms | Reconcile-verify s | Disk MB | Correctness |
+|------:|------:|------:|------:|------:|------:|------:|------:|------:|------:|:--:|
+| 100,000 | 11,797 | 19,356 | 183 | 131 | 1.0 | 3.3 | 1 | 0.8 | 408 | ✅ |
+| 200,000 | 9,534 | 17,768 | 173 | 127 | 1.3 | 6.1 | 3 | 1.8 | 788 | ✅ |
+| 500,000 | 6,349 | — | 248 | — | 12.1 | 17.5 | 8 | 5.4 | 1,957 | ✅ |
+| 1,000,000 | 4,531 | 17,355 | 288 | 483 | 43.2 | 36.8 | 338 | 13.0 | 1,954 | ✅ |
+
+At 1M: `storeCount == ftsCount == 1,000,000`; paging walked all 1,000,000 with
+**no skips and no duplicates** (incl. the same-timestamp block); rare / Boolean /
+`NEAR` result sets exact (`NEAR` p95 = 1.1 ms); reopen persisted the full
+corpus. Common-term search p95 = 1,388 ms is the pathological all-match case
+(the term is in every row); real (rare/proximity) queries stay sub-millisecond.
+
+**What changed vs SwiftData:**
+
+| Property | SwiftData | SQLite (chosen) |
+|---|---|---|
+| Import scaling | O(N²) — 1M ≈ 144 h (infeasible) | ~linear-ish — **1M in ~3.7 min** |
+| Keyset paging | O(N)/page — ~54 ms @16K, ~3.3 s @1M | O(log N) — **37–43 ms @1M** |
+| Reopen / count | fast (but never reached scale) | 1–8 ms @≤500K; 338 ms @1M (`COUNT(*)` O(N)) |
+| Resident memory | bounded (never reached scale) | **bounded — 173–486 MB across 100K→1M** |
+| Correctness | ✅ | ✅ (through 1M) |
+| Reached 1,000,000? | ❌ | ✅ |
+
+**Two honest wrinkles found and handled during 4B:**
+1. The harness originally materialized the whole corpus in RAM, inflating RSS
+   (falsely 409 MB @100K). Fixed with a **streaming** deterministic generator;
+   RSS then reflects the store only.
+2. The first 1M run failed (paging stopped at 535,500; reopen 0; disk 0) — the
+   dev machine had only 11 GiB free and macOS **purged the sandbox tmp** mid-run
+   (~4 GB / 10 min at 600 B). Two fixes: (a) `SQLiteEmailStore` read loops now
+   **throw on `sqlite3_step` errors** instead of silently treating them as
+   end-of-rows (a real robustness bug — a partial result must never look
+   complete); (b) re-ran 1M at 200 B bodies (~1.9 GB) which completed cleanly.
+
+**Residual, non-blocking (follow-ups):**
+- Import throughput declines mildly with scale (11.8K → 4.5K msg/s over
+  100K→1M) — random UUID-primary-key B-tree inserts. Still ~1,900× SwiftData
+  and a one-time cost; a future `WITHOUT ROWID` / integer-PK change could flatten it.
+- `totalCount()` is SQLite's O(N) `COUNT(*)` (cold reopen 338 ms @1M). A
+  persisted count row (updated on insert/delete) would make it O(1).
+
 ## Reproduce
 
 ```

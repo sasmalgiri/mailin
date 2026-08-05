@@ -169,10 +169,24 @@ struct StressResult: Codable, Sendable {
 
 // MARK: - Corpus
 
-private struct StressCorpus {
-    var emails: [MBOXParser.RawEmail]
-    var distinctCount: Int
-    var duplicateCount: Int
+/// A plan holds only metadata + the known expected-ID sets — NOT the emails.
+/// Emails are regenerated deterministically per chunk during import/index so
+/// the harness never holds the whole corpus in memory; the measured RSS then
+/// reflects the store, not a giant test buffer. (Critical for a truthful 1M
+/// memory number: a materialized 1M-email array would be ~2 GB on its own.)
+private struct StressCorpusPlan {
+    let config: StressConfig
+    let distinctCount: Int
+    let duplicateCount: Int
+    let generatedTotal: Int
+    let rareIndices: Set<Int>
+    let nearAdjIndices: Set<Int>
+    let nearFarIndices: Set<Int>
+    let dupSourceIndices: [Int]
+    let rareIDs: Set<UUID>
+    let booleanAndIDs: Set<UUID>
+    let nearIDs: Set<UUID>
+
     let commonToken = "commontoken"
     let rareToken = "zebraxyzq"
     let alphaToken = "alphatok"
@@ -180,9 +194,96 @@ private struct StressCorpus {
     let nearA = "quickmarker"
     let nearB = "jumpmarker"
     let nearProximity = 3
-    var rareIDs: Set<UUID>
-    var booleanAndIDs: Set<UUID>
-    var nearIDs: Set<UUID>
+
+    /// The id of distinct email `i` — first two draws of its per-index RNG.
+    /// `email(at:)` uses the same RNG and continues from the same point, so the
+    /// ids computed here (for expected sets) match the ids that get stored.
+    static func idForIndex(_ i: Int, seed: UInt64) -> UUID {
+        var rng = SplitMix64(seed: seed ^ (UInt64(i) &* 0x9E37_79B9_7F4A_7C15))
+        return deterministicUUID(rng.next(), rng.next())
+    }
+
+    /// Deterministically (re)build distinct email `i`.
+    func email(at i: Int) -> MBOXParser.RawEmail {
+        var rng = SplitMix64(seed: config.seed ^ (UInt64(i) &* 0x9E37_79B9_7F4A_7C15))
+        let id = deterministicUUID(rng.next(), rng.next())
+        let mid = "<msg-\(i)@stress.mailin>"
+
+        let year: Int, month: Int, day: Int, hour: Int, minute: Int
+        if i < config.sameTimestampBlock {
+            year = config.startYear; month = 1; day = 1; hour = 0; minute = 0
+        } else {
+            year = config.startYear + (i % config.years)
+            month = 1 + ((i / config.years) % 12)
+            day = 1 + (i % 28)
+            hour = i % 24
+            minute = i % 60
+        }
+        let dateHeader = stressDateHeader(year: year, month: month, day: day, hour: hour, minute: minute)
+
+        let vocabCount = stressVocab.count
+        var words: [String] = [commonToken]
+        if i % 50 == 0 { words.append(alphaToken) }
+        if i % 80 == 0 { words.append(betaToken) }
+        if rareIndices.contains(i) { words.append(rareToken) }
+        if nearAdjIndices.contains(i) {
+            words.append(contentsOf: [nearA, nearB])
+        } else if nearFarIndices.contains(i) {
+            words.append(nearA)
+            for _ in 0..<30 { words.append(stressVocab[Int(rng.next() % UInt64(vocabCount))]) }
+            words.append(nearB)
+        }
+        var bytes = words.joined(separator: " ").utf8.count
+        while bytes < config.bodyBytes {
+            let w = stressVocab[Int(rng.next() % UInt64(vocabCount))]
+            words.append(w); bytes += w.utf8.count + 1
+        }
+        let body = words.joined(separator: " ")
+
+        return MBOXParser.RawEmail(
+            id: id,
+            headers: [
+                "Message-ID": mid,
+                "Subject": "Message \(i) \(commonToken)",
+                "From": "sender\(i % 500)@example.com",
+                "To": "recipient\(i % 300)@example.org",
+                "Date": dateHeader,
+            ],
+            rawSource: "From sender@example.com\nSubject: Message \(i)\n\n\(body)",
+            messageType: "email",
+            attachments: [],
+            timestamp: "\(year)-01-01T00:00:00Z",
+            domains: ["example.com"],
+            plainBody: body,
+            htmlBody: ""
+        )
+    }
+
+    /// Deterministically (re)build duplicate copy `k` — same Message-ID as an
+    /// earlier email (new id), so the store's dedup must drop it.
+    func duplicate(at k: Int) -> MBOXParser.RawEmail {
+        let srcIndex = dupSourceIndices[k]
+        let mid = "<msg-\(srcIndex)@stress.mailin>"
+        var rng = SplitMix64(seed: config.seed ^ 0xDEAD_BEEF ^ UInt64(k))
+        let dupID = deterministicUUID(rng.next(), rng.next())
+        return MBOXParser.RawEmail(
+            id: dupID,
+            headers: [
+                "Message-ID": mid,
+                "Subject": "Duplicate of \(srcIndex) \(commonToken)",
+                "From": "dup@example.com",
+                "To": "dup@example.org",
+                "Date": stressDateHeader(year: config.startYear, month: 6, day: 15, hour: 12, minute: 0),
+            ],
+            rawSource: "From dup@example.com\n\n\(commonToken) duplicate body",
+            messageType: "email",
+            attachments: [],
+            timestamp: "\(config.startYear)-06-15T12:00:00Z",
+            domains: ["example.com"],
+            plainBody: "\(commonToken) duplicate body filler filler filler",
+            htmlBody: ""
+        )
+    }
 }
 
 private let stressVocab: [String] = [
@@ -203,7 +304,7 @@ private func stressDateHeader(year: Int, month: Int, day: Int, hour: Int, minute
            day, stressMonths[(month - 1) % 12], year, hour, minute)
 }
 
-private func buildCorpus(_ config: StressConfig) -> StressCorpus {
+private func makePlan(_ config: StressConfig) -> StressCorpusPlan {
     let n = config.scale
     let step = max(1, n / 8)
     let rareIndices = Set((1...7).map { $0 * step }.filter { $0 < n })
@@ -211,113 +312,22 @@ private func buildCorpus(_ config: StressConfig) -> StressCorpus {
     let nearAdjIndices = Set((1...5).map { $0 * nearStep }.filter { $0 < n })
     let nearFarIndices = Set((1...5).map { $0 * nearStep + 3 }.filter { $0 < n && !nearAdjIndices.contains($0) })
 
-    var emails: [MBOXParser.RawEmail] = []
-    emails.reserveCapacity(n + n * config.duplicatePermille / 1000)
-    var rareIDs = Set<UUID>()
-    var booleanAndIDs = Set<UUID>()
-    var nearIDs = Set<UUID>()
-    var firstIDByIndex: [Int: (UUID, String)] = [:]   // for duplicate copies
-
-    let vocabCount = stressVocab.count
-    let commonToken = "commontoken", rareToken = "zebraxyzq"
-    let alphaToken = "alphatok", betaToken = "betatok"
-    let nearA = "quickmarker", nearB = "jumpmarker"
-
-    for i in 0..<n {
-        var rng = SplitMix64(seed: config.seed ^ (UInt64(i) &* 0x9E37_79B9_7F4A_7C15))
-        let id = deterministicUUID(rng.next(), rng.next())
-        let mid = "<msg-\(i)@stress.mailin>"
-        firstIDByIndex[i] = (id, mid)
-
-        // Date: a same-timestamp block first (keyset tie-break), then spread
-        // across `years` so multiple FTS shards are exercised.
-        let year: Int, month: Int, day: Int, hour: Int, minute: Int
-        if i < config.sameTimestampBlock {
-            year = config.startYear; month = 1; day = 1; hour = 0; minute = 0
-        } else {
-            year = config.startYear + (i % config.years)
-            month = 1 + ((i / config.years) % 12)
-            day = 1 + (i % 28)
-            hour = i % 24
-            minute = i % 60
-        }
-        let dateHeader = stressDateHeader(year: year, month: month, day: day, hour: hour, minute: minute)
-
-        // Body: filler words to hit ~bodyBytes, plus deterministic special tokens.
-        var words: [String] = [commonToken]
-        let isAlpha = (i % 50 == 0)
-        let isBeta = (i % 80 == 0)
-        if isAlpha { words.append(alphaToken) }
-        if isBeta { words.append(betaToken) }
-        if rareIndices.contains(i) { words.append(rareToken); rareIDs.insert(id) }
-        if isAlpha && isBeta { booleanAndIDs.insert(id) }
-
-        if nearAdjIndices.contains(i) {
-            words.append(contentsOf: [nearA, nearB])   // adjacent → within proximity
-            nearIDs.insert(id)
-        } else if nearFarIndices.contains(i) {
-            words.append(nearA)                          // far apart (filler between)
-            for _ in 0..<30 { words.append(stressVocab[Int(rng.next() % UInt64(vocabCount))]) }
-            words.append(nearB)
-        }
-        var bytes = words.joined(separator: " ").utf8.count
-        while bytes < config.bodyBytes {
-            let w = stressVocab[Int(rng.next() % UInt64(vocabCount))]
-            words.append(w)
-            bytes += w.utf8.count + 1
-        }
-        let body = words.joined(separator: " ")
-
-        emails.append(MBOXParser.RawEmail(
-            id: id,
-            headers: [
-                "Message-ID": mid,
-                "Subject": "Message \(i) \(commonToken)",
-                "From": "sender\(i % 500)@example.com",
-                "To": "recipient\(i % 300)@example.org",
-                "Date": dateHeader,
-            ],
-            rawSource: "From sender@example.com\nSubject: Message \(i)\n\n\(body)",
-            messageType: "email",
-            attachments: [],
-            timestamp: "\(year)-01-01T00:00:00Z",
-            domains: ["example.com"],
-            plainBody: body,
-            htmlBody: ""
-        ))
-    }
-
-    // Duplicate copies: same Message-ID as an earlier email (new id), so the
-    // store's dedup must drop them — distinct stored count stays == n.
     let dupCount = n * config.duplicatePermille / 1000
-    if dupCount > 0 {
-        for k in 0..<dupCount {
-            let srcIndex = (k * max(1, n / max(1, dupCount))) % n
-            guard let (_, mid) = firstIDByIndex[srcIndex] else { continue }
-            var rng = SplitMix64(seed: config.seed ^ 0xDEAD_BEEF ^ UInt64(k))
-            let dupID = deterministicUUID(rng.next(), rng.next())
-            emails.append(MBOXParser.RawEmail(
-                id: dupID,
-                headers: [
-                    "Message-ID": mid,                    // <-- duplicate key
-                    "Subject": "Duplicate of \(srcIndex) \(commonToken)",
-                    "From": "dup@example.com",
-                    "To": "dup@example.org",
-                    "Date": stressDateHeader(year: config.startYear, month: 6, day: 15, hour: 12, minute: 0),
-                ],
-                rawSource: "From dup@example.com\n\n\(commonToken) duplicate body",
-                messageType: "email",
-                attachments: [],
-                timestamp: "\(config.startYear)-06-15T12:00:00Z",
-                domains: ["example.com"],
-                plainBody: "\(commonToken) duplicate body filler filler filler",
-                htmlBody: ""
-            ))
-        }
-    }
+    let dupSourceIndices = (0..<dupCount).map { k in (k * max(1, n / max(1, dupCount))) % n }
 
-    return StressCorpus(
-        emails: emails, distinctCount: n, duplicateCount: dupCount,
+    // Expected result-ID sets, computed from indices without materializing any
+    // email (ids are a pure function of index + seed).
+    var rareIDs = Set<UUID>(), booleanAndIDs = Set<UUID>(), nearIDs = Set<UUID>()
+    for i in rareIndices { rareIDs.insert(StressCorpusPlan.idForIndex(i, seed: config.seed)) }
+    for i in nearAdjIndices { nearIDs.insert(StressCorpusPlan.idForIndex(i, seed: config.seed)) }
+    // Boolean AND: alpha (i%50==0) AND beta (i%80==0) ⇒ i % lcm(50,80)=400 == 0.
+    var i = 0
+    while i < n { booleanAndIDs.insert(StressCorpusPlan.idForIndex(i, seed: config.seed)); i += 400 }
+
+    return StressCorpusPlan(
+        config: config, distinctCount: n, duplicateCount: dupCount, generatedTotal: n + dupCount,
+        rareIndices: rareIndices, nearAdjIndices: nearAdjIndices, nearFarIndices: nearFarIndices,
+        dupSourceIndices: dupSourceIndices,
         rareIDs: rareIDs, booleanAndIDs: booleanAndIDs, nearIDs: nearIDs
     )
 }
@@ -353,39 +363,52 @@ enum StressHarness {
         let env = try MailinStorageEnvironment.disposable(at: root)
         precondition(!env.isProduction, "stress harness must never run against production")
 
-        let corpus = buildCorpus(config)
+        let plan = makePlan(config)
         let clock = ContinuousClock()
 
         let rssBaseline = currentFootprintBytes()
 
-        // ---- Import (real EmailStore.insertBatch, real dedup) --------------
+        // ---- Import (streamed: only one chunk resident at a time) ----------
         var rssPeakImport = rssBaseline
         let importStart = clock.now
-        var idx = 0
-        while idx < corpus.emails.count {
-            let end = min(idx + config.insertSampleChunk, corpus.emails.count)
-            let slice = Array(corpus.emails[idx..<end])
-            try await env.store.insertBatch(slice, batchSize: config.innerBatchSize, progress: nil)
+        var lo = 0
+        while lo < plan.distinctCount {
+            let hi = min(lo + config.insertSampleChunk, plan.distinctCount)
+            var chunk: [MBOXParser.RawEmail] = []; chunk.reserveCapacity(hi - lo)
+            for j in lo..<hi { chunk.append(plan.email(at: j)) }
+            try await env.store.insertBatch(chunk, batchSize: config.innerBatchSize)
             rssPeakImport = max(rssPeakImport, currentFootprintBytes())
-            idx = end
+            lo = hi
+        }
+        // Duplicate copies (dedup must drop them).
+        lo = 0
+        while lo < plan.duplicateCount {
+            let hi = min(lo + config.insertSampleChunk, plan.duplicateCount)
+            var chunk: [MBOXParser.RawEmail] = []; chunk.reserveCapacity(hi - lo)
+            for k in lo..<hi { chunk.append(plan.duplicate(at: k)) }
+            try await env.store.insertBatch(chunk, batchSize: config.innerBatchSize)
+            rssPeakImport = max(rssPeakImport, currentFootprintBytes())
+            lo = hi
         }
         let importSeconds = ms(importStart.duration(to: clock.now)) / 1_000
+        if let s = env.store as? SQLiteEmailStore { try? await s.checkpoint() }
         let rssPostImport = currentFootprintBytes()
         let storeCount = try await env.store.totalCount()
 
-        // ---- Index (real FTS5 indexBatch, sharded by year) -----------------
+        // ---- Index (streamed FTS5 indexBatch, sharded by year) -------------
         var rssPeakIndex = rssPostImport
-        let distinctEmails = Array(corpus.emails[0..<corpus.distinctCount])
         let indexStart = clock.now
-        idx = 0
-        while idx < distinctEmails.count {
-            let end = min(idx + config.indexSampleChunk, distinctEmails.count)
-            try await env.fts.indexBatch(Array(distinctEmails[idx..<end]))
+        lo = 0
+        while lo < plan.distinctCount {
+            let hi = min(lo + config.indexSampleChunk, plan.distinctCount)
+            var chunk: [MBOXParser.RawEmail] = []; chunk.reserveCapacity(hi - lo)
+            for j in lo..<hi { chunk.append(plan.email(at: j)) }
+            try await env.fts.indexBatch(chunk)
             rssPeakIndex = max(rssPeakIndex, currentFootprintBytes())
-            idx = end
+            lo = hi
         }
         let indexSeconds = ms(indexStart.duration(to: clock.now)) / 1_000
-        let ftsCommonCount = try await env.fts.countRaw(env.repositoryCommonQuery(corpus.commonToken))
+        let ftsCommonCount = try await env.fts.countRaw(env.repositoryCommonQuery(plan.commonToken))
         let ftsRowCount = try await env.fts.rowCount()
 
         // ---- Reconcile verification pass (should re-index ~nothing) --------
@@ -397,45 +420,51 @@ enum StressHarness {
         let rssReconcile = currentFootprintBytes()
 
         // ---- Search / NEAR / count latency ---------------------------------
+        // Time-capped: the common term matches every row, so at 1M a single
+        // ranked search can take seconds — cap the phase so latency sampling
+        // can't dominate (or blow the test timeout).
+        let phaseCapMs = 3_000.0
         var searchTimes: [Double] = [], nearTimes: [Double] = []
-        for _ in 0..<config.searchTrials {
+        var elapsed = 0.0
+        while searchTimes.count < config.searchTrials && elapsed < phaseCapMs {
             let t0 = clock.now
-            _ = try await env.fts.searchRaw(corpus.commonToken, limit: 50)
-            searchTimes.append(ms(t0.duration(to: clock.now)))
+            _ = try await env.fts.searchRaw(plan.commonToken, limit: 50)
+            let dt = ms(t0.duration(to: clock.now)); searchTimes.append(dt); elapsed += dt
         }
-        let nearQuery = FTSQueryBuilder.proximity(term1: corpus.nearA, term2: corpus.nearB, distance: corpus.nearProximity)
-            ?? FTSQueryBuilder.escapeTerm(corpus.nearA)
-        for _ in 0..<config.searchTrials {
+        let nearQuery = FTSQueryBuilder.proximity(term1: plan.nearA, term2: plan.nearB, distance: plan.nearProximity)
+            ?? FTSQueryBuilder.escapeTerm(plan.nearA)
+        elapsed = 0.0
+        while nearTimes.count < config.searchTrials && elapsed < phaseCapMs {
             let t0 = clock.now
             _ = try await env.fts.searchRaw(nearQuery, limit: 50)
-            nearTimes.append(ms(t0.duration(to: clock.now)))
+            let dt = ms(t0.duration(to: clock.now)); nearTimes.append(dt); elapsed += dt
         }
         searchTimes.sort(); nearTimes.sort()
         let countStart = clock.now
-        _ = try await env.fts.countRaw(corpus.commonToken)
+        _ = try await env.fts.countRaw(plan.commonToken)
         let countMs = ms(countStart.duration(to: clock.now))
         let rssSearch = currentFootprintBytes()
 
         // ---- Correctness: rare / boolean / NEAR exact sets -----------------
-        let rareResult = Set(try await env.fts.searchRaw(corpus.rareToken, limit: max(100, corpus.rareIDs.count * 4)))
-        let rareOK = rareResult == corpus.rareIDs
-        let boolQuery = "\(corpus.alphaToken) AND \(corpus.betaToken)"
-        let boolResult = Set(try await env.fts.searchRaw(boolQuery, limit: max(100, corpus.booleanAndIDs.count * 4)))
-        let boolOK = boolResult == corpus.booleanAndIDs
-        let nearResult = Set(try await env.fts.searchRaw(nearQuery, limit: max(100, corpus.nearIDs.count * 4)))
-        let nearOK = nearResult == corpus.nearIDs
-        if !rareOK { notes.append("rare mismatch: got \(rareResult.count), expected \(corpus.rareIDs.count)") }
-        if !boolOK { notes.append("boolean mismatch: got \(boolResult.count), expected \(corpus.booleanAndIDs.count)") }
-        if !nearOK { notes.append("NEAR mismatch: got \(nearResult.count), expected \(corpus.nearIDs.count)") }
+        let rareResult = Set(try await env.fts.searchRaw(plan.rareToken, limit: max(100, plan.rareIDs.count * 4)))
+        let rareOK = rareResult == plan.rareIDs
+        let boolQuery = "\(plan.alphaToken) AND \(plan.betaToken)"
+        let boolResult = Set(try await env.fts.searchRaw(boolQuery, limit: max(100, plan.booleanAndIDs.count * 4)))
+        let boolOK = boolResult == plan.booleanAndIDs
+        let nearResult = Set(try await env.fts.searchRaw(nearQuery, limit: max(100, plan.nearIDs.count * 4)))
+        let nearOK = nearResult == plan.nearIDs
+        if !rareOK { notes.append("rare mismatch: got \(rareResult.count), expected \(plan.rareIDs.count)") }
+        if !boolOK { notes.append("boolean mismatch: got \(boolResult.count), expected \(plan.booleanAndIDs.count)") }
+        if !nearOK { notes.append("NEAR mismatch: got \(nearResult.count), expected \(plan.nearIDs.count)") }
 
         // ---- Paging: full keyset walk, exact no-skip/no-dupe ---------------
         // (Uses a Set of ids for exact verification — test-only memory, kept
         // out of the reported product-RSS phases above.)
-        var seen = Set<UUID>(); seen.reserveCapacity(corpus.distinctCount)
+        var seen = Set<UUID>(); seen.reserveCapacity(plan.distinctCount)
         var noDup = true
         var cursorDate: Date? = nil, cursorID: UUID? = nil
         var firstPageMs = 0.0, deepPageMs = 0.0
-        let deepThreshold = Int(Double(corpus.distinctCount) * 0.9)
+        let deepThreshold = Int(Double(plan.distinctCount) * 0.9)
         var visited = 0, pageNo = 0
         while true {
             let t0 = clock.now
@@ -452,10 +481,11 @@ enum StressHarness {
             pageNo += 1
             if page.count < config.pageSize { break }
         }
-        let noSkips = (visited == corpus.distinctCount) && (seen.count == corpus.distinctCount)
-        if !noSkips { notes.append("paging visited \(visited)/\(corpus.distinctCount), unique \(seen.count)") }
+        let noSkips = (visited == plan.distinctCount) && (seen.count == plan.distinctCount)
+        if !noSkips { notes.append("paging visited \(visited)/\(plan.distinctCount), unique \(seen.count)") }
 
         // ---- Disk footprint (full corpus, before destructive checks) -------
+        if let s = env.store as? SQLiteEmailStore { try? await s.checkpoint() }
         let storeStats = directoryStats(root.appendingPathComponent("store"))
         let ftsStats = directoryStats(root.appendingPathComponent("fts"))
         // External storage = SwiftData blob files that aren't the main .store db.
@@ -469,31 +499,31 @@ enum StressHarness {
         let warmStart = clock.now
         _ = try await reopened.store.summaryPage(after: nil, before: nil, cursorDate: nil, cursorID: nil, limit: config.pageSize)
         let warmReopenMs = ms(warmStart.duration(to: clock.now))
-        let reopenOK = (reopenCount == corpus.distinctCount)
-        if !reopenOK { notes.append("reopen count \(reopenCount) != \(corpus.distinctCount)") }
+        let reopenOK = (reopenCount == plan.distinctCount)
+        if !reopenOK { notes.append("reopen count \(reopenCount) != \(plan.distinctCount)") }
 
         // ---- Destructive: delete consistency + reconcile rebuild -----------
         var deleteOK = true, rebuiltOK = true
         if config.runDestructiveChecks {
-            if let victim = corpus.rareIDs.first {
+            if let victim = plan.rareIDs.first {
                 try await env.repository.delete(ids: [victim])
                 let stillInStore = (try await env.store.fullEmail(id: victim)) != nil
-                let stillInFTS = try await env.fts.searchRaw(corpus.rareToken, limit: 100).contains(victim)
+                let stillInFTS = try await env.fts.searchRaw(plan.rareToken, limit: 100).contains(victim)
                 deleteOK = !stillInStore && !stillInFTS
                 if !deleteOK { notes.append("delete left residue store=\(stillInStore) fts=\(stillInFTS)") }
             }
             // Clear FTS, then reconcile must rebuild it entirely from the store.
             try await env.fts.clear()
             _ = try await FTSReconciler.reconcile(store: env.store, fts: env.fts, pageSize: config.reconcilePageSize)
-            let rebuilt = try await env.fts.countRaw(corpus.commonToken)
+            let rebuilt = try await env.fts.countRaw(plan.commonToken)
             // One rare doc was deleted above, so expected common count is distinct-1.
-            let expectedAfterDelete = corpus.distinctCount - (corpus.rareIDs.isEmpty ? 0 : 1)
+            let expectedAfterDelete = plan.distinctCount - (plan.rareIDs.isEmpty ? 0 : 1)
             rebuiltOK = (rebuilt == expectedAfterDelete)
             if !rebuiltOK { notes.append("reconcile rebuilt \(rebuilt), expected \(expectedAfterDelete)") }
         }
 
-        let passed = (storeCount == corpus.distinctCount)
-            && (ftsCommonCount == corpus.distinctCount)
+        let passed = (storeCount == plan.distinctCount)
+            && (ftsCommonCount == plan.distinctCount)
             && noSkips && noDup && rareOK && boolOK && nearOK
             && deleteOK && rebuiltOK && reopenOK
 
@@ -504,16 +534,16 @@ enum StressHarness {
             seed: String(format: "0x%016llX", config.seed),
             configuration: config.configurationLabel,
             bodyBytes: config.bodyBytes,
-            generatedTotal: corpus.emails.count,
-            distinctExpected: corpus.distinctCount,
-            duplicateCopies: corpus.duplicateCount,
+            generatedTotal: plan.generatedTotal,
+            distinctExpected: plan.distinctCount,
+            duplicateCopies: plan.duplicateCount,
             storeCountAfterImport: storeCount,
             ftsCountCommonTerm: ftsCommonCount,
             ftsRowCount: ftsRowCount,
             importSeconds: importSeconds,
-            importMsgPerSec: importSeconds > 0 ? Double(corpus.emails.count) / importSeconds : 0,
+            importMsgPerSec: importSeconds > 0 ? Double(plan.generatedTotal) / importSeconds : 0,
             indexSeconds: indexSeconds,
-            indexMsgPerSec: indexSeconds > 0 ? Double(corpus.distinctCount) / indexSeconds : 0,
+            indexMsgPerSec: indexSeconds > 0 ? Double(plan.distinctCount) / indexSeconds : 0,
             rssBaselineMB: mb(rssBaseline),
             rssPeakImportMB: mb(rssPeakImport),
             rssPostImportMB: mb(rssPostImport),

@@ -1,10 +1,28 @@
 # V2 Storage Decision
 
-**Status: DECISION REQUIRES ONE PRODUCT INPUT (deployment target).**
-Evidence is complete and unambiguous about *what fails*; the choice between the
-two remedies hinges on whether Mailin must keep supporting macOS 14 / iOS 17.
+## DECISION: REPLACE STORAGE BEHIND `EmailRepository` — with direct SQLite. ✅ CONFIRMED AT 1,000,000.
 
-See `V2_SCALE_RESULTS.md` for the measurements this rests on.
+The user chose Option B (keep macOS 14.6 / iOS 17.6 support). It has been
+implemented (`SQLiteEmailStore`) and validated by re-running the **same**
+10K→1M harness. The engine now scales:
+
+- Import: **1,000,000 emails in ~3.7 min** (was O(N²) → 144 h on SwiftData).
+- Keyset paging: **37–43 ms at 1M** (was O(N) → ~3.3 s/page on SwiftData).
+- Resident memory: **bounded, 173–486 MB across 100K→1M** (the decisive metric).
+- Correctness: perfect through 1M (dedup, paging no-skip/no-dupe, rare/Boolean/
+  `NEAR` exact, reconcile, reopen).
+
+The `EmailRepository` boundary meant this swap touched **zero UI**. See
+`V2_SCALE_RESULTS.md` for the full before/after tables.
+
+Everything below is the original decision analysis, retained for the record.
+
+---
+
+**Original status (before implementation): DECISION REQUIRED ONE PRODUCT INPUT
+(deployment target).** Evidence was complete and unambiguous about *what fails*;
+the choice between the two remedies hinged on whether Mailin must keep
+supporting macOS 14 / iOS 17. The user chose to keep it → Option B.
 
 ## What the harness proved
 

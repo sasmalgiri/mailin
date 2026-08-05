@@ -27,8 +27,17 @@ enum StorageEnvironmentError: Error, Sendable, Equatable {
 /// single location. The production environment uses the shared singletons; a
 /// disposable environment uses freshly-constructed instances under an isolated
 /// directory.
+/// Which canonical-store engine a disposable environment uses. Production is
+/// migrating to `.sqlite` (direct SQLite/blob) because the stress harness
+/// proved SwiftData's import is O(N²) and its keyset paging O(N) on the
+/// shipping deployment target; `.swiftData` is retained for A/B measurement.
+enum StorageEngine: Sendable {
+    case sqlite
+    case swiftData
+}
+
 struct MailinStorageEnvironment: Sendable {
-    let store: EmailStore
+    let store: any EmailArchiveStore
     let fts: FTSSearchIndex
     let repository: EmailStoreRepository
     /// nil for the production environment (default OS locations); the isolated
@@ -40,7 +49,7 @@ struct MailinStorageEnvironment: Sendable {
 
     /// The one environment over the real user data. Read/written by the app.
     static let production = MailinStorageEnvironment(
-        store: .shared,
+        store: EmailStore.shared,
         fts: .shared,
         repository: .shared,
         root: nil,
@@ -49,13 +58,19 @@ struct MailinStorageEnvironment: Sendable {
 
     /// An isolated, disposable environment rooted at `root`. Every store /
     /// index file lives under `root`, so deleting `root` fully disposes of it.
+    /// `engine` selects the canonical-store implementation under test.
     ///
     /// Throws `StorageEnvironmentError.refusedProductionPath` if `root`
     /// resolves onto (equals, contains, or is contained by) the production
     /// storage directory — the hard safety gate.
-    static func disposable(at root: URL) throws -> MailinStorageEnvironment {
+    static func disposable(at root: URL, engine: StorageEngine = .sqlite) throws -> MailinStorageEnvironment {
         try assertNotProduction(root)
-        let store = EmailStore(storeDirectory: root.appendingPathComponent("store", isDirectory: true))
+        let storeDir = root.appendingPathComponent("store", isDirectory: true)
+        let store: any EmailArchiveStore
+        switch engine {
+        case .sqlite:    store = SQLiteEmailStore(directory: storeDir)
+        case .swiftData: store = EmailStore(storeDirectory: storeDir)
+        }
         let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts", isDirectory: true))
         let repo = EmailStoreRepository(store: store, fts: fts)
         return MailinStorageEnvironment(

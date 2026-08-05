@@ -76,11 +76,13 @@ struct EmailStoreRepository: EmailRepository {
 
     /// The store + index this repository resolves against. Defaults to the
     /// production singletons; `MailinStorageEnvironment.disposable` injects
-    /// isolated instances so a harness can never reach real user data.
-    let store: EmailStore
+    /// isolated instances so a harness can never reach real user data. `store`
+    /// is the bounded-store contract, so the engine (SwiftData vs direct
+    /// SQLite) can be swapped without touching this repository or the UI.
+    let store: any EmailArchiveStore
     let fts: FTSSearchIndex
 
-    init(store: EmailStore = .shared, fts: FTSSearchIndex = .shared) {
+    init(store: any EmailArchiveStore = EmailStore.shared, fts: FTSSearchIndex = .shared) {
         self.store = store
         self.fts = fts
     }

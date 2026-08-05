@@ -92,7 +92,7 @@ enum FTSReconciler {
     @discardableResult
     static func reconcile(pageSize: Int = 5_000, maxPages: Int? = nil) async throws -> ReconcileResult {
         try await reconcileCore(
-            store: .shared, fts: .shared, pageSize: pageSize, maxPages: maxPages,
+            store: EmailStore.shared, fts: .shared, pageSize: pageSize, maxPages: maxPages,
             initialDate: loadCursorDate(), initialID: loadCursorID(),
             onAdvance: { saveCursor(date: $0, id: $1) },
             onComplete: { clearCursor() }
@@ -106,7 +106,7 @@ enum FTSReconciler {
     /// otherwise: a failure throws without losing progress within the run.
     @discardableResult
     static func reconcile(
-        store: EmailStore,
+        store: any EmailArchiveStore,
         fts: FTSSearchIndex,
         pageSize: Int = 5_000,
         maxPages: Int? = nil
@@ -122,7 +122,7 @@ enum FTSReconciler {
     /// `onComplete` so the production path can use UserDefaults while the
     /// harness path uses nothing — the page-walk logic is identical for both.
     private static func reconcileCore(
-        store: EmailStore,
+        store: any EmailArchiveStore,
         fts: FTSSearchIndex,
         pageSize: Int,
         maxPages: Int?,

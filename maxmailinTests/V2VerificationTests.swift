@@ -482,7 +482,7 @@ final class V2VerificationTests: XCTestCase {
         let envB = try MailinStorageEnvironment.disposable(at: base.appendingPathComponent("B"))
 
         let fixtures = (0..<5).map { makeEmail(mid: "<iso-\($0)@t>", subject: "S\($0)", body: "body \($0)") }
-        try await envA.store.insertBatch(fixtures, sourceFileHash: nil, batchSize: 200, progress: nil)
+        try await envA.store.insertBatch(fixtures, batchSize: 200)
 
         let a = try await envA.repository.count(query: .all)
         let b = try await envB.repository.count(query: .all)
