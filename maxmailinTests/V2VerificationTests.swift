@@ -11,6 +11,24 @@ import XCTest
 @MainActor
 final class V2VerificationTests: XCTestCase {
 
+    // MARK: - Per-test isolation (deterministic: no shared FTS/store state)
+
+    override func setUp() async throws {
+        try await super.setUp()
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ftstest_\(UUID().uuidString)")
+        FTSSearchIndex.testShardsDirectoryOverride = dir
+        await FTSSearchIndex.shared.resetForTesting()
+        FTSReconciler.resetCursorForTesting()
+    }
+
+    override func tearDown() async throws {
+        try? await FTSSearchIndex.shared.clear()
+        await FTSSearchIndex.shared.resetForTesting()
+        FTSSearchIndex.testShardsDirectoryOverride = nil
+        FTSReconciler.resetCursorForTesting()
+        try await super.tearDown()
+    }
+
     // MARK: - Fixtures
 
     private func makeEmail(mid: String, subject: String, body: String) -> MBOXParser.RawEmail {
@@ -322,6 +340,49 @@ final class V2VerificationTests: XCTestCase {
     }
 
     // MARK: - P0-#3 — AI tools use FTS5/EmailStore, not the whole archive
+
+    // MARK: - Stage 3 — EmailRepository bounded data contract
+
+    /// The repository returns bounded pages/summaries (no full bodies), keyset
+    /// pagination doesn't overlap, count works, text query goes through FTS, and
+    /// full content hydrates only on demand.
+    func testRepositoryPagesBoundedSummariesAndCount() async throws {
+        let savedInMemory = EmailStore.testInMemory
+        EmailStore.testInMemory = true
+        await EmailStore.shared.resetForTesting()
+        let ftsDir = FileManager.default.temporaryDirectory.appendingPathComponent("fts_\(UUID().uuidString)")
+        FTSSearchIndex.testShardsDirectoryOverride = ftsDir
+        await FTSSearchIndex.shared.resetForTesting()
+        defer { EmailStore.testInMemory = savedInMemory; FTSSearchIndex.testShardsDirectoryOverride = nil }
+
+        let fixtures = (0..<7).map { makeEmailDated(mid: "<repo-\($0)@test>", subject: "Repo \($0)", body: "alpha body \($0)", dayOffset: $0) }
+        try await EmailStore.shared.insertBatch(fixtures, sourceFileHash: nil, batchSize: 200, progress: nil)
+        try await FTSSearchIndex.shared.clear()
+        try await FTSSearchIndex.shared.indexBatch(fixtures)
+
+        let repo = EmailStoreRepository.shared
+
+        let total = try await repo.count(query: .all)
+        XCTAssertEqual(total, 7, "count(all) == store total")
+
+        let p1 = try await repo.page(query: .all, cursor: nil, limit: 3)
+        XCTAssertEqual(p1.summaries.count, 3, "bounded page")
+        XCTAssertNotNil(p1.nextCursor, "more pages available")
+        XCTAssertTrue(p1.summaries.allSatisfy { $0.bodyPreview.count <= 400 }, "summary preview, not full body")
+
+        let p2 = try await repo.page(query: .all, cursor: p1.nextCursor, limit: 3)
+        XCTAssertTrue(Set(p1.summaries.map(\.id)).isDisjoint(with: Set(p2.summaries.map(\.id))), "keyset pages don't overlap")
+
+        let hits = try await repo.page(query: EmailQuery(text: "alpha"), cursor: nil, limit: 5)
+        XCTAssertGreaterThan(hits.summaries.count, 0, "text query returns hits")
+        XCTAssertLessThanOrEqual(hits.summaries.count, 5, "bounded")
+
+        let full = try await repo.fullEmail(id: p1.summaries[0].id)
+        XCTAssertNotNil(full, "full content hydrates on demand")
+
+        await EmailStore.shared.resetForTesting()
+        try await FTSSearchIndex.shared.clear()
+    }
 
     #if canImport(FoundationModels)
     /// The AI search tool retrieves via FTS5 → EmailStore (bounded evidence),

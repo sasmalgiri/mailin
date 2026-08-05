@@ -429,6 +429,68 @@ actor EmailStore {
         return stored.map { (id: $0.id, date: $0.date) }
     }
 
+    // MARK: - Bounded summaries (EmailRepository support)
+
+    /// Build a lightweight summary from a stored row WITHOUT touching the
+    /// externalStorage bodies (plainBody/htmlBody/rawSource stay on disk).
+    nonisolated static func summary(from s: StoredEmail) -> EmailSummary {
+        EmailSummary(
+            id: s.id,
+            messageID: s.messageID,
+            subject: s.subject,
+            from: s.fromAddress,
+            date: s.date,
+            bodyPreview: s.bodyPreview ?? "",
+            hasAttachments: s.hasAttachments,
+            sizeBytes: s.sizeBytes
+        )
+    }
+
+    /// Keyset page of lightweight summaries, most-recent first. No bodies.
+    func summaryPage(beforeDate: Date?, beforeID: UUID?, limit: Int) throws -> [EmailSummary] {
+        let container = try ensureContainer()
+        let context = ModelContext(container)
+        var descriptor: FetchDescriptor<StoredEmail>
+        if let beforeDate, let beforeID {
+            descriptor = FetchDescriptor<StoredEmail>(
+                predicate: #Predicate { $0.date < beforeDate || ($0.date == beforeDate && $0.id < beforeID) },
+                sortBy: [SortDescriptor(\.date, order: .reverse), SortDescriptor(\.id, order: .reverse)]
+            )
+        } else if let beforeDate {
+            descriptor = FetchDescriptor<StoredEmail>(
+                predicate: #Predicate { $0.date < beforeDate },
+                sortBy: [SortDescriptor(\.date, order: .reverse), SortDescriptor(\.id, order: .reverse)]
+            )
+        } else {
+            descriptor = FetchDescriptor<StoredEmail>(
+                sortBy: [SortDescriptor(\.date, order: .reverse), SortDescriptor(\.id, order: .reverse)]
+            )
+        }
+        descriptor.fetchLimit = limit
+        return try context.fetch(descriptor).map { Self.summary(from: $0) }
+    }
+
+    /// Lightweight summaries for specific ids. No bodies.
+    func summaries(ids: [UUID]) throws -> [EmailSummary] {
+        guard !ids.isEmpty else { return [] }
+        let container = try ensureContainer()
+        let context = ModelContext(container)
+        let idArray = ids
+        let descriptor = FetchDescriptor<StoredEmail>(predicate: #Predicate { idArray.contains($0.id) })
+        return try context.fetch(descriptor).map { Self.summary(from: $0) }
+    }
+
+    /// Which of the given ids exist in the store.
+    func existingIDs(among ids: [UUID]) throws -> Set<UUID> {
+        guard !ids.isEmpty else { return [] }
+        let container = try ensureContainer()
+        let context = ModelContext(container)
+        let idArray = ids
+        var d = FetchDescriptor<StoredEmail>(predicate: #Predicate { idArray.contains($0.id) })
+        d.propertiesToFetch = [\.id]
+        return Set(try context.fetch(d).map { $0.id })
+    }
+
     /// Full emails (with bodies) for the given ids — for reconcile reindex.
     func emails(withIDs ids: [UUID]) throws -> [MBOXParser.RawEmail] {
         guard !ids.isEmpty else { return [] }
