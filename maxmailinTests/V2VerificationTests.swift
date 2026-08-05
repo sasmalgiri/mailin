@@ -635,6 +635,118 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertNotNil(full)
     }
 
+    // MARK: - Stage 5D.1A — bounded paged list model
+
+    /// (date DESC, id-string DESC) oracle mirroring the SQLite keyset.
+    private func oracleOrder(_ fixtures: [MBOXParser.RawEmail]) -> [EmailID] {
+        fixtures.sorted { a, b in
+            let ad = MBOXParser.parseDate(a.headers["Date"]) ?? .distantPast
+            let bd = MBOXParser.parseDate(b.headers["Date"]) ?? .distantPast
+            if ad != bd { return ad > bd }
+            return a.id.uuidString > b.id.uuidString
+        }.map(\.id)
+    }
+
+    private func makeListVM(_ fixtures: [MBOXParser.RawEmail], pageSize: Int, maxRetained: Int) async throws -> ArchiveListViewModel {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-lvm-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        try await store.insertBatch(fixtures, batchSize: 200)
+        let svc = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+        return ArchiveListViewModel(archive: svc, pageSize: pageSize, maxRetained: maxRetained)
+    }
+
+    /// Paged list ids/order/count/traversal match the array oracle; pages are
+    /// disjoint, page size is never exceeded, detail hydrates, missing → nil.
+    func testArchiveListVM_differentialAgainstOracle() async throws {
+        // dayOffset wraps at 28 → repeated timestamps, so this also exercises
+        // keyset tie-breaking with no skips/duplicates.
+        let fixtures = (0..<55).map { makeEmailDated(mid: "<l-\($0)@t>", subject: "Subj \($0)", body: "body \($0)", dayOffset: $0) }
+        let oracle = oracleOrder(fixtures)
+        let vm = try await makeListVM(fixtures, pageSize: 10, maxRetained: 10_000)
+
+        var appended: [EmailID] = []
+        var maxBatch = 0
+        vm._debugOnAppend = { batch in appended.append(contentsOf: batch.map(\.id)); maxBatch = max(maxBatch, batch.count) }
+
+        await vm.loadInitial()
+        XCTAssertEqual(vm.totalCount, 55, "count matches oracle")
+        XCTAssertEqual(vm.summaries.map(\.id), Array(oracle.prefix(10)), "first page ids/order match oracle")
+        XCTAssertTrue(vm.hasMore)
+        let page1 = Set(vm.summaries.map(\.id))
+
+        await vm.loadNextPage()
+        XCTAssertEqual(vm.summaries.map(\.id), Array(oracle.prefix(20)), "second page appends in oracle order")
+        let page2 = Set(vm.summaries.map(\.id)).subtracting(page1)
+        XCTAssertTrue(page1.isDisjoint(with: page2), "page 1 ∩ page 2 = ∅")
+
+        var guardCount = 0
+        while vm.hasMore && guardCount < 100 { await vm.loadNextPage(); guardCount += 1 }
+        XCTAssertEqual(vm.summaries.map(\.id), oracle, "full traversal (no cap) == oracle exactly")
+        XCTAssertEqual(appended, oracle, "every id yielded exactly once, in order")
+        XCTAssertLessThanOrEqual(maxBatch, 10, "page size never exceeded")
+
+        // Detail hydration by id, and missing id → nil.
+        let full = try await vm.fullEmail(id: oracle[0])
+        XCTAssertEqual(full?.id, oracle[0], "fullEmail returns the same logical email")
+        let missing = try await vm.fullEmail(id: UUID())
+        XCTAssertNil(missing, "nonexistent id returns nil")
+    }
+
+    /// Resident summaries stay bounded across a large traversal, yet no id is
+    /// skipped or duplicated (verified via the per-page hook).
+    func testArchiveListVM_boundedRetention() async throws {
+        let fixtures = (0..<500).map { makeEmail(mid: "<bm-\($0)@t>", subject: "S\($0)", body: "b \($0)") }
+        let oracle = oracleOrder(fixtures)
+        let vm = try await makeListVM(fixtures, pageSize: 50, maxRetained: 120)
+
+        var appended: [EmailID] = []
+        vm._debugOnAppend = { appended.append(contentsOf: $0.map(\.id)) }
+
+        await vm.loadInitial()
+        var guardCount = 0
+        while vm.hasMore && guardCount < 100 { await vm.loadNextPage(); guardCount += 1 }
+
+        XCTAssertLessThanOrEqual(vm.maxRetainedObserved, 120, "resident window never exceeds maxRetained")
+        XCTAssertGreaterThanOrEqual(vm.maxRetainedObserved, 100, "window actually filled")
+        XCTAssertLessThanOrEqual(vm.summaries.count, 120)
+        XCTAssertEqual(Set(appended), Set(oracle), "no ids skipped despite capping")
+        XCTAssertEqual(appended.count, 500, "no duplicates")
+    }
+
+    /// Query-revision guard: a slow superseded load must NOT overwrite the newer
+    /// query's results, even if it completes last (deterministic via a gated mock).
+    func testArchiveListVM_revisionGuardDropsStale() async throws {
+        let mock = GatedRepository()
+        let a = EmailSummary(id: UUID(), messageID: "A", subject: "A", from: "a", date: Date(timeIntervalSince1970: 100), bodyPreview: "", hasAttachments: false, sizeBytes: 0)
+        let c = EmailSummary(id: UUID(), messageID: "C", subject: "C", from: "c", date: Date(timeIntervalSince1970: 200), bodyPreview: "", hasAttachments: false, sizeBytes: 0)
+        await mock.setDatasets(["__all__": [a], "C": [c]])
+        let vm = ArchiveListViewModel(archive: ArchiveDataService(repository: mock), pageSize: 10, maxRetained: 100)
+
+        let tA = Task { await vm.loadInitial() }                       // query .all (stale-to-be)
+        await waitUntil { await mock.pending == 1 }
+        let tC = Task { await vm.setQuery(EmailQuery(text: "C")) }     // supersedes A
+        await waitUntil { await mock.pending == 2 }
+
+        await mock.release()   // A's page returns first → revision stale → discarded
+        await mock.release()   // C's page returns → published
+        _ = await tA.value; _ = await tC.value
+
+        XCTAssertEqual(vm.summaries.map(\.id), [c.id], "only the latest query's results are visible")
+        XCTAssertEqual(vm.totalCount, 1)
+        XCTAssertFalse(vm.isLoading, "loading state settled")
+    }
+
+    private func waitUntil(_ condition: @escaping () async -> Bool, timeout: TimeInterval = 3) async {
+        let start = Date()
+        while !(await condition()) {
+            if Date().timeIntervalSince(start) > timeout { return }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+    }
+
     // MARK: - Stage 5A — storage activation coordinator
 
     /// Build a coordinator over the in-memory SwiftData source + a disposable
@@ -856,4 +968,41 @@ final class V2VerificationTests: XCTestCase {
         await EmailStore.shared.resetForTesting()
     }
     #endif
+}
+
+/// A repository whose `page()` calls suspend until explicitly `release()`d, so a
+/// test can force a deterministic (reordered) completion order and prove the
+/// list model's query-revision guard drops stale results. Distinguishes queries
+/// by `text` so the "wrong" and "right" results are observably different.
+actor GatedRepository: EmailRepository {
+    private var gates: [CheckedContinuation<Void, Never>] = []
+    private var _pending = 0
+    private var datasets: [String: [EmailSummary]] = [:]
+
+    func setDatasets(_ d: [String: [EmailSummary]]) { datasets = d }
+    var pending: Int { _pending }
+
+    /// Resume the oldest suspended `page()` call.
+    func release() {
+        guard !gates.isEmpty else { return }
+        let g = gates.removeFirst()
+        _pending -= 1
+        g.resume()
+    }
+
+    private func key(_ q: EmailQuery) -> String { (q.text?.isEmpty ?? true) ? "__all__" : q.text! }
+
+    func page(query: EmailQuery, cursor: EmailPageCursor?, limit: Int) async throws -> EmailPage {
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            gates.append(c); _pending += 1
+        }
+        let data = datasets[key(query)] ?? []
+        return EmailPage(summaries: Array(data.prefix(limit)), nextCursor: nil)
+    }
+    func summaries(ids: [EmailID]) async throws -> [EmailSummary] { [] }
+    func fullEmail(id: EmailID) async throws -> MBOXParser.RawEmail? { nil }
+    func fullEmails(ids: [EmailID]) async throws -> [MBOXParser.RawEmail] { [] }
+    func exists(ids: [EmailID]) async throws -> Set<EmailID> { [] }
+    func count(query: EmailQuery) async throws -> Int { (datasets[key(query)] ?? []).count }
+    func delete(ids: [EmailID]) async throws {}
 }
