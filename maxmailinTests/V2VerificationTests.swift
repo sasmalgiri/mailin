@@ -572,7 +572,7 @@ final class V2VerificationTests: XCTestCase {
     /// `baseline` whenever you retire references. (No hosted CI, so this runs as
     /// a unit test on the dev machine / ⌘U.)
     func testLegacyCorpusConsumerCountOnlyDecreases() throws {
-        let baseline = 260
+        let baseline = 258   // W2-B: metadata migrated to aggregates (was 260)
         let src = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()   // maxmailinTests
             .deletingLastPathComponent()   // repo root

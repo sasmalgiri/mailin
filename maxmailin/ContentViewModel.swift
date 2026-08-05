@@ -568,22 +568,27 @@ class ContentViewModel: ObservableObject {
     }
 
     // MARK: - Metadata/AI
+    /// Stage 5 W2-B: metadata (top subjects + date range) now comes from bounded
+    /// SQL aggregates over the SQLite store, not a whole-archive `[RawEmail]`
+    /// scan. Signature kept synchronous; the bounded aggregate fetch runs in a
+    /// MainActor Task so callers are unchanged.
     func autoDetectMetadata() {
         guard isParsed else {
             statusMessage = "Parse a file first."
             statusColor = .orange
             return
         }
-        let replyCounts = replyFrequency(for: senderEmail)
-        let sortedSubjects = Dictionary(grouping: parsedEmails, by: { $0.headers["Subject"] ?? "(No Subject)" })
-            .mapValues { $0.count }
-            .sorted { replyCounts[$0.key, default: 0] < replyCounts[$1.key, default: 0] }
-
-        subjectList = sortedSubjects.map { $0.key }
-        let dates = parsedEmails.compactMap { MBOXParser.parseDate($0.headers["Date"]) }
-        detectedDateRange = (dates.min(), dates.max())
-        statusMessage = "Metadata detected: \(subjectList.count) subjects."
-        statusColor = .blue
+        Task { @MainActor in
+            do {
+                let snap = try await ArchiveAggregateService.shared.snapshot(topLimit: 200)
+                self.subjectList = snap.topSubjects.map { $0.value }
+                self.detectedDateRange = (snap.minDate, snap.maxDate)
+                self.statusMessage = "Metadata detected: \(self.subjectList.count) subjects."
+                self.statusColor = .blue
+            } catch {
+                // Non-fatal: keep any prior metadata rather than clearing it.
+            }
+        }
     }
 
     func runAIQuery() {
