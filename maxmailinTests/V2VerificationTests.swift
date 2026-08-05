@@ -565,6 +565,114 @@ final class V2VerificationTests: XCTestCase {
         await EmailStore.shared.resetForTesting()
     }
 
+    // MARK: - Stage 5A — storage activation coordinator
+
+    /// Build a coordinator over the in-memory SwiftData source + a disposable
+    /// SQLite dest, with an isolated UserDefaults state key.
+    private func makeActivation() -> (StorageActivationCoordinator, SQLiteEmailStore, String, URL) {
+        let key = "test.activation.\(UUID().uuidString)"
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-act-\(UUID().uuidString)", isDirectory: true)
+        let dest = SQLiteEmailStore(directory: root)
+        let coord = StorageActivationCoordinator(source: .shared, dest: dest, defaults: .standard, stateKey: key)
+        return (coord, dest, key, root)
+    }
+
+    /// Fresh install (empty source) activates immediately; existing SwiftData
+    /// migrates non-destructively and only then activates.
+    func testActivation_freshAndExisting() async throws {
+        let saved = EmailStore.testInMemory
+        EmailStore.testInMemory = true
+        await EmailStore.shared.resetForTesting()
+        defer { EmailStore.testInMemory = saved }
+
+        // Fresh: nothing in source → active immediately.
+        let (fresh, _, freshKey, freshRoot) = makeActivation()
+        defer { UserDefaults.standard.removeObject(forKey: freshKey); try? FileManager.default.removeItem(at: freshRoot) }
+        let freshBefore = await fresh.isActive
+        XCTAssertFalse(freshBefore, "not active until run")
+        let s0 = await fresh.activate()
+        XCTAssertEqual(s0, .active)
+        let s0Active = await fresh.isActive
+        XCTAssertTrue(s0Active, "import gate opens only after activation")
+
+        // Existing SwiftData: 25 rows migrate into SQLite, source untouched.
+        let fixtures = (0..<25).map { makeEmail(mid: "<a-\($0)@t>", subject: "S\($0)", body: "body \($0)") }
+        try await EmailStore.shared.insertBatch(fixtures, batchSize: 100)
+        let (coord, dest, key, root) = makeActivation()
+        defer { UserDefaults.standard.removeObject(forKey: key); try? FileManager.default.removeItem(at: root) }
+        let s1 = await coord.activate()
+        XCTAssertEqual(s1, .active)
+        let destCount = try await dest.totalCount()
+        XCTAssertEqual(destCount, 25, "all rows migrated before activation")
+        let srcCount = try await EmailStore.shared.totalCount()
+        XCTAssertEqual(srcCount, 25, "SwiftData source not modified (rollback intact)")
+
+        await EmailStore.shared.resetForTesting()
+    }
+
+    /// An interrupted migration (state left `copying`, dest partially filled)
+    /// resumes and reaches `active`; a stale `active` marker over a short dest
+    /// is re-migrated rather than trusted.
+    func testActivation_resumesAndRejectsStaleMarker() async throws {
+        let saved = EmailStore.testInMemory
+        EmailStore.testInMemory = true
+        await EmailStore.shared.resetForTesting()
+        defer { EmailStore.testInMemory = saved }
+
+        let fixtures = (0..<30).map { makeEmailDated(mid: "<b-\($0)@t>", subject: "S\($0)", body: "body \($0)", dayOffset: $0) }
+        try await EmailStore.shared.insertBatch(fixtures, batchSize: 100)
+
+        // Interrupted: copy one page, leave marker at `copying`.
+        let (coord, dest, key, root) = makeActivation()
+        defer { UserDefaults.standard.removeObject(forKey: key); try? FileManager.default.removeItem(at: root) }
+        _ = try await MailinStoreMigration.migrate(from: EmailStore.shared, to: dest, pageSize: 5, maxPages: 1, markCompleteFlag: false)
+        let partial = try await dest.totalCount()
+        XCTAssertLessThan(partial, 30, "left partially migrated")
+        UserDefaults.standard.set("copying", forKey: key)
+
+        let resumed = await coord.activate()
+        XCTAssertEqual(resumed, .active, "resumes from copying to active")
+        let full = try await dest.totalCount()
+        XCTAssertEqual(full, 30, "resume completed the copy")
+
+        // Stale marker: pretend active but wipe the dest — must NOT stay active
+        // on a half-populated/empty archive; re-migrates.
+        try await dest.clearAll()
+        UserDefaults.standard.set("active", forKey: key)
+        let recovered = await coord.activate()
+        XCTAssertEqual(recovered, .active)
+        let refilled = try await dest.totalCount()
+        XCTAssertEqual(refilled, 30, "stale active marker over short dest was re-migrated")
+
+        await EmailStore.shared.resetForTesting()
+    }
+
+    /// A destination already holding every row activates even when the marker is
+    /// absent; a second activate() is an idempotent no-op.
+    func testActivation_markerAbsentButComplete_andIdempotent() async throws {
+        let saved = EmailStore.testInMemory
+        EmailStore.testInMemory = true
+        await EmailStore.shared.resetForTesting()
+        defer { EmailStore.testInMemory = saved }
+
+        let fixtures = (0..<12).map { makeEmail(mid: "<c-\($0)@t>", subject: "S\($0)", body: "body \($0)") }
+        try await EmailStore.shared.insertBatch(fixtures, batchSize: 100)
+
+        let (coord, dest, key, root) = makeActivation()
+        defer { UserDefaults.standard.removeObject(forKey: key); try? FileManager.default.removeItem(at: root) }
+        // Pre-populate dest fully, but leave the state marker absent.
+        _ = try await MailinStoreMigration.migrate(from: EmailStore.shared, to: dest, markCompleteFlag: false)
+        XCTAssertNil(UserDefaults.standard.string(forKey: key), "no marker yet")
+
+        let s = await coord.activate()
+        XCTAssertEqual(s, .active, "complete dest verifies + activates without re-copy")
+        let again = await coord.activate()
+        XCTAssertEqual(again, .active, "idempotent")
+
+        await EmailStore.shared.resetForTesting()
+    }
+
     // MARK: - Stage 4 — mailin-v2-stress harness
 
     /// Drives the REAL engine (EmailStore + FTS5 + repository + reconcile) over

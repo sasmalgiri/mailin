@@ -167,6 +167,19 @@ struct mailinApp: App {
                         // launches.
                         await MigrationService.shared.migrateIfNeeded()
 
+                        // Stage 5A: establish SQLite as the production storage
+                        // authority BEFORE any archive read/write. On an
+                        // existing SwiftData install this migrates it (non-
+                        // destructively) into SQLite and only marks `.active`
+                        // after the count + reopen integrity gate passes. Import
+                        // and the read cutover gate on `isActive`. Idempotent —
+                        // a fast no-op once active.
+                        let storageState = await StorageActivationCoordinator.shared.activate()
+                        _ = try? HMACChainAuditLog.shared.append(
+                            action: "v2.storage.activation",
+                            detail: "SQLite activation state: \(storageState.rawValue)"
+                        )
+
                         // Repair any store↔FTS drift (a crash between the
                         // store commit and the FTS commit can leave a row in
                         // the store but unsearchable). Only runs when drift is

@@ -59,6 +59,10 @@ actor SQLiteEmailStore: EmailArchiveStore {
         self.directory = directory
     }
 
+    /// The on-disk location of this store. Used by the activation coordinator's
+    /// reopen gate to prove durability with a fresh connection.
+    nonisolated var storeDirectory: URL { directory }
+
     deinit { if let db { sqlite3_close(db) } }
 
     // MARK: - Open / schema
