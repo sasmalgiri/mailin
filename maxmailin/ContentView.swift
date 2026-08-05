@@ -4037,7 +4037,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
                 EmailPersistence.save(emails: viewModel.parsedEmails, senderEmail: viewModel.senderEmail)
                 EmailSearchIndex.shared.buildAsync(from: viewModel.parsedEmails)
                 predictiveEngine.buildVectors(from: viewModel.parsedEmails)
-                SpotlightIndexer.shared.indexEmails(viewModel.parsedEmails)
+                SpotlightIndexer.shared.indexAllFromArchive()   // bounded: streams from SQLite, no corpus
                 #if canImport(FoundationModels)
                 if #available(macOS 26, iOS 26, *) {
                     FoundationModelEngine.invalidateProfileCache()
