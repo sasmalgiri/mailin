@@ -140,12 +140,29 @@ class ContentViewModel: ObservableObject {
     }
 
     // MARK: - Zip Import Support (sandbox-safe, no Process)
+
+    /// Synchronous extraction. Records the temp dir for later cleanup.
     func extractMailFilesFromZip(at zipURL: URL) -> [URL] {
+        let (files, tempDir) = Self.extractZipCore(at: zipURL)
+        pendingTempDirs.append(tempDir)
+        return files
+    }
+
+    /// Off-main extraction — runs the heavy parse/inflate on a background
+    /// executor so a large zip doesn't block (beachball) the main thread.
+    func extractMailFilesFromZipAsync(at zipURL: URL) async -> [URL] {
+        let (files, tempDir) = await Task.detached { Self.extractZipCore(at: zipURL) }.value
+        pendingTempDirs.append(tempDir)
+        return files
+    }
+
+    /// Pure, nonisolated extraction core so it can run off the main actor.
+    /// Returns the extracted files and the temp dir they were written to.
+    nonisolated static func extractZipCore(at zipURL: URL) -> (files: [URL], tempDir: URL) {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("mailin_zip_\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        pendingTempDirs.append(tempDir)
 
-        guard let archive = try? Data(contentsOf: zipURL) else { return [] }
+        guard let archive = try? Data(contentsOf: zipURL) else { return ([], tempDir) }
 
         var mailFiles: [URL] = []
         var offset = 0
@@ -180,7 +197,7 @@ class ContentViewModel: ObservableObject {
                 if method == 0 {
                     fileData = compressedData
                 } else if method == 8 {
-                    fileData = decompressDeflate(compressedData, uncompressedSize: uncompressedSize)
+                    fileData = Self.decompressDeflate(compressedData, uncompressedSize: uncompressedSize)
                 }
 
                 if let data = fileData {
@@ -201,10 +218,10 @@ class ContentViewModel: ObservableObject {
             offset = dataStart + compressedSize
         }
 
-        return mailFiles
+        return (mailFiles, tempDir)
     }
 
-    private func decompressDeflate(_ data: Data, uncompressedSize: Int) -> Data? {
+    nonisolated private static func decompressDeflate(_ data: Data, uncompressedSize: Int) -> Data? {
         guard !data.isEmpty else { return nil }
         let maxDecompressedSize = 500_000_000 // 500MB safety cap
         guard uncompressedSize >= 0 && uncompressedSize <= maxDecompressedSize else { return nil }
