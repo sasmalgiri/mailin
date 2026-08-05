@@ -94,16 +94,20 @@ The cure for the recurring "built but not wired" pattern: a claim ships only whe
 | Streaming ingest | ✅ | ⚠️ UI retains whole `[RawEmail]` | ❌ | ✅ (mbox) | ❌ | ❌ strong scale claim |
 | FTS free-text | ✅ | ✅ | ✅ | ✅ | ❌ | ⚠️ (not "instant @ 10M") |
 | FTS Boolean | ✅ | ✅ | ✅ | ✅ | ❌ | ⚠️ |
-| Proximity (NEAR) | ✅ (SQLite) | ❌ in-RAM `allEmails` | ❌ | ❌ | ❌ | ❌ scale claim |
-| Regex | ✅ | ❌ in-RAM scan | ❌ | ❌ | ❌ | ❌ scale claim |
-| AI search/assistant | ✅ tools | ❌ in-RAM `hybridSearch`, whole `[RawEmail]` | ❌ | ❌ | ❌ | ❌ large-scale claim |
+| Proximity (NEAR) | ✅ | ✅ FTS5 `NEAR()` **[P0-S1]** | ✅ | ✅ | ❌ | ⚠️ (not "instant @ 10M") |
+| Regex | ✅ | ❌ in-RAM scan (by design) | ❌ | ❌ | ❌ | ❌ scale claim |
+| AI search/thread | ✅ tools | ✅ FTS5→EmailStore (bounded) **[P0-#3]** | ✅ | ✅ | ❌ | ⚠️ (analytics tools still array-backed) |
 | Keyset pagination | ✅ | ⚠️ partial (UI still array-backed) | ✅ (engine) | ❌ | ❌ | ⚠️ |
 | Migration (R1) | ✅ | ✅ | ✅ | ✅ | device pending | device gate |
-| Delete / reconcile | ✅ | ✅ | ⚠️ reconcile builds full `Set<UUID>` | ✅ | ❌ | ⚠️ |
+| Delete / reconcile | ✅ | ✅ | ✅ paged registry, no whole-set **[P0-S2]** | ✅ | ❌ | ⚠️ |
 | Redaction (export) | ✅ | ✅ | ✅ | ✅ | n/a | ✅ (export-scoped) |
 | S/MIME | ✅ | ✅ | ✅ | ❌ | n/a | build-verified only |
 
 **Systemic rule:** a "scale" claim (millions of messages / instant / bounded memory) requires the **Bounded memory** *and* **Scale test** columns green — not just "Engine exists." See `V2_ROADMAP.md` for the completion plan that turns the ⚠️/❌ rows green.
+
+**Still NOT green (deliberately):** *Streaming ingest* and *Keyset pagination* remain ⚠️/❌ because `ContentViewModel.parsedEmails` / `ParsedEmailListViewModel.allEmails/filteredEmails` still hold the whole archive in the UI. That whole-UI `[RawEmail]` → paged `EmailSummary/EmailID` cutover is **`v2-core-cutover`**, gated by a production stress harness (`mailin-v2-stress`) proving RSS doesn't grow linearly with corpus. No "bounded memory regardless of archive size" claim until that branch lands. The **Scale test** column is `❌` everywhere until that harness exists.
+
+**Done on `v2-honesty-pass` since this matrix was written:** P0-S1 (FTS5 NEAR proximity), P0-S2 (bounded paged reconciliation + registry), P0-#3 (AI search/thread tools → FTS5/EmailStore) — each with executed tests.
 
 ## 5. Reference docs in repo
 - `V2_CLAIMS_AUDIT_AND_ACTION_PLAN.md` — full claims-vs-code audit + plan

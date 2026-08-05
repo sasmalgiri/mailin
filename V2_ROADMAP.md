@@ -86,9 +86,11 @@ Result: a **private, bounded-memory, evidence-grounded archive analysis engine**
 
 ---
 
-## Suggested first increments (bounded + verifiable — safe to start without the full cutover)
-1. **FTS5 `NEAR()` proximity** + delete in-RAM proximity fallback — small, testable.
-2. **Paged reconciliation** + `indexed_message` registry — replaces the unbounded `Set<UUID>`; testable.
-3. **AI `SearchEmailsTool` → FTS5+EmailStore** — contained cutover of the one tool; testable.
-4. **Scale-claim relabel** + query-driven time scoping — copy + query planner.
-Then the big track: **P0 bounded-memory UI cutover** on its own branch with the stress harness as its gate.
+## First increments — STATUS (on `v2-honesty-pass`, each with executed tests)
+1. ✅ **P0-S1 FTS5 `NEAR()` proximity** — `FTSQueryBuilder` + `searchRaw`; in-RAM proximity fallback removed. Tests: near/far match, quoting-safe, live dispatch (red-then-green).
+2. ✅ **P0-S2 paged reconciliation** — `indexed_message` registry (same-txn), `indexedSubset` (chunked), `FTSReconciler` (keyset cursor, restartable, no 100k ceiling, no whole `Set`). Tests: missing-beyond-first-page, interrupted/resumed.
+3. ✅ **P0-#3 AI `SearchEmailsTool`/`GetThreadInfoTool` → FTS5+EmailStore** (bounded). Test: reaches FTS5, ≤5 evidence, not the corpus.
+4. ⏸️ **Scale-claim relabel** + query-driven time scoping — copy + query planner (next).
+5. ⏸️ **Analytics AI tools** (timeline/contacts/stats) still take `[RawEmail]` — repository-backed aggregates (next AI increment).
+
+**STOP HERE on this branch** (per plan). The big track — **P0 whole-UI bounded-memory cutover** (`ContentViewModel`/`ParsedEmailListViewModel` off `[RawEmail]`) — goes on **`v2-core-cutover`** with **`mailin-v2-stress`** built first as its acceptance oracle (RSS must not grow linearly with corpus).
