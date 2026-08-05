@@ -64,6 +64,9 @@ protocol EmailRepository: Sendable {
     func page(query: EmailQuery, cursor: EmailPageCursor?, limit: Int) async throws -> EmailPage
     func summaries(ids: [EmailID]) async throws -> [EmailSummary]
     func fullEmail(id: EmailID) async throws -> MBOXParser.RawEmail?
+    /// Bounded hydration of full emails (with bodies) for a specific id batch —
+    /// for derived consumers that need bodies, fed one bounded page at a time.
+    func fullEmails(ids: [EmailID]) async throws -> [MBOXParser.RawEmail]
     func exists(ids: [EmailID]) async throws -> Set<EmailID>
     func count(query: EmailQuery) async throws -> Int
     func delete(ids: [EmailID]) async throws
@@ -119,6 +122,10 @@ struct EmailStoreRepository: EmailRepository {
 
     func fullEmail(id: EmailID) async throws -> MBOXParser.RawEmail? {
         try await store.fullEmail(id: id)
+    }
+
+    func fullEmails(ids: [EmailID]) async throws -> [MBOXParser.RawEmail] {
+        try await store.emails(withIDs: ids)
     }
 
     func exists(ids: [EmailID]) async throws -> Set<EmailID> {

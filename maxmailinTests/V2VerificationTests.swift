@@ -565,6 +565,76 @@ final class V2VerificationTests: XCTestCase {
         await EmailStore.shared.resetForTesting()
     }
 
+    // MARK: - Stage 5C.0 — migration firewall ratchet guard
+
+    /// The number of legacy whole-corpus references (parsedEmails / .allEmails /
+    /// filteredEmails) may only DECREASE as consumers migrate behind
+    /// ArchiveDataService. Fails if a new reference is introduced; lower
+    /// `baseline` whenever you retire references. (No hosted CI, so this runs as
+    /// a unit test on the dev machine / ⌘U.)
+    func testLegacyCorpusConsumerCountOnlyDecreases() throws {
+        let baseline = 260
+        let src = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // maxmailinTests
+            .deletingLastPathComponent()   // repo root
+            .appendingPathComponent("maxmailin")
+        let fm = FileManager.default
+        guard let items = try? fm.contentsOfDirectory(at: src, includingPropertiesForKeys: nil) else {
+            throw XCTSkip("app source not found at \(src.path)")
+        }
+        let patterns = ["parsedEmails", ".allEmails", "filteredEmails"]
+        var count = 0
+        for f in items where f.pathExtension == "swift" && f.lastPathComponent != "ArchiveDataService.swift" {
+            guard let text = try? String(contentsOf: f, encoding: .utf8) else { continue }
+            for p in patterns { count += text.components(separatedBy: p).count - 1 }
+        }
+        print("LEGACY_CORPUS_CONSUMERS=\(count) (baseline \(baseline))")
+        XCTAssertLessThanOrEqual(count, baseline,
+            "Introduced a new legacy whole-corpus reference (\(count) > \(baseline)). Route new code through ArchiveDataService, not parsedEmails/allEmails/filteredEmails.")
+    }
+
+    /// Differential test: the firewall's paged/streamed reads over SQLite must
+    /// return the same ids/order/count as a direct-array oracle — the guarantee
+    /// that lets consumers migrate onto ArchiveDataService with confidence.
+    func testArchiveDataService_matchesArrayOracle() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-fw-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        let svc = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+
+        // Distinct dates → deterministic keyset order.
+        let fixtures = (0..<20).map { makeEmailDated(mid: "<f-\($0)@t>", subject: "S\($0)", body: "b \($0)", dayOffset: $0) }
+        try await store.insertBatch(fixtures, batchSize: 100)
+
+        // Oracle: (date DESC, id DESC) with id compared as its uuid string,
+        // mirroring the SQLite keyset.
+        let oracleIDs = fixtures.sorted { lhs, rhs in
+            let ld = MBOXParser.parseDate(lhs.headers["Date"]) ?? .distantPast
+            let rd = MBOXParser.parseDate(rhs.headers["Date"]) ?? .distantPast
+            if ld != rd { return ld > rd }
+            return lhs.id.uuidString > rhs.id.uuidString
+        }.map(\.id)
+
+        let page = try await svc.page(query: .all, cursor: nil, limit: 100)
+        XCTAssertEqual(page.summaries.map(\.id), oracleIDs, "firewall page order == array oracle")
+        let count = try await svc.count(query: .all)
+        XCTAssertEqual(count, 20, "firewall count == oracle count")
+
+        // Streaming walks the whole set (bounded pages) with the same members.
+        var streamed: [EmailID] = []
+        for try await batch in svc.streamSummaries(query: .all, batchSize: 7) {
+            streamed.append(contentsOf: batch.map(\.id))
+        }
+        XCTAssertEqual(Set(streamed), Set(oracleIDs), "stream covers the whole archive")
+        XCTAssertEqual(streamed.count, 20, "stream has no skips or duplicates")
+
+        // Detail hydration by id returns bodies.
+        let full = try await svc.fullEmail(id: oracleIDs[0])
+        XCTAssertNotNil(full)
+    }
+
     // MARK: - Stage 5A — storage activation coordinator
 
     /// Build a coordinator over the in-memory SwiftData source + a disposable
