@@ -497,6 +497,14 @@ struct NSFReader {
         // This is a fallback for NSF files where the structured parse fails
         var notes: [NSFNote] = []
 
+        // The scan fallback materialises the entire file as a String. Cap it so
+        // a multi-GB NSF that fails structured parse fails cleanly rather than
+        // OOM'ing (structured parse handles large files via mmap; this doesn't).
+        let maxScanBytes = 200 * 1024 * 1024
+        guard data.count <= maxScanBytes else {
+            throw NSFParser.NSFError.invalidFormat("File too large for scan fallback (\(data.count) bytes)")
+        }
+
         guard let text = String(data: data, encoding: .utf8)
                 ?? String(data: data, encoding: .isoLatin1)
                 ?? String(data: data, encoding: .windowsCP1252) else {

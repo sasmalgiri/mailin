@@ -179,6 +179,15 @@ struct MBOXParser {
         senderEmail: String,
         onProgress: ((Double) -> Void)? = nil
     ) throws -> [RawEmail] {
+        // Ceiling on the non-streaming path: this reads the whole file into a
+        // String. Files above the cap must use the streaming parser, not be
+        // materialised whole (OOM). 500 MB is well above any single .eml or a
+        // small mbox; larger archives go through parseStreamingCallback.
+        let maxNonStreamingBytes = 500 * 1024 * 1024
+        if let size = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size]) as? Int,
+           size > maxNonStreamingBytes {
+            throw ExtractionError.fileTooLarge(filename: fileURL.lastPathComponent, size: size)
+        }
         let content = try FileUtils.readTextFile(url: fileURL)
         let rawMessages = splitMBOX(content: content)
         var parsedEmails: [RawEmail] = []
