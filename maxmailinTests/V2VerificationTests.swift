@@ -320,4 +320,42 @@ final class V2VerificationTests: XCTestCase {
         await EmailStore.shared.resetForTesting()
         FTSReconciler.resetCursorForTesting()
     }
+
+    // MARK: - P0-#3 — AI tools use FTS5/EmailStore, not the whole archive
+
+    #if canImport(FoundationModels)
+    /// The AI search tool retrieves via FTS5 → EmailStore (bounded evidence),
+    /// not by scanning an in-memory `[RawEmail]` corpus.
+    func testAISearchToolRetrievesBoundedEvidenceViaFTS() async throws {
+        guard #available(macOS 26, iOS 26, *) else {
+            throw XCTSkip("Foundation Models tools require macOS/iOS 26")
+        }
+        let savedInMemory = EmailStore.testInMemory
+        EmailStore.testInMemory = true
+        await EmailStore.shared.resetForTesting()
+        let ftsDir = FileManager.default.temporaryDirectory.appendingPathComponent("fts_\(UUID().uuidString)")
+        FTSSearchIndex.testShardsDirectoryOverride = ftsDir
+        await FTSSearchIndex.shared.resetForTesting()
+        defer { EmailStore.testInMemory = savedInMemory; FTSSearchIndex.testShardsDirectoryOverride = nil }
+
+        let fixtures = (0..<8).map { makeEmail(mid: "<ai-\($0)@test>", subject: "Apollo \($0)", body: "project apollo status update \($0)") }
+        try await EmailStore.shared.insertBatch(fixtures, sourceFileHash: nil, batchSize: 200, progress: nil)
+        try await FTSSearchIndex.shared.clear()
+        try await FTSSearchIndex.shared.indexBatch(fixtures)
+
+        await FTSSearchIndex.shared.resetDebugSearchCallCount()
+        let tool = SearchEmailsTool()
+        let output = try await tool.call(arguments: .init(query: "apollo"))
+        let dispatched = await FTSSearchIndex.shared.debugSearchCallCount
+
+        XCTAssertGreaterThanOrEqual(dispatched, 1, "AI search tool must reach FTS5")
+        XCTAssertTrue(output.contains("Apollo"), "returns matching evidence")
+        let evidenceCount = output.components(separatedBy: "Subject:").count - 1
+        XCTAssertGreaterThan(evidenceCount, 0, "found some evidence")
+        XCTAssertLessThanOrEqual(evidenceCount, 5, "bounded evidence set (<=5), not the whole archive")
+
+        try await FTSSearchIndex.shared.clear()
+        await EmailStore.shared.resetForTesting()
+    }
+    #endif
 }
