@@ -13,6 +13,9 @@
 
 import Foundation
 import SwiftData
+import os.log
+
+private let emailStoreLog = Logger(subsystem: "com.ecosanskriti.mailin", category: "EmailStore")
 
 /// Errors that can surface during persistence operations.
 enum EmailStoreError: LocalizedError {
@@ -179,7 +182,14 @@ actor EmailStore {
                     let descriptor = FetchDescriptor<StoredEmail>(
                         predicate: #Predicate { $0.messageID == mid }
                     )
-                    if let _ = try? context.fetch(descriptor).first { continue }
+                    do {
+                        if try context.fetch(descriptor).first != nil { continue }
+                    } catch {
+                        // Don't silently treat a transient dedup-fetch failure as
+                        // "no duplicate". Log and proceed to insert — a possible
+                        // duplicate is recoverable; silent data loss is not.
+                        emailStoreLog.error("dedup fetch failed; inserting anyway: \(error.localizedDescription, privacy: .public)")
+                    }
                 }
                 let date = parsedDate(from: email.headers["Date"]) ?? Date.distantPast
                 let stored = StoredEmail(
