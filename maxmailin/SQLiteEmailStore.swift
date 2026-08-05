@@ -227,6 +227,44 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return Int(sqlite3_column_int64(stmt, 0))
     }
 
+    // MARK: - Aggregates (DB-side; never stream bodies to count metadata)
+
+    /// Min/max stored date as unix seconds.
+    func dateRangeSeconds() throws -> (min: Int64?, max: Int64?) {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT MIN(date), MAX(date) FROM emails;")
+        defer { sqlite3_finalize(stmt) }
+        guard try stepRow(stmt, db) else { return (nil, nil) }
+        let lo = sqlite3_column_type(stmt, 0) == SQLITE_NULL ? nil : sqlite3_column_int64(stmt, 0)
+        let hi = sqlite3_column_type(stmt, 1) == SQLITE_NULL ? nil : sqlite3_column_int64(stmt, 1)
+        return (lo, hi)
+    }
+
+    func attachmentCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM emails WHERE has_attach = 1;")
+    }
+
+    /// Whitelisted grouping columns — the raw value is the actual column, so no
+    /// user string is ever interpolated into SQL.
+    enum GroupColumn: String, Sendable { case fromAddr = "from_addr", subject = "subject", toAddr = "to_addr" }
+
+    /// Top `limit` values of a column by frequency (GROUP BY … ORDER BY count).
+    func topGrouped(_ column: GroupColumn, limit: Int) throws -> [AggregateBucket] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT \(column.rawValue) AS v, COUNT(*) AS c FROM emails
+            WHERE v IS NOT NULL AND v <> '' GROUP BY v ORDER BY c DESC, v ASC LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        var out: [AggregateBucket] = []
+        while try stepRow(stmt, db) {
+            out.append(AggregateBucket(value: columnText(stmt, 0), count: Int(sqlite3_column_int64(stmt, 1))))
+        }
+        return out
+    }
+
     // MARK: - Paging
 
     func summaryPage(after: Date?, before: Date?, cursorDate: Date?, cursorID: UUID?, limit: Int) throws -> [EmailSummary] {

@@ -800,6 +800,44 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertFalse(vm.isLoading, "loading state settled")
     }
 
+    // MARK: - Stage 5 Wave 2A — DB-side aggregates
+
+    /// ArchiveAggregateService matches a Swift-computed oracle (total, with-
+    /// attachments, date range, top senders/subjects) — DB aggregates, no corpus.
+    func testArchiveAggregateService_matchesOracle() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-agg-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+
+        // Deterministic fixtures: sender cycles 0..4 (so sender k appears with a
+        // known frequency); every 3rd has an attachment; subjects repeat mod 7.
+        var fixtures: [MBOXParser.RawEmail] = []
+        for i in 0..<50 {
+            var e = makeEmailDated(mid: "<agg-\(i)@t>", subject: "Subject \(i % 7)", body: "b \(i)", dayOffset: i)
+            e.headers["From"] = "sender\(i % 5)@example.com"
+            if i % 3 == 0 { e.attachments = [AttachmentMetadata(filename: "a.pdf", mimeType: "application/pdf", size: 10)] }
+            fixtures.append(e)
+        }
+        try await store.insertBatch(fixtures, batchSize: 100)
+        let svc = ArchiveAggregateService(store: store)
+        let snap = try await svc.snapshot(topLimit: 5)
+
+        // Oracle.
+        XCTAssertEqual(snap.total, 50)
+        XCTAssertEqual(snap.withAttachments, fixtures.filter { !$0.attachments.isEmpty }.count)
+        let dates = fixtures.compactMap { MBOXParser.parseDate($0.headers["Date"]) }
+        XCTAssertEqual(snap.minDate, dates.min())
+        XCTAssertEqual(snap.maxDate, dates.max())
+
+        let senderCounts = Dictionary(grouping: fixtures, by: { $0.headers["From"] ?? "" }).mapValues { $0.count }
+        let topSenderOracle = senderCounts.max { $0.value < $1.value }!
+        XCTAssertEqual(snap.topSenders.first?.count, topSenderOracle.value, "top sender frequency matches oracle")
+        XCTAssertTrue(snap.topSenders.count <= 5, "bounded to topLimit")
+
+        let subjectCounts = Dictionary(grouping: fixtures, by: { $0.headers["Subject"] ?? "" }).mapValues { $0.count }
+        XCTAssertEqual(snap.topSubjects.first?.count, subjectCounts.values.max(), "top subject frequency matches oracle")
+    }
+
     // MARK: - Stage 5 Wave 1C/1E — detail hydration + selection scope
 
     /// ID→fullEmail detail: hydrates the right email, reports missing, and a
