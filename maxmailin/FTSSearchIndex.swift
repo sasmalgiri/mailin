@@ -168,7 +168,19 @@ actor FTSSearchIndex {
     }
     #endif
 
-    private init() {}
+    /// When non-nil, this instance stores its shards under an explicit
+    /// directory instead of the shared Application Support location. Set only
+    /// via `init(shardsDirectory:)` for isolated harness/test environments.
+    /// Release-safe (not gated behind DEBUG).
+    private let shardsDirectoryOverrideInstance: URL?
+
+    private init() { self.shardsDirectoryOverrideInstance = nil }
+
+    /// Isolated instance storing shards under `shardsDirectory` — never the
+    /// shared production index. Used by `MailinStorageEnvironment.disposable`.
+    init(shardsDirectory: URL) {
+        self.shardsDirectoryOverrideInstance = shardsDirectory
+    }
 
     /// Close every shard handle except the `keep` most-recently-accessed.
     /// Used by the memory-pressure handler to release SQLite page caches
@@ -638,6 +650,11 @@ actor FTSSearchIndex {
     // MARK: - URLs
 
     private func shardsDirectory() throws -> URL {
+        // Isolated instance (harness/test environment) — Release-safe.
+        if let override = shardsDirectoryOverrideInstance {
+            try? FileManager.default.createDirectory(at: override, withIntermediateDirectories: true)
+            return override
+        }
         #if DEBUG
         if let override = FTSSearchIndex.testShardsDirectoryOverride {
             try? FileManager.default.createDirectory(at: override, withIntermediateDirectories: true)

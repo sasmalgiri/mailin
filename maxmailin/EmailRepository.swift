@@ -74,6 +74,17 @@ protocol EmailRepository: Sendable {
 struct EmailStoreRepository: EmailRepository {
     static let shared = EmailStoreRepository()
 
+    /// The store + index this repository resolves against. Defaults to the
+    /// production singletons; `MailinStorageEnvironment.disposable` injects
+    /// isolated instances so a harness can never reach real user data.
+    let store: EmailStore
+    let fts: FTSSearchIndex
+
+    init(store: EmailStore = .shared, fts: FTSSearchIndex = .shared) {
+        self.store = store
+        self.fts = fts
+    }
+
     func page(query: EmailQuery, cursor: EmailPageCursor?, limit: Int) async throws -> EmailPage {
         let hasText = !(query.text?.isEmpty ?? true)
         let hasDates = query.afterDate != nil || query.beforeDate != nil
@@ -84,15 +95,15 @@ struct EmailStoreRepository: EmailRepository {
         }
         if hasText, let text = query.text {
             // Text query → FTS5 → bounded IDs → summaries (bm25 order).
-            let fts = FTSQueryBuilder.freeTextOrBoolean(text) ?? FTSQueryBuilder.escapeTerm(text)
-            let ids = (try? await FTSSearchIndex.shared.searchRaw(fts, limit: limit)) ?? []
-            let sums = try await EmailStore.shared.summaries(ids: ids)
+            let ftsQuery = FTSQueryBuilder.freeTextOrBoolean(text) ?? FTSQueryBuilder.escapeTerm(text)
+            let ids = (try? await fts.searchRaw(ftsQuery, limit: limit)) ?? []
+            let sums = try await store.summaries(ids: ids)
             let rank = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($1, $0) })
             let ordered = sums.sorted { (rank[$0.id] ?? .max) < (rank[$1.id] ?? .max) }
             return EmailPage(summaries: ordered, nextCursor: nil)
         }
         // Non-text: keyset page with the query's date bounds applied in the DB.
-        let sums = try await EmailStore.shared.summaryPage(
+        let sums = try await store.summaryPage(
             after: query.afterDate, before: query.beforeDate,
             cursorDate: cursor?.beforeDate, cursorID: cursor?.beforeID, limit: limit
         )
@@ -101,15 +112,15 @@ struct EmailStoreRepository: EmailRepository {
     }
 
     func summaries(ids: [EmailID]) async throws -> [EmailSummary] {
-        try await EmailStore.shared.summaries(ids: ids)
+        try await store.summaries(ids: ids)
     }
 
     func fullEmail(id: EmailID) async throws -> MBOXParser.RawEmail? {
-        try await EmailStore.shared.fullEmail(id: id)
+        try await store.fullEmail(id: id)
     }
 
     func exists(ids: [EmailID]) async throws -> Set<EmailID> {
-        try await EmailStore.shared.existingIDs(among: ids)
+        try await store.existingIDs(among: ids)
     }
 
     func count(query: EmailQuery) async throws -> Int {
@@ -120,10 +131,10 @@ struct EmailStoreRepository: EmailRepository {
         }
         if hasText, let text = query.text {
             // O(1)-memory FTS COUNT(*) — never materializes result IDs.
-            let fts = FTSQueryBuilder.freeTextOrBoolean(text) ?? FTSQueryBuilder.escapeTerm(text)
-            return try await FTSSearchIndex.shared.countRaw(fts)
+            let ftsQuery = FTSQueryBuilder.freeTextOrBoolean(text) ?? FTSQueryBuilder.escapeTerm(text)
+            return try await fts.countRaw(ftsQuery)
         }
-        return try await EmailStore.shared.count(after: query.afterDate, before: query.beforeDate)
+        return try await store.count(after: query.afterDate, before: query.beforeDate)
     }
 
     func delete(ids: [EmailID]) async throws {
@@ -131,7 +142,7 @@ struct EmailStoreRepository: EmailRepository {
         // FTS first, then store: if the store delete fails afterward, the
         // canonical row still exists and bounded reconcile restores search —
         // no ghost FTS row. Errors propagate (no silent try?).
-        for id in ids { try await FTSSearchIndex.shared.delete(id: id) }
-        try await EmailStore.shared.delete(ids: Set(ids))
+        for id in ids { try await fts.delete(id: id) }
+        try await store.delete(ids: Set(ids))
     }
 }

@@ -63,7 +63,21 @@ actor EmailStore {
 
     private var container: ModelContainer?
 
-    private init() {}
+    /// When non-nil, this instance persists to an explicit on-disk location
+    /// instead of the shared production store. Set only via
+    /// `init(storeDirectory:)` for isolated harness/test environments — the
+    /// production `.shared` instance always uses the default location.
+    private let storeURL: URL?
+
+    private init() { self.storeURL = nil }
+
+    /// Isolated instance persisting under `storeDirectory` — never the shared
+    /// production store. Used by `MailinStorageEnvironment.disposable(at:)` so
+    /// stress harnesses cannot touch real user data. Release-safe (not gated
+    /// behind DEBUG).
+    init(storeDirectory: URL) {
+        self.storeURL = storeDirectory.appendingPathComponent("mailin.store")
+    }
 
     #if DEBUG
     /// Test-only: build an in-memory store so unit tests don't touch the real
@@ -80,17 +94,31 @@ actor EmailStore {
         if let container { return container }
 
         let schema = Schema(versionedSchema: MailinSchemaV1.self)
-        #if DEBUG
-        let inMemory = EmailStore.testInMemory
-        #else
-        let inMemory = false
-        #endif
-        let config = ModelConfiguration(
-            schema: schema,
-            isStoredInMemoryOnly: inMemory,
-            allowsSave: true,
-            cloudKitDatabase: .none      // strictly offline, no iCloud sync
-        )
+        let config: ModelConfiguration
+        if let storeURL {
+            // Isolated environment: persist to the explicit disposable location.
+            try? FileManager.default.createDirectory(
+                at: storeURL.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            config = ModelConfiguration(
+                schema: schema,
+                url: storeURL,
+                allowsSave: true,
+                cloudKitDatabase: .none
+            )
+        } else {
+            #if DEBUG
+            let inMemory = EmailStore.testInMemory
+            #else
+            let inMemory = false
+            #endif
+            config = ModelConfiguration(
+                schema: schema,
+                isStoredInMemoryOnly: inMemory,
+                allowsSave: true,
+                cloudKitDatabase: .none      // strictly offline, no iCloud sync
+            )
+        }
         do {
             let c = try ModelContainer(
                 for: schema,

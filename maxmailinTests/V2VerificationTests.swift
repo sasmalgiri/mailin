@@ -443,6 +443,54 @@ final class V2VerificationTests: XCTestCase {
         await EmailStore.shared.resetForTesting()
     }
 
+    // MARK: - Stage 3.1.7 — injectable, Release-safe storage environment
+
+    /// Hard safety gate: a disposable environment must refuse to root itself on
+    /// (or overlapping) the real user's production storage directory, so a
+    /// stress harness can never touch production data. A temp root is allowed.
+    func testDisposableEnvironmentRefusesProductionPath() throws {
+        let prod = MailinStorageEnvironment.productionStorageDirectory
+
+        // Exactly the production directory → refused.
+        XCTAssertThrowsError(try MailinStorageEnvironment.disposable(at: prod)) {
+            XCTAssertTrue($0 is StorageEnvironmentError)
+        }
+        // A directory INSIDE production → refused.
+        XCTAssertThrowsError(
+            try MailinStorageEnvironment.disposable(at: prod.appendingPathComponent("fts5"))
+        )
+        // An ANCESTOR that contains production (Application Support) → refused.
+        XCTAssertThrowsError(
+            try MailinStorageEnvironment.disposable(at: prod.deletingLastPathComponent())
+        )
+        // A disjoint temp root → allowed.
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-gate-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        XCTAssertNoThrow(try MailinStorageEnvironment.disposable(at: temp))
+    }
+
+    /// Two disposable environments at different roots are fully isolated: data
+    /// written into one is invisible to the other (and neither touches the
+    /// shared production singletons).
+    func testDisposableEnvironmentsAreIsolatedByRoot() async throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-iso-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+
+        let envA = try MailinStorageEnvironment.disposable(at: base.appendingPathComponent("A"))
+        let envB = try MailinStorageEnvironment.disposable(at: base.appendingPathComponent("B"))
+
+        let fixtures = (0..<5).map { makeEmail(mid: "<iso-\($0)@t>", subject: "S\($0)", body: "body \($0)") }
+        try await envA.store.insertBatch(fixtures, sourceFileHash: nil, batchSize: 200, progress: nil)
+
+        let a = try await envA.repository.count(query: .all)
+        let b = try await envB.repository.count(query: .all)
+        XCTAssertEqual(a, 5, "environment A sees its own data")
+        XCTAssertEqual(b, 0, "environment B is isolated — sees nothing from A")
+        XCTAssertFalse(envA.isProduction, "disposable environment is never marked production")
+    }
+
     #if canImport(FoundationModels)
     /// The AI search tool retrieves via FTS5 → EmailStore (bounded evidence),
     /// not by scanning an in-memory `[RawEmail]` corpus.
