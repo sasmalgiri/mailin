@@ -85,8 +85,29 @@ Streaming mbox ingest, resumable checkpoints, keyset pagination, year-sharded FT
 
 ---
 
+## 6. Production Wiring Matrix — "class exists ≠ feature ships"
+
+The cure for the recurring "built but not wired" pattern: a claim ships only when the **production path** is wired, **bounded-memory**, and tested. Verified against `v2-honesty-pass`.
+
+| Capability | Engine exists | Prod path wired | Bounded memory | Fixture test | Scale test | Claim allowed |
+|---|---|---|---|---|---|---|
+| Streaming ingest | ✅ | ⚠️ UI retains whole `[RawEmail]` | ❌ | ✅ (mbox) | ❌ | ❌ strong scale claim |
+| FTS free-text | ✅ | ✅ | ✅ | ✅ | ❌ | ⚠️ (not "instant @ 10M") |
+| FTS Boolean | ✅ | ✅ | ✅ | ✅ | ❌ | ⚠️ |
+| Proximity (NEAR) | ✅ (SQLite) | ❌ in-RAM `allEmails` | ❌ | ❌ | ❌ | ❌ scale claim |
+| Regex | ✅ | ❌ in-RAM scan | ❌ | ❌ | ❌ | ❌ scale claim |
+| AI search/assistant | ✅ tools | ❌ in-RAM `hybridSearch`, whole `[RawEmail]` | ❌ | ❌ | ❌ | ❌ large-scale claim |
+| Keyset pagination | ✅ | ⚠️ partial (UI still array-backed) | ✅ (engine) | ❌ | ❌ | ⚠️ |
+| Migration (R1) | ✅ | ✅ | ✅ | ✅ | device pending | device gate |
+| Delete / reconcile | ✅ | ✅ | ⚠️ reconcile builds full `Set<UUID>` | ✅ | ❌ | ⚠️ |
+| Redaction (export) | ✅ | ✅ | ✅ | ✅ | n/a | ✅ (export-scoped) |
+| S/MIME | ✅ | ✅ | ✅ | ❌ | n/a | build-verified only |
+
+**Systemic rule:** a "scale" claim (millions of messages / instant / bounded memory) requires the **Bounded memory** *and* **Scale test** columns green — not just "Engine exists." See `V2_ROADMAP.md` for the completion plan that turns the ⚠️/❌ rows green.
+
 ## 5. Reference docs in repo
 - `V2_CLAIMS_AUDIT_AND_ACTION_PLAN.md` — full claims-vs-code audit + plan
 - `V2_IMPLEMENTATION_LOG.md` — chronological record of every change + corrections
 - `V2_SMOKE_TEST.md` — device test matrix + directional pass rule (S≥E)
+- `V2_ROADMAP.md` — bounded-memory + evidence-grounded-AI completion plan (v2.0 scope vs 2.1/2.2)
 - **PR #3** — four-tier ledger + "merge ≠ release" banner
