@@ -891,6 +891,64 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertEqual(derivedCount2, 24)
     }
 
+    // MARK: - Stage 5 Wave 2A — evidence + export services
+
+    /// Evidence service returns bounded, ordered references with excerpts drawn
+    /// from the real bodies; text queries retrieve matching evidence only.
+    func testArchiveEvidenceService_boundedAndGrounded() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-ev-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        var fixtures = (0..<20).map { makeEmailDated(mid: "<ev-\($0)@t>", subject: "S\($0)", body: "common body content number \($0)", dayOffset: $0) }
+        fixtures[3].plainBody = "zebraxyz secret marker three"
+        try await store.insertBatch(fixtures, batchSize: 100)
+        try await fts.indexBatch(fixtures)
+        let svc = ArchiveEvidenceService(archive: ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts)), excerptChars: 40)
+
+        let all = try await svc.evidence(for: .all, limit: 5)
+        XCTAssertEqual(all.count, 5, "bounded to limit")
+        XCTAssertTrue(all.allSatisfy { $0.excerpt.count <= 40 }, "excerpts bounded")
+        XCTAssertTrue(all.allSatisfy { !$0.evidenceID.isEmpty })
+
+        let hits = try await svc.evidence(for: EmailQuery(text: "zebraxyz"), limit: 10)
+        XCTAssertEqual(hits.count, 1, "text query retrieves only matching evidence")
+        XCTAssertEqual(hits.first?.id, fixtures[3].id)
+        XCTAssertTrue(hits.first?.excerpt.contains("zebraxyz") ?? false, "excerpt grounded in real body")
+    }
+
+    /// Export streams a whole-query selection to disk incrementally and the
+    /// output record count matches the selection (minus exclusions).
+    func testArchiveExportService_streamsSelection() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-exp-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        let fixtures = (0..<30).map { makeEmailDated(mid: "<exp-\($0)@t>", subject: "Subject, \($0)", body: "b \($0)", dayOffset: $0) }
+        try await store.insertBatch(fixtures, batchSize: 100)
+        let svc = ArchiveExportService(archive: ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts)))
+
+        // CSV, whole-query Select All minus 5 exclusions → 25 rows + header.
+        let excluded = Set(fixtures.prefix(5).map(\.id))
+        let csvURL = root.appendingPathComponent("out.csv")
+        var progressTicks = 0
+        let result = try await svc.export(scope: .query(.all, exclusions: excluded), format: .csvSummaries, to: csvURL, batchSize: 7) { _ in progressTicks += 1 }
+        XCTAssertEqual(result.recordsWritten, 25, "streamed exactly the selection minus exclusions")
+        XCTAssertTrue(result.completed)
+        XCTAssertGreaterThan(progressTicks, 1, "progress reported per batch (streamed, not one shot)")
+        let lines = try String(contentsOf: csvURL, encoding: .utf8).split(separator: "\n")
+        XCTAssertEqual(lines.count, 26, "header + 25 rows")
+        XCTAssertTrue(lines[0].hasPrefix("id,date,from,to,subject"))
+        // CSV quoting: subjects contain commas.
+        XCTAssertTrue(lines[1].contains("\"Subject,"), "comma-bearing field quoted")
+
+        // JSON export parses and has the right count.
+        let jsonURL = root.appendingPathComponent("out.json")
+        _ = try await svc.export(scope: .explicit(Set(fixtures.map(\.id))), format: .jsonSummaries, to: jsonURL)
+        let parsed = try JSONSerialization.jsonObject(with: Data(contentsOf: jsonURL)) as? [[String: Any]]
+        XCTAssertEqual(parsed?.count, 30, "valid JSON array of all 30")
+    }
+
     // MARK: - Stage 5 Wave 1C/1E — detail hydration + selection scope
 
     /// ID→fullEmail detail: hydrates the right email, reports missing, and a
