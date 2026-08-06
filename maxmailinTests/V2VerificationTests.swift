@@ -918,6 +918,68 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertTrue(injReport.answer.abstained, "injection content with no evidence is rejected, not obeyed")
     }
 
+    // MARK: - Stage 5 W3 / Engine cutover 3 — Full analytics (streaming, scoped)
+
+    /// The streaming, scope-aware ArchiveFullAnalyticsService.compute(scope:)
+    /// produces byte-identical analytics to the array oracle over the same
+    /// store data — exact tallies + order-independent NLP within the cap.
+    func testFullAnalytics_streamingEqualsArrayOracle() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-fana-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        let svc = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+
+        var fixtures: [MBOXParser.RawEmail] = []
+        for i in 0..<18 {
+            var e = makeEmailDated(mid: "<fa-\(i)@t>", subject: "S\(i)",
+                                   body: String(repeating: "word\(i % 3) ", count: (i % 4) + 1),
+                                   dayOffset: i)
+            e.headers["From"] = "sender\(i % 4)@corp\(i % 2).com"
+            e.headers["To"] = "team@corp\(i % 2).com, boss@corp0.com"
+            fixtures.append(e)
+        }
+        try await store.insertBatch(fixtures, batchSize: 100)
+
+        var collected: [MBOXParser.RawEmail] = []
+        for try await b in svc.streamFullEmails() { collected.append(contentsOf: b) }
+
+        let engine = ArchiveFullAnalyticsService(service: svc)
+        let oracle = await engine.compute(emails: collected)
+        let streamed = try await engine.compute(scope: .all, nlpCap: 5000)
+
+        // Exact tallies.
+        XCTAssertEqual(streamed.totalCount, oracle.totalCount)
+        XCTAssertEqual(streamed.sentCount, oracle.sentCount)
+        XCTAssertEqual(streamed.receivedCount, oracle.receivedCount)
+        XCTAssertEqual(streamed.totalAttachments, oracle.totalAttachments)
+        XCTAssertEqual(streamed.totalStorageMB, oracle.totalStorageMB, accuracy: 1e-9)
+        XCTAssertEqual(streamed.timelineBuckets.map { "\($0.date.timeIntervalSince1970):\($0.sent):\($0.received)" },
+                       oracle.timelineBuckets.map { "\($0.date.timeIntervalSince1970):\($0.sent):\($0.received)" })
+        XCTAssertEqual(streamed.topContacts.map { "\($0.address):\($0.count)" },
+                       oracle.topContacts.map { "\($0.address):\($0.count)" })
+        XCTAssertEqual(streamed.heatmapData.map { "\($0.dayOfWeek)-\($0.hour):\($0.count)" },
+                       oracle.heatmapData.map { "\($0.dayOfWeek)-\($0.hour):\($0.count)" })
+        XCTAssertEqual(Set(streamed.domainCounts.map { "\($0.domain):\($0.count)" }),
+                       Set(oracle.domainCounts.map { "\($0.domain):\($0.count)" }))
+        XCTAssertEqual(streamed.sizeDistribution.map { "\($0.label):\($0.count)" },
+                       oracle.sizeDistribution.map { "\($0.label):\($0.count)" })
+        XCTAssertEqual(Set(streamed.contactRelationships.map { "\($0.from)|\($0.to):\($0.count)" }),
+                       Set(oracle.contactRelationships.map { "\($0.from)|\($0.to):\($0.count)" }))
+        // NLP (order-independent aggregates) match within the cap.
+        XCTAssertEqual(streamed.avgSentiment, oracle.avgSentiment, accuracy: 1e-9)
+        XCTAssertEqual(streamed.sentimentLabel, oracle.sentimentLabel)
+        XCTAssertEqual(Set(streamed.topTopics.map { "\($0.word):\($0.count)" }),
+                       Set(oracle.topTopics.map { "\($0.word):\($0.count)" }))
+        XCTAssertEqual(streamed.highPriorityCount, oracle.highPriorityCount)
+        XCTAssertEqual(streamed.mediumPriorityCount, oracle.mediumPriorityCount)
+        XCTAssertEqual(streamed.piiCounts, oracle.piiCounts)
+        XCTAssertEqual(streamed.languages.count, oracle.languages.count)
+        // Sanity: the fixture actually produced content.
+        XCTAssertEqual(streamed.totalCount, 18)
+        XCTAssertFalse(streamed.topContacts.isEmpty)
+    }
+
     // MARK: - Stage 5 W3 / Engine cutover 2 — AnomalyDetectionEngine (streaming)
 
     /// The streaming, store-driven AnomalyDetectionEngine.detectAnomalies(from:)
