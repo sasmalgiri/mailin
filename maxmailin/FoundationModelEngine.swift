@@ -998,6 +998,35 @@ struct FoundationModelEngine {
         return finalContent
     }
 
+    /// Bounded most-recent working set streamed from the store — the corpus-free
+    /// basis for the analysis entry points below (insights/security/triage/etc.
+    /// are recency-representative; the char budget further trims downstream).
+    private static func boundedWorkingSet(cap: Int = 200) async -> [MBOXParser.RawEmail] {
+        var acc: [MBOXParser.RawEmail] = []
+        let stream = await ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
+        do { for try await b in stream { acc.append(contentsOf: b); if acc.count >= cap { break } } } catch { }
+        return Array(acc.prefix(cap))
+    }
+
+    // Corpus-free overloads — retrieve a bounded working set from the store
+    // instead of receiving the whole `[RawEmail]` archive.
+
+    static func summarize() async throws -> String {
+        try await summarize(emails: await boundedWorkingSet())
+    }
+    static func triageEmails(onUpdate: @MainActor @Sendable @escaping (String) -> Void) async throws -> String {
+        try await triageEmails(await boundedWorkingSet(), onUpdate: onUpdate)
+    }
+    static func generateInsights(onUpdate: @MainActor @Sendable @escaping (String) -> Void) async throws -> String {
+        try await generateInsights(await boundedWorkingSet(), onUpdate: onUpdate)
+    }
+    static func synthesizeThread(onUpdate: @MainActor @Sendable @escaping (String) -> Void) async throws -> String {
+        try await synthesizeThread(await boundedWorkingSet(), onUpdate: onUpdate)
+    }
+    static func securityBrief(onUpdate: @MainActor @Sendable @escaping (String) -> Void) async throws -> String {
+        try await securityBrief(await boundedWorkingSet(), onUpdate: onUpdate)
+    }
+
     // MARK: - Hybrid: NLP retrieval + Apple AI synthesis
 
     static func synthesizeFromNLPResults(

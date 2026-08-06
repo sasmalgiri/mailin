@@ -880,7 +880,7 @@ struct ITAdminAnalysisView: View {
             guard aiSecurityBrief.isEmpty else { return }
             isGeneratingBrief = true
             Task {
-                let result = try? await FoundationModelEngine.securityBrief(emails) { text in
+                let result = try? await FoundationModelEngine.securityBrief { text in
                     aiSecurityBrief = text
                 }
                 aiSecurityBrief = result ?? "Security brief unavailable."

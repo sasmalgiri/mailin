@@ -2183,19 +2183,20 @@ struct AIAssistantView: View {
                     group.addTask {
                         switch specialAction {
                         case .triage:
-                            return try await FoundationModelEngine.triageEmails(self.emails) { partial in
+                            // Bounded: engine retrieves its own working set from SQLite.
+                            return try await FoundationModelEngine.triageEmails { partial in
                                 self.streamingAnswer = partial
                             }
                         case .insights:
-                            return try await FoundationModelEngine.generateInsights(self.emails) { partial in
+                            return try await FoundationModelEngine.generateInsights { partial in
                                 self.streamingAnswer = partial
                             }
                         case .securityBrief:
-                            return try await FoundationModelEngine.securityBrief(self.emails) { partial in
+                            return try await FoundationModelEngine.securityBrief { partial in
                                 self.streamingAnswer = partial
                             }
                         case .threadStory:
-                            return try await FoundationModelEngine.synthesizeThread(self.emails) { partial in
+                            return try await FoundationModelEngine.synthesizeThread { partial in
                                 self.streamingAnswer = partial
                             }
                         case .general:

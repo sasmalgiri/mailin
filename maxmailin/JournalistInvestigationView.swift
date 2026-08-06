@@ -150,7 +150,7 @@ struct JournalistInvestigationView: View {
             guard aiNarrative.isEmpty else { return }
             isGeneratingNarrative = true
             Task {
-                let result = try? await FoundationModelEngine.generateInsights(emails) { text in
+                let result = try? await FoundationModelEngine.generateInsights { text in
                     aiNarrative = text
                 }
                 aiNarrative = result ?? "AI narrative unavailable."

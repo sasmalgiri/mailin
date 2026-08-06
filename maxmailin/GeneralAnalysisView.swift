@@ -114,7 +114,8 @@ struct GeneralAnalysisView: View {
         if #available(macOS 26, iOS 26, *) {
             guard !isGeneratingAI && aiNarrative.isEmpty else { return }
             isGeneratingAI = true
-            let result = try? await FoundationModelEngine.summarize(emails: emails)
+            // Bounded: engine retrieves its own working set from SQLite.
+            let result = try? await FoundationModelEngine.summarize()
             aiNarrative = result ?? ""
             isGeneratingAI = false
         }
