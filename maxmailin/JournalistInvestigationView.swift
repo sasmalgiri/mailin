@@ -139,7 +139,7 @@ struct JournalistInvestigationView: View {
 
     private func loadV4Data() async {
         if digestSections.isEmpty {
-            let sections = await AIDigestGenerator.generateDigest(emails: emails, period: .lastWeek)
+            let sections = await AIDigestGenerator.generateDigest(period: .lastWeek)
             digestSections = sections
         }
     }

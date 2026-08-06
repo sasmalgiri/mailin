@@ -52,6 +52,21 @@ struct AIDigestGenerator {
 
     // MARK: - Public Entry Point
 
+    /// Corpus-free digest for recent periods (today/week/month) — streams a
+    /// bounded most-recent working set from the store instead of receiving the
+    /// whole `[RawEmail]` archive, then filters to the period. For arbitrary
+    /// custom ranges use the array overload.
+    static func generateDigest(
+        period: TimePeriod,
+        customStart: Date? = nil,
+        customEnd: Date? = nil
+    ) async -> [DigestSection] {
+        var recent: [MBOXParser.RawEmail] = []
+        let stream = await ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
+        do { for try await b in stream { recent.append(contentsOf: b); if recent.count >= 1000 { break } } } catch { }
+        return await generateDigest(emails: Array(recent.prefix(1000)), period: period, customStart: customStart, customEnd: customEnd)
+    }
+
     static func generateDigest(
         emails: [MBOXParser.RawEmail],
         period: TimePeriod,

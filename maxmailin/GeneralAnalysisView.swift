@@ -123,7 +123,7 @@ struct GeneralAnalysisView: View {
 
         if digestSections.isEmpty {
             isGeneratingDigest = true
-            let sections = await AIDigestGenerator.generateDigest(emails: emails, period: .today)
+            let sections = await AIDigestGenerator.generateDigest(period: .today)
             digestSections = sections
             isGeneratingDigest = false
         }
