@@ -600,6 +600,40 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertTrue(violations.isEmpty, "Forbidden production pattern(s) reintroduced:\n" + violations.joined(separator: "\n"))
     }
 
+    // MARK: - Stage 5 W4 — privacy audit: bounded layer is on-device
+
+    /// The v2 bounded data / retrieval / AI-context / export layer must make NO
+    /// network calls — email content never leaves the device through these paths.
+    /// (Opt-in online features live in other files, e.g. CloudAIProvider/iCloud,
+    /// behind user toggles; this guards the always-on bounded core.)
+    func testPrivacyAudit_boundedLayerIsOnDevice() throws {
+        let src = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("maxmailin")
+        let onDeviceFiles = [
+            "ArchiveDataService.swift", "ArchiveRetrievalService.swift",
+            "ArchiveFullAnalytics.swift", "ArchiveTimelineService.swift",
+            "ArchiveAggregateService.swift", "ArchiveAnalyticsService.swift",
+            "ArchiveEvidenceService.swift", "ArchiveExportService.swift",
+            "SQLiteEmailStore.swift", "EmailRepository.swift", "FTSSearchIndex.swift",
+        ]
+        let networkTokens = ["URLSession", "URLRequest", ".dataTask", "https://", "http://", "import Network"]
+        var violations: [String] = []
+        for name in onDeviceFiles {
+            let url = src.appendingPathComponent(name)
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+                throw XCTSkip("missing \(name)")
+            }
+            for (i, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+                if line.contains("//") { continue }
+                for tok in networkTokens where line.contains(tok) {
+                    violations.append("\(name):\(i + 1)  \(tok)")
+                }
+            }
+        }
+        XCTAssertTrue(violations.isEmpty, "Network access in the on-device bounded layer:\n" + violations.joined(separator: "\n"))
+    }
+
     // MARK: - Stage 5C.0 — migration firewall ratchet guard
 
     /// The number of legacy whole-corpus references (parsedEmails / .allEmails /
@@ -916,6 +950,72 @@ final class V2VerificationTests: XCTestCase {
         let injAnswer = GroundedAnswer(summary: "", findings: [injection], limitations: [], abstained: false)
         let injReport = EvidenceVerifier.validate(injAnswer, retrieved: retrieved)
         XCTAssertTrue(injReport.answer.abstained, "injection content with no evidence is rejected, not obeyed")
+    }
+
+    // MARK: - Stage 5 W4 — production-path scale evidence (migrated engines)
+
+    /// Drives every migrated streaming engine + AI retrieval over a non-trivial
+    /// store and asserts each completes with BOUNDED output — the production-path
+    /// evidence that engine memory is independent of archive size. (The store
+    /// itself is separately proven to 1,000,000 in V2_SCALE_RESULTS.md.)
+    func testProductionPathScale_boundedEnginesOverLargeStore() async throws {
+        let n = 2_000
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-w4-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        let svc = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+
+        // Insert N emails in batches (bounded), spread across days/senders.
+        var batch: [MBOXParser.RawEmail] = []
+        for i in 0..<n {
+            var e = makeEmailDated(mid: "<w4-\(i)@t>", subject: "S\(i)",
+                                   body: (i % 10 == 0 ? "quarterly report figures" : "status \(i % 7)"),
+                                   dayOffset: i % 28)
+            e.headers["From"] = "sender\(i % 25)@corp\(i % 3).com"
+            e.headers["To"] = "team@corp\(i % 3).com"
+            batch.append(e)
+            if batch.count == 500 { try await store.insertBatch(batch, batchSize: 500); try await fts.indexBatch(batch); batch.removeAll(keepingCapacity: true) }
+        }
+        if !batch.isEmpty { try await store.insertBatch(batch, batchSize: 500); try await fts.indexBatch(batch) }
+
+        let total = try await svc.count()
+        XCTAssertEqual(total, n, "all rows stored")
+
+        // 1. Bounded FTS retrieval.
+        let hits = try await ArchiveRetrievalService(data: svc, fts: fts).retrieve("report", limit: 15)
+        XCTAssertLessThanOrEqual(hits.count, 15)
+        XCTAssertFalse(hits.isEmpty)
+
+        // 2. Predictive — bounded working set.
+        let pred = try await PredictiveEngine.analyze(from: svc, cap: 500)
+        XCTAssertLessThanOrEqual(pred.urgentEmails.count, 500)
+
+        // 3. Anomaly — archive-wide; affected-id lists capped.
+        let anomalies = try await AnomalyDetectionEngine.detectAnomalies(from: svc)
+        XCTAssertTrue(anomalies.allSatisfy { $0.affectedEmails.count <= AnomalyDetectionEngine.maxAffectedIDsPerAnomaly })
+
+        // 4. Full analytics — bounded top-N lists.
+        let analytics = try await ArchiveFullAnalyticsService(service: svc).compute(scope: .all)
+        XCTAssertEqual(analytics.totalCount, n)
+        XCTAssertLessThanOrEqual(analytics.topContacts.count, 10)
+        XCTAssertLessThanOrEqual(analytics.domainCounts.count, 15)
+
+        // 5. Communication patterns — completes over the archive.
+        let comm = try await CommunicationPatternAnalyzer.analyze(from: svc, senderEmail: "sender0@corp0.com")
+        XCTAssertEqual(comm.hourly.count, 24)
+        XCTAssertEqual(comm.weekday.count, 7)
+
+        // 6. Timeline — day buckets bounded by distinct days (<= 28 here).
+        let tl = try await ArchiveTimelineService(service: svc).load(scope: .all, timezone: TimeZone(identifier: "UTC")!)
+        XCTAssertEqual(tl.totalEmails, n)
+        XCTAssertLessThanOrEqual(tl.days.count, 28)
+
+        // 7. Executive dashboard — 12 rolling weeks, top-5 contacts.
+        let dash = try await ExecutiveDashboardView.buildDashboardData(from: svc)
+        XCTAssertEqual(dash.totalEmails, n)
+        XCTAssertLessThanOrEqual(dash.weeklyVolume.count, 12)
+        XCTAssertLessThanOrEqual(dash.topContacts.count, 5)
     }
 
     // MARK: - Stage 5 W3 / AI substrate — bounded FTS5-backed retrieval
