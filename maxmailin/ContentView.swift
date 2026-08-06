@@ -770,7 +770,7 @@ struct ContentView: View {
                 .navigationTitle("Executive Dashboard")
 
         case .reportBuilder:
-            ReportBuilderView(emails: hubCurrentEmails)
+            ReportBuilderView()
                 .navigationTitle("Report Builder")
         case .batchOperations:
             BatchOperationsView(
@@ -4601,7 +4601,7 @@ struct V9SheetsModifier: ViewModifier {
                     .resizableSheet()
             }
             .sheet(isPresented: $appState.showReportBuilder) {
-                ReportBuilderView(emails: currentEmails, isPresented: $appState.showReportBuilder)
+                ReportBuilderView(isPresented: $appState.showReportBuilder)
                     .resizableSheet()
             }
             .sheet(isPresented: $appState.showKeywordMonitor) {

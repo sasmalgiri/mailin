@@ -250,11 +250,17 @@ struct DuplicateManagerView: View {
 
     private func scanForDuplicates() {
         isScanning = true
-        let emails = model.allEmails
         let includeNear = showNearDuplicates
         let threshold = similarityThreshold
 
         Task.detached(priority: .utility) {
+            // v2: scan a bounded working set from the store (the store already
+            // enforces message-id dedup at insert; this surfaces near-dupes and
+            // content-hash groups over a bounded window).
+            var emails: [MBOXParser.RawEmail] = []
+            let stream = await ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
+            do { for try await b in stream { emails.append(contentsOf: b); if emails.count >= 5000 { break } } } catch { }
+            emails = Array(emails.prefix(5000))
             let exactGroups = Self.findExactDuplicates(in: emails)
             let nearGroups: [[MBOXParser.RawEmail]]
             if includeNear {
