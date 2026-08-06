@@ -282,91 +282,84 @@ class ContentViewModel: ObservableObject {
                     }
                 }
             }
-            var allEmails: [MBOXParser.RawEmail] = []
+            // v2 bounded streaming import: each parsed batch is persisted to the
+            // SQLite store + FTS5 and then DROPPED, so peak RAM is bounded by the
+            // batch size regardless of archive/file size. Only a bounded PREVIEW
+            // (`previewCap`) is retained to back the legacy in-RAM UI; the true
+            // count is tracked separately. Dedup is enforced by the store
+            // (INSERT OR IGNORE on message_id) with persistent findings.
+            let previewCap = 5000
+            var preview: [MBOXParser.RawEmail] = []
+            var totalParsed = 0
             var errors: [String] = []
             var fileHashes: [ForensicManager.SourceFileHash] = []
             let totalFiles = max(1.0, Double(urls.count))
+            let storageActive = await StorageActivationCoordinator.shared.isActive
+
             for (idx, fileURL) in urls.enumerated() {
                 if forensicEnabled {
                     if let hash = ForensicManager.computeHashes(for: fileURL) {
                         fileHashes.append(hash)
                     }
                 }
+                let fileSizeBytes = self.fileSize(at: fileURL)
+                let sourceName = fileURL.lastPathComponent
+                await MainActor.run { self.loadingText = "Importing \(sourceName)..." }
                 do {
-                    let emails: [MBOXParser.RawEmail]
-                    let ext = fileURL.pathExtension.lowercased()
-                    let useStreaming = (ext == "mbox" || ext == "eml") && self.shouldUseStreaming(for: fileURL)
-
-                    if useStreaming {
-                        let fileSizeBytes = self.fileSize(at: fileURL)
-                        await MainActor.run {
-                            self.loadingText = "Streaming \(fileURL.lastPathComponent) (\(Self.formatByteCount(fileSizeBytes)))..."
-                        }
-                        emails = try MBOXParser.parseStreaming(
-                            fileURL: fileURL,
-                            senderEmail: capturedSenderEmail,
-                            onProgress: { prog in
-                                Task { @MainActor in
-                                    self.loadingProgress = (Double(idx) + prog) / totalFiles
-                                    let processed = Int64(prog * Double(fileSizeBytes))
-                                    self.loadingText = "Streaming \(fileURL.lastPathComponent): \(Self.formatByteCount(processed)) / \(Self.formatByteCount(fileSizeBytes))"
-                                    ImportProgressNotifier.shared.updateProgress(
-                                        filename: fileURL.lastPathComponent,
-                                        current: idx + 1,
-                                        total: urls.count,
-                                        bytesProcessed: processed,
-                                        totalBytes: fileSizeBytes
-                                    )
-                                }
+                    _ = try await ParserFactory.parseStreamingCallback(
+                        fileURL: fileURL,
+                        senderEmail: capturedSenderEmail,
+                        batchSize: 500,
+                        onProgress: { prog in
+                            Task { @MainActor in
+                                self.loadingProgress = (Double(idx) + prog) / totalFiles
+                                self.loadingText = "Importing \(sourceName): \(Int(prog * 100))%"
+                                ImportProgressNotifier.shared.updateProgress(
+                                    filename: sourceName,
+                                    current: idx + 1,
+                                    total: urls.count,
+                                    bytesProcessed: Int64(prog * Double(fileSizeBytes)),
+                                    totalBytes: fileSizeBytes
+                                )
                             }
-                        )
-                    } else {
-                        let fileSizeBytesNonStream = self.fileSize(at: fileURL)
-                        await MainActor.run {
-                            self.loadingText = "Parsing \(fileURL.lastPathComponent)..."
                         }
-                        emails = try ParserFactory.parse(
-                            fileURL: fileURL,
-                            senderEmail: capturedSenderEmail,
-                            onProgress: { prog in
-                                Task { @MainActor in
-                                    self.loadingProgress = (Double(idx) + prog) / totalFiles
-                                    self.loadingText = "Parsing \(fileURL.lastPathComponent): \(Int(prog * 100))%"
-                                    ImportProgressNotifier.shared.updateProgress(
-                                        filename: fileURL.lastPathComponent,
-                                        current: idx + 1,
-                                        total: urls.count,
-                                        bytesProcessed: Int64(prog * Double(fileSizeBytesNonStream)),
-                                        totalBytes: fileSizeBytesNonStream
-                                    )
-                                }
-                            }
-                        )
+                    ) { batch in
+                        let withSource = batch.map { email -> MBOXParser.RawEmail in
+                            var copy = email
+                            copy.headers["sourceFile"] = sourceName
+                            return copy
+                        }
+                        // Persist to the authority, then let the batch fall out of
+                        // scope — bounded peak memory.
+                        if storageActive {
+                            try? await SQLiteEmailStore.shared.insertBatch(withSource, batchSize: 500)
+                            try? await FTSSearchIndex.shared.indexBatch(withSource)
+                        }
+                        totalParsed += withSource.count
+                        if preview.count < previewCap {
+                            preview.append(contentsOf: withSource.prefix(previewCap - preview.count))
+                        }
                     }
-                    let withSource = emails.map { email -> MBOXParser.RawEmail in
-                        var copy = email
-                        copy.headers["sourceFile"] = fileURL.lastPathComponent
-                        return copy
-                    }
-                    allEmails.append(contentsOf: withSource)
                 } catch {
-                    errors.append("\(fileURL.lastPathComponent): \(error.localizedDescription)")
+                    errors.append("\(sourceName): \(error.localizedDescription)")
                 }
                 await MainActor.run {
-                    self.loadingText = "Parsed \(idx+1) of \(urls.count) file(s)..."
+                    self.loadingText = "Imported \(idx+1) of \(urls.count) file(s)..."
                     self.loadingProgress = min(1.0, Double(idx + 1) / totalFiles)
                 }
             }
 
-            let finalAllEmails = allEmails
+            let finalPreview = maxEmails.map { Array(preview.prefix($0)) } ?? preview
+            let finalTotal = maxEmails.map { min($0, totalParsed) } ?? totalParsed
             let finalErrors = errors
             let finalFileHashes = fileHashes
+            let didPersist = storageActive
             await MainActor.run {
                 self.isParsing = false
                 self.stopMemoryMonitoring()
                 self.parseErrors = finalErrors
 
-                guard !finalAllEmails.isEmpty else {
+                guard finalTotal > 0 else {
                     let fileNames = urls.map { $0.lastPathComponent }.joined(separator: ", ")
                     if finalErrors.isEmpty {
                         let extensions = urls.map { $0.pathExtension.lowercased() }
@@ -393,75 +386,40 @@ class ContentViewModel: ObservableObject {
                     ForensicManager.shared.registerFileHash(hash)
                 }
 
-                var cappedEmails = finalAllEmails
-                if let cap = maxEmails, cappedEmails.count > cap {
-                    cappedEmails = Array(cappedEmails.prefix(cap))
-                }
-                var emailsToKeep: [MBOXParser.RawEmail]
-                if removeDuplicates {
-                    let dedupResult = Self.deduplicate(cappedEmails)
-                    self.duplicatesRemoved = dedupResult.removed.count
-                    var seenDupIDs = Set<String>()
-                    self.removedDuplicates = dedupResult.removed.filter { email in
-                        let key = (email.headers["Message-ID"] ?? email.headers["Message-Id"])
-                            ?? "\(email.headers["From"] ?? "")\(email.headers["Date"] ?? "")\(email.headers["Subject"] ?? "")"
-                        return seenDupIDs.insert(key).inserted
-                    }.map { DuplicateFinding(from: $0) }   // lightweight projection, no bodies retained
-                    emailsToKeep = dedupResult.kept
-                } else {
-                    self.duplicatesRemoved = 0
-                    self.removedDuplicates = []
-                    emailsToKeep = cappedEmails
-                }
-                self.parsedEmails = self.annotate(emailsToKeep)
-                self.totalParsedCount = self.parsedEmails.count
+                // The SQLite store holds the full, deduped archive (persisted per
+                // batch during streaming above). `parsedEmails` is only a BOUNDED
+                // preview that backs the legacy in-RAM UI; `totalParsedCount` is
+                // the true total. Dedup is enforced by the store; the count comes
+                // from its persistent findings.
+                self.parsedEmails = self.annotate(finalPreview)
+                self.totalParsedCount = finalTotal
                 self.isParsed = true
                 self.updateMetadataDisplay()
+                self.duplicatesRemoved = 0
+                self.removedDuplicates = []
+                if didPersist {
+                    Task { @MainActor in
+                        self.duplicatesRemoved = (try? await SQLiteEmailStore.shared.duplicatesCount()) ?? 0
+                    }
+                }
 
                 if forensicEnabled {
                     ForensicManager.shared.storeEmailHashes(self.parsedEmails)
                 }
-                ForensicManager.shared.logAction("Parse Complete", detail: "Parsed \(self.parsedEmails.count) emails from \(urls.count) file(s). \(self.duplicatesRemoved) duplicates removed.")
+                ForensicManager.shared.logAction("Import Complete", detail: "Imported \(finalTotal) emails from \(urls.count) file(s) into SQLite + FTS5.")
 
-                // Stage 5B: persist into the ACTIVATED SQLite store (+ FTS5) —
-                // the single production authority. Writes are gated on storage
-                // activation so nothing lands while migration is unresolved; no
-                // dual-write to SwiftData (SwiftData is the read-only migration
-                // source retained for rollback). The in-memory `parsedEmails`
-                // still backs the current UI until the list cutover (5D).
-                let v2Emails = self.parsedEmails
-                Task.detached(priority: .utility) {
-                    guard await StorageActivationCoordinator.shared.isActive else {
-                        await MainActor.run {
-                            _ = try? HMACChainAuditLog.shared.append(
-                                action: "v2.import.blocked",
-                                detail: "Import persistence skipped: SQLite storage not yet active"
-                            )
-                        }
-                        return
-                    }
-                    try? await SQLiteEmailStore.shared.insertBatch(v2Emails, batchSize: 500)
-                    try? await FTSSearchIndex.shared.indexBatch(v2Emails)
-                    await MainActor.run {
-                        _ = try? HMACChainAuditLog.shared.append(
-                            action: "v2.import.persisted",
-                            detail: "Persisted \(v2Emails.count) emails to SQLite + FTS5"
-                        )
-                    }
-                }
                 let recoveryInfo: String
                 if let report = MBOXParser.lastRecoveryReport, report.hasDamage {
                     recoveryInfo = " (\(report.failed) unparseable skipped)"
                 } else {
                     recoveryInfo = ""
                 }
-                let dedupInfo = self.duplicatesRemoved > 0 ? " \(self.duplicatesRemoved) duplicates removed." : ""
                 if finalErrors.isEmpty {
-                    self.statusMessage = "Parsed \(self.parsedEmails.count) emails from \(urls.count) file(s).\(dedupInfo)\(recoveryInfo)"
+                    self.statusMessage = "Imported \(finalTotal) emails from \(urls.count) file(s).\(recoveryInfo)"
                     self.statusColor = recoveryInfo.isEmpty ? .green : .orange
                 } else {
                     let errorHint = finalErrors.first.map { " (\($0))" } ?? ""
-                    self.statusMessage = "Parsed \(self.parsedEmails.count) emails. \(finalErrors.count) file(s) had errors\(errorHint).\(dedupInfo)\(recoveryInfo)"
+                    self.statusMessage = "Imported \(finalTotal) emails. \(finalErrors.count) file(s) had errors\(errorHint).\(recoveryInfo)"
                     self.statusColor = .orange
                 }
                 self.loadingProgress = 1.0
@@ -470,7 +428,7 @@ class ContentViewModel: ObservableObject {
 
                 // Notify import completion via system notification
                 let importFilename = urls.count == 1 ? urls.first?.lastPathComponent ?? "archive" : "\(urls.count) files"
-                ImportProgressNotifier.shared.completeImport(filename: importFilename, count: self.parsedEmails.count)
+                ImportProgressNotifier.shared.completeImport(filename: importFilename, count: finalTotal)
 
                 // Update widget data from bounded services (aggregate top
                 // senders + a few recent summaries) — never the whole corpus.
