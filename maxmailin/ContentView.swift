@@ -748,7 +748,7 @@ struct ContentView: View {
             )
             .navigationTitle("Topic Clusters")
         case .timeline:
-            EmailTimelineView(emails: hubCurrentEmails)
+            EmailTimelineView()
                 .navigationTitle("Timeline")
         case .communicationPatterns:
             CommunicationPatternsView(senderEmail: viewModel.senderEmail)
