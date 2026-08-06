@@ -918,6 +918,33 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertTrue(injReport.answer.abstained, "injection content with no evidence is rejected, not obeyed")
     }
 
+    // MARK: - Stage 5 W3 / Phase 10 — persistent dedup findings
+
+    /// Exact duplicates (same Message-ID) dropped at import are recorded as
+    /// persistent findings; distinct rows stored, findings pageable.
+    func testPersistentDedupFindings() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-dupfind-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+
+        // 8 distinct + 3 dup Message-IDs (of the first 3) = 11 imported, 8 stored, 3 findings.
+        var fixtures = (0..<8).map { makeEmail(mid: "<f-\($0)@t>", subject: "S\($0)", body: "b \($0)") }
+        fixtures += (0..<3).map { makeEmail(mid: "<f-\($0)@t>", subject: "dup\($0)", body: "dup") }
+        try await store.insertBatch(fixtures, batchSize: 100)
+
+        let stored = try await store.totalCount()
+        XCTAssertEqual(stored, 8, "dedup kept 8 distinct")
+        let dupCount = try await store.duplicatesCount()
+        XCTAssertEqual(dupCount, 3, "3 exact-duplicate findings recorded")
+        let recent = try await store.recentDuplicates(limit: 10)
+        XCTAssertEqual(recent.count, 3)
+        XCTAssertTrue(recent.allSatisfy { ($0.messageID ?? "").hasPrefix("<f-") }, "findings carry the duplicated Message-ID")
+
+        try await store.clearAll()
+        let afterClear = try await store.duplicatesCount()
+        XCTAssertEqual(afterClear, 0, "clearAll wipes findings")
+    }
+
     // MARK: - Stage 5 W3 / Phase 12 — import receipt
 
     /// A finalized receipt verifies; persists + reloads intact; any tamper is

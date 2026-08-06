@@ -49,8 +49,6 @@
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		C3F77F722E21F62600351625 /* maxmailin */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = maxmailin;
 			sourceTree = "<group>";
 		};
@@ -97,7 +95,6 @@
 				6C03A43C05B823F769A9169F /* SmokeTests.swift */,
 				B137BCFD52463D2F34C4DAE4 /* V2VerificationTests.swift */,
 			);
-			name = maxmailinTests;
 			path = maxmailinTests;
 			sourceTree = SOURCE_ROOT;
 		};

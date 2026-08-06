@@ -144,8 +144,46 @@ actor SQLiteEmailStore: EmailArchiveStore {
         try exec(handle, "CREATE INDEX IF NOT EXISTS idx_derived_topic ON derived(topic);")
         try exec(handle, "CREATE INDEX IF NOT EXISTS idx_derived_thread ON derived(thread_id);")
         try exec(handle, "CREATE INDEX IF NOT EXISTS idx_derived_rev ON derived(corpus_revision);")
+        // Persistent exact-dedup findings (Phase 10): rows dropped at import time
+        // because their Message-ID already existed.
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS duplicates(
+                id           INTEGER PRIMARY KEY,
+                duplicate_id TEXT,
+                message_id   TEXT,
+                source_hash  TEXT,
+                created_at   INTEGER NOT NULL DEFAULT 0
+            );
+        """)
         self.db = handle
         return handle
+    }
+
+    // MARK: - Duplicate findings (Phase 10)
+
+    struct StoredDuplicate: Sendable, Equatable {
+        let duplicateID: String
+        let messageID: String?
+        let sourceHash: String?
+    }
+
+    func duplicatesCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM duplicates;")
+    }
+
+    func recentDuplicates(limit: Int) throws -> [StoredDuplicate] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT duplicate_id, message_id, source_hash FROM duplicates ORDER BY id DESC LIMIT ?;")
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        var out: [StoredDuplicate] = []
+        while try stepRow(stmt, db) {
+            out.append(StoredDuplicate(duplicateID: columnText(stmt, 0),
+                                       messageID: columnTextOptional(stmt, 1),
+                                       sourceHash: columnTextOptional(stmt, 2)))
+        }
+        return out
     }
 
     // MARK: - Corpus revision
@@ -297,7 +335,11 @@ actor SQLiteEmailStore: EmailArchiveStore {
             INSERT OR IGNORE INTO email_bodies(id, plain, html, raw, headers_json)
             VALUES (?,?,?,?,?);
         """)
-        defer { sqlite3_finalize(insertEmail); sqlite3_finalize(insertBody) }
+        let insertDup = try prepare(db, """
+            INSERT INTO duplicates(duplicate_id, message_id, source_hash, created_at)
+            VALUES (?,?,?,?);
+        """)
+        defer { sqlite3_finalize(insertEmail); sqlite3_finalize(insertBody); sqlite3_finalize(insertDup) }
 
         for chunk in emails.chunked(into: max(1, batchSize)) {
             try exec(db, "BEGIN TRANSACTION;")
@@ -339,6 +381,15 @@ actor SQLiteEmailStore: EmailArchiveStore {
                         guard sqlite3_step(insertBody) == SQLITE_DONE else {
                             throw SQLiteStoreError.step(lastError(db))
                         }
+                    } else if let mid {
+                        // INSERT OR IGNORE skipped a row with a present Message-ID
+                        // → exact duplicate. Record the finding (Phase 10).
+                        sqlite3_reset(insertDup); sqlite3_clear_bindings(insertDup)
+                        bindText(insertDup, 1, idStr)
+                        bindText(insertDup, 2, mid)
+                        bindTextOrNull(insertDup, 3, sourceFileHash)
+                        sqlite3_bind_int64(insertDup, 4, dateInt)
+                        _ = sqlite3_step(insertDup)   // best-effort; never fails the import
                     }
                 }
                 try exec(db, "COMMIT;")
@@ -605,6 +656,8 @@ actor SQLiteEmailStore: EmailArchiveStore {
         let db = try ensureDB()
         try exec(db, "DELETE FROM emails;")
         try exec(db, "DELETE FROM email_bodies;")
+        try exec(db, "DELETE FROM derived;")
+        try exec(db, "DELETE FROM duplicates;")
     }
 
     /// Fold the WAL back into the main db file. Keeps the on-disk footprint
