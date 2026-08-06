@@ -869,7 +869,7 @@ struct ContentView: View {
             ReviewBatchPanelView(emails: hubCurrentEmails, manager: reviewBatchManager)
                 .navigationTitle("Review Batches")
         case .custodianPanel:
-            CustodianPanelView(emails: hubCurrentEmails, manager: custodianManager)
+            CustodianPanelView(manager: custodianManager)
                 .navigationTitle("Custodian Panel")
         case .workspaceManager:
             WorkspaceManagerView()
@@ -4361,7 +4361,7 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
                     #endif
             }
             .sheet(isPresented: $appState.showCustodianPanel) {
-                CustodianPanelView(emails: currentEmails, manager: custodianManager, isPresented: $appState.showCustodianPanel)
+                CustodianPanelView(manager: custodianManager, isPresented: $appState.showCustodianPanel)
                     #if os(macOS)
                     .frame(minWidth: 460, minHeight: 340)
                     #else
