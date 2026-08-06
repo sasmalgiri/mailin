@@ -918,6 +918,40 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertTrue(injReport.answer.abstained, "injection content with no evidence is rejected, not obeyed")
     }
 
+    // MARK: - Stage 5 W3 / Engine cutover 5 — Timeline (streaming day buckets)
+
+    /// The streaming ArchiveTimelineService.load(scope:) produces identical day
+    /// buckets + hour histogram to the array oracle over the same store data.
+    func testTimeline_streamingEqualsArrayOracle() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-tl-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        let svc = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+        let tz = TimeZone(identifier: "UTC")!
+
+        var fixtures: [MBOXParser.RawEmail] = []
+        for i in 0..<25 {
+            // spread across days (some share a day) to exercise bucketing
+            fixtures.append(makeEmailDated(mid: "<tl-\(i)@t>", subject: "S\(i)", body: "b", dayOffset: i % 12))
+        }
+        try await store.insertBatch(fixtures, batchSize: 100)
+
+        var collected: [MBOXParser.RawEmail] = []
+        for try await b in svc.streamFullEmails() { collected.append(contentsOf: b) }
+
+        let engine = ArchiveTimelineService(service: svc)
+        let oracle = await engine.load(days: collected, timezone: tz)
+        let streamed = try await engine.load(scope: .all, timezone: tz)
+
+        XCTAssertEqual(streamed.totalEmails, oracle.totalEmails)
+        XCTAssertEqual(streamed.hourCounts, oracle.hourCounts)
+        XCTAssertEqual(streamed.days.map { "\($0.day.timeIntervalSince1970):\($0.sent):\($0.received)" },
+                       oracle.days.map { "\($0.day.timeIntervalSince1970):\($0.sent):\($0.received)" })
+        XCTAssertEqual(streamed.totalEmails, 25)
+        XCTAssertFalse(streamed.days.isEmpty)
+    }
+
     // MARK: - Stage 5 W3 / Engine cutover 4 — Communication patterns (streaming)
 
     /// The streaming CommunicationPatternAnalyzer.analyze(from:) matches the
