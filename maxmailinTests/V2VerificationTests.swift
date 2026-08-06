@@ -952,6 +952,48 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertTrue(injReport.answer.abstained, "injection content with no evidence is rejected, not obeyed")
     }
 
+    // MARK: - Stage 5 W3 — forensic completeness: archive-wide privilege classification
+
+    /// LegalAnalysisFeatures.classifyPrivilege(from:) streams the whole archive
+    /// and classifies EVERY email — matching the array oracle over the same
+    /// store data (per-email, so identical), and bounded by `cap`.
+    func testLegalPrivilege_archiveWideStreamingMatchesOracle() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-priv-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        let svc = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+
+        var fixtures: [MBOXParser.RawEmail] = []
+        for i in 0..<24 {
+            let privileged = (i % 4 == 0)
+            fixtures.append(makeEmailDated(
+                mid: "<pv-\(i)@t>",
+                subject: privileged ? "Attorney-Client Privileged: legal advice" : "Weekly note \(i)",
+                body: privileged ? "Confidential communication with our attorney regarding legal counsel." : "routine \(i)",
+                dayOffset: i))
+        }
+        try await store.insertBatch(fixtures, batchSize: 100)
+
+        var collected: [MBOXParser.RawEmail] = []
+        for try await b in svc.streamFullEmails() { collected.append(contentsOf: b) }
+
+        let oracle = LegalAnalysisFeatures.classifyPrivilege(emails: collected)
+        let streamed = try await LegalAnalysisFeatures.classifyPrivilege(from: svc)
+
+        XCTAssertEqual(streamed.count, oracle.count, "every email classified")
+        XCTAssertEqual(streamed.count, 24)
+        func key(_ c: LegalAnalysisFeatures.PrivilegeClassification) -> String {
+            "\(c.email.id)|\(c.classification.rawValue)|\(String(format: "%.4f", c.score))"
+        }
+        XCTAssertEqual(Set(streamed.map(key)), Set(oracle.map(key)),
+                       "streaming classification == array oracle")
+
+        // Cap enforcement.
+        let capped = try await LegalAnalysisFeatures.classifyPrivilege(from: svc, cap: 10)
+        XCTAssertEqual(capped.count, 10)
+    }
+
     // MARK: - Stage 5 W4 — production-path scale evidence (migrated engines)
 
     /// Drives every migrated streaming engine + AI retrieval over a non-trivial
