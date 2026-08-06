@@ -885,7 +885,6 @@ struct ContentView: View {
                 .navigationTitle("Investigation Workbench")
         case .personalOrganizer:
             PersonalEmailOrganizerView(
-                emails: hubCurrentEmails,
                 onSkipToInbox: { sidebarSelection = .emailInbox }
             )
             .navigationTitle("Personal Organizer")
