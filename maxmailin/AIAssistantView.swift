@@ -2200,7 +2200,8 @@ struct AIAssistantView: View {
                                 self.streamingAnswer = partial
                             }
                         case .general:
-                            return try await FoundationModelEngine.respondSmart(to: query, emails: self.emails) { partial in
+                            // Bounded: orchestrator gets query-relevant retrieval from SQLite.
+                            return try await FoundationModelEngine.respondSmart(to: query) { partial in
                                 self.streamingAnswer = partial
                             } onConfirmAction: { description in
                                 await withCheckedContinuation { continuation in

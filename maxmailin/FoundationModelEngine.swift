@@ -4787,6 +4787,18 @@ struct FoundationModelEngine {
 
     // MARK: - respondSmart (unified entry point — all 7 improvements integrated)
 
+    /// Corpus-free orchestrated answer — feeds the orchestrator the bounded,
+    /// query-relevant retrieval from the store (<=50) instead of the whole
+    /// archive. Peak memory independent of archive size.
+    static func respondSmart(
+        to query: String,
+        onUpdate: @MainActor @Sendable @escaping (String) -> Void,
+        onConfirmAction: (@MainActor @Sendable (String) async -> Bool)? = nil
+    ) async throws -> String {
+        let (emails, _) = await retrieveContext(query: query, contextLimit: 50)
+        return try await respondSmart(to: query, emails: emails, onUpdate: onUpdate, onConfirmAction: onConfirmAction)
+    }
+
     static func respondSmart(
         to query: String,
         emails: [MBOXParser.RawEmail],
