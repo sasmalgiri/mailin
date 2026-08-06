@@ -751,7 +751,7 @@ struct ContentView: View {
             EmailTimelineView(emails: hubCurrentEmails)
                 .navigationTitle("Timeline")
         case .communicationPatterns:
-            CommunicationPatternsView(emails: hubCurrentEmails, senderEmail: viewModel.senderEmail)
+            CommunicationPatternsView(senderEmail: viewModel.senderEmail)
                 .navigationTitle("Communication Patterns")
         case .relationshipGraph:
             RelationshipGraphView(emails: hubCurrentEmails, senderEmail: viewModel.senderEmail)
@@ -4603,7 +4603,7 @@ struct V9SheetsModifier: ViewModifier {
                     .resizableSheet()
             }
             .sheet(isPresented: $appState.showCommunicationPatterns) {
-                CommunicationPatternsView(emails: currentEmails, senderEmail: senderEmail, isPresented: $appState.showCommunicationPatterns)
+                CommunicationPatternsView(senderEmail: senderEmail, isPresented: $appState.showCommunicationPatterns)
                     .resizableSheet()
             }
             .modifier(V9UtilitySheetsModifier(appState: appState, modelVM: modelVM))

@@ -918,6 +918,63 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertTrue(injReport.answer.abstained, "injection content with no evidence is rejected, not obeyed")
     }
 
+    // MARK: - Stage 5 W3 / Engine cutover 4 — Communication patterns (streaming)
+
+    /// The streaming CommunicationPatternAnalyzer.analyze(from:) matches the
+    /// array oracle (analyzeContacts/Hourly/Weekday/averageResponseTime) over
+    /// identical store data — per-contact aggregates, hourly/weekday, response.
+    func testCommunicationPatterns_streamingMatchesOracle() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-comm-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        let svc = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+        let sender = "me@x.com"
+
+        var fixtures: [MBOXParser.RawEmail] = []
+        for i in 0..<20 {
+            var e = makeEmailDated(mid: "<cp-\(i)@t>", subject: "S\(i)", body: "hello there \(i % 2)", dayOffset: i)
+            if i % 2 == 0 {
+                e.headers["From"] = sender
+                e.headers["To"] = "peer\(i % 3)@y.com"
+            } else {
+                e.headers["From"] = "peer\(i % 3)@y.com"
+                e.headers["To"] = sender
+            }
+            fixtures.append(e)
+        }
+        try await store.insertBatch(fixtures, batchSize: 100)
+
+        var collected: [MBOXParser.RawEmail] = []
+        for try await b in svc.streamFullEmails() { collected.append(contentsOf: b) }
+
+        let oContacts = CommunicationPatternAnalyzer.analyzeContacts(emails: collected, senderEmail: sender)
+        let oHourly = CommunicationPatternAnalyzer.analyzeHourlyPatterns(emails: collected)
+        let oWeekday = CommunicationPatternAnalyzer.analyzeWeekdayPatterns(emails: collected)
+        let oRT = CommunicationPatternAnalyzer.averageResponseTime(emails: collected, senderEmail: sender)
+
+        let s = try await CommunicationPatternAnalyzer.analyze(from: svc, senderEmail: sender)
+
+        XCTAssertEqual(s.hourly.map { "\($0.hour):\($0.count)" }, oHourly.map { "\($0.hour):\($0.count)" })
+        XCTAssertEqual(s.weekday.map { "\($0.weekday):\($0.count)" }, oWeekday.map { "\($0.weekday):\($0.count)" })
+        XCTAssertEqual(s.avgResponseHours ?? -1, oRT ?? -1, accuracy: 1e-9)
+
+        let sMap = Dictionary(uniqueKeysWithValues: s.contacts.map { ($0.address, $0) })
+        let oMap = Dictionary(uniqueKeysWithValues: oContacts.map { ($0.address, $0) })
+        XCTAssertEqual(Set(sMap.keys), Set(oMap.keys), "same contact set")
+        for (addr, o) in oMap {
+            guard let sc = sMap[addr] else { XCTFail("missing \(addr)"); continue }
+            XCTAssertEqual(sc.sent, o.sent, addr)
+            XCTAssertEqual(sc.received, o.received, addr)
+            XCTAssertEqual(sc.totalEmails, o.totalEmails, addr)
+            XCTAssertEqual(sc.firstContact, o.firstContact, addr)
+            XCTAssertEqual(sc.lastContact, o.lastContact, addr)
+            XCTAssertEqual(sc.sentimentAverage, o.sentimentAverage, accuracy: 1e-9, addr)
+            XCTAssertEqual(sc.avgResponseTimeHours ?? -1, o.avgResponseTimeHours ?? -1, accuracy: 1e-9, addr)
+        }
+        XCTAssertFalse(s.contacts.isEmpty, "fixture produced contacts")
+    }
+
     // MARK: - Stage 5 W3 / Engine cutover 3 — Full analytics (streaming, scoped)
 
     /// The streaming, scope-aware ArchiveFullAnalyticsService.compute(scope:)
