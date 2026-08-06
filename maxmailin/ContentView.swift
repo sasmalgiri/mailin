@@ -878,7 +878,7 @@ struct ContentView: View {
             LegalReviewWorkspaceView(emails: hubCurrentEmails, selectedEmailIDs: $selectedEmailIDs)
                 .navigationTitle("Legal Review Workspace")
         case .itAdminDashboard:
-            ITAdminAnalysisView(emails: hubCurrentEmails)
+            ITAdminAnalysisView()
                 .navigationTitle("IT Admin Analysis")
         case .journalistWorkbench:
             JournalistInvestigationView(emails: hubCurrentEmails)
