@@ -918,6 +918,56 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertTrue(injReport.answer.abstained, "injection content with no evidence is rejected, not obeyed")
     }
 
+    // MARK: - Stage 5 W3 / Engine cutover 1 — PredictiveEngine (bounded)
+
+    /// The bounded, store-driven PredictiveEngine.analyze(from:) matches the
+    /// in-RAM oracle analyze(emails:) over the same fixture, AND the working set
+    /// is hard-capped (never materializes the whole corpus).
+    func testPredictiveEngine_boundedMatchesOracleAndCaps() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-pred-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        let svc = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+
+        // 24 fixtures with distinct, monotonic dates (days 1..24); a few carry
+        // urgency signals.
+        var fixtures: [MBOXParser.RawEmail] = []
+        for i in 0..<24 {
+            let urgent = (i % 7 == 0)
+            fixtures.append(makeEmailDated(
+                mid: "<p-\(i)@t>",
+                subject: urgent ? "URGENT: action required now!!" : "Weekly note \(i)",
+                body: urgent ? "This is urgent, please respond asap by end of day." : "routine content \(i)",
+                dayOffset: i
+            ))
+        }
+        try await store.insertBatch(fixtures, batchSize: 100)
+
+        // Oracle: analyze the same emails as an in-RAM array (v1 path).
+        let oracle = PredictiveEngine.analyze(emails: fixtures)
+        // Bounded: cap comfortably above corpus → identical working set.
+        let bounded = try await PredictiveEngine.analyze(from: svc, cap: 5000)
+
+        XCTAssertEqual(bounded.urgentEmails.count, oracle.urgentEmails.count,
+                       "bounded analysis finds the same urgent emails as the oracle")
+        XCTAssertEqual(Set(bounded.urgentEmails.map { $0.email.headers["Subject"] ?? "" }),
+                       Set(oracle.urgentEmails.map { $0.email.headers["Subject"] ?? "" }),
+                       "same urgent subjects")
+        XCTAssertEqual(bounded.securityForecast.riskLevel, oracle.securityForecast.riskLevel,
+                       "same security posture")
+
+        // Cap enforcement: working set is bounded to `cap`, most-recent-first.
+        let capped = try await PredictiveEngine.recentWorkingSet(from: svc, cap: 10, batchSize: 4)
+        XCTAssertEqual(capped.count, 10, "working set hard-capped at cap")
+        let cappedDays = capped.compactMap { $0.headers["Date"] }.count
+        XCTAssertEqual(cappedDays, 10, "each capped email retains its Date header")
+        // The 10 most-recent (by date DESC) are the highest dayOffsets — assert
+        // the capped set excludes the oldest fixture (dayOffset 0, day 01).
+        XCTAssertFalse(capped.contains { ($0.headers["Message-ID"] ?? "") == "<p-0@t>" },
+                       "cap keeps the most-recent window, drops the oldest")
+    }
+
     // MARK: - Stage 5 W3 / Phase 10 — persistent dedup findings
 
     /// Exact duplicates (same Message-ID) dropped at import are recorded as

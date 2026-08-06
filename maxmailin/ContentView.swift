@@ -847,7 +847,7 @@ struct ContentView: View {
             BackgroundFindingsView(emails: hubCurrentEmails)
                 .navigationTitle("Background Scan")
         case .predictiveInsights:
-            PredictiveInsightsView(emails: hubCurrentEmails)
+            PredictiveInsightsView()
                 .navigationTitle("Predictive Insights")
         case .pluginManager:
             PluginManagerView(emails: hubCurrentEmails)
