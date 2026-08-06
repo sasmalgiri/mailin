@@ -339,6 +339,39 @@ final class V2VerificationTests: XCTestCase {
         FTSReconciler.resetCursorForTesting()
     }
 
+    /// Indexing the SAME email twice must leave exactly ONE searchable row.
+    /// RED before the fix: `insertWithHandle` did a plain append while the
+    /// registry was INSERT OR REPLACE, so a re-index (re-run import, or a
+    /// reconcile after a partial index) produced two FTS rows the registry
+    /// masked — search then returned the email twice. `dedupeShards()` is the
+    /// one-time repair for archives already in that state; here it must be a
+    /// clean no-op because the insert is now idempotent.
+    func testFTSIndexIsIdempotentAndDedupeIsNoOpWhenClean() async throws {
+        let ftsDir = FileManager.default.temporaryDirectory.appendingPathComponent("fts_\(UUID().uuidString)")
+        FTSSearchIndex.testShardsDirectoryOverride = ftsDir
+        await FTSSearchIndex.shared.resetForTesting()
+        defer { FTSSearchIndex.testShardsDirectoryOverride = nil }
+
+        let email = makeEmail(mid: "<idem@test>", subject: "Idem", body: "idempotent alpha token")
+        try await FTSSearchIndex.shared.indexBatch([email])
+        try await FTSSearchIndex.shared.indexBatch([email])   // re-index the SAME id
+
+        let count = try await FTSSearchIndex.shared.rowCount()
+        XCTAssertEqual(count, 1, "re-indexing the same email must not duplicate the FTS row")
+
+        let hits = try await FTSSearchIndex.shared.search("alpha", limit: 50)
+        let occurrences = hits.filter { $0 == email.id }.count
+        XCTAssertEqual(occurrences, 1, "search returns the email exactly once")
+
+        // Nothing to collapse when the index is already idempotent.
+        let removed = try await FTSSearchIndex.shared.dedupeShards()
+        XCTAssertEqual(removed, 0, "dedupe is a no-op on a clean index")
+        let afterCount = try await FTSSearchIndex.shared.rowCount()
+        XCTAssertEqual(afterCount, 1, "dedupe must not disturb a clean index")
+
+        try await FTSSearchIndex.shared.clear()
+    }
+
     // MARK: - P0-#3 — AI tools use FTS5/EmailStore, not the whole archive
 
     // MARK: - Stage 3 — EmailRepository bounded data contract

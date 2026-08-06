@@ -200,6 +200,11 @@ struct mailinApp: App {
                                 // launch; a failure just retries next launch.
                                 _ = try? await FTSReconciler.reconcile(store: store, fts: .shared)
                             }
+                            // Collapse any duplicate FTS rows left by a pre-
+                            // idempotent build (registry-masked, so the reconcile
+                            // above can't see them). Bounded per year-shard; a
+                            // no-op once clean.
+                            _ = try? await FTSSearchIndex.shared.dedupeShards()
                         }
 
                         // Self-test exercises the v2 storage + search +

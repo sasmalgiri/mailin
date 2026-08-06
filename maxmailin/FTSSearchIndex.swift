@@ -422,6 +422,42 @@ actor FTSSearchIndex {
         }
     }
 
+    /// One-time repair for archives indexed by a pre-idempotent build, which
+    /// could append more than one FTS row per email (the registry masked it,
+    /// so the reconciler never repaired it, and search returned doubles). Per
+    /// shard, if the content table has more rows than distinct ids, collapse
+    /// each id to its lowest-rowid row. Bounded: the `GROUP BY` runs INSIDE
+    /// SQLite over a single year-shard — no archive-wide `Set` is built in
+    /// Swift. Idempotent — a no-op once every shard is clean. Returns the
+    /// number of duplicate rows removed.
+    @discardableResult
+    func dedupeShards() throws -> Int {
+        try migrateLegacyIfNeeded()
+        var removed = 0
+        for year in try discoverAllShardYears() {
+            let db = try ensureShard(year: year)
+            // Cheap gate: only rewrite shards that actually carry duplicates.
+            let check = try prepare(db, "SELECT count(*) - count(DISTINCT email_id) FROM email_search;")
+            var dupes = 0
+            if sqlite3_step(check) == SQLITE_ROW { dupes = Int(sqlite3_column_int(check, 0)) }
+            sqlite3_finalize(check)
+            guard dupes > 0 else { continue }
+            try exec(db, "BEGIN TRANSACTION;")
+            do {
+                try exec(db, """
+                    DELETE FROM email_search
+                    WHERE rowid NOT IN (SELECT min(rowid) FROM email_search GROUP BY email_id);
+                """)
+                try exec(db, "COMMIT;")
+                removed += dupes
+            } catch {
+                try? exec(db, "ROLLBACK;")
+                throw error
+            }
+        }
+        return removed
+    }
+
     /// Total rows summed across every shard.
     func rowCount() throws -> Int {
         try migrateLegacyIfNeeded()
@@ -608,13 +644,26 @@ actor FTSSearchIndex {
     }
 
     private func insertWithHandle(_ email: MBOXParser.RawEmail, db: OpaquePointer) throws {
+        let idString = email.id.uuidString
+
+        // Idempotent index: clear any prior FTS row for this id in THIS shard
+        // before inserting. Without this, re-indexing the same email (a re-run
+        // import, or a reconcile after a partial index) appends a SECOND row —
+        // the registry (INSERT OR REPLACE below) still reads as "indexed once",
+        // masking the duplicate so the reconciler never repairs it, and search
+        // would return the email twice.
+        let del = try prepare(db, "DELETE FROM email_search WHERE email_id = ?;")
+        bindText(del, 1, idString)
+        let delOK = sqlite3_step(del) == SQLITE_DONE
+        sqlite3_finalize(del)
+        guard delOK else { throw FTSError.execFailed(lastError(db)) }
+
         let stmt = try prepare(db, """
             INSERT INTO email_search (email_id, subject, sender, recipients, body)
             VALUES (?, ?, ?, ?, ?);
         """)
         defer { sqlite3_finalize(stmt) }
 
-        let idString = email.id.uuidString
         let subject = email.headers["Subject"] ?? ""
         let sender = email.headers["From"] ?? ""
         let recipients = (email.headers["To"] ?? "") + " " + (email.headers["Cc"] ?? "")
