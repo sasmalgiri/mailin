@@ -1,10 +1,15 @@
 import SwiftUI
 
 struct GeneralAnalysisView: View {
-    let emails: [MBOXParser.RawEmail]
     let onNavigate: (HubDestination) -> Void
 
     // MARK: - State
+
+    // v2: bounded working set (recent sample) for on-device NLP/insight engines,
+    // plus accurate archive-wide total from the store. No injected corpus.
+    @State private var workingSet: [MBOXParser.RawEmail] = []
+    @State private var archiveTotal = 0
+    @State private var searchResults: [EmailNLPEngine.SearchResult] = []
 
     @State private var searchText = ""
     @State private var showTips = true
@@ -62,8 +67,26 @@ struct GeneralAnalysisView: View {
         }
         .overlay { if AnalysisCoordinator.isEnabled { AnalysisProgressOverlay(coordinator: coordinator) } }
         .featureTutorial(.general, key: "general_tutorial_seen", isPresented: $showTutorial)
+        .task { archiveTotal = (try? await ArchiveDataService.shared.count()) ?? 0 }
         .task { await loadV3Data() }
         .task { await loadV4Data() }
+        .onChange(of: searchText) { _, _ in Task { await loadSearch() } }
+        .onChange(of: showSearchResults) { _, _ in Task { await loadSearch() } }
+    }
+
+    /// Bounded most-recent working set from the store (no injected corpus).
+    private func loadWorkingSetIfNeeded() async {
+        guard workingSet.isEmpty else { return }
+        var acc: [MBOXParser.RawEmail] = []
+        let stream = ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
+        do { for try await b in stream { acc.append(contentsOf: b); if acc.count >= 2000 { break } } } catch { }
+        workingSet = Array(acc.prefix(2000))
+    }
+
+    /// Bounded FTS5-backed search preview (was in-RAM EmailSearchIndex).
+    private func loadSearch() async {
+        guard showSearchResults, !searchText.isEmpty else { searchResults = []; return }
+        searchResults = (try? await ArchiveRetrievalService.shared.retrieve(searchText, limit: 10)) ?? []
     }
 
     private func loadV3Data() async {
@@ -72,7 +95,8 @@ struct GeneralAnalysisView: View {
 
         guard !hasAnalyzed else { return }
         isAnalyzing = true
-        let emailsCopy = emails
+        await loadWorkingSetIfNeeded()
+        let emailsCopy = workingSet
         let graphForPatterns: KnowledgeGraph? = kgLoaded ? graph : nil
 
         guard AnalysisCoordinator.isEnabled else {
@@ -636,7 +660,7 @@ struct GeneralAnalysisView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Welcome to mailin")
                     .font(.system(size: 18, weight: .bold, design: .rounded))
-                Text("Your \(emails.count) emails are ready to explore. Everything runs on-device.")
+                Text("Your \(archiveTotal) emails are ready to explore. Everything runs on-device.")
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
             }
@@ -694,8 +718,7 @@ struct GeneralAnalysisView: View {
     }
 
     private var searchResultsPreview: some View {
-        let terms = searchText.lowercased().split(separator: " ").map(String.init)
-        let results = EmailSearchIndex.shared.hybridSearch(query: searchText, terms: terms, limit: 10)
+        let results = searchResults
 
         return VStack(alignment: .leading, spacing: 4) {
             HStack {
@@ -732,12 +755,12 @@ struct GeneralAnalysisView: View {
     // MARK: - Quick Stats
 
     private var quickStatsRow: some View {
-        let contacts = Set(emails.compactMap { extractDomain(from: $0.headers["From"] ?? "") }).count
-        let attachments = emails.flatMap { $0.attachments }.count
+        let contacts = Set(workingSet.compactMap { extractDomain(from: $0.headers["From"] ?? "") }).count
+        let attachments = workingSet.flatMap { $0.attachments }.count
         let dateRange = computeDateRange()
 
         return HStack(spacing: 10) {
-            statPill("Emails", value: "\(emails.count)", color: .blue)
+            statPill("Emails", value: "\(archiveTotal)", color: .blue)
             statPill("Domains", value: "\(contacts)", color: .green)
             statPill("Attachments", value: "\(attachments)", color: .brown)
             statPill("Range", value: dateRange, color: .purple)
@@ -1059,7 +1082,7 @@ struct GeneralAnalysisView: View {
     }
 
     private func computeDateRange() -> String {
-        let dates = emails.compactMap { MBOXParser.parseDate($0.headers["Date"] ?? "") }
+        let dates = workingSet.compactMap { MBOXParser.parseDate($0.headers["Date"] ?? "") }
         guard let first = dates.min(), let last = dates.max() else { return "N/A" }
         let f = DateFormatter()
         f.dateFormat = "MMM yy"

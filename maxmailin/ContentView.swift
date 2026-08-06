@@ -890,7 +890,7 @@ struct ContentView: View {
             )
             .navigationTitle("Personal Organizer")
         case .generalExplorer:
-            GeneralAnalysisView(emails: hubCurrentEmails, onNavigate: { dest in
+            GeneralAnalysisView(onNavigate: { dest in
                 sidebarSelection = dest
             })
             .navigationTitle("Feature Explorer")
