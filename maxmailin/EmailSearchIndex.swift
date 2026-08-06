@@ -11,6 +11,17 @@ import UIKit
 final class EmailSearchIndex {
     static let shared = EmailSearchIndex()
 
+    /// Hard structural ceiling on how many emails this legacy in-RAM index will
+    /// ever hold, regardless of what a caller passes to `build`/`buildAsync`.
+    /// The v2 shipping path (`useV2ArchiveList`) browses/searches the whole
+    /// archive through the bounded SQLite + FTS5 layer; this in-RAM index only
+    /// backs the legacy list, which itself shows at most a bounded preview
+    /// (`ContentViewModel.previewCap`). Capping here makes "resident memory does
+    /// not scale with archive size" a STRUCTURAL guarantee for this class — not
+    /// a property of every call site — so no future caller can reintroduce a
+    /// whole-corpus in-RAM index by accident.
+    static let maxInMemoryDocuments = 5_000
+
     private var invertedIndex: [String: Set<UUID>] = [:]
     private var emailMap: [UUID: MBOXParser.RawEmail] = [:]
     private var emailVectors: [UUID: [Double]] = [:]
@@ -74,7 +85,9 @@ final class EmailSearchIndex {
             termDocFreqs.removeAll()
             docLengths.removeAll()
 
-            for email in emails {
+            // Structural bound: never hold more than `maxInMemoryDocuments`.
+            let bounded = emails.prefix(Self.maxInMemoryDocuments)
+            for email in bounded {
                 emailMap[email.id] = email
 
                 let from = (email.headers["From"] ?? "").lowercased()
@@ -103,7 +116,7 @@ final class EmailSearchIndex {
             let totalLen = docLengths.values.reduce(0, +)
             avgDocLength = docLengths.isEmpty ? 1.0 : Double(totalLen) / Double(docLengths.count)
 
-            buildVectors(for: emails)
+            buildVectors(for: Array(bounded))
             isBuilt = true
         }
         saveToDisk()
@@ -119,7 +132,9 @@ final class EmailSearchIndex {
             self.termDocFreqs.removeAll()
             self.docLengths.removeAll()
 
-            for email in emails {
+            // Structural bound: never hold more than `maxInMemoryDocuments`.
+            let bounded = emails.prefix(Self.maxInMemoryDocuments)
+            for email in bounded {
                 self.emailMap[email.id] = email
 
                 let from = (email.headers["From"] ?? "").lowercased()
@@ -148,7 +163,7 @@ final class EmailSearchIndex {
             let totalLen = self.docLengths.values.reduce(0, +)
             self.avgDocLength = self.docLengths.isEmpty ? 1.0 : Double(totalLen) / Double(self.docLengths.count)
 
-            self.buildVectors(for: emails)
+            self.buildVectors(for: Array(bounded))
             self.isBuilt = true
             self.saveToDisk()
 
@@ -227,7 +242,9 @@ final class EmailSearchIndex {
             emailMap.removeAll()
             termDocFreqs.removeAll()
             docLengths.removeAll()
-            for email in emails {
+            // Structural bound: never hold more than `maxInMemoryDocuments`.
+            let bounded = emails.prefix(Self.maxInMemoryDocuments)
+            for email in bounded {
                 emailMap[email.id] = email
                 let from = (email.headers["From"] ?? "").lowercased()
                 let to = (email.headers["To"] ?? "").lowercased()
@@ -250,7 +267,7 @@ final class EmailSearchIndex {
                 }
             }
 
-            buildVectors(for: emails)
+            buildVectors(for: Array(bounded))
             isBuilt = true
             return true
         }

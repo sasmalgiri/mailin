@@ -633,6 +633,23 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertTrue(violations.isEmpty, "Forbidden production pattern(s) reintroduced:\n" + violations.joined(separator: "\n"))
     }
 
+    /// The legacy in-RAM `EmailSearchIndex` must stay STRUCTURALLY bounded: no
+    /// matter how many emails a caller passes, it indexes at most
+    /// `maxInMemoryDocuments`. This is the guarantee that lets the legacy list
+    /// coexist with the v2 bounded path without reintroducing a whole-corpus
+    /// in-RAM index. Feeds 3× the cap and asserts the resident count is capped.
+    func testEmailSearchIndexIsStructurallyBounded() {
+        let cap = EmailSearchIndex.maxInMemoryDocuments
+        let overflow = cap + cap / 2   // 1.5× the cap
+        let emails = (0..<overflow).map {
+            makeEmail(mid: "<cap-\($0)@test>", subject: "S\($0)", body: "bounded token \($0)")
+        }
+        EmailSearchIndex.shared.build(from: emails)
+        XCTAssertLessThanOrEqual(EmailSearchIndex.shared.indexedCount, cap,
+            "in-RAM index must never exceed maxInMemoryDocuments regardless of input size")
+        EmailSearchIndex.shared.clear()
+    }
+
     // MARK: - Stage 5 W4 — privacy audit: bounded layer is on-device
 
     /// The v2 bounded data / retrieval / AI-context / export layer must make NO
