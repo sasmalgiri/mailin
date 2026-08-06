@@ -4058,27 +4058,34 @@ private func handleMultipleFiles(_ urls: [URL]) {
         if autoDetectSender && viewModel.senderEmail.isEmpty && !defaultSenderEmail.isEmpty {
             viewModel.senderEmail = defaultSenderEmail
         }
-        let restored = EmailPersistence.load()
-        if !restored.emails.isEmpty {
-            if !restored.senderEmail.isEmpty {
-                viewModel.senderEmail = restored.senderEmail
-            }
-            viewModel.totalParsedCount = restored.emails.count
-            let emailsToRestore = storeManager.isPremium ? restored.emails : Array(restored.emails.prefix(StoreManager.freeEmailLimit))
-            viewModel.restoreEmails(emailsToRestore)
+        // v2: restore a BOUNDED preview from the activated SQLite store (the
+        // authority) instead of decoding the whole v1 JSON corpus into RAM at
+        // launch. The preview only backs the legacy in-RAM UI; browse/search/AI
+        // read the store directly. No whole-archive decode on startup.
+        Task { @MainActor in
+            let total = (try? await ArchiveDataService.shared.count()) ?? 0
+            guard total > 0 else { return }
+            viewModel.totalParsedCount = total
+            let cap = storeManager.isPremium ? 5000 : StoreManager.freeEmailLimit
+            var preview: [MBOXParser.RawEmail] = []
+            let stream = ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
+            do { for try await b in stream { preview.append(contentsOf: b); if preview.count >= cap { break } } } catch { }
+            let restorePreview = Array(preview.prefix(cap))
+            guard !restorePreview.isEmpty else { return }
+            viewModel.restoreEmails(restorePreview)
             modelVM.loadFromContentViewModel()
-            if !EmailSearchIndex.shared.loadFromDisk(emails: restored.emails) {
-                EmailSearchIndex.shared.buildAsync(from: restored.emails)
+            if !EmailSearchIndex.shared.loadFromDisk(emails: restorePreview) {
+                EmailSearchIndex.shared.buildAsync(from: restorePreview)
             }
-            predictiveEngine.buildVectors(from: restored.emails)
+            predictiveEngine.buildVectors(from: restorePreview)
             AIAssistantView.invalidateNLPCache()
             AIAssistantView.invalidateNLPPrecomputation()
             #if canImport(FoundationModels)
             if #available(macOS 26, iOS 26, *) {
-                FoundationModelEngine.precomputeOnImport(emails: restored.emails)
+                FoundationModelEngine.precomputeOnImport(emails: restorePreview)
             }
             #endif
-            AIAssistantView.nlpPrecomputeOnImport(emails: restored.emails)
+            AIAssistantView.nlpPrecomputeOnImport(emails: restorePreview)
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
