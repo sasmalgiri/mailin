@@ -920,6 +920,84 @@ struct FoundationModelEngine {
         return finalContent
     }
 
+    // MARK: - Bounded, store-driven Q&A (v2 AI-substrate cutover)
+    //
+    // Corpus-free overloads: RAG context is retrieved from SQLite (bounded to
+    // `contextLimit` emails) instead of narrowing a whole-corpus array. Peak
+    // memory is independent of archive size. Callers pass only the query.
+
+    /// Up to `contextLimit` relevant emails from the store for RAG grounding,
+    /// plus the true archive total — never materializes the corpus.
+    private static func retrieveContext(query: String, contextLimit: Int = 15) async -> (emails: [MBOXParser.RawEmail], total: Int) {
+        var contextEmails = ((try? await ArchiveRetrievalService.shared.retrieve(query, limit: contextLimit)) ?? []).map(\.email)
+        let total = (try? await ArchiveDataService.shared.count()) ?? contextEmails.count
+        if contextEmails.count < 3 {
+            // Thin retrieval → fall back to a bounded most-recent window.
+            var seen = Set(contextEmails.map(\.id))
+            let stream = await ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 20)
+            if let recent = try? await { () async throws -> [MBOXParser.RawEmail] in
+                var acc: [MBOXParser.RawEmail] = []
+                for try await batch in stream { acc.append(contentsOf: batch); if acc.count >= 20 { break } }
+                return Array(acc.prefix(20))
+            }() {
+                for e in recent where !seen.contains(e.id) {
+                    contextEmails.append(e); seen.insert(e.id)
+                    if contextEmails.count >= 20 { break }
+                }
+            }
+        }
+        return (contextEmails, total)
+    }
+
+    private static func prepareSessionBounded(query: String) async -> (session: LanguageModelSession, prompt: String) {
+        let (contextEmails, total) = await retrieveContext(query: query)
+        let emailContext = buildContext(from: contextEmails)
+        let instructions = """
+            You are an email analyst in mailin (on-device, private). \
+            First identify what the user is asking, then answer with evidence from the emails. \
+            Refer to emails by **Subject** and **sender** in bold. Use bullet points. \
+            If emails shown don't cover the question, use searchEmails tool.
+            """
+        let session = LanguageModelSession(
+            tools: [SearchEmailsTool(), GetThreadInfoTool()],
+            instructions: instructions
+        )
+        let isRAG = contextEmails.count < total
+        let prompt = """
+            Email archive: \(total) total emails\(isRAG ? " (\(contextEmails.count) most relevant shown below)" : ""):
+
+            \(emailContext)
+
+            User question: \(query)
+            """
+        return (session, prompt)
+    }
+
+    /// Bounded Q&A — retrieves its own context from the store.
+    static func respond(to query: String) async throws -> String {
+        guard isAvailable else { return "Apple AI is not available on this device." }
+        let prepared = await prepareSessionBounded(query: query)
+        let response = try await prepared.session.respond(to: prepared.prompt)
+        return response.content
+    }
+
+    /// Bounded streaming Q&A — retrieves its own context from the store.
+    static func respondStreaming(to query: String, onUpdate: @MainActor @Sendable @escaping (String) -> Void) async throws -> String {
+        guard isAvailable else {
+            let msg = "Apple AI is not available on this device."
+            await onUpdate(msg)
+            return msg
+        }
+        let prepared = await prepareSessionBounded(query: query)
+        let stream = prepared.session.streamResponse(to: prepared.prompt)
+        var finalContent = ""
+        for try await snapshot in stream {
+            finalContent = snapshot.content
+            await onUpdate(finalContent)
+        }
+        return finalContent
+    }
+
     // MARK: - Hybrid: NLP retrieval + Apple AI synthesis
 
     static func synthesizeFromNLPResults(

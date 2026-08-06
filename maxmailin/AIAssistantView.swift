@@ -2243,7 +2243,8 @@ struct AIAssistantView: View {
             do {
                 return try await withThrowingTaskGroup(of: String.self) { group in
                     group.addTask {
-                        try await FoundationModelEngine.respondStreaming(to: query, emails: self.emails) { partial in
+                        // Bounded: retrieves its own RAG context from SQLite.
+                        try await FoundationModelEngine.respondStreaming(to: query) { partial in
                             self.streamingAnswer = partial
                         }
                     }
