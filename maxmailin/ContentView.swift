@@ -832,7 +832,7 @@ struct ContentView: View {
             AIDigestView(emails: hubCurrentEmails)
                 .navigationTitle("AI Digest")
         case .smartAutoTagger:
-            SmartAutoTaggerView(emails: hubCurrentEmails)
+            SmartAutoTaggerView()
                 .navigationTitle("Smart Auto-Tagger")
         case .customExperts:
             CustomExpertConfigView()
@@ -4574,7 +4574,7 @@ struct V8SheetsModifier: ViewModifier {
                     .resizableSheet()
             }
             .sheet(isPresented: $appState.showSmartAutoTagger) {
-                SmartAutoTaggerView(emails: currentEmails, isPresented: $appState.showSmartAutoTagger)
+                SmartAutoTaggerView(isPresented: $appState.showSmartAutoTagger)
                     .resizableSheet()
             }
             .sheet(isPresented: $appState.showAIDigest) {
