@@ -255,7 +255,7 @@ struct ContentView: View {
                 .resizableSheet()
         }
         .sheet(isPresented: $appState.showAnalytics) {
-            EmailAnalyticsView(emails: modelVM.filteredEmails.isEmpty ? modelVM.allEmails : modelVM.filteredEmails)
+            EmailAnalyticsView(emails: modelVM.filteredEmails.isEmpty ? nil : modelVM.filteredEmails)
                 #if os(macOS)
                 .resizableSheet()
                 #else
@@ -738,7 +738,7 @@ struct ContentView: View {
                 .navigationTitle("Chain of Custody")
 
         case .emailAnalytics:
-            EmailAnalyticsView(emails: hubCurrentEmails)
+            EmailAnalyticsView()
                 .navigationTitle("Email Analytics")
         case .topicClusters:
             TopicClustersView(

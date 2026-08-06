@@ -608,7 +608,7 @@ final class V2VerificationTests: XCTestCase {
     /// `baseline` whenever you retire references. (No hosted CI, so this runs as
     /// a unit test on the dev machine / ⌘U.)
     func testLegacyCorpusConsumerCountOnlyDecreases() throws {
-        let baseline = 252   // W2-B/D: metadata + widget + Spotlight + duplicates (was 260)
+        let baseline = 251   // W3 engine cutover: analytics hub site off allEmails (was 260→252→251)
         let src = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()   // maxmailinTests
             .deletingLastPathComponent()   // repo root

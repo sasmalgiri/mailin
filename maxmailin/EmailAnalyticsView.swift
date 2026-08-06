@@ -5,7 +5,10 @@ import AppKit
 #endif
 
 struct EmailAnalyticsView: View {
-    let emails: [MBOXParser.RawEmail]
+    /// Legacy filtered-selection callers still pass an array; whole-archive
+    /// callers pass nil, and analytics stream from the activated SQLite store
+    /// (bounded). Migrating the last array callers off `emails` finishes this.
+    var emails: [MBOXParser.RawEmail]? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var analyticsData: AnalyticsData?
     @State private var isComputing = false
@@ -90,7 +93,7 @@ struct EmailAnalyticsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Email Analytics")
                         .font(Typography.headline)
-                    Text("\(emails.count) emails analyzed")
+                    Text("\(analyticsData?.totalCount ?? emails?.count ?? 0) emails analyzed")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
                 }
@@ -898,14 +901,30 @@ struct EmailAnalyticsView: View {
 
     private func loadAIInsights() {
         isLoadingAI = true
-        let emailsCopy = emails
+        let injected = emails
         Task {
+            // Bounded context: the filtered selection when injected, else a
+            // bounded most-recent working set from the store — never the corpus.
+            let emailsForAI: [MBOXParser.RawEmail]
+            if let injected {
+                emailsForAI = injected
+            } else {
+                var recent: [MBOXParser.RawEmail] = []
+                let stream = ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
+                do {
+                    for try await batch in stream {
+                        recent.append(contentsOf: batch)
+                        if recent.count >= 500 { recent = Array(recent.prefix(500)); break }
+                    }
+                } catch { /* best-effort context */ }
+                emailsForAI = recent
+            }
             var insights: String?
             #if canImport(FoundationModels)
             if #available(macOS 26, iOS 26, *) {
                 insights = await FoundationModelEngine.enhanceWithAI(
                     scope: .digest,
-                    emails: emailsCopy,
+                    emails: emailsForAI,
                     context: "Analyze this email archive for key patterns, trends, and notable findings"
                 )
             }
@@ -922,196 +941,19 @@ struct EmailAnalyticsView: View {
 
     private func computeAnalytics() async {
         isComputing = true
-        let emailsCopy = emails
-
-        let data = await Task.detached(priority: .userInitiated) {
-            var result = AnalyticsData()
-            result.totalCount = emailsCopy.count
-            result.sentCount = emailsCopy.filter { $0.messageType == "sent" }.count
-            result.receivedCount = emailsCopy.filter { $0.messageType == "received" }.count
-
-            await MainActor.run { computeStage = "Sentiment analysis..." }
-            let sentiment = EmailNLPEngine.averageSentiment(of: emailsCopy)
-            result.avgSentiment = sentiment.average
-            result.sentimentLabel = sentiment.label
-            result.sentimentBuckets = [
-                SentimentBucket(label: "Positive", count: sentiment.positive, color: .green),
-                SentimentBucket(label: "Neutral", count: sentiment.neutral, color: .gray),
-                SentimentBucket(label: "Negative", count: sentiment.negative, color: .red)
-            ]
-
-            await MainActor.run { computeStage = "Timeline computation..." }
-            result.timelineBuckets = Self.computeTimeline(emails: emailsCopy)
-
-            await MainActor.run { computeStage = "Contact analysis..." }
-            result.topContacts = Self.computeTopContacts(emails: emailsCopy)
-
-            await MainActor.run { computeStage = "Language detection..." }
-            result.languages = await EmailNLPEngine.detectLanguagesHybrid(in: emailsCopy)
-
-            await MainActor.run { computeStage = "Topic extraction..." }
-            result.topTopics = EmailNLPEngine.extractTopics(from: emailsCopy, limit: 12)
-
-            await MainActor.run { computeStage = "Heatmap & attachments..." }
-            result.heatmapData = Self.computeHeatmap(emails: emailsCopy)
-            result.attachmentTypes = Self.computeAttachmentTypes(emails: emailsCopy)
-            result.totalAttachments = emailsCopy.reduce(0) { $0 + $1.attachments.count }
-            result.domainCounts = Self.computeDomainCounts(emails: emailsCopy)
-            result.sizeDistribution = Self.computeSizeDistribution(emails: emailsCopy)
-
-            await MainActor.run { computeStage = "Contact relationships..." }
-            result.contactRelationships = Self.computeContactRelationships(emails: emailsCopy)
-
-            await MainActor.run { computeStage = "Compliance & priority scan..." }
-            result.piiCounts = EmailNLPEngine.piiSummary(in: emailsCopy)
-            let priorities = EmailNLPEngine.scoreAllPriorities(emailsCopy)
-            result.highPriorityCount = priorities.filter { $0.level == .high }.count
-            result.mediumPriorityCount = priorities.filter { $0.level == .medium }.count
-            result.totalStorageMB = Double(emailsCopy.reduce(0) { $0 + $1.rawSource.utf8.count }) / (1024.0 * 1024.0)
-
-            await MainActor.run { computeStage = "Done" }
-            return result
-        }.value
-
+        computeStage = "Analyzing..."
+        let data: AnalyticsData
+        if let emails {
+            // Legacy filtered selection → array path (bounded by the selection).
+            data = await ArchiveFullAnalyticsService.shared.compute(emails: emails)
+        } else {
+            // Whole archive → bounded streaming from the activated store.
+            data = (try? await ArchiveFullAnalyticsService.shared.compute(scope: .all)) ?? AnalyticsData()
+        }
         withAnimation(AnimationTiming.normal) {
             analyticsData = data
             isComputing = false
         }
-    }
-
-    nonisolated private static func computeTimeline(emails: [MBOXParser.RawEmail]) -> [TimelineBucket] {
-        let calendar = Calendar.current
-        var bucketMap: [Date: (sent: Int, received: Int)] = [:]
-
-        for email in emails {
-            guard let date = MBOXParser.parseDate(email.headers["Date"]) else { continue }
-            let month = calendar.dateInterval(of: .month, for: date)?.start ?? date
-            var entry = bucketMap[month, default: (sent: 0, received: 0)]
-            if email.messageType == "sent" {
-                entry.sent += 1
-            } else {
-                entry.received += 1
-            }
-            bucketMap[month] = entry
-        }
-
-        return bucketMap.sorted { $0.key < $1.key }.map {
-            TimelineBucket(date: $0.key, sent: $0.value.sent, received: $0.value.received)
-        }
-    }
-
-    nonisolated private static func computeTopContacts(emails: [MBOXParser.RawEmail]) -> [ContactCount] {
-        var counts: [String: Int] = [:]
-        for email in emails {
-            let from = email.headers["From"] ?? ""
-            if !from.isEmpty {
-                let clean = from.components(separatedBy: "<").last?.replacingOccurrences(of: ">", with: "").trimmingCharacters(in: .whitespaces) ?? from
-                counts[clean.lowercased(), default: 0] += 1
-            }
-        }
-        return counts.sorted { $0.value > $1.value }
-            .prefix(10)
-            .map { ContactCount(address: $0.key, count: $0.value) }
-    }
-
-    nonisolated private static func computeHeatmap(emails: [MBOXParser.RawEmail]) -> [HeatmapCell] {
-        let calendar = Calendar.current
-        var grid: [Int: [Int: Int]] = [:]
-        for email in emails {
-            guard let date = MBOXParser.parseDate(email.headers["Date"]) else { continue }
-            let dow = calendar.component(.weekday, from: date) - 1
-            let hour = (calendar.component(.hour, from: date) / 3) * 3
-            grid[dow, default: [:]][hour, default: 0] += 1
-        }
-        var cells: [HeatmapCell] = []
-        for day in 0..<7 {
-            for h in stride(from: 0, to: 24, by: 3) {
-                let count = grid[day]?[h] ?? 0
-                cells.append(HeatmapCell(dayOfWeek: day, hour: h, count: count))
-            }
-        }
-        return cells
-    }
-
-    nonisolated private static func computeAttachmentTypes(emails: [MBOXParser.RawEmail]) -> [AttachmentTypeCount] {
-        var typeCounts: [String: Int] = [:]
-        for email in emails {
-            for att in email.attachments {
-                let ext = (att.filename as NSString).pathExtension.lowercased()
-                let label = ext.isEmpty ? "unknown" : ext
-                typeCounts[label, default: 0] += 1
-            }
-        }
-        return typeCounts.sorted { $0.value > $1.value }
-            .map { AttachmentTypeCount(fileType: $0.key, count: $0.value) }
-    }
-
-    nonisolated private static func computeDomainCounts(emails: [MBOXParser.RawEmail]) -> [DomainCount] {
-        var counts: [String: Int] = [:]
-        for email in emails {
-            for domain in email.domains {
-                counts[domain.lowercased(), default: 0] += 1
-            }
-        }
-        return counts.sorted { $0.value > $1.value }
-            .prefix(15)
-            .map { DomainCount(domain: $0.key, count: $0.value) }
-    }
-
-    nonisolated private static func computeSizeDistribution(emails: [MBOXParser.RawEmail]) -> [SizeBucket] {
-        var buckets: [String: Int] = [
-            "< 1 KB": 0,
-            "1-10 KB": 0,
-            "10-100 KB": 0,
-            "100 KB-1 MB": 0,
-            "> 1 MB": 0
-        ]
-        let order = ["< 1 KB", "1-10 KB", "10-100 KB", "100 KB-1 MB", "> 1 MB"]
-
-        for email in emails {
-            let size = email.rawSource.utf8.count
-            switch size {
-            case ..<1024:
-                buckets["< 1 KB", default: 0] += 1
-            case 1024..<10240:
-                buckets["1-10 KB", default: 0] += 1
-            case 10240..<102400:
-                buckets["10-100 KB", default: 0] += 1
-            case 102400..<1048576:
-                buckets["100 KB-1 MB", default: 0] += 1
-            default:
-                buckets["> 1 MB", default: 0] += 1
-            }
-        }
-        return order.map { SizeBucket(label: $0, count: buckets[$0] ?? 0) }
-    }
-
-    nonisolated private static func computeContactRelationships(emails: [MBOXParser.RawEmail]) -> [ContactRelationship] {
-        var pairs: [String: Int] = [:]
-        for email in emails {
-            let fromRaw = email.headers["From"] ?? ""
-            let from = fromRaw.components(separatedBy: "<").last?.replacingOccurrences(of: ">", with: "").trimmingCharacters(in: .whitespaces).lowercased() ?? fromRaw.lowercased()
-            guard !from.isEmpty else { continue }
-
-            let toRaw = email.headers["To"] ?? ""
-            let recipients = toRaw.components(separatedBy: ",").compactMap { addr -> String? in
-                let cleaned = addr.components(separatedBy: "<").last?.replacingOccurrences(of: ">", with: "").trimmingCharacters(in: .whitespaces).lowercased() ?? addr.trimmingCharacters(in: .whitespaces).lowercased()
-                return cleaned.isEmpty ? nil : cleaned
-            }
-
-            for to in recipients {
-                let key = [from, to].sorted().joined(separator: "↔")
-                pairs[key, default: 0] += 1
-            }
-        }
-
-        return pairs.sorted { $0.value > $1.value }
-            .prefix(15)
-            .map { pair in
-                let parts = pair.key.components(separatedBy: "↔")
-                guard let from = parts.first else { return ContactRelationship(from: "?", to: "?", count: pair.value) }
-                return ContactRelationship(from: from, to: parts.count > 1 ? parts[1] : "?", count: pair.value)
-            }
     }
 }
 

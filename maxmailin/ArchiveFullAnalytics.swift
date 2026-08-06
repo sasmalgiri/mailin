@@ -37,38 +37,44 @@ final class ArchiveFullAnalyticsService {
     // MARK: - Public entry points
 
     /// Array path (also used as the oracle and for legacy filtered selections).
+    /// CPU work runs off the MainActor via a detached task.
     func compute(emails: [MBOXParser.RawEmail]) async -> AnalyticsData {
-        var acc = TallyAccumulator()
-        for e in emails { acc.ingest(e) }
-        var data = acc.finalize()
-        await applyNLP(to: &data, over: emails)
-        return data
+        await Task.detached(priority: .userInitiated) {
+            var acc = TallyAccumulator()
+            for e in emails { acc.ingest(e) }
+            var data = acc.finalize()
+            await Self.applyNLP(to: &data, over: emails)
+            return data
+        }.value
     }
 
     /// Streaming path — bounded tallies over the whole scope + NLP over a
-    /// bounded most-recent working set. Peak residency is one page + `nlpCap`.
+    /// bounded most-recent working set. Peak residency is one page + `nlpCap`,
+    /// and the fold runs off the MainActor.
     func compute(scope query: EmailQuery = .all,
                  nlpCap: Int = defaultNLPCap,
                  batchSize: Int = 500) async throws -> AnalyticsData {
-        var acc = TallyAccumulator()
-        var workingSet: [MBOXParser.RawEmail] = []
-        workingSet.reserveCapacity(min(nlpCap, 1024))
-
-        let stream = service.streamFullEmails(query: query, batchSize: batchSize)
-        for try await batch in stream {
-            for e in batch {
-                acc.ingest(e)
-                if workingSet.count < nlpCap { workingSet.append(e) }
+        let svc = service
+        return try await Task.detached(priority: .userInitiated) {
+            var acc = TallyAccumulator()
+            var workingSet: [MBOXParser.RawEmail] = []
+            workingSet.reserveCapacity(min(nlpCap, 1024))
+            let stream = await svc.streamFullEmails(query: query, batchSize: batchSize)
+            for try await batch in stream {
+                for e in batch {
+                    acc.ingest(e)
+                    if workingSet.count < nlpCap { workingSet.append(e) }
+                }
             }
-        }
-        var data = acc.finalize()
-        await applyNLP(to: &data, over: workingSet)
-        return data
+            var data = acc.finalize()
+            await Self.applyNLP(to: &data, over: workingSet)
+            return data
+        }.value
     }
 
     // MARK: - NLP (shared by both paths)
 
-    private func applyNLP(to data: inout AnalyticsData, over emails: [MBOXParser.RawEmail]) async {
+    nonisolated private static func applyNLP(to data: inout AnalyticsData, over emails: [MBOXParser.RawEmail]) async {
         let sentiment = EmailNLPEngine.averageSentiment(of: emails)
         data.avgSentiment = sentiment.average
         data.sentimentLabel = sentiment.label
@@ -109,6 +115,13 @@ final class ArchiveFullAnalyticsService {
         private var relationships: [String: Int] = [:]
 
         private static let sizeOrder = ["< 1 KB", "1-10 KB", "10-100 KB", "100 KB-1 MB", "> 1 MB"]
+
+        /// Deterministic ranking: count DESC, then key ASC — so streaming and
+        /// array folds (which build the dictionary in different orders) produce
+        /// identical tie ordering.
+        static func byCountThenKey(_ a: (key: String, value: Int), _ b: (key: String, value: Int)) -> Bool {
+            a.value != b.value ? a.value > b.value : a.key < b.key
+        }
 
         private func cleanAddress(_ raw: String) -> String {
             raw.components(separatedBy: "<").last?
@@ -186,7 +199,7 @@ final class ArchiveFullAnalyticsService {
             data.timelineBuckets = timeline.sorted { $0.key < $1.key }
                 .map { TimelineBucket(date: $0.key, sent: $0.value.sent, received: $0.value.received) }
 
-            data.topContacts = contacts.sorted { $0.value > $1.value }.prefix(10)
+            data.topContacts = contacts.sorted(by: Self.byCountThenKey).prefix(10)
                 .map { ContactCount(address: $0.key, count: $0.value) }
 
             var cells: [HeatmapCell] = []
@@ -197,15 +210,15 @@ final class ArchiveFullAnalyticsService {
             }
             data.heatmapData = cells
 
-            data.attachmentTypes = attachmentTypes.sorted { $0.value > $1.value }
+            data.attachmentTypes = attachmentTypes.sorted(by: Self.byCountThenKey)
                 .map { AttachmentTypeCount(fileType: $0.key, count: $0.value) }
 
-            data.domainCounts = domains.sorted { $0.value > $1.value }.prefix(15)
+            data.domainCounts = domains.sorted(by: Self.byCountThenKey).prefix(15)
                 .map { DomainCount(domain: $0.key, count: $0.value) }
 
             data.sizeDistribution = Self.sizeOrder.map { SizeBucket(label: $0, count: sizeBuckets[$0] ?? 0) }
 
-            data.contactRelationships = relationships.sorted { $0.value > $1.value }.prefix(15)
+            data.contactRelationships = relationships.sorted(by: Self.byCountThenKey).prefix(15)
                 .map { pair -> ContactRelationship in
                     let parts = pair.key.components(separatedBy: "↔")
                     guard let from = parts.first else { return ContactRelationship(from: "?", to: "?", count: pair.value) }
