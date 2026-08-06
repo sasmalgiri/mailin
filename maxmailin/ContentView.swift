@@ -881,7 +881,7 @@ struct ContentView: View {
             ITAdminAnalysisView()
                 .navigationTitle("IT Admin Analysis")
         case .journalistWorkbench:
-            JournalistInvestigationView(emails: hubCurrentEmails)
+            JournalistInvestigationView()
                 .navigationTitle("Investigation Workbench")
         case .personalOrganizer:
             PersonalEmailOrganizerView(

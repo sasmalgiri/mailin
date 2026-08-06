@@ -1,13 +1,11 @@
 import SwiftUI
 
 struct JournalistInvestigationView: View {
-    let emails: [MBOXParser.RawEmail]
-    var v2Source: PaginatedEmailViewModel? = nil
-
-    private var effectiveEmails: [MBOXParser.RawEmail] {
-        if let v2 = v2Source, !v2.emails.isEmpty { return v2.emails }
-        return emails
-    }
+    // v2: bounded most-recent working set streamed from the store (no injected
+    // corpus). Investigation engines/contact-browse/export run over this sample;
+    // the exact archive total comes from the store.
+    @State private var workingSet: [MBOXParser.RawEmail] = []
+    @State private var archiveTotal = 0
 
     // MARK: - State
 
@@ -131,10 +129,21 @@ struct JournalistInvestigationView: View {
         .overlay { if AnalysisCoordinator.isEnabled { AnalysisProgressOverlay(coordinator: coordinator) } }
         .featureTutorial(.journalist, key: "journalist_tutorial_seen", isPresented: $showTutorial)
         .sheet(isPresented: $showExportNotes) { exportNotesSheet }
+        .task { await loadBoundedWorkingSet() }
         .task { await loadV3Data() }
         .task { await loadV4Data() }
         .task { await loadInvestigationFeatures() }
         .sheet(isPresented: $showPDFExport) { pdfExportSheet }
+    }
+
+    /// Load the bounded working set + exact archive total from the store.
+    private func loadBoundedWorkingSet() async {
+        archiveTotal = (try? await ArchiveDataService.shared.count()) ?? 0
+        guard workingSet.isEmpty else { return }
+        var acc: [MBOXParser.RawEmail] = []
+        let stream = ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
+        do { for try await b in stream { acc.append(contentsOf: b); if acc.count >= 2000 { break } } } catch { }
+        workingSet = Array(acc.prefix(2000))
     }
 
     private func loadV4Data() async {
@@ -168,7 +177,7 @@ struct JournalistInvestigationView: View {
             Task {
                 let result = await FoundationModelEngine.enhanceWithAI(
                     scope: .investigation,
-                    emails: Array(effectiveEmails.prefix(50)),
+                    emails: Array(workingSet.prefix(50)),
                     context: "Extract the most newsworthy, impactful, or revealing direct quotes from these emails. Return each quote with attribution."
                 )
                 if let text = result {
@@ -188,8 +197,10 @@ struct JournalistInvestigationView: View {
         if loaded.nodeCount > 0 { graph = loaded; kgLoaded = true }
 
         guard !hasV3Analysis else { return }
+        var guardCount = 0
+        while workingSet.isEmpty && guardCount < 200 { try? await Task.sleep(nanoseconds: 50_000_000); guardCount += 1 }
         isV3Loading = true
-        let emailsCopy = effectiveEmails
+        let emailsCopy = workingSet
 
         guard AnalysisCoordinator.isEnabled else {
             let sentiment = EmailNLPEngine.analyzeSentiment(of: emailsCopy)
@@ -225,7 +236,7 @@ struct JournalistInvestigationView: View {
     private func loadInvestigationFeatures() async {
         while !hasV3Analysis { try? await Task.sleep(nanoseconds: 100_000_000) }
         guard !hasInvestigationFeatures else { return }
-        let emailsCopy = effectiveEmails
+        let emailsCopy = workingSet
         let graphCopy: KnowledgeGraph? = kgLoaded ? graph : nil
         let anomCopy = anomalies
 
@@ -384,7 +395,7 @@ struct JournalistInvestigationView: View {
                 if let selected = selectedContactEmail {
                     Divider()
                     sectionTitle("Emails involving \(selected)", icon: "envelope", color: .purple)
-                    let contactEmails = effectiveEmails.filter {
+                    let contactEmails = workingSet.filter {
                         ($0.headers["From"] ?? "").lowercased().contains(selected.lowercased()) ||
                         ($0.headers["To"] ?? "").lowercased().contains(selected.lowercased()) ||
                         ($0.headers["Cc"] ?? "").lowercased().contains(selected.lowercased())
@@ -411,7 +422,7 @@ struct JournalistInvestigationView: View {
     private func computeContactStats() -> [ContactStat] {
         var stats: [String: ContactStat] = [:]
 
-        for email in effectiveEmails {
+        for email in workingSet {
             let fromFull = email.headers["From"] ?? ""
             let fromEmail = extractEmail(fromFull).lowercased()
             let fromName = fromFull.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? fromEmail
@@ -812,7 +823,7 @@ struct JournalistInvestigationView: View {
         var groups: [String: [MBOXParser.RawEmail]] = [:]
         var sortDates: [String: Date] = [:]
 
-        for email in effectiveEmails {
+        for email in workingSet {
             let date = MBOXParser.parseDate(email.headers["Date"] ?? "")
             let key = date.map { formatter.string(from: $0) } ?? "Unknown Date"
             groups[key, default: []].append(email)
@@ -993,7 +1004,7 @@ struct JournalistInvestigationView: View {
                                        "have", "been", "will", "are", "was", "not", "but", "all", "can",
                                        "had", "her", "one", "our", "out", "you", "your", "has", "its"]
 
-        for email in effectiveEmails {
+        for email in workingSet {
             let subject = email.headers["Subject"] ?? ""
             let cleaned = subject.lowercased()
                 .replacingOccurrences(of: "re:", with: "")
@@ -1378,7 +1389,7 @@ struct JournalistInvestigationView: View {
                            "meeting", "discussed", "consensus", "authorized"]
         var quotes: [KeyQuote] = []
 
-        for email in effectiveEmails.prefix(100) {
+        for email in workingSet.prefix(100) {
             let sentences = email.plainBody.components(separatedBy: CharacterSet(charactersIn: ".!?"))
             let from = email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "?"
             let date = email.headers["Date"] ?? ""
@@ -1407,7 +1418,7 @@ struct JournalistInvestigationView: View {
                 let dateRange = computeDateRange()
 
                 HStack(spacing: 12) {
-                    overviewCard("Total Emails", value: "\(effectiveEmails.count)", icon: "envelope", color: .blue)
+                    overviewCard("Total Emails", value: "\(archiveTotal)", icon: "envelope", color: .blue)
                     overviewCard("Unique Contacts", value: "\(contacts.count)", icon: "person.3", color: .purple)
                     overviewCard("Bookmarked", value: "\(bookmarkedEmailIDs.count)", icon: "bookmark.fill", color: .orange)
                     overviewCard("Leads", value: "\(leads.count)", icon: "lightbulb", color: .yellow)
@@ -1415,7 +1426,7 @@ struct JournalistInvestigationView: View {
 
                 HStack(spacing: 12) {
                     overviewCard("Key Quotes", value: "\(keyQuotes.count)", icon: "quote.opening", color: .teal)
-                    overviewCard("Attachments", value: "\(effectiveEmails.flatMap { $0.attachments }.count)", icon: "paperclip", color: .brown)
+                    overviewCard("Attachments", value: "\(workingSet.flatMap { $0.attachments }.count)", icon: "paperclip", color: .brown)
                     overviewCard("Date Range", value: dateRange, icon: "calendar", color: .green)
                     overviewCard("Avg/Day", value: computeAvgPerDay(), icon: "chart.line.uptrend.xyaxis", color: .cyan)
                 }
@@ -1555,8 +1566,8 @@ struct JournalistInvestigationView: View {
                 Spacer()
                 Button("Generate PDF") {
                     Task {
-                        let bookmarked = effectiveEmails.filter { bookmarkedEmailIDs.contains($0.id) }
-                        let target = bookmarked.isEmpty ? emails : bookmarked
+                        let bookmarked = workingSet.filter { bookmarkedEmailIDs.contains($0.id) }
+                        let target = bookmarked.isEmpty ? workingSet : bookmarked
                         let data = await InvestigationReportGenerator.generateReport(
                             emails: target,
                             title: "Investigation Report",
@@ -1574,7 +1585,7 @@ struct JournalistInvestigationView: View {
                 Text("This report will include:")
                     .font(.system(size: 12, weight: .medium))
                 let bookmarked = bookmarkedEmailIDs.count
-                Text("• \(bookmarked > 0 ? "\(bookmarked) bookmarked" : "\(effectiveEmails.count) total") emails")
+                Text("• \(bookmarked > 0 ? "\(bookmarked) bookmarked" : "\(workingSet.count) total") emails")
                 Text("• \(leads.count) investigation leads")
                 Text("• \(keyQuotes.count) key quotes")
                 Text("• AI-enhanced analysis (if available)")
@@ -1680,7 +1691,7 @@ struct JournalistInvestigationView: View {
     }
 
     private func computeDateRange() -> String {
-        let dates = effectiveEmails.compactMap { MBOXParser.parseDate($0.headers["Date"] ?? "") }
+        let dates = workingSet.compactMap { MBOXParser.parseDate($0.headers["Date"] ?? "") }
         guard let first = dates.min(), let last = dates.max() else { return "N/A" }
         let f = DateFormatter()
         f.dateFormat = "MMM yyyy"
@@ -1688,17 +1699,17 @@ struct JournalistInvestigationView: View {
     }
 
     private func computeAvgPerDay() -> String {
-        let dates = effectiveEmails.compactMap { MBOXParser.parseDate($0.headers["Date"] ?? "") }
+        let dates = workingSet.compactMap { MBOXParser.parseDate($0.headers["Date"] ?? "") }
         guard let first = dates.min(), let last = dates.max() else { return "N/A" }
         let days = max(1, Calendar.current.dateComponents([.day], from: first, to: last).day ?? 1)
-        return String(format: "%.1f", Double(effectiveEmails.count) / Double(days))
+        return String(format: "%.1f", Double(workingSet.count) / Double(days))
     }
 
     private func generateExportText() -> String {
         var text = "INVESTIGATION NOTES\n"
         text += String(repeating: "=", count: 60) + "\n"
         text += "Date: \(Date())\n"
-        text += "Total Emails: \(effectiveEmails.count)\n"
+        text += "Total Emails: \(archiveTotal)\n"
         text += "Contacts: \(computeContactStats().count)\n\n"
 
         if !leads.isEmpty {
@@ -1722,7 +1733,7 @@ struct JournalistInvestigationView: View {
         if !bookmarkedEmailIDs.isEmpty {
             text += "BOOKMARKED EMAILS (\(bookmarkedEmailIDs.count))\n"
             text += String(repeating: "-", count: 40) + "\n"
-            for email in effectiveEmails where bookmarkedEmailIDs.contains(email.id) {
+            for email in workingSet where bookmarkedEmailIDs.contains(email.id) {
                 text += "  Subject: \(email.headers["Subject"] ?? "(No Subject)")\n"
                 text += "  From: \(email.headers["From"] ?? "")\n"
                 text += "  Date: \(email.headers["Date"] ?? "")\n\n"
@@ -1751,7 +1762,7 @@ struct JournalistInvestigationView: View {
     }
 
     private func runSentimentAnalysis() {
-        let emailsCopy = effectiveEmails
+        let emailsCopy = workingSet
         Task.detached(priority: .userInitiated) {
             var results: [UUID: SentimentResult] = [:]
             let positiveWords: Set<String> = ["thank", "thanks", "great", "good", "excellent", "wonderful", "appreciate",
