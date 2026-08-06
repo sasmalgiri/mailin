@@ -1,12 +1,22 @@
 import SwiftUI
 
 struct LegalReviewWorkspaceView: View {
-    let emails: [MBOXParser.RawEmail]
-    var v2Source: PaginatedEmailViewModel? = nil
+    // v2: no injected corpus. Review list is a growable paged full-email window
+    // from the store (reaches EVERY email for privilege review); the legal
+    // analysis engines + stats + export run over a bounded working set.
+    @State private var pagedEmails: [MBOXParser.RawEmail] = []
+    @State private var pageCursor: EmailPageCursor?
+    @State private var canLoadMore = true
+    @State private var isLoadingPage = false
+    @State private var workingSet: [MBOXParser.RawEmail] = []
+    @State private var archiveTotal = 0
+    @State private var searchHits: [MBOXParser.RawEmail] = []
+    @State private var selectedFullEmail: MBOXParser.RawEmail?
 
-    private var effectiveEmails: [MBOXParser.RawEmail] {
-        if let v2 = v2Source, !v2.emails.isEmpty { return v2.emails }
-        return emails
+    /// Emails shown in the review list: FTS hits when filtering, else the paged
+    /// browse window.
+    private var browseEmails: [MBOXParser.RawEmail] {
+        searchHits.isEmpty ? pagedEmails : searchHits
     }
     @Binding var selectedEmailIDs: Set<UUID>
 
@@ -140,7 +150,8 @@ struct LegalReviewWorkspaceView: View {
 
     private var selectedEmail: MBOXParser.RawEmail? {
         guard let id = selectedEmailIDs.first else { return nil }
-        return effectiveEmails.first { $0.id == id }
+        if let sel = selectedFullEmail, sel.id == id { return sel }
+        return browseEmails.first { $0.id == id }
     }
 
     var body: some View {
@@ -184,7 +195,48 @@ struct LegalReviewWorkspaceView: View {
         .sheet(isPresented: $showPrivilegeLog) { privilegeLogSheet }
         .sheet(isPresented: $showDashboard) { reviewDashboardSheet }
         .sheet(isPresented: $showPDFExport) { pdfPrivilegeReportSheet }
+        .task { await loadInitial() }
         .task { await loadV3Data() }
+        .onChange(of: filterSearchText) { _, _ in Task { await runSearch() } }
+        .onChange(of: selectedEmailIDs) { _, ids in Task { await hydrateSelected(ids.first) } }
+    }
+
+    // MARK: - v2 bounded loaders
+
+    private func loadInitial() async {
+        archiveTotal = (try? await ArchiveDataService.shared.count()) ?? 0
+        if pagedEmails.isEmpty { await loadNextPage() }
+        if workingSet.isEmpty {
+            var acc: [MBOXParser.RawEmail] = []
+            let stream = ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
+            do { for try await b in stream { acc.append(contentsOf: b); if acc.count >= 2000 { break } } } catch { }
+            workingSet = Array(acc.prefix(2000))
+        }
+    }
+
+    /// Append the next page of full emails to the review window (infinite scroll
+    /// reaches every email; memory bounded per page).
+    private func loadNextPage() async {
+        guard canLoadMore, !isLoadingPage else { return }
+        isLoadingPage = true
+        defer { isLoadingPage = false }
+        guard let page = try? await ArchiveDataService.shared.page(query: .all, cursor: pageCursor, limit: 100) else { return }
+        let full = (try? await ArchiveDataService.shared.fullEmails(ids: page.summaries.map(\.id))) ?? []
+        pagedEmails.append(contentsOf: full)
+        pageCursor = page.nextCursor
+        canLoadMore = page.nextCursor != nil
+    }
+
+    private func runSearch() async {
+        let q = filterSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { searchHits = []; return }
+        searchHits = ((try? await ArchiveRetrievalService.shared.retrieve(q, limit: 200)) ?? []).map(\.email)
+    }
+
+    private func hydrateSelected(_ id: UUID?) async {
+        guard let id else { selectedFullEmail = nil; return }
+        if let inWindow = browseEmails.first(where: { $0.id == id }) { selectedFullEmail = inWindow; return }
+        selectedFullEmail = try? await ArchiveDataService.shared.fullEmail(id: id)
     }
 
     private func loadV3Data() async {
@@ -192,8 +244,10 @@ struct LegalReviewWorkspaceView: View {
         if loaded.nodeCount > 0 { graph = loaded; kgLoaded = true }
 
         guard !hasV3Analysis else { return }
+        var guardCount = 0
+        while workingSet.isEmpty && guardCount < 200 { try? await Task.sleep(nanoseconds: 50_000_000); guardCount += 1 }
         isV3Loading = true
-        let emailsCopy = effectiveEmails
+        let emailsCopy = workingSet
 
         guard AnalysisCoordinator.isEnabled else {
             let pii = EmailNLPEngine.detectPII(in: emailsCopy)
@@ -268,7 +322,7 @@ struct LegalReviewWorkspaceView: View {
 
                 Spacer()
 
-                Text("\(filteredEmails.count)/\(effectiveEmails.count)")
+                Text("\(filteredEmails.count)/\(workingSet.count)")
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundColor(.secondary)
 
@@ -411,7 +465,7 @@ struct LegalReviewWorkspaceView: View {
     // MARK: - Filtered Emails
 
     private var filteredEmails: [MBOXParser.RawEmail] {
-        var result = effectiveEmails
+        var result = browseEmails
 
         if let fp = filterPrivilege {
             result = result.filter { (privilegeAssignments[$0.id] ?? .unreviewed) == fp }
@@ -498,6 +552,13 @@ struct LegalReviewWorkspaceView: View {
                         documentPreview(for: email)
                     }
                 }
+                .onAppear {
+                    // Infinite scroll: load the next page at the end of the
+                    // browse window (not while filtering).
+                    if filterSearchText.isEmpty, email.id == pagedEmails.last?.id {
+                        Task { await loadNextPage() }
+                    }
+                }
             }
             .listStyle(.plain)
             .environment(\.defaultMinListRowHeight, 28)
@@ -544,7 +605,7 @@ struct LegalReviewWorkspaceView: View {
             Spacer()
 
             Button {
-                forensicManager.runPrivilegeScan(on: emails)
+                forensicManager.runPrivilegeScan(on: workingSet)
                 runAISuggestions()
             } label: {
                 HStack(spacing: 2) {
@@ -1096,11 +1157,11 @@ struct LegalReviewWorkspaceView: View {
                 Spacer()
                 Button("Generate PDF") {
                     Task {
-                        let privilegedEmails = effectiveEmails.filter {
+                        let privilegedEmails = workingSet.filter {
                             let priv = privilegeAssignments[$0.id] ?? .unreviewed
                             return priv != .unreviewed && priv != .notPrivileged
                         }
-                        let target = privilegedEmails.isEmpty ? emails : privilegedEmails
+                        let target = privilegedEmails.isEmpty ? workingSet : privilegedEmails
                         let data = await InvestigationReportGenerator.generateReport(
                             emails: target,
                             title: "Privilege Review Report",
@@ -1115,13 +1176,13 @@ struct LegalReviewWorkspaceView: View {
                 Button("Done") { showPDFExport = false }
             }
             VStack(alignment: .leading, spacing: 6) {
-                let reviewed = effectiveEmails.filter { privilegeAssignments[$0.id] != nil && privilegeAssignments[$0.id] != .unreviewed }.count
-                let privileged = effectiveEmails.filter {
+                let reviewed = workingSet.filter { privilegeAssignments[$0.id] != nil && privilegeAssignments[$0.id] != .unreviewed }.count
+                let privileged = workingSet.filter {
                     let p = privilegeAssignments[$0.id] ?? .unreviewed
                     return p == .attorneyClient || p == .workProduct || p == .jointDefense || p == .partiallyPrivileged
                 }.count
                 Text("Report Summary").font(.headline)
-                Text("Total emails: \(effectiveEmails.count)")
+                Text("Total emails: \(workingSet.count)")
                 Text("Reviewed: \(reviewed)")
                 Text("Privileged: \(privileged)")
                 Text("PII findings: \(piiFindings.count)")
@@ -1691,7 +1752,7 @@ struct LegalReviewWorkspaceView: View {
         let reviewed = privilegeAssignments.values.filter { $0 != .unreviewed }.count
         let responsive = responsivenessAssignments.values.filter { $0 == .responsive || $0 == .partiallyResponsive }.count
         let privileged = privilegeAssignments.values.filter { $0 == .attorneyClient || $0 == .workProduct || $0 == .jointDefense || $0 == .partiallyPrivileged }.count
-        let progress = effectiveEmails.isEmpty ? 0.0 : Double(reviewed) / Double(effectiveEmails.count)
+        let progress = workingSet.isEmpty ? 0.0 : Double(reviewed) / Double(workingSet.count)
         let progressPct = Int(progress * 100)
 
         return VStack(spacing: 0) {
@@ -1701,7 +1762,7 @@ struct LegalReviewWorkspaceView: View {
                     ProgressView(value: progress)
                         .frame(width: 80)
                         .tint(progress >= 1.0 ? .green : .indigo)
-                    Text("\(reviewed) of \(effectiveEmails.count) reviewed (\(progressPct)%)")
+                    Text("\(reviewed) of \(workingSet.count) reviewed (\(progressPct)%)")
                         .font(.system(size: 9, weight: .medium))
                         .foregroundColor(.secondary)
                 }
@@ -1728,8 +1789,8 @@ struct LegalReviewWorkspaceView: View {
 
                 Spacer()
 
-                if filteredEmails.count != effectiveEmails.count {
-                    Text("Showing \(filteredEmails.count) of \(effectiveEmails.count)")
+                if filteredEmails.count != archiveTotal {
+                    Text("Showing \(filteredEmails.count) of \(archiveTotal)")
                         .font(.system(size: 9)).foregroundColor(.indigo)
                         .help("Filters are active — not all documents are shown")
                 }
@@ -1753,7 +1814,7 @@ struct LegalReviewWorkspaceView: View {
 
     private var privilegeLogSheet: some View {
         let logEntries = LegalAnalysisFeatures.generatePrivilegeLog(
-            emails: emails,
+            emails: workingSet,
             classifications: privilegeClassifications,
             batesPrefix: "DOC"
         )
@@ -1771,7 +1832,7 @@ struct LegalReviewWorkspaceView: View {
             }
 
             if logEntries.isEmpty {
-                let manualPrivileged = effectiveEmails.filter {
+                let manualPrivileged = workingSet.filter {
                     let priv = privilegeAssignments[$0.id] ?? .unreviewed
                     return priv == .attorneyClient || priv == .workProduct || priv == .jointDefense || priv == .partiallyPrivileged
                 }
@@ -1847,7 +1908,7 @@ struct LegalReviewWorkspaceView: View {
     // MARK: - Dashboard Sheet
 
     private var reviewDashboardSheet: some View {
-        let total = effectiveEmails.count
+        let total = workingSet.count
         let reviewed = privilegeAssignments.values.filter { $0 != .unreviewed }.count
         let responsive = responsivenessAssignments.values.filter { $0 == .responsive || $0 == .partiallyResponsive }.count
         let privileged = privilegeAssignments.values.filter { $0 != .unreviewed && $0 != .notPrivileged }.count
@@ -1944,7 +2005,7 @@ struct LegalReviewWorkspaceView: View {
     private func runAISuggestions() {
         isRunningAIScan = true
         var privilegeResults: [(UUID, Bool, [String], String)] = []
-        for email in effectiveEmails {
+        for email in workingSet {
             let result = ForensicManager.detectPrivilege(for: email)
             privilegeResults.append((email.id, result.isLikelyPrivileged, result.indicators, email.plainBody))
         }
@@ -2018,7 +2079,7 @@ struct LegalReviewWorkspaceView: View {
 
     private func exportPrivilegeLog() {
         var csv = "Bates Number,From,To,Date,Subject,Privilege Designation,Basis\n"
-        for email in effectiveEmails {
+        for email in workingSet {
             let priv = privilegeAssignments[email.id] ?? .unreviewed
             guard priv != .unreviewed && priv != .notPrivileged else { continue }
             let bates = batesManager.getBatesNumber(for: email.id) ?? ""

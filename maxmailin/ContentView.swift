@@ -875,7 +875,7 @@ struct ContentView: View {
             WorkspaceManagerView()
                 .navigationTitle("Workspaces")
         case .legalWorkspace:
-            LegalReviewWorkspaceView(emails: hubCurrentEmails, selectedEmailIDs: $selectedEmailIDs)
+            LegalReviewWorkspaceView(selectedEmailIDs: $selectedEmailIDs)
                 .navigationTitle("Legal Review Workspace")
         case .itAdminDashboard:
             ITAdminAnalysisView()
