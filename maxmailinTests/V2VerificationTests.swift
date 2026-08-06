@@ -918,6 +918,62 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertTrue(injReport.answer.abstained, "injection content with no evidence is rejected, not obeyed")
     }
 
+    // MARK: - Stage 5 W3 / Engine cutover 2 — AnomalyDetectionEngine (streaming)
+
+    /// The streaming, store-driven AnomalyDetectionEngine.detectAnomalies(from:)
+    /// scans the whole archive with bounded accumulators and produces the SAME
+    /// anomalies as the in-RAM array oracle over identical (round-tripped) data.
+    func testAnomalyEngine_streamingMatchesOracleArchiveWide() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-anom-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        let svc = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+
+        // Uniform body + sender → tone-shift / new-domain / hour / attachment
+        // detectors stay silent in BOTH paths. Only the deterministic,
+        // order-independent detectors fire: a frequency spike + a recipient
+        // anomaly.
+        var fixtures: [MBOXParser.RawEmail] = []
+        for d in 0..<10 {
+            fixtures.append(makeEmailDated(mid: "<a-\(d)@t>", subject: "day \(d)", body: "routine content", dayOffset: d))
+        }
+        for k in 0..<6 {   // 6 emails on day 11 → volume spike
+            fixtures.append(makeEmailDated(mid: "<spike-\(k)@t>", subject: "spike \(k)", body: "routine content", dayOffset: 10))
+        }
+        var recip = makeEmailDated(mid: "<recip@t>", subject: "broadcast", body: "routine content", dayOffset: 5)
+        recip.headers["To"] = (0..<12).map { "r\($0)@x.com" }.joined(separator: ", ")
+        fixtures.append(recip)
+        try await store.insertBatch(fixtures, batchSize: 100)
+
+        // Oracle: the SAME data as the store returns it (round-tripped), analyzed
+        // via the in-RAM array path.
+        var collected: [MBOXParser.RawEmail] = []
+        for try await b in svc.streamFullEmails() { collected.append(contentsOf: b) }
+        let oracle = AnomalyDetectionEngine.detectAnomalies(in: collected)
+        let streamed = try await AnomalyDetectionEngine.detectAnomalies(from: svc)
+
+        func key(_ a: AnomalyDetectionEngine.Anomaly) -> String {
+            "\(a.type.rawValue)|\(a.title)|\(String(format: "%.4f", a.severity))|\(a.detail)"
+        }
+        XCTAssertEqual(Set(streamed.map(key)), Set(oracle.map(key)),
+                       "streaming anomalies match the array oracle exactly")
+        // The intended anomalies are present.
+        XCTAssertTrue(streamed.contains { $0.type == .frequencySpike }, "spike detected")
+        XCTAssertTrue(streamed.contains { $0.type == .recipientAnomaly }, "recipient anomaly detected")
+        // affectedEmails agree as sets for each fired anomaly.
+        for s in streamed {
+            let match = oracle.first { key($0) == key(s) }
+            XCTAssertEqual(Set(s.affectedEmails), Set(match?.affectedEmails ?? []),
+                           "affected ids match for \(s.title)")
+        }
+        // Empty archive → no anomalies (bounded guard).
+        let empty = SQLiteEmailStore(directory: root.appendingPathComponent("empty"))
+        let emptySvc = ArchiveDataService(repository: EmailStoreRepository(store: empty, fts: fts))
+        let none = try await AnomalyDetectionEngine.detectAnomalies(from: emptySvc)
+        XCTAssertTrue(none.isEmpty)
+    }
+
     // MARK: - Stage 5 W3 / Engine cutover 1 — PredictiveEngine (bounded)
 
     /// The bounded, store-driven PredictiveEngine.analyze(from:) matches the
