@@ -256,9 +256,12 @@ struct LegalReviewWorkspaceView: View {
             let topics = EmailNLPEngine.extractTopics(from: emailsCopy, limit: 15)
             piiFindings = pii; entities = ents; anomalies = anom; nlpTopics = topics
             hasV3Analysis = true; isV3Loading = false
-            let pc = LegalAnalysisFeatures.classifyPrivilege(emails: emailsCopy)
-            legalHoldDetections = LegalAnalysisFeatures.detectLegalHolds(in: emailsCopy)
-            custodianAnalyses = LegalAnalysisFeatures.analyzeCustodians(emails: emailsCopy, privilegeClassifications: pc)
+            // Archive-wide: classify EVERY document for privilege (bounded stream),
+            // then derive holds/custodians from the same archive-wide set.
+            let pc = (try? await LegalAnalysisFeatures.classifyPrivilege(from: .shared)) ?? []
+            let pcEmails = pc.map(\.email)
+            legalHoldDetections = LegalAnalysisFeatures.detectLegalHolds(in: pcEmails)
+            custodianAnalyses = LegalAnalysisFeatures.analyzeCustodians(emails: pcEmails, privilegeClassifications: pc)
             privilegeClassifications = pc; return
         }
 
@@ -279,15 +282,18 @@ struct LegalReviewWorkspaceView: View {
         piiFindings = pii; entities = ents; anomalies = anom; nlpTopics = topics
         hasV3Analysis = true; isV3Loading = false
 
-        coordinator.advance(step: 5, label: "Classifying privilege...")
-        guard let privClass = await coordinator.runDetached({ LegalAnalysisFeatures.classifyPrivilege(emails: emailsCopy) }) else { coordinator.finish(); return }
+        // Archive-wide: classify EVERY document for privilege (bounded stream),
+        // then derive holds/custodians from the same archive-wide set.
+        coordinator.advance(step: 5, label: "Classifying privilege (archive-wide)...")
+        let privClass = (try? await LegalAnalysisFeatures.classifyPrivilege(from: .shared)) ?? []
+        let privCopy = privClass
+        let pcEmails = privClass.map(\.email)
 
         coordinator.advance(step: 6, label: "Detecting legal holds...")
-        guard let holds = await coordinator.runDetached({ LegalAnalysisFeatures.detectLegalHolds(in: emailsCopy) }) else { coordinator.finish(); return }
+        guard let holds = await coordinator.runDetached({ LegalAnalysisFeatures.detectLegalHolds(in: pcEmails) }) else { coordinator.finish(); return }
 
-        let privCopy = privClass
         coordinator.advance(step: 7, label: "Analyzing custodians...")
-        guard let custodians = await coordinator.runDetached({ LegalAnalysisFeatures.analyzeCustodians(emails: emailsCopy, privilegeClassifications: privCopy) }) else { coordinator.finish(); return }
+        guard let custodians = await coordinator.runDetached({ LegalAnalysisFeatures.analyzeCustodians(emails: pcEmails, privilegeClassifications: privCopy) }) else { coordinator.finish(); return }
 
         privilegeClassifications = privClass
         legalHoldDetections = holds
