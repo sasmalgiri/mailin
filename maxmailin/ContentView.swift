@@ -719,7 +719,7 @@ struct ContentView: View {
                 .navigationTitle("GDPR Compliance")
 
         case .anomalyDetection:
-            AnomalyDetectionView(emails: hubCurrentEmails)
+            AnomalyDetectionView()
                 .navigationTitle("Anomaly Detection")
         case .iocExtractor:
             IOCExtractorView(emails: hubCurrentEmails)
@@ -4564,7 +4564,7 @@ struct V8SheetsModifier: ViewModifier {
                     .resizableSheet()
             }
             .sheet(isPresented: $appState.showAnomalyDetection) {
-                AnomalyDetectionView(emails: currentEmails, isPresented: $appState.showAnomalyDetection)
+                AnomalyDetectionView(isPresented: $appState.showAnomalyDetection)
                     .resizableSheet()
             }
             .sheet(isPresented: $appState.showSmartAutoTagger) {

@@ -8,7 +8,8 @@
 import SwiftUI
 
 struct AnomalyDetectionView: View {
-    let emails: [MBOXParser.RawEmail]
+    /// v2: anomalies are detected archive-wide by streaming from the activated
+    /// SQLite store — no in-RAM corpus is injected.
     var isPresented: Binding<Bool>?
     @State private var anomalies: [AnomalyDetectionEngine.Anomaly] = []
     @State private var isAnalyzing = false
@@ -285,16 +286,19 @@ struct AnomalyDetectionView: View {
         isLoadingAI = true
         let anomalyTypes = typeCounts.map { "\($0.type.rawValue): \($0.count)" }.joined(separator: ", ")
         let context = """
-        Anomaly detection found \(anomalies.count) anomalies across \(emails.count) emails. \
+        Anomaly detection found \(anomalies.count) anomalies across the archive. \
         Types: \(anomalyTypes.isEmpty ? "none" : anomalyTypes).
         """
-        let emailsCopy = emails
+        // Bounded: hydrate only the affected emails (capped) for AI context —
+        // never the whole corpus.
+        let affectedIDs = Array(Set(anomalies.flatMap { $0.affectedEmails })).prefix(100)
         Task {
+            let emailsForAI = (try? await ArchiveDataService.shared.fullEmails(ids: Array(affectedIDs))) ?? []
             #if canImport(FoundationModels)
             if #available(macOS 26, iOS 26, *) {
                 let result = await FoundationModelEngine.enhanceWithAI(
                     scope: .security,
-                    emails: emailsCopy,
+                    emails: emailsForAI,
                     context: context
                 )
                 aiInsights = result ?? "AI analysis unavailable."
@@ -328,8 +332,8 @@ struct AnomalyDetectionView: View {
 
     private func analyze() {
         isAnalyzing = true
-        Task.detached {
-            let results = AnomalyDetectionEngine.detectAnomalies(in: emails)
+        Task {
+            let results = (try? await AnomalyDetectionEngine.detectAnomalies(from: .shared)) ?? []
             await MainActor.run {
                 anomalies = results
                 isAnalyzing = false
