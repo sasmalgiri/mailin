@@ -40,10 +40,8 @@ struct SearchEmailsIntent: AppIntent {
     var query: String
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
-        let searchTerms = query.components(separatedBy: .whitespaces)
-            .map { $0.trimmingCharacters(in: .punctuationCharacters).lowercased() }
-            .filter { $0.count >= 2 }
-        let results = EmailSearchIndex.shared.search(terms: searchTerms, limit: 10)
+        // Bounded FTS5-backed retrieval (was the in-RAM EmailSearchIndex).
+        let results = (try? await ArchiveRetrievalService.shared.retrieve(query, limit: 10)) ?? []
         let count = results.count
         return .result(value: "Found \(count) emails matching '\(query)'")
     }

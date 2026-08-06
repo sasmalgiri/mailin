@@ -918,6 +918,46 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertTrue(injReport.answer.abstained, "injection content with no evidence is rejected, not obeyed")
     }
 
+    // MARK: - Stage 5 W3 / AI substrate — bounded FTS5-backed retrieval
+
+    /// ArchiveRetrievalService returns bounded, bm25-ordered, store-hydrated
+    /// results — the replacement for the in-RAM EmailSearchIndex retrieval.
+    func testArchiveRetrievalService_boundedFTSBacked() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-retr-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        let data = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+        let retrieval = ArchiveRetrievalService(data: data, fts: fts)
+
+        var fixtures: [MBOXParser.RawEmail] = []
+        for i in 0..<20 {
+            let body = (i % 5 == 0) ? "quarterly budget review meeting" : "routine status note \(i)"
+            fixtures.append(makeEmailDated(mid: "<r-\(i)@t>", subject: "S\(i)", body: body, dayOffset: i))
+        }
+        try await store.insertBatch(fixtures, batchSize: 100)
+        try await fts.indexBatch(fixtures)
+
+        // Relevance retrieval returns only matching emails, bounded and hydrated.
+        let hits = try await retrieval.retrieve("budget", limit: 15)
+        XCTAssertFalse(hits.isEmpty, "found budget emails")
+        XCTAssertTrue(hits.allSatisfy { $0.email.plainBody.contains("budget") }, "only matching emails")
+        XCTAssertFalse(hits.contains { $0.email.plainBody.isEmpty }, "results are hydrated (bodies present)")
+        // bm25 order preserved (scores strictly descending by rank).
+        let scores = hits.map(\.score)
+        XCTAssertEqual(scores, scores.sorted(by: >), "results in descending score/rank order")
+
+        // Bound is honored.
+        let capped = try await retrieval.retrieve("routine", limit: 3)
+        XCTAssertLessThanOrEqual(capped.count, 3, "limit enforced")
+
+        // Empty / no-match queries are safe.
+        let none = try await retrieval.retrieve("   ", limit: 10)
+        XCTAssertTrue(none.isEmpty)
+        let miss = try await retrieval.retrieve("zzznomatchzzz", limit: 10)
+        XCTAssertTrue(miss.isEmpty)
+    }
+
     // MARK: - Stage 5 W3 / Engine cutover 6 — Executive dashboard (streaming)
 
     /// The streaming ExecutiveDashboardView.buildDashboardData(from:) matches the
