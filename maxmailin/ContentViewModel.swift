@@ -7,6 +7,9 @@ import os
 
 @MainActor
 class ContentViewModel: ObservableObject {
+    private static let importLogger = Logger(subsystem: "com.ecosanskriti.mailin",
+                                             category: "Import")
+
     @Published var senderEmail: String = ""
     @Published var selectedFiles: [URL] = []
     @Published var statusMessage = "No file selected."
@@ -293,6 +296,10 @@ class ContentViewModel: ObservableObject {
             var totalParsed = 0
             var errors: [String] = []
             var fileHashes: [ForensicManager.SourceFileHash] = []
+            // Count emails parsed but NOT persisted (store insert threw). These
+            // must not be counted as imported — silently dropping them was how
+            // an archive could look ingested while rows never reached the store.
+            var persistFailureCount = 0
             let totalFiles = max(1.0, Double(urls.count))
             let storageActive = await StorageActivationCoordinator.shared.isActive
 
@@ -332,8 +339,25 @@ class ContentViewModel: ObservableObject {
                         // Persist to the authority, then let the batch fall out of
                         // scope — bounded peak memory.
                         if storageActive {
-                            try? await SQLiteEmailStore.shared.insertBatch(withSource, batchSize: 500)
-                            try? await FTSSearchIndex.shared.indexBatch(withSource)
+                            do {
+                                try await SQLiteEmailStore.shared.insertBatch(withSource, batchSize: 500)
+                            } catch {
+                                // Store insert is the source of truth — a failure
+                                // here is real data loss. Never swallow it: log,
+                                // count it, and skip counting/indexing this batch
+                                // so `totalParsed` reflects only persisted rows.
+                                Self.importLogger.error("Persist failed for \(sourceName, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                                persistFailureCount += withSource.count
+                                return
+                            }
+                            do {
+                                try await FTSSearchIndex.shared.indexBatch(withSource)
+                            } catch {
+                                // Non-fatal: the rows ARE in the store; the launch
+                                // reconciler (FTSReconciler) backfills the FTS index.
+                                // Log so the drift is recorded, never fully silent.
+                                Self.importLogger.warning("FTS index failed for a batch in \(sourceName, privacy: .public); store↔FTS drift will be repaired on next launch: \(error.localizedDescription, privacy: .public)")
+                            }
                         }
                         totalParsed += withSource.count
                         if preview.count < previewCap {
@@ -347,6 +371,13 @@ class ContentViewModel: ObservableObject {
                     self.loadingText = "Imported \(idx+1) of \(urls.count) file(s)..."
                     self.loadingProgress = min(1.0, Double(idx + 1) / totalFiles)
                 }
+            }
+
+            // A persist failure means some parsed emails never reached the store.
+            // Surface it prominently — it is data loss, not a warning.
+            if persistFailureCount > 0 {
+                errors.append("\(persistFailureCount) email(s) could not be saved to the archive and were not imported. Please retry; if this persists, free up disk space and check the log.")
+                Self.importLogger.error("Import completed with \(persistFailureCount, privacy: .public) unpersisted email(s)")
             }
 
             let finalPreview = maxEmails.map { Array(preview.prefix($0)) } ?? preview
