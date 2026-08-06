@@ -1129,7 +1129,7 @@ struct ParsedEmailListView: View {
                 .listStyle(.plain)
                 #else
                 if forensicManager.isEnabled {
-                    ForensicReviewView(emails: emails, selectedEmailIDs: $selectedEmailIDs)
+                    ForensicReviewView(selectedEmailIDs: $selectedEmailIDs)
                 } else {
                     List(emails, id: \.id, selection: $selectedEmailIDs) { email in
                         emailRow(for: email)

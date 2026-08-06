@@ -1,7 +1,23 @@
 import SwiftUI
 
 struct ForensicReviewView: View {
-    let emails: [MBOXParser.RawEmail]
+    // v2: no injected corpus. Review list is a growable paged full-email window
+    // from the store (infinite scroll reaches EVERY email); forensic analysis /
+    // QC / privilege scan / dashboard run over a bounded working set.
+    @State private var pagedEmails: [MBOXParser.RawEmail] = []
+    @State private var pageCursor: EmailPageCursor?
+    @State private var canLoadMore = true
+    @State private var isLoadingPage = false
+    @State private var workingSet: [MBOXParser.RawEmail] = []
+    @State private var archiveTotal = 0
+    @State private var searchHits: [MBOXParser.RawEmail] = []
+    @State private var selectedFullEmail: MBOXParser.RawEmail?
+
+    /// Emails shown in the review list: FTS hits when searching, else the paged
+    /// browse window.
+    private var browseEmails: [MBOXParser.RawEmail] {
+        searchHits.isEmpty ? pagedEmails : searchHits
+    }
     @Binding var selectedEmailIDs: Set<UUID>
 
     @ObservedObject private var forensicManager = ForensicManager.shared
@@ -71,16 +87,17 @@ struct ForensicReviewView: View {
 
     private var selectedEmail: MBOXParser.RawEmail? {
         guard let id = selectedEmailIDs.first else { return nil }
-        return emails.first { $0.id == id }
+        if let sel = selectedFullEmail, sel.id == id { return sel }
+        return browseEmails.first { $0.id == id }
     }
 
     var body: some View {
         VStack(spacing: 0) {
             facetedFilterBar
 
-            if filteredEmails.count != emails.count {
+            if filteredEmails.count != archiveTotal {
                 Label {
-                    Text("Showing \(filteredEmails.count) of \(emails.count) emails matching current filters. Use tags, risk scores, and hot folders to narrow your forensic review scope.")
+                    Text("Showing \(filteredEmails.count) of \(archiveTotal) emails matching current filters. Use tags, risk scores, and hot folders to narrow your forensic review scope.")
                         .font(Typography.caption1)
                 } icon: {
                     Image(systemName: "magnifyingglass")
@@ -132,7 +149,46 @@ struct ForensicReviewView: View {
         .featureTutorial(.forensicReview, key: "forensic_review_tutorial_seen", isPresented: $showTutorial)
         .sheet(isPresented: $showDashboard) { dashboardSheet }
         .sheet(isPresented: $showProductionSets) { productionSetsSheet }
+        .task { await loadInitial() }
         .task { await loadForensicFeatures() }
+        .onChange(of: filterSearchText) { _, _ in Task { await runSearch() } }
+        .onChange(of: selectedEmailIDs) { _, ids in Task { await hydrateSelected(ids.first) } }
+    }
+
+    // MARK: - v2 bounded loaders
+
+    private func loadInitial() async {
+        archiveTotal = (try? await ArchiveDataService.shared.count()) ?? 0
+        if pagedEmails.isEmpty { await loadNextPage() }
+        if workingSet.isEmpty {
+            var acc: [MBOXParser.RawEmail] = []
+            let stream = ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
+            do { for try await b in stream { acc.append(contentsOf: b); if acc.count >= 2000 { break } } } catch { }
+            workingSet = Array(acc.prefix(2000))
+        }
+    }
+
+    private func loadNextPage() async {
+        guard canLoadMore, !isLoadingPage else { return }
+        isLoadingPage = true
+        defer { isLoadingPage = false }
+        guard let page = try? await ArchiveDataService.shared.page(query: .all, cursor: pageCursor, limit: 100) else { return }
+        let full = (try? await ArchiveDataService.shared.fullEmails(ids: page.summaries.map(\.id))) ?? []
+        pagedEmails.append(contentsOf: full)
+        pageCursor = page.nextCursor
+        canLoadMore = page.nextCursor != nil
+    }
+
+    private func runSearch() async {
+        let q = filterSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { searchHits = []; return }
+        searchHits = ((try? await ArchiveRetrievalService.shared.retrieve(q, limit: 200)) ?? []).map(\.email)
+    }
+
+    private func hydrateSelected(_ id: UUID?) async {
+        guard let id else { selectedFullEmail = nil; return }
+        if let inWindow = browseEmails.first(where: { $0.id == id }) { selectedFullEmail = inWindow; return }
+        selectedFullEmail = try? await ArchiveDataService.shared.fullEmail(id: id)
     }
 
     // MARK: - Faceted Filter Bar
@@ -166,7 +222,7 @@ struct ForensicReviewView: View {
 
                 Spacer()
 
-                Text("\(filteredEmails.count)/\(emails.count)")
+                Text("\(filteredEmails.count)/\(archiveTotal)")
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundColor(.secondary)
 
@@ -322,7 +378,7 @@ struct ForensicReviewView: View {
     // MARK: - Filtered & Sorted Emails
 
     private var filteredEmails: [MBOXParser.RawEmail] {
-        var result = emails
+        var result = browseEmails
 
         if !filterTags.isEmpty {
             result = result.filter { filterTags.contains(forensicManager.tagForEmail($0.id)) }
@@ -424,6 +480,11 @@ struct ForensicReviewView: View {
                         inlinePreview(for: email)
                     }
                 }
+                .onAppear {
+                    if filterSearchText.isEmpty, email.id == pagedEmails.last?.id {
+                        Task { await loadNextPage() }
+                    }
+                }
             }
             .listStyle(.plain)
             .environment(\.defaultMinListRowHeight, 28)
@@ -488,7 +549,7 @@ struct ForensicReviewView: View {
             .buttonStyle(.plain)
 
             Button {
-                let ids = forensicManager.qcSample(from: emails, percentage: 0.1)
+                let ids = forensicManager.qcSample(from: workingSet, percentage: 0.1)
                 qcSampleIDs = Set(ids)
             } label: {
                 HStack(spacing: 2) {
@@ -499,7 +560,7 @@ struct ForensicReviewView: View {
             }
             .buttonStyle(.plain)
 
-            Button { forensicManager.runPrivilegeScan(on: emails) } label: {
+            Button { forensicManager.runPrivilegeScan(on: workingSet) } label: {
                 HStack(spacing: 2) {
                     Image(systemName: "lock.shield").font(.system(size: 9))
                     Text("Privilege Scan").font(.system(size: 9, weight: .medium))
@@ -1350,7 +1411,7 @@ struct ForensicReviewView: View {
     // MARK: - Status Bar
 
     private var forensicStatusBar: some View {
-        let dashboard = reviewManager.computeDashboard(emails: emails)
+        let dashboard = reviewManager.computeDashboard(emails: workingSet)
         let filtered = filteredEmails.count
         let progressPct = Int(dashboard.progress * 100)
 
@@ -1403,8 +1464,8 @@ struct ForensicReviewView: View {
 
                 Spacer()
 
-                if filtered != emails.count {
-                    Text("Showing \(filtered) of \(emails.count)")
+                if filtered != archiveTotal {
+                    Text("Showing \(filtered) of \(archiveTotal)")
                         .font(.system(size: 9)).foregroundColor(.blue)
                         .help("Filters are active — not all emails are shown. Clear filters to see everything.")
                 }
@@ -1445,7 +1506,7 @@ struct ForensicReviewView: View {
     // MARK: - Dashboard Sheet
 
     private var dashboardSheet: some View {
-        let dashboard = reviewManager.computeDashboard(emails: emails)
+        let dashboard = reviewManager.computeDashboard(emails: workingSet)
         return ScrollView {
         VStack(spacing: 16) {
             HStack {
@@ -1624,7 +1685,9 @@ struct ForensicReviewView: View {
 
     private func loadForensicFeatures() async {
         guard !hasForensicAnalysis else { return }
-        let emailsCopy = emails
+        var guardCount = 0
+        while workingSet.isEmpty && guardCount < 200 { try? await Task.sleep(nanoseconds: 50_000_000); guardCount += 1 }
+        let emailsCopy = workingSet
 
         guard AnalysisCoordinator.isEnabled else {
             let scores = ForensicAnalysisFeatures.scoreEvidenceRelevance(emails: emailsCopy)
@@ -1826,7 +1889,7 @@ struct ForensicReviewView: View {
             if evidenceClusters.isEmpty {
                 Text("No clusters identified").font(.system(size: 11)).foregroundColor(.secondary)
             } else {
-                ForEach(evidenceClusters.prefix(8)) { cluster in
+                ForEach(Array(evidenceClusters.prefix(8))) { cluster in
                     HStack(spacing: 8) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(cluster.topic)

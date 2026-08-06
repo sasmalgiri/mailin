@@ -796,7 +796,7 @@ struct ContentView: View {
             ArchiveComparisonSheetWrapper(archiveA: hubCurrentEmails)
                 .navigationTitle("Archive Comparison")
         case .forensicReview:
-            ForensicReviewView(emails: hubCurrentEmails, selectedEmailIDs: $selectedEmailIDs)
+            ForensicReviewView(selectedEmailIDs: $selectedEmailIDs)
                 .navigationTitle("Forensic Review")
         case .investigationReport:
             InvestigationReportConfigSheet(emails: hubCurrentEmails, senderEmail: viewModel.senderEmail)
