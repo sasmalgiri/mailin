@@ -10,13 +10,9 @@ import Charts
 import NaturalLanguage
 
 struct ExecutiveDashboardView: View {
-    let emails: [MBOXParser.RawEmail]
-    var v2Source: PaginatedEmailViewModel? = nil
-
-    private var effectiveEmails: [MBOXParser.RawEmail] {
-        if let v2 = v2Source, !v2.emails.isEmpty { return v2.emails }
-        return emails
-    }
+    /// nil → whole archive (streamed from SQLite, bounded); non-nil → a legacy
+    /// filtered selection analyzed via the array path.
+    var emails: [MBOXParser.RawEmail]? = nil
     var isPresented: Binding<Bool>?
     @Environment(\.dismiss) private var envDismiss
     @State private var dashboardData: DashboardData?
@@ -78,7 +74,7 @@ struct ExecutiveDashboardView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Executive Dashboard")
                         .font(Typography.headline)
-                    Text("\(emails.count) emails")
+                    Text("\(dashboardData?.totalEmails ?? 0) emails")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
                 }
@@ -268,13 +264,29 @@ struct ExecutiveDashboardView: View {
         avg sentiment \(String(format: "%.2f", data.averageSentiment)), \
         response rate \(String(format: "%.0f%%", data.responseRate * 100)).
         """
-        let emailsCopy = emails
+        let injected = emails
         Task {
+            // Bounded AI context: filtered selection when injected, else a
+            // bounded most-recent working set — never the whole corpus.
+            let emailsForAI: [MBOXParser.RawEmail]
+            if let injected {
+                emailsForAI = injected
+            } else {
+                var recent: [MBOXParser.RawEmail] = []
+                let stream = ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
+                do {
+                    for try await batch in stream {
+                        recent.append(contentsOf: batch)
+                        if recent.count >= 500 { recent = Array(recent.prefix(500)); break }
+                    }
+                } catch { }
+                emailsForAI = recent
+            }
             #if canImport(FoundationModels)
             if #available(macOS 26, iOS 26, *) {
                 let result = await FoundationModelEngine.enhanceWithAI(
                     scope: .all,
-                    emails: emailsCopy,
+                    emails: emailsForAI,
                     context: context
                 )
                 aiInsights = result ?? "AI analysis unavailable."
@@ -406,21 +418,143 @@ struct ExecutiveDashboardView: View {
     // MARK: - Computation
 
     private func computeDashboard() async {
-        guard !emails.isEmpty else { return }
         isComputing = true
-
-        let emailsCopy = emails
-        let result = await Task.detached { () -> DashboardData in
-            return Self.buildDashboardData(from: emailsCopy)
-        }.value
-
+        let result: DashboardData
+        if let emails {
+            result = await Task.detached { Self.buildDashboardData(from: emails) }.value
+        } else {
+            result = (try? await Self.buildDashboardData(from: .shared)) ?? DashboardData(
+                totalEmails: 0, uniqueContacts: 0, averageSentiment: 0, responseRate: 0,
+                weeklyVolume: [], weeklySentiment: [], topContacts: [], categoryDistribution: [], recentEmails: [])
+        }
         await MainActor.run {
             dashboardData = result
             isComputing = false
         }
     }
 
-    nonisolated private static func buildDashboardData(from emails: [MBOXParser.RawEmail]) -> DashboardData {
+    /// Bounded streaming builder — one pass over the scope from SQLite. The
+    /// 12 rolling-week ranges are anchored to the max date (the first email in
+    /// the newest-first keyset stream), reproducing the array builder exactly
+    /// while holding only O(contacts + categories + 12 weeks + 10 recent).
+    nonisolated static func buildDashboardData(
+        from service: ArchiveDataService,
+        query: EmailQuery = .all,
+        batchSize: Int = 500
+    ) async throws -> DashboardData {
+        let svc = service
+        return try await Task.detached(priority: .userInitiated) {
+            let tagger = NLTagger(tagSchemes: [.sentimentScore])
+            let calendar = Calendar.current
+            var total = 0
+            var contactSet = Set<String>()
+            var totalSentiment = 0.0; var sentimentCount = 0
+            var replyCount = 0
+            var contactCounts: [String: Int] = [:]
+            var categoryCounts: [String: Int] = [:]
+            var maxDate: Date? = nil
+            // Top-10 most-recent by actual date (order-independent of stream).
+            var recentTop: [(date: Date, from: String, subject: String)] = []
+
+            func sentiment(of email: MBOXParser.RawEmail) -> Double? {
+                let text = bodyText(for: email)
+                guard !text.isEmpty else { return nil }
+                tagger.string = text
+                let (tag, _) = tagger.tag(at: text.startIndex, unit: .paragraph, scheme: .sentimentScore)
+                if let raw = tag?.rawValue, let s = Double(raw) { return s }
+                return nil
+            }
+
+            // Pass 1 — global aggregates + max date + top-10 recent (by date).
+            let s1 = await svc.streamFullEmails(query: query, batchSize: batchSize)
+            for try await batch in s1 {
+                for email in batch {
+                    total += 1
+                    if let from = email.headers["From"] {
+                        contactSet.insert(extractAddress(from: from).lowercased())
+                        contactCounts[extractDisplayName(from: from), default: 0] += 1
+                    }
+                    if let to = email.headers["To"] {
+                        for addr in to.components(separatedBy: ",") {
+                            let a = extractAddress(from: addr).lowercased()
+                            if !a.isEmpty { contactSet.insert(a) }
+                        }
+                    }
+                    if let s = sentiment(of: email) { totalSentiment += s; sentimentCount += 1 }
+                    let subject = (email.headers["Subject"] ?? "").lowercased()
+                    if subject.hasPrefix("re:") || email.inReplyTo != nil { replyCount += 1 }
+                    let cat = email.messageType.isEmpty ? "Unknown" : email.messageType.capitalized
+                    categoryCounts[cat, default: 0] += 1
+
+                    guard let date = MBOXParser.parseDate(email.headers["Date"]) else { continue }
+                    if maxDate.map({ date > $0 }) ?? true { maxDate = date }
+                    if recentTop.count < 10 || date > (recentTop.last?.date ?? .distantPast) {
+                        recentTop.append((date,
+                                          extractDisplayName(from: email.headers["From"] ?? "Unknown"),
+                                          email.headers["Subject"] ?? "(No Subject)"))
+                        recentTop.sort { $0.date > $1.date }
+                        if recentTop.count > 10 { recentTop.removeLast() }
+                    }
+                }
+            }
+
+            // Build the 12 rolling-week ranges anchored to the true max date.
+            var weekRanges: [(start: Date, end: Date, label: String)] = []
+            if let now = maxDate {
+                for i in (0..<12).reversed() {
+                    guard let ws = calendar.date(byAdding: .weekOfYear, value: -i, to: now) else { continue }
+                    let we = calendar.date(byAdding: .weekOfYear, value: 1, to: ws) ?? ws
+                    weekRanges.append((ws, we, weekLabel(for: ws, calendar: calendar)))
+                }
+            }
+            var weekVol = [Int](repeating: 0, count: weekRanges.count)
+            var weekSentSum = [Double](repeating: 0, count: weekRanges.count)
+            var weekSentCount = [Int](repeating: 0, count: weekRanges.count)
+
+            // Pass 2 — weekly volume + sentiment over the (now-known) window.
+            if !weekRanges.isEmpty {
+                let s2 = await svc.streamFullEmails(query: query, batchSize: batchSize)
+                for try await batch in s2 {
+                    for email in batch {
+                        guard let date = MBOXParser.parseDate(email.headers["Date"]) else { continue }
+                        for idx in weekRanges.indices where date >= weekRanges[idx].start && date < weekRanges[idx].end {
+                            weekVol[idx] += 1
+                            if let s = sentiment(of: email) { weekSentSum[idx] += s; weekSentCount[idx] += 1 }
+                            break
+                        }
+                    }
+                }
+            }
+
+            let recent = recentTop.map { RecentEmailItem(from: $0.from, subject: $0.subject, timeAgo: timeAgoString(from: $0.date)) }
+
+            let weeklyVolume = weekRanges.indices.map {
+                WeeklyVolumeBucket(weekLabel: weekRanges[$0].label, count: weekVol[$0])
+            }
+            let weeklySentiment = weekRanges.indices.map {
+                WeeklySentimentBucket(weekLabel: weekRanges[$0].label,
+                                      averageSentiment: weekSentCount[$0] > 0 ? weekSentSum[$0] / Double(weekSentCount[$0]) : 0.0)
+            }
+            let topContacts = contactCounts.sorted { $0.value > $1.value }.prefix(5)
+                .map { TopContact(name: $0.key, count: $0.value) }
+            let categoryDistribution = categoryCounts.sorted { $0.value > $1.value }
+                .map { CategoryBucket(name: $0.key, count: $0.value) }
+
+            return DashboardData(
+                totalEmails: total,
+                uniqueContacts: contactSet.count,
+                averageSentiment: sentimentCount > 0 ? totalSentiment / Double(sentimentCount) : 0.0,
+                responseRate: total > 0 ? Double(replyCount) / Double(total) : 0.0,
+                weeklyVolume: weeklyVolume,
+                weeklySentiment: weeklySentiment,
+                topContacts: Array(topContacts),
+                categoryDistribution: categoryDistribution,
+                recentEmails: recent
+            )
+        }.value
+    }
+
+    nonisolated static func buildDashboardData(from emails: [MBOXParser.RawEmail]) -> DashboardData {
         let totalEmails = emails.count
 
         // Unique contacts
@@ -605,7 +739,7 @@ struct ExecutiveDashboardView: View {
 
 // MARK: - Data Models
 
-private struct DashboardData {
+struct DashboardData {
     let totalEmails: Int
     let uniqueContacts: Int
     let averageSentiment: Double
@@ -617,31 +751,31 @@ private struct DashboardData {
     let recentEmails: [RecentEmailItem]
 }
 
-private struct WeeklyVolumeBucket: Identifiable {
+struct WeeklyVolumeBucket: Identifiable {
     let id = UUID()
     let weekLabel: String
     let count: Int
 }
 
-private struct WeeklySentimentBucket: Identifiable {
+struct WeeklySentimentBucket: Identifiable {
     let id = UUID()
     let weekLabel: String
     let averageSentiment: Double
 }
 
-private struct TopContact: Identifiable {
+struct TopContact: Identifiable {
     let id = UUID()
     let name: String
     let count: Int
 }
 
-private struct CategoryBucket: Identifiable {
+struct CategoryBucket: Identifiable {
     let id = UUID()
     let name: String
     let count: Int
 }
 
-private struct RecentEmailItem: Identifiable {
+struct RecentEmailItem: Identifiable {
     let id = UUID()
     let from: String
     let subject: String

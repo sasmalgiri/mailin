@@ -918,6 +918,53 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertTrue(injReport.answer.abstained, "injection content with no evidence is rejected, not obeyed")
     }
 
+    // MARK: - Stage 5 W3 / Engine cutover 6 — Executive dashboard (streaming)
+
+    /// The streaming ExecutiveDashboardView.buildDashboardData(from:) matches the
+    /// array oracle over identical store data (KPIs, rolling weeks, recents).
+    func testExecutiveDashboard_streamingMatchesOracle() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-dash-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        let svc = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+
+        var fixtures: [MBOXParser.RawEmail] = []
+        for i in 0..<20 {
+            var e = makeEmailDated(mid: "<ds-\(i)@t>", subject: (i % 3 == 0 ? "Re: topic \(i)" : "topic \(i)"),
+                                   body: "content \(i % 2)", dayOffset: i)
+            e.headers["From"] = "sender\(i % 4)@corp.com"
+            e.headers["To"] = "team@corp.com"
+            fixtures.append(e)
+        }
+        try await store.insertBatch(fixtures, batchSize: 100)
+
+        var collected: [MBOXParser.RawEmail] = []
+        for try await b in svc.streamFullEmails() { collected.append(contentsOf: b) }
+
+        let oracle = ExecutiveDashboardView.buildDashboardData(from: collected)
+        let streamed = try await ExecutiveDashboardView.buildDashboardData(from: svc)
+
+        XCTAssertEqual(streamed.totalEmails, oracle.totalEmails)
+        XCTAssertEqual(streamed.uniqueContacts, oracle.uniqueContacts)
+        XCTAssertEqual(streamed.averageSentiment, oracle.averageSentiment, accuracy: 1e-9)
+        XCTAssertEqual(streamed.responseRate, oracle.responseRate, accuracy: 1e-9)
+        XCTAssertEqual(streamed.weeklyVolume.map { "\($0.weekLabel):\($0.count)" },
+                       oracle.weeklyVolume.map { "\($0.weekLabel):\($0.count)" })
+        XCTAssertEqual(streamed.weeklySentiment.count, oracle.weeklySentiment.count)
+        for (a, b) in zip(streamed.weeklySentiment, oracle.weeklySentiment) {
+            XCTAssertEqual(a.weekLabel, b.weekLabel)
+            XCTAssertEqual(a.averageSentiment, b.averageSentiment, accuracy: 1e-9)
+        }
+        XCTAssertEqual(Set(streamed.topContacts.map { "\($0.name):\($0.count)" }),
+                       Set(oracle.topContacts.map { "\($0.name):\($0.count)" }))
+        XCTAssertEqual(Set(streamed.categoryDistribution.map { "\($0.name):\($0.count)" }),
+                       Set(oracle.categoryDistribution.map { "\($0.name):\($0.count)" }))
+        XCTAssertEqual(streamed.recentEmails.map { "\($0.from)|\($0.subject)" },
+                       oracle.recentEmails.map { "\($0.from)|\($0.subject)" })
+        XCTAssertEqual(streamed.totalEmails, 20)
+    }
+
     // MARK: - Stage 5 W3 / Engine cutover 5 — Timeline (streaming day buckets)
 
     /// The streaming ArchiveTimelineService.load(scope:) produces identical day

@@ -766,7 +766,7 @@ struct ContentView: View {
             AttachmentGridView(emails: hubCurrentEmails)
                 .navigationTitle("Attachments")
         case .executiveDashboard:
-            ExecutiveDashboardView(emails: hubCurrentEmails)
+            ExecutiveDashboardView()
                 .navigationTitle("Executive Dashboard")
 
         case .reportBuilder:
