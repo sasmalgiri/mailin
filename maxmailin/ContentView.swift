@@ -62,7 +62,7 @@ struct ContentView: View {
     // Part S: PURE presentation preference. Both modes page the same bounded
     // repository-backed architecture (ArchiveDataService); there is no
     // architectural fallback or rollback semantics behind this flag.
-    @AppStorage(ListModePreference.key) private var preferSimpleList = true
+    @AppStorage(ListModePreference.key) private var preferSimpleList = ListModePreference.defaultSimple
     @StateObject private var viewModel = ContentViewModel()
     @StateObject private var modelVM: ParsedEmailListViewModel
     @State private var showSpinner = false

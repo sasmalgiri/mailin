@@ -15,6 +15,11 @@ import UserNotifications
 /// carried rollback connotations from the cutover and is migrated once.
 enum ListModePreference {
     static let key = "listModeSimple"
+    /// §27 "no silent feature loss": the DEFAULT list is Advanced — the full
+    /// v1-parity toolkit (sorts, filters, multi-select, tags, threads, bulk
+    /// actions). Simple is an opt-in minimal mode, never the surprise a v1
+    /// user upgrades into. Guarded by testDefaultListModeIsAdvanced.
+    static let defaultSimple = false
     private static let legacyKey = "useV2ArchiveList"
 
     /// One-time preference migration: carry the user's stored choice over to
@@ -43,7 +48,7 @@ struct SettingsView: View {
     @AppStorage("emailListDensity") private var emailListDensity = "comfortable"
     // Simple (true) = clean ArchiveListView; Advanced (false) = full-filter
     // toolkit list. Both are bounded + repository-backed (Part S).
-    @AppStorage(ListModePreference.key) private var preferSimpleList = true
+    @AppStorage(ListModePreference.key) private var preferSimpleList = ListModePreference.defaultSimple
     @AppStorage("showEmailPreviews") private var showEmailPreviews = true
     @AppStorage("autoAdvanceAfterTag") private var autoAdvanceAfterTag = true
     @AppStorage("hasConsentedToCloudAI") private var hasConsentedToCloudAI = false

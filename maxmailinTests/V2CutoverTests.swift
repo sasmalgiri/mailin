@@ -289,6 +289,14 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(defaults.object(forKey: ListModePreference.key) as? Bool, true)
     }
 
+    /// §27 regression guard: the SHIPPING DEFAULT list mode is Advanced —
+    /// the full v1-parity toolkit. A v1 user upgrading must never land in
+    /// the minimal Simple list and perceive their features as deleted.
+    func testDefaultListModeIsAdvanced() {
+        XCTAssertFalse(ListModePreference.defaultSimple,
+            "default list mode must be Advanced (v1 feature parity); Simple is opt-in")
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default
