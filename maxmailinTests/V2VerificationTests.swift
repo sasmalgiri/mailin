@@ -60,35 +60,36 @@ final class V2VerificationTests: XCTestCase {
 
     // MARK: - 2b — Migration (R1)
 
-    /// Builds a v1 store in a temp dir with a KNOWN duplicate-Message-ID
-    /// fixture (100 rows, 90 distinct MIDs), migrates into an in-memory
-    /// EmailStore, and asserts the deduped row count. Expected value (90) is
-    /// hardcoded and independent of the production dedup helper.
+    /// §10.1/§10.2: the public-v1 JSON archive migrates DIRECTLY into SQLite
+    /// with preserveAll semantics — a KNOWN duplicate-Message-ID fixture
+    /// (100 rows, 90 distinct MIDs) must land as EXACTLY 100 rows, because
+    /// the v1 JSON already reflects the user's dedup choices. Fidelity
+    /// (attachments/tags) must survive the single hop, and a forced re-run
+    /// must not duplicate (UUID identity).
     ///
-    /// RED on the regression: point MigrationService.loadLegacyArchive back at
-    /// the old `com.ecosanskriti.mailin/email_archive.json` path and this fails
-    /// with stored < 90 (S < E) — a real shortfall the gate must catch.
+    /// RED on the regression: route migration back through the SwiftData hop
+    /// (which deduped and dropped attachments) and both assertions fail.
     func testMigrationFromRealV1Store() async throws {
         let fm = FileManager.default
         let tempDir = fm.temporaryDirectory.appendingPathComponent("mailin_migtest_\(UUID().uuidString)")
+        let sqliteDir = fm.temporaryDirectory.appendingPathComponent("mailin_migtest_sqlite_\(UUID().uuidString)")
 
         let savedOverride = EmailPersistence.testBaseDirectoryOverride
-        let savedInMemory = EmailStore.testInMemory
         EmailPersistence.testBaseDirectoryOverride = tempDir
-        EmailStore.testInMemory = true
-        await EmailStore.shared.resetForTesting()
+        MigrationService.testTargetStoreOverride = SQLiteEmailStore(directory: sqliteDir)
         UserDefaults.standard.set(false, forKey: "maxmailin.legacyJSONMigrationCompletedV1")
 
         defer {
             EmailPersistence.testBaseDirectoryOverride = savedOverride
-            EmailStore.testInMemory = savedInMemory
+            MigrationService.testTargetStoreOverride = nil
             UserDefaults.standard.set(false, forKey: "maxmailin.legacyJSONMigrationCompletedV1")
             try? fm.removeItem(at: tempDir)
+            try? fm.removeItem(at: sqliteDir)
         }
 
-        // 90 unique-MID emails + 10 that REUSE the first 10 MIDs = 100 rows,
-        // 90 distinct Message-IDs. Independent expected value:
-        let expected = 90
+        // 90 unique-MID emails + 10 that REUSE the first 10 MIDs = 100 rows.
+        // §10.2: ALL 100 must survive (preserveAll for existing user state).
+        let expected = 100
         var fixtures: [MBOXParser.RawEmail] = []
         for i in 0..<90 {
             fixtures.append(makeEmail(mid: "<u-\(i)@test>", subject: "Subject \(i)", body: "body running \(i)"))
@@ -96,6 +97,10 @@ final class V2VerificationTests: XCTestCase {
         for i in 0..<10 {
             fixtures.append(makeEmail(mid: "<u-\(i)@test>", subject: "Dup \(i)", body: "dup body \(i)"))
         }
+        // Fidelity probe: structured metadata the old SwiftData hop dropped.
+        fixtures[0].attachments = [AttachmentMetadata(
+            filename: "evidence.pdf", mimeType: "application/pdf", size: 999)]
+        fixtures[0].tags = ["Legacy-Label"]
         XCTAssertEqual(fixtures.count, 100, "fixture sanity: 100 rows")
 
         // Write the v1 store exactly the way v1 does.
@@ -104,15 +109,24 @@ final class V2VerificationTests: XCTestCase {
         // Run the real migration.
         await MigrationService.shared.forceMigrate()
 
-        let stored = try await EmailStore.shared.totalCount()
-        // Directional: equal passes, higher acceptable (within-chunk dupes),
-        // LOWER is data loss.
-        XCTAssertGreaterThanOrEqual(stored, expected,
-            "MIGRATION S < E — data loss: stored=\(stored) < expected=\(expected)")
+        let store = try XCTUnwrap(MigrationService.testTargetStoreOverride)
+        let stored = try await store.totalCount()
+        XCTAssertEqual(stored, expected,
+            "preserveAll migration: stored=\(stored), expected exactly \(expected)")
         XCTAssertTrue(MigrationService.shared.hasMigrated,
             "migration completion flag not set")
 
-        await EmailStore.shared.resetForTesting()
+        // Full fidelity survived the direct hop.
+        let hydrated = try await store.fullEmail(id: fixtures[0].id)
+        let first = try XCTUnwrap(hydrated)
+        XCTAssertEqual(first.attachments.count, 1, "attachment metadata migrated")
+        XCTAssertEqual(first.attachments.first?.filename, "evidence.pdf")
+        XCTAssertEqual(first.tags, ["Legacy-Label"], "tags migrated")
+
+        // Idempotent: a second forced run adds nothing (UUID identity).
+        await MigrationService.shared.forceMigrate()
+        let stored2 = try await store.totalCount()
+        XCTAssertEqual(stored2, expected, "re-migration must not duplicate rows")
     }
 
     // MARK: - 2a — Search routed through FTS5 (R2)

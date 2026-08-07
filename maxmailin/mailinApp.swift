@@ -153,11 +153,11 @@ struct mailinApp: App {
                         // memory-pressure drop hook was removed with it.)
                         await AppSelfAttestation.shared.compute()
 
-                        // maxmailin v2 SwiftData layer: migrate any legacy JSON
-                        // archive from earlier mailin installs into the new
-                        // SwiftData store. Idempotent — only runs once per
-                        // archive version, immediately returns on subsequent
-                        // launches.
+                        // §10.1: migrate any legacy JSON archive from public
+                        // mailin v1 DIRECTLY into the canonical SQLite store
+                        // (full fidelity, preserveAll, exact-ID-coverage gate).
+                        // Idempotent — only runs once per archive version,
+                        // immediately returns on subsequent launches.
                         await MigrationService.shared.migrateIfNeeded()
 
                         // Stage 5A: establish SQLite as the production storage

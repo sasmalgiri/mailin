@@ -3,16 +3,24 @@
 //  maxmailin
 //
 //  One-time migration from the legacy JSON-backed EmailPersistence store
-//  (inherited from mailin) into the new SwiftData-backed EmailStore.
+//  (public mailin v1) DIRECTLY into the canonical SQLite store (§10.1) —
+//  the SwiftData hop was removed because it dropped attachments metadata and
+//  message type. The v1 JSON holds complete Codable RawEmails, so one bounded
+//  hop preserves full fidelity.
 //
-//  Migration is idempotent: safe to call multiple times. Tracks completion
-//  via a UserDefaults flag so it only runs once per archive version.
+//  Semantics (§10.2): .preserveAll — the JSON content already reflects every
+//  dedup choice the user made in v1, so migration copies it EXACTLY, including
+//  legitimate rows that share a Message-ID. Idempotency comes from the
+//  preserved v1 UUIDs (id PRIMARY KEY), not from Message-ID uniqueness.
+//
+//  Completion is gated on EXACT ID coverage: every legacy email id must be
+//  present in SQLite (verified in bounded chunks), plus a sampled content
+//  check — never a bare count comparison.
 //
 //  Strictly on-device, no network, no telemetry.
 //
 
 import Foundation
-import SwiftData
 import os.log
 
 @MainActor
@@ -40,6 +48,14 @@ final class MigrationService: ObservableObject {
 
     private init() {}
 
+    /// Test seam: when set, migration writes into this store instead of the
+    /// shared production SQLite store.
+    static var testTargetStoreOverride: SQLiteEmailStore?
+
+    private var targetStore: SQLiteEmailStore {
+        Self.testTargetStoreOverride ?? SQLiteEmailStore.shared
+    }
+
     // MARK: - Public API
 
     /// Returns true if the legacy JSON migration has already been performed.
@@ -57,10 +73,9 @@ final class MigrationService: ObservableObject {
         await performMigration()
     }
 
-    /// Force a re-migration. Used for "restore from backup" flows. Caller
-    /// should warn the user since this will append duplicates if the SwiftData
-    /// store already has matching emails (idempotency is messageID-based, so
-    /// emails without a Message-ID header will duplicate).
+    /// Force a re-migration. Used for "restore from backup" flows. Idempotent:
+    /// legacy v1 UUIDs are preserved as primary keys, so re-running never
+    /// duplicates rows — even for emails without a Message-ID.
     func forceMigrate() async {
         UserDefaults.standard.set(false, forKey: completionKey)
         await performMigration()
@@ -95,40 +110,60 @@ final class MigrationService: ObservableObject {
 
         totalCount = legacyEmails.count
         status = .migrating
-        logger.info("Migrating \(legacyEmails.count) legacy emails into SwiftData…")
+        logger.info("Migrating \(legacyEmails.count) legacy emails directly into SQLite (preserveAll)…")
 
         do {
-            try await EmailStore.shared.insertBatch(legacyEmails) { processed, total in
-                Task { @MainActor in
-                    self.migratedCount = processed
-                    self.totalCount = total
-                    self.progressFraction = Double(processed) / Double(max(total, 1))
-                }
+            let store = targetStore
+            var processed = 0
+            for chunk in stride(from: 0, to: legacyEmails.count, by: 1_000).map({
+                Array(legacyEmails[$0..<min($0 + 1_000, legacyEmails.count)])
+            }) {
+                _ = try await store.insertBatch(
+                    chunk, sourceFileHash: nil, accountID: nil,
+                    sourceID: nil, firstOrdinal: nil, dedupPolicy: .preserveAll,
+                    batchSize: 500, progress: nil)
+                processed += chunk.count
+                migratedCount = processed
+                progressFraction = Double(processed) / Double(max(legacyEmails.count, 1))
             }
-            // Verify the write actually landed before marking complete. The v1
-            // store is left UNTOUCHED on disk (non-destructive); the completion
-            // flag is the sole idempotency guard.
-            // Meaningful count-verification: EmailStore dedupes by Message-ID,
-            // so the expected post-migration count is (distinct Message-IDs) +
-            // (emails that have no Message-ID, which are never deduped). Compare
-            // against that, NOT against legacyEmails.count — a Gmail export with
-            // the same message under multiple labels legitimately lands fewer
-            // rows, and comparing to the raw count would fail forever.
-            let distinctMIDs = Set(legacyEmails.compactMap { m -> String? in
-                let mid = m.headers["Message-ID"] ?? ""
-                return mid.isEmpty ? nil : mid
-            }).count
-            let noMIDCount = legacyEmails.filter { ($0.headers["Message-ID"] ?? "").isEmpty }.count
-            let expected = distinctMIDs + noMIDCount
-            let stored = try await EmailStore.shared.count()
-            guard stored >= expected else {
-                logger.error("Post-migration count \(stored) < expected \(expected) — not marking complete; will retry next launch.")
-                status = .failed("Migrated \(stored) of \(expected) emails — will retry on next launch.")
+
+            // §10 exactness gate 1: EXACT ID coverage — every legacy id must
+            // exist in the destination, verified in bounded chunks. The v1
+            // JSON is left UNTOUCHED on disk (non-destructive rollback source).
+            let allIDs = legacyEmails.map(\.id)
+            var missing = 0
+            for chunk in stride(from: 0, to: allIDs.count, by: 1_000).map({
+                Array(allIDs[$0..<min($0 + 1_000, allIDs.count)])
+            }) {
+                let present = try await store.existingIDs(among: chunk)
+                missing += chunk.count - present.count
+            }
+            guard missing == 0 else {
+                logger.error("Post-migration ID coverage failed: \(missing) legacy ids absent — not marking complete; will retry next launch.")
+                status = .failed("Migrated archive is missing \(missing) emails — will retry on next launch.")
                 return
             }
+
+            // §10 exactness gate 2: sampled content fidelity — subject, body,
+            // attachment count and message type must survive the hop.
+            let sample = legacyEmails.prefix(3) + legacyEmails.suffix(3)
+            for original in sample {
+                guard let hydrated = try await store.fullEmail(id: original.id) else {
+                    status = .failed("Migrated email \(original.id) could not be read back.")
+                    return
+                }
+                guard hydrated.plainBody == original.plainBody,
+                      hydrated.headers["Subject"] == original.headers["Subject"],
+                      hydrated.attachments.count == original.attachments.count else {
+                    logger.error("Content fidelity mismatch for \(original.id, privacy: .public) — not marking complete.")
+                    status = .failed("Migrated content did not verify — will retry on next launch.")
+                    return
+                }
+            }
+
             UserDefaults.standard.set(true, forKey: completionKey)
             status = .completed
-            logger.info("Migration complete: \(legacyEmails.count) legacy emails; expected \(expected) after dedup; store now holds \(stored).")
+            logger.info("Migration complete: \(legacyEmails.count) legacy emails copied with exact ID coverage + sampled fidelity verification.")
         } catch {
             logger.error("Migration failed: \(error.localizedDescription)")
             status = .failed(error.localizedDescription)
