@@ -2291,6 +2291,15 @@ actor SQLiteEmailStore: EmailArchiveStore {
         }
     }
 
+    /// §11.1: clear only the per-email forensic state (rows reference deleted
+    /// emails); the audit log + source-hash history remain as evidence.
+    func forensicPerEmailClear() throws {
+        let db = try ensureDB()
+        for table in ["forensic_email_hashes", "forensic_evidence_tags", "forensic_annotations"] {
+            try exec(db, "DELETE FROM \(table);")
+        }
+    }
+
     // MARK: - Mutation
 
     func delete(ids: Set<UUID>) throws {

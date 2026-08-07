@@ -289,8 +289,9 @@ struct ContentView: View {
                 // NotificationCenter from an alert button action proved
                 // unreliable — onReceive sometimes drops the event during
                 // alert dismissal. Direct invocation is synchronous and works
-                // on all platforms.
-                EmailPersistence.clear()
+                // on all platforms. §11: the canonical clear (SQLite + FTS +
+                // legacy stores + checkpoints + Spotlight + tombstone) runs
+                // inside handleDataCleared via ArchiveLifecycleService.
                 handleDataCleared()
             }
             Button("Cancel", role: .cancel) {}
@@ -4102,55 +4103,38 @@ private func handleMultipleFiles(_ urls: [URL]) {
         modelVM.resetFilters()
 
         Task { @MainActor in
-            let svc = ArchiveDataService.shared
-            // The hold set is a bounded user set; keep only ids that exist.
-            let holdIDs = Array(CustodianManager.shared.legalHolds)
-            let heldExisting = (try? await svc.exists(ids: holdIDs)) ?? []
-
+            // §11: ONE canonical clear — SQLite rows (respecting legal holds),
+            // FTS, per-email forensic state, Spotlight, import checkpoints,
+            // legacy JSON + SwiftData stores, and the no-resurrection
+            // tombstone. Throws on storage failure: the archive is NOT
+            // presented as empty when it is not.
+            let outcome: ArchiveLifecycleService.ClearOutcome
             do {
-                // Bounded batch deletes. The keyset cursor is delete-stable
-                // ((date,id) ordering — removing rows before the cursor cannot
-                // shift later pages), so we advance page by page.
-                var cursor: EmailPageCursor? = nil
-                while true {
-                    let page = try await svc.page(query: .all, cursor: cursor, limit: 500)
-                    if page.summaries.isEmpty { break }
-                    let deletable = page.summaries.map(\.id).filter { !heldExisting.contains($0) }
-                    if !deletable.isEmpty {
-                        try await svc.delete(ids: deletable)
-                    }
-                    guard let next = page.nextCursor else { break }
-                    cursor = next
-                }
+                outcome = try await ArchiveLifecycleService.shared.clearArchive()
             } catch {
-                // Authority still holds the data — do not clear the UI.
                 viewModel.statusMessage = "Clear failed: \(error.localizedDescription). Your emails were not removed."
                 viewModel.statusColor = .red
                 return
             }
+            for warning in outcome.warnings {
+                viewModel.statusMessage = warning
+                viewModel.statusColor = .orange
+            }
 
-            // Store cleared (except holds) — re-page the list from the store.
-            // Held emails survive in the authority, so the paged window shows
-            // exactly them; nothing is reconstructed in RAM here.
             viewModel.clearParsedData()
-            if !heldExisting.isEmpty {
-                viewModel.totalParsedCount = heldExisting.count
+            if outcome.heldKept > 0 {
+                viewModel.totalParsedCount = outcome.heldKept
                 viewModel.isParsed = true
-                ForensicManager.shared.logAction(
-                    "Data Clear — Legal Hold Enforced",
-                    detail: "\(heldExisting.count) email(s) preserved under legal hold"
-                )
             }
             modelVM.invalidateSearchCache()
             modelVM.refreshFromStore()
 
             EmailSearchIndex.shared.clear()
             EmailSearchIndex.shared.deleteDiskCache()
-            SpotlightIndexer.shared.removeAllIndexedEmails()
             AIAssistantView.invalidateNLPCache()
             AIAssistantView.invalidateNLPPrecomputation()
-            appState.hasParsedEmails = !heldExisting.isEmpty
-            appState.hasFilteredEmails = !heldExisting.isEmpty
+            appState.hasParsedEmails = outcome.heldKept > 0
+            appState.hasFilteredEmails = outcome.heldKept > 0
         }
     }
 

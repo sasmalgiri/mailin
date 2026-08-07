@@ -50,6 +50,7 @@ struct SettingsView: View {
     @AppStorage("customModelName") private var customModelName = ""
     @State private var savedDataCleared = false
     @State private var showClearConfirmation = false
+    @State private var clearError: String?
     @State private var showClearTempConfirmation = false
     @State private var showResetSettingsConfirmation = false
     @State private var showClearForensicConfirmation = false
@@ -432,14 +433,27 @@ struct SettingsView: View {
                 .alert("Clear Saved Data", isPresented: $showClearConfirmation) {
                     Button("Cancel", role: .cancel) {}
                     Button("Clear", role: .destructive) {
-                        EmailPersistence.clear()
-                        savedDataCleared = true
-                        NotificationCenter.default.post(name: .dataClearedByUser, object: nil)
+                        // §11: canonical clear — SQLite + FTS + legacy stores +
+                        // checkpoints + Spotlight + no-resurrection tombstone.
+                        Task { @MainActor in
+                            do {
+                                _ = try await ArchiveLifecycleService.shared.clearArchive()
+                                savedDataCleared = true
+                                NotificationCenter.default.post(name: .dataClearedByUser, object: nil)
+                            } catch {
+                                clearError = error.localizedDescription
+                            }
+                        }
                     }
                 } message: {
                     Text("This will permanently delete all saved email data. This action cannot be undone.")
                 }
 
+                if let clearError {
+                    Text("Clear failed: \(clearError)")
+                        .font(.caption)
+                        .foregroundColor(.red)
+                }
                 if savedDataCleared {
                     Text("Saved data cleared successfully.")
                         .font(.caption)
@@ -504,8 +518,12 @@ struct SettingsView: View {
                 .alert("Delete All Data", isPresented: $showDeleteAllConfirmation) {
                     Button("Cancel", role: .cancel) {}
                     Button("Delete Everything", role: .destructive) {
-                        compliance.deleteAllUserData()
-                        allDataDeleted = true
+                        // §11.2: canonical erase-all (clearArchive + forensic
+                        // history + receipts + prefs/keychain/temp).
+                        Task { @MainActor in
+                            _ = await ArchiveLifecycleService.shared.eraseAllData()
+                            allDataDeleted = true
+                        }
                     }
                 } message: {
                     Text("This will permanently delete ALL data including emails, settings, forensic data, AI keys, and preferences. The app will reset to its initial state. This cannot be undone.")

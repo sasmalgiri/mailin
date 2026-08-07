@@ -3073,3 +3073,128 @@ final class V2ForensicPersistenceTests: XCTestCase {
 }
 
 import CryptoKit
+
+// MARK: - §11/§61 — canonical clear lifecycle + no data resurrection
+
+final class V2LifecycleTests: XCTestCase {
+
+    private func tempRoot() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-lifecycle-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    private func fixture(_ i: Int) -> MBOXParser.RawEmail {
+        MBOXParser.RawEmail(
+            headers: ["Message-ID": "<lc-\(i)@t>", "Subject": "S\(i)", "From": "a@b.com",
+                      "To": "c@d.com", "Date": "Wed, \(String(format: "%02d", 1 + i % 28)) Jan 2025 10:00:00 +0000"],
+            rawSource: "clearable body \(i)", messageType: "received", attachments: [],
+            timestamp: "2025-01-15T10:00:00Z", domains: ["b.com"],
+            plainBody: "clearable body \(i)", htmlBody: ""
+        )
+    }
+
+    // §11.1: the canonical clear empties SQLite + FTS + review/forensic
+    // per-email state, clears the legacy stores and stamps the tombstone.
+    @MainActor
+    func testClearArchive_clearsEveryLayer_andStampsTombstone() async throws {
+        let root = tempRoot()
+        let saved = EmailStore.testInMemory
+        let savedPersistence = EmailPersistence.testBaseDirectoryOverride
+        EmailStore.testInMemory = true
+        EmailPersistence.testBaseDirectoryOverride = root.appendingPathComponent("legacy")
+        await EmailStore.shared.resetForTesting()
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        ArchiveLifecycleService.testStoreOverride = store
+        ArchiveLifecycleService.testFTSOverride = fts
+        let heldBackup = CustodianManager.shared.legalHolds
+        CustodianManager.shared.legalHolds = []
+        UserDefaults.standard.removeObject(forKey: ArchiveLifecycleService.migrationTombstoneKey)
+        defer {
+            EmailStore.testInMemory = saved
+            EmailPersistence.testBaseDirectoryOverride = savedPersistence
+            ArchiveLifecycleService.testStoreOverride = nil
+            ArchiveLifecycleService.testFTSOverride = nil
+            CustodianManager.shared.legalHolds = heldBackup
+            UserDefaults.standard.removeObject(forKey: ArchiveLifecycleService.migrationTombstoneKey)
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        let emails = (0..<10).map(fixture)
+        _ = try await store.insertBatch(emails, sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 100, progress: nil)
+        try await fts.indexBatch(emails)
+        try await store.reviewSetFlag(.pinned, ids: [emails[0].id], value: true)
+        try await store.forensicTagSet("Relevant", ids: [emails[1].id])
+        // Legacy JSON present too.
+        EmailPersistence.saveSync(emails: emails, senderEmail: "t@t.com")
+
+        let outcome = try await ArchiveLifecycleService.shared.clearArchive()
+        XCTAssertEqual(outcome.deleted, 10)
+        XCTAssertEqual(outcome.heldKept, 0)
+
+        let count = try await store.totalCount()
+        XCTAssertEqual(count, 0, "SQLite cleared")
+        let ftsRows = try await fts.rowCount()
+        XCTAssertEqual(ftsRows, 0, "FTS cleared — no stale search rows")
+        let review = try await store.reviewTotals()
+        XCTAssertEqual(review.states, 0, "review state cleared")
+        let tags = try await store.forensicTagCounts()
+        XCTAssertTrue(tags.isEmpty, "per-email forensic state cleared")
+        XCTAssertFalse(EmailPersistence.hasSavedData, "legacy JSON cleared")
+        XCTAssertTrue(UserDefaults.standard.bool(forKey: ArchiveLifecycleService.migrationTombstoneKey),
+            "no-resurrection tombstone stamped")
+    }
+
+    // §11.3/§61 THE resurrection regression: v1 SwiftData rows exist →
+    // migrate → user clears → relaunch (re-activation) → the old archive
+    // must NOT return. Also documents the failure without the tombstone.
+    func testClearedArchive_doesNotResurrectOnReactivation() async throws {
+        let root = tempRoot()
+        let saved = EmailStore.testInMemory
+        EmailStore.testInMemory = true
+        await EmailStore.shared.resetForTesting()
+        defer {
+            EmailStore.testInMemory = saved
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        // v1 source holds 10 emails.
+        let emails = (0..<10).map(fixture)
+        try await EmailStore.shared.insertBatch(emails, batchSize: 100)
+
+        let dest = SQLiteEmailStore(directory: root.appendingPathComponent("sqlite"))
+        let suite = try XCTUnwrap(UserDefaults(suiteName: "lifecycle-test-\(UUID().uuidString)"))
+        let coordinator = StorageActivationCoordinator(
+            source: .shared, dest: dest, defaults: suite, stateKey: "test.activation")
+
+        // First launch: migration runs, archive is active with 10 rows.
+        let s1 = await coordinator.activate()
+        XCTAssertEqual(s1, .active)
+        let migrated = try await dest.totalCount()
+        XCTAssertEqual(migrated, 10)
+
+        // User clears the archive (dest emptied + tombstone stamped). The
+        // SwiftData source is deliberately LEFT POPULATED here to prove the
+        // tombstone alone blocks resurrection even if the legacy clear failed.
+        try await dest.clearAll()
+        suite.set(true, forKey: ArchiveLifecycleService.migrationTombstoneKey)
+
+        // Relaunch: re-activation must NOT re-migrate the old rows.
+        let s2 = await coordinator.activate()
+        XCTAssertEqual(s2, .active)
+        let afterRelaunch = try await dest.totalCount()
+        XCTAssertEqual(afterRelaunch, 0, "cleared archive must stay empty — old v1 data must not resurrect")
+
+        // Negative control: WITHOUT the tombstone the old data WOULD return —
+        // documenting exactly what the tombstone prevents.
+        suite.removeObject(forKey: ArchiveLifecycleService.migrationTombstoneKey)
+        suite.removeObject(forKey: "test.activation")
+        let s3 = await coordinator.activate()
+        XCTAssertEqual(s3, .active)
+        let withoutTombstone = try await dest.totalCount()
+        XCTAssertEqual(withoutTombstone, 10, "control: without the tombstone the legacy rows re-migrate")
+
+        await EmailStore.shared.resetForTesting()
+    }
+}

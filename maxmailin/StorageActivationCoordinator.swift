@@ -82,9 +82,14 @@ actor StorageActivationCoordinator {
     @discardableResult
     func activate() async -> State {
         do {
+            // §11.3 tombstone: after a user-initiated archive clear, legacy
+            // SwiftData rows must NEVER re-migrate — old data may not
+            // resurrect into a deliberately emptied archive.
+            let tombstoned = defaults.bool(forKey: ArchiveLifecycleService.migrationTombstoneKey)
+
             // Opening either store here also validates it can be opened; a
             // failure to open the destination is caught below as `.failed`.
-            let sourceCount = try await source.totalCount()
+            let sourceCount = tombstoned ? 0 : (try await source.totalCount())
             let destCount = try await dest.totalCount()
 
             // Fast path: already active AND still consistent (dest holds at
