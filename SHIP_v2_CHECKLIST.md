@@ -1,5 +1,12 @@
 # mailin v2.0 — Ship Checklist
 
+> **UPDATE 2026-08-07:** engineering is COMPLETE
+> (V2_IMPLEMENTATION_COMPLETE.md, PR #4). Before running the archive steps
+> below, execute the device gates in **V2_OWNER_RELEASE_CHECKLIST.md** —
+> that file is the authoritative owner sequence; this one covers the
+> Xcode-UI stamping/archive mechanics only.
+
+
 A flip-the-switch list to take the current code state to a TestFlight-ready
 v2.0 build. Code changes for v2 have landed in this branch already (see
 `RELEASE_NOTES_v2.md`). The remaining work is project-file metadata plus a

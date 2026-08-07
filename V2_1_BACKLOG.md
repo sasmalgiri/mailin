@@ -32,6 +32,7 @@ correctness defect in v2.0.
 8. **Per-email content_revision producers** — the schema column exists
    (v2); no in-store content-edit path exists yet, so nothing bumps it.
    Wire it when in-place redaction/edit ships.
-9. **UI-convenience export writes** — a handful of `try?` single-file
-   ad-hoc exports in AIAssistantView/AIMetrics (user-triggered save-panel
-   flows) should surface write errors like ExportRunCenter flows do.
+9. ~~UI-convenience export writes~~ — **CLOSED 2026-08-07**: the ad-hoc
+   CSV/JSON/EML/report exports in AIAssistantView now surface write
+   failures (toast/alert, partial-failure counts). Remaining `try?` sites
+   are internal caches (conversation cache, metrics) — non-authoritative.

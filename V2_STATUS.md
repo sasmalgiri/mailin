@@ -1,4 +1,17 @@
-# mailin v2.0 — Status (reconciled to actual executed state)
+# mailin v2.0 — Status
+
+> **RECONCILED 2026-08-07 — ENGINEERING COMPLETE.** The authoritative record
+> is now `V2_IMPLEMENTATION_COMPLETE.md` (final acceptance matrix),
+> `V2_FINAL_GAP_AUDIT.md` (every directive item closed or explicitly
+> deferred), `V2_ENGINEERING_STATUS.md` (architecture of record) and
+> `V2_OWNER_RELEASE_CHECKLIST.md` (remaining human gates).
+> Current truth: **139 automated tests (138 pass + 1 env-gated stress
+> entry) ×2 identical runs; macOS Debug + Release green; production-path
+> stress executed at 10K/100K with flat RSS (1M run in progress /
+> V2_SCALE_RESULTS.md)**. Statements below reflect an EARLIER snapshot and
+> are retained for history only — where they conflict with the documents
+> above, the documents above win.
+
 
 **Target:** `maxmailin` (ships as `com.ecosanskriti.mailin`, "mailin 2.0")
 **Branch:** `v2-core-cutover` (ahead of `main`; the earlier PR #3 honesty-pass is merged to `main`)

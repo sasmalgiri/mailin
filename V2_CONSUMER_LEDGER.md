@@ -61,3 +61,16 @@ PredictiveEngine.
   `EmailSearchIndex.build(from:)`, whole-array dedup, corpus-resident caches.
 - 5D.3 rerun the stress harness through the **production** import/list/detail
   path; promote only storage/import/pagination/detail matrix rows.
+
+---
+
+## FINAL STATE (2026-08-07) — ledger CLOSED
+
+Whole-corpus production consumers: **0**. `ContentViewModel.parsedEmails` is
+deleted; `ParsedEmailListViewModel` owns only a bounded resident page window
+(DEBUG-only test bridge aside); every archive surface (both list modes, AI,
+analytics, exports, specialized views) consumes `ArchiveDataService` /
+`EmailQuery` / `ArchiveSelectionScope`. The ratchet guard and the
+architecture guards (`testArchitectureGuards_*`,
+`testLegacyCorpusConsumerCountOnlyDecreases`) enforce this permanently.
+See V2_UI_PARITY_MATRIX.md for the per-capability mapping.

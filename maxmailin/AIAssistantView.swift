@@ -1376,8 +1376,12 @@ struct AIAssistantView: View {
         }
         #if os(macOS)
         if let url = PlatformFileSaver.savePanel(suggestedName: "ai_search_results.csv", allowedTypes: [.commaSeparatedText]) {
-            try? csv.write(to: url, atomically: true, encoding: .utf8)
-            showToast("Exported \(emails.count) emails as CSV")
+            do {
+                try csv.write(to: url, atomically: true, encoding: .utf8)
+                showToast("Exported \(emails.count) emails as CSV")
+            } catch {
+                showToast("CSV export failed: \(error.localizedDescription)")
+            }
         }
         #else
         PlatformClipboard.copyString(csv)
@@ -1394,11 +1398,18 @@ struct AIAssistantView: View {
              "body": email.plainBody]
         }
         guard let data = try? JSONSerialization.data(withJSONObject: items, options: [.prettyPrinted, .sortedKeys]),
-              let json = String(data: data, encoding: .utf8) else { return }
+              let json = String(data: data, encoding: .utf8) else {
+            showToast("JSON export failed: the results could not be serialized.")
+            return
+        }
         #if os(macOS)
         if let url = PlatformFileSaver.savePanel(suggestedName: "ai_search_results.json", allowedTypes: [.json]) {
-            try? json.write(to: url, atomically: true, encoding: .utf8)
-            showToast("Exported \(emails.count) emails as JSON")
+            do {
+                try json.write(to: url, atomically: true, encoding: .utf8)
+                showToast("Exported \(emails.count) emails as JSON")
+            } catch {
+                showToast("JSON export failed: \(error.localizedDescription)")
+            }
         }
         #else
         PlatformClipboard.copyString(json)
@@ -1415,15 +1426,17 @@ struct AIAssistantView: View {
         panel.prompt = "Export Here"
         guard panel.runModal() == .OK, let folder = panel.url else { return }
         var count = 0
+        var failed = 0
         for email in emails {
             let subj = (email.headers["Subject"] ?? email.headers["subject"] ?? "email")
                 .replacingOccurrences(of: "/", with: "_").prefix(50)
             let filename = "\(subj)_\(count).eml"
             let url = folder.appendingPathComponent(String(filename))
-            try? email.rawSource.write(to: url, atomically: true, encoding: .utf8)
-            count += 1
+            do { try email.rawSource.write(to: url, atomically: true, encoding: .utf8); count += 1 }
+            catch { failed += 1 }
         }
-        showToast("Exported \(count) EML files")
+        showToast(failed == 0 ? "Exported \(count) EML files"
+                              : "Exported \(count) EML files — \(failed) FAILED to write")
         #else
         PlatformClipboard.copyString(emails.map(\.rawSource).joined(separator: "\n\n"))
         showToast("EML content copied to clipboard")
@@ -5715,13 +5728,24 @@ struct AIAssistantView: View {
         panel.canCreateDirectories = true
 
         if panel.runModal() == .OK, let url = panel.url {
-            try? markdown.write(to: url, atomically: true, encoding: .utf8)
+            do { try markdown.write(to: url, atomically: true, encoding: .utf8) }
+            catch {
+                let alert = NSAlert()
+                alert.messageText = "Report export failed"
+                alert.informativeText = error.localizedDescription
+                alert.runModal()
+            }
         }
         #else
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-report.md")
-        try? markdown.write(to: url, atomically: true, encoding: .utf8)
-        shareItems = [url]
-        showShareSheet = true
+        do {
+            try markdown.write(to: url, atomically: true, encoding: .utf8)
+            shareItems = [url]
+            showShareSheet = true
+        } catch {
+            // Surfaced instead of silently sharing a missing file.
+            print("Report export failed: \(error.localizedDescription)")
+        }
         #endif
     }
 }
