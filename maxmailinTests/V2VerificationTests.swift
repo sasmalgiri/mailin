@@ -3555,3 +3555,83 @@ final class V2ReceiptIntegrityTests: XCTestCase {
         XCTAssertEqual(loaded.verifyDetailed(), .verified, "signature survives the JSON round-trip")
     }
 }
+
+// MARK: - §22/§58 — derived jobs: live cancellation + one-new-email incremental
+
+@MainActor
+final class V2DerivedJobControlTests: XCTestCase {
+
+    private func tempRoot() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-djob-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    private func fixture(_ i: Int) -> MBOXParser.RawEmail {
+        MBOXParser.RawEmail(
+            headers: ["Message-ID": "<dj-\(i)-\(UUID().uuidString)@t>", "Subject": "S\(i)",
+                      "From": "a@b.com", "To": "c@d.com",
+                      "Date": "Wed, \(String(format: "%02d", 1 + i % 28)) Jan 2025 10:00:00 +0000"],
+            rawSource: "body \(i)", messageType: "received", attachments: [],
+            timestamp: "2025-01-15T10:00:00Z", domains: ["b.com"],
+            plainBody: "body \(i)", htmlBody: ""
+        )
+    }
+
+    // §58: an archive already analyzed + ONE new email → exactly one stale id.
+    func testAddOneEmail_onlyNewEmailIsStale() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root)
+        let emails = (0..<50).map(fixture)
+        _ = try await store.insertBatch(emails, sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 100, progress: nil)
+
+        // Analyze everything at version 1 (incremental mode).
+        let runner = ArchiveBackgroundJobRunner(store: store)
+        let first = await runner.run(batchSize: 20, minAnalysisVersion: 1, staleBelowRevision: false) { batch, existing, _ in
+            batch.map { email in
+                var r = existing[email.id] ?? DerivedRecord(emailID: email.id)
+                r.analysisVersion = 1
+                r.sentiment = "0.5"
+                return r
+            }
+        }
+        XCTAssertEqual(first, .completed)
+        let staleAfterFull = try await store.derivedStaleIDs(below: 0, minAnalysisVersion: 1, limit: 100)
+        XCTAssertTrue(staleAfterFull.isEmpty, "everything analyzed")
+
+        // Add ONE email: exactly it becomes stale — never a full recompute.
+        let newcomer = fixture(999)
+        _ = try await store.insertBatch([newcomer], sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        let stale = try await store.derivedStaleIDs(below: 0, minAnalysisVersion: 1, limit: 100)
+        XCTAssertEqual(stale, [newcomer.id], "adding 1 email must make exactly 1 record stale")
+    }
+
+    // §22.2: cancel() STOPS a live run at the next batch boundary.
+    func testRunnerCancel_stopsLiveRun() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root)
+        let emails = (0..<40).map(fixture)
+        _ = try await store.insertBatch(emails, sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 100, progress: nil)
+
+        let runner = ArchiveBackgroundJobRunner(store: store)
+        let runTask = Task { @MainActor in
+            await runner.run(batchSize: 5, minAnalysisVersion: 1, staleBelowRevision: false) { batch, existing, _ in
+                try? await Task.sleep(nanoseconds: 100_000_000)   // slow analyzer
+                return batch.map { email in
+                    var r = existing[email.id] ?? DerivedRecord(emailID: email.id)
+                    r.analysisVersion = 1
+                    return r
+                }
+            }
+        }
+        try await Task.sleep(nanoseconds: 150_000_000)   // let ~1–2 batches run
+        runner.cancel()
+        let final = await runTask.value
+        XCTAssertEqual(final, .cancelled, "cancel() must stop the live run")
+        XCTAssertLessThan(runner.processed, 40, "run stopped before completing all batches")
+    }
+}

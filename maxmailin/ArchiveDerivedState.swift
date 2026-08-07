@@ -127,13 +127,14 @@ final class ArchiveBackgroundJobRunner: ObservableObject {
              staleBelowRevision: Bool = true,
              compute: @escaping @Sendable ([MBOXParser.RawEmail], [EmailID: DerivedRecord], Int) async -> [DerivedRecord]) async -> State {
         cancel()
+        cancelRequested = false
         state = .running
         processed = 0
         do {
             let rev = try await revision.current()
             total = try await store.totalCount()
             while true {
-                if Task.isCancelled { state = .cancelled; return state }
+                if Task.isCancelled || cancelRequested { state = .cancelled; return state }
                 let ids = try await store.derivedStaleIDs(
                     below: staleBelowRevision ? rev : 0,
                     minAnalysisVersion: minAnalysisVersion, limit: batchSize
@@ -172,5 +173,15 @@ final class ArchiveBackgroundJobRunner: ObservableObject {
         return state
     }
 
-    func cancel() { task?.cancel(); task = nil }
+    /// §22.2: cancel() STOPS a live run. `run()` executes in the caller's
+    /// task (structured concurrency), so cancelling only `task` was a no-op
+    /// for external holders — the flag is checked every loop iteration and
+    /// takes effect at the next bounded batch boundary.
+    private var cancelRequested = false
+
+    func cancel() {
+        cancelRequested = true
+        task?.cancel()
+        task = nil
+    }
 }

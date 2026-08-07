@@ -860,27 +860,10 @@ final class EmailSearchIndex {
 
     // MARK: - Attachment Content Search
 
-    func searchAttachmentContent(terms: [String], limit: Int = 15) -> [EmailNLPEngine.SearchResult] {
-        guard queue.sync(execute: { isBuilt }), !terms.isEmpty else { return [] }
-        let lowerTerms = terms.map { $0.lowercased() }
-
-        return queue.sync {
-            var results: [EmailNLPEngine.SearchResult] = []
-            for (_, email) in emailMap {
-                guard let text = attachmentTextCache[email.id], !text.isEmpty else { continue }
-                let lower = text.lowercased()
-                var score = 0.0
-                for term in lowerTerms {
-                    if lower.contains(term) { score += 1.0 }
-                }
-                if score > 0 {
-                    results.append(EmailNLPEngine.SearchResult(email: email, score: score, matchContext: "Found in attachment"))
-                }
-                if results.count >= limit { break }
-            }
-            return results.sorted { $0.score > $1.score }
-        }
-    }
+    // §18: the in-memory attachment-content search was REMOVED (dead code —
+    // no production caller). The advanced list honestly reports that
+    // attachment contents aren't indexed; a persisted attachment-text FTS is
+    // an explicit v2.1 backlog item (V2_1_BACKLOG.md).
 
     // v4.1.1: Public accessor for attachment text cache
     func getAttachmentText(for emailID: UUID) -> String? {
