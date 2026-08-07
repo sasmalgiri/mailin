@@ -32,13 +32,37 @@ final class ArchiveListViewModel: ObservableObject {
     private(set) var query: EmailQuery = .all
     private var queryRevision: UInt64 = 0
 
+    /// Unified page cursor: non-text queries page by keyset; text queries page
+    /// by the ranked (bm25) continuation cursor (Part P2) — so the list can
+    /// scroll DEEP into ranked search results instead of seeing only a fixed
+    /// first window. Both are bounded value types.
+    private enum PageCursor: Equatable {
+        case keyset(EmailPageCursor)
+        case ranked(RankedSearchCursor)
+    }
+
     // Page bookkeeping. `startCursor[i]` fetches page i (page 0 = nil). Kept for
     // all discovered pages (lightweight cursors only, NOT summaries) so a
     // dropped page can be re-fetched. `nextCursor[i]` is the cursor after page i.
     private var residentPages: [(index: Int, summaries: [EmailSummary])] = []
-    private var startCursor: [Int: EmailPageCursor?] = [:]
-    private var nextCursorByPage: [Int: EmailPageCursor?] = [:]
+    private var startCursor: [Int: PageCursor?] = [:]
+    private var nextCursorByPage: [Int: PageCursor?] = [:]
     private var lastDiscoveredPage = -1   // highest page index whose existence is known
+
+    /// One page fetch, routed by query shape (ranked continuation for text,
+    /// keyset for everything else).
+    private func fetchPage(startingAt cursor: PageCursor?) async throws -> (batch: [EmailSummary], next: PageCursor?) {
+        if !(query.text?.isEmpty ?? true) {
+            let rankedCursor: RankedSearchCursor?
+            if case .ranked(let c) = cursor { rankedCursor = c } else { rankedCursor = nil }
+            let page = try await archive.searchRanked(query: query, cursor: rankedCursor, limit: pageSize)
+            return (Array(page.summaries.prefix(pageSize)), page.nextCursor.map(PageCursor.ranked))
+        }
+        let keysetCursor: EmailPageCursor?
+        if case .keyset(let c) = cursor { keysetCursor = c } else { keysetCursor = nil }
+        let page = try await archive.page(query: query, cursor: keysetCursor, limit: pageSize)
+        return (Array(page.summaries.prefix(pageSize)), page.nextCursor.map(PageCursor.keyset))
+    }
 
     private let archive: ArchiveDataService
     let pageSize: Int
@@ -78,16 +102,15 @@ final class ArchiveListViewModel: ObservableObject {
         isLoading = true
         do {
             let count = try await archive.count(query: query)
-            let page = try await archive.page(query: query, cursor: nil, limit: pageSize)
+            let (batch, next) = try await fetchPage(startingAt: nil)
             guard revision == queryRevision else { return }
             totalCount = count
-            let batch = Array(page.summaries.prefix(pageSize))
             startCursor[0] = .some(nil)
-            nextCursorByPage[0] = page.nextCursor
+            nextCursorByPage[0] = next
             lastDiscoveredPage = 0
             residentPages = [(0, batch)]
             rebuildPublished()
-            hasMore = page.nextCursor != nil
+            hasMore = next != nil
             hasPrevious = false
             isLoading = false
             #if DEBUG
@@ -108,11 +131,10 @@ final class ArchiveListViewModel: ObservableObject {
         let revision = queryRevision
         isLoading = true
         do {
-            let page = try await archive.page(query: query, cursor: cursor, limit: pageSize)
+            let (batch, next) = try await fetchPage(startingAt: cursor)
             guard revision == queryRevision else { return }
-            let batch = Array(page.summaries.prefix(pageSize))
             startCursor[newIndex] = .some(cursor)
-            nextCursorByPage[newIndex] = page.nextCursor
+            nextCursorByPage[newIndex] = next
             lastDiscoveredPage = max(lastDiscoveredPage, newIndex)
             residentPages.append((newIndex, batch))
             if residentPages.count > windowPages { residentPages.removeFirst() }
@@ -138,10 +160,9 @@ final class ArchiveListViewModel: ObservableObject {
         let revision = queryRevision
         isLoading = true
         do {
-            let page = try await archive.page(query: query, cursor: fetchCursor, limit: pageSize)
+            let (batch, next) = try await fetchPage(startingAt: fetchCursor)
             guard revision == queryRevision else { return }
-            let batch = Array(page.summaries.prefix(pageSize))
-            nextCursorByPage[prevIndex] = page.nextCursor
+            nextCursorByPage[prevIndex] = next
             residentPages.insert((prevIndex, batch), at: 0)
             if residentPages.count > windowPages { residentPages.removeLast() }
             rebuildPublished()

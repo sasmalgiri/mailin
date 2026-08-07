@@ -20,12 +20,25 @@ class ParsedEmailListViewModel: ObservableObject {
     /// content without changing count and must invalidate cached hits.
     private var corpusVersion = 0
 
+    // Part P3: bounded regex result cache (async, like the FTS cache) — the
+    // matched ids come from BoundedRegexSearch (literal-derived FTS candidates
+    // + exact verify, or a capped scope scan), never an unbounded corpus walk.
+    private var regexMatchIDs: Set<UUID>? = nil
+    private var regexMatchKey: String? = nil
+
+    /// User-visible search caveat (Part P): regex cap truncation or the
+    /// attachment filename-only limitation. Silent truncation is not allowed —
+    /// the list surfaces this under the search field.
+    @Published var searchNotice: String? = nil
+
     /// Invalidate the FTS result cache. Call after delete/redact/reindex so a
     /// stale hit isn't served for content that changed in place.
     func invalidateSearchCache() {
         corpusVersion &+= 1
         ftsMatchKey = nil
         ftsMatchIDs = nil
+        regexMatchKey = nil
+        regexMatchIDs = nil
     }
 
     #if DEBUG
@@ -703,28 +716,10 @@ class ParsedEmailListViewModel: ObservableObject {
         return parsed
     }
 
-    /// Bounded regex scan over the resident preview array (regex has no FTS5
-    /// form). Caps pattern length and per-email scanned characters like the
-    /// retired in-RAM index did.
-    nonisolated static func boundedRegexMatchIDs(pattern: String, in emails: [MBOXParser.RawEmail]) -> Set<UUID> {
-        guard pattern.count <= 1000 else { return [] }
-        let cleanPattern: String
-        if pattern.hasPrefix("/") && pattern.hasSuffix("/") && pattern.count > 2 {
-            cleanPattern = String(pattern.dropFirst().dropLast())
-        } else {
-            cleanPattern = pattern.replacingOccurrences(of: "*", with: ".*")
-        }
-        guard let regex = try? NSRegularExpression(pattern: cleanPattern, options: .caseInsensitive) else { return [] }
-        var ids = Set<UUID>()
-        for email in emails {
-            let text = String(email.fullText.prefix(100_000))
-            let range = NSRange(location: 0, length: (text as NSString).length)
-            if regex.firstMatch(in: text, options: .withoutAnchoringBounds, range: range) != nil {
-                ids.insert(email.id)
-            }
-        }
-        return ids
-    }
+    // (Part P3) The old in-place preview regex scan (`boundedRegexMatchIDs`)
+    // is replaced by `BoundedRegexSearch` — literal-derived FTS candidates +
+    // exact verification, or an explicitly capped scope scan with the cap
+    // surfaced via `searchNotice`. See the regex branch in `applyFilters`.
 
     // MARK: - Apply Filters (with minReplyCount logic + free limit)
     func applyFilters() {
@@ -765,14 +760,21 @@ class ParsedEmailListViewModel: ObservableObject {
         // Boolean route through FTS only once the index isn't mid-build.
         let useFTS = (ftsQuery != nil) && (!isParsing || !allowInRAMFallback)
         if let ftsQuery, useFTS {
+            // Part P: PREVIEW-BOUNDED on purpose. The legacy Simple list only
+            // filters the bounded resident preview (`allEmails`), so we ask
+            // FTS which PREVIEW ids match (`matchingSubset`) instead of
+            // materializing an archive-wide id list (was `limit: 100_000` —
+            // a whole-corpus-sized fetch). Archive-wide truth (totals) comes
+            // from the store count (`archiveTotalCount`), never this set.
+            let previewIDs = allEmails.map(\.id)
             let cacheKey = "\(ftsQuery)\u{1}\(allEmails.count)\u{1}\(corpusVersion)"
             if cacheKey != ftsMatchKey {
                 let searchTask = Task { [weak self] in
                     guard let self else { return }
                     let populated = ((try? await FTSSearchIndex.shared.rowCount()) ?? 0) > 0
                     if populated {
-                        let ids = (try? await FTSSearchIndex.shared.searchRaw(ftsQuery, limit: 100_000)) ?? []
-                        self.ftsMatchIDs = Set(ids)   // empty set = authoritative zero matches
+                        let ids = (try? await FTSSearchIndex.shared.matchingSubset(of: previewIDs, ftsQuery: ftsQuery)) ?? []
+                        self.ftsMatchIDs = ids   // empty set = authoritative zero matches
                     } else {
                         // Nothing indexed yet. Free-text/Boolean fall back to
                         // in-RAM; proximity has no fallback → authoritative empty.
@@ -793,21 +795,47 @@ class ParsedEmailListViewModel: ObservableObject {
             ftsMatchIDs = nil
         }
 
-        // Bounded fallbacks — the legacy in-RAM EmailSearchIndex is gone
-        // (Part F). Regex (no FTS5 form) scans only the bounded preview array
-        // already resident for the legacy list. Boolean queries simply wait
-        // for FTS (advancedMatchIDs stays nil → plain substring matching
-        // below applies in the meantime).
-        if advancedMatchIDs == nil && allowInRAMFallback {
-            if parsed.isRegexQuery && !parsed.freeText.isEmpty {
-                advancedMatchIDs = Self.boundedRegexMatchIDs(pattern: parsed.freeText, in: allEmails)
+        // Part P3 — bounded regex: literal-derived FTS candidates + exact
+        // verification (or a capped scope scan, with the cap SURFACED via
+        // `searchNotice`, never silent). Async like the FTS path; while the
+        // result is pending the list shows no regex matches rather than wrong
+        // ones, and re-renders when the task lands.
+        if parsed.isRegexQuery && !parsed.freeText.isEmpty {
+            let pattern = parsed.freeText
+            let cacheKey = "\(pattern)\u{1}\(corpusVersion)"
+            if cacheKey != regexMatchKey {
+                let searchTask = Task { [weak self] in
+                    guard let self else { return }
+                    let outcome = (try? await ArchiveDataService.shared.regexSearch(pattern: pattern)) ?? RegexSearchOutcome()
+                    self.regexMatchIDs = outcome.matchedIDs
+                    self.searchNotice = outcome.truncated
+                        ? "Regex too broad — only the first \(outcome.scanned) emails were scanned. Add a text term or a date filter to narrow it."
+                        : nil
+                    self.regexMatchKey = cacheKey
+                    self.applyFilters()
+                }
+                #if DEBUG
+                lastFTSSearchTask = searchTask
+                #endif
             }
+            advancedMatchIDs = (regexMatchKey == cacheKey ? regexMatchIDs : nil) ?? []
+        } else {
+            regexMatchKey = nil
+            regexMatchIDs = nil
+            if searchNotice != nil { searchNotice = nil }
         }
 
         if parsed.searchInAttachments && !parsed.freeText.isEmpty {
             // Degraded but bounded: match attachment FILENAMES over the
-            // resident preview (extracted attachment text lived only in the
-            // retired in-RAM index; FTS attachment text is a later phase).
+            // resident preview. No attachment-text extraction runs in the v2
+            // import/index pipeline (the PDF/RTF/DOCX/OCR extraction lived
+            // only in the retired in-RAM index build), so there is no
+            // extracted text to index into FTS — indexing attachment content
+            // is a later phase. The limitation is USER-VISIBLE via
+            // `searchNotice` below, not silently degraded.
+            if searchNotice == nil {
+                searchNotice = "in:attachments matches attachment file names only — attachment contents aren't indexed yet."
+            }
             let terms = parsed.freeText.lowercased().split(separator: " ").map(String.init)
             let attachIDs = Set(allEmails.filter { email in
                 !email.attachments.isEmpty && email.attachments.contains { att in

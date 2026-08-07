@@ -66,6 +66,31 @@ final class ArchiveDataService {
         try await repository.exists(ids: ids)
     }
 
+    // MARK: - Part P — ranked continuation + bounded regex
+
+    /// One bounded page of ranked (bm25) text-search results with a
+    /// continuation cursor (Part P2). Resuming with the same query yields
+    /// every match exactly once in stable order; a changed query throws
+    /// `.staleSearchCursor`. Falls back to a single bounded page (no
+    /// continuation) when the repository lacks the ranked capability.
+    func searchRanked(query: EmailQuery, cursor: RankedSearchCursor? = nil, limit: Int = 100) async throws -> RankedSearchPage {
+        if let ranked = repository as? RankedSearchRepository {
+            return try await ranked.searchRanked(query: query, cursor: cursor, limit: limit)
+        }
+        let page = try await repository.page(query: query, cursor: nil, limit: limit)
+        return RankedSearchPage(summaries: page.summaries, nextCursor: nil)
+    }
+
+    /// Bounded regex search (Part P3): literal-derived FTS candidates + exact
+    /// verification, or a capped scope scan when no literal is derivable. The
+    /// outcome's `truncated` flag MUST be surfaced by callers.
+    func regexSearch(pattern: String, after: Date? = nil, before: Date? = nil) async throws -> RegexSearchOutcome {
+        guard let repo = repository as? EmailStoreRepository else { return RegexSearchOutcome() }
+        return try await BoundedRegexSearch.run(
+            pattern: pattern, store: repo.store, fts: repo.fts, after: after, before: before
+        )
+    }
+
     // MARK: - Bounded mutation
 
     func delete(ids: [EmailID]) async throws {

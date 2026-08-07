@@ -212,6 +212,7 @@ struct ParsedEmailListView: View {
     }
 
     private var iOSSearchBar: some View {
+        VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
@@ -295,6 +296,15 @@ struct ParsedEmailListView: View {
                     .font(.title3)
                     .foregroundColor(.secondary)
             }
+        }
+
+        // Part P: user-visible search caveats — never silently truncated.
+        if let notice = model.searchNotice {
+            Label(notice, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundColor(.orange)
+                .accessibilityLabel("Search notice: \(notice)")
+        }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -621,6 +631,16 @@ struct ParsedEmailListView: View {
             .padding(.horizontal, Spacing.small)
             .padding(.vertical, Spacing.xxSmall)
             .adaptiveGlass(in: RoundedRectangle(cornerRadius: CornerRadius.medium))
+
+            // Part P: user-visible search caveats (regex cap truncation /
+            // attachment filename-only matching) — never silently truncated.
+            if let notice = model.searchNotice {
+                Label(notice, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .padding(.horizontal, Spacing.small)
+                    .accessibilityLabel("Search notice: \(notice)")
+            }
         }
     }
 

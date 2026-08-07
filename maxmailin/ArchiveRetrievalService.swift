@@ -57,6 +57,33 @@ final class ArchiveRetrievalService {
         try await retrieve(terms.joined(separator: " "), limit: limit)
     }
 
+    /// Part P2: ranked retrieval with a bounded continuation cursor — the AI
+    /// layer pages deeper into a ranked result set instead of re-fetching a
+    /// fixed giant list. Pass the returned cursor to get the next page; a
+    /// changed query invalidates the cursor (`.staleSearchCursor`). Iterating
+    /// to exhaustion yields every match exactly once.
+    func retrievePage(
+        _ query: String,
+        cursor: RankedSearchCursor? = nil,
+        limit: Int = 15
+    ) async throws -> (results: [EmailNLPEngine.SearchResult], nextCursor: RankedSearchCursor?) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, limit > 0 else { return ([], nil) }
+        let page = try await data.searchRanked(query: EmailQuery(text: trimmed), cursor: cursor, limit: limit)
+        let ids = page.summaries.map(\.id)
+        guard !ids.isEmpty else { return ([], page.nextCursor) }
+        let emails = try await data.fullEmails(ids: ids)
+        let byID = Dictionary(emails.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        var results: [EmailNLPEngine.SearchResult] = []
+        results.reserveCapacity(ids.count)
+        for (rank, id) in ids.enumerated() {
+            guard let email = byID[id] else { continue }
+            let score = Double(ids.count - rank)   // descending, preserves rank order
+            results.append(EmailNLPEngine.SearchResult(email: email, score: score, matchContext: Self.snippet(email)))
+        }
+        return (results, page.nextCursor)
+    }
+
     // MARK: - Bounded thread expansion (replaces EmailSearchIndex.expandByThread)
 
     /// Expand a bounded seed set with same-thread emails via bounded FTS
