@@ -132,7 +132,7 @@ final class BackgroundAnalysisManager: ObservableObject {
     // MARK: - Run Analysis
 
     func runAnalysis() async {
-        let emails = currentArchiveEmails()
+        let emails = await currentArchiveEmails()
         guard !emails.isEmpty else {
             logger.info("No emails loaded — skipping background analysis")
             return
@@ -211,13 +211,22 @@ final class BackgroundAnalysisManager: ObservableObject {
         }
         #endif
 
-        // 6. New domain burst detection
+        // 6. New domain burst detection — streamed over the WHOLE archive in
+        // bounded summary pages (only the per-domain count dictionary is
+        // resident), so burst counts stay exact beyond the analysis working set.
         var domainFirstSeen: [String: Int] = [:]
-        for email in emails {
-            if let from = email.headers["From"],
-               let domain = from.components(separatedBy: "@").last?.lowercased().trimmingCharacters(in: .punctuationCharacters) {
-                domainFirstSeen[domain, default: 0] += 1
+        do {
+            for try await batch in ArchiveDataService.shared.streamSummaries(query: .all, batchSize: 500) {
+                for summary in batch {
+                    let from = summary.from
+                    guard !from.isEmpty,
+                          let domain = from.components(separatedBy: "@").last?.lowercased().trimmingCharacters(in: .punctuationCharacters)
+                    else { continue }
+                    domainFirstSeen[domain, default: 0] += 1
+                }
             }
+        } catch {
+            logger.error("Domain burst stream failed: \(error.localizedDescription)")
         }
         let burstDomains = domainFirstSeen.filter { $0.value >= 10 }.sorted { $0.value > $1.value }
         if burstDomains.count > 3 {
@@ -279,8 +288,34 @@ final class BackgroundAnalysisManager: ObservableObject {
 
     // MARK: - Email Access
 
-    private func currentArchiveEmails() -> [MBOXParser.RawEmail] {
-        EmailPersistence.load().emails
+    /// Cap on the in-memory analysis working set. The engines above (anomaly
+    /// detection, phishing, PII, sentiment trend, knowledge graph) need one
+    /// cross-comparable set, so we materialize a bounded most-recent window —
+    /// matching the 2000-email working sets in GeneralAnalysisView and
+    /// ForensicReviewView — rather than the whole corpus.
+    private static let analysisWorkingSetCap = 2000
+
+    /// Bounded most-recent working set from the SQLite v2 authority. The
+    /// legacy `EmailPersistence` JSON is a truncated (≤5000-email) preview and
+    /// must never be treated as the archive. Gated on storage activation:
+    /// `activate()` is idempotent (fast no-op once active); if SQLite is not
+    /// the confirmed authority we skip the run instead of falling back to v1.
+    private func currentArchiveEmails() async -> [MBOXParser.RawEmail] {
+        guard await StorageActivationCoordinator.shared.activate() == .active else {
+            logger.warning("SQLite store not active — skipping background analysis")
+            return []
+        }
+        var working: [MBOXParser.RawEmail] = []
+        let stream = ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
+        do {
+            for try await batch in stream {
+                working.append(contentsOf: batch)
+                if working.count >= Self.analysisWorkingSetCap { break }
+            }
+        } catch {
+            logger.error("Bounded archive stream failed: \(error.localizedDescription)")
+        }
+        return Array(working.prefix(Self.analysisWorkingSetCap))
     }
 
     // MARK: - Persistence
