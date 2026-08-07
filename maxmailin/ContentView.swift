@@ -255,7 +255,7 @@ struct ContentView: View {
             #endif
         }
         .sheet(isPresented: $appState.showReplyStatsSheet) {
-            ReplyStatsView(replyData: modelVM.replyFrequency(for: viewModel.senderEmail))
+            ReplyStatsView(senderEmail: viewModel.senderEmail)
                 #if os(macOS)
                 .frame(minWidth: 500, minHeight: 400)
                 #else
@@ -264,7 +264,7 @@ struct ContentView: View {
                 .resizableSheet()
         }
         .sheet(isPresented: $appState.showAnalytics) {
-            EmailAnalyticsView(emails: modelVM.filteredEmails.isEmpty ? nil : modelVM.filteredEmails)
+            EmailAnalyticsView(query: modelVM.currentArchiveQuery)
                 #if os(macOS)
                 .resizableSheet()
                 #else
@@ -707,8 +707,11 @@ struct ContentView: View {
         }
     }
 
-    private var hubCurrentEmails: [MBOXParser.RawEmail] {
-        modelVM.filteredEmails.isEmpty ? modelVM.allEmails : modelVM.filteredEmails
+    /// Part G1: hub destinations that still take `[RawEmail]` are hosted over a
+    /// bounded working set streamed from the store for the CURRENT query —
+    /// never the resident preview arrays.
+    private func hubWorkingSet<Content: View>(@ViewBuilder content: @escaping ([MBOXParser.RawEmail]) -> Content) -> some View {
+        ArchiveWorkingSetView(query: modelVM.currentArchiveQuery, content: content)
     }
 
     @ViewBuilder
@@ -718,43 +721,45 @@ struct ContentView: View {
             emailInboxDestination
 
         case .eDiscovery:
-            EDiscoveryWorkflowView(emails: hubCurrentEmails)
+            hubWorkingSet { EDiscoveryWorkflowView(emails: $0) }
                 .navigationTitle("eDiscovery Workflow")
         case .predictiveCoding:
-            PredictiveCodingView(emails: hubCurrentEmails, engine: predictiveEngine)
+            hubWorkingSet { PredictiveCodingView(emails: $0, engine: predictiveEngine) }
                 .navigationTitle("Predictive Coding")
         case .gdprCompliance:
-            GDPRReportConfigView(emails: hubCurrentEmails)
+            hubWorkingSet { GDPRReportConfigView(emails: $0) }
                 .navigationTitle("GDPR Compliance")
 
         case .anomalyDetection:
             AnomalyDetectionView()
                 .navigationTitle("Anomaly Detection")
         case .iocExtractor:
-            IOCExtractorView(emails: hubCurrentEmails)
+            hubWorkingSet { IOCExtractorView(emails: $0) }
                 .navigationTitle("IOC Extractor")
         case .smartAlerts:
-            SmartAlertsView(emails: hubCurrentEmails)
+            hubWorkingSet { SmartAlertsView(emails: $0) }
                 .navigationTitle("Smart Alerts")
         case .keywordMonitor:
-            KeywordMonitorView(emails: hubCurrentEmails)
+            hubWorkingSet { KeywordMonitorView(emails: $0) }
                 .navigationTitle("Keyword Monitor")
         case .nearDuplicates:
-            NearDuplicateDetectionView(emails: hubCurrentEmails)
+            hubWorkingSet { NearDuplicateDetectionView(emails: $0) }
                 .navigationTitle("Near Duplicates")
         case .chainOfCustody:
-            ChainOfCustodyView(emails: hubCurrentEmails)
+            hubWorkingSet { ChainOfCustodyView(emails: $0) }
                 .navigationTitle("Chain of Custody")
 
         case .emailAnalytics:
             EmailAnalyticsView()
                 .navigationTitle("Email Analytics")
         case .topicClusters:
-            TopicClustersView(
-                emails: hubCurrentEmails,
-                selectedClusterFilter: $selectedClusterFilter,
-                clusterFilterIDs: $modelVM.clusterFilterIDs
-            )
+            hubWorkingSet { emails in
+                TopicClustersView(
+                    emails: emails,
+                    selectedClusterFilter: $selectedClusterFilter,
+                    clusterFilterIDs: $modelVM.clusterFilterIDs
+                )
+            }
             .navigationTitle("Topic Clusters")
         case .timeline:
             EmailTimelineView()
@@ -763,16 +768,16 @@ struct ContentView: View {
             CommunicationPatternsView(senderEmail: viewModel.senderEmail)
                 .navigationTitle("Communication Patterns")
         case .relationshipGraph:
-            RelationshipGraphView(emails: hubCurrentEmails, senderEmail: viewModel.senderEmail)
+            hubWorkingSet { RelationshipGraphView(emails: $0, senderEmail: viewModel.senderEmail) }
                 .navigationTitle("Relationship Graph")
         case .duplicateManager:
             DuplicateManagerView(model: modelVM)
                 .navigationTitle("Duplicate Manager")
         case .threadSummarizer:
-            ThreadSummarizerView(threadEmails: hubCurrentEmails)
+            hubWorkingSet { ThreadSummarizerView(threadEmails: $0) }
                 .navigationTitle("Thread Summarizer")
         case .attachmentGallery:
-            AttachmentGridView(emails: hubCurrentEmails)
+            hubWorkingSet { AttachmentGridView(emails: $0) }
                 .navigationTitle("Attachments")
         case .executiveDashboard:
             ExecutiveDashboardView()
@@ -782,42 +787,44 @@ struct ContentView: View {
             ReportBuilderView()
                 .navigationTitle("Report Builder")
         case .batchOperations:
-            BatchOperationsView(
-                emails: hubCurrentEmails,
-                selectedIDs: $selectedEmailIDs,
-                onTagApplied: { tag, ids in
-                    for id in ids {
-                        if tag.isEmpty {
-                            modelVM.userTags[id] = nil
-                        } else {
-                            var tags = modelVM.userTags[id] ?? []
-                            tags.insert(tag)
-                            modelVM.userTags[id] = tags
+            hubWorkingSet { emails in
+                BatchOperationsView(
+                    emails: emails,
+                    selectedIDs: $selectedEmailIDs,
+                    onTagApplied: { tag, ids in
+                        for id in ids {
+                            if tag.isEmpty {
+                                modelVM.userTags[id] = nil
+                            } else {
+                                var tags = modelVM.userTags[id] ?? []
+                                tags.insert(tag)
+                                modelVM.userTags[id] = tags
+                            }
                         }
+                    },
+                    onExportRequested: { _, _ in
+                        appState.triggerExport = true
                     }
-                },
-                onExportRequested: { _, _ in
-                    appState.triggerExport = true
-                }
-            )
+                )
+            }
             .navigationTitle("Batch Operations")
         case .archiveComparison:
-            ArchiveComparisonSheetWrapper(archiveA: hubCurrentEmails)
+            hubWorkingSet { ArchiveComparisonSheetWrapper(archiveA: $0) }
                 .navigationTitle("Archive Comparison")
         case .forensicReview:
             ForensicReviewView(selectedEmailIDs: $selectedEmailIDs)
                 .navigationTitle("Forensic Review")
         case .investigationReport:
-            InvestigationReportConfigSheet(emails: hubCurrentEmails, senderEmail: viewModel.senderEmail)
+            hubWorkingSet { InvestigationReportConfigSheet(emails: $0, senderEmail: viewModel.senderEmail) }
                 .navigationTitle("Investigation Report")
         case .batesNumbering:
-            BatesConfigView(emails: hubCurrentEmails)
+            hubWorkingSet { BatesConfigView(emails: $0) }
                 .navigationTitle("Bates Numbering")
         case .redaction:
-            RedactionConfigView(emails: hubCurrentEmails)
+            hubWorkingSet { RedactionConfigView(emails: $0) }
                 .navigationTitle("Redaction")
         case .automationRules:
-            AutomationRulesView(emails: hubCurrentEmails)
+            hubWorkingSet { AutomationRulesView(emails: $0) }
                 .navigationTitle("Automation Rules")
 
         case .aiAssistant:
@@ -836,7 +843,9 @@ struct ContentView: View {
             .environmentObject(storeManager)
             .navigationTitle("AI Assistant")
         case .aiDigest:
-            AIDigestView(emails: hubCurrentEmails)
+            // Zero-array digest: the generator streams a bounded working set
+            // of the selected period from the store itself.
+            AIDigestView()
                 .navigationTitle("AI Digest")
         case .smartAutoTagger:
             SmartAutoTaggerView()
@@ -845,24 +854,26 @@ struct ContentView: View {
             CustomExpertConfigView()
                 .navigationTitle("Custom Experts")
         case .knowledgeGraphExplorer:
-            KnowledgeGraphExplorerView(emails: hubCurrentEmails)
+            hubWorkingSet { KnowledgeGraphExplorerView(emails: $0) }
                 .navigationTitle("Knowledge Graph")
         case .aiVisualizations:
-            AIVisualizationDashboardView(emails: hubCurrentEmails)
+            hubWorkingSet { AIVisualizationDashboardView(emails: $0) }
                 .navigationTitle("AI Visualizations")
         case .backgroundFindings:
-            BackgroundFindingsView(emails: hubCurrentEmails)
+            hubWorkingSet { BackgroundFindingsView(emails: $0) }
                 .navigationTitle("Background Scan")
         case .predictiveInsights:
             PredictiveInsightsView()
                 .navigationTitle("Predictive Insights")
         case .pluginManager:
-            PluginManagerView(emails: hubCurrentEmails)
+            hubWorkingSet { PluginManagerView(emails: $0) }
                 .navigationTitle("Plugin Manager")
         case .personaHub:
             MainNavigationHubView(
-                emailCount: modelVM.allEmails.count,
-                filteredCount: modelVM.filteredEmails.count,
+                // Part G3: archive total from the store count; the visible
+                // filtered count describes the preview-backed list.
+                emailCount: max(modelVM.archiveTotalCount, modelVM.allEmails.count),
+                filteredCount: modelVM.displayedEmailCount,
                 persona: personaManager.selectedPersona,
                 onNavigate: { destination in
                     handleHubNavigation(destination)
@@ -873,7 +884,7 @@ struct ContentView: View {
             )
             .navigationTitle("\(personaManager.selectedPersona.shortLabel) Hub")
         case .reviewBatches:
-            ReviewBatchPanelView(emails: hubCurrentEmails, manager: reviewBatchManager)
+            hubWorkingSet { ReviewBatchPanelView(emails: $0, manager: reviewBatchManager) }
                 .navigationTitle("Review Batches")
         case .custodianPanel:
             CustodianPanelView(manager: custodianManager)
@@ -942,7 +953,7 @@ struct ContentView: View {
                     .frame(minWidth: 280, idealWidth: 400)
                 VStack(spacing: 0) {
                     detailContentView
-                    if appState.dockedBottomPanel != nil && !currentEmailsForDock.isEmpty {
+                    if appState.dockedBottomPanel != nil && modelVM.isParsed {
                         dockedBottomPanelView
                     }
                 }
@@ -979,7 +990,7 @@ struct ContentView: View {
                     WelcomeHubView(onOpenArchive: { openPanelFallback() }, onBrowseFiles: { showFileImporter = true })
                 }
             }
-            .navigationTitle(modelVM.showParsedList ? "\(modelVM.filteredEmails.count) Emails" : "mailin")
+            .navigationTitle(modelVM.showParsedList ? "\(modelVM.displayedEmailCount) Emails" : "mailin")
             .navigationBarTitleDisplayMode(modelVM.showParsedList ? .inline : .large)
             .toolbar {
                 if modelVM.showParsedList {
@@ -1085,7 +1096,7 @@ struct ContentView: View {
                 if let email = modelVM.filteredEmails.first(where: { $0.id == emailID }) {
                     EmailDetailView(
                         email: email,
-                        allEmails: modelVM.filteredEmails,
+                        orderedIDs: modelVM.filteredEmails.map(\.id),
                         onNavigate: { newID in selectedEmailIDs = [newID] },
                         onClose: { withAnimation { selectedEmailIDs = [] } },
                         searchText: modelVM.searchText
@@ -1402,14 +1413,14 @@ struct ContentView: View {
                         let _ = modelVM.rehydrateIfNeeded(selectedID)
                         EmailDetailView(
                             email: email,
-                            allEmails: modelVM.filteredEmails,
+                            orderedIDs: modelVM.filteredEmails.map(\.id),
                             onNavigate: { newID in iPadSelectedEmailID = newID },
                             onClose: { withAnimation { iPadSelectedEmailID = nil } },
                             searchText: modelVM.searchText
                         )
                         .id(selectedID)
 
-                        if appState.dockedBottomPanel != nil && !currentEmailsForDock.isEmpty {
+                        if appState.dockedBottomPanel != nil && modelVM.isParsed {
                             dockedBottomPanelView
                         }
                     }
@@ -1954,9 +1965,11 @@ struct ContentView: View {
                     filterSection
                         .padding(.horizontal, Spacing.xSmall)
 
-                    if !modelVM.allEmails.isEmpty {
+                    if modelVM.isParsed {
                         Divider().padding(.horizontal, Spacing.xSmall)
-                        FolderTreeView(emails: modelVM.allEmails, selectedFolder: $selectedFolder)
+                        // Part G7: self-loading — archive total from the store
+                        // count, buckets over a bounded working set.
+                        FolderTreeView(selectedFolder: $selectedFolder)
                             .padding(.horizontal, Spacing.xSmall)
                             .onChange(of: selectedFolder) { _, newFolder in
                                 if let folder = newFolder {
@@ -2312,11 +2325,9 @@ struct ContentView: View {
         #endif
     }
 
-    private var currentEmailsForDock: [MBOXParser.RawEmail] {
-        modelVM.filteredEmails.isEmpty ? modelVM.allEmails : modelVM.filteredEmails
-    }
-
     // MARK: - Docked Bottom Panel (Topics / Subjects)
+    // Part G1: docked panels stream their own bounded working set for the
+    // current query — never the resident preview arrays.
 
     @ViewBuilder
     private var dockedBottomPanelView: some View {
@@ -2329,16 +2340,20 @@ struct ContentView: View {
             Group {
                 switch appState.dockedBottomPanel {
                 case .topics:
-                    TopicClustersView(
-                        emails: currentEmailsForDock,
-                        selectedClusterFilter: $selectedClusterFilter,
-                        clusterFilterIDs: $modelVM.clusterFilterIDs
-                    )
+                    ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
+                        TopicClustersView(
+                            emails: emails,
+                            selectedClusterFilter: $selectedClusterFilter,
+                            clusterFilterIDs: $modelVM.clusterFilterIDs
+                        )
+                    }
                 case .subjects:
-                    SubjectsListView(
-                        emails: currentEmailsForDock,
-                        clusterFilterIDs: $modelVM.clusterFilterIDs
-                    )
+                    ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
+                        SubjectsListView(
+                            emails: emails,
+                            clusterFilterIDs: $modelVM.clusterFilterIDs
+                        )
+                    }
                 case .none:
                     EmptyView()
                 }
@@ -2461,7 +2476,9 @@ struct ContentView: View {
                 .help("View removed duplicates")
             }
             HStack(spacing: Spacing.small) {
-                Label("\(modelVM.filteredEmails.count) Emails", systemImage: "chart.bar.fill")
+                // Part G3: unfiltered → store-backed archive total; filtered →
+                // the visible (preview-backed) list count.
+                Label("\(modelVM.displayedEmailCount) Emails", systemImage: "chart.bar.fill")
                     .font(Typography.title3)
                     .foregroundColor(AppColors.secondary)
                 if modelVM.aiPinnedIDs != nil {
@@ -2849,7 +2866,7 @@ struct ContentView: View {
             if let email = modelVM.filteredEmails.first(where: { $0.id == selectedID }) {
                 EmailDetailView(
                     email: email,
-                    allEmails: modelVM.filteredEmails,
+                    orderedIDs: modelVM.filteredEmails.map(\.id),
                     onNavigate: { newID in selectedEmailIDs = [newID] },
                     onClose: { withAnimation { selectedEmailIDs = [] } },
                     searchText: modelVM.searchText
@@ -3983,7 +4000,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
         viewModel.restoreEmails(emails)
         modelVM.loadFromContentViewModel()
         predictiveEngine.buildVectors(from: emails)
-        SpotlightIndexer.shared.indexEmails(emails)
+        SpotlightIndexer.shared.indexAllFromArchive()   // bounded: streams from SQLite, no corpus (Part G5)
         #if canImport(FoundationModels)
         if #available(macOS 26, iOS 26, *) {
             FoundationModelEngine.invalidateProfileCache()
@@ -4135,38 +4152,76 @@ private func handleMultipleFiles(_ urls: [URL]) {
         showGettingStarted = true
     }
 
+    /// Part G6: clearing data is a STORE-level deletion that respects legal
+    /// hold — not a rewrite of the resident preview arrays. Non-held emails
+    /// are deleted from the SQLite authority + FTS in bounded keyset batches
+    /// (the same guarded FTS-first path `removeEmails` uses); held emails are
+    /// re-hydrated by id as the surviving preview. A failed store delete
+    /// leaves the UI untouched and surfaces the error (no optimistic clear).
     private func handleDataCleared() {
-        let heldEmails = modelVM.allEmails.filter { CustodianManager.shared.isUnderLegalHold($0.id) }
-
         selectedEmailIDs.removeAll()
         modelVM.resetFilters()
 
-        if heldEmails.isEmpty {
-            modelVM.allEmails = []
-            modelVM.filteredEmails = []
-            modelVM.isParsed = false
-            modelVM.showParsedList = false
-            modelVM.emailCount = 0
-        } else {
-            modelVM.allEmails = heldEmails
-            modelVM.filteredEmails = heldEmails
-            modelVM.emailCount = heldEmails.count
-            ForensicManager.shared.logAction(
-                "Data Clear — Legal Hold Enforced",
-                detail: "\(heldEmails.count) email(s) preserved under legal hold"
-            )
-        }
+        Task { @MainActor in
+            let svc = ArchiveDataService.shared
+            // The hold set is a bounded user set; keep only ids that exist.
+            let holdIDs = Array(CustodianManager.shared.legalHolds)
+            let heldExisting = (try? await svc.exists(ids: holdIDs)) ?? []
 
-        modelVM.replyCountPerSender = [:]
-        modelVM.priorityScores = [:]
-        viewModel.clearParsedData()
-        EmailSearchIndex.shared.clear()
-        EmailSearchIndex.shared.deleteDiskCache()
-        SpotlightIndexer.shared.removeAllIndexedEmails()
-        AIAssistantView.invalidateNLPCache()
-        AIAssistantView.invalidateNLPPrecomputation()
-        appState.hasParsedEmails = !heldEmails.isEmpty
-        appState.hasFilteredEmails = !heldEmails.isEmpty
+            do {
+                // Bounded batch deletes. The keyset cursor is delete-stable
+                // ((date,id) ordering — removing rows before the cursor cannot
+                // shift later pages), so we advance page by page.
+                var cursor: EmailPageCursor? = nil
+                while true {
+                    let page = try await svc.page(query: .all, cursor: cursor, limit: 500)
+                    if page.summaries.isEmpty { break }
+                    let deletable = page.summaries.map(\.id).filter { !heldExisting.contains($0) }
+                    if !deletable.isEmpty {
+                        try await svc.delete(ids: deletable)
+                    }
+                    guard let next = page.nextCursor else { break }
+                    cursor = next
+                }
+            } catch {
+                // Authority still holds the data — do not clear the UI.
+                viewModel.statusMessage = "Clear failed: \(error.localizedDescription). Your emails were not removed."
+                viewModel.statusColor = .red
+                return
+            }
+
+            // Store cleared (except holds) — now refresh preview/list state.
+            let heldEmails = (try? await svc.fullEmails(ids: Array(heldExisting))) ?? []
+            viewModel.clearParsedData()
+
+            if heldEmails.isEmpty {
+                modelVM.allEmails = []
+                modelVM.filteredEmails = []
+                modelVM.isParsed = false
+                modelVM.showParsedList = false
+                modelVM.emailCount = 0
+            } else {
+                viewModel.restoreEmails(heldEmails)
+                modelVM.allEmails = heldEmails
+                modelVM.filteredEmails = heldEmails
+                modelVM.emailCount = heldEmails.count
+                ForensicManager.shared.logAction(
+                    "Data Clear — Legal Hold Enforced",
+                    detail: "\(heldEmails.count) email(s) preserved under legal hold"
+                )
+            }
+            modelVM.refreshArchiveTotalCount()
+
+            modelVM.replyCountPerSender = [:]
+            modelVM.priorityScores = [:]
+            EmailSearchIndex.shared.clear()
+            EmailSearchIndex.shared.deleteDiskCache()
+            SpotlightIndexer.shared.removeAllIndexedEmails()
+            AIAssistantView.invalidateNLPCache()
+            AIAssistantView.invalidateNLPPrecomputation()
+            appState.hasParsedEmails = !heldEmails.isEmpty
+            appState.hasFilteredEmails = !heldEmails.isEmpty
+        }
     }
 
     // MARK: - Menu Trigger Handlers
@@ -4352,9 +4407,10 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
     var importFromCloud: ([MBOXParser.RawEmail]) -> Void
     var senderEmail: String
 
-    private var currentEmails: [MBOXParser.RawEmail] {
-        modelVM.filteredEmails.isEmpty ? modelVM.allEmails : modelVM.filteredEmails
-    }
+    /// Part G1: sheets that still take `[RawEmail]` are hosted over a bounded
+    /// working set streamed from the store for the CURRENT query — never the
+    /// resident preview arrays.
+    private var currentQuery: EmailQuery { modelVM.currentArchiveQuery }
 
     func body(content: Content) -> some View {
         content
@@ -4367,7 +4423,9 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
                     #endif
             }
             .sheet(isPresented: $appState.showPredictiveCoding) {
-                PredictiveCodingView(emails: currentEmails, engine: predictiveEngine, isPresented: $appState.showPredictiveCoding)
+                ArchiveWorkingSetView(query: currentQuery) { emails in
+                    PredictiveCodingView(emails: emails, engine: predictiveEngine, isPresented: $appState.showPredictiveCoding)
+                }
                     #if os(macOS)
                     .frame(minWidth: 460, minHeight: 350)
                     #else
@@ -4383,7 +4441,9 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
                     #endif
             }
             .sheet(isPresented: $appState.showReviewBatches) {
-                ReviewBatchPanelView(emails: currentEmails, manager: reviewBatchManager, isPresented: $appState.showReviewBatches)
+                ArchiveWorkingSetView(query: currentQuery) { emails in
+                    ReviewBatchPanelView(emails: emails, manager: reviewBatchManager, isPresented: $appState.showReviewBatches)
+                }
                     #if os(macOS)
                     .frame(minWidth: 460, minHeight: 340)
                     #else
@@ -4402,7 +4462,10 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
             .onChange(of: appState.triggerExportHeadersCSV) { _, val in
                 if val {
                     appState.triggerExportHeadersCSV = false
-                    let csv = ExportManager.exportHeadersOnlyCSV(from: currentEmails)
+                    // Export path — still preview-array-backed; Part O (exports
+                    // phase) streams this via ArchiveSelectionScope.
+                    let csv = ExportManager.exportHeadersOnlyCSV(
+                        from: modelVM.filteredEmails.isEmpty ? modelVM.allEmails : modelVM.filteredEmails)
                     #if os(macOS)
                     _ = PlatformFileSaver.saveText(csv, suggestedName: "headers_export.csv")
                     #endif
@@ -4424,7 +4487,9 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
                 if val { appState.triggerExportRelativity = false; exportRelativity() }
             }
             .sheet(isPresented: $appState.showAttachmentGrid) {
-                AttachmentGridView(emails: currentEmails)
+                ArchiveWorkingSetView(query: currentQuery) { emails in
+                    AttachmentGridView(emails: emails)
+                }
                     #if os(macOS)
                     .frame(minWidth: 480, minHeight: 360)
                     #else
@@ -4432,21 +4497,26 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
                     #endif
             }
             .sheet(isPresented: $appState.showTimeline) {
-                EmailTimelineView(emails: currentEmails, isPresented: $appState.showTimeline)
+                // nil emails → the timeline streams the archive from the store.
+                EmailTimelineView(isPresented: $appState.showTimeline)
                     .resizableSheet()
                     #if os(iOS)
                     .presentationDetents([.large])
                     #endif
             }
             .sheet(isPresented: $appState.showRelationshipGraph) {
-                RelationshipGraphView(emails: currentEmails, senderEmail: senderEmail, isPresented: $appState.showRelationshipGraph)
+                ArchiveWorkingSetView(query: currentQuery) { emails in
+                    RelationshipGraphView(emails: emails, senderEmail: senderEmail, isPresented: $appState.showRelationshipGraph)
+                }
                     .resizableSheet()
                     #if os(iOS)
                     .presentationDetents([.large])
                     #endif
             }
             .sheet(isPresented: $appState.showArchiveComparison) {
-                ArchiveComparisonSheetWrapper(archiveA: currentEmails)
+                ArchiveWorkingSetView(query: currentQuery) { emails in
+                    ArchiveComparisonSheetWrapper(archiveA: emails)
+                }
                     #if os(macOS)
                     .frame(minWidth: 480, minHeight: 360)
                     #else
@@ -4454,20 +4524,24 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
                     #endif
             }
             .sheet(isPresented: $appState.showInvestigationReport) {
-                InvestigationReportConfigSheet(emails: currentEmails, senderEmail: senderEmail, isPresented: $appState.showInvestigationReport)
+                ArchiveWorkingSetView(query: currentQuery) { emails in
+                    InvestigationReportConfigSheet(emails: emails, senderEmail: senderEmail, isPresented: $appState.showInvestigationReport)
+                }
                     .resizableSheet()
                     #if os(macOS)
                     .frame(minWidth: 460, minHeight: 350)
                     #endif
             }
-            .modifier(V7SheetsModifier(appState: appState, emails: currentEmails, senderEmail: senderEmail, selectedEmailIDs: $selectedEmailIDs, modelVM: modelVM))
+            .modifier(V7SheetsModifier(appState: appState, query: currentQuery, senderEmail: senderEmail, selectedEmailIDs: $selectedEmailIDs, modelVM: modelVM))
     }
 }
 
 // MARK: - V7 Sheets Modifier
 struct V7SheetsModifier: ViewModifier {
     @Bindable var appState: AppStateManager
-    var emails: [MBOXParser.RawEmail]
+    /// Part G1: the current archive query; each sheet streams its own bounded
+    /// working set — no preview array is passed down.
+    var query: EmailQuery
     var senderEmail: String
     @Binding var selectedEmailIDs: Set<UUID>
     @ObservedObject var modelVM: ParsedEmailListViewModel
@@ -4475,91 +4549,109 @@ struct V7SheetsModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .sheet(isPresented: $appState.showAutomationRules) {
-                AutomationRulesView(emails: emails)
+                ArchiveWorkingSetView(query: query) { emails in
+                    AutomationRulesView(emails: emails)
+                }
                     .resizableSheet()
                     #if os(macOS)
                     .frame(minWidth: 460, minHeight: 360)
                     #endif
             }
             .sheet(isPresented: $appState.showBatchOperations) {
-                BatchOperationsView(
-                    emails: emails,
-                    selectedIDs: $selectedEmailIDs,
-                    onTagApplied: { tag, ids in
-                        for id in ids {
-                            if tag.isEmpty {
-                                modelVM.userTags[id] = nil
-                            } else {
-                                var tags = modelVM.userTags[id] ?? []
-                                tags.insert(tag)
-                                modelVM.userTags[id] = tags
+                ArchiveWorkingSetView(query: query) { emails in
+                    BatchOperationsView(
+                        emails: emails,
+                        selectedIDs: $selectedEmailIDs,
+                        onTagApplied: { tag, ids in
+                            for id in ids {
+                                if tag.isEmpty {
+                                    modelVM.userTags[id] = nil
+                                } else {
+                                    var tags = modelVM.userTags[id] ?? []
+                                    tags.insert(tag)
+                                    modelVM.userTags[id] = tags
+                                }
                             }
-                        }
-                    },
-                    onExportRequested: { emailsToExport, format in
-                        appState.triggerExport = true
-                    },
-                    isPresented: $appState.showBatchOperations
-                )
+                        },
+                        onExportRequested: { emailsToExport, format in
+                            appState.triggerExport = true
+                        },
+                        isPresented: $appState.showBatchOperations
+                    )
+                }
                 .resizableSheet()
                 #if os(macOS)
                 .frame(minWidth: 500, minHeight: 400)
                 #endif
             }
             .sheet(isPresented: $appState.showThreadSummarizer) {
-                ThreadSummarizerView(threadEmails: emails, isPresented: $appState.showThreadSummarizer)
+                ArchiveWorkingSetView(query: query) { emails in
+                    ThreadSummarizerView(threadEmails: emails, isPresented: $appState.showThreadSummarizer)
+                }
                     .resizableSheet()
                     #if os(macOS)
                     .frame(minWidth: 460, minHeight: 360)
                     #endif
             }
             .sheet(isPresented: $appState.showSmartAlerts) {
-                SmartAlertsView(emails: emails, isPresented: $appState.showSmartAlerts)
+                ArchiveWorkingSetView(query: query) { emails in
+                    SmartAlertsView(emails: emails, isPresented: $appState.showSmartAlerts)
+                }
                     .resizableSheet()
                     #if os(macOS)
                     .frame(minWidth: 460, minHeight: 350)
                     #endif
             }
-            .modifier(V7ForensicSheetsModifier(appState: appState, emails: emails))
+            .modifier(V7ForensicSheetsModifier(appState: appState, query: query))
     }
 }
 
 struct V7ForensicSheetsModifier: ViewModifier {
     @Bindable var appState: AppStateManager
-    var emails: [MBOXParser.RawEmail]
+    var query: EmailQuery
 
     func body(content: Content) -> some View {
         content
             .sheet(isPresented: $appState.showEDiscovery) {
-                EDiscoveryWorkflowView(emails: emails, isPresented: $appState.showEDiscovery)
+                ArchiveWorkingSetView(query: query) { emails in
+                    EDiscoveryWorkflowView(emails: emails, isPresented: $appState.showEDiscovery)
+                }
                     .resizableSheet()
                     #if os(macOS)
                     .frame(minWidth: 480, minHeight: 380)
                     #endif
             }
             .sheet(isPresented: $appState.showBatesNumbering) {
-                BatesConfigView(emails: emails)
+                ArchiveWorkingSetView(query: query) { emails in
+                    BatesConfigView(emails: emails)
+                }
                     .resizableSheet()
                     #if os(macOS)
                     .frame(minWidth: 500, minHeight: 400)
                     #endif
             }
             .sheet(isPresented: $appState.showRedaction) {
-                RedactionConfigView(emails: emails)
+                ArchiveWorkingSetView(query: query) { emails in
+                    RedactionConfigView(emails: emails)
+                }
                     .resizableSheet()
                     #if os(macOS)
                     .frame(minWidth: 460, minHeight: 360)
                     #endif
             }
             .sheet(isPresented: $appState.showGDPRReport) {
-                GDPRReportConfigView(emails: emails, isPresented: $appState.showGDPRReport)
+                ArchiveWorkingSetView(query: query) { emails in
+                    GDPRReportConfigView(emails: emails, isPresented: $appState.showGDPRReport)
+                }
                     .resizableSheet()
                     #if os(macOS)
                     .frame(minWidth: 500, minHeight: 400)
                     #endif
             }
             .sheet(isPresented: $appState.showChainOfCustody) {
-                ChainOfCustodyView(emails: emails, isPresented: $appState.showChainOfCustody)
+                ArchiveWorkingSetView(query: query) { emails in
+                    ChainOfCustodyView(emails: emails, isPresented: $appState.showChainOfCustody)
+                }
                     .resizableSheet()
                     #if os(macOS)
                     .frame(minWidth: 460, minHeight: 360)
@@ -4573,14 +4665,12 @@ struct V8SheetsModifier: ViewModifier {
     @Bindable var appState: AppStateManager
     @ObservedObject var modelVM: ParsedEmailListViewModel
 
-    private var currentEmails: [MBOXParser.RawEmail] {
-        modelVM.filteredEmails.isEmpty ? modelVM.allEmails : modelVM.filteredEmails
-    }
-
     func body(content: Content) -> some View {
         content
             .sheet(isPresented: $appState.showNearDuplicates) {
-                NearDuplicateDetectionView(emails: currentEmails, isPresented: $appState.showNearDuplicates)
+                ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
+                    NearDuplicateDetectionView(emails: emails, isPresented: $appState.showNearDuplicates)
+                }
                     .resizableSheet()
             }
             .sheet(isPresented: $appState.showAnomalyDetection) {
@@ -4592,7 +4682,9 @@ struct V8SheetsModifier: ViewModifier {
                     .resizableSheet()
             }
             .sheet(isPresented: $appState.showAIDigest) {
-                AIDigestView(emails: currentEmails, isPresented: $appState.showAIDigest)
+                // Zero-array digest: the generator streams a bounded working
+                // set of the selected period from the store itself.
+                AIDigestView(isPresented: $appState.showAIDigest)
                     .resizableSheet()
             }
     }
@@ -4604,14 +4696,12 @@ struct V9SheetsModifier: ViewModifier {
     @ObservedObject var modelVM: ParsedEmailListViewModel
     var senderEmail: String
 
-    private var currentEmails: [MBOXParser.RawEmail] {
-        modelVM.filteredEmails.isEmpty ? modelVM.allEmails : modelVM.filteredEmails
-    }
-
     func body(content: Content) -> some View {
         content
             .sheet(isPresented: $appState.showExecutiveDashboard) {
-                ExecutiveDashboardView(emails: currentEmails, isPresented: $appState.showExecutiveDashboard)
+                // Query injection: the dashboard streams the current scope
+                // from SQLite in bounded pages (no array plumbing).
+                ExecutiveDashboardView(query: modelVM.currentArchiveQuery, isPresented: $appState.showExecutiveDashboard)
                     .resizableSheet()
             }
             .sheet(isPresented: $appState.showReportBuilder) {
@@ -4619,7 +4709,9 @@ struct V9SheetsModifier: ViewModifier {
                     .resizableSheet()
             }
             .sheet(isPresented: $appState.showKeywordMonitor) {
-                KeywordMonitorView(emails: currentEmails, isPresented: $appState.showKeywordMonitor)
+                ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
+                    KeywordMonitorView(emails: emails, isPresented: $appState.showKeywordMonitor)
+                }
                     .resizableSheet()
             }
             .sheet(isPresented: $appState.showCommunicationPatterns) {
@@ -4634,10 +4726,6 @@ struct V9UtilitySheetsModifier: ViewModifier {
     @Bindable var appState: AppStateManager
     @ObservedObject var modelVM: ParsedEmailListViewModel
     @EnvironmentObject private var storeManager: StoreManager
-
-    private var currentEmails: [MBOXParser.RawEmail] {
-        modelVM.filteredEmails.isEmpty ? modelVM.allEmails : modelVM.filteredEmails
-    }
 
     func body(content: Content) -> some View {
         content
@@ -4661,11 +4749,15 @@ struct V9UtilitySheetsModifier: ViewModifier {
                     .resizableSheet()
             }
             .sheet(isPresented: $appState.showAllAttachmentsGallery) {
-                AllAttachmentsGalleryView(emails: currentEmails)
+                ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
+                    AllAttachmentsGalleryView(emails: emails)
+                }
                     .resizableSheet()
             }
             .sheet(isPresented: $appState.showIOCExtractor) {
-                IOCExtractorView(emails: currentEmails)
+                ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
+                    IOCExtractorView(emails: emails)
+                }
                     .resizableSheet()
             }
             .sheet(isPresented: $appState.showGuidedSearch) {

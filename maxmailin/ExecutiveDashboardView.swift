@@ -10,9 +10,10 @@ import Charts
 import NaturalLanguage
 
 struct ExecutiveDashboardView: View {
-    /// nil → whole archive (streamed from SQLite, bounded); non-nil → a legacy
-    /// filtered selection analyzed via the array path.
-    var emails: [MBOXParser.RawEmail]? = nil
+    /// Part G1: the view never receives an archive array. Callers inject the
+    /// CURRENT filter as an `EmailQuery` (default: whole archive) and the
+    /// dashboard streams that scope from SQLite in bounded pages.
+    var query: EmailQuery = .all
     var isPresented: Binding<Bool>?
     @Environment(\.dismiss) private var envDismiss
     @State private var dashboardData: DashboardData?
@@ -264,24 +265,11 @@ struct ExecutiveDashboardView: View {
         avg sentiment \(String(format: "%.2f", data.averageSentiment)), \
         response rate \(String(format: "%.0f%%", data.responseRate * 100)).
         """
-        let injected = emails
+        let scopeQuery = query
         Task {
-            // Bounded AI context: filtered selection when injected, else a
-            // bounded most-recent working set — never the whole corpus.
-            let emailsForAI: [MBOXParser.RawEmail]
-            if let injected {
-                emailsForAI = injected
-            } else {
-                var recent: [MBOXParser.RawEmail] = []
-                let stream = ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
-                do {
-                    for try await batch in stream {
-                        recent.append(contentsOf: batch)
-                        if recent.count >= 500 { recent = Array(recent.prefix(500)); break }
-                    }
-                } catch { }
-                emailsForAI = recent
-            }
+            // Bounded AI context: a capped most-recent working set of the
+            // current query streamed from the store — never the whole corpus.
+            let emailsForAI = await ArchiveDataService.shared.workingSet(query: scopeQuery, cap: 500)
             #if canImport(FoundationModels)
             if #available(macOS 26, iOS 26, *) {
                 let result = await FoundationModelEngine.enhanceWithAI(
@@ -419,14 +407,10 @@ struct ExecutiveDashboardView: View {
 
     private func computeDashboard() async {
         isComputing = true
-        let result: DashboardData
-        if let emails {
-            result = await Task.detached { Self.buildDashboardData(from: emails) }.value
-        } else {
-            result = (try? await Self.buildDashboardData(from: .shared)) ?? DashboardData(
-                totalEmails: 0, uniqueContacts: 0, averageSentiment: 0, responseRate: 0,
-                weeklyVolume: [], weeklySentiment: [], topContacts: [], categoryDistribution: [], recentEmails: [])
-        }
+        // Bounded streaming over the injected scope from the activated store.
+        let result = (try? await Self.buildDashboardData(from: .shared, query: query)) ?? DashboardData(
+            totalEmails: 0, uniqueContacts: 0, averageSentiment: 0, responseRate: 0,
+            weeklyVolume: [], weeklySentiment: [], topContacts: [], categoryDistribution: [], recentEmails: [])
         await MainActor.run {
             dashboardData = result
             isComputing = false

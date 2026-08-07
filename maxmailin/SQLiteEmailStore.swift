@@ -458,6 +458,75 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return out
     }
 
+    /// Total stored size in bytes (SUM aggregate — never streams bodies).
+    func totalSizeBytes() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COALESCE(SUM(size_bytes), 0) FROM emails;")
+    }
+
+    /// Emails whose From header contains `needle` (case-insensitive) — the
+    /// DB-side equivalent of the legacy `from.contains(sender)` sent/received
+    /// annotation, as a COUNT aggregate.
+    func countFromContains(_ needle: String) throws -> Int {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT COUNT(*) FROM emails WHERE instr(lower(from_addr), lower(?)) > 0;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, needle)
+        guard try stepRow(stmt, db) else { return 0 }
+        return Int(sqlite3_column_int64(stmt, 0))
+    }
+
+    /// Per-sender rollup (count, total bytes, latest date) — GROUP BY aggregate
+    /// powering the cleanup view without a corpus scan. Bounded by `limit`.
+    struct SenderRollup: Sendable, Equatable {
+        let sender: String
+        let count: Int
+        let totalSizeBytes: Int
+        let latestDate: Date?
+    }
+
+    func senderRollups(limit: Int) throws -> [SenderRollup] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT from_addr, COUNT(*) AS c, COALESCE(SUM(size_bytes), 0), MAX(date)
+            FROM emails WHERE from_addr <> '' GROUP BY from_addr
+            ORDER BY c DESC, from_addr ASC LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        var out: [SenderRollup] = []
+        while try stepRow(stmt, db) {
+            let ts = sqlite3_column_type(stmt, 3) == SQLITE_NULL ? nil : sqlite3_column_int64(stmt, 3)
+            out.append(SenderRollup(
+                sender: columnText(stmt, 0),
+                count: Int(sqlite3_column_int64(stmt, 1)),
+                totalSizeBytes: Int(sqlite3_column_int64(stmt, 2)),
+                latestDate: ts.map { Date(timeIntervalSince1970: Double($0)) }
+            ))
+        }
+        return out
+    }
+
+    /// To-field frequencies of emails whose From contains `senderContains`
+    /// (case-insensitive) — the bounded GROUP BY behind reply-frequency stats.
+    /// Buckets are raw To strings; the caller splits multi-recipient fields.
+    func recipientFieldCounts(senderContains: String, limit: Int) throws -> [AggregateBucket] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT to_addr, COUNT(*) AS c FROM emails
+            WHERE instr(lower(from_addr), lower(?)) > 0 AND to_addr <> ''
+            GROUP BY to_addr ORDER BY c DESC, to_addr ASC LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, senderContains)
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+        var out: [AggregateBucket] = []
+        while try stepRow(stmt, db) {
+            out.append(AggregateBucket(value: columnText(stmt, 0), count: Int(sqlite3_column_int64(stmt, 1))))
+        }
+        return out
+    }
+
     /// Whitelisted grouping columns — the raw value is the actual column, so no
     /// user string is ever interpolated into SQL.
     enum GroupColumn: String, Sendable { case fromAddr = "from_addr", subject = "subject", toAddr = "to_addr" }

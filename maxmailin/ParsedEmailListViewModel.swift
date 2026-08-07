@@ -240,8 +240,49 @@ class ParsedEmailListViewModel: ObservableObject {
     var isPremiumUser: Bool = false
 
     // MARK: - Data
+    // NOTE (Part G): both arrays are the BOUNDED preview backing the legacy
+    // Simple list — never archive truth. Archive-wide totals/analytics come
+    // from ArchiveDataService / ArchiveAggregateService.
     @Published var allEmails: [MBOXParser.RawEmail] = []
     @Published var filteredEmails: [MBOXParser.RawEmail] = []
+
+    // MARK: - Archive truth (Part G3)
+
+    /// Store-backed archive total. The resident preview arrays are capped, so
+    /// their counts must never be presented as the archive total.
+    @Published private(set) var archiveTotalCount = 0
+
+    /// Refresh the store-backed archive total (fire-and-forget, bounded O(1)).
+    func refreshArchiveTotalCount() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.archiveTotalCount = (try? await ArchiveDataService.shared.count()) ?? self.archiveTotalCount
+        }
+    }
+
+    /// The count shown in list headers/titles. When nothing is filtered out of
+    /// the preview the archive total (store COUNT) is the truth; when a filter
+    /// narrows the list, the count of the visible (preview-backed) list is
+    /// exactly what the user sees.
+    var displayedEmailCount: Int {
+        filteredEmails.count == allEmails.count
+            ? max(archiveTotalCount, allEmails.count)
+            : filteredEmails.count
+    }
+
+    /// The current legacy filter state mapped onto the bounded archive query
+    /// (text + date bounds — the fields `EmailQuery` resolves today). This is
+    /// the same mapping the AI assistant scope uses (Part D precedent); feature
+    /// views stream their own bounded working sets for this query instead of
+    /// receiving the preview arrays.
+    var currentArchiveQuery: EmailQuery {
+        var query = EmailQuery.all
+        let text = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !text.isEmpty { query.text = text }
+        if startDate > .distantPast { query.afterDate = startDate }
+        if endDate < .distantFuture { query.beforeDate = endDate }
+        return query
+    }
     @Published var aiPinnedIDs: Set<UUID>? = nil
     @Published var emailThreads: [EmailThread] = []
     @Published var replyCountPerSender: [String: Int] = [:]
@@ -460,6 +501,7 @@ class ParsedEmailListViewModel: ObservableObject {
         allEmails.removeAll { ids.contains($0.id) }
         emailCount = allEmails.count
         viewModel.removeEmails(ids: ids)
+        refreshArchiveTotalCount()
         applyFilters()
     }
 
@@ -468,6 +510,7 @@ class ParsedEmailListViewModel: ObservableObject {
         allEmails = viewModel.parsedEmails
         emailCount = allEmails.count
         isParsed = !allEmails.isEmpty
+        refreshArchiveTotalCount()
         replyCountPerSender = computeReplyCountPerSender(in: allEmails)
         startDate = earliestEmailDate ?? .distantPast
         endDate = latestEmailDate ?? .distantFuture
@@ -506,6 +549,7 @@ class ParsedEmailListViewModel: ObservableObject {
                     self.isParsing = false
                     self.parseProgress = 1.0
                     self.emailCount = emails.count
+                    self.refreshArchiveTotalCount()
                     self.replyCountPerSender = self.computeReplyCountPerSender(in: emails)
                     self.startDate = self.earliestEmailDate ?? .distantPast
                     self.endDate = self.latestEmailDate ?? .distantFuture
@@ -861,26 +905,9 @@ class ParsedEmailListViewModel: ObservableObject {
         return counts
     }
 
-    // MARK: - Reply Frequency for Stats/Modal
-    /// Returns a mapping: recipientEmail -> number of times this user (senderEmail) replied to them.
-    func replyFrequency(for userEmail: String) -> [String: Int] {
-        guard !userEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [:] }
-        let sentByUser = allEmails.filter {
-            ($0.headers["From"] ?? "").localizedCaseInsensitiveContains(userEmail)
-        }
-        var counts: [String: Int] = [:]
-        for email in sentByUser {
-            if let toField = email.headers["To"] {
-                let recipients = toField
-                    .split(separator: ",")
-                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-                for recipient in recipients where !recipient.isEmpty {
-                    counts[recipient, default: 0] += 1
-                }
-            }
-        }
-        return counts
-    }
+    // Reply frequency stats moved to ArchiveAggregateService.replyRecipientCounts
+    // (Part G4): a bounded SQL GROUP BY over the store, consumed by
+    // ReplyStatsView directly — no preview-array walk.
 
     // MARK: - Filtering Logic (unchanged)
     private func filterMatch(_ email: MBOXParser.RawEmail) -> Bool {
@@ -1042,39 +1069,15 @@ class ParsedEmailListViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Cleanup Mode (sender-grouped data)
-    struct SenderGroup: Identifiable {
-        var id: String { sender }
-        let sender: String
-        let count: Int
-        let totalSizeKB: Int
-        let latestDate: Date?
-    }
+    // Cleanup Mode sender rollups + archive storage total moved to
+    // ArchiveAggregateService.senderRollups / totalSizeBytes (Part G9): SQL
+    // GROUP BY / SUM aggregates over the store, consumed by the cleanup view
+    // directly — the preview arrays must not be presented as archive stats.
 
-    var senderGroups: [SenderGroup] {
-        var grouped: [String: (count: Int, size: Int, latest: Date?)] = [:]
-        for email in allEmails {
-            let sender = email.headers["From"] ?? "Unknown"
-            var entry = grouped[sender, default: (count: 0, size: 0, latest: nil)]
-            entry.count += 1
-            entry.size += email.rawSource.utf8.count / 1024
-            let date = MBOXParser.parseDate(email.headers["Date"])
-            if let d = date {
-                if let existing = entry.latest {
-                    if d > existing { entry.latest = d }
-                } else {
-                    entry.latest = d
-                }
-            }
-            grouped[sender] = entry
-        }
-        return grouped.map { SenderGroup(sender: $0.key, count: $0.value.count, totalSizeKB: $0.value.size, latestDate: $0.value.latest) }
-            .sorted { $0.count > $1.count }
-    }
-
-    var totalStorageMB: Double {
-        Double(allEmails.reduce(0) { $0 + $1.rawSource.utf8.count }) / (1024.0 * 1024.0)
-    }
+    // NOTE (Part G9): everything below is PREVIEW-SCOPED by design — it
+    // describes the resident bounded preview backing the legacy Simple list
+    // (its filter pickers and date-filter defaults), not the whole archive.
+    // Archive-wide equivalents live in ArchiveAggregateService.
     var earliestEmailDate: Date? {
         allEmails.compactMap { isoFormatter.date(from: $0.timestamp) }.min()
     }
@@ -1097,6 +1100,7 @@ class ParsedEmailListViewModel: ObservableObject {
     var allTags: [String] {
         Array(Set(allEmails.flatMap { $0.tags })).sorted()
     }
+    /// Date span of the visible (preview-backed) filtered list.
     var filteredDateRange: (Date?, Date?) {
         let dates = filteredEmails.compactMap { isoFormatter.date(from: $0.timestamp) }
         return (dates.min(), dates.max())

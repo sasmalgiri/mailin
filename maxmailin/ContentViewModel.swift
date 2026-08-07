@@ -602,6 +602,10 @@ class ContentViewModel: ObservableObject {
         }
     }
 
+    /// Part G4: answers come from bounded SQL aggregates over the SQLite store
+    /// (COUNT / GROUP BY), never whole-array walks over the resident preview.
+    /// Signature kept synchronous (autoDetectMetadata precedent); the bounded
+    /// aggregate fetch runs in a MainActor Task and publishes `aiResponse`.
     func runAIQuery() {
         guard isParsed else {
             aiResponse = "Please parse a file first."
@@ -609,22 +613,28 @@ class ContentViewModel: ObservableObject {
         }
         let lower = aiPrompt.lowercased()
         if lower.contains("how many") && lower.contains("sent") {
-            let count = parsedEmails.filter { $0.messageType == "sent" }.count
-            aiResponse = "Total sent emails: \(count)"
+            Task { @MainActor in
+                let counts = try? await ArchiveAggregateService.shared.sentReceivedCounts(senderEmail: self.senderEmail)
+                self.aiResponse = "Total sent emails: \(counts?.sent ?? 0)"
+            }
         } else if lower.contains("how many") && lower.contains("received") {
-            let count = parsedEmails.filter { $0.messageType == "received" }.count
-            aiResponse = "Total received emails: \(count)"
+            Task { @MainActor in
+                let counts = try? await ArchiveAggregateService.shared.sentReceivedCounts(senderEmail: self.senderEmail)
+                self.aiResponse = "Total received emails: \(counts?.received ?? 0)"
+            }
         } else if lower.contains("top subject") {
-            let freq = Dictionary(grouping: parsedEmails.map { $0.headers["Subject"] ?? "(No Subject)" }, by: { $0 })
-                .mapValues { $0.count }
-                .sorted { $0.value > $1.value }
-            aiResponse = "Top Subjects:\n" + freq.prefix(5).map { "\($0.key): \($0.value)" }.joined(separator: "\n")
+            Task { @MainActor in
+                let subjects = (try? await ArchiveAggregateService.shared.topSubjects(limit: 5)) ?? []
+                self.aiResponse = "Top Subjects:\n" + subjects.map { "\($0.value): \($0.count)" }.joined(separator: "\n")
+            }
         } else if lower.contains("reply frequency") {
-            let freq = replyFrequency(for: senderEmail)
-            let summary = freq.sorted { $0.value > $1.value }.prefix(5)
-                .map { "\($0.key): \($0.value)" }
-                .joined(separator: "\n")
-            aiResponse = "Top Reply Recipients:\n" + summary
+            Task { @MainActor in
+                let freq = (try? await ArchiveAggregateService.shared.replyRecipientCounts(senderEmail: self.senderEmail)) ?? [:]
+                let summary = freq.sorted { $0.value > $1.value }.prefix(5)
+                    .map { "\($0.key): \($0.value)" }
+                    .joined(separator: "\n")
+                self.aiResponse = "Top Reply Recipients:\n" + summary
+            }
         } else {
             aiResponse = "Sorry, I didn't understand that. Try asking about 'sent emails', 'received emails', 'top subjects', or 'reply frequency'."
         }
@@ -711,27 +721,8 @@ class ContentViewModel: ObservableObject {
         autoDetectMetadata()
     }
 
-    // MARK: - Reply Frequency (threading)
-    func replyFrequency(for userEmail: String) -> [String: Int] {
-        guard !userEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [:] }
-        let replies = parsedEmails.filter {
-            $0.headers["From"]?.lowercased().contains(userEmail.lowercased()) == true
-        }
-
-        var counts: [String: Int] = [:]
-        for email in replies {
-            if let toField = email.headers["To"] {
-                let recipients = toField.components(separatedBy: ",")
-                for recipient in recipients {
-                    let trimmed = recipient.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty {
-                        counts[trimmed, default: 0] += 1
-                    }
-                }
-            }
-        }
-        return counts
-    }
+    // Reply frequency moved to ArchiveAggregateService.replyRecipientCounts
+    // (Part G4): a bounded SQL GROUP BY over the store — no preview-array walk.
 
     // MARK: - Clear all parsed state
     private func cleanupTempDirs() {

@@ -9,9 +9,18 @@ struct FolderNode: Identifiable {
     var filterValue: String
 }
 
+/// Part G7: self-loading folder tree. The "All Emails" total is the store
+/// COUNT (archive truth); the folder buckets (sent/received, attachments,
+/// labels, source files) are computed over a bounded most-recent working set
+/// streamed from the store — tags/source-file metadata have no SQL column yet,
+/// so their counts are working-set-scoped, exactly like the preview array this
+/// view used to receive. No injected corpus.
 struct FolderTreeView: View {
-    let emails: [MBOXParser.RawEmail]
     @Binding var selectedFolder: String?
+
+    @State private var archiveTotal = 0
+    @State private var workingSet: [MBOXParser.RawEmail] = []
+    @State private var isLoaded = false
 
     private struct FlatRow: Identifiable {
         var id: String { "\(node.filterValue)-\(depth)" }
@@ -39,7 +48,7 @@ struct FolderTreeView: View {
                             Text("All Emails")
                                 .font(Typography.callout)
                             Spacer()
-                            Text("\(emails.count)")
+                            Text("\(archiveTotal)")
                                 .font(Typography.caption2)
                                 .foregroundColor(AppColors.secondary)
                         }
@@ -49,7 +58,7 @@ struct FolderTreeView: View {
                         .cornerRadius(CornerRadius.small)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("All Emails, \(emails.count)")
+                    .accessibilityLabel("All Emails, \(archiveTotal)")
                     .accessibilityAddTraits(selectedFolder == nil ? .isSelected : [])
 
                     ForEach(rows) { row in
@@ -83,6 +92,12 @@ struct FolderTreeView: View {
                 }
             }
         }
+        .task {
+            guard !isLoaded else { return }
+            archiveTotal = (try? await ArchiveDataService.shared.count()) ?? 0
+            workingSet = await ArchiveDataService.shared.workingSet(query: .all)
+            isLoaded = true
+        }
     }
 
     private func flattenTree(_ nodes: [FolderNode], depth: Int = 0) -> [FlatRow] {
@@ -105,8 +120,10 @@ struct FolderTreeView: View {
         return AppColors.secondary
     }
 
+    /// Folder buckets over the bounded working set (see type comment).
     private func buildTree() -> [FolderNode] {
         var nodes: [FolderNode] = []
+        let emails = workingSet
 
         let sent = emails.filter { $0.messageType == "sent" }
         let received = emails.filter { $0.messageType == "received" }

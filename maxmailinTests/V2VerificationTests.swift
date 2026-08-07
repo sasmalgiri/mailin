@@ -701,7 +701,7 @@ final class V2VerificationTests: XCTestCase {
     /// `baseline` whenever you retire references. (No hosted CI, so this runs as
     /// a unit test on the dev machine / ⌘U.)
     func testLegacyCorpusConsumerCountOnlyDecreases() throws {
-        let baseline = 222   // Parts D/E/F: AIAssistantView scope semantics + EmailSearchIndex build removal (was 260→252→251→222)
+        let baseline = 194   // Parts G/H: ContentView hub/dock/sheets → bounded working sets, analytics/dashboard/digest/detail/folder/reply-stats off arrays (was 260→252→251→222→194)
         let src = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()   // maxmailinTests
             .deletingLastPathComponent()   // repo root
@@ -965,6 +965,67 @@ final class V2VerificationTests: XCTestCase {
 
         let subjectCounts = Dictionary(grouping: fixtures, by: { $0.headers["Subject"] ?? "" }).mapValues { $0.count }
         XCTAssertEqual(snap.topSubjects.first?.count, subjectCounts.values.max(), "top subject frequency matches oracle")
+    }
+
+    /// Part G4/G9 aggregates: sent/received split, reply-recipient counts,
+    /// total size, and per-sender rollups are SQL aggregates that must match a
+    /// direct-array oracle on a known fixture.
+    func testArchiveAggregateService_partGAggregatesMatchOracle() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-aggG-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+
+        // Deterministic fixtures: 40 emails; sender cycles 0..3, with
+        // "me@example.com" as sender for every 4th (the user's sent mail).
+        // Sent mail alternates single- and multi-recipient To fields.
+        let user = "Me@Example.com"   // mixed case → aggregates must be case-insensitive
+        var fixtures: [MBOXParser.RawEmail] = []
+        for i in 0..<40 {
+            var e = makeEmailDated(mid: "<aggG-\(i)@t>", subject: "S\(i % 5)", body: "body \(i)", dayOffset: i)
+            if i % 4 == 0 {
+                e.headers["From"] = "Me Sender <me@example.com>"
+                e.headers["To"] = i % 8 == 0 ? "a@x.com, B@y.com" : "c@z.com"
+            } else {
+                e.headers["From"] = "sender\(i % 4)@example.com"
+                e.headers["To"] = "me@example.com"
+            }
+            fixtures.append(e)
+        }
+        try await store.insertBatch(fixtures, batchSize: 100)
+        let svc = ArchiveAggregateService(store: store)
+
+        // Sent/received: oracle is the legacy annotation rule (From contains user).
+        let sentOracle = fixtures.filter { ($0.headers["From"] ?? "").lowercased().contains(user.lowercased()) }.count
+        let counts = try await svc.sentReceivedCounts(senderEmail: user)
+        XCTAssertEqual(counts.sent, sentOracle)
+        XCTAssertEqual(counts.received, fixtures.count - sentOracle)
+
+        // Reply recipients: oracle is the legacy array walk (split To on commas).
+        var replyOracle: [String: Int] = [:]
+        for e in fixtures where (e.headers["From"] ?? "").lowercased().contains(user.lowercased()) {
+            for r in (e.headers["To"] ?? "").split(separator: ",") {
+                let key = r.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if !key.isEmpty { replyOracle[key, default: 0] += 1 }
+            }
+        }
+        let replies = try await svc.replyRecipientCounts(senderEmail: user)
+        XCTAssertEqual(replies, replyOracle)
+
+        // Total size: SUM(size_bytes) equals the oracle sum of raw sizes.
+        let sizeOracle = fixtures.reduce(0) { $0 + $1.rawSource.utf8.count }
+        let totalSize = try await svc.totalSizeBytes()
+        XCTAssertEqual(totalSize, sizeOracle)
+
+        // Sender rollups: count / bytes / latest date per sender, top-N bounded.
+        let bySender = Dictionary(grouping: fixtures, by: { $0.headers["From"] ?? "" })
+        let rollups = try await svc.senderRollups(limit: 3)
+        XCTAssertEqual(rollups.count, 3, "bounded to limit")
+        let top = try XCTUnwrap(rollups.first)
+        let topOracle = try XCTUnwrap(bySender.max { $0.value.count < $1.value.count })
+        XCTAssertEqual(top.count, topOracle.value.count)
+        let oracleGroup = try XCTUnwrap(bySender[top.sender])
+        XCTAssertEqual(top.totalSizeBytes, oracleGroup.reduce(0) { $0 + $1.rawSource.utf8.count })
+        XCTAssertEqual(top.latestDate, oracleGroup.compactMap { MBOXParser.parseDate($0.headers["Date"]) }.max())
     }
 
     // MARK: - Stage 5 Wave 2C / Phase 6 — evidence-grounded AI verifier

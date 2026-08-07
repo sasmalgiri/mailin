@@ -59,4 +59,47 @@ final class ArchiveAggregateService {
     func topSubjects(limit: Int = 10) async throws -> [AggregateBucket] {
         try await store.topGrouped(.subject, limit: limit)
     }
+
+    // MARK: - Part G aggregates (replace preview-array walks in legacy screens)
+
+    /// Total archive size in bytes (SUM(size_bytes) — DB aggregate).
+    func totalSizeBytes() async throws -> Int {
+        try await store.totalSizeBytes()
+    }
+
+    /// Per-sender rollups (count / bytes / latest date) for the cleanup view —
+    /// a bounded GROUP BY, never a corpus scan.
+    func senderRollups(limit: Int = 200) async throws -> [SQLiteEmailStore.SenderRollup] {
+        try await store.senderRollups(limit: limit)
+    }
+
+    /// Sent/received split using the same rule the legacy annotator applied
+    /// (From contains the user's address ⇒ sent), as two COUNT aggregates.
+    func sentReceivedCounts(senderEmail: String) async throws -> (sent: Int, received: Int) {
+        let needle = senderEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let total = try await store.totalCount()
+        guard !needle.isEmpty else { return (0, total) }
+        let sent = try await store.countFromContains(needle)
+        return (sent, max(0, total - sent))
+    }
+
+    /// Reply frequency: recipient → number of emails the user (From contains
+    /// `senderEmail`) sent them. DB GROUP BY over the To field, bounded by
+    /// `fieldLimit` distinct To strings; multi-recipient fields are split
+    /// client-side exactly like the legacy array walk.
+    func replyRecipientCounts(senderEmail: String, fieldLimit: Int = 500) async throws -> [String: Int] {
+        let needle = senderEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return [:] }
+        let buckets = try await store.recipientFieldCounts(senderContains: needle, limit: fieldLimit)
+        var counts: [String: Int] = [:]
+        for bucket in buckets {
+            let recipients = bucket.value
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            for recipient in recipients where !recipient.isEmpty {
+                counts[recipient, default: 0] += bucket.count
+            }
+        }
+        return counts
+    }
 }

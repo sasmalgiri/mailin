@@ -46,6 +46,10 @@ struct ParsedEmailListView: View {
     @State private var showSaveSearchAlert = false
     @State private var saveSearchName = ""
     @State private var showCleanupMode = false
+    // Part G9: cleanup stats are store aggregates (SUM / GROUP BY), loaded by
+    // cleanupModeView's .task — never derived from the resident preview.
+    @State private var cleanupTotalSizeBytes = 0
+    @State private var cleanupSenderRollups: [SQLiteEmailStore.SenderRollup] = []
     @State private var quickFilterAIImportant = false
     @State private var quickFilterAISuspicious = false
     @State private var quickFilterAINegative = false
@@ -183,13 +187,13 @@ struct ParsedEmailListView: View {
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
             case .stats:
-                ReplyStatsView(replyData: model.replyFrequency(for: model.viewModel.senderEmail))
+                ReplyStatsView(senderEmail: model.viewModel.senderEmail)
             case .rawSource(let rfc822):
                 RawSourceView(rawText: rfc822)
             }
         }
         .sheet(isPresented: $showAnalyticsSheet) {
-            EmailAnalyticsView(emails: model.filteredEmails)
+            EmailAnalyticsView(query: model.currentArchiveQuery)
         }
         #if !DEBUG
         .sheet(isPresented: $showAIPaywall) {
@@ -369,7 +373,7 @@ struct ParsedEmailListView: View {
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
             case .stats:
-                ReplyStatsView(replyData: model.replyFrequency(for: model.viewModel.senderEmail))
+                ReplyStatsView(senderEmail: model.viewModel.senderEmail)
                     #if os(macOS)
                     .frame(minWidth: 500, minHeight: 400)
                     #else
@@ -386,7 +390,7 @@ struct ParsedEmailListView: View {
         }
 
         .sheet(isPresented: $showAnalyticsSheet) {
-            EmailAnalyticsView(emails: model.filteredEmails)
+            EmailAnalyticsView(query: model.currentArchiveQuery)
                 #if os(iOS)
                 .presentationDetents([.large])
                 #endif
@@ -438,7 +442,9 @@ struct ParsedEmailListView: View {
                     .fontWeight(.bold)
 
                 if !model.filteredEmails.isEmpty {
-                    Text("\(model.filteredEmails.count)")
+                    // Part G3: unfiltered → store-backed archive total; filtered
+                    // → the visible (preview-backed) list count.
+                    Text("\(model.displayedEmailCount)")
                         .font(.system(.caption, design: .rounded))
                         .fontWeight(.semibold)
                         .foregroundColor(.white)
@@ -1787,13 +1793,16 @@ struct ParsedEmailListView: View {
     #endif
 
     // MARK: - Cleanup Mode
+    // Part G9: archive-wide storage total (SUM aggregate) and per-sender
+    // rollups (bounded GROUP BY) come from the store — the resident preview is
+    // never presented as archive stats.
     private var cleanupModeView: some View {
         VStack(alignment: .leading, spacing: Spacing.small) {
             HStack {
                 Label("Email Cleanup", systemImage: "trash.circle")
                     .font(Typography.headline)
                 Spacer()
-                Text(String(format: "%.1f MB total", model.totalStorageMB))
+                Text(String(format: "%.1f MB total", Double(cleanupTotalSizeBytes) / (1024.0 * 1024.0)))
                     .font(Typography.caption1)
                     .foregroundColor(AppColors.secondary)
                     .padding(.horizontal, Spacing.xSmall)
@@ -1804,7 +1813,7 @@ struct ParsedEmailListView: View {
             .padding(.horizontal, Spacing.small)
 
             List {
-                ForEach(model.senderGroups) { group in
+                ForEach(cleanupSenderRollups, id: \.sender) { group in
                     HStack {
                         VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
                             Text(group.sender)
@@ -1815,7 +1824,7 @@ struct ParsedEmailListView: View {
                                 Text("\(group.count) emails")
                                     .font(Typography.caption1)
                                     .foregroundColor(AppColors.secondary)
-                                Text("\(group.totalSizeKB) KB")
+                                Text("\(group.totalSizeBytes / 1024) KB")
                                     .font(Typography.caption1)
                                     .foregroundColor(AppColors.secondary)
                                 if let date = group.latestDate {
@@ -1839,6 +1848,10 @@ struct ParsedEmailListView: View {
                     .padding(.vertical, Spacing.xxxSmall)
                 }
             }
+        }
+        .task {
+            cleanupTotalSizeBytes = (try? await ArchiveAggregateService.shared.totalSizeBytes()) ?? 0
+            cleanupSenderRollups = (try? await ArchiveAggregateService.shared.senderRollups(limit: 200)) ?? []
         }
     }
 
@@ -3385,7 +3398,12 @@ struct RawSourceView: View {
 
 // MARK: - Reply Stats View
 struct ReplyStatsView: View {
-    let replyData: [String: Int]
+    /// Part G4: reply frequency comes from a bounded SQL GROUP BY over the
+    /// store (ArchiveAggregateService.replyRecipientCounts), not a preview-
+    /// array walk. The view loads its own data for the given sender.
+    let senderEmail: String
+    @State private var replyData: [String: Int] = [:]
+    @State private var isLoading = true
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -3412,7 +3430,15 @@ struct ReplyStatsView: View {
                 .foregroundColor(AppColors.secondary)
 
             Divider()
-            if replyData.isEmpty {
+            if isLoading {
+                VStack {
+                    Spacer()
+                    ProgressView("Computing reply statistics…")
+                        .font(Typography.callout)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity)
+            } else if replyData.isEmpty {
                 EmptyStateView(
                     icon: "chart.bar",
                     title: "No reply data yet",
@@ -3456,5 +3482,9 @@ struct ReplyStatsView: View {
             }
         }
         .padding(Spacing.medium)
+        .task {
+            replyData = (try? await ArchiveAggregateService.shared.replyRecipientCounts(senderEmail: senderEmail)) ?? [:]
+            isLoading = false
+        }
     }
 }

@@ -8,7 +8,9 @@
 import SwiftUI
 
 struct AIDigestView: View {
-    let emails: [MBOXParser.RawEmail]
+    // Part G1: zero-array digest. The generator streams a bounded working set
+    // of the selected period from the SQLite store — the view never receives
+    // or holds an archive array.
     var isPresented: Binding<Bool>?
     @State private var selectedPeriod: AIDigestGenerator.TimePeriod = .lastWeek
     @State private var sections: [AIDigestGenerator.DigestSection] = []
@@ -202,11 +204,9 @@ struct AIDigestView: View {
         let period = selectedPeriod
         let start = customStart
         let end = customEnd
-        let emailList = emails
 
         Task.detached {
             let results = await AIDigestGenerator.generateDigest(
-                emails: emailList,
                 period: period,
                 customStart: period == .custom ? start : nil,
                 customEnd: period == .custom ? end : nil

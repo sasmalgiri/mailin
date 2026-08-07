@@ -12,7 +12,10 @@ import UIKit
 
 struct EmailDetailView: View {
     let email: MBOXParser.RawEmail
-    var allEmails: [MBOXParser.RawEmail] = []
+    /// Part G: prev/next navigation needs only the ORDERED VISIBLE IDS of the
+    /// current filtered list (the list's loaded page state), never the corpus.
+    /// The caller hydrates the neighbor by id when `onNavigate` fires.
+    var orderedIDs: [EmailID] = []
     var onNavigate: ((UUID) -> Void)? = nil
     var onClose: (() -> Void)? = nil
     var searchText: String = ""
@@ -55,7 +58,7 @@ struct EmailDetailView: View {
     @State private var showTranslation = false
 
     private var currentIndex: Int? {
-        allEmails.firstIndex(where: { $0.id == email.id })
+        orderedIDs.firstIndex(of: email.id)
     }
     private var hasPrev: Bool {
         guard let idx = currentIndex else { return false }
@@ -63,20 +66,20 @@ struct EmailDetailView: View {
     }
     private var hasNext: Bool {
         guard let idx = currentIndex else { return false }
-        return idx < allEmails.count - 1
+        return idx < orderedIDs.count - 1
     }
 
     private func advanceToNextUnreviewed() {
         guard let idx = currentIndex, let navigate = onNavigate else { return }
-        for i in (idx + 1)..<allEmails.count {
-            let tag = forensicManager.tagForEmail(allEmails[i].id)
+        for i in (idx + 1)..<orderedIDs.count {
+            let tag = forensicManager.tagForEmail(orderedIDs[i])
             if tag == .none {
-                navigate(allEmails[i].id)
+                navigate(orderedIDs[i])
                 return
             }
         }
-        if hasNext, idx + 1 < allEmails.count {
-            navigate(allEmails[idx + 1].id)
+        if hasNext, idx + 1 < orderedIDs.count {
+            navigate(orderedIDs[idx + 1])
         }
     }
 
@@ -229,7 +232,7 @@ struct EmailDetailView: View {
                     HStack(spacing: 4) {
                         Button {
                             if let idx = currentIndex, idx > 0 {
-                                onNavigate?(allEmails[idx - 1].id)
+                                onNavigate?(orderedIDs[idx - 1])
                             }
                         } label: {
                             Image(systemName: "chevron.left")
@@ -242,14 +245,14 @@ struct EmailDetailView: View {
                         .keyboardShortcut(.upArrow, modifiers: [.command])
 
                         if let idx = currentIndex {
-                            Text("\(idx + 1)/\(allEmails.count)")
+                            Text("\(idx + 1)/\(orderedIDs.count)")
                                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                                 .foregroundColor(AppColors.secondary)
                         }
 
                         Button {
-                            if let idx = currentIndex, idx < allEmails.count - 1 {
-                                onNavigate?(allEmails[idx + 1].id)
+                            if let idx = currentIndex, idx < orderedIDs.count - 1 {
+                                onNavigate?(orderedIDs[idx + 1])
                             }
                         } label: {
                             Image(systemName: "chevron.right")

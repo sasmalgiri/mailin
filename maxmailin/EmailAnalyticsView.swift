@@ -5,10 +5,11 @@ import AppKit
 #endif
 
 struct EmailAnalyticsView: View {
-    /// Legacy filtered-selection callers still pass an array; whole-archive
-    /// callers pass nil, and analytics stream from the activated SQLite store
-    /// (bounded). Migrating the last array callers off `emails` finishes this.
-    var emails: [MBOXParser.RawEmail]? = nil
+    /// Part G2: the view never receives an archive array. Callers inject the
+    /// CURRENT filter as an `EmailQuery` (default: whole archive) and every
+    /// figure streams from the activated SQLite store in bounded pages via
+    /// ArchiveFullAnalyticsService (exact tallies + NLP over a capped set).
+    var query: EmailQuery = .all
     @Environment(\.dismiss) private var dismiss
     @State private var analyticsData: AnalyticsData?
     @State private var isComputing = false
@@ -93,7 +94,7 @@ struct EmailAnalyticsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Email Analytics")
                         .font(Typography.headline)
-                    Text("\(analyticsData?.totalCount ?? emails?.count ?? 0) emails analyzed")
+                    Text("\(analyticsData?.totalCount ?? 0) emails analyzed")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
                 }
@@ -901,24 +902,11 @@ struct EmailAnalyticsView: View {
 
     private func loadAIInsights() {
         isLoadingAI = true
-        let injected = emails
+        let scopeQuery = query
         Task {
-            // Bounded context: the filtered selection when injected, else a
-            // bounded most-recent working set from the store — never the corpus.
-            let emailsForAI: [MBOXParser.RawEmail]
-            if let injected {
-                emailsForAI = injected
-            } else {
-                var recent: [MBOXParser.RawEmail] = []
-                let stream = ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
-                do {
-                    for try await batch in stream {
-                        recent.append(contentsOf: batch)
-                        if recent.count >= 500 { recent = Array(recent.prefix(500)); break }
-                    }
-                } catch { /* best-effort context */ }
-                emailsForAI = recent
-            }
+            // Bounded context: a capped most-recent working set of the current
+            // query streamed from the store — never the corpus.
+            let emailsForAI = await ArchiveDataService.shared.workingSet(query: scopeQuery, cap: 500)
             var insights: String?
             #if canImport(FoundationModels)
             if #available(macOS 26, iOS 26, *) {
@@ -942,14 +930,8 @@ struct EmailAnalyticsView: View {
     private func computeAnalytics() async {
         isComputing = true
         computeStage = "Analyzing..."
-        let data: AnalyticsData
-        if let emails {
-            // Legacy filtered selection → array path (bounded by the selection).
-            data = await ArchiveFullAnalyticsService.shared.compute(emails: emails)
-        } else {
-            // Whole archive → bounded streaming from the activated store.
-            data = (try? await ArchiveFullAnalyticsService.shared.compute(scope: .all)) ?? AnalyticsData()
-        }
+        // Bounded streaming over the injected scope from the activated store.
+        let data = (try? await ArchiveFullAnalyticsService.shared.compute(scope: query)) ?? AnalyticsData()
         withAnimation(AnimationTiming.normal) {
             analyticsData = data
             isComputing = false
