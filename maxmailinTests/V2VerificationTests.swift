@@ -2576,7 +2576,7 @@ final class V2StorageSchemaTests: XCTestCase {
         // Opening the store must migrate in place (v0-implicit → v1 → v2).
         let store = SQLiteEmailStore(directory: root)
         let v = try await store.schemaVersion()
-        XCTAssertEqual(v, 2, "populated v1 store upgrades to v2")
+        XCTAssertEqual(v, SQLiteEmailStore.currentSchemaVersion, "populated v1 store upgrades to the latest schema")
         let count = try await store.totalCount()
         XCTAssertEqual(count, 2, "no rows lost in migration")
 
@@ -2594,7 +2594,7 @@ final class V2StorageSchemaTests: XCTestCase {
         // Re-open: migration must be a no-op (idempotent, restart-safe).
         let reopened = SQLiteEmailStore(directory: root)
         let v2 = try await reopened.schemaVersion()
-        XCTAssertEqual(v2, 2)
+        XCTAssertEqual(v2, SQLiteEmailStore.currentSchemaVersion)
         let count2 = try await reopened.totalCount()
         XCTAssertEqual(count2, 2)
     }
@@ -2933,3 +2933,143 @@ final class V2ReviewStateTests: XCTestCase {
         XCTAssertEqual(states[emails[1].id]?.isRead, true, "write-through persisted")
     }
 }
+
+// MARK: - §21 — forensic state persistence, streamed audit chain, streaming hashes
+
+final class V2ForensicPersistenceTests: XCTestCase {
+
+    private func tempRoot() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-forensic-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    // §21: evidence tags / annotations / per-email hashes / source hashes /
+    // audit entries survive a fresh store reopen — SQLite is the authority.
+    func testForensicState_persistsAcrossReopen() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let id1 = UUID(), id2 = UUID()
+        do {
+            let store = SQLiteEmailStore(directory: root)
+            try await store.forensicTagSet("Relevant", ids: [id1])
+            try await store.forensicAnnotationSet("smoking gun", examiner: "Ada", id: id1)
+            try await store.forensicHashUpsert([id2: .init(md5: "m", sha1: "s1", sha256: "s256", byteCount: 42)])
+            try await store.forensicSourceHashUpsert(.init(
+                filename: "Inbox.mbox", fileSize: 1_000, md5: "fm", sha1: "fs1",
+                sha256: "fsha", importedAt: Date(timeIntervalSince1970: 1_700_000_000)))
+            try await store.forensicAuditAppend(.init(
+                seq: 0, entryID: UUID(), timestamp: Date(), action: "Test",
+                detail: "d", examiner: "Ada", previousHash: "GENESIS", entryHash: "h0"))
+        }
+        let reopened = SQLiteEmailStore(directory: root)
+        let tags = try await reopened.forensicTags(ids: [id1])
+        XCTAssertEqual(tags[id1]?.tag, "Relevant")
+        let notes = try await reopened.forensicAnnotations(ids: [id1])
+        XCTAssertEqual(notes[id1]?.note, "smoking gun")
+        XCTAssertEqual(notes[id1]?.examiner, "Ada")
+        let hashes = try await reopened.forensicHashes(ids: [id2])
+        XCTAssertEqual(hashes[id2]?.sha256, "s256")
+        let sources = try await reopened.forensicSourceHashes()
+        XCTAssertEqual(sources.count, 1)
+        XCTAssertEqual(sources.first?.sha256, "fsha")
+        let auditCount = try await reopened.forensicAuditCount()
+        XCTAssertEqual(auditCount, 1)
+        let counts = try await reopened.forensicTagCounts()
+        XCTAssertEqual(counts["Relevant"], 1)
+    }
+
+    // §21.1: the audit chain verifies STREAMED from the durable log, and a
+    // tampered entry is detected.
+    @MainActor
+    func testAuditChain_streamedVerification_detectsTamper() async throws {
+        let root = tempRoot()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            ForensicManager.testStoreOverride = nil
+        }
+        let store = SQLiteEmailStore(directory: root)
+        ForensicManager.testStoreOverride = store
+        let fm = ForensicManager.shared
+        let wasEnabled = fm.isEnabled
+        defer { fm.isEnabled = wasEnabled; fm.clearForensicData() }
+        fm.clearForensicData()
+        try await Task.sleep(nanoseconds: 200_000_000)   // let the async clear land
+        await fm.bootstrapFromStore()
+        fm.isEnabled = true
+
+        fm.logAction("Action A", detail: "first")
+        fm.logAction("Action B", detail: "second")
+        fm.logAction("Action C", detail: "third")
+        try await Task.sleep(nanoseconds: 300_000_000)   // async appends land
+
+        let ok = await fm.verifyAuditLogIntegrityStreamed()
+        XCTAssertEqual(ok, .verified, "intact chain verifies streamed")
+
+        // Tamper with entry #1 directly in the durable log.
+        var raw: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(root.appendingPathComponent("emails.db").path, &raw), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(raw, "UPDATE forensic_audit_log SET detail = 'FORGED' WHERE seq = 1;", nil, nil, nil), SQLITE_OK)
+        sqlite3_close(raw)
+
+        let tampered = await fm.verifyAuditLogIntegrityStreamed()
+        guard case .tampered(let details) = tampered else {
+            return XCTFail("tampered entry must be detected, got \(tampered)")
+        }
+        XCTAssertTrue(details.contains("1"), "identifies the tampered entry: \(details)")
+    }
+
+    // §9: streamed multi-digest source hashing matches a whole-file reference.
+    func testStreamingSourceHash_matchesWholeFileReference() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("hash-fixture-\(UUID().uuidString).bin")
+        defer { try? FileManager.default.removeItem(at: url) }
+        // > 1 MB so multiple chunks are exercised.
+        var data = Data()
+        for i in 0..<300_000 { data.append(UInt8(truncatingIfNeeded: i &* 31)) }
+        data.append(Data("mailin forensic fixture".utf8))
+        try data.write(to: url)
+
+        let streamed = try XCTUnwrap(ForensicManager.computeHashes(for: url))
+        let refSHA = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let refMD5 = Insecure.MD5.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let refSHA1 = Insecure.SHA1.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        XCTAssertEqual(streamed.sha256, refSHA)
+        XCTAssertEqual(streamed.md5, refMD5)
+        XCTAssertEqual(streamed.sha1, refSHA1)
+        XCTAssertEqual(streamed.fileSize, Int64(data.count))
+    }
+
+    // §21: the per-email hash cache stays window-bounded.
+    @MainActor
+    func testEmailHashCache_windowBounded() async throws {
+        let root = tempRoot()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            ForensicManager.testStoreOverride = nil
+        }
+        ForensicManager.testStoreOverride = SQLiteEmailStore(directory: root)
+        let fm = ForensicManager.shared
+        fm.clearForensicData()
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        // Store hashes for far more emails than the window cap, in batches.
+        let batchSize = 1_000
+        for b in 0..<7 {
+            let batch = (0..<batchSize).map { i -> MBOXParser.RawEmail in
+                MBOXParser.RawEmail(
+                    headers: ["Subject": "S\(b)-\(i)"], rawSource: "raw \(b) \(i)",
+                    messageType: "received", attachments: [], timestamp: "",
+                    domains: [], plainBody: "b", htmlBody: "")
+            }
+            fm.storeEmailHashes(batch)
+        }
+        XCTAssertLessThanOrEqual(fm.perEmailHashes.count, ForensicManager.hashWindowCap + batchSize,
+            "hash cache must stay window-bounded (got \(fm.perEmailHashes.count))")
+        try await Task.sleep(nanoseconds: 500_000_000)   // writes land
+        let stored = try await ForensicManager.testStoreOverride!.forensicHashCount()
+        XCTAssertEqual(stored, 7 * batchSize, "every hash row is durable even though the cache is bounded")
+        fm.clearForensicData()
+    }
+}
+
+import CryptoKit

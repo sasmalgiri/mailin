@@ -546,6 +546,11 @@ class ParsedEmailListViewModel: ObservableObject {
         queryTotalCount = pager.totalCount
         // §19: review state for exactly this window (bounded read).
         await review.hydrateWindow(ids: ids)
+        // §21: forensic hashes/tags/annotations for this window (bounded read;
+        // keeps badges exact even beyond the startup hydration cap).
+        if ForensicManager.shared.isEnabled {
+            await ForensicManager.shared.prefetchForensicWindow(ids: ids)
+        }
         // Window changed → per-window derived state must be recomputed.
         computePriorityScores()
         if isProductionArchive {

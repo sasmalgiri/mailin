@@ -121,7 +121,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// store fully at the previous version — never half-migrated, and a user
     /// DB is NEVER silently recreated. A store newer than this build refuses
     /// to open instead of guessing.
-    static let currentSchemaVersion = 2
+    static let currentSchemaVersion = 3
 
     private func migrateSchema(_ handle: OpaquePointer) throws {
         var v = try scalarInt(handle, "PRAGMA user_version;")
@@ -147,6 +147,68 @@ actor SQLiteEmailStore: EmailArchiveStore {
             }
             v = 2
         }
+        if v == 2 {
+            try inExclusiveTransaction(handle) {
+                try migrateV2toV3(handle)
+                try exec(handle, "PRAGMA user_version = 3;")
+            }
+            v = 3
+        }
+    }
+
+    /// v2 → v3 (§21): forensic state moves from whole-in-memory JSON maps to
+    /// indexed durable tables — evidence tags, examiner annotations, per-email
+    /// hashes, source-file hashes, and the HMAC-chained audit log.
+    private func migrateV2toV3(_ handle: OpaquePointer) throws {
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS forensic_email_hashes(
+                email_id   TEXT PRIMARY KEY,
+                md5        TEXT NOT NULL DEFAULT '',
+                sha1       TEXT NOT NULL DEFAULT '',
+                sha256     TEXT NOT NULL DEFAULT '',
+                byte_count INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS forensic_evidence_tags(
+                email_id  TEXT PRIMARY KEY,
+                tag       TEXT NOT NULL,
+                tagged_at INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_forensic_tag ON forensic_evidence_tags(tag, email_id);")
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS forensic_annotations(
+                email_id   TEXT PRIMARY KEY,
+                note       TEXT NOT NULL DEFAULT '',
+                examiner   TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS forensic_source_hashes(
+                id          INTEGER PRIMARY KEY,
+                filename    TEXT NOT NULL DEFAULT '',
+                file_size   INTEGER NOT NULL DEFAULT 0,
+                md5         TEXT NOT NULL DEFAULT '',
+                sha1        TEXT NOT NULL DEFAULT '',
+                sha256      TEXT NOT NULL,
+                imported_at INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        try exec(handle, "CREATE UNIQUE INDEX IF NOT EXISTS idx_forensic_source_sha ON forensic_source_hashes(sha256);")
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS forensic_audit_log(
+                seq       INTEGER PRIMARY KEY,
+                entry_id  TEXT NOT NULL,
+                ts        REAL NOT NULL,
+                action    TEXT NOT NULL,
+                detail    TEXT NOT NULL,
+                examiner  TEXT NOT NULL,
+                prev_hash TEXT NOT NULL,
+                entry_hash TEXT NOT NULL
+            );
+        """)
     }
 
     private func inExclusiveTransaction(_ handle: OpaquePointer, _ body: () throws -> Void) throws {
@@ -1905,6 +1967,328 @@ actor SQLiteEmailStore: EmailArchiveStore {
             try scalarInt(db, "SELECT COUNT(*) FROM email_user_tags;"),
             try scalarInt(db, "SELECT COUNT(*) FROM email_annotations;")
         )
+    }
+
+    // MARK: - Forensic state (§21)
+
+    struct ForensicEmailHashRow: Sendable, Equatable {
+        let md5: String
+        let sha1: String
+        let sha256: String
+        let byteCount: Int
+    }
+
+    func forensicHashUpsert(_ hashes: [UUID: ForensicEmailHashRow]) throws {
+        guard !hashes.isEmpty else { return }
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            INSERT INTO forensic_email_hashes(email_id, md5, sha1, sha256, byte_count)
+            VALUES (?,?,?,?,?)
+            ON CONFLICT(email_id) DO NOTHING;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        try exec(db, "BEGIN TRANSACTION;")
+        do {
+            for (id, h) in hashes {
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, id.uuidString)
+                bindText(stmt, 2, h.md5)
+                bindText(stmt, 3, h.sha1)
+                bindText(stmt, 4, h.sha256)
+                sqlite3_bind_int64(stmt, 5, Int64(h.byteCount))
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    func forensicHashes(ids: [UUID]) throws -> [UUID: ForensicEmailHashRow] {
+        guard !ids.isEmpty else { return [:] }
+        let db = try ensureDB()
+        var out: [UUID: ForensicEmailHashRow] = [:]
+        for chunk in ids.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, "SELECT email_id, md5, sha1, sha256, byte_count FROM forensic_email_hashes WHERE email_id IN (\(placeholders));")
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            while try stepRow(stmt, db) {
+                guard let id = columnUUID(stmt, 0) else { continue }
+                out[id] = ForensicEmailHashRow(
+                    md5: columnText(stmt, 1), sha1: columnText(stmt, 2),
+                    sha256: columnText(stmt, 3), byteCount: Int(sqlite3_column_int64(stmt, 4)))
+            }
+        }
+        return out
+    }
+
+    func forensicHashCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM forensic_email_hashes;")
+    }
+
+    func forensicTagSet(_ tag: String?, ids: [UUID]) throws {
+        guard !ids.isEmpty else { return }
+        let db = try ensureDB()
+        let now = Int64(Date().timeIntervalSince1970)
+        let sql = tag == nil
+            ? "DELETE FROM forensic_evidence_tags WHERE email_id = ?;"
+            : """
+              INSERT INTO forensic_evidence_tags(email_id, tag, tagged_at) VALUES (?,?,?)
+              ON CONFLICT(email_id) DO UPDATE SET tag = excluded.tag, tagged_at = excluded.tagged_at;
+              """
+        let stmt = try prepare(db, sql)
+        defer { sqlite3_finalize(stmt) }
+        try exec(db, "BEGIN TRANSACTION;")
+        do {
+            for id in ids {
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, id.uuidString)
+                if let tag {
+                    bindText(stmt, 2, tag)
+                    sqlite3_bind_int64(stmt, 3, now)
+                }
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    func forensicTags(ids: [UUID]) throws -> [UUID: (tag: String, taggedAt: Date)] {
+        guard !ids.isEmpty else { return [:] }
+        let db = try ensureDB()
+        var out: [UUID: (String, Date)] = [:]
+        for chunk in ids.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, "SELECT email_id, tag, tagged_at FROM forensic_evidence_tags WHERE email_id IN (\(placeholders));")
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            while try stepRow(stmt, db) {
+                guard let id = columnUUID(stmt, 0) else { continue }
+                out[id] = (columnText(stmt, 1), Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 2))))
+            }
+        }
+        return out
+    }
+
+    /// All (email_id, tag) pairs, paged — bounded hydration/scan path.
+    func forensicTagsPage(limit: Int, offset: Int) throws -> [(id: UUID, tag: String, taggedAt: Date)] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT email_id, tag, tagged_at FROM forensic_evidence_tags ORDER BY email_id LIMIT ? OFFSET ?;")
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        sqlite3_bind_int(stmt, 2, Int32(offset))
+        var out: [(UUID, String, Date)] = []
+        while try stepRow(stmt, db) {
+            guard let id = columnUUID(stmt, 0) else { continue }
+            out.append((id, columnText(stmt, 1), Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 2)))))
+        }
+        return out
+    }
+
+    func forensicTagCounts() throws -> [String: Int] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT tag, COUNT(*) FROM forensic_evidence_tags GROUP BY tag;")
+        defer { sqlite3_finalize(stmt) }
+        var out: [String: Int] = [:]
+        while try stepRow(stmt, db) { out[columnText(stmt, 0)] = Int(sqlite3_column_int64(stmt, 1)) }
+        return out
+    }
+
+    func forensicIDs(withTag tag: String, limit: Int, offset: Int) throws -> [UUID] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT email_id FROM forensic_evidence_tags WHERE tag = ? ORDER BY email_id LIMIT ? OFFSET ?;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, tag)
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+        sqlite3_bind_int(stmt, 3, Int32(offset))
+        var out: [UUID] = []
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append(id) } }
+        return out
+    }
+
+    func forensicAnnotationSet(_ note: String?, examiner: String, id: UUID) throws {
+        let db = try ensureDB()
+        if let note, !note.isEmpty {
+            let stmt = try prepare(db, """
+                INSERT INTO forensic_annotations(email_id, note, examiner, created_at) VALUES (?,?,?,?)
+                ON CONFLICT(email_id) DO UPDATE SET note = excluded.note, examiner = excluded.examiner, created_at = excluded.created_at;
+            """)
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, id.uuidString)
+            bindText(stmt, 2, note)
+            bindText(stmt, 3, examiner)
+            sqlite3_bind_int64(stmt, 4, Int64(Date().timeIntervalSince1970))
+            guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        } else {
+            let stmt = try prepare(db, "DELETE FROM forensic_annotations WHERE email_id = ?;")
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, id.uuidString)
+            guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        }
+    }
+
+    func forensicAnnotations(ids: [UUID]) throws -> [UUID: (note: String, examiner: String, createdAt: Date)] {
+        guard !ids.isEmpty else { return [:] }
+        let db = try ensureDB()
+        var out: [UUID: (String, String, Date)] = [:]
+        for chunk in ids.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, "SELECT email_id, note, examiner, created_at FROM forensic_annotations WHERE email_id IN (\(placeholders));")
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            while try stepRow(stmt, db) {
+                guard let id = columnUUID(stmt, 0) else { continue }
+                out[id] = (columnText(stmt, 1), columnText(stmt, 2),
+                           Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 3))))
+            }
+        }
+        return out
+    }
+
+    func forensicAnnotationCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM forensic_annotations;")
+    }
+
+    func forensicAnnotationsPage(limit: Int, offset: Int) throws -> [(id: UUID, note: String, examiner: String, createdAt: Date)] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT email_id, note, examiner, created_at FROM forensic_annotations ORDER BY email_id LIMIT ? OFFSET ?;")
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        sqlite3_bind_int(stmt, 2, Int32(offset))
+        var out: [(UUID, String, String, Date)] = []
+        while try stepRow(stmt, db) {
+            guard let id = columnUUID(stmt, 0) else { continue }
+            out.append((id, columnText(stmt, 1), columnText(stmt, 2),
+                        Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 3)))))
+        }
+        return out
+    }
+
+    // MARK: - Forensic source hashes + audit log (§21.1/§21.2)
+
+    struct ForensicSourceHashRow: Sendable, Equatable {
+        let filename: String
+        let fileSize: Int64
+        let md5: String
+        let sha1: String
+        let sha256: String
+        let importedAt: Date
+    }
+
+    func forensicSourceHashUpsert(_ row: ForensicSourceHashRow) throws {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            INSERT INTO forensic_source_hashes(filename, file_size, md5, sha1, sha256, imported_at)
+            VALUES (?,?,?,?,?,?)
+            ON CONFLICT(sha256) DO UPDATE SET imported_at = excluded.imported_at;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, row.filename)
+        sqlite3_bind_int64(stmt, 2, row.fileSize)
+        bindText(stmt, 3, row.md5)
+        bindText(stmt, 4, row.sha1)
+        bindText(stmt, 5, row.sha256)
+        sqlite3_bind_int64(stmt, 6, Int64(row.importedAt.timeIntervalSince1970))
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+    }
+
+    func forensicSourceHashes() throws -> [ForensicSourceHashRow] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT filename, file_size, md5, sha1, sha256, imported_at FROM forensic_source_hashes ORDER BY imported_at DESC;")
+        defer { sqlite3_finalize(stmt) }
+        var out: [ForensicSourceHashRow] = []
+        while try stepRow(stmt, db) {
+            out.append(ForensicSourceHashRow(
+                filename: columnText(stmt, 0), fileSize: sqlite3_column_int64(stmt, 1),
+                md5: columnText(stmt, 2), sha1: columnText(stmt, 3), sha256: columnText(stmt, 4),
+                importedAt: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 5)))))
+        }
+        return out
+    }
+
+    struct ForensicAuditRow: Sendable, Equatable {
+        let seq: Int
+        let entryID: UUID
+        let timestamp: Date
+        let action: String
+        let detail: String
+        let examiner: String
+        let previousHash: String
+        let entryHash: String
+    }
+
+    /// Append one audit entry. `seq` is the PRIMARY KEY, so a duplicated or
+    /// out-of-order append fails loudly instead of corrupting the chain.
+    func forensicAuditAppend(_ row: ForensicAuditRow) throws {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            INSERT INTO forensic_audit_log(seq, entry_id, ts, action, detail, examiner, prev_hash, entry_hash)
+            VALUES (?,?,?,?,?,?,?,?);
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, Int64(row.seq))
+        bindText(stmt, 2, row.entryID.uuidString)
+        sqlite3_bind_double(stmt, 3, row.timestamp.timeIntervalSince1970)
+        bindText(stmt, 4, row.action)
+        bindText(stmt, 5, row.detail)
+        bindText(stmt, 6, row.examiner)
+        bindText(stmt, 7, row.previousHash)
+        bindText(stmt, 8, row.entryHash)
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+    }
+
+    private func forensicAuditRow(_ stmt: OpaquePointer?) -> ForensicAuditRow? {
+        guard let entryID = columnUUID(stmt, 1) else { return nil }
+        return ForensicAuditRow(
+            seq: Int(sqlite3_column_int64(stmt, 0)),
+            entryID: entryID,
+            timestamp: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 2)),
+            action: columnText(stmt, 3), detail: columnText(stmt, 4),
+            examiner: columnText(stmt, 5),
+            previousHash: columnText(stmt, 6), entryHash: columnText(stmt, 7))
+    }
+
+    private static let auditColumns = "seq, entry_id, ts, action, detail, examiner, prev_hash, entry_hash"
+
+    /// Ordered page for streamed verification (ascending from `fromSeq`).
+    func forensicAuditPage(fromSeq: Int, limit: Int) throws -> [ForensicAuditRow] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT \(Self.auditColumns) FROM forensic_audit_log WHERE seq >= ? ORDER BY seq ASC LIMIT ?;")
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, Int64(fromSeq))
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+        var out: [ForensicAuditRow] = []
+        while try stepRow(stmt, db) { if let r = forensicAuditRow(stmt) { out.append(r) } }
+        return out
+    }
+
+    /// Most recent entries for UI display (descending).
+    func forensicAuditRecent(limit: Int) throws -> [ForensicAuditRow] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT \(Self.auditColumns) FROM forensic_audit_log ORDER BY seq DESC LIMIT ?;")
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        var out: [ForensicAuditRow] = []
+        while try stepRow(stmt, db) { if let r = forensicAuditRow(stmt) { out.append(r) } }
+        return out
+    }
+
+    func forensicAuditCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM forensic_audit_log;")
+    }
+
+    func forensicAuditLast() throws -> ForensicAuditRow? {
+        try forensicAuditRecent(limit: 1).first
+    }
+
+    func forensicClearAll() throws {
+        let db = try ensureDB()
+        for table in ["forensic_email_hashes", "forensic_evidence_tags", "forensic_annotations",
+                      "forensic_source_hashes", "forensic_audit_log"] {
+            try exec(db, "DELETE FROM \(table);")
+        }
     }
 
     // MARK: - Mutation

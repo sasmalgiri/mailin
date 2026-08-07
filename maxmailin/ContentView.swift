@@ -4190,17 +4190,18 @@ private func handleMultipleFiles(_ urls: [URL]) {
         #else
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("audit_log.txt")
         #endif
-        let log = forensicManager.exportAuditLog()
-        do {
-            try log.write(to: url, atomically: true, encoding: .utf8)
-            viewModel.statusMessage = "Exported audit log with \(forensicManager.auditLog.count) entries."
-            viewModel.statusColor = .green
-            #if os(iOS)
-            iOSShareFile(at: url)
-            #endif
-        } catch {
-            viewModel.statusMessage = "Failed to export audit log: \(error.localizedDescription)"
-            viewModel.statusColor = .red
+        Task { @MainActor in
+            do {
+                let total = try await forensicManager.exportAuditLogStreamed(to: url)
+                viewModel.statusMessage = "Exported audit log with \(total) entries."
+                viewModel.statusColor = .green
+                #if os(iOS)
+                iOSShareFile(at: url)
+                #endif
+            } catch {
+                viewModel.statusMessage = "Failed to export audit log: \(error.localizedDescription)"
+                viewModel.statusColor = .red
+            }
         }
     }
 

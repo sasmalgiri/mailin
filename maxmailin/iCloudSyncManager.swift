@@ -326,8 +326,7 @@ class iCloudSyncManager: ObservableObject {
 
                 if localTag == nil || remoteTimestamp > localTimestamp {
                     let oldValue = localTag?.rawValue ?? "none"
-                    forensic.evidenceTags[uuid] = tag
-                    forensic.tagTimestamps[uuid] = remoteTimestamp
+                    forensic.applyMergedTag(uuid, tag: tag, timestamp: remoteTimestamp)
                     mergedTagCount += 1
 
                     if forensic.isEnabled {
@@ -341,11 +340,11 @@ class iCloudSyncManager: ObservableObject {
 
                 if let existing = forensic.annotations[uuid] {
                     if dto.timestamp > existing.timestamp {
-                        forensic.annotations[uuid] = ForensicManager.Annotation(
+                        forensic.applyMergedAnnotation(uuid, annotation: ForensicManager.Annotation(
                             text: dto.text,
                             examiner: dto.examiner,
                             timestamp: dto.timestamp
-                        )
+                        ))
                         mergedAnnotationCount += 1
 
                         if forensic.isEnabled {
@@ -353,11 +352,11 @@ class iCloudSyncManager: ObservableObject {
                         }
                     }
                 } else {
-                    forensic.annotations[uuid] = ForensicManager.Annotation(
+                    forensic.applyMergedAnnotation(uuid, annotation: ForensicManager.Annotation(
                         text: dto.text,
                         examiner: dto.examiner,
                         timestamp: dto.timestamp
-                    )
+                    ))
                     mergedAnnotationCount += 1
 
                     if forensic.isEnabled {
