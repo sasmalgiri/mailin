@@ -1490,9 +1490,13 @@ final class V2VerificationTests: XCTestCase {
     func testImportReceipt_hashPersistAndTamper() async throws {
         var receipt = ImportReceipt(startedAt: Date(timeIntervalSince1970: 1000), completedAt: Date(timeIntervalSince1970: 1090))
         receipt.sources = [.init(filename: "a.mbox", sizeBytes: 12345, sha256: "abc", parser: "mbox", parserVersion: 1)]
-        receipt.discovered = 50; receipt.inserted = 48; receipt.duplicates = 2; receipt.skipped = 0
+        receipt.discovered = 52; receipt.parsed = 50; receipt.inserted = 48; receipt.duplicates = 2; receipt.skipped = 0
+        receipt.damaged = 2; receipt.persistFailed = 0; receipt.indexed = 48; receipt.attachmentsSeen = 7
+        receipt.fileFailures = [.init(filename: "bad.mbox", message: "unreadable")]
+        receipt.resumed = true; receipt.resumedDetail = "Resumed a.mbox at message 100."
+        receipt.ftsDegraded = true; receipt.ftsFailedBatchCount = 1; receipt.reconciliationPending = true
         receipt.durationSeconds = 90; receipt.storeCountBefore = 100; receipt.storeCountAfter = 148; receipt.ftsRowCount = 148
-        receipt.finalize()
+        try receipt.finalize()
         XCTAssertTrue(receipt.verify(), "finalized receipt verifies")
         XCTAssertFalse(receipt.contentHash.isEmpty)
 
@@ -1506,10 +1510,150 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertTrue(reloaded.verify(), "reloaded receipt still verifies")
         XCTAssertEqual(store.list().count, 1)
 
-        // Tamper → verify fails.
+        // Tamper → verify fails (outcome, degradation, and failure fields).
         var tampered = reloaded
         tampered.inserted = 9999
         XCTAssertFalse(tampered.verify(), "edited receipt fails its self-hash")
+        var tampered2 = reloaded
+        tampered2.ftsDegraded = false
+        XCTAssertFalse(tampered2.verify(), "hiding FTS degradation fails the self-hash")
+        var tampered3 = reloaded
+        tampered3.fileFailures = []
+        XCTAssertFalse(tampered3.verify(), "erasing per-file failures fails the self-hash")
+
+        // Unavailable counts are representable as nil — never fabricated 0 —
+        // and still covered by the signature.
+        var unavailable = ImportReceipt(startedAt: Date(timeIntervalSince1970: 1000), completedAt: Date(timeIntervalSince1970: 1090))
+        unavailable.inserted = nil; unavailable.storeCountBefore = nil
+        try unavailable.finalize()
+        XCTAssertTrue(unavailable.verify())
+        var fabricated = unavailable
+        fabricated.inserted = 0
+        XCTAssertFalse(fabricated.verify(), "nil→0 substitution is tamper-detected")
+    }
+
+    // MARK: - P0 B5 — safe resume identity (ordinal-bound checkpoints)
+
+    /// Resume arithmetic never skips or double-commits a message ordinal,
+    /// for ANY batch size — including a batch size different from the one
+    /// the interrupted session used.
+    func testResumeArithmetic_batchSizeChangeNeverSkipsMessages() throws {
+        let total = 1_003
+        // Session 1 (batchSize 50) crashed after committing 137 messages.
+        let resumeFrom = 137
+        // Session 2 resumes with a DIFFERENT batch size.
+        for newBatchSize in [1, 7, 50, 64, 500, 5_000] {
+            var committed: [Int] = []
+            var batchStart = 0
+            while batchStart < total {
+                let batchCount = min(newBatchSize, total - batchStart)
+                let range = BulkImportCoordinator.pendingRange(
+                    batchStart: batchStart, batchCount: batchCount, resumeFrom: resumeFrom
+                )
+                committed.append(contentsOf: range.map { batchStart + $0 })
+                batchStart += batchCount
+            }
+            XCTAssertEqual(committed, Array(resumeFrom..<total),
+                "batchSize \(newBatchSize): resume must commit exactly [\(resumeFrom), \(total)) — no gaps, no repeats")
+        }
+        // Degenerate cases: nothing committed yet / everything committed.
+        XCTAssertEqual(BulkImportCoordinator.pendingRange(batchStart: 0, batchCount: 10, resumeFrom: 0), 0..<10)
+        XCTAssertTrue(BulkImportCoordinator.pendingRange(batchStart: 0, batchCount: 10, resumeFrom: 10).isEmpty)
+        XCTAssertTrue(BulkImportCoordinator.pendingRange(batchStart: 0, batchCount: 10, resumeFrom: 99).isEmpty)
+    }
+
+    /// The checkpoint store only offers a resume point when the FULL identity
+    /// matches (SHA-256 + byte size + parser + parser version + schema).
+    /// Any mismatch — including a legacy batch-count checkpoint — refuses to
+    /// resume (returns 0 → restart the file), never guesses.
+    func testCheckpointStore_identityBoundResume() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-ckpt-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("checkpoints.json")
+        let store = ImportCheckpointStore(storeURL: url)
+
+        let identity = ImportCheckpointStore.ResumeIdentity(
+            sha256: "abc123", sizeBytes: 9_999, parser: "mbox", parserVersion: 1
+        )
+        try await store.recordProgress(identity: identity, sourceName: "big.mbox", messagesIngested: 137)
+
+        // Exact identity match → resume at the recorded ordinal, regardless
+        // of what batch size the new session uses (ordinal-bound).
+        let resume = await store.resumePoint(for: identity)
+        XCTAssertEqual(resume, 137)
+
+        // Any single identity-field mismatch → refuse resume (restart file).
+        var differentSize = identity; differentSize.sizeBytes = 10_000
+        var differentParser = identity; differentParser.parser = "pst"
+        var differentVersion = identity; differentVersion.parserVersion = 2
+        let r1 = await store.resumePoint(for: differentSize)
+        let r2 = await store.resumePoint(for: differentParser)
+        let r3 = await store.resumePoint(for: differentVersion)
+        XCTAssertEqual(r1, 0, "size mismatch must restart")
+        XCTAssertEqual(r2, 0, "parser mismatch must restart")
+        XCTAssertEqual(r3, 0, "parser-version mismatch must restart")
+
+        // Persists across a fresh instance (crash simulation).
+        let reloadedStore = ImportCheckpointStore(storeURL: url)
+        let resumeAfterReload = await reloadedStore.resumePoint(for: identity)
+        XCTAssertEqual(resumeAfterReload, 137, "checkpoint survives process restart")
+
+        // Legacy schema-v1 (batch-count) checkpoint written by an older build:
+        // decodes, but is never resumed — the file restarts from scratch.
+        let legacyJSON = """
+        {"entries":{},"inProgress":{"legacyhash":{"sha256":"legacyhash","sourceName":"old.mbox","batchesIngested":4,"lastUpdatedAt":0}}}
+        """
+        let legacyURL = dir.appendingPathComponent("legacy.json")
+        try Data(legacyJSON.utf8).write(to: legacyURL)
+        let legacyStore = ImportCheckpointStore(storeURL: legacyURL)
+        let legacyIdentity = ImportCheckpointStore.ResumeIdentity(
+            sha256: "legacyhash", sizeBytes: 0, parser: "mbox", parserVersion: 1
+        )
+        let legacyResume = await legacyStore.resumePoint(for: legacyIdentity)
+        XCTAssertEqual(legacyResume, 0, "legacy batch-count checkpoints must never resume (schema mismatch)")
+
+        // Completing the file clears the in-progress checkpoint.
+        try await store.record(sha256: identity.sha256, sourceName: "big.mbox", emailCount: 500)
+        let afterComplete = await store.resumePoint(for: identity)
+        XCTAssertEqual(afterComplete, 0)
+        let imported = await store.isImported(sha256: identity.sha256)
+        XCTAssertTrue(imported)
+    }
+
+    /// Part B3: a checkpoint that cannot be persisted THROWS — the import
+    /// must fail-stop rather than advance past an unrecorded batch. And a
+    /// corrupt checkpoint file is detected + surfaced, never silently
+    /// treated as empty.
+    func testCheckpointStore_writeFailureThrowsAndCorruptionSurfaces() async throws {
+        // Unwritable location: a path under a regular FILE cannot be created.
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-ckptfail-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let blocker = dir.appendingPathComponent("blocker")
+        try Data("x".utf8).write(to: blocker)
+        let impossible = blocker.appendingPathComponent("sub").appendingPathComponent("checkpoints.json")
+        let failingStore = ImportCheckpointStore(storeURL: impossible)
+        let identity = ImportCheckpointStore.ResumeIdentity(
+            sha256: "h", sizeBytes: 1, parser: "mbox", parserVersion: 1
+        )
+        do {
+            try await failingStore.recordProgress(identity: identity, sourceName: "f.mbox", messagesIngested: 10)
+            XCTFail("checkpoint write into an impossible path must throw")
+        } catch let error as ImportCheckpointStore.CheckpointError {
+            if case .writeFailed = error {} else { XCTFail("unexpected checkpoint error: \(error)") }
+        }
+
+        // Corruption: garbage bytes where the checkpoint file should be.
+        let corruptURL = dir.appendingPathComponent("corrupt.json")
+        try Data("not json at all {{{".utf8).write(to: corruptURL)
+        let corruptStore = ImportCheckpointStore(storeURL: corruptURL)
+        let detected = await corruptStore.corruptionDetected()
+        XCTAssertTrue(detected, "undecodable checkpoint file must be surfaced as corruption")
+        let count = await corruptStore.importedCount()
+        XCTAssertEqual(count, 0, "corrupt store starts empty (files re-import; store dedups)")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: corruptURL.path),
+            "corrupt file is quarantined (moved aside), not clobbered")
     }
 
     // MARK: - Stage 5 W2-C / Phase 7 — analytics snapshot

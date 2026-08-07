@@ -2,6 +2,10 @@ import Foundation
 import os
 
 struct NSFParser {
+    /// Bump when message extraction/ordering changes — invalidates mid-file
+    /// resume checkpoints bound to the previous version (Part B5).
+    static let parserVersion = 1
+
     private static let logger = Logger(subsystem: "com.mailin", category: "NSFParser")
 
     static func parse(

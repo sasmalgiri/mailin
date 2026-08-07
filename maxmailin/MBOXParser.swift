@@ -2,6 +2,10 @@ import Foundation
 import CryptoKit
 
 struct MBOXParser {
+    /// Bump when message splitting/ordering changes — invalidates mid-file
+    /// resume checkpoints bound to the previous version (Part B5).
+    static let parserVersion = 1
+
     struct RawEmail: Identifiable, Codable, Sendable {
         let id: UUID
         var headers: [String: String]

@@ -199,6 +199,15 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .dataClearedByUser)) { _ in handleDataCleared() }
         .onReceive(NotificationCenter.default.publisher(for: .detectMetadata)) { _ in viewModel.autoDetectMetadata() }
         .onReceive(NotificationCenter.default.publisher(for: .triggerFileImportFromShortcut)) { _ in openPanelFallback() }
+        .onReceive(NotificationCenter.default.publisher(for: .importFileFromURL)) { notification in
+            // "Open with mailin" from Finder/Files: mailinApp posts the file
+            // URL here. Route it through the same handler as every other
+            // entry point (previously this notification had no observer, so
+            // opening a file with the app silently did nothing).
+            if let url = notification.object as? URL {
+                resolveAndHandleSelectedFile(url)
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .spotlightEmailSelected)) { notification in
             if let emailID = notification.object as? UUID {
                 selectedEmailIDs = [emailID]

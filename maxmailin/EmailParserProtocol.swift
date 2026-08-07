@@ -27,6 +27,28 @@ struct ParserFactory {
         "mbox", "eml", "emlx", "msg", "pst", "ost", "nsf"
     ]
 
+    /// Stable parser identity (type + version) for a file extension. Used to
+    /// bind resume checkpoints and import receipts to the exact parser that
+    /// produced them (Part B5/C): a parser upgrade invalidates mid-file
+    /// checkpoints instead of silently resuming against a different message
+    /// ordering.
+    static func parserIdentity(forExtension ext: String) -> (name: String, version: Int) {
+        switch ext.lowercased() {
+        case "mbox", "eml":
+            return ("mbox", MBOXParser.parserVersion)
+        case "emlx":
+            return ("emlx", EMLXParser.parserVersion)
+        case "msg":
+            return ("msg", MSGParser.parserVersion)
+        case "pst", "ost":
+            return ("pst", PSTParser.parserVersion)
+        case "nsf":
+            return ("nsf", NSFParser.parserVersion)
+        default:
+            return ("mbox", MBOXParser.parserVersion)
+        }
+    }
+
     /// Streaming-capable formats: parser can drain messages in batches
     /// without holding the entire file in memory. Used by the bulk import
     /// coordinator to decide between callback-based (bounded memory) and

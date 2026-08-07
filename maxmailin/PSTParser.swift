@@ -4,6 +4,10 @@ import os.log
 private let pstLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "mailin", category: "PSTParser")
 
 struct PSTParser {
+    /// Bump when message extraction/ordering changes — invalidates mid-file
+    /// resume checkpoints bound to the previous version (Part B5).
+    static let parserVersion = 1
+
     enum PSTError: LocalizedError {
         case fileTooLarge(Int64)
         var errorDescription: String? {

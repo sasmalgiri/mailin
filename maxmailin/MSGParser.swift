@@ -1,6 +1,10 @@
 import Foundation
 
 struct MSGParser {
+    /// Bump when message extraction/ordering changes — invalidates mid-file
+    /// resume checkpoints bound to the previous version (Part B5).
+    static let parserVersion = 1
+
     static func parse(
         fileURL: URL,
         senderEmail: String,
