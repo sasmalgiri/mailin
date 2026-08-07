@@ -22,6 +22,8 @@ struct SettingsView: View {
     @AppStorage("showInlineImages") private var showInlineImages = true
     @AppStorage("enableAIFeatures") private var enableAIFeatures = true
     @AppStorage("emailListDensity") private var emailListDensity = "comfortable"
+    // Simple (true) = bounded ArchiveListView; Advanced (false) = full-filter legacy list.
+    @AppStorage("useV2ArchiveList") private var useV2ArchiveList = true
     @AppStorage("showEmailPreviews") private var showEmailPreviews = true
     @AppStorage("autoAdvanceAfterTag") private var autoAdvanceAfterTag = true
     @AppStorage("hasConsentedToCloudAI") private var hasConsentedToCloudAI = false
@@ -322,6 +324,24 @@ struct SettingsView: View {
     // MARK: - Display Settings
     private var displaySettings: some View {
         Form {
+            Section {
+                Picker("List Mode", selection: $useV2ArchiveList) {
+                    Text("Simple").tag(true)
+                    Text("Advanced").tag(false)
+                }
+                .pickerStyle(.segmented)
+                .help("Simple: a fast, memory-light list (search + date filter) that scales to any archive size. Advanced: the full filter/sort/smart-tag/saved-search toolkit.")
+
+                Text(useV2ArchiveList
+                     ? "Simple — fast, bounded browsing. Search and date range cover the whole archive."
+                     : "Advanced — sort, smart-tag, sender/domain and saved-search filters. Best for detailed review of moderate-size archives.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } header: {
+                Text("List Mode")
+                    .font(.headline)
+            }
+
             Section {
                 Picker("Email List Density", selection: $emailListDensity) {
                     Text("Compact").tag("compact")

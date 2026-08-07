@@ -55,11 +55,13 @@ struct ContentView: View {
     @AppStorage("autoDetectSender") private var autoDetectSender = true
     @AppStorage("showAdvancedFeatures") private var showAdvancedFeatures = false
     @AppStorage("removeDuplicates") private var removeDuplicates = true
-    // Stage 5 Wave 3.1: the repository-backed, bounded ArchiveListView is now
-    // the default browse path in BOTH Debug and Release (shared platform + list/
-    // search/detail are automated-gate green). The flag is retained as a
-    // one-setting rollback valve until the owner's manual UI smoke passes
-    // (MANUAL_UI_SMOKE_PENDING); it is deleted entirely once smoke is green.
+    // List mode, user-facing (Settings ▸ Display ▸ List Mode):
+    //   true  = Simple   → repository-backed, bounded ArchiveListView (default).
+    //   false = Advanced → legacy ParsedEmailListView with the full filter/sort/
+    //           smart-tag/saved-search toolkit.
+    // The bounded list is the default browse path in Debug and Release; this flag
+    // now selects between the two modes rather than being a one-shot rollback
+    // valve, so it is a shipping setting (do not delete).
     @AppStorage("useV2ArchiveList") private var useV2ArchiveList = true
     @StateObject private var viewModel = ContentViewModel()
     @StateObject private var modelVM: ParsedEmailListViewModel
