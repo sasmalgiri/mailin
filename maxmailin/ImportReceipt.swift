@@ -74,6 +74,41 @@ enum ArtifactProtection {
     }
 }
 
+/// §8: keyed signing for import receipts. A plain SHA-256 self-hash is only a
+/// checksum — anyone editing the JSON can recompute it. Receipts are now
+/// HMAC-SHA256-signed with a device-local key held in the Keychain, so an
+/// edit CANNOT be re-signed without the key. The key fingerprint is embedded
+/// so a receipt names the key that must verify it.
+enum ReceiptSigner {
+    private static let keychainKey = "receiptHMACKey"
+
+    static var key: SymmetricKey {
+        let existing = KeychainHelper.load(key: keychainKey)
+        if !existing.isEmpty, let data = Data(base64Encoded: existing) {
+            return SymmetricKey(data: data)
+        }
+        var bytes = [UInt8](repeating: 0, count: 32)
+        if SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) != errSecSuccess {
+            bytes = (0..<32).map { _ in UInt8.random(in: 0...255) }
+        }
+        let data = Data(bytes)
+        KeychainHelper.save(key: keychainKey, value: data.base64EncodedString())
+        return SymmetricKey(data: data)
+    }
+
+    /// Public identifier of the signing key (SHA-256 of key bytes, first 16
+    /// hex chars) — embedded in receipts, safe to display.
+    static var keyFingerprint: String {
+        let digest = key.withUnsafeBytes { SHA256.hash(data: Data($0)) }
+        return String(digest.map { String(format: "%02x", $0) }.joined().prefix(16))
+    }
+
+    static func hmacHex(_ data: Data) -> String {
+        Data(HMAC<SHA256>.authenticationCode(for: data, using: key))
+            .map { String(format: "%02x", $0) }.joined()
+    }
+}
+
 struct ImportReceipt: Codable, Sendable, Equatable {
     struct SourceRecord: Codable, Sendable, Equatable {
         var filename: String
@@ -90,8 +125,8 @@ struct ImportReceipt: Codable, Sendable, Equatable {
         var message: String
     }
 
-    /// Bumped when receipt fields/semantics change.
-    var schemaVersion: Int = 2
+    /// Bumped when receipt fields/semantics change. v3 = keyed HMAC signing (§8).
+    var schemaVersion: Int = 3
     // Source
     var sources: [SourceRecord] = []
     // Outcome (see header for exact semantics)
@@ -126,8 +161,15 @@ struct ImportReceipt: Codable, Sendable, Equatable {
     var storeCountBefore: Int? = nil
     var storeCountAfter: Int? = nil
     var ftsRowCount: Int? = nil
-    /// SHA-256 over the canonical JSON of every OTHER field. Empty until finalized.
+    /// SHA-256 over the canonical JSON of every other field. This is a
+    /// CONTENT CHECKSUM (corruption detection), NOT tamper evidence — the
+    /// keyed `signature` below provides that (§8).
     var contentHash: String = ""
+    /// §8: HMAC-SHA256 over the canonical JSON, keyed by the device-local
+    /// Keychain key. An edited receipt cannot be re-signed without the key.
+    var signature: String = ""
+    /// Fingerprint of the signing key (`ReceiptSigner.keyFingerprint`).
+    var signingKeyID: String = ""
 
     init(startedAt: Date, completedAt: Date) {
         self.startedAt = startedAt
@@ -136,32 +178,61 @@ struct ImportReceipt: Codable, Sendable, Equatable {
 
     /// nil when canonical encoding fails — callers must treat that as a
     /// signing failure, never hash empty data (Part B3).
-    private func canonicalHash() -> String? {
+    private func canonicalData() -> Data? {
         var copy = self
         copy.contentHash = ""
+        copy.signature = ""
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .secondsSince1970
-        guard let data = try? encoder.encode(copy) else { return nil }
-        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        return try? encoder.encode(copy)
     }
 
-    /// Stamp the self-hash. Call once, last. Throws when the receipt cannot
-    /// be canonically encoded — an unsigned receipt must be surfaced, not
-    /// silently produced with a hash of empty data.
+    /// Stamp checksum + keyed signature. Call once, last. Throws when the
+    /// receipt cannot be canonically encoded — an unsigned receipt must be
+    /// surfaced, not silently produced with a hash of empty data.
     mutating func finalize() throws {
-        guard let hash = canonicalHash() else {
+        signingKeyID = ReceiptSigner.keyFingerprint
+        guard let data = canonicalData() else {
             throw MaxmailinError.forensic(.signatureInvalid,
-                detail: "Import receipt could not be canonically encoded for self-hashing.")
+                detail: "Import receipt could not be canonically encoded for signing.")
         }
-        contentHash = hash
+        contentHash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        signature = ReceiptSigner.hmacHex(data)
     }
 
-    /// True iff the receipt has not been altered since `finalize()`.
-    /// A receipt that cannot be re-encoded never verifies.
+    enum VerificationResult: Equatable {
+        /// Keyed HMAC verified with this device's key.
+        case verified
+        /// Pre-§8 receipt (schema < 3): only the unkeyed checksum matches —
+        /// integrity of storage, NOT tamper evidence.
+        case checksumOnly
+        case tampered(String)
+    }
+
+    /// §8 verifyReceipt(): keyed verification with an honest legacy tier.
+    func verifyDetailed() -> VerificationResult {
+        guard let data = canonicalData() else { return .tampered("receipt cannot be re-encoded") }
+        let checksum = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        guard !contentHash.isEmpty, contentHash == checksum else {
+            return .tampered("content checksum mismatch")
+        }
+        if signature.isEmpty {
+            // Legacy (schema < 3) receipt: never claim tamper evidence.
+            return schemaVersion < 3 ? .checksumOnly : .tampered("signature missing")
+        }
+        guard ReceiptSigner.hmacHex(data) == signature else {
+            return .tampered("HMAC signature mismatch — receipt was modified or signed by a different install")
+        }
+        return .verified
+    }
+
+    /// True iff the receipt verifies at its strongest available tier.
     func verify() -> Bool {
-        guard let hash = canonicalHash() else { return false }
-        return !contentHash.isEmpty && contentHash == hash
+        switch verifyDetailed() {
+        case .verified, .checksumOnly: return true
+        case .tampered: return false
+        }
     }
 
     // Custom decode with per-field defaults so receipts persisted by earlier
@@ -194,6 +265,8 @@ struct ImportReceipt: Codable, Sendable, Equatable {
         storeCountAfter = try c.decodeIfPresent(Int.self, forKey: .storeCountAfter)
         ftsRowCount = try c.decodeIfPresent(Int.self, forKey: .ftsRowCount)
         contentHash = try c.decodeIfPresent(String.self, forKey: .contentHash) ?? ""
+        signature = try c.decodeIfPresent(String.self, forKey: .signature) ?? ""
+        signingKeyID = try c.decodeIfPresent(String.self, forKey: .signingKeyID) ?? ""
     }
 }
 

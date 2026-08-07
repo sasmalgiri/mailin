@@ -134,17 +134,76 @@ actor StorageActivationCoordinator {
         }
     }
 
-    /// Integrity gate: the destination must hold ≥ `expected` rows AND a brand
-    /// new SQLite connection over the same files must open and report the same
-    /// count — proving the data is durably on disk, not just in a cache/WAL of
-    /// the working handle. Only then is `.active` persisted.
+    /// §10 content-identity gate — count alone is NOT enough. Activation
+    /// requires, in order:
+    ///   1. destCount ≥ expected;
+    ///   2. EXACT ID coverage: every source id exists in the destination
+    ///      (bounded (id,date) keyset walk — ids only, never bodies);
+    ///   3. sampled content fidelity: first/last source pages' subjects,
+    ///      bodies and attachment counts match after hydration;
+    ///   4. `PRAGMA integrity_check` == "ok";
+    ///   5. a brand-new SQLite connection over the same files reopens and
+    ///      reports the same count (durability, not cache/WAL illusion).
+    /// Only then is `.active` persisted.
     private func verifyAndActivate(expected: Int) async throws -> State {
         let destCount = try await dest.totalCount()
         guard destCount >= expected else {
             store(.failed)
             return .failed
         }
-        // Reopen with a fresh instance at the same directory.
+
+        // 2. Exact source-ID coverage (skip when the source is empty/tombstoned).
+        if expected > 0 {
+            var beforeDate: Date? = nil
+            var beforeID: UUID? = nil
+            var missing = 0
+            var firstPageIDs: [UUID] = []
+            var lastPageIDs: [UUID] = []
+            while true {
+                let page = try await source.reconcilePage(beforeDate: beforeDate, beforeID: beforeID, limit: 1_000)
+                if page.isEmpty { break }
+                let ids = page.map(\.id)
+                if firstPageIDs.isEmpty { firstPageIDs = Array(ids.prefix(3)) }
+                lastPageIDs = Array(ids.suffix(3))
+                let present = try await dest.existingIDs(among: ids)
+                missing += ids.count - present.count
+                beforeDate = page.last!.date
+                beforeID = page.last!.id
+                if page.count < 1_000 { break }
+            }
+            guard missing == 0 else {
+                store(.failed)
+                activationLog.error("identity gate: \(missing) source ids absent from destination")
+                return .failed
+            }
+
+            // 3. Sampled content fidelity (bounded: ≤6 emails hydrated).
+            for id in Set(firstPageIDs + lastPageIDs) {
+                guard let src = try await source.fullEmail(id: id),
+                      let dst = try await dest.fullEmail(id: id) else {
+                    store(.failed)
+                    activationLog.error("identity gate: sample \(id, privacy: .public) unreadable")
+                    return .failed
+                }
+                guard dst.plainBody == src.plainBody,
+                      dst.headers["Subject"] == src.headers["Subject"],
+                      dst.attachments.count >= src.attachments.count else {
+                    store(.failed)
+                    activationLog.error("identity gate: content mismatch for \(id, privacy: .public)")
+                    return .failed
+                }
+            }
+        }
+
+        // 4. Database health.
+        let health = try await dest.integrityCheck()
+        guard health == "ok" else {
+            store(.failed)
+            activationLog.error("integrity_check failed: \(health, privacy: .public)")
+            return .failed
+        }
+
+        // 5. Fresh-connection durability gate.
         let reopened = SQLiteEmailStore(directory: dest.storeDirectory)
         let reopenedCount = try await reopened.totalCount()
         guard reopenedCount == destCount else {

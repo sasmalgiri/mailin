@@ -3483,3 +3483,75 @@ final class V2ParserHardeningTests: XCTestCase {
             "documented §7.2 ceiling (V2_FORMAT_MATRIX.md) — update BOTH together")
     }
 }
+
+// MARK: - §8 — keyed receipt integrity
+
+final class V2ReceiptIntegrityTests: XCTestCase {
+
+    private func makeReceipt() throws -> ImportReceipt {
+        var r = ImportReceipt(startedAt: Date(timeIntervalSince1970: 1_000),
+                              completedAt: Date(timeIntervalSince1970: 1_090))
+        r.discovered = 50; r.parsed = 48; r.inserted = 48; r.damaged = 2
+        r.sources = [.init(filename: "Inbox.mbox", sizeBytes: 1_234,
+                           sha256: "abc", parser: "mbox", parserVersion: 1)]
+        try r.finalize()
+        return r
+    }
+
+    func testSignedReceipt_verifies_andCarriesKeyID() throws {
+        let receipt = try makeReceipt()
+        XCTAssertEqual(receipt.verifyDetailed(), .verified)
+        XCTAssertFalse(receipt.signature.isEmpty)
+        XCTAssertEqual(receipt.signingKeyID, ReceiptSigner.keyFingerprint)
+    }
+
+    // §8 THE attack the checksum could not stop: edit a field AND recompute
+    // the unkeyed SHA-256. The keyed HMAC must still fail.
+    func testTamperedReceipt_withRecomputedChecksum_stillFails() throws {
+        var tampered = try makeReceipt()
+        tampered.inserted = 999_999   // forge the outcome
+
+        // Attacker recomputes the (public-algorithm) checksum…
+        var copy = tampered
+        copy.contentHash = ""; copy.signature = ""
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .secondsSince1970
+        let canonical = try encoder.encode(copy)
+        tampered.contentHash = SHA256.hash(data: canonical).map { String(format: "%02x", $0) }.joined()
+        // …but cannot re-sign without the Keychain key.
+
+        guard case .tampered(let reason) = tampered.verifyDetailed() else {
+            return XCTFail("forged receipt with recomputed checksum MUST fail keyed verification")
+        }
+        XCTAssertTrue(reason.contains("HMAC"), reason)
+        XCTAssertFalse(tampered.verify())
+    }
+
+    func testLegacyUnsignedReceipt_isChecksumOnly_neverClaimsTamperEvidence() throws {
+        var legacy = ImportReceipt(startedAt: Date(timeIntervalSince1970: 1_000),
+                                   completedAt: Date(timeIntervalSince1970: 1_050))
+        legacy.schemaVersion = 2
+        legacy.parsed = 10
+        // Legacy self-hash only (pre-§8 behavior).
+        var copy = legacy
+        copy.contentHash = ""; copy.signature = ""
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .secondsSince1970
+        legacy.contentHash = SHA256.hash(data: try encoder.encode(copy)).map { String(format: "%02x", $0) }.joined()
+
+        XCTAssertEqual(legacy.verifyDetailed(), .checksumOnly,
+            "pre-§8 receipts verify as checksum-only — an honest, weaker tier")
+    }
+
+    func testSignedReceipt_persistsAndVerifiesAfterReload() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("receipts-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = ImportReceiptStore(directory: dir)
+        let url = try store.save(try makeReceipt())
+        let loaded = try store.load(url)
+        XCTAssertEqual(loaded.verifyDetailed(), .verified, "signature survives the JSON round-trip")
+    }
+}
