@@ -4,15 +4,12 @@
 //
 //  Stage 5C.0 (v2-core-cutover): the migration firewall. Every UI screen and
 //  derived consumer obtains archive data through THIS service — bounded pages,
-//  counts, single emails, bounded id batches, and bounded streaming — instead
-//  of reaching into `ContentViewModel.parsedEmails` /
-//  `ParsedEmailListViewModel.allEmails` / `filteredEmails`.
+//  counts, single emails, bounded id batches, and bounded streaming.
 //
 //  It fronts the activated SQLite store via `EmailRepository`, so consumers are
-//  bounded-by-construction and the storage engine stays swappable. During the
-//  cutover the old whole-array path remains as a temporary correctness ORACLE
-//  (differential tests compare new-vs-old on fixtures); once every consumer is
-//  migrated, the array — and this dual world — is deleted.
+//  bounded-by-construction and the storage engine stays swappable. Part Q/R/S
+//  completed the cutover: the legacy whole-corpus arrays are deleted and both
+//  list modes page through this service.
 //
 //  No `loadAll()` / `loadEverything()` is offered on purpose: the firewall must
 //  not let a migrated screen silently reconstruct the whole corpus.

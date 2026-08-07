@@ -235,6 +235,10 @@ actor ImportCheckpointStore {
             let state = PersistedState(entries: entries, inProgress: inProgress)
             let data = try JSONEncoder().encode(state)
             try data.write(to: url, options: .atomic)
+            // W3: checkpoints are written after every batch of a potentially
+            // hours-long import — the write must survive a device lock, so
+            // background-readable class; owner-only (600) on macOS.
+            ArtifactProtection.applyBackgroundReadable(to: url)
         } catch {
             Self.logger.fault("Import checkpoint save failed: \(error.localizedDescription, privacy: .public)")
             throw CheckpointError.writeFailed(error.localizedDescription)

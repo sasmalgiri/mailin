@@ -55,14 +55,14 @@ struct ReportGenerator {
         }
 
         // Filter emails by date range
-        let filteredEmails: [MBOXParser.RawEmail]
+        let scopedEmails: [MBOXParser.RawEmail]
         if let range = dateRange {
-            filteredEmails = emails.filter { email in
+            scopedEmails = emails.filter { email in
                 guard let date = MBOXParser.parseDate(email.headers["Date"]) else { return false }
                 return range.contains(date)
             }
         } else {
-            filteredEmails = emails
+            scopedEmails = emails
         }
 
         // Title Page
@@ -93,7 +93,7 @@ struct ReportGenerator {
                  font: NSFont.systemFont(ofSize: 10, weight: .light), color: .gray, alignment: .center)
         y -= 20
 
-        drawText(context: context, text: "\(filteredEmails.count) emails analyzed", x: margin, y: y, width: contentWidth,
+        drawText(context: context, text: "\(scopedEmails.count) emails analyzed", x: margin, y: y, width: contentWidth,
                  font: NSFont.systemFont(ofSize: 11, weight: .medium), color: .gray, alignment: .center)
         y -= 50
 
@@ -127,7 +127,7 @@ struct ReportGenerator {
             context.strokePath()
             y -= 20
 
-            let content = sectionContent(section.name, emails: filteredEmails)
+            let content = sectionContent(section.name, emails: scopedEmails)
             let lines = content.components(separatedBy: "\n")
             for line in lines {
                 if y < margin + 30 {

@@ -9,6 +9,25 @@ import SwiftUI
 import TipKit
 import UserNotifications
 
+/// Part S: the List Mode preference is a PURE presentation choice — both modes
+/// (Simple `ArchiveListView`, Advanced `ParsedEmailListView`) page the same
+/// bounded repository-backed architecture. The old key `useV2ArchiveList`
+/// carried rollback connotations from the cutover and is migrated once.
+enum ListModePreference {
+    static let key = "listModeSimple"
+    private static let legacyKey = "useV2ArchiveList"
+
+    /// One-time preference migration: carry the user's stored choice over to
+    /// the new key, then remove the legacy key so no rollback flag remains.
+    static func migrateIfNeeded(defaults: UserDefaults = .standard) {
+        if defaults.object(forKey: key) == nil,
+           let legacy = defaults.object(forKey: legacyKey) as? Bool {
+            defaults.set(legacy, forKey: key)
+        }
+        defaults.removeObject(forKey: legacyKey)
+    }
+}
+
 struct SettingsView: View {
     @EnvironmentObject var storeManager: StoreManager
     @ObservedObject private var forensicManager = ForensicManager.shared
@@ -22,8 +41,9 @@ struct SettingsView: View {
     @AppStorage("showInlineImages") private var showInlineImages = true
     @AppStorage("enableAIFeatures") private var enableAIFeatures = true
     @AppStorage("emailListDensity") private var emailListDensity = "comfortable"
-    // Simple (true) = bounded ArchiveListView; Advanced (false) = full-filter legacy list.
-    @AppStorage("useV2ArchiveList") private var useV2ArchiveList = true
+    // Simple (true) = clean ArchiveListView; Advanced (false) = full-filter
+    // toolkit list. Both are bounded + repository-backed (Part S).
+    @AppStorage(ListModePreference.key) private var preferSimpleList = true
     @AppStorage("showEmailPreviews") private var showEmailPreviews = true
     @AppStorage("autoAdvanceAfterTag") private var autoAdvanceAfterTag = true
     @AppStorage("hasConsentedToCloudAI") private var hasConsentedToCloudAI = false
@@ -325,16 +345,16 @@ struct SettingsView: View {
     private var displaySettings: some View {
         Form {
             Section {
-                Picker("List Mode", selection: $useV2ArchiveList) {
+                Picker("List Mode", selection: $preferSimpleList) {
                     Text("Simple").tag(true)
                     Text("Advanced").tag(false)
                 }
                 .pickerStyle(.segmented)
-                .help("Simple: a fast, memory-light list (search + date filter) that scales to any archive size. Advanced: the full filter/sort/smart-tag/saved-search toolkit.")
+                .help("Simple: a fast, clean list (search + date filter). Advanced: the full filter/sort/smart-tag/saved-search toolkit. Both scale to any archive size.")
 
-                Text(useV2ArchiveList
-                     ? "Simple — fast, bounded browsing. Search and date range cover the whole archive."
-                     : "Advanced — sort, smart-tag, sender/domain and saved-search filters. Best for detailed review of moderate-size archives.")
+                Text(preferSimpleList
+                     ? "Simple — fast, clean browsing. Search and date range cover the whole archive."
+                     : "Advanced — sort, smart-tag, sender/domain and saved-search filters over the same paged archive.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             } header: {

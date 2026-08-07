@@ -248,6 +248,10 @@ class EncryptedStorageManager {
         if !FileManager.default.fileExists(atPath: dir.path) {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
+        // W3: encrypted archives are created/opened only from foreground,
+        // user-driven flows — the strictest class (.complete) applies: the
+        // files are unreadable whenever the device is locked. macOS: 700.
+        ArtifactProtection.applyForegroundOnly(to: dir)
         return dir
     }
 
@@ -260,6 +264,7 @@ class EncryptedStorageManager {
         let archiveData = try encoder.encode(archive)
         let archiveURL = dir.appendingPathComponent("\(archive.id.uuidString).\(archiveExtension)")
         try archiveData.write(to: archiveURL, options: .atomic)
+        ArtifactProtection.applyForegroundOnly(to: archiveURL)
 
         // Save a small metadata sidecar
         let metadata = ArchiveMetadata(
@@ -272,6 +277,7 @@ class EncryptedStorageManager {
         let metaData = try encoder.encode(metadata)
         let metaURL = dir.appendingPathComponent("\(archive.id.uuidString).\(metadataExtension)")
         try metaData.write(to: metaURL, options: .atomic)
+        ArtifactProtection.applyForegroundOnly(to: metaURL)
     }
 
     func loadArchive(id: UUID) throws -> EncryptedArchive {

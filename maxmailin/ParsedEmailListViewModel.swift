@@ -1,6 +1,16 @@
 import Foundation
 import SwiftUI
 
+// Part S (v2-core-cutover): the "Advanced" list mode's view model, rebuilt on
+// the SAME bounded architecture as the Simple list. It owns an
+// `ArchiveListViewModel` pager (keyset/ranked pages over the SQLite archive via
+// `ArchiveDataService`) and hydrates only the resident page WINDOW into full
+// emails for the feature-rich UI (smart tags, evidence tags, sort, threading).
+// There is NO whole-corpus array anywhere: `residentEmails` is the bounded
+// hydrated window (≤ pager.maxRetained), `visibleEmails` is that window after
+// the in-window refinements. Free text / Boolean queries page the whole
+// archive through the repository's ranked search; every match is reachable by
+// scrolling — nothing is preview-truncated.
 @MainActor
 class ParsedEmailListViewModel: ObservableObject {
     // MARK: - Root ViewModel
@@ -8,11 +18,10 @@ class ParsedEmailListViewModel: ObservableObject {
 
     private var isResettingFilters = false
 
-    // FTS5-backed match cache. `ftsMatchKey` is the query string the cached IDs
-    // correspond to. Free-text / boolean searches are resolved by the SQLite
-    // FTS5 engine (FTSSearchIndex, async). The legacy in-RAM EmailSearchIndex
-    // is no longer built (Part F); interim fallbacks scan only the bounded
-    // preview array already resident for the legacy list.
+    // FTS5-backed match cache for the resident window. `ftsMatchKey` is the
+    // query string the cached IDs correspond to. Free-text / boolean searches
+    // are resolved by the SQLite FTS5 engine (FTSSearchIndex, async) against
+    // the WINDOW's ids (`matchingSubset`) — never an archive-wide id list.
     private var ftsMatchIDs: Set<UUID>? = nil
     private var ftsMatchKey: String? = nil
     /// Bumped on any content mutation (delete / redact / reindex) so the search
@@ -26,9 +35,10 @@ class ParsedEmailListViewModel: ObservableObject {
     private var regexMatchIDs: Set<UUID>? = nil
     private var regexMatchKey: String? = nil
 
-    /// User-visible search caveat (Part P): regex cap truncation or the
-    /// attachment filename-only limitation. Silent truncation is not allowed —
-    /// the list surfaces this under the search field.
+    /// User-visible search caveat (Part P): regex cap truncation, the
+    /// attachment filename-only limitation, or proximity's loaded-pages scope.
+    /// Silent truncation is not allowed — the list surfaces this under the
+    /// search field.
     @Published var searchNotice: String? = nil
 
     /// Invalidate the FTS result cache. Call after delete/redact/reindex so a
@@ -46,6 +56,17 @@ class ParsedEmailListViewModel: ObservableObject {
     /// await it deterministically (`await lastFTSSearchTask?.value`) instead of
     /// polling a timeout.
     var lastFTSSearchTask: Task<Void, Never>?
+
+    /// Test-only window seed: V2VerificationTests injects fixtures and drives
+    /// `applyFilters()` directly to observe the FTS dispatch. This seeds the
+    /// bounded resident window — it is NOT a corpus property.
+    var allEmails: [MBOXParser.RawEmail] {
+        get { residentEmails }
+        set {
+            residentEmails = newValue
+            emailCount = newValue.count
+        }
+    }
     #endif
 
     // MARK: - UI State
@@ -204,7 +225,7 @@ class ParsedEmailListViewModel: ObservableObject {
 
     func recomputeSmartTagCounts() {
         var counts: [SmartTag: Int] = [:]
-        for email in allEmails {
+        for email in residentEmails {
             if let tag = resolveSmartTag(for: email) {
                 counts[tag, default: 0] += 1
             }
@@ -252,42 +273,70 @@ class ParsedEmailListViewModel: ObservableObject {
     // MARK: - Premium
     var isPremiumUser: Bool = false
 
-    // MARK: - Data
-    // NOTE (Part G): both arrays are the BOUNDED preview backing the legacy
-    // Simple list — never archive truth. Archive-wide totals/analytics come
-    // from ArchiveDataService / ArchiveAggregateService.
-    @Published var allEmails: [MBOXParser.RawEmail] = []
-    @Published var filteredEmails: [MBOXParser.RawEmail] = []
+    // MARK: - Data (bounded page window — Part S)
+
+    /// The internal pager: bounded keyset/ranked pages over the archive. Owns
+    /// the query cursor bookkeeping; this model hydrates its summary window.
+    private let pager: ArchiveListViewModel
+    private let archive: ArchiveDataService
+
+    /// Shared-singleton side effects (derived-state publication, sender
+    /// aggregates, thread-key backfill) run only against the production
+    /// archive — isolated test/harness archives must not touch the shared
+    /// derived stores.
+    private var isProductionArchive: Bool { archive === ArchiveDataService.shared }
+
+    /// The hydrated resident page window, in archive/rank order. Bounded by
+    /// `pager.maxRetained` (a few hundred), never the corpus.
+    @Published private(set) var residentEmails: [MBOXParser.RawEmail] = []
+
+    /// The resident window after in-window refinements (review state, smart
+    /// tags, operators, quick pickers) and sorting. What the list renders.
+    @Published private(set) var visibleEmails: [MBOXParser.RawEmail] = []
+
+    /// Ordered ids of the visible window — detail-view navigation order.
+    var visibleOrderedIDs: [UUID] { visibleEmails.map(\.id) }
+
+    @Published private(set) var isLoadingPage = false
+
+    /// Store-truth count for the CURRENT query (pager total).
+    @Published private(set) var queryTotalCount = 0
+
+    /// Guards concurrent reload/hydrate cycles (a superseded reload must not
+    /// overwrite a newer window).
+    private var windowRevision: UInt64 = 0
+    /// Forward pages fetched for the current query — free-tier paging gate.
+    private var forwardPagesLoaded = 0
 
     // MARK: - Archive truth (Part G3)
 
-    /// Store-backed archive total. The resident preview arrays are capped, so
-    /// their counts must never be presented as the archive total.
+    /// Store-backed archive total (query-independent). The resident window is
+    /// bounded, so its count must never be presented as the archive total.
     @Published private(set) var archiveTotalCount = 0
 
     /// Refresh the store-backed archive total (fire-and-forget, bounded O(1)).
     func refreshArchiveTotalCount() {
         Task { @MainActor [weak self] in
             guard let self else { return }
-            self.archiveTotalCount = (try? await ArchiveDataService.shared.count()) ?? self.archiveTotalCount
+            self.archiveTotalCount = (try? await self.archive.count()) ?? self.archiveTotalCount
         }
     }
 
-    /// The count shown in list headers/titles. When nothing is filtered out of
-    /// the preview the archive total (store COUNT) is the truth; when a filter
-    /// narrows the list, the count of the visible (preview-backed) list is
+    /// The count shown in list headers/titles. When nothing is refined out of
+    /// the window the query total (store COUNT / ranked total) is the truth;
+    /// when an in-window refinement narrows the list, the visible count is
     /// exactly what the user sees.
     var displayedEmailCount: Int {
-        filteredEmails.count == allEmails.count
-            ? max(archiveTotalCount, allEmails.count)
-            : filteredEmails.count
+        visibleEmails.count == residentEmails.count
+            ? max(queryTotalCount, visibleEmails.count)
+            : visibleEmails.count
     }
 
-    /// The current legacy filter state mapped onto the bounded archive query
-    /// (text + date bounds — the fields `EmailQuery` resolves today). This is
-    /// the same mapping the AI assistant scope uses (Part D precedent); feature
-    /// views stream their own bounded working sets for this query instead of
-    /// receiving the preview arrays.
+    /// The current filter state mapped onto the bounded archive query (text +
+    /// date bounds — the fields `EmailQuery` resolves today). This is the same
+    /// mapping the AI assistant scope uses (Part D precedent); feature views
+    /// stream their own bounded working sets for this query instead of
+    /// receiving email arrays.
     var currentArchiveQuery: EmailQuery {
         var query = EmailQuery.all
         let text = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -407,22 +456,170 @@ class ParsedEmailListViewModel: ObservableObject {
     private var searchDebounceTask: Task<Void, Never>?
 
     // MARK: - Init
-    init(viewModel: ContentViewModel) {
+    init(viewModel: ContentViewModel, archive: ArchiveDataService = .shared,
+         pageSize: Int = 100, maxRetained: Int = 500) {
         self.viewModel = viewModel
+        self.archive = archive
+        self.pager = ArchiveListViewModel(archive: archive, pageSize: pageSize, maxRetained: maxRetained)
         loadSavedSearches()
         loadUserData()
         _userDataInitialized = true
     }
 
-    func rehydrateIfNeeded(_ emailID: UUID) {
-        guard let idx = filteredEmails.firstIndex(where: { $0.id == emailID }),
-              filteredEmails[idx].isBodyCompacted else { return }
-        if let rehydrated = viewModel.rehydrateBody(for: emailID) {
-            filteredEmails[idx] = rehydrated
-            if let allIdx = allEmails.firstIndex(where: { $0.id == emailID }) {
-                allEmails[allIdx] = rehydrated
+    // MARK: - Paging (Part S)
+
+    /// The pager's query: free text / Boolean route to the repository's ranked
+    /// search (archive-wide, cursor-paged). Regex and proximity have no
+    /// repository text form — they page by date bounds only and refine the
+    /// window (regex ids come from BoundedRegexSearch; proximity from a native
+    /// FTS5 NEAR over the window ids).
+    private var pagerQuery: EmailQuery {
+        var query = EmailQuery.all
+        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            let parsed = parseSearchQuery(trimmed)
+            if !parsed.isRegexQuery && !parsed.isProximityQuery {
+                let free = parsed.freeText.trimmingCharacters(in: .whitespaces)
+                if !free.isEmpty { query.text = free }
             }
         }
+        if startDate > .distantPast { query.afterDate = startDate }
+        if endDate < .distantFuture { query.beforeDate = endDate }
+        return query
+    }
+
+    /// Reload the page window from the first page of the current query, then
+    /// re-apply the in-window refinements. Also refreshes archive-truth counts
+    /// and the per-sender aggregate used by the reply-count filter.
+    func refreshFromStore() {
+        Task { @MainActor [weak self] in await self?.refreshFromStoreNow() }
+    }
+
+    /// Awaitable form (deterministic for tests; the fire-and-forget wrapper is
+    /// what view code calls).
+    func refreshFromStoreNow() async {
+        let revision = windowRevision &+ 1
+        windowRevision = revision
+        isLoadingPage = true
+        let total = (try? await archive.count()) ?? 0
+        guard revision == windowRevision else { return }
+        archiveTotalCount = total
+        isParsed = total > 0
+        showParsedList = total > 0
+        await refreshSenderAggregates()
+        await pager.setQuery(pagerQuery)
+        forwardPagesLoaded = 1
+        guard revision == windowRevision else { return }
+        await hydrateWindow(revision: revision)
+        isLoadingPage = false
+        if isParsed && isProductionArchive {
+            // Part L: incremental persisted thread-key backfill (no-op once
+            // every stored email has a key).
+            ArchiveThreadService.shared.kickBackfill()
+        }
+    }
+
+    /// Re-page when the archive query (text/date bounds) changed. In-window
+    /// refinements go through `applyFilters()` alone.
+    private func reloadPagesForQueryChange() {
+        Task { @MainActor [weak self] in await self?.reloadForQueryChangeNow() }
+    }
+
+    /// Awaitable form (deterministic for tests).
+    func reloadForQueryChangeNow() async {
+        let revision = windowRevision &+ 1
+        windowRevision = revision
+        isLoadingPage = true
+        await pager.setQuery(pagerQuery)
+        forwardPagesLoaded = 1
+        guard revision == windowRevision else { return }
+        await hydrateWindow(revision: revision)
+        isLoadingPage = false
+    }
+
+    /// Whether more pages can be fetched forward (free tier caps the paging
+    /// depth at `StoreManager.freeEmailLimit` — gated from store counts, the
+    /// sidebar upgrade banner explains the cap).
+    var hasMorePages: Bool {
+        guard pager.hasMore else { return false }
+        if isPremiumUser { return true }
+        return forwardPagesLoaded * pager.pageSize < StoreManager.freeEmailLimit
+    }
+
+    /// Pages exist before the window head (deep-scrolled windows drop early
+    /// pages; "Load earlier" re-fetches them).
+    var hasEarlierPages: Bool { pager.hasPrevious }
+
+    /// Infinite-scroll trigger: fetch the next page when the given row is at
+    /// (or past) the window's tail.
+    func loadMoreIfNeeded(currentID: UUID) {
+        guard hasMorePages, !isLoadingPage else { return }
+        guard let idx = visibleEmails.lastIndex(where: { $0.id == currentID }),
+              idx >= max(0, visibleEmails.count - 10) else { return }
+        loadNextPage()
+    }
+
+    func loadNextPage() {
+        Task { @MainActor [weak self] in await self?.loadNextPageNow() }
+    }
+
+    /// Awaitable form (deterministic for tests).
+    func loadNextPageNow() async {
+        guard hasMorePages, !isLoadingPage else { return }
+        let revision = windowRevision
+        isLoadingPage = true
+        await pager.loadNextPage()
+        guard revision == windowRevision else { return }
+        forwardPagesLoaded += 1
+        await hydrateWindow(revision: revision)
+        isLoadingPage = false
+    }
+
+    func loadEarlierPage() {
+        Task { @MainActor [weak self] in await self?.loadEarlierPageNow() }
+    }
+
+    /// Awaitable form (deterministic for tests).
+    func loadEarlierPageNow() async {
+        guard hasEarlierPages, !isLoadingPage else { return }
+        let revision = windowRevision
+        isLoadingPage = true
+        await pager.loadPreviousPage()
+        guard revision == windowRevision else { return }
+        await hydrateWindow(revision: revision)
+        isLoadingPage = false
+    }
+
+    /// Hydrate the pager's summary window into full emails (bodies included)
+    /// in window order, then re-apply the in-window refinements.
+    private func hydrateWindow(revision: UInt64) async {
+        let ids = pager.summaries.map(\.id)
+        let fetched = (try? await archive.fullEmails(ids: ids)) ?? []
+        guard revision == windowRevision else { return }
+        var byID: [UUID: MBOXParser.RawEmail] = [:]
+        byID.reserveCapacity(fetched.count)
+        for email in fetched { byID[email.id] = email }
+        residentEmails = ids.compactMap { byID[$0] }
+        emailCount = residentEmails.count
+        queryTotalCount = pager.totalCount
+        // Window changed → per-window derived state must be recomputed.
+        computePriorityScores()
+        if isProductionArchive {
+            aiFiltersComputed = false
+            computeAIFilterData()
+        }
+        applyFilters()
+    }
+
+    /// Per-sender email counts from a bounded SQL aggregate (GROUP BY over the
+    /// store) — used by the reply-count filter and the sidebar ranking. Never
+    /// computed from a corpus array.
+    private func refreshSenderAggregates() async {
+        guard isProductionArchive else { return }
+        let rollups = (try? await ArchiveAggregateService.shared.senderRollups(limit: 500)) ?? []
+        var counts: [String: Int] = [:]
+        for rollup in rollups { counts[rollup.sender] = rollup.count }
+        replyCountPerSender = counts
     }
 
     func searchTextDidChange() {
@@ -430,21 +627,27 @@ class ParsedEmailListViewModel: ObservableObject {
         searchDebounceTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
-            if self?.isNaturalLanguageMode == true {
-                self?.applyNaturalLanguageFilter(self?.searchText ?? "")
+            guard let self else { return }
+            if self.isNaturalLanguageMode {
+                self.applyNaturalLanguageFilter(self.searchText)
             } else {
-                self?.applyFilters()
+                self.reloadPagesForQueryChange()
             }
         }
     }
 
+    /// Date-bound pickers changed: the archive query changed, so re-page.
+    func dateBoundsChanged() {
+        reloadPagesForQueryChange()
+    }
+
     /// Interprets a natural language query and applies structured filters.
-    /// Supports date ranges, sender filters, category filters, attachment filters, and sentiment.
+    /// Supports date ranges, sender filters, attachment filters, and sentiment.
     func applyNaturalLanguageFilter(_ query: String) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             hasAttachmentFilter = false
-            applyFilters()
+            reloadPagesForQueryChange()
             return
         }
 
@@ -462,7 +665,7 @@ class ParsedEmailListViewModel: ObservableObject {
             // Avoid matching date-related "from" like "from last week"
             let dateWords: Set<String> = ["last", "past", "this", "yesterday", "today", "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]
             if !dateWords.contains(name.lowercased()) {
-                // Check if it matches a known sender
+                // Check if it matches a known sender in the loaded window
                 let matchingSenders = allFromEmails.filter { $0.localizedCaseInsensitiveContains(name) }
                 if !matchingSenders.isEmpty {
                     selectedFromEmails = matchingSenders
@@ -470,27 +673,6 @@ class ParsedEmailListViewModel: ObservableObject {
                     // Fall back to free-text search with the name
                     searchText = name
                 }
-            }
-        }
-
-        // Parse category: "newsletters", "promotional", "personal"
-        let categories: [String: EmailNLPEngine.EmailCategory] = [
-            "personal": .personal,
-            "transactional": .transactional,
-            "newsletter": .newsletter,
-            "newsletters": .newsletter,
-            "promotional": .promotional,
-            "automated": .automated
-        ]
-        for (keyword, category) in categories {
-            if trimmed.lowercased().contains(keyword) {
-                // Filter to emails matching this category
-                let matchingIDs = allEmails.filter { emailClassifications[$0.id] == category }.map(\.id)
-                if !matchingIDs.isEmpty {
-                    // Use the category as a constraint via the AI classification filter
-                    // We set a temporary search that includes only these IDs
-                }
-                break
             }
         }
 
@@ -502,95 +684,20 @@ class ParsedEmailListViewModel: ObservableObject {
             hasAttachmentFilter = false
         }
 
-        // Parse sentiment: "positive emails", "negative tone"
-        // These are handled by the existing quick filter toggles in the UI,
-        // but we can set them here for NL convenience
-        // (sentiment filtering is done in quickFilteredEmails in the view)
-
-        applyFilters()
+        reloadPagesForQueryChange()
     }
 
     func removeDuplicateEmails(ids: Set<UUID>) {
         // Part M(a): route removal through the GUARDED store deletion path
-        // (ContentViewModel.removeEmailsAwaitingResult — FTS-first delete with
-        // UI rollback on store failure). The resident preview arrays here
-        // mutate only AFTER the authority confirms the delete, so a failed
-        // delete can never leave this list claiming the emails are gone.
+        // (ContentViewModel.removeEmailsAwaitingResult — FTS-first delete).
+        // The paged window reloads only AFTER the authority confirms the
+        // delete, so a failed delete can never leave this list claiming the
+        // emails are gone.
         Task { @MainActor [weak self] in
             guard let self else { return }
             guard await viewModel.removeEmailsAwaitingResult(ids: ids) else { return }
-            allEmails.removeAll { ids.contains($0.id) }
-            emailCount = allEmails.count
-            refreshArchiveTotalCount()
-            applyFilters()
-        }
-    }
-
-    // MARK: - Load Emails from ContentViewModel
-    func loadFromContentViewModel() {
-        allEmails = viewModel.parsedEmails
-        emailCount = allEmails.count
-        isParsed = !allEmails.isEmpty
-        refreshArchiveTotalCount()
-        replyCountPerSender = computeReplyCountPerSender(in: allEmails)
-        startDate = earliestEmailDate ?? .distantPast
-        endDate = latestEmailDate ?? .distantFuture
-        if isParsed {
-            computePriorityScores()
-            applyFilters()
-            showParsedList = true
-            computeAIFilterData()
-            // Part L: incremental persisted thread-key backfill (no-op once
-            // every stored email has a key).
-            ArchiveThreadService.shared.kickBackfill()
-        }
-    }
-
-    // MARK: - MBOX Parse Logic with Progress
-    func parseMBOX(fileURL: URL, senderEmail: String) {
-        guard !isParsing else { return }
-        isParsing = true
-        isParsed = false
-        parseProgress = 0.0
-        allEmails = []
-        filteredEmails = []
-
-        Task.detached(priority: .userInitiated) { [weak self] in
-            do {
-                let emails = try MBOXParser.parse(
-                    fileURL: fileURL,
-                    senderEmail: senderEmail,
-                    onProgress: { progress in
-                        Task { @MainActor in
-                            self?.parseProgress = progress
-                        }
-                    }
-                )
-                guard let self else { return }
-                await MainActor.run {
-                    self.allEmails = emails
-                    self.isParsed = true
-                    self.isParsing = false
-                    self.parseProgress = 1.0
-                    self.emailCount = emails.count
-                    self.refreshArchiveTotalCount()
-                    self.replyCountPerSender = self.computeReplyCountPerSender(in: emails)
-                    self.startDate = self.earliestEmailDate ?? .distantPast
-                    self.endDate = self.latestEmailDate ?? .distantFuture
-                    self.computePriorityScores()
-                    self.applyFilters()
-                    self.showParsedList = true
-                    self.recomputeSmartTagCounts()
-                    self.computeAIFilterData()
-                }
-            } catch {
-                guard let self else { return }
-                await MainActor.run {
-                    self.isParsing = false
-                    self.isParsed = false
-                    self.parseProgress = 0.0
-                }
-            }
+            invalidateSearchCache()
+            refreshFromStore()
         }
     }
 
@@ -603,8 +710,8 @@ class ParsedEmailListViewModel: ObservableObject {
         selectedSubjects.removeAll()
         selectedTags.removeAll()
         searchText = ""
-        startDate = earliestEmailDate ?? .distantPast
-        endDate = latestEmailDate ?? .distantFuture
+        startDate = .distantPast
+        endDate = .distantFuture
         minReplyCount = 0
         hasAttachmentFilter = false
         isNaturalLanguageMode = false
@@ -612,7 +719,7 @@ class ParsedEmailListViewModel: ObservableObject {
         selectedEvidenceTag = nil
         clusterFilterIDs = nil
         isResettingFilters = false
-        applyFilters()
+        reloadPagesForQueryChange()
     }
 
     // MARK: - Search Operator Parsing
@@ -716,12 +823,14 @@ class ParsedEmailListViewModel: ObservableObject {
         return parsed
     }
 
-    // (Part P3) The old in-place preview regex scan (`boundedRegexMatchIDs`)
-    // is replaced by `BoundedRegexSearch` — literal-derived FTS candidates +
-    // exact verification, or an explicitly capped scope scan with the cap
-    // surfaced via `searchNotice`. See the regex branch in `applyFilters`.
+    // MARK: - Apply Filters (in-window refinement; paging is separate)
 
-    // MARK: - Apply Filters (with minReplyCount logic + free limit)
+    /// Refine the resident page window into `visibleEmails`. This NEVER
+    /// re-pages the archive — query (text/date) changes go through
+    /// `reloadPagesForQueryChange()`; everything here is bounded by the
+    /// resident window. Free-text/Boolean matches are verified through FTS5
+    /// (`matchingSubset` over the window ids); regex uses BoundedRegexSearch;
+    /// proximity compiles to a native FTS5 NEAR — no in-RAM corpus engine.
     func applyFilters() {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let parsed = parseSearchQuery(query)
@@ -732,11 +841,9 @@ class ParsedEmailListViewModel: ObservableObject {
         var advancedMatchIDs: Set<UUID>?
 
         // Compile the parsed query into valid FTS5 grammar (FTSQueryBuilder).
-        // Regex has no FTS5 form and stays in-RAM. Proximity compiles to a
-        // native NEAR(...) and is routed through FTS5 with NO in-RAM fallback
-        // (removes the whole-array `EmailSearchIndex.proximitySearch` scale
-        // violation). Free-text/Boolean use FTS when the index isn't mid-build,
-        // else the in-RAM engine (which holds the parsed-so-far set).
+        // Regex has no FTS5 form. Proximity compiles to a native NEAR(...) and
+        // is routed through FTS5 with NO in-RAM fallback. Free-text/Boolean use
+        // FTS when the index isn't mid-build, else a bounded window scan.
         let ftsQuery: String?
         let allowInRAMFallback: Bool
         if parsed.isRegexQuery {
@@ -748,7 +855,7 @@ class ParsedEmailListViewModel: ObservableObject {
                 term2: parsed.proximityTerm2,
                 distance: parsed.proximityDistance
             )
-            allowInRAMFallback = false   // proximity is FTS5-only now
+            allowInRAMFallback = false   // proximity is FTS5-only
         } else {
             let t = parsed.freeText.trimmingCharacters(in: .whitespaces)
             ftsQuery = t.isEmpty ? nil : FTSQueryBuilder.freeTextOrBoolean(t)
@@ -760,24 +867,22 @@ class ParsedEmailListViewModel: ObservableObject {
         // Boolean route through FTS only once the index isn't mid-build.
         let useFTS = (ftsQuery != nil) && (!isParsing || !allowInRAMFallback)
         if let ftsQuery, useFTS {
-            // Part P: PREVIEW-BOUNDED on purpose. The legacy Simple list only
-            // filters the bounded resident preview (`allEmails`), so we ask
-            // FTS which PREVIEW ids match (`matchingSubset`) instead of
-            // materializing an archive-wide id list (was `limit: 100_000` —
-            // a whole-corpus-sized fetch). Archive-wide truth (totals) comes
-            // from the store count (`archiveTotalCount`), never this set.
-            let previewIDs = allEmails.map(\.id)
-            let cacheKey = "\(ftsQuery)\u{1}\(allEmails.count)\u{1}\(corpusVersion)"
+            // Bounded on purpose: ask FTS which WINDOW ids match
+            // (`matchingSubset`) instead of materializing an archive-wide id
+            // list. Archive-wide truth (totals) comes from the pager's store
+            // count, never this set.
+            let windowIDs = residentEmails.map(\.id)
+            let cacheKey = "\(ftsQuery)\u{1}\(residentEmails.count)\u{1}\(corpusVersion)"
             if cacheKey != ftsMatchKey {
                 let searchTask = Task { [weak self] in
                     guard let self else { return }
                     let populated = ((try? await FTSSearchIndex.shared.rowCount()) ?? 0) > 0
                     if populated {
-                        let ids = (try? await FTSSearchIndex.shared.matchingSubset(of: previewIDs, ftsQuery: ftsQuery)) ?? []
+                        let ids = (try? await FTSSearchIndex.shared.matchingSubset(of: windowIDs, ftsQuery: ftsQuery)) ?? []
                         self.ftsMatchIDs = ids   // empty set = authoritative zero matches
                     } else {
-                        // Nothing indexed yet. Free-text/Boolean fall back to
-                        // in-RAM; proximity has no fallback → authoritative empty.
+                        // Nothing indexed yet. Free-text/Boolean fall back to a
+                        // window scan; proximity has no fallback → authoritative empty.
                         self.ftsMatchIDs = allowInRAMFallback ? nil : Set<UUID>()
                     }
                     self.ftsMatchKey = cacheKey
@@ -806,7 +911,7 @@ class ParsedEmailListViewModel: ObservableObject {
             if cacheKey != regexMatchKey {
                 let searchTask = Task { [weak self] in
                     guard let self else { return }
-                    let outcome = (try? await ArchiveDataService.shared.regexSearch(pattern: pattern)) ?? RegexSearchOutcome()
+                    let outcome = (try? await self.archive.regexSearch(pattern: pattern)) ?? RegexSearchOutcome()
                     self.regexMatchIDs = outcome.matchedIDs
                     self.searchNotice = outcome.truncated
                         ? "Regex too broad — only the first \(outcome.scanned) emails were scanned. Add a text term or a date filter to narrow it."
@@ -822,22 +927,26 @@ class ParsedEmailListViewModel: ObservableObject {
         } else {
             regexMatchKey = nil
             regexMatchIDs = nil
-            if searchNotice != nil { searchNotice = nil }
+            if parsed.isProximityQuery {
+                // Proximity matches within the loaded page window (NEAR has no
+                // repository paging form) — surfaced, never silent.
+                searchNotice = "Proximity search matches loaded pages — scroll or Load More to search further."
+            } else if searchNotice != nil {
+                searchNotice = nil
+            }
         }
 
         if parsed.searchInAttachments && !parsed.freeText.isEmpty {
             // Degraded but bounded: match attachment FILENAMES over the
-            // resident preview. No attachment-text extraction runs in the v2
-            // import/index pipeline (the PDF/RTF/DOCX/OCR extraction lived
-            // only in the retired in-RAM index build), so there is no
-            // extracted text to index into FTS — indexing attachment content
-            // is a later phase. The limitation is USER-VISIBLE via
-            // `searchNotice` below, not silently degraded.
+            // resident window. No attachment-text extraction runs in the v2
+            // import/index pipeline, so there is no extracted text to index
+            // into FTS — indexing attachment content is a later phase. The
+            // limitation is USER-VISIBLE via `searchNotice`, not silent.
             if searchNotice == nil {
                 searchNotice = "in:attachments matches attachment file names only — attachment contents aren't indexed yet."
             }
             let terms = parsed.freeText.lowercased().split(separator: " ").map(String.init)
-            let attachIDs = Set(allEmails.filter { email in
+            let attachIDs = Set(residentEmails.filter { email in
                 !email.attachments.isEmpty && email.attachments.contains { att in
                     let name = att.filename.lowercased()
                     return terms.contains { name.contains($0) }
@@ -850,7 +959,7 @@ class ParsedEmailListViewModel: ObservableObject {
             }
         }
 
-        var result = allEmails.filter { email in
+        var result = residentEmails.filter { email in
             if deletedIDs.contains(email.id) { return false }
             if archivedIDs.contains(email.id) { return false }
             if showPinnedOnly && !pinnedIDs.contains(email.id) { return false }
@@ -920,35 +1029,20 @@ class ParsedEmailListViewModel: ObservableObject {
             return filterMatch(email) && replyCount >= minReplyCount
                 && matchesFromOp && matchesToOp && matchesSubjectOp && matchesHasAttachment && matchesDateOps && matchesEvidenceTag && matchesSmartTag && matchesNLAttachment && matchesType && matchesTag && matchesSource
         }
+        // Free-tier visibility cap — gated from the store-count-driven paging
+        // depth; this is a defensive second bound on the visible list.
         if !isPremiumUser && result.count > StoreManager.freeEmailLimit {
             result = Array(result.prefix(StoreManager.freeEmailLimit))
         }
-        filteredEmails = result
-        sortFilteredEmails()
+        visibleEmails = result
+        sortVisibleEmails()
         if groupByThread {
-            emailThreads = ThreadGrouper.group(filteredEmails)
+            emailThreads = ThreadGrouper.group(visibleEmails)
         }
         recomputeSmartTagCounts()
     }
 
-    // MARK: - Compute reply count per sender (actual sent mails)
-    private func computeReplyCountPerSender(in emails: [MBOXParser.RawEmail]) -> [String: Int] {
-        var counts: [String: Int] = [:]
-        for email in emails {
-            let sender = (email.headers["From"] ?? "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if !sender.isEmpty {
-                counts[sender, default: 0] += 1
-            }
-        }
-        return counts
-    }
-
-    // Reply frequency stats moved to ArchiveAggregateService.replyRecipientCounts
-    // (Part G4): a bounded SQL GROUP BY over the store, consumed by
-    // ReplyStatsView directly — no preview-array walk.
-
-    // MARK: - Filtering Logic (unchanged)
+    // MARK: - Filtering Logic (in-window)
     private func filterMatch(_ email: MBOXParser.RawEmail) -> Bool {
         let date = isoFormatter.date(from: email.timestamp)
             ?? MBOXParser.parseDate(email.headers["Date"])
@@ -969,29 +1063,29 @@ class ParsedEmailListViewModel: ObservableObject {
         [key, key.lowercased(), key.capitalized].compactMap { dict[$0] }
     }
 
-    private func sortFilteredEmails() {
+    private func sortVisibleEmails() {
         switch sortBy {
         case .dateAsc:
-            filteredEmails.sort {
+            visibleEmails.sort {
                 (isoFormatter.date(from: $0.timestamp) ?? .distantPast) <
                 (isoFormatter.date(from: $1.timestamp) ?? .distantPast)
             }
         case .dateDesc:
-            filteredEmails.sort {
+            visibleEmails.sort {
                 (isoFormatter.date(from: $0.timestamp) ?? .distantPast) >
                 (isoFormatter.date(from: $1.timestamp) ?? .distantPast)
             }
         case .subjectAsc:
-            filteredEmails.sort {
+            visibleEmails.sort {
                 ($0.headers["Subject"] ?? "")
                     .localizedCompare($1.headers["Subject"] ?? "") == .orderedAscending
             }
         case .priorityDesc:
-            filteredEmails.sort {
+            visibleEmails.sort {
                 (priorityScores[$0.id] ?? 0) > (priorityScores[$1.id] ?? 0)
             }
         case .sizeDesc:
-            filteredEmails.sort {
+            visibleEmails.sort {
                 $0.rawSource.utf8.count > $1.rawSource.utf8.count
             }
         }
@@ -1015,16 +1109,16 @@ class ParsedEmailListViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Priority Scores (cached)
+    // MARK: - Priority Scores (cached, per window)
     @Published var priorityScores: [UUID: Int] = [:]
 
-    // Part I.2: this synchronous pass over the BOUNDED resident preview keeps
+    // Part I.2: this synchronous pass over the BOUNDED resident window keeps
     // sort-by-priority correct immediately at load; the persisted per-email
     // priority (derived store, computed by the archive-wide background job
     // with DB-side sender counts) overwrites these values when
     // computeAIFilterData's fetch completes, and is the archive truth.
     func computePriorityScores() {
-        let results = EmailNLPEngine.scoreAllPriorities(allEmails, replyCountPerSender: replyCountPerSender)
+        let results = EmailNLPEngine.scoreAllPriorities(residentEmails, replyCountPerSender: replyCountPerSender)
         var scores: [UUID: Int] = [:]
         for r in results {
             scores[r.email.id] = r.score
@@ -1048,24 +1142,24 @@ class ParsedEmailListViewModel: ObservableObject {
     @AppStorage("enableAIFeatures") private var enableAIFeatures = true
 
     func computeAIFilterData() {
-        guard !aiFiltersComputed, !allEmails.isEmpty, enableAIFeatures else { return }
+        guard !aiFiltersComputed, !residentEmails.isEmpty, enableAIFeatures else { return }
         // Part I: the filter attributes are PERSISTED derived state
         // (ArchiveDerivedStateStore), computed once by a bounded background job
-        // — not recomputed over the resident array every time filters need
-        // them. This reads the persisted records for the resident preview
-        // page, computes-and-persists only the missing ones (bounded by the
-        // preview cap, in 300-email batches), then kicks the incremental
-        // archive-wide job for everything else. Reopening costs one fetch.
-        let previewEmails = allEmails
+        // — not recomputed over the resident window every time filters need
+        // them. This reads the persisted records for the resident window,
+        // computes-and-persists only the missing ones (bounded by the window,
+        // in 300-email batches), then kicks the incremental archive-wide job
+        // for everything else. Reopening costs one fetch.
+        let windowEmails = residentEmails
         let senderCounts = replyCountPerSender
         Task { @MainActor [weak self] in
             guard let self else { return }
             let store = ArchiveDerivedStateStore.shared
-            let ids = previewEmails.map(\.id)
+            let ids = windowEmails.map(\.id)
             var records = (try? await store.fetch(ids: ids)) ?? [:]
 
-            // Fill in preview emails that have no (current-version) record yet.
-            let missing = previewEmails.filter {
+            // Fill in window emails that have no (current-version) record yet.
+            let missing = windowEmails.filter {
                 (records[$0.id]?.analysisVersion ?? 0) < DerivedAIAnalysis.analysisVersion
             }
             if !missing.isEmpty {
@@ -1083,7 +1177,7 @@ class ParsedEmailListViewModel: ObservableObject {
             }
 
             // Publish the persisted attributes into the filter caches the
-            // legacy UI reads (same thresholds/values as before).
+            // list UI reads (same thresholds/values as before).
             var sentMap: [UUID: Double] = [:]
             var classMap: [UUID: EmailNLPEngine.EmailCategory] = [:]
             var phishIDs = Set<UUID>()
@@ -1106,44 +1200,45 @@ class ParsedEmailListViewModel: ObservableObject {
         }
     }
 
-    // Cleanup Mode sender rollups + archive storage total moved to
+    // Cleanup Mode sender rollups + archive storage total live in
     // ArchiveAggregateService.senderRollups / totalSizeBytes (Part G9): SQL
     // GROUP BY / SUM aggregates over the store, consumed by the cleanup view
-    // directly — the preview arrays must not be presented as archive stats.
+    // directly — the page window must not be presented as archive stats.
 
-    // NOTE (Part G9): everything below is PREVIEW-SCOPED by design — it
-    // describes the resident bounded preview backing the legacy Simple list
-    // (its filter pickers and date-filter defaults), not the whole archive.
-    // Archive-wide equivalents live in ArchiveAggregateService.
+    // NOTE (Part S): everything below is WINDOW-SCOPED by design — it
+    // describes the resident bounded page window (its filter pickers and
+    // date-filter defaults), not the whole archive. Archive-wide equivalents
+    // live in ArchiveAggregateService.
     var earliestEmailDate: Date? {
-        allEmails.compactMap { isoFormatter.date(from: $0.timestamp) }.min()
+        residentEmails.compactMap { isoFormatter.date(from: $0.timestamp) }.min()
     }
     var latestEmailDate: Date? {
-        allEmails.compactMap { isoFormatter.date(from: $0.timestamp) }.max()
+        residentEmails.compactMap { isoFormatter.date(from: $0.timestamp) }.max()
     }
     var allFromEmails: [String] {
-        Array(Set(allEmails.compactMap { $0.headers["From"] })).sorted()
+        Array(Set(residentEmails.compactMap { $0.headers["From"] })).sorted()
     }
     var allToEmails: [String] {
-        Array(Set(allEmails.compactMap { $0.headers["To"] })).sorted()
+        Array(Set(residentEmails.compactMap { $0.headers["To"] })).sorted()
     }
     var allSubjects: [String] {
-        Array(Set(allEmails.compactMap { $0.headers["Subject"] })).sorted()
+        Array(Set(residentEmails.compactMap { $0.headers["Subject"] })).sorted()
     }
     var allDomains: [String] {
-        let domains = allEmails.flatMap { $0.domains }
+        let domains = residentEmails.flatMap { $0.domains }
         return Array(Set(domains)).sorted()
     }
     var allTags: [String] {
-        Array(Set(allEmails.flatMap { $0.tags })).sorted()
+        Array(Set(residentEmails.flatMap { $0.tags })).sorted()
     }
-    /// Date span of the visible (preview-backed) filtered list.
+    /// Date span of the visible (window-backed) list.
     var filteredDateRange: (Date?, Date?) {
-        let dates = filteredEmails.compactMap { isoFormatter.date(from: $0.timestamp) }
+        let dates = visibleEmails.compactMap { isoFormatter.date(from: $0.timestamp) }
         return (dates.min(), dates.max())
     }
 
-    /// For sidebar: returns senders sorted by their reply count descending.
+    /// For sidebar: returns senders sorted by their email count descending
+    /// (store aggregate).
     var sortedSendersByReplyCount: [(email: String, count: Int)] {
         replyCountPerSender
             .sorted { $0.value > $1.value }

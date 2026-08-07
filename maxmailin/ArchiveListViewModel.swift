@@ -85,6 +85,11 @@ final class ArchiveListViewModel: ObservableObject {
 
     var maxRetained: Int { windowPages * pageSize }
 
+    /// Ordered ids of the loaded page window — the detail view's navigation
+    /// order (Part R: detail navigation sources list PAGE state, never a
+    /// whole-corpus array).
+    var visibleOrderedIDs: [EmailID] { summaries.map(\.id) }
+
     // MARK: - Loading
 
     /// Load (or reload) from the first page for the current query.

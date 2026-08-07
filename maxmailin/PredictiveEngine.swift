@@ -182,7 +182,7 @@ struct PredictiveEngine {
         var predictions: [ThreadPrediction] = []
 
         for thread in threads.prefix(20) {
-            let trend = EmailNLPEngine.threadSentimentTrend(thread.allEmails)
+            let trend = EmailNLPEngine.threadSentimentTrend(thread.members)
             let points = trend.points
             guard points.count >= 2 else { continue }
 
@@ -193,7 +193,7 @@ struct PredictiveEngine {
             let sentimentDelta = recentAvg - olderAvg
 
             // Response frequency — are people still engaged?
-            let dates = thread.allEmails.compactMap { MBOXParser.parseDate($0.headers["Date"]) }.sorted()
+            let dates = thread.members.compactMap { MBOXParser.parseDate($0.headers["Date"]) }.sorted()
             let lastMessageAge: Int
             if let last = dates.last {
                 lastMessageAge = Calendar.current.dateComponents([.day], from: last, to: Date()).day ?? 999
@@ -202,8 +202,8 @@ struct PredictiveEngine {
             }
 
             // Participant engagement — are all participants still responding?
-            let allParticipants = Set(thread.allEmails.compactMap { $0.headers["From"]?.lowercased() })
-            let recentParticipants = Set(thread.allEmails.suffix(max(1, thread.count / 2)).compactMap { $0.headers["From"]?.lowercased() })
+            let allParticipants = Set(thread.members.compactMap { $0.headers["From"]?.lowercased() })
+            let recentParticipants = Set(thread.members.suffix(max(1, thread.count / 2)).compactMap { $0.headers["From"]?.lowercased() })
             let engagementRatio = allParticipants.isEmpty ? 0 : Double(recentParticipants.count) / Double(allParticipants.count)
 
             // Outcome prediction

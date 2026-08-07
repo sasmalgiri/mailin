@@ -5,8 +5,8 @@ import AppKit
 
 // MARK: - AIMode Enum
 enum AIMode: String, CaseIterable, Identifiable {
-    case allEmails = "All Emails"
-    case filteredEmails = "Filtered Emails"
+    case entireArchive = "All Emails"
+    case currentFilter = "Filtered Emails"
     var id: String { self.rawValue }
 }
 

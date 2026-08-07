@@ -2150,8 +2150,8 @@ struct EmailDetailView: View {
             HStack(spacing: Spacing.small) {
                 if sigResult.status != .notSigned {
                     HStack(spacing: 4) {
-                        Image(systemName: sigResult.status == .valid ? "checkmark.seal.fill" : sigResult.status == .unknownSigner ? "questionmark.circle.fill" : "xmark.seal.fill")
-                            .foregroundColor(sigResult.status == .valid ? .green : sigResult.status == .unknownSigner ? .orange : .red)
+                        Image(systemName: Self.smimeBadgeIcon(for: sigResult.status))
+                            .foregroundColor(Self.smimeBadgeColor(for: sigResult.status))
                             .font(.footnote)
                         VStack(alignment: .leading, spacing: 0) {
                             Text("Signature: \(sigResult.status.rawValue)")
@@ -2166,7 +2166,7 @@ struct EmailDetailView: View {
                     }
                     .padding(.horizontal, Spacing.small)
                     .padding(.vertical, Spacing.xxxSmall)
-                    .background(sigResult.status == .valid ? Color.green.opacity(0.1) : Color.orange.opacity(0.1))
+                    .background(Self.smimeBadgeColor(for: sigResult.status).opacity(0.1))
                     .cornerRadius(CornerRadius.small)
                 }
                 if isEncrypted {
@@ -2186,6 +2186,28 @@ struct EmailDetailView: View {
                 Spacer()
             }
         }
+        }
+    }
+
+    /// Part V: four DISTINCT verdict presentations — exhaustive, no ambiguous
+    /// "Valid" and no shared icon/color between semantically different states.
+    private static func smimeBadgeIcon(for status: SMIMEHandler.SignatureStatus) -> String {
+        switch status {
+        case .validTrusted:      return "checkmark.seal.fill"
+        case .validUntrustedCert: return "checkmark.seal"
+        case .invalid:           return "xmark.seal.fill"
+        case .unverifiable:      return "questionmark.circle.fill"
+        case .notSigned:         return "seal"
+        }
+    }
+
+    private static func smimeBadgeColor(for status: SMIMEHandler.SignatureStatus) -> Color {
+        switch status {
+        case .validTrusted:      return .green
+        case .validUntrustedCert: return .orange
+        case .invalid:           return .red
+        case .unverifiable:      return .gray
+        case .notSigned:         return .secondary
         }
     }
 

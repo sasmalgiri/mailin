@@ -8,7 +8,7 @@ import NaturalLanguage
 import UniformTypeIdentifiers
 
 /// Scope semantics for the AI assistant — replaces the legacy corpus arrays
-/// (`allEmails`/`filteredEmails`/`selectedEmails`). Callers pass the CURRENT
+/// (whole-corpus or filtered-list arrays). Callers pass the CURRENT
 /// archive filter as an `EmailQuery` plus the explicitly selected ids; the
 /// view resolves them against the bounded store (counts via the repository,
 /// analysis over a capped hydrated working set, search via FTS5) — never a
@@ -2903,7 +2903,7 @@ struct AIAssistantView: View {
             dateFmt.dateStyle = .short
             dateFmt.timeStyle = .short
             for (i, thread) in multiMessage.prefix(5).enumerated() {
-                let trend = EmailNLPEngine.threadSentimentTrend(thread.allEmails)
+                let trend = EmailNLPEngine.threadSentimentTrend(thread.members)
                 result += "\(i + 1). \(trend.subject)\n"
                 result += "   Participants: \(trend.participants.joined(separator: ", "))\n"
                 result += "   Overall trend: \(trend.overallTrend)\n"
@@ -2922,8 +2922,8 @@ struct AIAssistantView: View {
             if multiMessage.isEmpty { return scopeLabel + "No conversation threads with multiple messages found." }
             var result = scopeLabel + "Thread Summaries\n\n"
             for (i, thread) in multiMessage.prefix(5).enumerated() {
-                let summary = EmailNLPEngine.summarizeThread(thread.allEmails)
-                let trend = EmailNLPEngine.threadSentimentTrend(thread.allEmails)
+                let summary = EmailNLPEngine.summarizeThread(thread.members)
+                let trend = EmailNLPEngine.threadSentimentTrend(thread.members)
                 result += "\(i + 1). \(summary)"
                 result += "   Sentiment trend: \(trend.overallTrend)\n"
                 result += String(repeating: "-", count: 40) + "\n\n"
@@ -3027,13 +3027,13 @@ struct AIAssistantView: View {
             var result = scopeLabel
             result += "**Most active thread: \"\(winner.subject)\"** — \(winner.count) messages\n\n"
 
-            let participants = Set(winner.allEmails.compactMap {
+            let participants = Set(winner.members.compactMap {
                 $0.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces)
             })
             result += "Participants: \(participants.joined(separator: ", "))\n"
 
-            if let first = winner.allEmails.first?.headers["Date"].flatMap({ MBOXParser.parseDate($0) }),
-               let last = winner.allEmails.last?.headers["Date"].flatMap({ MBOXParser.parseDate($0) }) {
+            if let first = winner.members.first?.headers["Date"].flatMap({ MBOXParser.parseDate($0) }),
+               let last = winner.members.last?.headers["Date"].flatMap({ MBOXParser.parseDate($0) }) {
                 let days = Calendar.current.dateComponents([.day], from: first, to: last).day ?? 0
                 result += "Span: \(days) day\(days == 1 ? "" : "s")\n"
             }
@@ -3041,7 +3041,7 @@ struct AIAssistantView: View {
             if top.count > 1 {
                 result += "\n**Top threads by reply count:**\n\n"
                 for (i, thread) in top.enumerated() {
-                    let partCount = Set(thread.allEmails.compactMap {
+                    let partCount = Set(thread.members.compactMap {
                         $0.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces)
                     }).count
                     let maxCount = max(1, top[0].count)
@@ -4026,8 +4026,8 @@ struct AIAssistantView: View {
             if multiMessage.isEmpty { return scopeLabel + "I didn't find any conversation threads with back-and-forth replies. The emails may all be standalone messages." }
             var result = scopeLabel + "I found **\(multiMessage.count) active conversation\(multiMessage.count == 1 ? "" : "s")** (threads with replies) out of \(threads.count) total threads. Here are the most active:\n\n"
             for (i, thread) in multiMessage.prefix(8).enumerated() {
-                let sentiment = EmailNLPEngine.averageSentiment(of: thread.allEmails)
-                let trend = EmailNLPEngine.threadSentimentTrend(thread.allEmails)
+                let sentiment = EmailNLPEngine.averageSentiment(of: thread.members)
+                let trend = EmailNLPEngine.threadSentimentTrend(thread.members)
                 let participants = trend.participants.prefix(3).map { "**\($0)**" }.joined(separator: ", ")
                 let toneWord = sentiment.average > 0.1 ? "positive" : sentiment.average < -0.1 ? "tense" : "neutral"
                 result += "\(i + 1). **\(thread.subject)** — \(thread.count) messages, \(toneWord) tone (\(trend.overallTrend))\n"
@@ -5222,7 +5222,7 @@ struct AIAssistantView: View {
             timeline += "CONVERSATION THREADS:\n"
             for thread in multiMessage.prefix(5) {
                 timeline += "\n\"\(thread.subject)\" (\(thread.count) emails):\n"
-                let sorted = thread.allEmails.sorted {
+                let sorted = thread.members.sorted {
                     (MBOXParser.parseDate($0.headers["Date"]) ?? .distantPast) <
                     (MBOXParser.parseDate($1.headers["Date"]) ?? .distantPast)
                 }
@@ -5233,7 +5233,7 @@ struct AIAssistantView: View {
                     let tone = sentimentResults.first?.label ?? "Neutral"
                     timeline += "  → \(date) | \(from) | \(tone)\n"
                 }
-                let trend = EmailNLPEngine.threadSentimentTrend(thread.allEmails)
+                let trend = EmailNLPEngine.threadSentimentTrend(thread.members)
                 timeline += "  Trend: \(trend.overallTrend)\n"
             }
             steps.append("Thread timeline: \(multiMessage.count) conversation\(multiMessage.count == 1 ? "" : "s")")

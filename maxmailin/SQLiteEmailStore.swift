@@ -70,6 +70,11 @@ actor SQLiteEmailStore: EmailArchiveStore {
     private func ensureDB() throws -> OpaquePointer {
         if let db { return db }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        // W3: the canonical store is read by background analysis/reconcile
+        // jobs after device lock → background-readable class on iOS; new
+        // files (emails.db + its -wal/-shm) inherit the directory's class.
+        // macOS: 700 so no other local user can open the archive.
+        ArtifactProtection.applyBackgroundReadable(to: directory)
         let url = directory.appendingPathComponent("emails.db")
         var handle: OpaquePointer?
         let rc = sqlite3_open_v2(
@@ -79,6 +84,13 @@ actor SQLiteEmailStore: EmailArchiveStore {
         guard rc == SQLITE_OK, let handle else {
             throw SQLiteStoreError.open("sqlite3_open_v2 rc=\(rc)")
         }
+        // Owner-only on the DB file itself. SQLite creates -wal/-shm with the
+        // database file's permissions, so setting emails.db before the first
+        // write covers them too; the explicit calls handle files that already
+        // existed from an earlier version.
+        ArtifactProtection.applyBackgroundReadable(to: url)
+        ArtifactProtection.applyBackgroundReadable(to: URL(fileURLWithPath: url.path + "-wal"))
+        ArtifactProtection.applyBackgroundReadable(to: URL(fileURLWithPath: url.path + "-shm"))
         try exec(handle, "PRAGMA journal_mode = WAL;")
         try exec(handle, "PRAGMA synchronous = NORMAL;")
         try exec(handle, "PRAGMA foreign_keys = OFF;")

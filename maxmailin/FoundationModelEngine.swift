@@ -411,7 +411,7 @@ struct GetThreadInfoTool: Tool {
             return "No thread found for '\(arguments.subject)'"
         }
         var output = "Thread: \(thread.subject) (\(thread.count) emails)\n\n"
-        let sorted = thread.allEmails.sorted {
+        let sorted = thread.members.sorted {
             (MBOXParser.parseDate($0.headers["Date"]) ?? .distantPast) <
             (MBOXParser.parseDate($1.headers["Date"]) ?? .distantPast)
         }
@@ -3848,8 +3848,8 @@ struct FoundationModelEngine {
         let multiThreads = threads.filter { $0.count > 1 }.sorted { $0.count > $1.count }
         p += "\nKEY THREADS (\(threads.count) total, \(multiThreads.count) multi-email):\n"
         for thread in multiThreads.prefix(8) {
-            let participants = Set(thread.allEmails.compactMap { $0.headers["From"] }).count
-            let threadDates = thread.allEmails.compactMap { MBOXParser.parseDate($0.headers["Date"]) }.sorted()
+            let participants = Set(thread.members.compactMap { $0.headers["From"] }).count
+            let threadDates = thread.members.compactMap { MBOXParser.parseDate($0.headers["Date"]) }.sorted()
             var line = "• \"\(thread.subject)\" — \(thread.count) emails, \(participants) people"
             if let first = threadDates.first, let last = threadDates.last {
                 line += ", \(f.string(from: first))–\(f.string(from: last))"
@@ -4940,11 +4940,11 @@ struct FoundationModelEngine {
         let queryTerms = Set(EmailNLPEngine.extractSearchTerms(from: query).map { $0.lowercased() })
 
         let rankedThreads = threads.sorted { a, b in
-            let aRelevance = queryTerms.isEmpty ? 0 : a.allEmails.reduce(0) { acc, email in
+            let aRelevance = queryTerms.isEmpty ? 0 : a.members.reduce(0) { acc, email in
                 let text = (email.headers["Subject"] ?? "") + " " + email.plainBody
                 return acc + queryTerms.filter { text.lowercased().contains($0) }.count
             }
-            let bRelevance = queryTerms.isEmpty ? 0 : b.allEmails.reduce(0) { acc, email in
+            let bRelevance = queryTerms.isEmpty ? 0 : b.members.reduce(0) { acc, email in
                 let text = (email.headers["Subject"] ?? "") + " " + email.plainBody
                 return acc + queryTerms.filter { text.lowercased().contains($0) }.count
             }
@@ -4956,11 +4956,11 @@ struct FoundationModelEngine {
         var charCount = result.count
 
         for thread in rankedThreads.prefix(3) {
-            let participants = Set(thread.allEmails.compactMap { $0.headers["From"] })
+            let participants = Set(thread.members.compactMap { $0.headers["From"] })
             var threadSection = "── Thread: \"\(thread.subject)\" (\(thread.count) msgs, \(participants.count) participants) ──\n"
             threadSection += "Participants: \(participants.prefix(5).joined(separator: ", "))\n"
 
-            for (i, email) in thread.allEmails.enumerated() {
+            for (i, email) in thread.members.enumerated() {
                 let from = email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "?"
                 let date = email.headers["Date"] ?? "?"
                 let sentiment = EmailNLPEngine.analyzeSentiment(of: [email]).first
@@ -5014,7 +5014,7 @@ struct FoundationModelEngine {
             let threads = ThreadGrouper.group(emails).filter { $0.count > 1 }
             if !threads.isEmpty {
                 let trendData = threads.prefix(3).map { thread -> String in
-                    let trend = EmailNLPEngine.threadSentimentTrend(thread.allEmails)
+                    let trend = EmailNLPEngine.threadSentimentTrend(thread.members)
                     return "\"\(thread.subject)\": \(trend.overallTrend)"
                 }
                 d += "THREAD TRENDS: " + trendData.joined(separator: "; ") + "\n"
@@ -6094,7 +6094,7 @@ struct FoundationModelEngine {
                 for term in terms {
                     let lower = term.lowercased()
                     if let thread = threads.first(where: { $0.subject.lowercased().contains(lower) }) {
-                        return Array(thread.allEmails.sorted {
+                        return Array(thread.members.sorted {
                             (MBOXParser.parseDate($0.headers["Date"]) ?? .distantPast) <
                             (MBOXParser.parseDate($1.headers["Date"]) ?? .distantPast)
                         }.prefix(limit))

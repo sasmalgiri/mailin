@@ -3,12 +3,98 @@ import Security
 
 struct SMIMEHandler {
 
-    enum SignatureStatus: String, Codable {
-        case valid = "Valid"
-        case invalid = "Invalid"
-        case unknownSigner = "Unknown Signer"
+    /// Four-state forensic verdict (Part V). Each state is a DISTINCT forensic
+    /// conclusion — none may be collapsed into another:
+    ///  • validTrusted       — signature cryptographically valid AND the signer
+    ///                         chains to a trusted anchor.
+    ///  • validUntrustedCert — signature cryptographically valid, but the
+    ///                         certificate chain is NOT trusted (self-signed,
+    ///                         unknown CA, expired, or trust unavailable).
+    ///  • invalid            — the cryptographic check FAILED: content was
+    ///                         tampered with after signing, or the signature
+    ///                         bytes are wrong. The strongest negative claim.
+    ///  • unverifiable       — no conclusion possible: malformed CMS, missing
+    ///                         certificates, detached content we cannot
+    ///                         reconstruct, or an unsupported structure.
+    ///                         MUST NOT be presented as valid OR invalid.
+    ///  • notSigned          — passthrough: the message carries no signature.
+    enum SignatureStatus: String, Codable, CaseIterable {
+        case validTrusted = "Valid — Trusted Signer"
+        case validUntrustedCert = "Valid Signature — Untrusted Certificate"
+        case invalid = "Invalid — Failed Cryptographic Check"
+        case unverifiable = "Unverifiable"
         case notSigned = "Not Signed"
-        case error = "Error"
+    }
+
+    /// Platform-independent mirror of `CMSSignerStatus`, so the status→verdict
+    /// mapping is a pure function testable without CMSDecoder fixtures.
+    enum DecoderStatus: CaseIterable, Sendable {
+        case unsigned
+        case valid
+        case needsDetachedContent
+        case invalidSignature   // tampered content OR bad signature bytes
+        case invalidCert
+        case invalidIndex
+    }
+
+    /// Outcome of the SecTrust / cert-chain evaluation accompanying the
+    /// decoder status.
+    enum TrustOutcome: CaseIterable, Sendable {
+        case trusted        // certVerifyResult == errSecSuccess
+        case untrusted      // chain evaluated and rejected
+        case unavailable    // no trust evaluation was possible
+    }
+
+    /// PURE status→verdict mapping (Part V.3a). Every CMSDecoder status +
+    /// trust-evaluation combination is mapped EXPLICITLY — exhaustive switch,
+    /// no `default:` that could swallow a distinct outcome. In particular:
+    /// `invalidSignature` (tampered content / bad signature bytes) maps to
+    /// `.invalid`, NEVER to an "unknown signer" style downgrade.
+    static func mapVerdict(parseError: Bool,
+                           decoderStatus: DecoderStatus?,
+                           trustResult: TrustOutcome,
+                           certsPresent: Bool,
+                           certExpired: Bool) -> SignatureStatus {
+        // Malformed CMS: the decoder never produced a status — nothing can be
+        // concluded about the content either way.
+        if parseError { return .unverifiable }
+        // Decoder ran but no signer status was obtainable (e.g.
+        // CMSDecoderCopySignerStatus failed): unverifiable, not invalid.
+        guard let decoderStatus else { return .unverifiable }
+
+        switch decoderStatus {
+        case .unsigned:
+            return .notSigned
+        case .valid:
+            // Crypto check passed. Without the signer certificate we cannot
+            // attribute the signature to anyone — unverifiable.
+            guard certsPresent else { return .unverifiable }
+            switch trustResult {
+            case .trusted:
+                // An expired certificate can never support a "trusted" claim
+                // (no signing-time proof) — downgrade to untrusted-cert.
+                return certExpired ? .validUntrustedCert : .validTrusted
+            case .untrusted, .unavailable:
+                return .validUntrustedCert
+            }
+        case .needsDetachedContent:
+            // multipart/signed (detached): we don't reconstruct the
+            // canonicalized signed bytes, so the crypto check never ran.
+            // Not "invalid" (that would falsely imply tampering).
+            return .unverifiable
+        case .invalidSignature:
+            // THE forensic-grade case: content hash mismatch (tampering) or
+            // corrupt signature bytes. Always .invalid.
+            return .invalid
+        case .invalidCert:
+            // CMS verified the signature but could not verify the signer
+            // certificate. With certs present that is a trust problem, not
+            // tampering; with no certs at all nothing is attributable.
+            return certsPresent ? .validUntrustedCert : .unverifiable
+        case .invalidIndex:
+            // API-level failure (signer index out of range) — no conclusion.
+            return .unverifiable
+        }
     }
 
     struct CertificateInfo {
@@ -40,17 +126,22 @@ struct SMIMEHandler {
 
         #if os(macOS)
         guard let signedData = findSignedData(in: email) else {
-            return VerificationResult(status: .error, signerName: nil, signerEmail: nil, certificateInfo: nil)
+            // Signed content type but no extractable signature blob —
+            // structurally unverifiable, not "invalid".
+            return VerificationResult(status: .unverifiable, signerName: nil, signerEmail: nil, certificateInfo: nil)
         }
 
         var decoder: CMSDecoder?
         guard CMSDecoderCreate(&decoder) == errSecSuccess, let cmsDecoder = decoder else {
-            return VerificationResult(status: .error, signerName: nil, signerEmail: nil, certificateInfo: nil)
+            return VerificationResult(status: mapVerdict(parseError: true, decoderStatus: nil, trustResult: .unavailable, certsPresent: false, certExpired: false),
+                                      signerName: nil, signerEmail: nil, certificateInfo: nil)
         }
 
         guard CMSDecoderUpdateMessage(cmsDecoder, (signedData as NSData).bytes, signedData.count) == errSecSuccess,
               CMSDecoderFinalizeMessage(cmsDecoder) == errSecSuccess else {
-            return VerificationResult(status: .error, signerName: nil, signerEmail: nil, certificateInfo: nil)
+            // Malformed CMS structure — parse failure.
+            return VerificationResult(status: mapVerdict(parseError: true, decoderStatus: nil, trustResult: .unavailable, certsPresent: false, certExpired: false),
+                                      signerName: nil, signerEmail: nil, certificateInfo: nil)
         }
 
         var numSigners: Int = 0
@@ -65,7 +156,9 @@ struct SMIMEHandler {
 
         let status = CMSDecoderCopySignerStatus(cmsDecoder, 0, policy, true, &signerStatus, &trust, &certVerifyResult)
         guard status == errSecSuccess else {
-            return VerificationResult(status: .error, signerName: nil, signerEmail: nil, certificateInfo: nil)
+            // Decoder ran but the signer status is unobtainable.
+            return VerificationResult(status: mapVerdict(parseError: false, decoderStatus: nil, trustResult: .unavailable, certsPresent: false, certExpired: false),
+                                      signerName: nil, signerEmail: nil, certificateInfo: nil)
         }
 
         var signerName: String?
@@ -87,32 +180,35 @@ struct SMIMEHandler {
             certInfo = extractCertificateInfo(from: certRef, chain: certChain)
         }
 
-        var resultStatus: SignatureStatus
+        // EXHAUSTIVE CMSSignerStatus → DecoderStatus translation. No `default:`
+        // — an OS-added case falls to `@unknown default` and is surfaced as
+        // "no status" (→ unverifiable), never silently classified.
+        let decoderStatus: DecoderStatus?
         switch signerStatus {
-        case .valid:
-            // Honor the trust-chain result. A cryptographically-valid signature
-            // that does NOT chain to a trusted anchor (certVerifyResult != ok)
-            // must not be reported as "Valid" — that would be a false forensic
-            // conclusion. Downgrade to unknown signer.
-            resultStatus = (certVerifyResult == errSecSuccess) ? .valid : .unknownSigner
-        case .needsDetachedContent:
-            // multipart/signed (detached) signatures require the original signed
-            // bytes to be supplied to CMS (canonicalized). We don't yet
-            // reconstruct them, so we must NOT report "Invalid" (which implies
-            // tampering) for a legitimately-signed detached message. Report as
-            // unverified/unknown instead.
-            resultStatus = .unknownSigner
-        default:
-            resultStatus = .unknownSigner
+        case .unsigned:             decoderStatus = .unsigned
+        case .valid:                decoderStatus = .valid
+        case .needsDetachedContent: decoderStatus = .needsDetachedContent
+        case .invalidSignature:     decoderStatus = .invalidSignature
+        case .invalidCert:          decoderStatus = .invalidCert
+        case .invalidIndex:         decoderStatus = .invalidIndex
+        @unknown default:           decoderStatus = nil
         }
 
-        if let info = certInfo, info.isExpired {
-            resultStatus = .invalid
-        }
+        let trustOutcome: TrustOutcome = (trust == nil)
+            ? .unavailable
+            : (certVerifyResult == errSecSuccess ? .trusted : .untrusted)
+
+        let resultStatus = mapVerdict(parseError: false,
+                                      decoderStatus: decoderStatus,
+                                      trustResult: trustOutcome,
+                                      certsPresent: certInfo != nil,
+                                      certExpired: certInfo?.isExpired ?? false)
 
         return VerificationResult(status: resultStatus, signerName: signerName, signerEmail: signerEmail, certificateInfo: certInfo)
         #else
-        return VerificationResult(status: .error, signerName: nil, signerEmail: nil, certificateInfo: nil)
+        // No CMSDecoder off macOS — verification is not supported, which is
+        // an "unverifiable" conclusion, not an invalid signature.
+        return VerificationResult(status: .unverifiable, signerName: nil, signerEmail: nil, certificateInfo: nil)
         #endif
     }
 

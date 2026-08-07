@@ -85,7 +85,7 @@ struct ITAdminAnalysisView: View {
         return browseEmails.first { $0.id == selectedEmailID }
     }
 
-    private var filteredEmails: [MBOXParser.RawEmail] {
+    private var visibleEmails: [MBOXParser.RawEmail] {
         // Search already applied via FTS (searchHits); browse window otherwise.
         browseEmails
     }
@@ -325,12 +325,12 @@ struct ITAdminAnalysisView: View {
             HStack {
                 Text("EMAILS").font(.system(size: 9, weight: .semibold)).foregroundColor(.secondary)
                 Spacer()
-                Text("\(filteredEmails.count)").font(.system(size: 9, weight: .bold, design: .monospaced)).foregroundColor(.teal)
+                Text("\(visibleEmails.count)").font(.system(size: 9, weight: .bold, design: .monospaced)).foregroundColor(.teal)
             }
             .padding(.horizontal, 8).padding(.vertical, 4)
             .background(AppColors.backgroundSecondary.opacity(0.6))
 
-            List(filteredEmails, id: \.id, selection: $selectedEmailID) { email in
+            List(visibleEmails, id: \.id, selection: $selectedEmailID) { email in
                 emailListRow(email)
                     .tag(email.id)
                     .onAppear {

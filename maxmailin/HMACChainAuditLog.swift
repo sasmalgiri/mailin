@@ -56,6 +56,9 @@ final class HMACChainAuditLog: ObservableObject {
             "com.ecosanskriti.mailin", isDirectory: true
         )
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // W3: the audit chain is appended by background work (launch tasks,
+        // import completion) — background-readable class; 700 dir on macOS.
+        ArtifactProtection.applyBackgroundReadable(to: dir)
         self.storeURL = dir.appendingPathComponent("hmac_audit_chain.json")
         loadFromDisk()
     }
@@ -125,6 +128,8 @@ final class HMACChainAuditLog: ObservableObject {
 
     private func saveToDisk() throws {
         try PrivacyHardening.writeJSON(entries, to: storeURL)
+        // W3: owner-only file; background-readable protection class on iOS.
+        ArtifactProtection.applyBackgroundReadable(to: storeURL)
     }
 
     private func loadFromDisk() {

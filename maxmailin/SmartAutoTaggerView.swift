@@ -27,7 +27,7 @@ struct SmartAutoTaggerView: View {
             .sorted { $0.count > $1.count }
     }
 
-    private var filteredEmails: [MBOXParser.RawEmail] {
+    private var visibleEmails: [MBOXParser.RawEmail] {
         guard let selectedTag = selectedTag else { return workingSet }
         let matchingIDs = Set(
             tagger.suggestedTags
@@ -90,7 +90,7 @@ struct SmartAutoTaggerView: View {
 
                     // Email list with tags
                     List {
-                        ForEach(filteredEmails) { email in
+                        ForEach(visibleEmails) { email in
                             emailTagRow(email)
                         }
                     }

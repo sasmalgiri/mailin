@@ -328,7 +328,7 @@ struct LegalReviewWorkspaceView: View {
 
                 Spacer()
 
-                Text("\(filteredEmails.count)/\(workingSet.count)")
+                Text("\(visibleEmails.count)/\(workingSet.count)")
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundColor(.secondary)
 
@@ -470,7 +470,7 @@ struct LegalReviewWorkspaceView: View {
 
     // MARK: - Filtered Emails
 
-    private var filteredEmails: [MBOXParser.RawEmail] {
+    private var visibleEmails: [MBOXParser.RawEmail] {
         var result = browseEmails
 
         if let fp = filterPrivilege {
@@ -549,7 +549,7 @@ struct LegalReviewWorkspaceView: View {
             columnHeaders
             Divider()
 
-            let sorted = filteredEmails
+            let sorted = visibleEmails
             List(sorted, id: \.id, selection: $selectedEmailIDs) { email in
                 VStack(spacing: 0) {
                     documentRow(for: email)
@@ -1795,8 +1795,8 @@ struct LegalReviewWorkspaceView: View {
 
                 Spacer()
 
-                if filteredEmails.count != archiveTotal {
-                    Text("Showing \(filteredEmails.count) of \(archiveTotal)")
+                if visibleEmails.count != archiveTotal {
+                    Text("Showing \(visibleEmails.count) of \(archiveTotal)")
                         .font(.system(size: 9)).foregroundColor(.indigo)
                         .help("Filters are active — not all documents are shown")
                 }

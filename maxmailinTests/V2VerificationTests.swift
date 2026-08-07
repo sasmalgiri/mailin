@@ -618,7 +618,11 @@ final class V2VerificationTests: XCTestCase {
             "repository.loadAll",
             ".loadAll(",
             "PrivateCloudComputeLanguageModel",
+            // Part U: every spelling of an unbounded fetch limit.
             "limit: Int.max",
+            "limit = Int.max",
+            "fetchLimit: Int.max",
+            "fetchLimit = Int.max",
             // Part F: the legacy in-RAM corpus index must never be (re)built
             // or reloaded in production — FTS5/repository is the only corpus
             // search authority.
@@ -659,6 +663,136 @@ final class V2VerificationTests: XCTestCase {
         EmailSearchIndex.shared.clear()
     }
 
+    // MARK: - Part U — extended guard family (source scans)
+
+    /// Production source directory (shared by the scan guards below).
+    private var productionSourceDir: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("maxmailin")
+    }
+
+    /// Every production Swift file, or skip if the tree isn't present.
+    private func productionSwiftFiles() throws -> [URL] {
+        guard let items = try? FileManager.default.contentsOfDirectory(
+            at: productionSourceDir, includingPropertiesForKeys: nil
+        ) else {
+            throw XCTSkip("app source not found at \(productionSourceDir.path)")
+        }
+        return items.filter { $0.pathExtension == "swift" }
+    }
+
+    /// `allIndexedIDs` materializes every indexed UUID (unbounded memory) and
+    /// is legacy/test-only. The ONLY production file allowed to mention it is
+    /// FTSSearchIndex.swift itself (its definition + the internal drift-repair
+    /// helper `indexMissing`). Any other production reference is a regression.
+    func testArchitectureGuards_allIndexedIDsConfinedToFTSSearchIndex() throws {
+        var violations: [String] = []
+        for f in try productionSwiftFiles() where f.lastPathComponent != "FTSSearchIndex.swift" {
+            guard let text = try? String(contentsOf: f, encoding: .utf8) else { continue }
+            for (i, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+                if line.contains("//") { continue }
+                if line.contains("allIndexedIDs") {
+                    violations.append("\(f.lastPathComponent):\(i + 1)")
+                }
+            }
+        }
+        XCTAssertTrue(violations.isEmpty,
+            "allIndexedIDs (unbounded ID materialization) referenced outside FTSSearchIndex:\n"
+            + violations.joined(separator: "\n"))
+    }
+
+    /// AIAssistantView must never regrow an initializer that accepts a corpus
+    /// array (`[MBOXParser.RawEmail]`) — the AI surface is scope/repository
+    /// fed (Parts D/E). Captures each `init(...)` parameter list with balanced
+    /// parentheses (multiline-safe) and rejects the corpus-array type.
+    func testArchitectureGuards_aiViewHasNoCorpusArrayInit() throws {
+        let url = productionSourceDir.appendingPathComponent("AIAssistantView.swift")
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+            throw XCTSkip("AIAssistantView.swift not found")
+        }
+        var violations: [String] = []
+        var searchRange = text.startIndex..<text.endIndex
+        while let hit = text.range(of: "init(", range: searchRange) {
+            // Capture to the matching close paren.
+            var depth = 0
+            var idx = text.index(before: hit.upperBound)   // the "("
+            var end: String.Index? = nil
+            while idx < text.endIndex {
+                let ch = text[idx]
+                if ch == "(" { depth += 1 }
+                if ch == ")" { depth -= 1; if depth == 0 { end = idx; break } }
+                idx = text.index(after: idx)
+            }
+            guard let end else { break }
+            let params = text[hit.upperBound..<end]
+            if params.contains("[MBOXParser.RawEmail]") {
+                let lineNo = text[text.startIndex..<hit.lowerBound].filter { $0 == "\n" }.count + 1
+                violations.append("AIAssistantView.swift:\(lineNo)  init taking [MBOXParser.RawEmail]")
+            }
+            searchRange = text.index(after: end)..<text.endIndex
+        }
+        XCTAssertTrue(violations.isEmpty,
+            "AIAssistantView regrew a corpus-array initializer:\n" + violations.joined(separator: "\n"))
+    }
+
+    /// OFFLINE_MODE gate integrity (structural, per-file): any production file
+    /// that references a network-connector symbol must contain the
+    /// `#if !OFFLINE_MODE` compile gate, so the offline build provably cannot
+    /// link connector code paths. Comment-only mentions are ignored.
+    private func offlineGateViolations() throws -> [String] {
+        let connectorSymbols = [
+            "GmailConnector", "OutlookConnector", "IMAPClient", "IMAPConfigView",
+            "SMTPClient", "CloudAIProvider", "CloudConnectView",
+        ]
+        var violations: [String] = []
+        for f in try productionSwiftFiles() {
+            guard let text = try? String(contentsOf: f, encoding: .utf8) else { continue }
+            guard !text.contains("#if !OFFLINE_MODE") else { continue }   // gated file — OK
+            for (i, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+                if line.contains("//") { continue }
+                for sym in connectorSymbols where line.contains(sym) {
+                    violations.append("\(f.lastPathComponent):\(i + 1)  \(sym) referenced without #if !OFFLINE_MODE")
+                }
+            }
+        }
+        return violations
+    }
+
+    func testArchitectureGuards_offlineModeGateIntegrity() throws {
+        let violations = try offlineGateViolations()
+        XCTAssertTrue(violations.isEmpty,
+            "Connector symbol referenced in a file with no #if !OFFLINE_MODE gate:\n"
+            + violations.joined(separator: "\n"))
+    }
+
+    // MARK: - Stage 5 W2 — no public logging of email content
+
+    /// The worst logging pattern: `privacy: .public` on the same line as an
+    /// interpolation of message content (subject/body/raw source/prompt/
+    /// evidence). os.log redacts interpolations by default; `.public` defeats
+    /// that — it must never be combined with content-bearing values.
+    func testPrivacyGuards_noPublicLogInterpolationOfContent() throws {
+        let contentTokens = [
+            "subject", "probequery", "plainbody", "htmlbody", "rawsource",
+            "bodypreview", "prompt", "evidence", "answertext", "headers[",
+        ]
+        var violations: [String] = []
+        for f in try productionSwiftFiles() {
+            guard let text = try? String(contentsOf: f, encoding: .utf8) else { continue }
+            for (i, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+                if line.contains("//") { continue }
+                guard line.contains("privacy: .public") else { continue }
+                let lower = line.lowercased()
+                for tok in contentTokens where lower.contains(tok) {
+                    violations.append("\(f.lastPathComponent):\(i + 1)  '\(tok)' logged with privacy: .public")
+                }
+            }
+        }
+        XCTAssertTrue(violations.isEmpty,
+            "Email/AI content interpolated into a PUBLIC os.log message:\n" + violations.joined(separator: "\n"))
+    }
+
     // MARK: - Stage 5 W4 — privacy audit: bounded layer is on-device
 
     /// The v2 bounded data / retrieval / AI-context / export layer must make NO
@@ -691,6 +825,29 @@ final class V2VerificationTests: XCTestCase {
             }
         }
         XCTAssertTrue(violations.isEmpty, "Network access in the on-device bounded layer:\n" + violations.joined(separator: "\n"))
+
+        // W1 — offline gate integrity across the WHOLE production tree:
+        // connector symbols only in #if !OFFLINE_MODE-gated files.
+        let gateViolations = try offlineGateViolations()
+        XCTAssertTrue(gateViolations.isEmpty,
+            "Connector symbol outside an OFFLINE_MODE-gated file:\n" + gateViolations.joined(separator: "\n"))
+
+        // W1 — no Private Cloud Compute symbol anywhere in production source:
+        // all AI inference is on-device; PCC would silently move email content
+        // to Apple-operated compute.
+        var pccViolations: [String] = []
+        for f in try productionSwiftFiles() {
+            guard let text = try? String(contentsOf: f, encoding: .utf8) else { continue }
+            for (i, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+                if line.contains("//") { continue }
+                if line.contains("PrivateCloudCompute")
+                    || line.range(of: #"\bPCC\b"#, options: .regularExpression) != nil {
+                    pccViolations.append("\(f.lastPathComponent):\(i + 1)")
+                }
+            }
+        }
+        XCTAssertTrue(pccViolations.isEmpty,
+            "Private Cloud Compute symbol in production source:\n" + pccViolations.joined(separator: "\n"))
     }
 
     // MARK: - Stage 5C.0 — migration firewall ratchet guard

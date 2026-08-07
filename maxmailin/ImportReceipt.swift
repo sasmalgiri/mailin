@@ -29,6 +29,51 @@
 import Foundation
 import CryptoKit
 
+/// W3: at-rest protection for locally-created evidence artifacts (SQLite DB,
+/// FTS shards, receipts, checkpoints, audit log, encrypted archives).
+///
+///  • iOS — Data Protection classes:
+///      `.completeUntilFirstUserAuthentication` for artifacts that background
+///      work must keep reading/writing after the device locks (the SQLite
+///      store, FTS shards, import checkpoints/receipts written mid-import,
+///      and the audit log that background jobs append to). `.complete` for
+///      strictly foreground, user-driven artifacts (encrypted archive
+///      export files) — unreadable whenever the device is locked.
+///  • macOS — no Data Protection classes; instead ensure code-created
+///      containing directories are 700 and files 600 (owner-only), so other
+///      local users can never read the archive artifacts.
+///
+/// Best-effort by design: a missing file is a no-op (callers apply this right
+/// after creation), and a failed chmod must not abort an import.
+enum ArtifactProtection {
+    /// Stores that background jobs (import continuation, FTS reconciler,
+    /// background analysis) read while the device may be locked.
+    static func applyBackgroundReadable(to url: URL) {
+        apply(to: url, foregroundOnly: false)
+    }
+
+    /// Strictly foreground, user-driven artifacts.
+    static func applyForegroundOnly(to url: URL) {
+        apply(to: url, foregroundOnly: true)
+    }
+
+    private static func apply(to url: URL, foregroundOnly: Bool) {
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { return }
+        #if os(iOS)
+        let cls: FileProtectionType = foregroundOnly
+            ? .complete
+            : .completeUntilFirstUserAuthentication
+        // Directories: new children inherit the directory's class.
+        try? fm.setAttributes([.protectionKey: cls], ofItemAtPath: url.path)
+        #else
+        let perms = isDir.boolValue ? 0o700 : 0o600
+        try? fm.setAttributes([.posixPermissions: perms], ofItemAtPath: url.path)
+        #endif
+    }
+}
+
 struct ImportReceipt: Codable, Sendable, Equatable {
     struct SourceRecord: Codable, Sendable, Equatable {
         var filename: String
@@ -168,12 +213,16 @@ struct ImportReceiptStore {
     @discardableResult
     func save(_ receipt: ImportReceipt) throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        // W3: receipts are written mid-import, which may outlive a device
+        // lock — background-readable class; owner-only on macOS.
+        ArtifactProtection.applyBackgroundReadable(to: directory)
         let stamp = Int(receipt.completedAt.timeIntervalSince1970)
         let url = directory.appendingPathComponent("receipt-\(stamp)-\(UUID().uuidString.prefix(8)).json")
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .secondsSince1970
         try encoder.encode(receipt).write(to: url)
+        ArtifactProtection.applyBackgroundReadable(to: url)
         return url
     }
 

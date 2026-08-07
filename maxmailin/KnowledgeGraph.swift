@@ -614,7 +614,7 @@ struct KnowledgeGraphBuilder {
         let threads = ThreadGrouper.group(emails).filter { $0.count > 1 }
 
         for thread in threads {
-            let participants = thread.allEmails.compactMap {
+            let participants = thread.members.compactMap {
                 extractEmail(from: $0.headers["From"] ?? "").lowercased()
             }.filter { !$0.isEmpty }
             let uniqueParticipants = Array(Set(participants))

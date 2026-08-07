@@ -263,7 +263,7 @@ struct ArchiveComparisonView: View {
     // MARK: - Email List
     private func emailList(result: ComparisonResult) -> some View {
         VStack(alignment: .leading, spacing: Spacing.xSmall) {
-            let emails = filteredEmails(result: result)
+            let emails = comparisonEmails(result: result)
             Text("\(emails.count) email\(emails.count == 1 ? "" : "s")")
                 .font(Typography.caption1)
                 .foregroundColor(AppColors.secondary)
@@ -302,7 +302,7 @@ struct ArchiveComparisonView: View {
         }
     }
 
-    private func filteredEmails(result: ComparisonResult) -> [ComparisonEmailItem] {
+    private func comparisonEmails(result: ComparisonResult) -> [ComparisonEmailItem] {
         var items: [ComparisonEmailItem] = []
 
         switch filter {

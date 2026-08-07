@@ -95,9 +95,9 @@ struct ForensicReviewView: View {
         VStack(spacing: 0) {
             facetedFilterBar
 
-            if filteredEmails.count != archiveTotal {
+            if visibleEmails.count != archiveTotal {
                 Label {
-                    Text("Showing \(filteredEmails.count) of \(archiveTotal) emails matching current filters. Use tags, risk scores, and hot folders to narrow your forensic review scope.")
+                    Text("Showing \(visibleEmails.count) of \(archiveTotal) emails matching current filters. Use tags, risk scores, and hot folders to narrow your forensic review scope.")
                         .font(Typography.caption1)
                 } icon: {
                     Image(systemName: "magnifyingglass")
@@ -222,7 +222,7 @@ struct ForensicReviewView: View {
 
                 Spacer()
 
-                Text("\(filteredEmails.count)/\(archiveTotal)")
+                Text("\(visibleEmails.count)/\(archiveTotal)")
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundColor(.secondary)
 
@@ -377,7 +377,7 @@ struct ForensicReviewView: View {
 
     // MARK: - Filtered & Sorted Emails
 
-    private var filteredEmails: [MBOXParser.RawEmail] {
+    private var visibleEmails: [MBOXParser.RawEmail] {
         var result = browseEmails
 
         if !filterTags.isEmpty {
@@ -471,7 +471,7 @@ struct ForensicReviewView: View {
             columnHeaders
             Divider()
 
-            let sorted = filteredEmails
+            let sorted = visibleEmails
             List(sorted, id: \.id, selection: $selectedEmailIDs) { email in
                 VStack(spacing: 0) {
                     tableRow(for: email)
@@ -1412,7 +1412,7 @@ struct ForensicReviewView: View {
 
     private var forensicStatusBar: some View {
         let dashboard = reviewManager.computeDashboard(emails: workingSet)
-        let filtered = filteredEmails.count
+        let filtered = visibleEmails.count
         let progressPct = Int(dashboard.progress * 100)
 
         return VStack(spacing: 0) {
@@ -1643,7 +1643,7 @@ struct ForensicReviewView: View {
 
     private func startQueueReview() {
         reviewManager.startReviewQueue()
-        let unreviewed = filteredEmails.filter { forensicManager.tagForEmail($0.id) == .none }
+        let unreviewed = visibleEmails.filter { forensicManager.tagForEmail($0.id) == .none }
         if let first = unreviewed.first {
             selectedEmailIDs = [first.id]
         }

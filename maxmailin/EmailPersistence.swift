@@ -68,19 +68,22 @@ struct EmailPersistence {
         let savedAt: Date
     }
 
-    static func save(emails: [MBOXParser.RawEmail], senderEmail: String) {
-        guard !emails.isEmpty else { return }
-        saveQueue.async {
-            performSave(emails: emails, senderEmail: senderEmail)
-        }
-    }
+    // Part Q: the async `save(emails:senderEmail:)` production API is GONE —
+    // the v1 JSON store is never written by the app anymore. `load()` stays
+    // ONLY as MigrationService's one-time migration source (plus its internal
+    // uncompressed→compressed rewrite below), and the retention/clear paths
+    // keep `clear()`/`hasSavedData`.
 
+    #if DEBUG
+    /// Test-only v1-store writer: lets migration tests author a legacy store
+    /// exactly the way v1 did. Never called from production code.
     static func saveSync(emails: [MBOXParser.RawEmail], senderEmail: String) {
         guard !emails.isEmpty else { return }
         saveQueue.sync {
             performSave(emails: emails, senderEmail: senderEmail)
         }
     }
+    #endif
 
     private static func stripRedundantData(_ emails: [MBOXParser.RawEmail]) -> [MBOXParser.RawEmail] {
         emails.map { email in
@@ -156,7 +159,9 @@ struct EmailPersistence {
 
             if hasUncompressed && !emails.isEmpty {
                 let sender = senderEmail
-                save(emails: emails, senderEmail: sender)
+                saveQueue.async {
+                    performSave(emails: emails, senderEmail: sender)
+                }
                 persistLog.info("Migrating uncompressed store to compressed format")
             }
 

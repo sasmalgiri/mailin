@@ -780,6 +780,10 @@ actor FTSSearchIndex {
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
+        // W3: FTS shards are read/written by the launch reconciler and
+        // background indexing after device lock → background-readable class
+        // on iOS (children inherit); owner-only 700 directory on macOS.
+        ArtifactProtection.applyBackgroundReadable(to: url.deletingLastPathComponent())
 
         var db: OpaquePointer?
         let rc = sqlite3_open_v2(
@@ -791,6 +795,9 @@ actor FTSSearchIndex {
         guard rc == SQLITE_OK, let db else {
             throw FTSError.openFailed("sqlite3_open_v2 rc=\(rc) for shard \(year)")
         }
+        // Owner-only shard file; SQLite propagates these permissions to the
+        // shard's -wal/-shm companions on first write.
+        ArtifactProtection.applyBackgroundReadable(to: url)
         try exec(db, "PRAGMA journal_mode = WAL;")
         try exec(db, "PRAGMA synchronous = NORMAL;")
         try exec(db, """

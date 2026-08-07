@@ -61,7 +61,11 @@ struct ArchiveListView: View {
                     }
                 }
         } detail: {
-            ArchiveDetailHost(detail: detail)
+            ArchiveDetailHost(
+                detail: detail,
+                orderedIDs: model.visibleOrderedIDs,
+                onNavigate: { id in selectedID = id }
+            )
         }
         .task {
             if model.summaries.isEmpty && model.error == nil { await model.loadInitial() }
@@ -182,6 +186,10 @@ struct ArchiveSummaryRow: View {
 
 struct ArchiveDetailHost: View {
     @ObservedObject var detail: ArchiveDetailViewModel
+    /// Loaded page-window order for prev/next navigation (Part R: sourced
+    /// from ArchiveListViewModel's page state, never a corpus array).
+    var orderedIDs: [EmailID] = []
+    var onNavigate: ((EmailID) -> Void)? = nil
 
     var body: some View {
         switch detail.state {
@@ -192,7 +200,7 @@ struct ArchiveDetailHost: View {
             ProgressView("Loading email…")
                 .accessibilityIdentifier("archive.detail.loading")
         case .loaded(let email):
-            EmailDetailView(email: email)
+            EmailDetailView(email: email, orderedIDs: orderedIDs, onNavigate: onNavigate)
                 .accessibilityIdentifier("archive.detail.loaded")
         case .failed(_, let message):
             ArchiveLoadFailureView(message: message, retry: nil)

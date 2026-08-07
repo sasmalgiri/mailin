@@ -293,8 +293,9 @@ final class CloudAIManager: ObservableObject {
         case 429:
             throw CloudAIError.rateLimited
         case 400...499:
-            let body = String(data: data, encoding: .utf8) ?? ""
-            logger.error("API error \(httpResponse.statusCode): \(body)")
+            // W2: never log the response body — provider error bodies can echo
+            // the request prompt (email evidence content) back verbatim.
+            logger.error("API error \(httpResponse.statusCode): response body \(data.count) bytes (content redacted)")
             throw CloudAIError.httpError(httpResponse.statusCode)
         default:
             throw CloudAIError.httpError(httpResponse.statusCode)

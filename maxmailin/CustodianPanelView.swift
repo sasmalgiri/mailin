@@ -190,7 +190,7 @@ struct CustodianPanelView: View {
 
     private var detailPanel: some View {
         VStack(alignment: .leading, spacing: Spacing.small) {
-            let filteredEmails: [MBOXParser.RawEmail] = {
+            let scopedEmails: [MBOXParser.RawEmail] = {
                 guard let sel = selectedCustodian else { return workingSet }
                 if sel == "__unassigned__" {
                     return workingSet.filter { manager.custodian(for: $0.id) == nil }
@@ -200,12 +200,12 @@ struct CustodianPanelView: View {
             }()
 
             HStack {
-                Text("\(filteredEmails.count) emails")
+                Text("\(scopedEmails.count) emails")
                     .font(Typography.headline)
                 Spacer()
                 if let sel = selectedCustodian, sel != "__unassigned__" {
                     Button("Place All on Legal Hold") {
-                        manager.placeLegalHold(on: filteredEmails)
+                        manager.placeLegalHold(on: scopedEmails)
                     }
                     .buttonStyle(CompactSecondaryButtonStyle())
                 }
@@ -214,7 +214,7 @@ struct CustodianPanelView: View {
             .padding(.top, Spacing.small)
 
             List {
-                ForEach(filteredEmails, id: \.id) { email in
+                ForEach(scopedEmails, id: \.id) { email in
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(email.headers["Subject"] ?? "(No Subject)")
@@ -273,7 +273,7 @@ struct CustodianPanelView: View {
         }
         .alert("Assign Custodian", isPresented: $showAssignSheet) {
             Button("Assign to All Visible") {
-                let filteredEmails: [MBOXParser.RawEmail] = {
+                let scopedEmails: [MBOXParser.RawEmail] = {
                     guard let sel = selectedCustodian else { return workingSet }
                     if sel == "__unassigned__" {
                         return workingSet.filter { manager.custodian(for: $0.id) == nil }
@@ -281,7 +281,7 @@ struct CustodianPanelView: View {
                     let ids = Set(manager.emailIDs(for: sel))
                     return workingSet.filter { ids.contains($0.id) }
                 }()
-                manager.assignCustodian(newCustodianName.trimmingCharacters(in: .whitespaces), to: filteredEmails.map(\.id))
+                manager.assignCustodian(newCustodianName.trimmingCharacters(in: .whitespaces), to: scopedEmails.map(\.id))
                 newCustodianName = ""
             }
             Button("Cancel", role: .cancel) {}

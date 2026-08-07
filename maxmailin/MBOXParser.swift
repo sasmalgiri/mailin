@@ -194,7 +194,7 @@ struct MBOXParser {
         }
         let content = try FileUtils.readTextFile(url: fileURL)
         let rawMessages = splitMBOX(content: content)
-        var parsedEmails: [RawEmail] = []
+        var messages: [RawEmail] = []
         let total = Double(rawMessages.count)
 
         var recoveryErrors = 0
@@ -202,7 +202,7 @@ struct MBOXParser {
         for (idx, raw) in rawMessages.enumerated() {
             do {
                 let email = try processRawMessage(raw, senderEmail: senderEmail)
-                parsedEmails.append(email)
+                messages.append(email)
             } catch {
                 recoveryErrors += 1
                 let category = categorizeParseError(error, rawSnippet: String(raw.prefix(200)))
@@ -217,14 +217,14 @@ struct MBOXParser {
 
         lastRecoveryReport = ParseRecoveryReport(
             totalMessages: rawMessages.count,
-            successfullyParsed: parsedEmails.count,
+            successfullyParsed: messages.count,
             failed: recoveryErrors,
             errorCategories: errorCategories
         )
 
-        let summary = summarize(emails: parsedEmails)
-        try saveSessionJSON(exportable: ExportableParsedMBOXFile(emails: parsedEmails.map { $0.asExportable() }, summary: summary))
-        return parsedEmails
+        let summary = summarize(emails: messages)
+        try saveSessionJSON(exportable: ExportableParsedMBOXFile(emails: messages.map { $0.asExportable() }, summary: summary))
+        return messages
     }
 
     private static func categorizeParseError(_ error: Error, rawSnippet: String) -> String {
@@ -256,7 +256,7 @@ struct MBOXParser {
         var currentLines: [String] = []
         var failedCount = 0
         var inMessage = false
-        var parsedEmails: [RawEmail] = []
+        var messages: [RawEmail] = []
         var lastCompactionIndex = 0
 
         func nextLine() -> String? {
@@ -284,16 +284,16 @@ struct MBOXParser {
         }
 
         func compactIfNeeded() {
-            let newCount = parsedEmails.count
+            let newCount = messages.count
             guard newCount - lastCompactionIndex >= compactionBatchSize else { return }
             let (_, pressure) = ContentViewModel.checkMemoryPressure()
             guard pressure != .normal else { return }
 
             let rangeToCompact = lastCompactionIndex..<newCount
-            let batch = Array(parsedEmails[rangeToCompact])
+            let batch = Array(messages[rangeToCompact])
             EmailPersistence.persistBodies(batch)
             for i in rangeToCompact {
-                parsedEmails[i].compact()
+                messages[i].compact()
             }
             lastCompactionIndex = newCount
         }
@@ -303,7 +303,7 @@ struct MBOXParser {
             let raw = currentLines.joined(separator: "\n")
             do {
                 let email = try processRawMessage(raw, senderEmail: senderEmail)
-                parsedEmails.append(email)
+                messages.append(email)
             } catch {
                 failedCount += 1
             }
@@ -332,9 +332,9 @@ struct MBOXParser {
         }
         flushCurrentMessage()
 
-        let summary = summarize(emails: parsedEmails)
-        try saveSessionJSON(exportable: ExportableParsedMBOXFile(emails: parsedEmails.map { $0.asExportable() }, summary: summary))
-        return parsedEmails
+        let summary = summarize(emails: messages)
+        try saveSessionJSON(exportable: ExportableParsedMBOXFile(emails: messages.map { $0.asExportable() }, summary: summary))
+        return messages
     }
 
     // MARK: - Streaming Pipeline (callback per batch — no array accumulation)

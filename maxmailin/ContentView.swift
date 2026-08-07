@@ -56,13 +56,13 @@ struct ContentView: View {
     @AppStorage("showAdvancedFeatures") private var showAdvancedFeatures = false
     @AppStorage("removeDuplicates") private var removeDuplicates = true
     // List mode, user-facing (Settings ▸ Display ▸ List Mode):
-    //   true  = Simple   → repository-backed, bounded ArchiveListView (default).
-    //   false = Advanced → legacy ParsedEmailListView with the full filter/sort/
+    //   true  = Simple   → clean ArchiveListView (default).
+    //   false = Advanced → ParsedEmailListView with the full filter/sort/
     //           smart-tag/saved-search toolkit.
-    // The bounded list is the default browse path in Debug and Release; this flag
-    // now selects between the two modes rather than being a one-shot rollback
-    // valve, so it is a shipping setting (do not delete).
-    @AppStorage("useV2ArchiveList") private var useV2ArchiveList = true
+    // Part S: PURE presentation preference. Both modes page the same bounded
+    // repository-backed architecture (ArchiveDataService); there is no
+    // architectural fallback or rollback semantics behind this flag.
+    @AppStorage(ListModePreference.key) private var preferSimpleList = true
     @StateObject private var viewModel = ContentViewModel()
     @StateObject private var modelVM: ParsedEmailListViewModel
     @State private var showSpinner = false
@@ -113,6 +113,8 @@ struct ContentView: View {
     @ObservedObject private var reviewBatchManager = ReviewBatchManager.shared
 
     init() {
+        // Part S: one-time migration of the stored list-mode preference key.
+        ListModePreference.migrateIfNeeded()
         let vm = ContentViewModel()
         _viewModel = StateObject(wrappedValue: vm)
         _modelVM = StateObject(wrappedValue: ParsedEmailListViewModel(viewModel: vm))
@@ -186,7 +188,7 @@ struct ContentView: View {
         }
         .onChange(of: modelVM.isParsed) { handleParseStateChange() }
         .onChange(of: storeManager.isPremium) { handlePremiumChange() }
-        .onChange(of: modelVM.filteredEmails.count) { handleFilteredChange() }
+        .onChange(of: modelVM.visibleEmails.count) { handleFilteredChange() }
         .onAppear { handleAppear() }
         .onChange(of: viewModel.parseErrors) { _, errors in
             // Surface a friendly error sheet when parsing fails. Apple App
@@ -875,7 +877,7 @@ struct ContentView: View {
             MainNavigationHubView(
                 // Part G3: archive total from the store count; the visible
                 // filtered count describes the preview-backed list.
-                emailCount: max(modelVM.archiveTotalCount, modelVM.allEmails.count),
+                emailCount: modelVM.archiveTotalCount,
                 filteredCount: modelVM.displayedEmailCount,
                 persona: personaManager.selectedPersona,
                 onNavigate: { destination in
@@ -947,7 +949,7 @@ struct ContentView: View {
                 leftSidebar
             }
             .frame(minWidth: 200, idealWidth: 260, maxWidth: 360)
-            if useV2ArchiveList {
+            if preferSimpleList {
                 // Repository-backed bounded browse (its own list+detail split).
                 ArchiveListView()
                     .frame(minWidth: 580)
@@ -967,7 +969,7 @@ struct ContentView: View {
     #else
     private var emailInboxDestination: some View {
         Group {
-            if useV2ArchiveList {
+            if preferSimpleList {
                 ArchiveListView()
             } else {
                 ParsedEmailListView(model: modelVM, selectedEmailIDs: $selectedEmailIDs)
@@ -983,7 +985,7 @@ struct ContentView: View {
         @Bindable var appState = appState
         return NavigationStack {
             Group {
-                if useV2ArchiveList {
+                if preferSimpleList {
                     ArchiveListView()
                 } else if modelVM.showParsedList {
                     ParsedEmailListView(model: modelVM, selectedEmailIDs: $selectedEmailIDs)
@@ -1095,11 +1097,10 @@ struct ContentView: View {
                 }
             }
             .navigationDestination(for: UUID.self) { emailID in
-                let _ = modelVM.rehydrateIfNeeded(emailID)
-                if let email = modelVM.filteredEmails.first(where: { $0.id == emailID }) {
+                if let email = modelVM.visibleEmails.first(where: { $0.id == emailID }) {
                     EmailDetailView(
                         email: email,
-                        orderedIDs: modelVM.filteredEmails.map(\.id),
+                        orderedIDs: modelVM.visibleOrderedIDs,
                         onNavigate: { newID in selectedEmailIDs = [newID] },
                         onClose: { withAnimation { selectedEmailIDs = [] } },
                         searchText: modelVM.searchText
@@ -1304,7 +1305,7 @@ struct ContentView: View {
         return GeometryReader { geo in
             let totalWidth = geo.size.width
             let hasSelection = iPadSelectedEmailID != nil &&
-                modelVM.filteredEmails.contains(where: { $0.id == iPadSelectedEmailID })
+                modelVM.visibleEmails.contains(where: { $0.id == iPadSelectedEmailID })
             let showFiltersPane = modelVM.showParsedList
             let filtersW = showFiltersPane ? totalWidth * 0.30 : 0
             let remainingW = totalWidth - filtersW
@@ -1394,10 +1395,11 @@ struct ContentView: View {
                         .padding(.vertical, Spacing.xSmall)
                         .background(AppColors.backgroundSecondary)
 
-                        List(modelVM.filteredEmails, id: \.id, selection: $iPadSelectedEmailID) { email in
+                        List(modelVM.visibleEmails, id: \.id, selection: $iPadSelectedEmailID) { email in
                             EmailRowView(email: email, searchText: modelVM.searchText, showRiskIndicator: forensicManager.isEnabled)
                                 .padding(.vertical, Spacing.xxxSmall)
                                 .tag(email.id)
+                                .onAppear { modelVM.loadMoreIfNeeded(currentID: email.id) }
                         }
                         .listStyle(.plain)
                     } else {
@@ -1409,14 +1411,13 @@ struct ContentView: View {
 
                 if hasSelection,
                    let selectedID = iPadSelectedEmailID,
-                   let email = modelVM.filteredEmails.first(where: { $0.id == selectedID }) {
+                   let email = modelVM.visibleEmails.first(where: { $0.id == selectedID }) {
                     Divider()
 
                     VStack(spacing: 0) {
-                        let _ = modelVM.rehydrateIfNeeded(selectedID)
                         EmailDetailView(
                             email: email,
-                            orderedIDs: modelVM.filteredEmails.map(\.id),
+                            orderedIDs: modelVM.visibleOrderedIDs,
                             onNavigate: { newID in iPadSelectedEmailID = newID },
                             onClose: { withAnimation { iPadSelectedEmailID = nil } },
                             searchText: modelVM.searchText
@@ -1577,7 +1578,7 @@ struct ContentView: View {
 
     // MARK: - Batch Operations (Multi-Select)
     private var batchOperationsView: some View {
-        let selectedEmails = modelVM.filteredEmails.filter { selectedEmailIDs.contains($0.id) }
+        let selectedEmails = modelVM.visibleEmails.filter { selectedEmailIDs.contains($0.id) }
         let attachmentCount = selectedEmails.reduce(0) { $0 + $1.attachments.count }
         return VStack(spacing: Spacing.large) {
             Spacer()
@@ -2518,12 +2519,12 @@ struct ContentView: View {
                     .labelsHidden()
                     .frame(maxWidth: 120)
                     .accessibilityLabel("Start date filter")
-                    .onChange(of: modelVM.startDate) { _, _ in modelVM.applyFilters() }
+                    .onChange(of: modelVM.startDate) { _, _ in modelVM.dateBoundsChanged() }
                 DatePicker("", selection: $modelVM.endDate, displayedComponents: .date)
                     .labelsHidden()
                     .frame(maxWidth: 120)
                     .accessibilityLabel("End date filter")
-                    .onChange(of: modelVM.endDate) { _, _ in modelVM.applyFilters() }
+                    .onChange(of: modelVM.endDate) { _, _ in modelVM.dateBoundsChanged() }
                 Spacer()
             }
         }
@@ -2865,11 +2866,10 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if selectedEmailIDs.count == 1,
                   let selectedID = selectedEmailIDs.first {
-            let _ = modelVM.rehydrateIfNeeded(selectedID)
-            if let email = modelVM.filteredEmails.first(where: { $0.id == selectedID }) {
+            if let email = modelVM.visibleEmails.first(where: { $0.id == selectedID }) {
                 EmailDetailView(
                     email: email,
-                    orderedIDs: modelVM.filteredEmails.map(\.id),
+                    orderedIDs: modelVM.visibleOrderedIDs,
                     onNavigate: { newID in selectedEmailIDs = [newID] },
                     onClose: { withAnimation { selectedEmailIDs = [] } },
                     searchText: modelVM.searchText
@@ -2880,8 +2880,8 @@ struct ContentView: View {
             }
         } else if selectedEmailIDs.count == 2 {
             let pair = Array(selectedEmailIDs)
-            let emailA = pair.count > 0 ? modelVM.filteredEmails.first(where: { $0.id == pair[0] }) : nil
-            let emailB = pair.count > 1 ? modelVM.filteredEmails.first(where: { $0.id == pair[1] }) : nil
+            let emailA = pair.count > 0 ? modelVM.visibleEmails.first(where: { $0.id == pair[0] }) : nil
+            let emailB = pair.count > 1 ? modelVM.visibleEmails.first(where: { $0.id == pair[1] }) : nil
             if let a = emailA, let b = emailB {
                 VStack(spacing: 0) {
                     HStack {
@@ -3020,11 +3020,12 @@ struct ContentView: View {
     /// without needing an external archive. Tagged with `SampleData.sampleTag`
     /// so they can be filtered or removed later.
     private func loadSampleData() {
-        let samples = SampleData.emails()
-        viewModel.appendEmails(samples)
-        modelVM.loadFromContentViewModel()
-        EmailPersistence.save(emails: viewModel.parsedEmails, senderEmail: viewModel.senderEmail)
-        NotificationCenter.default.post(name: .parsingFinished, object: nil)
+        // Part Q: samples are persisted into the SQLite authority + FTS like
+        // any other import — no in-RAM corpus, no v1 JSON writes. `ingestEmails`
+        // posts `.parsingFinished`, which re-pages the list surfaces.
+        Task { @MainActor in
+            await viewModel.ingestEmails(SampleData.emails(), sourceLabel: "sample data")
+        }
     }
 
     private func onboardingStep(number: String, icon: String, title: String, subtitle: String?) -> some View {
@@ -3353,8 +3354,8 @@ private func handleMultipleFiles(_ urls: [URL]) {
     /// id list.
     private var selectionScope: ArchiveSelectionScope {
         if selectAllMatching {
-            let previewIDs = Set(modelVM.filteredEmails.map(\.id))
-            let exclusions = previewIDs.subtracting(selectedEmailIDs)
+            let windowIDs = Set(modelVM.visibleOrderedIDs)
+            let exclusions = windowIDs.subtracting(selectedEmailIDs)
             return .query(modelVM.currentArchiveQuery, exclusions: exclusions)
         }
         if !selectedEmailIDs.isEmpty { return .explicit(selectedEmailIDs) }
@@ -3963,23 +3964,12 @@ private func handleMultipleFiles(_ urls: [URL]) {
 
     private func importFromCloud(_ emails: [MBOXParser.RawEmail]) {
         guard !emails.isEmpty else { return }
-        viewModel.restoreEmails(emails)
-        modelVM.loadFromContentViewModel()
-        predictiveEngine.buildVectors(from: emails)
-        SpotlightIndexer.shared.indexAllFromArchive()   // bounded: streams from SQLite, no corpus (Part G5)
-        #if canImport(FoundationModels)
-        if #available(macOS 26, iOS 26, *) {
-            FoundationModelEngine.invalidateProfileCache()
-            FoundationModelEngine.invalidateAnswerCache()
-            FoundationModelEngine.precomputeOnImport(emails: emails)
+        // Part Q: cloud fetches are persisted into the SQLite authority + FTS
+        // — no in-RAM corpus, no v1 JSON writes. `.parsingFinished` (posted by
+        // ingestEmails) re-pages the list and refreshes derived caches.
+        Task { @MainActor in
+            await viewModel.ingestEmails(emails, sourceLabel: "cloud")
         }
-        #endif
-        AIAssistantView.invalidateNLPCache()
-        AIAssistantView.invalidateNLPPrecomputation()
-        AIAssistantView.nlpPrecomputeOnImport(emails: emails)
-        EmailPersistence.save(emails: emails, senderEmail: viewModel.senderEmail)
-        viewModel.statusMessage = "Imported \(emails.count) emails from cloud."
-        viewModel.statusColor = .green
     }
 
     // MARK: - State Change Handlers
@@ -3988,7 +3978,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             modelVM.isPremiumUser = storeManager.isPremium
             modelVM.applyFilters()
             appState.hasParsedEmails = true
-            appState.hasFilteredEmails = !modelVM.filteredEmails.isEmpty
+            appState.hasFilteredEmails = !modelVM.visibleEmails.isEmpty
         }
     }
     private func handlePremiumChange() {
@@ -3999,15 +3989,13 @@ private func handleMultipleFiles(_ urls: [URL]) {
             UserDefaults.standard.removeObject(forKey: "freeAttachmentDownloadCount")
         }
         if modelVM.isParsed {
-            if storeManager.isPremium {
-                modelVM.loadFromContentViewModel()
-            }
-            modelVM.applyFilters()
+            // Premium unlock lifts the free paging cap — re-page from the store.
+            modelVM.refreshFromStore()
         }
     }
     private func handleFilteredChange() {
-        appState.hasFilteredEmails = !modelVM.filteredEmails.isEmpty
-        let validIDs = Set(modelVM.filteredEmails.map(\.id))
+        appState.hasFilteredEmails = !modelVM.visibleEmails.isEmpty
+        let validIDs = Set(modelVM.visibleOrderedIDs)
         let stale = selectedEmailIDs.subtracting(validIDs)
         if !stale.isEmpty { selectedEmailIDs.subtract(stale) }
         // O1: a symbolic Select All is tied to the query it was issued for —
@@ -4034,25 +4022,25 @@ private func handleMultipleFiles(_ urls: [URL]) {
         ) { _ in
             MainActor.assumeIsolated {
                 selectedEmailIDs.removeAll()
+                modelVM.invalidateSearchCache()
                 modelVM.resetFilters()
-                modelVM.loadFromContentViewModel()
+                // Part Q: NO v1 JSON writes and NO in-RAM precompute over a
+                // preview array — the list re-pages the SQLite authority and
+                // derived state is persisted (Parts I–M) / computed lazily.
+                modelVM.refreshFromStore()
                 showSpinner = false
-                EmailPersistence.save(emails: viewModel.parsedEmails, senderEmail: viewModel.senderEmail)
-                predictiveEngine.buildVectors(from: viewModel.parsedEmails)
                 SpotlightIndexer.shared.indexAllFromArchive()   // bounded: streams from SQLite, no corpus
                 #if canImport(FoundationModels)
                 if #available(macOS 26, iOS 26, *) {
                     FoundationModelEngine.invalidateProfileCache()
                     FoundationModelEngine.invalidateAnswerCache()
-                    FoundationModelEngine.precomputeOnImport(emails: viewModel.parsedEmails)
                 }
                 #endif
                 AIAssistantView.invalidateNLPCache()
                 AIAssistantView.invalidateNLPPrecomputation()
-                AIAssistantView.nlpPrecomputeOnImport(emails: viewModel.parsedEmails)
 
                 // Record successful import and prompt for review if appropriate
-                if !viewModel.parsedEmails.isEmpty {
+                if viewModel.totalParsedCount > 0 {
                     ReviewPromptManager.recordImport()
                 }
             }
@@ -4060,31 +4048,16 @@ private func handleMultipleFiles(_ urls: [URL]) {
         if autoDetectSender && viewModel.senderEmail.isEmpty && !defaultSenderEmail.isEmpty {
             viewModel.senderEmail = defaultSenderEmail
         }
-        // v2: restore a BOUNDED preview from the activated SQLite store (the
-        // authority) instead of decoding the whole v1 JSON corpus into RAM at
-        // launch. The preview only backs the legacy in-RAM UI; browse/search/AI
-        // read the store directly. No whole-archive decode on startup.
+        // Part Q: NO startup corpus rehydration. Storage is activated in
+        // mailinApp; here we only refresh the store-backed archive count and
+        // let the paged list load its first summaries page. Nothing is
+        // reconstructed in RAM at launch.
         Task { @MainActor in
             let total = (try? await ArchiveDataService.shared.count()) ?? 0
             guard total > 0 else { return }
             viewModel.totalParsedCount = total
-            let cap = storeManager.isPremium ? 5000 : StoreManager.freeEmailLimit
-            var preview: [MBOXParser.RawEmail] = []
-            let stream = ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
-            do { for try await b in stream { preview.append(contentsOf: b); if preview.count >= cap { break } } } catch { }
-            let restorePreview = Array(preview.prefix(cap))
-            guard !restorePreview.isEmpty else { return }
-            viewModel.restoreEmails(restorePreview)
-            modelVM.loadFromContentViewModel()
-            predictiveEngine.buildVectors(from: restorePreview)
-            AIAssistantView.invalidateNLPCache()
-            AIAssistantView.invalidateNLPPrecomputation()
-            #if canImport(FoundationModels)
-            if #available(macOS 26, iOS 26, *) {
-                FoundationModelEngine.precomputeOnImport(emails: restorePreview)
-            }
-            #endif
-            AIAssistantView.nlpPrecomputeOnImport(emails: restorePreview)
+            viewModel.isParsed = true
+            modelVM.refreshFromStore()
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -4159,37 +4132,28 @@ private func handleMultipleFiles(_ urls: [URL]) {
                 return
             }
 
-            // Store cleared (except holds) — now refresh preview/list state.
-            let heldEmails = (try? await svc.fullEmails(ids: Array(heldExisting))) ?? []
+            // Store cleared (except holds) — re-page the list from the store.
+            // Held emails survive in the authority, so the paged window shows
+            // exactly them; nothing is reconstructed in RAM here.
             viewModel.clearParsedData()
-
-            if heldEmails.isEmpty {
-                modelVM.allEmails = []
-                modelVM.filteredEmails = []
-                modelVM.isParsed = false
-                modelVM.showParsedList = false
-                modelVM.emailCount = 0
-            } else {
-                viewModel.restoreEmails(heldEmails)
-                modelVM.allEmails = heldEmails
-                modelVM.filteredEmails = heldEmails
-                modelVM.emailCount = heldEmails.count
+            if !heldExisting.isEmpty {
+                viewModel.totalParsedCount = heldExisting.count
+                viewModel.isParsed = true
                 ForensicManager.shared.logAction(
                     "Data Clear — Legal Hold Enforced",
-                    detail: "\(heldEmails.count) email(s) preserved under legal hold"
+                    detail: "\(heldExisting.count) email(s) preserved under legal hold"
                 )
             }
-            modelVM.refreshArchiveTotalCount()
+            modelVM.invalidateSearchCache()
+            modelVM.refreshFromStore()
 
-            modelVM.replyCountPerSender = [:]
-            modelVM.priorityScores = [:]
             EmailSearchIndex.shared.clear()
             EmailSearchIndex.shared.deleteDiskCache()
             SpotlightIndexer.shared.removeAllIndexedEmails()
             AIAssistantView.invalidateNLPCache()
             AIAssistantView.invalidateNLPPrecomputation()
-            appState.hasParsedEmails = !heldEmails.isEmpty
-            appState.hasFilteredEmails = !heldEmails.isEmpty
+            appState.hasParsedEmails = !heldExisting.isEmpty
+            appState.hasFilteredEmails = !heldExisting.isEmpty
         }
     }
 
@@ -4206,7 +4170,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
         // SELECTION ITSELF turns symbolic — bulk actions consume
         // `selectionScope` = current query + deselected ids, so "Select All"
         // over a million matches never materializes the id list.
-        selectedEmailIDs = Set(modelVM.filteredEmails.map(\.id))
+        selectedEmailIDs = Set(modelVM.visibleOrderedIDs)
         selectAllMatching = true
     }
     private func handleTriggerPrint() {
@@ -4750,7 +4714,7 @@ struct V9UtilitySheetsModifier: ViewModifier {
             }
             .sheet(isPresented: $appState.showGuidedSearch) {
                 GuidedSearchView(searchText: $modelVM.searchText, isPresented: $appState.showGuidedSearch, onSearch: {
-                    modelVM.applyFilters()
+                    modelVM.searchTextDidChange()
                 })
                     .resizableSheet()
             }
@@ -4959,7 +4923,7 @@ struct InvestigationReportConfigSheet: View {
     @State private var showFileExporter = false
     @State private var savedSuccessfully = false
 
-    private var filteredEmails: [MBOXParser.RawEmail] {
+    private var matchingEmails: [MBOXParser.RawEmail] {
         guard !emailSearchText.isEmpty else { return emails }
         let query = emailSearchText.lowercased()
         return emails.filter {
@@ -5057,7 +5021,7 @@ struct InvestigationReportConfigSheet: View {
 
                                 ScrollView {
                                     LazyVStack(spacing: 0) {
-                                        ForEach(filteredEmails, id: \.id) { email in
+                                        ForEach(matchingEmails, id: \.id) { email in
                                             emailSelectionRow(email)
                                         }
                                     }

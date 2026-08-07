@@ -84,7 +84,7 @@ struct ParsedEmailListView: View {
     #endif
 
     private var quickFilteredEmails: [MBOXParser.RawEmail] {
-        model.filteredEmails.filter { email in
+        model.visibleEmails.filter { email in
             if quickFilterSent && email.messageType != "sent" { return false }
             if quickFilterReceived && email.messageType != "received" { return false }
             if quickFilterAttachments && email.attachments.isEmpty { return false }
@@ -283,7 +283,7 @@ struct ParsedEmailListView: View {
                         Label("Export Attachments (\(totalAttachments))", systemImage: "arrow.down.circle")
                     }
                 }
-                if !model.filteredEmails.isEmpty {
+                if !model.visibleEmails.isEmpty {
                     Button { exportFilteredJSON() } label: {
                         Label("Export as JSON", systemImage: "square.and.arrow.up")
                     }
@@ -318,7 +318,7 @@ struct ParsedEmailListView: View {
             Divider()
             contentView
 
-            if totalAttachments > 0 || !model.filteredEmails.isEmpty {
+            if totalAttachments > 0 || !model.visibleEmails.isEmpty {
                 Divider()
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: Spacing.xxSmall) {
@@ -333,7 +333,7 @@ struct ParsedEmailListView: View {
                             .controlSize(.small)
                         }
 
-                        if !model.filteredEmails.isEmpty {
+                        if !model.visibleEmails.isEmpty {
                             Button {
                                 exportFilteredJSON()
                             } label: {
@@ -451,7 +451,7 @@ struct ParsedEmailListView: View {
                     .font(.system(.headline, design: .rounded))
                     .fontWeight(.bold)
 
-                if !model.filteredEmails.isEmpty {
+                if !model.visibleEmails.isEmpty {
                     // Part G3: unfiltered → store-backed archive total; filtered
                     // → the visible (preview-backed) list count.
                     Text("\(model.displayedEmailCount)")
@@ -1129,7 +1129,7 @@ struct ParsedEmailListView: View {
                         icon: "line.3.horizontal.decrease.circle",
                         title: "No matching emails",
                         message: hasAnyQuickFilterActive
-                            ? "Active filter chips are hiding all emails. Clear them to see your \(model.filteredEmails.count) emails."
+                            ? "Active filter chips are hiding all emails. Clear them to see your \(model.visibleEmails.count) emails."
                             : "No emails match your current filters. Try widening the date range, selecting more senders, or reducing the minimum reply count."
                     )
                     if hasAnyQuickFilterActive {
@@ -1146,25 +1146,74 @@ struct ParsedEmailListView: View {
                 threadedListView
             } else {
                 #if os(iOS)
-                List(emails, id: \.id) { email in
-                    NavigationLink(value: email.id) {
-                        emailRow(for: email)
+                List {
+                    pageWindowHeader
+                    ForEach(emails, id: \.id) { email in
+                        NavigationLink(value: email.id) {
+                            emailRow(for: email)
+                        }
+                        .padding(.vertical, Spacing.xxxSmall)
+                        .onAppear { model.loadMoreIfNeeded(currentID: email.id) }
                     }
-                    .padding(.vertical, Spacing.xxxSmall)
+                    pageWindowFooter
                 }
                 .listStyle(.plain)
                 #else
                 if forensicManager.isEnabled {
                     ForensicReviewView(selectedEmailIDs: $selectedEmailIDs)
                 } else {
-                    List(emails, id: \.id, selection: $selectedEmailIDs) { email in
-                        emailRow(for: email)
-                            .padding(.vertical, Spacing.xxxSmall)
-                            .tag(email.id)
+                    List(selection: $selectedEmailIDs) {
+                        pageWindowHeader
+                        ForEach(emails, id: \.id) { email in
+                            emailRow(for: email)
+                                .padding(.vertical, Spacing.xxxSmall)
+                                .tag(email.id)
+                                .onAppear { model.loadMoreIfNeeded(currentID: email.id) }
+                        }
+                        pageWindowFooter
                     }
                 }
                 #endif
             }
+        }
+    }
+
+    // MARK: - Page window affordances (Part S — bounded window paging)
+
+    /// Deep-scrolled windows drop their earliest pages; this re-fetches them.
+    @ViewBuilder
+    private var pageWindowHeader: some View {
+        if model.hasEarlierPages {
+            Button {
+                model.loadEarlierPage()
+            } label: {
+                Label("Load earlier emails", systemImage: "chevron.up")
+                    .font(Typography.caption1)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Load earlier emails")
+        }
+    }
+
+    @ViewBuilder
+    private var pageWindowFooter: some View {
+        if model.isLoadingPage {
+            HStack {
+                Spacer()
+                ProgressView().controlSize(.small)
+                Spacer()
+            }
+        } else if model.hasMorePages {
+            Button {
+                model.loadNextPage()
+            } label: {
+                Label("Load more emails", systemImage: "chevron.down")
+                    .font(Typography.caption1)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Load more emails")
         }
     }
 
@@ -2171,8 +2220,7 @@ struct ParsedEmailListView: View {
         .contextMenu {
             #if os(macOS)
             Button {
-                model.rehydrateIfNeeded(email.id)
-                let rehydrated = model.filteredEmails.first(where: { $0.id == email.id }) ?? email
+                let rehydrated = model.visibleEmails.first(where: { $0.id == email.id }) ?? email
                 EmailDetailView(email: rehydrated)
                     .openInWindow(title: decodeMIMEHeader(rehydrated.headers["Subject"] ?? "Email"), storeManager: storeManager)
             } label: {
@@ -2673,7 +2721,7 @@ struct ParsedEmailListView: View {
 
     // MARK: - Download All Attachments
     private var totalAttachments: Int {
-        model.filteredEmails.map { $0.attachments.count }.reduce(0, +)
+        model.visibleEmails.map { $0.attachments.count }.reduce(0, +)
     }
     private static let freeAttachmentLimit = 10
     @AppStorage("freeAttachmentDownloadCount") private var freeAttachmentDownloadCount: Int = 0

@@ -13,12 +13,11 @@ final class EmailSearchIndex {
 
     /// Hard structural ceiling on how many emails this legacy in-RAM index will
     /// ever hold, regardless of what a caller passes to `build`/`buildAsync`.
-    /// The v2 shipping path (`useV2ArchiveList`) browses/searches the whole
-    /// archive through the bounded SQLite + FTS5 layer; this in-RAM index only
-    /// backs the legacy list, which itself shows at most a bounded preview
-    /// (`ContentViewModel.previewCap`). Capping here makes "resident memory does
-    /// not scale with archive size" a STRUCTURAL guarantee for this class — not
-    /// a property of every call site — so no future caller can reintroduce a
+    /// Both shipping list modes browse/search the whole archive through the
+    /// bounded SQLite + FTS5 layer (Part S); this in-RAM index has NO
+    /// production builders left. Capping here makes "resident memory does not
+    /// scale with archive size" a STRUCTURAL guarantee for this class — not a
+    /// property of every call site — so no future caller can reintroduce a
     /// whole-corpus in-RAM index by accident.
     static let maxInMemoryDocuments = 5_000
 
