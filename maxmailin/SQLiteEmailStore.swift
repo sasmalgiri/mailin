@@ -1274,20 +1274,27 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return try scalarInt(db, "SELECT COUNT(*) FROM emails;")
     }
 
+    /// Browse count — excludes trashed rows (§19.1). `totalCount()` remains
+    /// the physical row count for activation/reconcile gates.
     func count(after: Date?, before: Date?) throws -> Int {
         let db = try ensureDB()
-        if after == nil && before == nil {
-            return try scalarInt(db, "SELECT COUNT(*) FROM emails;")
-        }
         let lo = after.map { Int64($0.timeIntervalSince1970.rounded()) } ?? Int64.min
         let hi = before.map { Int64($0.timeIntervalSince1970.rounded()) } ?? Int64.max
-        let stmt = try prepare(db, "SELECT COUNT(*) FROM emails WHERE date >= ? AND date < ?;")
+        let stmt = try prepare(db, """
+            SELECT COUNT(*) FROM emails e
+            WHERE e.date >= ? AND e.date < ? AND \(Self.notTrashedPredicate);
+        """)
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_int64(stmt, 1, lo)
         sqlite3_bind_int64(stmt, 2, hi)
         guard try stepRow(stmt, db) else { return 0 }
         return Int(sqlite3_column_int64(stmt, 0))
     }
+
+    /// §19.1: browse surfaces hide trashed rows. Correlated NOT EXISTS keeps
+    /// the (date,id) keyset plan intact (review-state rows are sparse).
+    static let notTrashedPredicate =
+        "NOT EXISTS (SELECT 1 FROM email_review_state r WHERE r.email_id = e.id AND r.trashed = 1)"
 
     // MARK: - Aggregates (DB-side; never stream bodies to count metadata)
 
@@ -1419,12 +1426,12 @@ actor SQLiteEmailStore: EmailArchiveStore {
         let lo = after.map { Int64($0.timeIntervalSince1970.rounded()) } ?? Int64.min
         let hi = before.map { Int64($0.timeIntervalSince1970.rounded()) } ?? Int64.max
         var sql = """
-            SELECT id, message_id, subject, from_addr, date, body_preview, has_attach, size_bytes
-            FROM emails WHERE date >= ? AND date < ?
+            SELECT e.id, e.message_id, e.subject, e.from_addr, e.date, e.body_preview, e.has_attach, e.size_bytes
+            FROM emails e WHERE e.date >= ? AND e.date < ? AND \(Self.notTrashedPredicate)
         """
         let hasCursor = (cursorDate != nil && cursorID != nil)
-        if hasCursor { sql += " AND (date < ? OR (date = ? AND id < ?))" }
-        sql += " ORDER BY date DESC, id DESC LIMIT ?;"
+        if hasCursor { sql += " AND (e.date < ? OR (e.date = ? AND e.id < ?))" }
+        sql += " ORDER BY e.date DESC, e.id DESC LIMIT ?;"
 
         let stmt = try prepare(db, sql)
         defer { sqlite3_finalize(stmt) }
@@ -1621,6 +1628,283 @@ actor SQLiteEmailStore: EmailArchiveStore {
             emails[i].tags = (tagsByEmail[key] ?? []).sorted()
             emails[i].domains = (domainsByEmail[key] ?? []).sorted()
         }
+    }
+
+    // MARK: - Review state (§19)
+
+    enum ReviewFlag: String, Sendable, CaseIterable {
+        case pinned
+        case isRead = "is_read"
+        case archived
+        case trashed
+    }
+
+    struct ReviewStateRow: Sendable, Equatable {
+        var pinned = false
+        var isRead = false
+        var archived = false
+        var trashed = false
+    }
+
+    func reviewSetFlag(_ flag: ReviewFlag, ids: [UUID], value: Bool) throws {
+        guard !ids.isEmpty else { return }
+        let db = try ensureDB()
+        let now = Int64(Date().timeIntervalSince1970)
+        let stmt = try prepare(db, """
+            INSERT INTO email_review_state(email_id, \(flag.rawValue), updated_at) VALUES (?,?,?)
+            ON CONFLICT(email_id) DO UPDATE SET \(flag.rawValue) = excluded.\(flag.rawValue), updated_at = excluded.updated_at;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        try exec(db, "BEGIN TRANSACTION;")
+        do {
+            for id in ids {
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, id.uuidString)
+                sqlite3_bind_int(stmt, 2, value ? 1 : 0)
+                sqlite3_bind_int64(stmt, 3, now)
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    func reviewStates(ids: [UUID]) throws -> [UUID: ReviewStateRow] {
+        guard !ids.isEmpty else { return [:] }
+        let db = try ensureDB()
+        var out: [UUID: ReviewStateRow] = [:]
+        for chunk in ids.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, """
+                SELECT email_id, pinned, is_read, archived, trashed
+                FROM email_review_state WHERE email_id IN (\(placeholders));
+            """)
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            while try stepRow(stmt, db) {
+                guard let id = columnUUID(stmt, 0) else { continue }
+                out[id] = ReviewStateRow(
+                    pinned: sqlite3_column_int(stmt, 1) != 0,
+                    isRead: sqlite3_column_int(stmt, 2) != 0,
+                    archived: sqlite3_column_int(stmt, 3) != 0,
+                    trashed: sqlite3_column_int(stmt, 4) != 0
+                )
+            }
+        }
+        return out
+    }
+
+    /// IDs carrying a flag, newest-email first, paged — powers Trash /
+    /// Pinned views without materializing archive-sized sets.
+    func reviewIDs(where flag: ReviewFlag, limit: Int, offset: Int) throws -> [UUID] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT r.email_id FROM email_review_state r
+            JOIN emails e ON e.id = r.email_id
+            WHERE r.\(flag.rawValue) = 1
+            ORDER BY e.date DESC, e.id DESC LIMIT ? OFFSET ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        sqlite3_bind_int(stmt, 2, Int32(offset))
+        var out: [UUID] = []
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append(id) } }
+        return out
+    }
+
+    func reviewCount(of flag: ReviewFlag) throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM email_review_state WHERE \(flag.rawValue) = 1;")
+    }
+
+    // MARK: - User tags / annotations (§19)
+
+    func userTagAdd(_ tag: String, ids: [UUID]) throws {
+        try userTagMutate("INSERT OR IGNORE INTO email_user_tags(email_id, tag) VALUES (?,?);", tag: tag, ids: ids)
+    }
+
+    func userTagRemove(_ tag: String, ids: [UUID]) throws {
+        try userTagMutate("DELETE FROM email_user_tags WHERE email_id = ? AND tag = ?;", tag: tag, ids: ids)
+    }
+
+    private func userTagMutate(_ sql: String, tag: String, ids: [UUID]) throws {
+        guard !ids.isEmpty, !tag.isEmpty else { return }
+        let db = try ensureDB()
+        let stmt = try prepare(db, sql)
+        defer { sqlite3_finalize(stmt) }
+        try exec(db, "BEGIN TRANSACTION;")
+        do {
+            for id in ids {
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, id.uuidString)
+                bindText(stmt, 2, tag)
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    func userTagsClear(ids: [UUID]) throws {
+        guard !ids.isEmpty else { return }
+        let db = try ensureDB()
+        for chunk in ids.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, "DELETE FROM email_user_tags WHERE email_id IN (\(placeholders));")
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        }
+    }
+
+    func userTags(ids: [UUID]) throws -> [UUID: Set<String>] {
+        guard !ids.isEmpty else { return [:] }
+        let db = try ensureDB()
+        var out: [UUID: Set<String>] = [:]
+        for chunk in ids.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, "SELECT email_id, tag FROM email_user_tags WHERE email_id IN (\(placeholders));")
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            while try stepRow(stmt, db) {
+                guard let id = columnUUID(stmt, 0) else { continue }
+                out[id, default: []].insert(columnText(stmt, 1))
+            }
+        }
+        return out
+    }
+
+    /// Distinct tag vocabulary (bounded) — a DB aggregate, not a corpus scan.
+    func distinctUserTags(limit: Int) throws -> [String] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT DISTINCT tag FROM email_user_tags ORDER BY tag LIMIT ?;")
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        var out: [String] = []
+        while try stepRow(stmt, db) { out.append(columnText(stmt, 0)) }
+        return out
+    }
+
+    func idsWithUserTag(_ tag: String, limit: Int, offset: Int) throws -> [UUID] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT t.email_id FROM email_user_tags t
+            JOIN emails e ON e.id = t.email_id
+            WHERE t.tag = ? ORDER BY e.date DESC, e.id DESC LIMIT ? OFFSET ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, tag)
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+        sqlite3_bind_int(stmt, 3, Int32(offset))
+        var out: [UUID] = []
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append(id) } }
+        return out
+    }
+
+    func annotationSet(_ note: String?, id: UUID) throws {
+        let db = try ensureDB()
+        if let note, !note.isEmpty {
+            let stmt = try prepare(db, """
+                INSERT INTO email_annotations(email_id, note, updated_at) VALUES (?,?,?)
+                ON CONFLICT(email_id) DO UPDATE SET note = excluded.note, updated_at = excluded.updated_at;
+            """)
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, id.uuidString)
+            bindText(stmt, 2, note)
+            sqlite3_bind_int64(stmt, 3, Int64(Date().timeIntervalSince1970))
+            guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        } else {
+            let stmt = try prepare(db, "DELETE FROM email_annotations WHERE email_id = ?;")
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, id.uuidString)
+            guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        }
+    }
+
+    func annotations(ids: [UUID]) throws -> [UUID: String] {
+        guard !ids.isEmpty else { return [:] }
+        let db = try ensureDB()
+        var out: [UUID: String] = [:]
+        for chunk in ids.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, "SELECT email_id, note FROM email_annotations WHERE email_id IN (\(placeholders));")
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            while try stepRow(stmt, db) {
+                guard let id = columnUUID(stmt, 0) else { continue }
+                out[id] = columnText(stmt, 1)
+            }
+        }
+        return out
+    }
+
+    /// §20 one-shot legacy import — the JSON review file lands in one
+    /// transaction so a crash can't leave half-migrated state.
+    func reviewBulkImport(
+        pinned: [UUID], read: [UUID], archived: [UUID], trashed: [UUID],
+        tags: [UUID: Set<String>], annotations annots: [UUID: String]
+    ) throws {
+        let db = try ensureDB()
+        let now = Int64(Date().timeIntervalSince1970)
+        try exec(db, "BEGIN TRANSACTION;")
+        do {
+            let flagStmt = try prepare(db, """
+                INSERT INTO email_review_state(email_id, pinned, is_read, archived, trashed, updated_at)
+                VALUES (?,?,?,?,?,?)
+                ON CONFLICT(email_id) DO UPDATE SET
+                    pinned = MAX(pinned, excluded.pinned),
+                    is_read = MAX(is_read, excluded.is_read),
+                    archived = MAX(archived, excluded.archived),
+                    trashed = MAX(trashed, excluded.trashed),
+                    updated_at = excluded.updated_at;
+            """)
+            defer { sqlite3_finalize(flagStmt) }
+            var flagValues: [UUID: (Bool, Bool, Bool, Bool)] = [:]
+            for id in pinned { flagValues[id, default: (false, false, false, false)].0 = true }
+            for id in read { flagValues[id, default: (false, false, false, false)].1 = true }
+            for id in archived { flagValues[id, default: (false, false, false, false)].2 = true }
+            for id in trashed { flagValues[id, default: (false, false, false, false)].3 = true }
+            for (id, f) in flagValues {
+                sqlite3_reset(flagStmt); sqlite3_clear_bindings(flagStmt)
+                bindText(flagStmt, 1, id.uuidString)
+                sqlite3_bind_int(flagStmt, 2, f.0 ? 1 : 0)
+                sqlite3_bind_int(flagStmt, 3, f.1 ? 1 : 0)
+                sqlite3_bind_int(flagStmt, 4, f.2 ? 1 : 0)
+                sqlite3_bind_int(flagStmt, 5, f.3 ? 1 : 0)
+                sqlite3_bind_int64(flagStmt, 6, now)
+                guard sqlite3_step(flagStmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            let tagStmt = try prepare(db, "INSERT OR IGNORE INTO email_user_tags(email_id, tag) VALUES (?,?);")
+            defer { sqlite3_finalize(tagStmt) }
+            for (id, set) in tags {
+                for tag in set where !tag.isEmpty {
+                    sqlite3_reset(tagStmt); sqlite3_clear_bindings(tagStmt)
+                    bindText(tagStmt, 1, id.uuidString)
+                    bindText(tagStmt, 2, tag)
+                    guard sqlite3_step(tagStmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+                }
+            }
+            let noteStmt = try prepare(db, """
+                INSERT INTO email_annotations(email_id, note, updated_at) VALUES (?,?,?)
+                ON CONFLICT(email_id) DO UPDATE SET note = excluded.note, updated_at = excluded.updated_at;
+            """)
+            defer { sqlite3_finalize(noteStmt) }
+            for (id, note) in annots where !note.isEmpty {
+                sqlite3_reset(noteStmt); sqlite3_clear_bindings(noteStmt)
+                bindText(noteStmt, 1, id.uuidString)
+                bindText(noteStmt, 2, note)
+                sqlite3_bind_int64(noteStmt, 3, now)
+                guard sqlite3_step(noteStmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    func reviewTotals() throws -> (states: Int, tags: Int, annotations: Int) {
+        let db = try ensureDB()
+        return (
+            try scalarInt(db, "SELECT COUNT(*) FROM email_review_state;"),
+            try scalarInt(db, "SELECT COUNT(*) FROM email_user_tags;"),
+            try scalarInt(db, "SELECT COUNT(*) FROM email_annotations;")
+        )
     }
 
     // MARK: - Mutation

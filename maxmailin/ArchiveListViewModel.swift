@@ -202,10 +202,32 @@ final class ArchiveListViewModel: ObservableObject {
         try await archive.fullEmail(id: id)
     }
 
-    /// Delete emails, then reload the current query so the bounded pages reflect
-    /// the removal with no skip/duplicate corruption. (Reload-from-top is safe:
-    /// keyset ordering is stable across deletions.)
+    /// §19.1: "Delete" in the browse UI is Move to Trash — a restorable review
+    /// flag, never physical destruction. Pages/counts exclude trashed rows, so
+    /// a reload reflects the removal with no skip/duplicate corruption.
     func delete(_ ids: Set<EmailID>) async {
+        guard !ids.isEmpty else { return }
+        do {
+            try await archive.setTrashed(ids: Array(ids), true)
+        } catch {
+            self.error = error
+        }
+        await loadInitial()
+    }
+
+    /// Restore trashed emails back into the browse surfaces.
+    func restore(_ ids: Set<EmailID>) async {
+        guard !ids.isEmpty else { return }
+        do {
+            try await archive.setTrashed(ids: Array(ids), false)
+        } catch {
+            self.error = error
+        }
+        await loadInitial()
+    }
+
+    /// PERMANENT deletion — distinct, explicit operation (row + FTS ghost).
+    func permanentlyDelete(_ ids: Set<EmailID>) async {
         guard !ids.isEmpty else { return }
         do {
             try await archive.delete(ids: Array(ids))

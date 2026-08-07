@@ -166,8 +166,18 @@ struct EmailStoreRepository: EmailRepository {
             let hi = query.beforeDate ?? .distantFuture
             sums = sums.filter { $0.date >= lo && $0.date < hi }
         }
+        sums = try await excludingTrashed(sums)
         let rank = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($1, $0) })
         return sums.sorted { (rank[$0.id] ?? .max) < (rank[$1.id] ?? .max) }
+    }
+
+    /// §19.1: trashed rows stay in the FTS index (restore must not require a
+    /// reindex) but are excluded from every user-facing search result at the
+    /// hydration boundary — one bounded review-state lookup per page.
+    private func excludingTrashed(_ sums: [EmailSummary]) async throws -> [EmailSummary] {
+        guard !sums.isEmpty, let sqlite = store as? SQLiteEmailStore else { return sums }
+        let states = try await sqlite.reviewStates(ids: sums.map(\.id))
+        return sums.filter { !(states[$0.id]?.trashed ?? false) }
     }
 
     func summaries(ids: [EmailID]) async throws -> [EmailSummary] {
@@ -252,10 +262,8 @@ extension EmailStoreRepository: RankedSearchRepository {
             next = cont
             if hits.isEmpty && cont == nil { break }
             if !hits.isEmpty {
-                let byID = Dictionary(
-                    try await store.summaries(ids: hits.map(\.id)).map { ($0.id, $0) },
-                    uniquingKeysWith: { a, _ in a }
-                )
+                let hydrated = try await excludingTrashed(store.summaries(ids: hits.map(\.id)))
+                let byID = Dictionary(hydrated.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
                 for hit in hits {
                     guard let summary = byID[hit.id] else { continue }
                     if needsDateFilter && !(summary.date >= lo && summary.date < hi) { continue }

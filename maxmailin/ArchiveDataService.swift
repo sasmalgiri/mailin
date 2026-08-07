@@ -90,8 +90,34 @@ final class ArchiveDataService {
 
     // MARK: - Bounded mutation
 
+    /// PERMANENT deletion (row + bodies + derived + FTS via repository).
+    /// §19.1: browse UIs must not call this as their default "delete" —
+    /// use `setTrashed` and keep destruction an explicit second step.
     func delete(ids: [EmailID]) async throws {
         try await repository.delete(ids: ids)
+    }
+
+    /// §19.1 soft trash: flag rows in review state so browse pages/counts
+    /// exclude them; fully restorable.
+    func setTrashed(ids: [EmailID], _ value: Bool) async throws {
+        guard let repo = repository as? EmailStoreRepository,
+              let sqlite = repo.store as? SQLiteEmailStore else {
+            throw SQLiteStoreError.schema("trash requires the SQLite review-state store")
+        }
+        try await sqlite.reviewSetFlag(.trashed, ids: ids, value: value)
+    }
+
+    /// Trashed IDs, newest first (the Trash surface's read path).
+    func trashedIDs(limit: Int, offset: Int) async throws -> [EmailID] {
+        guard let repo = repository as? EmailStoreRepository,
+              let sqlite = repo.store as? SQLiteEmailStore else { return [] }
+        return try await sqlite.reviewIDs(where: .trashed, limit: limit, offset: offset)
+    }
+
+    func trashedCount() async throws -> Int {
+        guard let repo = repository as? EmailStoreRepository,
+              let sqlite = repo.store as? SQLiteEmailStore else { return 0 }
+        return try await sqlite.reviewCount(of: .trashed)
     }
 
     // MARK: - Bounded streaming (for derived jobs)

@@ -125,13 +125,13 @@ struct ArchiveListView: View {
                         .contextMenu {
                             Button(role: .destructive) {
                                 Task { await model.delete([summary.id]); detail.invalidate(summary.id) }
-                            } label: { Label("Delete", systemImage: "trash") }
+                            } label: { Label("Move to Trash", systemImage: "trash") }
                         }
                         #if os(iOS)
                         .swipeActions(edge: .trailing) {
                             Button(role: .destructive) {
                                 Task { await model.delete([summary.id]); detail.invalidate(summary.id) }
-                            } label: { Label("Delete", systemImage: "trash") }
+                            } label: { Label("Move to Trash", systemImage: "trash") }
                         }
                         #endif
                 }

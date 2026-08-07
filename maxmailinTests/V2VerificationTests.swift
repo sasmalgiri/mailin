@@ -1042,8 +1042,9 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertLessThanOrEqual(vm.maxRetainedObserved, 100, "window stays bounded through bidirectional browsing")
     }
 
-    /// Delete from the list removes the row from the store, FTS and the paged
-    /// results, with no skip/duplicate corruption across page boundaries.
+    /// §19.1: Delete from the list = Move to Trash. The row disappears from
+    /// paged results, counts and user-facing text search — but the physical
+    /// row AND its FTS entry survive, so Restore is instant and lossless.
     func testArchiveListVM_deleteReflectsInPagesAndSearch() async throws {
         let fixtures = (0..<40).map { makeEmailDated(mid: "<del-\($0)@t>", subject: "S\($0)", body: "token \($0)", dayOffset: $0) }
         // Build a VM whose archive also has FTS, so search reflects deletion.
@@ -1071,10 +1072,25 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertFalse(seen.contains(victim), "deleted row gone from paged results")
         XCTAssertFalse(dup, "no duplicates after delete")
         let count = try await svc.count(query: .all)
-        XCTAssertEqual(count, 39, "store count reflects deletion")
-        // FTS also no longer returns it.
-        let hits = try await fts.searchRaw("token", limit: 100)
-        XCTAssertFalse(hits.contains(victim), "deleted row gone from FTS")
+        XCTAssertEqual(count, 39, "browse count reflects the trashed row")
+
+        // Physical row + FTS entry survive (soft trash, not destruction)…
+        let physical = try await store.totalCount()
+        XCTAssertEqual(physical, 40, "trash must not destroy the row")
+        let rawHits = try await fts.searchRaw("token", limit: 100)
+        XCTAssertTrue(rawHits.contains(victim), "FTS entry kept so Restore needs no reindex")
+        // …but user-facing text search excludes it.
+        let searchPage = try await svc.page(query: EmailQuery(text: "token"), cursor: nil, limit: 100)
+        XCTAssertFalse(searchPage.summaries.contains { $0.id == victim },
+            "trashed row hidden from user-facing search")
+
+        // Restore: visible again everywhere, no reindex needed.
+        await vm.restore([victim])
+        let restoredCount = try await svc.count(query: .all)
+        XCTAssertEqual(restoredCount, 40)
+        let searchAfterRestore = try await svc.page(query: EmailQuery(text: "token"), cursor: nil, limit: 100)
+        XCTAssertTrue(searchAfterRestore.summaries.contains { $0.id == victim },
+            "restored row searchable again")
     }
 
     /// Query-revision guard: a slow superseded load must NOT overwrite the newer
@@ -2750,5 +2766,170 @@ final class V2StorageSchemaTests: XCTestCase {
             sha256: "hash-one", filename: "Inbox.mbox", byteSize: 10,
             parser: "mbox", parserVersion: 1, accountID: nil, sourceKind: "mbox"))
         XCTAssertEqual(s1, s1Again)
+    }
+}
+
+// MARK: - §19/§20 — review state persistence, trash semantics, JSON migration
+
+final class V2ReviewStateTests: XCTestCase {
+
+    private func tempRoot() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-review-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    private func fixture(_ i: Int) -> MBOXParser.RawEmail {
+        MBOXParser.RawEmail(
+            headers: ["Message-ID": "<rv-\(i)@t>", "Subject": "S\(i)", "From": "a@b.com",
+                      "To": "c@d.com", "Date": "Wed, \(String(format: "%02d", 1 + i % 28)) Jan 2025 10:00:00 +0000"],
+            rawSource: "body \(i)", messageType: "received", attachments: [],
+            timestamp: "2025-01-15T10:00:00Z", domains: ["b.com"],
+            plainBody: "body \(i)", htmlBody: ""
+        )
+    }
+
+    // §19: flags/tags/annotations survive a fresh reopen; no in-memory maps.
+    func testReviewState_persistsAcrossReopen() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let emails = (0..<5).map(fixture)
+        do {
+            let store = SQLiteEmailStore(directory: root)
+            _ = try await store.insertBatch(emails, sourceFileHash: nil, accountID: nil,
+                sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+            try await store.reviewSetFlag(.pinned, ids: [emails[0].id], value: true)
+            try await store.reviewSetFlag(.isRead, ids: [emails[1].id], value: true)
+            try await store.reviewSetFlag(.archived, ids: [emails[2].id], value: true)
+            try await store.userTagAdd("Key-Evidence", ids: [emails[3].id])
+            try await store.annotationSet("check this thread", id: emails[4].id)
+        }
+        let reopened = SQLiteEmailStore(directory: root)
+        let states = try await reopened.reviewStates(ids: emails.map(\.id))
+        XCTAssertEqual(states[emails[0].id]?.pinned, true)
+        XCTAssertEqual(states[emails[1].id]?.isRead, true)
+        XCTAssertEqual(states[emails[2].id]?.archived, true)
+        let tags = try await reopened.userTags(ids: [emails[3].id])
+        XCTAssertEqual(tags[emails[3].id], ["Key-Evidence"])
+        let notes = try await reopened.annotations(ids: [emails[4].id])
+        XCTAssertEqual(notes[emails[4].id], "check this thread")
+        let vocab = try await reopened.distinctUserTags(limit: 100)
+        XCTAssertEqual(vocab, ["Key-Evidence"])
+    }
+
+    // §19.1: trash is soft — hidden from browse pages/counts, restorable,
+    // and NEVER physical. Permanent delete is the separate explicit op.
+    func testTrash_hiddenRestorable_permanentDeleteSeparate() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root)
+        let emails = (0..<4).map(fixture)
+        _ = try await store.insertBatch(emails, sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+
+        // Trash one: browse count and page exclude it; physical count doesn't.
+        try await store.reviewSetFlag(.trashed, ids: [emails[0].id], value: true)
+        let browseCount = try await store.count(after: nil, before: nil)
+        XCTAssertEqual(browseCount, 3, "browse count excludes trashed")
+        let physical = try await store.totalCount()
+        XCTAssertEqual(physical, 4, "trash must NOT destroy the row")
+        let page = try await store.summaryPage(after: nil, before: nil, cursorDate: nil, cursorID: nil, limit: 10)
+        XCTAssertFalse(page.contains { $0.id == emails[0].id }, "trashed row hidden from pages")
+        let trashedIDs = try await store.reviewIDs(where: .trashed, limit: 10, offset: 0)
+        XCTAssertEqual(trashedIDs, [emails[0].id])
+
+        // Restore: fully visible again.
+        try await store.reviewSetFlag(.trashed, ids: [emails[0].id], value: false)
+        let afterRestore = try await store.count(after: nil, before: nil)
+        XCTAssertEqual(afterRestore, 4, "restore returns the row to browse")
+
+        // Permanent delete: the explicit destructive op removes the row.
+        try await store.delete(ids: [emails[1].id])
+        let afterPermanent = try await store.totalCount()
+        XCTAssertEqual(afterPermanent, 3)
+        let full = try await store.fullEmail(id: emails[1].id)
+        XCTAssertNil(full)
+    }
+
+    // §20: the legacy user_review_data.json migrates once, with verification;
+    // legacy deletedIDs become Trash (soft) — not destruction. JSON is kept.
+    @MainActor
+    func testLegacyReviewJSON_migratesToTables() async throws {
+        let root = tempRoot()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            ReviewStateService.testStoreOverride = nil
+            ReviewStateService.resetMigrationForTesting()
+        }
+        let store = SQLiteEmailStore(directory: root)
+        ReviewStateService.testStoreOverride = store
+        ReviewStateService.resetMigrationForTesting()
+
+        let emails = (0..<4).map(fixture)
+        _ = try await store.insertBatch(emails, sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+
+        // Write a legacy JSON file at the real legacy path.
+        let legacy = ReviewStateService.LegacyReviewData(
+            pinnedIDs: [emails[0].id.uuidString],
+            readIDs: [emails[1].id.uuidString],
+            deletedIDs: [emails[2].id.uuidString],
+            archivedIDs: [],
+            userTags: [emails[3].id.uuidString: ["Legacy-Tag"]],
+            annotations: [emails[3].id.uuidString: "legacy note"]
+        )
+        let url = ReviewStateService.legacyJSONURL
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let backup = try? Data(contentsOf: url)   // preserve any real user file
+        defer {
+            if let backup { try? backup.write(to: url) } else { try? FileManager.default.removeItem(at: url) }
+        }
+        try JSONEncoder().encode(legacy).write(to: url)
+
+        let service = ReviewStateService()
+        await service.migrateLegacyJSONIfNeeded()
+
+        let states = try await store.reviewStates(ids: emails.map(\.id))
+        XCTAssertEqual(states[emails[0].id]?.pinned, true, "pinned migrated")
+        XCTAssertEqual(states[emails[1].id]?.isRead, true, "read migrated")
+        XCTAssertEqual(states[emails[2].id]?.trashed, true, "legacy deletedIDs → Trash (soft), not destruction")
+        let physicalAfterMigration = try await store.totalCount()
+        XCTAssertEqual(physicalAfterMigration, 4, "no rows destroyed by migration")
+        let tags = try await store.userTags(ids: [emails[3].id])
+        XCTAssertEqual(tags[emails[3].id], ["Legacy-Tag"])
+        let notes = try await store.annotations(ids: [emails[3].id])
+        XCTAssertEqual(notes[emails[3].id], "legacy note")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path),
+            "legacy JSON kept as rollback evidence")
+    }
+
+    // §19: the service window is bounded — hydrating a window exposes exactly
+    // that window's state, and mutations write through durably.
+    @MainActor
+    func testReviewService_windowedAndWriteThrough() async throws {
+        let root = tempRoot()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            ReviewStateService.testStoreOverride = nil
+        }
+        let store = SQLiteEmailStore(directory: root)
+        ReviewStateService.testStoreOverride = store
+        let emails = (0..<3).map(fixture)
+        _ = try await store.insertBatch(emails, sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        try await store.reviewSetFlag(.pinned, ids: [emails[0].id], value: true)
+
+        let service = ReviewStateService()
+        await service.hydrateWindow(ids: [emails[0].id, emails[1].id])
+        XCTAssertTrue(service.isPinned(emails[0].id))
+        XCTAssertFalse(service.isPinned(emails[1].id))
+        XCTAssertEqual(service.windowStates.count, 1, "only rows WITH state are cached — window-bounded")
+
+        // Mutation: optimistic + durable.
+        service.setFlag(.isRead, ids: [emails[1].id], value: true)
+        XCTAssertTrue(service.isRead(emails[1].id), "optimistic window update")
+        // Wait for the async write-through, then verify durably via the store.
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let states = try await store.reviewStates(ids: [emails[1].id])
+        XCTAssertEqual(states[emails[1].id]?.isRead, true, "write-through persisted")
     }
 }

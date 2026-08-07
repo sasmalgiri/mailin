@@ -797,14 +797,11 @@ struct ContentView: View {
                     emails: emails,
                     selectedIDs: $selectedEmailIDs,
                     onTagApplied: { tag, ids in
-                        for id in ids {
-                            if tag.isEmpty {
-                                modelVM.userTags[id] = nil
-                            } else {
-                                var tags = modelVM.userTags[id] ?? []
-                                tags.insert(tag)
-                                modelVM.userTags[id] = tags
-                            }
+                        let idArray = Array(ids)
+                        if tag.isEmpty {
+                            modelVM.review.clearAllTags(for: idArray)
+                        } else {
+                            modelVM.review.addTag(tag, to: idArray)
                         }
                     },
                     onExportRequested: { _, _ in
@@ -4515,14 +4512,11 @@ struct V7SheetsModifier: ViewModifier {
                         emails: emails,
                         selectedIDs: $selectedEmailIDs,
                         onTagApplied: { tag, ids in
-                            for id in ids {
-                                if tag.isEmpty {
-                                    modelVM.userTags[id] = nil
-                                } else {
-                                    var tags = modelVM.userTags[id] ?? []
-                                    tags.insert(tag)
-                                    modelVM.userTags[id] = tags
-                                }
+                            let idArray = Array(ids)
+                            if tag.isEmpty {
+                                modelVM.review.clearAllTags(for: idArray)
+                            } else {
+                                modelVM.review.addTag(tag, to: idArray)
                             }
                         },
                         onExportRequested: { emailsToExport, format in

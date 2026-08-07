@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import Combine
 
 // Part S (v2-core-cutover): the "Advanced" list mode's view model, rebuilt on
 // the SAME bounded architecture as the Simple list. It owns an
@@ -349,108 +350,41 @@ class ParsedEmailListViewModel: ObservableObject {
     @Published var emailThreads: [EmailThread] = []
     @Published var replyCountPerSender: [String: Int] = [:]
 
-    // MARK: - Pin/Star & Custom Tags & Annotations
-    @Published var pinnedIDs: Set<UUID> = [] { didSet { if _userDataInitialized { persistUserData() } } }
-    @Published var readIDs: Set<UUID> = [] { didSet { if _userDataInitialized { persistUserData() } } }
-    @Published var deletedIDs: Set<UUID> = [] { didSet { if _userDataInitialized { persistUserData() } } }
-    @Published var archivedIDs: Set<UUID> = [] { didSet { if _userDataInitialized { persistUserData() } } }
-    @Published var userTags: [UUID: Set<String>] = [:] { didSet { if _userDataInitialized { persistUserData() } } }
-    @Published var annotations: [UUID: String] = [:] { didSet { if _userDataInitialized { persistUserData() } } }
-    private var _userDataInitialized = false
+    // MARK: - Pin/Star & Custom Tags & Annotations (§19: SQLite-backed)
+    //
+    // Review state lives in indexed SQLite tables behind ReviewStateService.
+    // The service caches ONLY the visible window; these wrappers keep the
+    // long-standing VM API stable for every view that consumes it. The
+    // service is @Published-observed so row state changes re-render.
+    let review = ReviewStateService.shared
+
     @Published var showPinnedOnly = false { didSet { if !isResettingFilters { applyFilters() } } }
 
-    func togglePin(_ emailID: UUID) {
-        if pinnedIDs.contains(emailID) { pinnedIDs.remove(emailID) }
-        else { pinnedIDs.insert(emailID) }
-    }
+    func togglePin(_ emailID: UUID) { review.togglePin(emailID); applyFilters() }
+    func isPinned(_ emailID: UUID) -> Bool { review.isPinned(emailID) }
 
-    func isPinned(_ emailID: UUID) -> Bool { pinnedIDs.contains(emailID) }
+    func markRead(_ emailID: UUID) { review.setFlag(.isRead, ids: [emailID], value: true) }
+    func markUnread(_ emailID: UUID) { review.setFlag(.isRead, ids: [emailID], value: false) }
+    func toggleRead(_ emailID: UUID) { review.toggleRead(emailID) }
+    func isRead(_ emailID: UUID) -> Bool { review.isRead(emailID) }
 
-    func markRead(_ emailID: UUID) { readIDs.insert(emailID) }
-    func markUnread(_ emailID: UUID) { readIDs.remove(emailID) }
-    func toggleRead(_ emailID: UUID) {
-        if readIDs.contains(emailID) { readIDs.remove(emailID) }
-        else { readIDs.insert(emailID) }
-    }
-    func isRead(_ emailID: UUID) -> Bool { readIDs.contains(emailID) }
+    /// §19.1: "delete" is Move to Trash — a soft, restorable flag. Permanent
+    /// destruction is a separate explicit operation on ReviewStateService.
+    func deleteEmail(_ emailID: UUID) { review.moveToTrash([emailID]); applyFilters() }
+    func undeleteEmail(_ emailID: UUID) { review.restoreFromTrash([emailID]); applyFilters() }
+    func isDeleted(_ emailID: UUID) -> Bool { review.isTrashed(emailID) }
 
-    func deleteEmail(_ emailID: UUID) { deletedIDs.insert(emailID) }
-    func undeleteEmail(_ emailID: UUID) { deletedIDs.remove(emailID) }
-    func isDeleted(_ emailID: UUID) -> Bool { deletedIDs.contains(emailID) }
+    func archiveEmail(_ emailID: UUID) { review.setFlag(.archived, ids: [emailID], value: true); applyFilters() }
+    func unarchiveEmail(_ emailID: UUID) { review.setFlag(.archived, ids: [emailID], value: false); applyFilters() }
+    func isArchived(_ emailID: UUID) -> Bool { review.isArchived(emailID) }
 
-    func archiveEmail(_ emailID: UUID) { archivedIDs.insert(emailID) }
-    func unarchiveEmail(_ emailID: UUID) { archivedIDs.remove(emailID) }
-    func isArchived(_ emailID: UUID) -> Bool { archivedIDs.contains(emailID) }
+    func addUserTag(_ tag: String, to emailID: UUID) { review.addTag(tag, to: [emailID]) }
+    func removeUserTag(_ tag: String, from emailID: UUID) { review.removeTag(tag, from: [emailID]) }
+    func userTagsFor(_ emailID: UUID) -> Set<String> { review.tags(for: emailID) }
+    var allUserTags: [String] { review.knownTags }
 
-    func addUserTag(_ tag: String, to emailID: UUID) {
-        userTags[emailID, default: []].insert(tag)
-    }
-
-    func removeUserTag(_ tag: String, from emailID: UUID) {
-        userTags[emailID]?.remove(tag)
-    }
-
-    func userTagsFor(_ emailID: UUID) -> Set<String> {
-        userTags[emailID] ?? []
-    }
-
-    var allUserTags: [String] {
-        Array(Set(userTags.values.flatMap { $0 })).sorted()
-    }
-
-    func setAnnotation(_ text: String, for emailID: UUID) {
-        annotations[emailID] = text.isEmpty ? nil : text
-    }
-
-    func annotationFor(_ emailID: UUID) -> String {
-        annotations[emailID] ?? ""
-    }
-
-    private static let userDataURL: URL = {
-        let dir = (FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory)
-            .appendingPathComponent("mailin", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("user_review_data.json")
-    }()
-
-    private func persistUserData() {
-        let data = UserReviewData(
-            pinnedIDs: Array(pinnedIDs).map(\.uuidString),
-            readIDs: Array(readIDs).map(\.uuidString),
-            deletedIDs: Array(deletedIDs).map(\.uuidString),
-            archivedIDs: Array(archivedIDs).map(\.uuidString),
-            userTags: userTags.reduce(into: [String: [String]]()) { $0[$1.key.uuidString] = Array($1.value) },
-            annotations: annotations.reduce(into: [String: String]()) { $0[$1.key.uuidString] = $1.value }
-        )
-        if let encoded = try? JSONEncoder().encode(data) {
-            try? encoded.write(to: Self.userDataURL, options: [.atomic, .completeFileProtection])
-        }
-    }
-
-    private func loadUserData() {
-        guard FileManager.default.fileExists(atPath: Self.userDataURL.path),
-              let data = try? Data(contentsOf: Self.userDataURL),
-              let decoded = try? JSONDecoder().decode(UserReviewData.self, from: data) else { return }
-        pinnedIDs = Set(decoded.pinnedIDs.compactMap { UUID(uuidString: $0) })
-        readIDs = Set((decoded.readIDs ?? []).compactMap { UUID(uuidString: $0) })
-        deletedIDs = Set((decoded.deletedIDs ?? []).compactMap { UUID(uuidString: $0) })
-        archivedIDs = Set((decoded.archivedIDs ?? []).compactMap { UUID(uuidString: $0) })
-        userTags = decoded.userTags.reduce(into: [UUID: Set<String>]()) {
-            if let uuid = UUID(uuidString: $1.key) { $0[uuid] = Set($1.value) }
-        }
-        annotations = decoded.annotations.reduce(into: [UUID: String]()) {
-            if let uuid = UUID(uuidString: $1.key) { $0[uuid] = $1.value }
-        }
-    }
-
-    struct UserReviewData: Codable {
-        let pinnedIDs: [String]
-        var readIDs: [String]? = []
-        var deletedIDs: [String]? = []
-        var archivedIDs: [String]? = []
-        let userTags: [String: [String]]
-        let annotations: [String: String]
-    }
+    func setAnnotation(_ text: String, for emailID: UUID) { review.setAnnotation(text, for: emailID) }
+    func annotationFor(_ emailID: UUID) -> String { review.annotation(for: emailID) }
 
     private let isoFormatter = ISO8601DateFormatter()
     private var searchDebounceTask: Task<Void, Never>?
@@ -462,9 +396,17 @@ class ParsedEmailListViewModel: ObservableObject {
         self.archive = archive
         self.pager = ArchiveListViewModel(archive: archive, pageSize: pageSize, maxRetained: maxRetained)
         loadSavedSearches()
-        loadUserData()
-        _userDataInitialized = true
+        // Views observe this VM — forward review-state changes (pin/read/tag
+        // badges) so rows re-render without observing the service directly.
+        reviewChangeForwarder = review.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+        // §20: one-time migration of the legacy review JSON into SQLite —
+        // idempotent, verified, keeps the JSON as rollback evidence.
+        Task { @MainActor [review] in await review.migrateLegacyJSONIfNeeded() }
     }
+
+    private var reviewChangeForwarder: AnyCancellable?
 
     // MARK: - Paging (Part S)
 
@@ -602,6 +544,8 @@ class ParsedEmailListViewModel: ObservableObject {
         residentEmails = ids.compactMap { byID[$0] }
         emailCount = residentEmails.count
         queryTotalCount = pager.totalCount
+        // §19: review state for exactly this window (bounded read).
+        await review.hydrateWindow(ids: ids)
         // Window changed → per-window derived state must be recomputed.
         computePriorityScores()
         if isProductionArchive {
@@ -960,9 +904,9 @@ class ParsedEmailListViewModel: ObservableObject {
         }
 
         var result = residentEmails.filter { email in
-            if deletedIDs.contains(email.id) { return false }
-            if archivedIDs.contains(email.id) { return false }
-            if showPinnedOnly && !pinnedIDs.contains(email.id) { return false }
+            if review.isTrashed(email.id) { return false }
+            if review.isArchived(email.id) { return false }
+            if showPinnedOnly && !review.isPinned(email.id) { return false }
             if let clusterIDs = clusterFilterIDs {
                 if !clusterIDs.contains(email.id) { return false }
             }
