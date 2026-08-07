@@ -8,7 +8,10 @@ struct ParserFactory {
     ) throws -> [MBOXParser.RawEmail] {
         let ext = fileURL.pathExtension.lowercased()
         switch ext {
-        case "mbox", "eml":
+        case "mbox", "eml", "":
+            // Extensionless files are treated as MBOX (Google Takeout ships
+            // extensionless mbox payloads) — a deliberate, documented mapping
+            // (V2_FORMAT_MATRIX.md), not a silent fallthrough.
             return try MBOXParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
         case "emlx":
             return try EMLXParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
@@ -18,8 +21,17 @@ struct ParserFactory {
             return try PSTParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
         case "nsf":
             return try NSFParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
+        case "zip":
+            // §7.6: no bounded ZIP extraction ships in v2.0 — an explicit,
+            // honest limitation instead of silently mis-parsing the archive
+            // as MBOX. (ZIP contents can be imported after manual extraction.)
+            throw ExtractionError.unsupportedFormat(
+                reason: "ZIP archives are not imported directly in this version. Unzip the archive and import the contained mailbox files (.mbox, .eml, …).")
         default:
-            return try MBOXParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
+            // §7.4: an unknown extension is an explicit error — never a
+            // silent MBOX fallthrough that mis-parses binary data.
+            throw ExtractionError.unsupportedFormat(
+                reason: "Unsupported file type '.\(ext)'. Supported formats: \(allSupportedExtensions.map { ".\($0)" }.joined(separator: ", ")).")
         }
     }
 
@@ -34,7 +46,7 @@ struct ParserFactory {
     /// ordering.
     static func parserIdentity(forExtension ext: String) -> (name: String, version: Int) {
         switch ext.lowercased() {
-        case "mbox", "eml":
+        case "mbox", "eml", "":
             return ("mbox", MBOXParser.parserVersion)
         case "emlx":
             return ("emlx", EMLXParser.parserVersion)
@@ -45,7 +57,7 @@ struct ParserFactory {
         case "nsf":
             return ("nsf", NSFParser.parserVersion)
         default:
-            return ("mbox", MBOXParser.parserVersion)
+            return ("unsupported", 0)
         }
     }
 
@@ -53,15 +65,16 @@ struct ParserFactory {
     /// without holding the entire file in memory. Used by the bulk import
     /// coordinator to decide between callback-based (bounded memory) and
     /// array-based ingest.
-    static let streamableExtensions: Set<String> = ["mbox", "eml"]
+    static let streamableExtensions: Set<String> = ["mbox", "eml", ""]
 
     /// Streaming parse for formats that support it. Calls `onBatch` for each
     /// chunk of `batchSize` parsed messages and immediately drops them, so
     /// peak memory is bounded by `batchSize` rather than file size. For
-    /// formats that cannot stream (PST, NSF, MSG) the caller should fall
-    /// back to `parse(fileURL:senderEmail:onProgress:)`.
+    /// formats that cannot stream (PST, NSF, MSG) the array parser runs and
+    /// the result is drained through `onBatch` in bounded chunks.
     ///
-    /// Returns the total number of messages successfully parsed.
+    /// Returns the SOURCE-SCOPED recovery report (§7.7 — no global mutable
+    /// report; concurrent imports cannot race).
     @discardableResult
     static func parseStreamingCallback(
         fileURL: URL,
@@ -69,10 +82,10 @@ struct ParserFactory {
         batchSize: Int = 200,
         onProgress: ((Double) -> Void)? = nil,
         onBatch: ([MBOXParser.RawEmail]) async throws -> Void
-    ) async throws -> Int {
+    ) async throws -> MBOXParser.ParseRecoveryReport {
         let ext = fileURL.pathExtension.lowercased()
         switch ext {
-        case "mbox", "eml":
+        case "mbox", "eml", "":
             return try await MBOXParser.parseStreamingCallback(
                 fileURL: fileURL,
                 senderEmail: senderEmail,
@@ -81,13 +94,17 @@ struct ParserFactory {
                 onBatch: onBatch
             )
         default:
-            // Non-streamable format: defer to the array-based parser and
-            // hand the entire result to onBatch as a single batch.
+            // Non-streamable format: the array parser runs (rejecting
+            // unsupported extensions) and the result drains in bounded
+            // chunks. These parsers throw on damage rather than recover,
+            // so a successful parse reports zero failures.
             let parsed = try parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
             for chunk in parsed.chunked(into: batchSize) {
                 try await onBatch(chunk)
             }
-            return parsed.count
+            return MBOXParser.ParseRecoveryReport(
+                totalMessages: parsed.count, successfullyParsed: parsed.count,
+                failed: 0, errorCategories: [:])
         }
     }
 }

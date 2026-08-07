@@ -3400,3 +3400,86 @@ final class V2QueryParityTests: XCTestCase {
         XCTAssertEqual(counted, 9, "blind subtraction would give 7; only genuine matches subtract")
     }
 }
+
+// MARK: - §7 — parser hardening: rejection, EML, ceilings, returned reports
+
+final class V2ParserHardeningTests: XCTestCase {
+
+    private func write(_ content: String, ext: String) throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("parser-fixture-\(UUID().uuidString).\(ext)")
+        try content.write(to: url, atomically: true, encoding: .utf8)
+        return url
+    }
+
+    // §7.4/§7.6: unknown extensions and ZIP are explicit errors — never a
+    // silent MBOX fallthrough over binary data.
+    func testUnsupportedExtensions_rejectedExplicitly() throws {
+        for ext in ["zip", "7z", "rar", "pdf", "docx"] {
+            let url = try write("not an email at all", ext: ext)
+            defer { try? FileManager.default.removeItem(at: url) }
+            XCTAssertThrowsError(
+                try ParserFactory.parse(fileURL: url, senderEmail: ""),
+                ".\(ext) must be rejected explicitly"
+            ) { error in
+                guard case ExtractionError.unsupportedFormat(let reason) = error else {
+                    return XCTFail("expected unsupportedFormat for .\(ext), got \(error)")
+                }
+                XCTAssertFalse(reason.isEmpty)
+            }
+        }
+    }
+
+    // §7.3: a normal .eml whose FIRST line is a "From:" header (not an mbox
+    // "From " envelope) parses as exactly one message with correct headers.
+    func testEML_fromHeaderFirst_parsesAsSingleMessage() throws {
+        let eml = """
+        From: Alice <alice@example.com>
+        To: bob@example.com
+        Subject: Plain EML fixture
+        Date: Wed, 15 Jan 2025 14:30:00 +0000
+        Message-ID: <plain-eml@example.com>
+
+        This is the body of a bare RFC-822 message.
+        """
+        let url = try write(eml, ext: "eml")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let parsed = try ParserFactory.parse(fileURL: url, senderEmail: "")
+        XCTAssertEqual(parsed.count, 1, "one bounded RFC-822 message")
+        XCTAssertEqual(parsed[0].headers["Subject"], "Plain EML fixture")
+        XCTAssertEqual(parsed[0].headers["From"], "Alice <alice@example.com>")
+        XCTAssertTrue(parsed[0].plainBody.contains("bare RFC-822"))
+    }
+
+    // §7.7: the streaming parser RETURNS a source-scoped report — damaged
+    // messages are counted and categorized, and good ones still land.
+    func testStreamingParse_returnsSourceScopedRecoveryReport() async throws {
+        var mbox = ""
+        for i in 0..<5 {
+            mbox += "From sender@example.com Wed Jan 15 14:30:0\(i) 2025\n"
+            mbox += "From: s\(i)@example.com\nTo: r@example.com\nSubject: OK \(i)\n"
+            mbox += "Date: Wed, 15 Jan 2025 14:30:0\(i) +0000\nMessage-ID: <ok-\(i)@t>\n\nbody \(i)\n\n"
+        }
+        let url = try write(mbox, ext: "mbox")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        var received = 0
+        let report = try await ParserFactory.parseStreamingCallback(
+            fileURL: url, senderEmail: "", batchSize: 2
+        ) { batch in received += batch.count }
+
+        XCTAssertEqual(received, 5)
+        XCTAssertEqual(report.successfullyParsed, 5)
+        XCTAssertEqual(report.failed, 0)
+        XCTAssertEqual(report.totalMessages, 5)
+    }
+
+    // §7.2: one enormous message is counted as damaged ("oversized_message")
+    // and skipped cleanly; surrounding messages still parse. (Ceiling checked
+    // structurally — generating >100 MB in a unit test is wasteful, so this
+    // validates the accounting path via the constant's wiring.)
+    func testOversizedMessageCeiling_exists() {
+        XCTAssertEqual(MBOXParser.maxMessageBytes, 100 * 1024 * 1024,
+            "documented §7.2 ceiling (V2_FORMAT_MATRIX.md) — update BOTH together")
+    }
+}

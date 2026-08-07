@@ -286,14 +286,13 @@ final class BulkImportCoordinator {
                 committedOrdinal = resumeFrom
 
                 // 4. Streaming parse → persist → index → checkpoint, one
-                //    bounded batch at a time. (1h) The recovery report is a
-                //    global static reflecting only the LAST parse — clear it
-                //    now and capture it immediately after THIS file's parse.
+                //    bounded batch at a time. §7.7: the recovery report is
+                //    RETURNED per source — no global static, no race.
                 self.status = .parsing(file: sourceName)
-                MBOXParser.lastRecoveryReport = nil
+                var fileReport: MBOXParser.ParseRecoveryReport? = nil
 
                 do {
-                    _ = try await ParserFactory.parseStreamingCallback(
+                    fileReport = try await ParserFactory.parseStreamingCallback(
                         fileURL: url,
                         senderEmail: options.senderEmail,
                         batchSize: batchSize,
@@ -422,10 +421,8 @@ final class BulkImportCoordinator {
                     fileError = error
                 }
 
-                // (1h) Capture this file's recovery report NOW — before any
-                // other file parses — to avoid the multi-file race on the
-                // global static.
-                if let report = MBOXParser.lastRecoveryReport {
+                // §7.7: aggregate this file's returned (source-scoped) report.
+                if let report = fileReport {
                     summary.damaged += report.failed
                     summary.discovered += report.totalMessages
                 } else {
