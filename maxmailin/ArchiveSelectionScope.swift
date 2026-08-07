@@ -37,8 +37,13 @@ extension ArchiveDataService {
             return ids.count
         case .query(let query, let exclusions):
             let total = try await count(query: query)
-            // Exclusions are a bounded user set; subtract those that actually match.
-            return max(0, total - exclusions.count)
+            // §15: subtract ONLY exclusions that actually belong to the query —
+            // a deselected id that no longer matches (or was deleted) must not
+            // shrink the count. Exclusions are a bounded user set, so this is
+            // one bounded verification pass, never a result materialization.
+            guard !exclusions.isEmpty else { return total }
+            let matching = try await matchingIDs(among: Array(exclusions), query: query)
+            return max(0, total - matching.count)
         }
     }
 

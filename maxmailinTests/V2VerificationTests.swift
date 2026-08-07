@@ -3198,3 +3198,205 @@ final class V2LifecycleTests: XCTestCase {
         await EmailStore.shared.resetForTesting()
     }
 }
+
+// MARK: - §13–§16 — query parity: compiler, filtered pages, sorts, exact counts, exclusions
+
+@MainActor
+final class V2QueryParityTests: XCTestCase {
+
+    private func tempRoot() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-query-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    private func fixture(
+        i: Int, from: String = "alice@corp.com", to: String = "bob@dest.org",
+        subject: String? = nil, body: String = "common token", size: Int = 100,
+        messageType: String = "received", domains: [String] = ["corp.com"],
+        tags: [String] = [], day: Int? = nil, attachments: [AttachmentMetadata] = []
+    ) -> MBOXParser.RawEmail {
+        let d = String(format: "%02d", 1 + (day ?? i) % 28)
+        return MBOXParser.RawEmail(
+            headers: ["Message-ID": "<qp-\(i)-\(UUID().uuidString)@t>",
+                      "Subject": subject ?? "Subject \(i)",
+                      "From": from, "To": to,
+                      "Date": "Wed, \(d) Jan 2025 10:00:00 +0000"],
+            rawSource: String(repeating: "x", count: size), messageType: messageType,
+            attachments: attachments, timestamp: "2025-01-15T10:00:00Z", domains: domains,
+            plainBody: body, htmlBody: "", tags: tags
+        )
+    }
+
+    private func makeService(_ root: URL) -> (SQLiteEmailStore, FTSSearchIndex, ArchiveDataService) {
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        return (store, fts, ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts)))
+    }
+
+    // §13.1: the compiler maps every legacy operator; unknown keys stay text.
+    func testQueryCompiler_operators() {
+        let q = ArchiveQueryCompiler.compile(
+            #"from:alice@x.com to:bob@y.com subject:"quarterly report" has:attachment type:sent tag:Work domain:x.com before:2025-02-01 after:2024-01-15 is:pinned budget forecast"#)
+        XCTAssertEqual(q.sender, "alice@x.com")
+        XCTAssertEqual(q.recipient, "bob@y.com")
+        XCTAssertEqual(q.subjectContains, "quarterly report")
+        XCTAssertEqual(q.hasAttachments, true)
+        XCTAssertEqual(q.messageType, "sent")
+        XCTAssertEqual(q.userTag, "Work")
+        XCTAssertEqual(q.domain, "x.com")
+        XCTAssertTrue(q.pinnedOnly)
+        XCTAssertNotNil(q.beforeDate)
+        XCTAssertNotNil(q.afterDate)
+        XCTAssertEqual(q.text, "budget forecast", "free text preserved")
+
+        let unknown = ArchiveQueryCompiler.compile("weird:thing hello")
+        XCTAssertEqual(unknown.text, "weird:thing hello", "unrecognized operator is searched literally, not dropped")
+    }
+
+    // §13/§16: SQL-compiled filters and every sort page exactly like an
+    // in-memory oracle — across page boundaries, no skip/duplicate.
+    func testFilteredPagesAndSorts_matchOracle() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (store, _, svc) = makeService(root)
+
+        var emails: [MBOXParser.RawEmail] = []
+        for i in 0..<60 {
+            emails.append(fixture(
+                i: i,
+                from: i % 3 == 0 ? "alice@corp.com" : "carol@other.net",
+                subject: "S-\(String(format: "%03d", (i * 37) % 100))-\(i)",
+                size: (i * 131) % 5_000,
+                messageType: i % 2 == 0 ? "sent" : "received",
+                domains: i % 4 == 0 ? ["corp.com", "extra.io"] : ["corp.com"],
+                tags: i % 5 == 0 ? ["Gmail-Label"] : [],
+                attachments: i % 6 == 0 ? [AttachmentMetadata(filename: "a.pdf", mimeType: "application/pdf", size: 1)] : []
+            ))
+        }
+        _ = try await store.insertBatch(emails, sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 100, progress: nil)
+        try await store.userTagAdd("Reviewed", ids: emails.enumerated().filter { $0.offset % 7 == 0 }.map { $0.element.id })
+
+        // Filter oracle checks (count + page contents).
+        var senderQ = EmailQuery(); senderQ.sender = "alice"
+        let senderCount = try await svc.count(query: senderQ)
+        XCTAssertEqual(senderCount, emails.filter { $0.headers["From"]!.contains("alice") }.count)
+
+        var typeQ = EmailQuery(); typeQ.messageType = "sent"
+        let typeCount = try await svc.count(query: typeQ)
+        XCTAssertEqual(typeCount, 30)
+
+        var attachQ = EmailQuery(); attachQ.hasAttachments = true
+        let attachCount = try await svc.count(query: attachQ)
+        XCTAssertEqual(attachCount, 10)
+
+        var domainQ = EmailQuery(); domainQ.domain = "extra.io"
+        let domainCount = try await svc.count(query: domainQ)
+        XCTAssertEqual(domainCount, 15)
+
+        var tagQ = EmailQuery(); tagQ.userTag = "Reviewed"
+        let tagCount = try await svc.count(query: tagQ)
+        XCTAssertEqual(tagCount, 9)
+
+        // Sort keyset paging == oracle order, across small pages.
+        func pageAll(_ query: EmailQuery) async throws -> [EmailSummary] {
+            var out: [EmailSummary] = []
+            var cursor: EmailPageCursor? = nil
+            while true {
+                let page = try await svc.page(query: query, cursor: cursor, limit: 7)
+                out.append(contentsOf: page.summaries)
+                guard let next = page.nextCursor else { break }
+                cursor = next
+                if page.summaries.isEmpty { break }
+            }
+            return out
+        }
+
+        var subjectQ = EmailQuery(); subjectQ.sort = .subjectAZ
+        let subjectPaged = try await pageAll(subjectQ)
+        XCTAssertEqual(subjectPaged.count, 60, "no skip/dup across subject pages")
+        let subjectOracle = subjectPaged.map(\.subject).sorted {
+            $0.compare($1, options: .caseInsensitive) == .orderedAscending
+        }
+        XCTAssertEqual(subjectPaged.map(\.subject), subjectOracle, "subject A–Z order")
+        XCTAssertEqual(Set(subjectPaged.map(\.id)).count, 60, "unique rows")
+
+        var sizeQ = EmailQuery(); sizeQ.sort = .sizeDesc
+        let sizePaged = try await pageAll(sizeQ)
+        XCTAssertEqual(sizePaged.count, 60)
+        XCTAssertEqual(sizePaged.map(\.sizeBytes), sizePaged.map(\.sizeBytes).sorted(by: >), "size descending")
+
+        var oldestQ = EmailQuery(); oldestQ.sort = .dateAsc
+        let oldestPaged = try await pageAll(oldestQ)
+        XCTAssertEqual(oldestPaged.map(\.date), oldestPaged.map(\.date).sorted(), "date ascending")
+
+        // Combined filter + sort.
+        var combo = EmailQuery(); combo.messageType = "sent"; combo.sort = .sizeDesc
+        let comboPaged = try await pageAll(combo)
+        XCTAssertEqual(comboPaged.count, 30)
+        XCTAssertEqual(comboPaged.map(\.sizeBytes), comboPaged.map(\.sizeBytes).sorted(by: >))
+    }
+
+    // §14/§55: MORE THAN 2,000 identical-term matches — the ranked cursor
+    // pages past the old cap with no skip/duplicate, and the count is EXACT.
+    func testTextSearch_beyond2000Matches_exactCountAndFullIteration() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (store, fts, svc) = makeService(root)
+
+        let total = 2_100
+        var emails: [MBOXParser.RawEmail] = []
+        emails.reserveCapacity(total)
+        for i in 0..<total {
+            emails.append(fixture(i: i, body: "needle haystack \(i)", day: i))
+        }
+        _ = try await store.insertBatch(emails, sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 500, progress: nil)
+        try await fts.indexBatch(emails)
+
+        // §14.2 exact count (needs the streamed path once > cap).
+        let count = try await svc.count(query: EmailQuery(text: "needle"))
+        XCTAssertEqual(count, total, "text count must be exact past 2,000 (got \(count))")
+
+        // §14.1 iterate the ranked cursor to exhaustion: every match exactly once.
+        var seen = Set<EmailID>()
+        var cursor: RankedSearchCursor? = nil
+        var rounds = 0
+        repeat {
+            let page = try await svc.searchRanked(query: EmailQuery(text: "needle"), cursor: cursor, limit: 500)
+            for s in page.summaries {
+                XCTAssertTrue(seen.insert(s.id).inserted, "duplicate in ranked continuation: \(s.id)")
+            }
+            cursor = page.nextCursor
+            rounds += 1
+        } while cursor != nil && rounds < 50
+        XCTAssertEqual(seen.count, total, "ranked continuation covers every match past 2,000")
+
+        // Trash a match: count drops exactly by one (fast path disabled).
+        try await store.reviewSetFlag(.trashed, ids: [emails[0].id], value: true)
+        let afterTrash = try await svc.count(query: EmailQuery(text: "needle"))
+        XCTAssertEqual(afterTrash, total - 1, "trashed match excluded from the exact count")
+    }
+
+    // §15: scope count subtracts ONLY exclusions that actually match the query.
+    func testSelectionScope_exclusionsVerifiedAgainstQuery() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (store, fts, svc) = makeService(root)
+        let matching = (0..<10).map { fixture(i: $0, body: "target term \($0)") }
+        let nonMatching = (100..<105).map { fixture(i: $0, body: "unrelated") }
+        _ = try await store.insertBatch(matching + nonMatching, sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 100, progress: nil)
+        try await fts.indexBatch(matching + nonMatching)
+
+        let query = EmailQuery(text: "target")
+        let base = try await svc.count(scope: .query(query, exclusions: []))
+        XCTAssertEqual(base, 10)
+
+        // A real exclusion + a non-matching id + a nonexistent id: only the
+        // real one may shrink the count.
+        let exclusions: Set<EmailID> = [matching[0].id, nonMatching[0].id, UUID()]
+        let counted = try await svc.count(scope: .query(query, exclusions: exclusions))
+        XCTAssertEqual(counted, 9, "blind subtraction would give 7; only genuine matches subtract")
+    }
+}

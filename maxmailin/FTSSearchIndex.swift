@@ -579,6 +579,38 @@ actor FTSSearchIndex {
         return total
     }
 
+    /// §15: which of `ids` match `ftsQuery` — one bounded query per shard per
+    /// chunk (MATCH + email_id IN). Used to verify Select-All exclusions
+    /// against the query, never to materialize result sets.
+    func matchingIDs(among ids: [UUID], ftsQuery: String) throws -> Set<UUID> {
+        try migrateLegacyIfNeeded()
+        let trimmed = ftsQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !ids.isEmpty else { return [] }
+        var out = Set<UUID>()
+        let chunks = stride(from: 0, to: ids.count, by: 500).map {
+            Array(ids[$0..<Swift.min($0 + 500, ids.count)])
+        }
+        for year in try discoverAllShardYears() {
+            let db = try ensureShard(year: year)
+            for chunk in chunks {
+                let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+                let stmt = try prepare(db, """
+                    SELECT email_id FROM email_search
+                    WHERE email_search MATCH ? AND email_id IN (\(placeholders));
+                """)
+                defer { sqlite3_finalize(stmt) }
+                bindText(stmt, 1, trimmed)
+                for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 2), id.uuidString) }
+                while sqlite3_step(stmt) == SQLITE_ROW {
+                    if let c = sqlite3_column_text(stmt, 0), let id = UUID(uuidString: String(cString: c)) {
+                        out.insert(id)
+                    }
+                }
+            }
+        }
+        return out
+    }
+
     /// Remove every row from every shard. Files are kept (lighter than a
     /// full unlink, and the next insert re-uses the open handles).
     func clear() throws {

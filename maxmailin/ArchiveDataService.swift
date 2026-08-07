@@ -63,6 +63,23 @@ final class ArchiveDataService {
         try await repository.exists(ids: ids)
     }
 
+    /// §15: which of `ids` genuinely match `query` — structured filters
+    /// verified in SQL, text via a bounded per-ID FTS check. Used to verify
+    /// Select-All exclusions; bounded by `ids`, never by the result set.
+    func matchingIDs(among ids: [EmailID], query: EmailQuery) async throws -> Set<EmailID> {
+        guard !ids.isEmpty else { return [] }
+        guard let repo = repository as? EmailStoreRepository,
+              let sqlite = repo.store as? SQLiteEmailStore else {
+            return try await exists(ids: ids)   // best effort without SQL access
+        }
+        var candidates = try await sqlite.matchingIDs(among: ids, query: query)
+        if let text = query.text, !text.isEmpty, !candidates.isEmpty {
+            let ftsQuery = FTSQueryBuilder.freeTextOrBoolean(text) ?? FTSQueryBuilder.escapeTerm(text)
+            candidates = try await repo.fts.matchingIDs(among: Array(candidates), ftsQuery: ftsQuery)
+        }
+        return candidates
+    }
+
     // MARK: - Part P — ranked continuation + bounded regex
 
     /// One bounded page of ranked (bm25) text-search results with a

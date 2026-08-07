@@ -333,18 +333,32 @@ class ParsedEmailListViewModel: ObservableObject {
             : visibleEmails.count
     }
 
-    /// The current filter state mapped onto the bounded archive query (text +
-    /// date bounds — the fields `EmailQuery` resolves today). This is the same
-    /// mapping the AI assistant scope uses (Part D precedent); feature views
-    /// stream their own bounded working sets for this query instead of
-    /// receiving email arrays.
+    /// §13.1: the current filter state compiled onto the full archive query —
+    /// operator syntax (from:/to:/has:attachment/…) via ArchiveQueryCompiler
+    /// plus the structured UI filter state. This is the same mapping the AI
+    /// assistant scope uses (Part D precedent); feature views stream their own
+    /// bounded working sets for this query instead of receiving email arrays.
     var currentArchiveQuery: EmailQuery {
-        var query = EmailQuery.all
-        let text = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !text.isEmpty { query.text = text }
-        if startDate > .distantPast { query.afterDate = startDate }
-        if endDate < .distantFuture { query.beforeDate = endDate }
-        return query
+        var base = EmailQuery.all
+        if startDate > .distantPast { base.afterDate = startDate }
+        if endDate < .distantFuture { base.beforeDate = endDate }
+        if selectedFromEmails.count == 1 { base.sender = selectedFromEmails[0] }
+        if selectedToEmails.count == 1 { base.recipient = selectedToEmails[0].lowercased() }
+        if selectedDomains.count == 1 { base.domain = selectedDomains[0].lowercased() }
+        if selectedSubjects.count == 1 { base.subjectContains = selectedSubjects[0] }
+        if selectedTags.count == 1 { base.userTag = selectedTags[0] }
+        if let evidence = selectedEvidenceTag, evidence != .none { base.evidenceTag = evidence.rawValue }
+        if hasAttachmentFilter { base.hasAttachments = true }
+        if showPinnedOnly { base.pinnedOnly = true }
+        switch sortBy {
+        case .dateDesc: base.sort = .dateDesc
+        case .dateAsc: base.sort = .dateAsc
+        case .subjectAsc: base.sort = .subjectAZ
+        case .sizeDesc: base.sort = .sizeDesc
+        case .priorityDesc: base.sort = .priorityDesc
+        }
+        return ArchiveQueryCompiler.compile(
+            searchText.trimmingCharacters(in: .whitespacesAndNewlines), base: base)
     }
     @Published var aiPinnedIDs: Set<UUID>? = nil
     @Published var emailThreads: [EmailThread] = []

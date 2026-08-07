@@ -121,7 +121,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// store fully at the previous version — never half-migrated, and a user
     /// DB is NEVER silently recreated. A store newer than this build refuses
     /// to open instead of guessing.
-    static let currentSchemaVersion = 3
+    static let currentSchemaVersion = 4
 
     private func migrateSchema(_ handle: OpaquePointer) throws {
         var v = try scalarInt(handle, "PRAGMA user_version;")
@@ -153,6 +153,14 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 try exec(handle, "PRAGMA user_version = 3;")
             }
             v = 3
+        }
+        if v == 3 {
+            try inExclusiveTransaction(handle) {
+                // §16: priority sort keyset support.
+                try exec(handle, "CREATE INDEX IF NOT EXISTS idx_derived_priority ON derived(priority, email_id);")
+                try exec(handle, "PRAGMA user_version = 4;")
+            }
+            v = 4
         }
     }
 
@@ -1477,6 +1485,199 @@ actor SQLiteEmailStore: EmailArchiveStore {
         var out: [AggregateBucket] = []
         while try stepRow(stmt, db) {
             out.append(AggregateBucket(value: columnText(stmt, 0), count: Int(sqlite3_column_int64(stmt, 1))))
+        }
+        return out
+    }
+
+    // MARK: - §13 filtered queries (SQL-compiled; no field silently ignored)
+
+    private enum QueryBind {
+        case text(String)
+        case int(Int64)
+    }
+
+    /// Compile every non-text EmailQuery field into WHERE clauses + binds.
+    /// The email row is aliased `e`. Text is handled by FTS upstream.
+    private static func filterClauses(_ q: EmailQuery) -> (sql: [String], binds: [QueryBind]) {
+        var sql: [String] = []
+        var binds: [QueryBind] = []
+        if let after = q.afterDate {
+            sql.append("e.date >= ?")
+            binds.append(.int(Int64(after.timeIntervalSince1970.rounded())))
+        }
+        if let before = q.beforeDate {
+            sql.append("e.date < ?")
+            binds.append(.int(Int64(before.timeIntervalSince1970.rounded())))
+        }
+        if let sender = q.sender, !sender.isEmpty {
+            sql.append("instr(lower(e.from_addr), lower(?)) > 0")
+            binds.append(.text(sender))
+        }
+        if let recipient = q.recipient, !recipient.isEmpty {
+            sql.append("""
+                EXISTS (SELECT 1 FROM email_participants p WHERE p.email_id = e.id
+                        AND p.role IN ('TO','CC','BCC') AND instr(p.normalized_address, lower(?)) > 0)
+                """)
+            binds.append(.text(recipient))
+        }
+        if let subject = q.subjectContains, !subject.isEmpty {
+            sql.append("instr(lower(e.subject), lower(?)) > 0")
+            binds.append(.text(subject))
+        }
+        if let domain = q.domain, !domain.isEmpty {
+            sql.append("EXISTS (SELECT 1 FROM email_domains dm WHERE dm.email_id = e.id AND dm.domain = ?)")
+            binds.append(.text(domain))
+        }
+        if let tag = q.userTag, !tag.isEmpty {
+            sql.append("EXISTS (SELECT 1 FROM email_user_tags ut WHERE ut.email_id = e.id AND ut.tag = ?)")
+            binds.append(.text(tag))
+        }
+        if let etag = q.evidenceTag, !etag.isEmpty {
+            sql.append("EXISTS (SELECT 1 FROM forensic_evidence_tags ft WHERE ft.email_id = e.id AND ft.tag = ?)")
+            binds.append(.text(etag))
+        }
+        if let hasAttach = q.hasAttachments {
+            sql.append("e.has_attach = \(hasAttach ? 1 : 0)")
+        }
+        if let type = q.messageType, !type.isEmpty {
+            sql.append("e.message_type = ?")
+            binds.append(.text(type))
+        }
+        if q.pinnedOnly {
+            sql.append("EXISTS (SELECT 1 FROM email_review_state rv WHERE rv.email_id = e.id AND rv.pinned = 1)")
+        }
+        if !q.includeTrashed {
+            sql.append(notTrashedPredicate)
+        }
+        return (sql, binds)
+    }
+
+    /// ORDER BY + keyset predicate for each §16 sort. `sortKey` is the cursor
+    /// boundary value (subject string / decimal size / decimal priority).
+    private static func sortSQL(_ sort: EmailSortOrder) -> (orderBy: String, keyset: String, joins: String) {
+        switch sort {
+        case .dateDesc:
+            return ("e.date DESC, e.id DESC", "(e.date < ? OR (e.date = ? AND e.id < ?))", "")
+        case .dateAsc:
+            return ("e.date ASC, e.id ASC", "(e.date > ? OR (e.date = ? AND e.id > ?))", "")
+        case .subjectAZ:
+            return ("e.subject COLLATE NOCASE ASC, e.id ASC",
+                    "(e.subject > ? COLLATE NOCASE OR (e.subject = ? COLLATE NOCASE AND e.id > ?))", "")
+        case .sizeDesc:
+            return ("e.size_bytes DESC, e.id DESC",
+                    "(e.size_bytes < ? OR (e.size_bytes = ? AND e.id < ?))", "")
+        case .priorityDesc:
+            return ("COALESCE(d.priority, -1) DESC, e.id DESC",
+                    "(COALESCE(d.priority, -1) < ? OR (COALESCE(d.priority, -1) = ? AND e.id < ?))",
+                    "LEFT JOIN derived d ON d.email_id = e.id")
+        }
+    }
+
+    private func bindQueryValues(_ stmt: OpaquePointer?, _ binds: [QueryBind], startingAt index: Int32) -> Int32 {
+        var idx = index
+        for bind in binds {
+            switch bind {
+            case .text(let s): bindText(stmt, idx, s)
+            case .int(let i): sqlite3_bind_int64(stmt, idx, i)
+            }
+            idx += 1
+        }
+        return idx
+    }
+
+    /// One keyset page of a fully SQL-compiled filtered query (§13/§16).
+    /// Returns the summaries and each row's sort key so the caller can build
+    /// the continuation cursor for any sort order.
+    func filteredSummaryPage(
+        _ query: EmailQuery, cursorSortKey: String?, cursorID: UUID?, limit: Int
+    ) throws -> [(summary: EmailSummary, sortKey: String)] {
+        let db = try ensureDB()
+        let (clauses, binds) = Self.filterClauses(query)
+        let (orderBy, keyset, joins) = Self.sortSQL(query.sort)
+        let sortKeyExpr: String
+        switch query.sort {
+        case .dateDesc, .dateAsc: sortKeyExpr = "CAST(e.date AS TEXT)"
+        case .subjectAZ: sortKeyExpr = "e.subject"
+        case .sizeDesc: sortKeyExpr = "CAST(e.size_bytes AS TEXT)"
+        case .priorityDesc: sortKeyExpr = "CAST(COALESCE(d.priority, -1) AS TEXT)"
+        }
+        var whereSQL = clauses.isEmpty ? "1=1" : clauses.joined(separator: " AND ")
+        let hasCursor = (cursorSortKey != nil && cursorID != nil)
+        if hasCursor { whereSQL += " AND " + keyset }
+        let sql = """
+            SELECT e.id, e.message_id, e.subject, e.from_addr, e.date, e.body_preview,
+                   e.has_attach, e.size_bytes, \(sortKeyExpr)
+            FROM emails e \(joins)
+            WHERE \(whereSQL)
+            ORDER BY \(orderBy) LIMIT ?;
+        """
+        let stmt = try prepare(db, sql)
+        defer { sqlite3_finalize(stmt) }
+        var idx = bindQueryValues(stmt, binds, startingAt: 1)
+        if hasCursor, let key = cursorSortKey, let cid = cursorID {
+            // The keyset predicates take (key, key, id) in every sort.
+            switch query.sort {
+            case .subjectAZ:
+                bindText(stmt, idx, key); idx += 1
+                bindText(stmt, idx, key); idx += 1
+            default:
+                let intKey = Int64(key) ?? 0
+                sqlite3_bind_int64(stmt, idx, intKey); idx += 1
+                sqlite3_bind_int64(stmt, idx, intKey); idx += 1
+            }
+            bindText(stmt, idx, cid.uuidString); idx += 1
+        }
+        sqlite3_bind_int(stmt, idx, Int32(limit))
+
+        var out: [(EmailSummary, String)] = []
+        while try stepRow(stmt, db) {
+            guard let id = columnUUID(stmt, 0) else { continue }
+            let summary = EmailSummary(
+                id: id,
+                messageID: columnTextOptional(stmt, 1),
+                subject: columnText(stmt, 2),
+                from: columnText(stmt, 3),
+                date: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 4))),
+                bodyPreview: columnText(stmt, 5),
+                hasAttachments: sqlite3_column_int(stmt, 6) != 0,
+                sizeBytes: Int(sqlite3_column_int64(stmt, 7))
+            )
+            out.append((summary, columnText(stmt, 8)))
+        }
+        return out
+    }
+
+    /// Exact COUNT(*) for a fully SQL-compiled filtered query (§14.2 for the
+    /// non-text case) — an aggregate, never a materialization.
+    func filteredCount(_ query: EmailQuery) throws -> Int {
+        let db = try ensureDB()
+        let (clauses, binds) = Self.filterClauses(query)
+        let whereSQL = clauses.isEmpty ? "1=1" : clauses.joined(separator: " AND ")
+        let stmt = try prepare(db, "SELECT COUNT(*) FROM emails e WHERE \(whereSQL);")
+        defer { sqlite3_finalize(stmt) }
+        _ = bindQueryValues(stmt, binds, startingAt: 1)
+        guard try stepRow(stmt, db) else { return 0 }
+        return Int(sqlite3_column_int64(stmt, 0))
+    }
+
+    /// Which of `candidates` satisfy the query's NON-TEXT filters — used to
+    /// verify FTS candidates (text queries) and scope exclusions (§15) with
+    /// one bounded IN query per chunk.
+    func matchingIDs(among candidates: [UUID], query: EmailQuery) throws -> Set<UUID> {
+        guard !candidates.isEmpty else { return [] }
+        let db = try ensureDB()
+        let (clauses, binds) = Self.filterClauses(query)
+        var out = Set<UUID>()
+        for chunk in candidates.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            var whereSQL = "e.id IN (\(placeholders))"
+            if !clauses.isEmpty { whereSQL += " AND " + clauses.joined(separator: " AND ") }
+            let stmt = try prepare(db, "SELECT e.id FROM emails e WHERE \(whereSQL);")
+            defer { sqlite3_finalize(stmt) }
+            var idx: Int32 = 1
+            for id in chunk { bindText(stmt, idx, id.uuidString); idx += 1 }
+            _ = bindQueryValues(stmt, binds, startingAt: idx)
+            while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.insert(id) } }
         }
         return out
     }
