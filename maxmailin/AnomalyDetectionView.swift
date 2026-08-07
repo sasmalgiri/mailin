@@ -69,7 +69,7 @@ struct AnomalyDetectionView: View {
                         title: "No Anomalies Found",
                         message: "No unusual patterns detected in the current email archive."
                     )
-                    Button("Run Analysis") { analyze() }
+                    Button("Run Analysis") { analyze(force: true) }
                         .buttonStyle(PrimaryButtonStyle())
                         .padding(.top, Spacing.medium)
                     Spacer()
@@ -330,14 +330,99 @@ struct AnomalyDetectionView: View {
         return "Low"
     }
 
-    private func analyze() {
-        isAnalyzing = true
-        Task {
-            let results = (try? await AnomalyDetectionEngine.detectAnomalies(from: .shared)) ?? []
-            await MainActor.run {
-                anomalies = results
+    // Part I: findings are PERSISTED per corpus revision — reopening this view
+    // reads the cached findings instead of re-streaming the archive. Detection
+    // re-runs only when the corpus revision moved (import/delete) or nothing
+    // is cached yet.
+    private func analyze(force: Bool = false) {
+        Task { @MainActor in
+            let revision = (try? await ArchiveCorpusRevision.shared.reconciled()) ?? 0
+            if !force,
+               let cached = AnomalyFindingsCache.load(),
+               cached.corpusRevision == revision,
+               cached.engineVersion == AnomalyFindingsCache.engineVersion {
+                anomalies = cached.anomalies()
                 isAnalyzing = false
+                return
             }
+            isAnalyzing = true
+            let results = (try? await AnomalyDetectionEngine.detectAnomalies(from: .shared)) ?? []
+            AnomalyFindingsCache.save(results, corpusRevision: revision)
+            anomalies = results
+            isAnalyzing = false
+        }
+    }
+}
+
+// MARK: - Persisted anomaly findings (Part I)
+
+/// Compact persisted snapshot of the last archive-wide anomaly run: per-finding
+/// type/severity/title/detail plus the (already capped) affected-email ids.
+/// Keyed by corpus revision + engine version, mirroring the derived-state
+/// staleness contract.
+enum AnomalyFindingsCache {
+    /// Bump when the detection logic changes.
+    static let engineVersion = 1
+
+    struct CachedAnomaly: Codable {
+        let type: String
+        let severity: Double
+        let title: String
+        let detail: String
+        let affectedEmails: [UUID]
+        let timestamp: Date?
+    }
+
+    struct Snapshot: Codable {
+        let engineVersion: Int
+        let corpusRevision: Int
+        let findings: [CachedAnomaly]
+
+        func anomalies() -> [AnomalyDetectionEngine.Anomaly] {
+            findings.compactMap { cached in
+                guard let type = AnomalyDetectionEngine.AnomalyType(rawValue: cached.type) else { return nil }
+                return AnomalyDetectionEngine.Anomaly(
+                    type: type,
+                    severity: cached.severity,
+                    title: cached.title,
+                    detail: cached.detail,
+                    affectedEmails: cached.affectedEmails,
+                    timestamp: cached.timestamp
+                )
+            }
+        }
+    }
+
+    private static var cacheURL: URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let dir = appSupport.appendingPathComponent("com.ecosanskriti.mailin", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("anomaly_findings.json")
+    }
+
+    static func load() -> Snapshot? {
+        guard let data = try? Data(contentsOf: cacheURL) else { return nil }
+        return try? JSONDecoder().decode(Snapshot.self, from: data)
+    }
+
+    static func save(_ anomalies: [AnomalyDetectionEngine.Anomaly], corpusRevision: Int) {
+        let snapshot = Snapshot(
+            engineVersion: engineVersion,
+            corpusRevision: corpusRevision,
+            findings: anomalies.map {
+                CachedAnomaly(
+                    type: $0.type.rawValue,
+                    severity: $0.severity,
+                    title: $0.title,
+                    detail: $0.detail,
+                    affectedEmails: $0.affectedEmails,
+                    timestamp: $0.timestamp
+                )
+            }
+        )
+        if let data = try? JSONEncoder().encode(snapshot) {
+            try? data.write(to: cacheURL, options: [.atomic, .completeFileProtection])
         }
     }
 }

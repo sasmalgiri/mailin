@@ -51,7 +51,9 @@ struct ThreadGrouper {
         return "single:" + email.id.uuidString
     }
 
-    private static func normalizeSubject(_ subject: String) -> String {
+    /// Shared with ThreadKeyDeriver (Part L) so persisted subject-fallback
+    /// thread keys agree with the legacy visible-page grouping.
+    static func normalizeSubject(_ subject: String) -> String {
         var s = subject.trimmingCharacters(in: .whitespacesAndNewlines)
         let prefixes = ["re:", "fwd:", "fw:", "re[", "fwd["]
         var changed = true

@@ -47,6 +47,12 @@ final class ArchiveCorpusRevision {
     /// Bump after a content-affecting change (import / delete / redaction).
     @discardableResult
     func bump() async throws -> Int { try await store.bumpCorpusRevision() }
+
+    /// Current revision, after reconciling with the store's row count — so an
+    /// import path that doesn't bump explicitly still moves the revision, and
+    /// stale derived state is detected (two O(1) aggregates).
+    @discardableResult
+    func reconciled() async throws -> Int { try await store.reconcileCorpusRevisionWithCount() }
 }
 
 // MARK: - Derived state store
@@ -59,9 +65,14 @@ final class ArchiveDerivedStateStore {
 
     func upsert(_ records: [DerivedRecord]) async throws { try await store.derivedUpsert(records) }
     func fetch(ids: [EmailID]) async throws -> [EmailID: DerivedRecord] { try await store.derivedFetch(ids: ids) }
-    func staleIDs(below revision: Int, limit: Int) async throws -> [EmailID] { try await store.derivedStaleIDs(below: revision, limit: limit) }
+    func staleIDs(below revision: Int, minAnalysisVersion: Int = 0, limit: Int) async throws -> [EmailID] {
+        try await store.derivedStaleIDs(below: revision, minAnalysisVersion: minAnalysisVersion, limit: limit)
+    }
     func count() async throws -> Int { try await store.derivedCount() }
     func delete(ids: Set<EmailID>) async throws { try await store.derivedDelete(ids: ids) }
+    /// Partial update (Part J): persist ONLY topic assignments, preserving every
+    /// other derived field another producer wrote.
+    func setTopics(_ topics: [EmailID: String]) async throws { try await store.derivedSetTopics(topics) }
 }
 
 // MARK: - Background job runner
@@ -93,6 +104,28 @@ final class ArchiveBackgroundJobRunner: ObservableObject {
     @discardableResult
     func run(batchSize: Int = 300,
              compute: @escaping @Sendable ([MBOXParser.RawEmail], Int) -> [DerivedRecord]) async -> State {
+        await run(batchSize: batchSize, minAnalysisVersion: 0) { emails, _, rev in
+            compute(emails, rev)
+        }
+    }
+
+    /// Version- and merge-aware variant (Parts I/K): records whose
+    /// `analysis_version` is below `minAnalysisVersion` are treated as stale, so
+    /// bumping the producer's version constant triggers an incremental
+    /// recompute. `compute` also receives the EXISTING derived records for the
+    /// batch so producers can merge (preserve fields another producer — topics,
+    /// thread ids, predictive scores — persisted). Async so on-device model
+    /// engines can be awaited per bounded batch.
+    ///
+    /// `staleBelowRevision: false` makes the work list purely
+    /// missing-or-version-bumped — the incremental mode for per-email
+    /// content-derived attributes, which don't change when OTHER emails are
+    /// imported (already-computed EmailIDs are skipped).
+    @discardableResult
+    func run(batchSize: Int = 300,
+             minAnalysisVersion: Int,
+             staleBelowRevision: Bool = true,
+             compute: @escaping @Sendable ([MBOXParser.RawEmail], [EmailID: DerivedRecord], Int) async -> [DerivedRecord]) async -> State {
         cancel()
         state = .running
         processed = 0
@@ -101,15 +134,35 @@ final class ArchiveBackgroundJobRunner: ObservableObject {
             total = try await store.totalCount()
             while true {
                 if Task.isCancelled { state = .cancelled; return state }
-                let ids = try await store.derivedStaleIDs(below: rev, limit: batchSize)
+                let ids = try await store.derivedStaleIDs(
+                    below: staleBelowRevision ? rev : 0,
+                    minAnalysisVersion: minAnalysisVersion, limit: batchSize
+                )
                 if ids.isEmpty { break }
                 let emails = try await store.emails(withIDs: ids)
-                let records = compute(emails, rev)
+                let existing = try await derived.fetch(ids: ids)
+                let records = await compute(emails, existing, rev)
                 // Ensure each record carries the revision it was computed at.
                 let stamped = records.map { r -> DerivedRecord in
                     var r = r; if r.corpusRevision == 0 { r.corpusRevision = rev }; return r
                 }
-                try await derived.upsert(stamped)
+                // Guard against a compute that fails to stamp the version: an
+                // unstamped record would stay "stale" forever and loop.
+                let versionSafe = stamped.map { r -> DerivedRecord in
+                    var r = r
+                    if r.analysisVersion < minAnalysisVersion { r.analysisVersion = minAnalysisVersion }
+                    return r
+                }
+                // If compute returned nothing for some ids, still mark them
+                // processed (placeholder record) so the job can't spin forever.
+                let returnedIDs = Set(versionSafe.map(\.emailID))
+                let placeholders = ids.filter { !returnedIDs.contains($0) }.map { id -> DerivedRecord in
+                    var r = existing[id] ?? DerivedRecord(emailID: id)
+                    r.corpusRevision = rev
+                    r.analysisVersion = minAnalysisVersion
+                    return r
+                }
+                try await derived.upsert(versionSafe + placeholders)
                 processed += ids.count
             }
             state = .completed

@@ -44,8 +44,34 @@ struct TopicClustersView: View {
         .featureTutorial(.topicClusters, key: "topic_clusters_tutorial_seen", isPresented: $showTutorial)
         .onAppear {
             if clusters.isEmpty {
-                computeClusters()
+                loadPersistedOrCompute()
             }
+        }
+    }
+
+    /// Part J: reopen is instant — load the persisted clustering (valid for
+    /// the current corpus revision) instead of re-running k-means; compute
+    /// only when nothing valid is persisted (or on explicit Re-analyze).
+    private func loadPersistedOrCompute() {
+        Task { @MainActor in
+            let revision = (try? await ArchiveCorpusRevision.shared.reconciled()) ?? 0
+            if let cached = TopicClusterCache.load(),
+               cached.corpusRevision == revision,
+               cached.analysisVersion == TopicClusterCache.analysisVersion,
+               !cached.clusters.isEmpty {
+                clusters = cached.clusters.map { c in
+                    TopicCluster(
+                        label: c.label,
+                        keywords: c.keywords,
+                        emailIDs: c.emailIDs,
+                        color: Self.clusterColors[c.colorIndex % Self.clusterColors.count],
+                        coherence: c.coherence
+                    )
+                }
+                silhouetteScore = cached.silhouette
+                return
+            }
+            computeClusters()
         }
     }
 
@@ -361,6 +387,11 @@ struct TopicClustersView: View {
 
     // MARK: - Compute
 
+    // Sampling bound (Part J): clustering operates on the bounded working set
+    // this view receives (≤2000 post-G/H) and additionally hard-caps at
+    // `maxClusteringEmails` (10 000) inside kMeansPlusPlusClustering. Only
+    // compact features (sentence vectors + term counts) are derived per email;
+    // bodies are never retained beyond the working set already resident.
     private func computeClusters() {
         isComputing = true
         let allEmails = emails
@@ -372,6 +403,30 @@ struct TopicClustersView: View {
                 self.clusters = result
                 self.silhouetteScore = silhouette
                 self.isComputing = false
+            }
+            // Part J persist-after-compute: topic assignments go to the derived
+            // store (per-email `topic`, partial upsert preserving other derived
+            // fields) and the compact cluster metadata (labels/keywords/ids —
+            // NOT bodies) to the cluster cache, so reopening is a pure read.
+            await MainActor.run {
+                let snapshot = result.map { cluster in
+                    TopicClusterCache.PersistedCluster(
+                        label: cluster.label,
+                        keywords: cluster.keywords,
+                        emailIDs: cluster.emailIDs,
+                        colorIndex: Self.clusterColors.firstIndex(of: cluster.color) ?? 0,
+                        coherence: cluster.coherence
+                    )
+                }
+                var topics: [UUID: String] = [:]
+                for cluster in result {
+                    for id in cluster.emailIDs { topics[id] = cluster.label }
+                }
+                Task { @MainActor in
+                    let revision = (try? await ArchiveCorpusRevision.shared.current()) ?? 0
+                    TopicClusterCache.save(clusters: snapshot, silhouette: silhouette, corpusRevision: revision)
+                    try? await ArchiveDerivedStateStore.shared.setTopics(topics)
+                }
             }
         }
     }
@@ -639,6 +694,56 @@ struct TopicClustersView: View {
             .sorted { $0.tfidf > $1.tfidf }
             .prefix(count)
             .map(\.word)
+    }
+}
+
+// MARK: - Persisted clustering (Part J)
+
+/// Compact persisted snapshot of the last topic clustering: labels, keywords,
+/// member ids, coherence — never bodies. Keyed by corpus revision + analysis
+/// version, so a content change or a clustering-logic change invalidates it.
+enum TopicClusterCache {
+    /// Bump when the clustering/keyword logic changes.
+    static let analysisVersion = 1
+
+    struct PersistedCluster: Codable {
+        let label: String
+        let keywords: [String]
+        let emailIDs: [UUID]
+        let colorIndex: Int
+        let coherence: Double
+    }
+
+    struct Snapshot: Codable {
+        let analysisVersion: Int
+        let corpusRevision: Int
+        let silhouette: Double?
+        let clusters: [PersistedCluster]
+    }
+
+    private static var cacheURL: URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let dir = appSupport.appendingPathComponent("com.ecosanskriti.mailin", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("topic_clusters.json")
+    }
+
+    static func load() -> Snapshot? {
+        guard let data = try? Data(contentsOf: cacheURL) else { return nil }
+        return try? JSONDecoder().decode(Snapshot.self, from: data)
+    }
+
+    static func save(clusters: [PersistedCluster], silhouette: Double?, corpusRevision: Int) {
+        let snapshot = Snapshot(
+            analysisVersion: analysisVersion,
+            corpusRevision: corpusRevision,
+            silhouette: silhouette,
+            clusters: clusters
+        )
+        if let data = try? JSONEncoder().encode(snapshot) {
+            try? data.write(to: cacheURL, options: [.atomic, .completeFileProtection])
+        }
     }
 }
 

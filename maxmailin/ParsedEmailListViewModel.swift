@@ -498,11 +498,19 @@ class ParsedEmailListViewModel: ObservableObject {
     }
 
     func removeDuplicateEmails(ids: Set<UUID>) {
-        allEmails.removeAll { ids.contains($0.id) }
-        emailCount = allEmails.count
-        viewModel.removeEmails(ids: ids)
-        refreshArchiveTotalCount()
-        applyFilters()
+        // Part M(a): route removal through the GUARDED store deletion path
+        // (ContentViewModel.removeEmailsAwaitingResult — FTS-first delete with
+        // UI rollback on store failure). The resident preview arrays here
+        // mutate only AFTER the authority confirms the delete, so a failed
+        // delete can never leave this list claiming the emails are gone.
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard await viewModel.removeEmailsAwaitingResult(ids: ids) else { return }
+            allEmails.removeAll { ids.contains($0.id) }
+            emailCount = allEmails.count
+            refreshArchiveTotalCount()
+            applyFilters()
+        }
     }
 
     // MARK: - Load Emails from ContentViewModel
@@ -519,6 +527,9 @@ class ParsedEmailListViewModel: ObservableObject {
             applyFilters()
             showParsedList = true
             computeAIFilterData()
+            // Part L: incremental persisted thread-key backfill (no-op once
+            // every stored email has a key).
+            ArchiveThreadService.shared.kickBackfill()
         }
     }
 
@@ -979,6 +990,11 @@ class ParsedEmailListViewModel: ObservableObject {
     // MARK: - Priority Scores (cached)
     @Published var priorityScores: [UUID: Int] = [:]
 
+    // Part I.2: this synchronous pass over the BOUNDED resident preview keeps
+    // sort-by-priority correct immediately at load; the persisted per-email
+    // priority (derived store, computed by the archive-wide background job
+    // with DB-side sender counts) overwrites these values when
+    // computeAIFilterData's fetch completes, and is the archive truth.
     func computePriorityScores() {
         let results = EmailNLPEngine.scoreAllPriorities(allEmails, replyCountPerSender: replyCountPerSender)
         var scores: [UUID: Int] = [:]
@@ -1005,67 +1021,60 @@ class ParsedEmailListViewModel: ObservableObject {
 
     func computeAIFilterData() {
         guard !aiFiltersComputed, !allEmails.isEmpty, enableAIFeatures else { return }
-        Task.detached(priority: .utility) { [allEmails] in
+        // Part I: the filter attributes are PERSISTED derived state
+        // (ArchiveDerivedStateStore), computed once by a bounded background job
+        // — not recomputed over the resident array every time filters need
+        // them. This reads the persisted records for the resident preview
+        // page, computes-and-persists only the missing ones (bounded by the
+        // preview cap, in 300-email batches), then kicks the incremental
+        // archive-wide job for everything else. Reopening costs one fetch.
+        let previewEmails = allEmails
+        let senderCounts = replyCountPerSender
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let store = ArchiveDerivedStateStore.shared
+            let ids = previewEmails.map(\.id)
+            var records = (try? await store.fetch(ids: ids)) ?? [:]
+
+            // Fill in preview emails that have no (current-version) record yet.
+            let missing = previewEmails.filter {
+                (records[$0.id]?.analysisVersion ?? 0) < DerivedAIAnalysis.analysisVersion
+            }
+            if !missing.isEmpty {
+                let revision = (try? await ArchiveCorpusRevision.shared.reconciled()) ?? 0
+                var start = 0
+                while start < missing.count {
+                    let batch = Array(missing[start..<min(start + 300, missing.count)])
+                    let computed = await DerivedAIAnalysis.computeRecords(
+                        for: batch, existing: records, senderCounts: senderCounts, revision: revision
+                    )
+                    try? await store.upsert(computed)
+                    for record in computed { records[record.emailID] = record }
+                    start += 300
+                }
+            }
+
+            // Publish the persisted attributes into the filter caches the
+            // legacy UI reads (same thresholds/values as before).
             var sentMap: [UUID: Double] = [:]
             var classMap: [UUID: EmailNLPEngine.EmailCategory] = [:]
             var phishIDs = Set<UUID>()
-
-            #if canImport(FoundationModels)
-            if #available(macOS 26, iOS 26, *), FoundationModelEngine.isAvailable {
-                let tagResults = await FoundationModelEngine.tagEmails(allEmails) { _, _ in }
-
-                for (id, result) in tagResults {
-                    switch result.sentiment {
-                    case "positive": sentMap[id] = 0.8
-                    case "negative": sentMap[id] = -0.8
-                    default: sentMap[id] = 0.0
-                    }
-
-                    switch result.category {
-                    case "personal": classMap[id] = .personal
-                    case "transactional": classMap[id] = .transactional
-                    case "newsletter": classMap[id] = .newsletter
-                    case "promotional": classMap[id] = .promotional
-                    case "automated": classMap[id] = .automated
-                    default: break
-                    }
-                }
-
-                // NLTagger fallback for emails FoundationModels missed
-                let missedSentiment = allEmails.filter { sentMap[$0.id] == nil }
-                if !missedSentiment.isEmpty {
-                    let fallback = EmailNLPEngine.analyzeSentiment(of: missedSentiment)
-                    for r in fallback { sentMap[r.email.id] = r.score }
-                }
-                for email in allEmails where classMap[email.id] == nil {
-                    classMap[email.id] = EmailNLPEngine.classify(email)
-                }
-
-                phishIDs = await FoundationModelEngine.classifyPhishing(allEmails) { _, _ in }
-            } else {
-                let sentiments = EmailNLPEngine.analyzeSentiment(of: allEmails)
-                for r in sentiments { sentMap[r.email.id] = r.score }
-                for email in allEmails { classMap[email.id] = EmailNLPEngine.classify(email) }
-                let phishing = EmailNLPEngine.detectPhishing(in: allEmails)
-                    .filter { $0.riskLevel == .high }
-                phishIDs = Set(phishing.map(\.email.id))
+            var priorities = priorityScores
+            for (id, record) in records {
+                if let score = DerivedAIAnalysis.sentimentScore(from: record) { sentMap[id] = score }
+                if let category = DerivedAIAnalysis.classification(from: record) { classMap[id] = category }
+                if record.phishing == true { phishIDs.insert(id) }
+                if let priority = record.priority { priorities[id] = priority }
             }
-            #else
-            let sentiments = EmailNLPEngine.analyzeSentiment(of: allEmails)
-            for r in sentiments { sentMap[r.email.id] = r.score }
-            for email in allEmails { classMap[email.id] = EmailNLPEngine.classify(email) }
-            let phishing = EmailNLPEngine.detectPhishing(in: allEmails)
-                .filter { $0.riskLevel == .high }
-            phishIDs = Set(phishing.map(\.email.id))
-            #endif
+            sentimentScores = sentMap
+            phishingEmailIDs = phishIDs
+            emailClassifications = classMap
+            priorityScores = priorities
+            aiFiltersComputed = true
+            recomputeSmartTagCounts()
 
-            await MainActor.run { [sentMap, phishIDs, classMap] in
-                self.sentimentScores = sentMap
-                self.phishingEmailIDs = phishIDs
-                self.emailClassifications = classMap
-                self.aiFiltersComputed = true
-                self.recomputeSmartTagCounts()
-            }
+            // Incremental archive-wide job (no-op when already computed).
+            DerivedAIAnalysisJob.shared.kickIfNeeded()
         }
     }
 

@@ -748,6 +748,18 @@ class ContentViewModel: ObservableObject {
     }
 
     func removeEmails(ids: Set<UUID>) {
+        Task { @MainActor [weak self] in
+            _ = await self?.removeEmailsAwaitingResult(ids: ids)
+        }
+    }
+
+    /// Guarded deletion path (Part M): optimistic UI removal, durable delete
+    /// from the FTS index then the SQLite authority, rollback of the UI state
+    /// on any store failure. Returns whether the delete durably succeeded, so
+    /// callers holding their own resident copies (e.g. the duplicate manager's
+    /// preview arrays) mutate only after the authority confirms.
+    @discardableResult
+    func removeEmailsAwaitingResult(ids: Set<UUID>) async -> Bool {
         let removed = parsedEmails.filter { ids.contains($0.id) }
         // Snapshot state so a failed store delete can be rolled back — the UI
         // must never show emails as removed while the authority still has them.
@@ -763,23 +775,25 @@ class ContentViewModel: ObservableObject {
         // failure leaves a canonical row that reconcile can restore, never a
         // ghost FTS row. Failures are surfaced and the optimistic UI removal
         // is rolled back (Part B3 — never `try?`-swallow a correctness error).
-        let idList = ids
-        let rollbackCount = removed.count
-        Task { @MainActor in
-            do {
-                for id in idList {
-                    try await FTSSearchIndex.shared.delete(id: id)
-                }
-                try await SQLiteEmailStore.shared.delete(ids: idList)
-            } catch {
-                Self.importLogger.error("Delete failed; rolling back UI removal: \(error.localizedDescription, privacy: .public)")
-                self.parsedEmails = previousEmails
-                self.totalParsedCount = previousTotal
-                self.duplicatesRemoved = max(0, self.duplicatesRemoved - rollbackCount)
-                self.removedDuplicates.removeLast(rollbackCount)
-                self.statusMessage = "Delete failed: \(error.localizedDescription). The emails were not removed."
-                self.statusColor = .red
+        do {
+            for id in ids {
+                try await FTSSearchIndex.shared.delete(id: id)
             }
+            try await SQLiteEmailStore.shared.delete(ids: ids)
+            // Content-affecting mutation: bump the corpus revision so derived
+            // state (Parts I–M) can detect staleness. Best-effort — the delete
+            // itself already succeeded.
+            _ = try? await ArchiveCorpusRevision.shared.bump()
+            return true
+        } catch {
+            Self.importLogger.error("Delete failed; rolling back UI removal: \(error.localizedDescription, privacy: .public)")
+            parsedEmails = previousEmails
+            totalParsedCount = previousTotal
+            duplicatesRemoved = max(0, duplicatesRemoved - removed.count)
+            removedDuplicates.removeLast(removed.count)
+            statusMessage = "Delete failed: \(error.localizedDescription). The emails were not removed."
+            statusColor = .red
+            return false
         }
     }
 

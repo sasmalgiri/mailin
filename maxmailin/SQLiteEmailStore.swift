@@ -155,6 +155,50 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 created_at   INTEGER NOT NULL DEFAULT 0
             );
         """)
+        // Part L: persisted thread relationships. One stable thread key per
+        // email, derived from Message-ID / In-Reply-To / References (subject
+        // fallback at lower confidence). Indexed so threadKey → members is an
+        // O(log N) seek, never a runtime archive-wide grouping.
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS thread_keys(
+                email_id   TEXT PRIMARY KEY,
+                thread_key TEXT NOT NULL,
+                confidence INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_thread_keys_key ON thread_keys(thread_key);")
+        // Part K: predictive-coding (TAR) records — compact features + human
+        // label + model score per email, versioned. Never whole messages.
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS predictive_records(
+                email_id        TEXT PRIMARY KEY,
+                label           INTEGER,
+                score           REAL,
+                features        TEXT,
+                model_version   INTEGER NOT NULL DEFAULT 0,
+                feature_version INTEGER NOT NULL DEFAULT 0,
+                corpus_revision INTEGER NOT NULL DEFAULT 0,
+                updated_at      INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_predictive_score ON predictive_records(score);")
+        // Part M: persisted near-duplicate findings — one row per group member
+        // (representative flagged), with similarity + algorithm version, so the
+        // review UI pages persisted findings instead of recomputing.
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS near_dup_findings(
+                id                INTEGER PRIMARY KEY,
+                group_key         TEXT NOT NULL,
+                email_id          TEXT NOT NULL,
+                is_representative INTEGER NOT NULL DEFAULT 0,
+                similarity        REAL NOT NULL DEFAULT 0,
+                algo_version      INTEGER NOT NULL DEFAULT 0,
+                corpus_revision   INTEGER NOT NULL DEFAULT 0,
+                created_at        INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_near_dup_group ON near_dup_findings(group_key);")
         self.db = handle
         return handle
     }
@@ -201,6 +245,25 @@ actor SQLiteEmailStore: EmailArchiveStore {
             ON CONFLICT(key) DO UPDATE SET value = value + 1;
         """)
         return try corpusRevision()
+    }
+
+    /// Reconcile the revision with the store's cardinality: if the row count
+    /// changed since it was last observed (an import/delete path that didn't
+    /// bump explicitly), bump once and remember the new count. Two O(1)
+    /// aggregates — safe to call on every derived-state read. Content edits
+    /// that keep the count constant (redaction) must still call
+    /// `bumpCorpusRevision()` explicitly.
+    @discardableResult
+    func reconcileCorpusRevisionWithCount() throws -> Int {
+        let db = try ensureDB()
+        let total = try scalarInt(db, "SELECT COUNT(*) FROM emails;")
+        let observed = try scalarInt(db, "SELECT value FROM meta WHERE key = 'corpus_observed_count';")
+        guard total != observed else { return try corpusRevision() }
+        try exec(db, """
+            INSERT INTO meta(key, value) VALUES ('corpus_observed_count', \(total))
+            ON CONFLICT(key) DO UPDATE SET value = \(total);
+        """)
+        return try bumpCorpusRevision()
     }
 
     // MARK: - Derived state (per-email analysis)
@@ -277,21 +340,48 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     /// Email ids whose derived state is missing or stale relative to `revision`
     /// — the work list for a background analysis job. Joined to `emails` so
-    /// deleted rows never appear.
-    func derivedStaleIDs(below revision: Int, limit: Int) throws -> [EmailID] {
+    /// deleted rows never appear. `minAnalysisVersion` (Part I/K) marks records
+    /// produced by an older analysis/model version as stale, so bumping the
+    /// version constant triggers an incremental recompute.
+    func derivedStaleIDs(below revision: Int, minAnalysisVersion: Int = 0, limit: Int) throws -> [EmailID] {
         let db = try ensureDB()
         let stmt = try prepare(db, """
             SELECT e.id FROM emails e
             LEFT JOIN derived d ON d.email_id = e.id
-            WHERE d.email_id IS NULL OR d.corpus_revision < ?
+            WHERE d.email_id IS NULL OR d.corpus_revision < ? OR d.analysis_version < ?
             LIMIT ?;
         """)
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_int64(stmt, 1, Int64(revision))
-        sqlite3_bind_int(stmt, 2, Int32(limit))
+        sqlite3_bind_int64(stmt, 2, Int64(minAnalysisVersion))
+        sqlite3_bind_int(stmt, 3, Int32(limit))
         var out: [EmailID] = []
         while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append(id) } }
         return out
+    }
+
+    /// Partial upsert (Part J): set ONLY the topic column for the given emails,
+    /// preserving every other derived field a different producer persisted.
+    func derivedSetTopics(_ topics: [EmailID: String]) throws {
+        guard !topics.isEmpty else { return }
+        let db = try ensureDB()
+        let now = Int(Date().timeIntervalSince1970)
+        let stmt = try prepare(db, """
+            INSERT INTO derived(email_id, topic, updated_at) VALUES (?,?,?)
+            ON CONFLICT(email_id) DO UPDATE SET topic = excluded.topic, updated_at = excluded.updated_at;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        try exec(db, "BEGIN TRANSACTION;")
+        do {
+            for (id, topic) in topics {
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, id.uuidString)
+                bindText(stmt, 2, topic)
+                sqlite3_bind_int64(stmt, 3, Int64(now))
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
     }
 
     func derivedCount() throws -> Int {
@@ -309,6 +399,334 @@ actor SQLiteEmailStore: EmailArchiveStore {
             for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
             guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
         }
+    }
+
+    // MARK: - Thread keys (Part L)
+
+    struct ThreadKeyRow: Sendable, Equatable {
+        let emailID: EmailID
+        let threadKey: String
+        let confidence: Int
+    }
+
+    /// Header fields needed to derive a thread key — no bodies hydrated.
+    struct ThreadKeySource: Sendable {
+        let id: EmailID
+        let messageID: String?
+        let inReplyTo: String?
+        let references: String?
+        let subject: String
+    }
+
+    /// One bounded page of emails that don't have a thread key yet — the work
+    /// list for the thread-key backfill job.
+    func threadKeyMissingPage(limit: Int) throws -> [ThreadKeySource] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT e.id, e.message_id, e.in_reply_to, e.references_ids, e.subject
+            FROM emails e LEFT JOIN thread_keys t ON t.email_id = e.id
+            WHERE t.email_id IS NULL LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        var out: [ThreadKeySource] = []
+        while try stepRow(stmt, db) {
+            guard let id = columnUUID(stmt, 0) else { continue }
+            out.append(ThreadKeySource(
+                id: id,
+                messageID: columnTextOptional(stmt, 1),
+                inReplyTo: columnTextOptional(stmt, 2),
+                references: columnTextOptional(stmt, 3),
+                subject: columnText(stmt, 4)
+            ))
+        }
+        return out
+    }
+
+    func threadKeysUpsert(_ rows: [ThreadKeyRow]) throws {
+        guard !rows.isEmpty else { return }
+        let db = try ensureDB()
+        let now = Int64(Date().timeIntervalSince1970)
+        let stmt = try prepare(db, """
+            INSERT INTO thread_keys(email_id, thread_key, confidence, updated_at) VALUES (?,?,?,?)
+            ON CONFLICT(email_id) DO UPDATE SET
+                thread_key = excluded.thread_key, confidence = excluded.confidence, updated_at = excluded.updated_at;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        try exec(db, "BEGIN TRANSACTION;")
+        do {
+            for row in rows {
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, row.emailID.uuidString)
+                bindText(stmt, 2, row.threadKey)
+                sqlite3_bind_int64(stmt, 3, Int64(row.confidence))
+                sqlite3_bind_int64(stmt, 4, now)
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    func threadKey(for id: EmailID) throws -> ThreadKeyRow? {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT email_id, thread_key, confidence FROM thread_keys WHERE email_id = ?;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, id.uuidString)
+        guard try stepRow(stmt, db), let rid = columnUUID(stmt, 0) else { return nil }
+        return ThreadKeyRow(emailID: rid, threadKey: columnText(stmt, 1), confidence: Int(sqlite3_column_int64(stmt, 2)))
+    }
+
+    /// Members of a thread, newest first, paginated — the indexed query path
+    /// that replaces archive-wide runtime grouping.
+    func threadEmailIDs(threadKey: String, limit: Int, offset: Int) throws -> [EmailID] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT t.email_id FROM thread_keys t
+            JOIN emails e ON e.id = t.email_id
+            WHERE t.thread_key = ? ORDER BY e.date DESC, e.id DESC LIMIT ? OFFSET ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, threadKey)
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+        sqlite3_bind_int(stmt, 3, Int32(offset))
+        var out: [EmailID] = []
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append(id) } }
+        return out
+    }
+
+    func threadKeyCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM thread_keys;")
+    }
+
+    // MARK: - Predictive coding records (Part K)
+
+    struct PredictiveRecordRow: Sendable, Equatable {
+        let emailID: EmailID
+        var label: Int? = nil          // 1 relevant / 0 irrelevant / nil unlabeled
+        var score: Double? = nil
+        var features: String? = nil    // compact JSON tf-idf features (labeled rows)
+        var modelVersion: Int = 0
+        var featureVersion: Int = 0
+        var corpusRevision: Int = 0
+        var updatedAt: Int = 0
+    }
+
+    /// Upsert human labels (+ compact features). Preserves any model score a
+    /// scoring job already persisted for the row.
+    func predictiveUpsertLabels(_ rows: [PredictiveRecordRow]) throws {
+        guard !rows.isEmpty else { return }
+        let db = try ensureDB()
+        let now = Int64(Date().timeIntervalSince1970)
+        let stmt = try prepare(db, """
+            INSERT INTO predictive_records(email_id, label, features, model_version, feature_version, corpus_revision, updated_at)
+            VALUES (?,?,?,?,?,?,?)
+            ON CONFLICT(email_id) DO UPDATE SET
+                label = excluded.label, features = excluded.features,
+                feature_version = excluded.feature_version, corpus_revision = excluded.corpus_revision,
+                updated_at = excluded.updated_at;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        try exec(db, "BEGIN TRANSACTION;")
+        do {
+            for row in rows {
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, row.emailID.uuidString)
+                if let l = row.label { sqlite3_bind_int64(stmt, 2, Int64(l)) } else { sqlite3_bind_null(stmt, 2) }
+                bindTextOrNull(stmt, 3, row.features)
+                sqlite3_bind_int64(stmt, 4, Int64(row.modelVersion))
+                sqlite3_bind_int64(stmt, 5, Int64(row.featureVersion))
+                sqlite3_bind_int64(stmt, 6, Int64(row.corpusRevision))
+                sqlite3_bind_int64(stmt, 7, now)
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    /// Upsert model scores from a (bounded) scoring pass. Preserves any human
+    /// label / features already persisted for the row.
+    func predictiveUpsertScores(_ scores: [EmailID: Double], modelVersion: Int, featureVersion: Int, corpusRevision: Int) throws {
+        guard !scores.isEmpty else { return }
+        let db = try ensureDB()
+        let now = Int64(Date().timeIntervalSince1970)
+        let stmt = try prepare(db, """
+            INSERT INTO predictive_records(email_id, score, model_version, feature_version, corpus_revision, updated_at)
+            VALUES (?,?,?,?,?,?)
+            ON CONFLICT(email_id) DO UPDATE SET
+                score = excluded.score, model_version = excluded.model_version,
+                feature_version = excluded.feature_version, corpus_revision = excluded.corpus_revision,
+                updated_at = excluded.updated_at;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        try exec(db, "BEGIN TRANSACTION;")
+        do {
+            for (id, score) in scores {
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, id.uuidString)
+                sqlite3_bind_double(stmt, 2, score)
+                sqlite3_bind_int64(stmt, 3, Int64(modelVersion))
+                sqlite3_bind_int64(stmt, 4, Int64(featureVersion))
+                sqlite3_bind_int64(stmt, 5, Int64(corpusRevision))
+                sqlite3_bind_int64(stmt, 6, now)
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    private func predictiveRow(_ stmt: OpaquePointer?) -> PredictiveRecordRow? {
+        guard let id = columnUUID(stmt, 0) else { return nil }
+        return PredictiveRecordRow(
+            emailID: id,
+            label: sqlite3_column_type(stmt, 1) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(stmt, 1)),
+            score: sqlite3_column_type(stmt, 2) == SQLITE_NULL ? nil : sqlite3_column_double(stmt, 2),
+            features: columnTextOptional(stmt, 3),
+            modelVersion: Int(sqlite3_column_int64(stmt, 4)),
+            featureVersion: Int(sqlite3_column_int64(stmt, 5)),
+            corpusRevision: Int(sqlite3_column_int64(stmt, 6)),
+            updatedAt: Int(sqlite3_column_int64(stmt, 7))
+        )
+    }
+
+    private static let predictiveColumns =
+        "email_id, label, score, features, model_version, feature_version, corpus_revision, updated_at"
+
+    func predictiveFetch(ids: [EmailID]) throws -> [EmailID: PredictiveRecordRow] {
+        guard !ids.isEmpty else { return [:] }
+        let db = try ensureDB()
+        var out: [EmailID: PredictiveRecordRow] = [:]
+        for chunk in ids.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, "SELECT \(Self.predictiveColumns) FROM predictive_records WHERE email_id IN (\(placeholders));")
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            while try stepRow(stmt, db) { if let row = predictiveRow(stmt) { out[row.emailID] = row } }
+        }
+        return out
+    }
+
+    /// Scored records paged by score (highest first) — the view's read path.
+    func predictivePage(limit: Int, offset: Int) throws -> [PredictiveRecordRow] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT \(Self.predictiveColumns) FROM predictive_records
+            WHERE score IS NOT NULL ORDER BY score DESC, email_id ASC LIMIT ? OFFSET ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        sqlite3_bind_int(stmt, 2, Int32(offset))
+        var out: [PredictiveRecordRow] = []
+        while try stepRow(stmt, db) { if let row = predictiveRow(stmt) { out.append(row) } }
+        return out
+    }
+
+    /// All labeled training rows — bounded by the number of human labels.
+    func predictiveLabeled() throws -> [PredictiveRecordRow] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT \(Self.predictiveColumns) FROM predictive_records WHERE label IS NOT NULL;")
+        defer { sqlite3_finalize(stmt) }
+        var out: [PredictiveRecordRow] = []
+        while try stepRow(stmt, db) { if let row = predictiveRow(stmt) { out.append(row) } }
+        return out
+    }
+
+    func predictiveCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM predictive_records;")
+    }
+
+    // MARK: - Near-duplicate findings (Part M)
+
+    struct NearDupMemberRow: Sendable, Equatable {
+        let groupKey: String
+        let emailID: EmailID
+        let isRepresentative: Bool
+        let similarity: Double
+    }
+
+    /// Replace the persisted near-duplicate findings wholesale (one analysis
+    /// run = one findings set), stamping algorithm version + corpus revision.
+    func nearDuplicatesReplace(_ rows: [NearDupMemberRow], algoVersion: Int, corpusRevision: Int) throws {
+        let db = try ensureDB()
+        let now = Int64(Date().timeIntervalSince1970)
+        try exec(db, "BEGIN TRANSACTION;")
+        do {
+            try exec(db, "DELETE FROM near_dup_findings;")
+            let stmt = try prepare(db, """
+                INSERT INTO near_dup_findings(group_key, email_id, is_representative, similarity, algo_version, corpus_revision, created_at)
+                VALUES (?,?,?,?,?,?,?);
+            """)
+            defer { sqlite3_finalize(stmt) }
+            for row in rows {
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, row.groupKey)
+                bindText(stmt, 2, row.emailID.uuidString)
+                sqlite3_bind_int(stmt, 3, row.isRepresentative ? 1 : 0)
+                sqlite3_bind_double(stmt, 4, row.similarity)
+                sqlite3_bind_int64(stmt, 5, Int64(algoVersion))
+                sqlite3_bind_int64(stmt, 6, Int64(corpusRevision))
+                sqlite3_bind_int64(stmt, 7, now)
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    /// One page of group keys, largest groups first — the review UI pages these.
+    func nearDuplicateGroupKeysPage(limit: Int, offset: Int) throws -> [String] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT group_key FROM near_dup_findings
+            GROUP BY group_key ORDER BY COUNT(*) DESC, group_key ASC LIMIT ? OFFSET ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        sqlite3_bind_int(stmt, 2, Int32(offset))
+        var out: [String] = []
+        while try stepRow(stmt, db) { out.append(columnText(stmt, 0)) }
+        return out
+    }
+
+    func nearDuplicateMembers(groupKeys: [String]) throws -> [NearDupMemberRow] {
+        guard !groupKeys.isEmpty else { return [] }
+        let db = try ensureDB()
+        var out: [NearDupMemberRow] = []
+        for chunk in groupKeys.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, """
+                SELECT group_key, email_id, is_representative, similarity
+                FROM near_dup_findings WHERE group_key IN (\(placeholders));
+            """)
+            defer { sqlite3_finalize(stmt) }
+            for (i, key) in chunk.enumerated() { bindText(stmt, Int32(i + 1), key) }
+            while try stepRow(stmt, db) {
+                guard let id = columnUUID(stmt, 1) else { continue }
+                out.append(NearDupMemberRow(
+                    groupKey: columnText(stmt, 0),
+                    emailID: id,
+                    isRepresentative: sqlite3_column_int(stmt, 2) != 0,
+                    similarity: sqlite3_column_double(stmt, 3)
+                ))
+            }
+        }
+        return out
+    }
+
+    func nearDuplicateGroupCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(DISTINCT group_key) FROM near_dup_findings;")
+    }
+
+    /// Version/revision the persisted findings were produced at (0/0 = none).
+    func nearDuplicateMeta() throws -> (algoVersion: Int, corpusRevision: Int) {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT MAX(algo_version), MAX(corpus_revision) FROM near_dup_findings;")
+        defer { sqlite3_finalize(stmt) }
+        guard try stepRow(stmt, db) else { return (0, 0) }
+        let algo = sqlite3_column_type(stmt, 0) == SQLITE_NULL ? 0 : Int(sqlite3_column_int64(stmt, 0))
+        let rev = sqlite3_column_type(stmt, 1) == SQLITE_NULL ? 0 : Int(sqlite3_column_int64(stmt, 1))
+        return (algo, rev)
     }
 
     // MARK: - Insertion
@@ -706,8 +1124,10 @@ actor SQLiteEmailStore: EmailArchiveStore {
         do {
             for chunk in Array(ids).chunked(into: 500) {
                 let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
-                // (table, id column) — derived is keyed by email_id.
-                for (table, col) in [("emails", "id"), ("email_bodies", "id"), ("derived", "email_id")] {
+                // (table, id column) — derived tables are keyed by email_id.
+                for (table, col) in [("emails", "id"), ("email_bodies", "id"), ("derived", "email_id"),
+                                     ("thread_keys", "email_id"), ("predictive_records", "email_id"),
+                                     ("near_dup_findings", "email_id")] {
                     let stmt = try prepare(db, "DELETE FROM \(table) WHERE \(col) IN (\(placeholders));")
                     defer { sqlite3_finalize(stmt) }
                     for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
@@ -727,6 +1147,9 @@ actor SQLiteEmailStore: EmailArchiveStore {
         try exec(db, "DELETE FROM email_bodies;")
         try exec(db, "DELETE FROM derived;")
         try exec(db, "DELETE FROM duplicates;")
+        try exec(db, "DELETE FROM thread_keys;")
+        try exec(db, "DELETE FROM predictive_records;")
+        try exec(db, "DELETE FROM near_dup_findings;")
     }
 
     /// Fold the WAL back into the main db file. Keeps the on-disk footprint

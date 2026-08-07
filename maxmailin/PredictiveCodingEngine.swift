@@ -13,12 +13,23 @@ class PredictiveCodingEngine: ObservableObject {
     @Published var activeLearningRound: Int = 0
     @Published var confidenceDistribution: [String: Int] = [:]
 
+    // Part K: persisted record versioning. Bump `modelVersion` when the
+    // ensemble/training logic changes, `featureVersion` when the compact
+    // feature extraction changes — persisted scores at older versions are
+    // superseded on the next scoring pass.
+    static let modelVersion = 1
+    static let featureVersion = 1
+    /// Compact features cap: top tf-idf tokens persisted per LABELED email —
+    /// enough to retrain without ever retaining whole messages.
+    static let maxPersistedFeatureTokens = 64
+
     private var _initialized = false
     private var emailVectors: [UUID: [Double]] = [:]
     private var emailTokens: [UUID: [String: Double]] = [:]
     private var idfWeights: [String: Double] = [:]
     private var allEmailIDs: [UUID] = []
     private var retrainTask: Task<Void, Never>?
+    private var archiveScoreTask: Task<Void, Never>?
 
     private init() {
         loadPersistedTags()
@@ -187,8 +198,180 @@ class PredictiveCodingEngine: ObservableObject {
                 self.activeLearningRound += 1
                 self.confidenceDistribution = finalDistribution
                 self.isTraining = false
+                // Part K: persist {EmailID, compact features, human label,
+                // model score} + versions, then score the REST of the archive
+                // as a bounded background job (debounced).
+                self.persistTrainingRecords(predictions: finalPredictions)
+                self.scheduleArchiveScoring()
             }
         }
+    }
+
+    // MARK: - Persisted records (Part K)
+
+    /// Compact tf-idf feature snapshot for one email — the persisted training
+    /// representation (top tokens only; never the message).
+    private func compactFeatureJSON(for id: UUID) -> String? {
+        guard let tf = emailTokens[id], !tf.isEmpty else { return nil }
+        let top = tf
+            .map { (token: $0.key, weight: $0.value * (idfWeights[$0.key] ?? 1.0)) }
+            .sorted { $0.weight > $1.weight }
+            .prefix(Self.maxPersistedFeatureTokens)
+        let compact = Dictionary(uniqueKeysWithValues: top.map { ($0.token, ($0.weight * 10_000).rounded() / 10_000) })
+        guard let data = try? JSONEncoder().encode(compact) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    nonisolated private static func decodeFeatures(_ json: String?) -> [String: Double]? {
+        guard let json, let data = json.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode([String: Double].self, from: data)
+    }
+
+    /// Persist labels (+ compact features) and the current working-set scores.
+    private func persistTrainingRecords(predictions scored: [UUID: Double]) {
+        var labeledRows: [SQLiteEmailStore.PredictiveRecordRow] = []
+        for id in relevantIDs {
+            labeledRows.append(SQLiteEmailStore.PredictiveRecordRow(
+                emailID: id, label: 1, features: compactFeatureJSON(for: id),
+                modelVersion: Self.modelVersion, featureVersion: Self.featureVersion
+            ))
+        }
+        for id in irrelevantIDs {
+            labeledRows.append(SQLiteEmailStore.PredictiveRecordRow(
+                emailID: id, label: 0, features: compactFeatureJSON(for: id),
+                modelVersion: Self.modelVersion, featureVersion: Self.featureVersion
+            ))
+        }
+        let rows = labeledRows
+        Task { @MainActor in
+            let store = SQLiteEmailStore.shared
+            let revision = (try? await store.corpusRevision()) ?? 0
+            let stamped = rows.map { row -> SQLiteEmailStore.PredictiveRecordRow in
+                var row = row; row.corpusRevision = revision; return row
+            }
+            try? await store.predictiveUpsertLabels(stamped)
+            try? await store.predictiveUpsertScores(
+                scored, modelVersion: Self.modelVersion,
+                featureVersion: Self.featureVersion, corpusRevision: revision
+            )
+        }
+    }
+
+    /// Fill `predictions` for the given ids from PERSISTED scores (paged read
+    /// path) — so reopening the view shows scores without retraining. In-RAM
+    /// predictions from the current session win over persisted ones.
+    func hydratePersistedScores(for ids: [UUID]) async {
+        guard !ids.isEmpty else { return }
+        let rows = (try? await SQLiteEmailStore.shared.predictiveFetch(ids: ids)) ?? [:]
+        guard !rows.isEmpty else { return }
+        var updated = predictions
+        for (id, row) in rows where updated[id] == nil {
+            if let score = row.score { updated[id] = score }
+        }
+        predictions = updated
+    }
+
+    /// One page of persisted scored records, highest score first.
+    func persistedScorePage(limit: Int = 200, offset: Int = 0) async -> [SQLiteEmailStore.PredictiveRecordRow] {
+        (try? await SQLiteEmailStore.shared.predictivePage(limit: limit, offset: offset)) ?? []
+    }
+
+    /// Score the whole archive as a bounded background job: stream full emails
+    /// in pages, extract transient features per page, score with the current
+    /// labeled examples, persist the scores, release the page. Debounced so a
+    /// burst of tag clicks triggers one pass. No whole-message retention.
+    func scheduleArchiveScoring() {
+        archiveScoreTask?.cancel()
+        guard !relevantIDs.isEmpty else { return }
+        let relIDs = relevantIDs
+        let irrIDs = irrelevantIDs
+        let idf = idfWeights
+        var labeledTokens: [UUID: [String: Double]] = [:]
+        var labeledVectors: [UUID: [Double]] = [:]
+        for id in relIDs.union(irrIDs) {
+            if let tf = emailTokens[id] { labeledTokens[id] = tf }
+            if let vec = emailVectors[id] { labeledVectors[id] = vec }
+        }
+        archiveScoreTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(5))   // debounce tag bursts
+            guard !Task.isCancelled else { return }
+            // Recover labeled features from persisted records for labels whose
+            // in-RAM features are gone (e.g. after relaunch).
+            var tokens = labeledTokens
+            let persisted = (try? await SQLiteEmailStore.shared.predictiveLabeled()) ?? []
+            for row in persisted where tokens[row.emailID] == nil {
+                if let features = Self.decodeFeatures(row.features) { tokens[row.emailID] = features }
+            }
+            let trainTokens = tokens
+            let store = SQLiteEmailStore.shared
+            let revision = (try? await store.corpusRevision()) ?? 0
+            let stream = ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
+            do {
+                for try await batch in stream {
+                    if Task.isCancelled { return }
+                    let scores = await Task.detached(priority: .utility) {
+                        Self.scoreBatch(batch, relevantIDs: relIDs, irrelevantIDs: irrIDs,
+                                        labeledTokens: trainTokens, labeledVectors: labeledVectors,
+                                        idfWeights: idf)
+                    }.value
+                    try await store.predictiveUpsertScores(
+                        scores, modelVersion: Self.modelVersion,
+                        featureVersion: Self.featureVersion, corpusRevision: revision
+                    )
+                }
+            } catch {
+                // Non-fatal: persisted scores simply stop at the last page.
+            }
+            self?.archiveScoreTask = nil
+        }
+    }
+
+    /// Score one bounded batch with transient features (same tokenizer /
+    /// embedding / ensemble as the in-view path — identical scores for
+    /// identical inputs). Nothing from the batch is retained.
+    nonisolated private static func scoreBatch(
+        _ batch: [MBOXParser.RawEmail],
+        relevantIDs: Set<UUID>,
+        irrelevantIDs: Set<UUID>,
+        labeledTokens: [UUID: [String: Double]],
+        labeledVectors: [UUID: [Double]],
+        idfWeights: [String: Double]
+    ) -> [UUID: Double] {
+        let embedding = NLEmbedding.sentenceEmbedding(for: .english)
+        let tokenizer = NLTokenizer(unit: .word)
+        var tokens = labeledTokens
+        var vectors = labeledVectors
+        let batchIDs = batch.map(\.id)
+
+        for email in batch {
+            let text = (email.headers["Subject"] ?? "") + ". " + String(email.plainBody.prefix(500))
+            if let vec = embedding?.vector(for: text) { vectors[email.id] = vec }
+            let normalized = text.lowercased()
+            tokenizer.string = normalized
+            var tf: [String: Double] = [:]
+            tokenizer.enumerateTokens(in: normalized.startIndex..<normalized.endIndex) { range, _ in
+                let word = String(normalized[range])
+                if word.count >= 2 { tf[word, default: 0] += 1.0 }
+                return true
+            }
+            let maxTF = tf.values.max() ?? 1.0
+            for (k, v) in tf { tf[k] = v / maxTF }
+            tokens[email.id] = tf
+        }
+
+        let bayes = naiveBayesPredict(
+            relevantIDs: relevantIDs, irrelevantIDs: irrelevantIDs,
+            emailTokens: tokens, idfWeights: idfWeights, allIDs: batchIDs
+        )
+        let cosine = cosinePredict(
+            relevantIDs: relevantIDs, irrelevantIDs: irrelevantIDs,
+            emailVectors: vectors, allIDs: batchIDs
+        )
+        let (scores, _) = ensemblePredict(
+            bayesScores: bayes, cosineScores: cosine,
+            allIDs: batchIDs, taggedIDs: relevantIDs.union(irrelevantIDs)
+        )
+        return scores
     }
 
     // MARK: - Ensemble
@@ -393,6 +576,8 @@ class PredictiveCodingEngine: ObservableObject {
     }
 
     func reset() {
+        archiveScoreTask?.cancel()
+        archiveScoreTask = nil
         relevantIDs.removeAll()
         irrelevantIDs.removeAll()
         predictions.removeAll()
