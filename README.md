@@ -76,8 +76,8 @@ Import, search, analyze, and export email archives from Gmail, Outlook, Thunderb
 ### Forensic & Legal Tools
 - Tamper-evident HMAC-chained audit log and chain-of-custody artifacts
 - Evidence tagging and examiner annotations
-- SPF, DKIM, DMARC authentication analysis
-- S/MIME signature verification and encryption detection
+- Server-reported SPF, DKIM and DMARC authentication status, with header analysis
+- S/MIME verification for opaque signatures (trusted/untrusted chains distinguished); detached signatures and encryption are detected and reported honestly as unverifiable
 - Spoofing and phishing detection
 - MIME tree inspection and received chain analysis
 - Bates numbering and custodian management
