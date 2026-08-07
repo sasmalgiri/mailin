@@ -341,7 +341,8 @@ class ContentViewModel: ObservableObject {
             let options = BulkImportCoordinator.Options(
                 batchSize: 500,
                 senderEmail: self.senderEmail,
-                maxEmails: maxEmails
+                maxEmails: maxEmails,
+                dedupPolicy: removeDuplicates ? .messageID : .preserveAll
             )
 
             do {

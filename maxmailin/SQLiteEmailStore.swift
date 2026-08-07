@@ -21,6 +21,7 @@
 
 import Foundation
 import SQLite3
+import CryptoKit
 import os.log
 
 private let sqliteStoreLog = Logger(subsystem: "com.ecosanskriti.mailin", category: "SQLiteEmailStore")
@@ -102,6 +103,62 @@ actor SQLiteEmailStore: EmailArchiveStore {
         try exec(handle, "PRAGMA cache_size = -131072;")   // 128 MB (negative ⇒ KB)
         try exec(handle, "PRAGMA mmap_size = 268435456;")  // 256 MB memory-mapped I/O
         try exec(handle, "PRAGMA temp_store = MEMORY;")
+        try exec(handle, "PRAGMA busy_timeout = 5000;")
+        try migrateSchema(handle)
+        self.db = handle
+        return handle
+    }
+
+    // MARK: - Versioned schema migrations (§2)
+
+    /// Explicit, transactional, restart-safe schema versioning via
+    /// `PRAGMA user_version`:
+    ///   v1 = the original direct-SQLite store (implicit schema of the first
+    ///        v2-core-cutover builds)
+    ///   v2 = full-fidelity + source identity + dedup policy + review state
+    /// Each step runs inside one EXCLUSIVE transaction whose COMMIT also
+    /// publishes the new user_version, so a crash mid-migration leaves the
+    /// store fully at the previous version — never half-migrated, and a user
+    /// DB is NEVER silently recreated. A store newer than this build refuses
+    /// to open instead of guessing.
+    static let currentSchemaVersion = 2
+
+    private func migrateSchema(_ handle: OpaquePointer) throws {
+        var v = try scalarInt(handle, "PRAGMA user_version;")
+        if v > Self.currentSchemaVersion {
+            throw SQLiteStoreError.schema(
+                "store schema v\(v) is newer than this app supports (v\(Self.currentSchemaVersion)); refusing to open")
+        }
+        if v == 0 {
+            // Either a brand-new database or a store created before schema
+            // versioning existed (whose implicit schema is v1). Every v1 DDL
+            // statement is IF NOT EXISTS, so running it unconditionally also
+            // repairs a partially-created old store without touching data.
+            try inExclusiveTransaction(handle) {
+                try createSchemaV1(handle)
+                try exec(handle, "PRAGMA user_version = 1;")
+            }
+            v = 1
+        }
+        if v == 1 {
+            try inExclusiveTransaction(handle) {
+                try migrateV1toV2(handle)
+                try exec(handle, "PRAGMA user_version = 2;")
+            }
+            v = 2
+        }
+    }
+
+    private func inExclusiveTransaction(_ handle: OpaquePointer, _ body: () throws -> Void) throws {
+        try exec(handle, "BEGIN EXCLUSIVE TRANSACTION;")
+        do { try body(); try exec(handle, "COMMIT;") }
+        catch { try? exec(handle, "ROLLBACK;"); throw error }
+    }
+
+    /// The original (pre-versioning) schema, byte-for-byte what the first
+    /// v2-core-cutover builds created. Only ever executed for stores that are
+    /// genuinely empty; existing v1 stores are detected and left untouched.
+    private func createSchemaV1(_ handle: OpaquePointer) throws {
         try exec(handle, """
             CREATE TABLE IF NOT EXISTS emails(
                 id            TEXT PRIMARY KEY,
@@ -132,8 +189,8 @@ actor SQLiteEmailStore: EmailArchiveStore {
         """)
         // Keyset paging index: (date DESC, id DESC) is served by this.
         try exec(handle, "CREATE INDEX IF NOT EXISTS idx_emails_date_id ON emails(date, id);")
-        // Dedup index: unique on Message-ID, but only where present — multiple
-        // NULL (no-Message-ID) rows are allowed and never collapsed.
+        // v1 dedup index: unique on Message-ID where present. Replaced in v2
+        // by the policy-driven dedup_key index.
         try exec(handle, "CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_msgid ON emails(message_id) WHERE message_id IS NOT NULL;")
         // Meta (corpus revision etc.) + per-email derived analysis state.
         try exec(handle, "CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0);")
@@ -211,8 +268,146 @@ actor SQLiteEmailStore: EmailArchiveStore {
             );
         """)
         try exec(handle, "CREATE INDEX IF NOT EXISTS idx_near_dup_group ON near_dup_findings(group_key);")
-        self.db = handle
-        return handle
+    }
+
+    /// v1 → v2: full RawEmail fidelity (message type, attachments metadata,
+    /// tags, domains, participants), first-class source identity
+    /// (§3.1/§3.2), policy-driven dedup (§4), per-email content revisions
+    /// (§22), review state (§19) and sort indexes (§16).
+    private func migrateV1toV2(_ handle: OpaquePointer) throws {
+        try exec(handle, "ALTER TABLE emails ADD COLUMN message_type TEXT NOT NULL DEFAULT '';")
+        try exec(handle, "ALTER TABLE emails ADD COLUMN dedup_key TEXT;")
+        try exec(handle, "ALTER TABLE emails ADD COLUMN source_id INTEGER;")
+        try exec(handle, "ALTER TABLE emails ADD COLUMN source_ordinal INTEGER;")
+        try exec(handle, "ALTER TABLE emails ADD COLUMN attachment_count INTEGER NOT NULL DEFAULT 0;")
+        try exec(handle, "ALTER TABLE emails ADD COLUMN content_revision INTEGER NOT NULL DEFAULT 1;")
+        try exec(handle, "ALTER TABLE emails ADD COLUMN imported_at INTEGER NOT NULL DEFAULT 0;")
+        // Rows that exist under v1 were deduped by raw Message-ID; carrying
+        // that value into dedup_key preserves their semantics exactly (and is
+        // guaranteed collision-free because v1 enforced uniqueness on it).
+        try exec(handle, "UPDATE emails SET dedup_key = message_id WHERE message_id IS NOT NULL;")
+        try exec(handle, "UPDATE emails SET attachment_count = has_attach WHERE has_attach = 1;")
+        // message_id becomes a lookup index; uniqueness moves to dedup_key so
+        // `preserveAll` imports can legitimately store repeated Message-IDs.
+        try exec(handle, "DROP INDEX IF EXISTS idx_emails_msgid;")
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_emails_msgid_lookup ON emails(message_id) WHERE message_id IS NOT NULL;")
+        try exec(handle, "CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_dedup_key ON emails(dedup_key) WHERE dedup_key IS NOT NULL;")
+        // Stable source occurrence: crash-resume / repeated parses of the same
+        // source re-hit this constraint instead of duplicating evidence.
+        try exec(handle, """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_source_occurrence
+            ON emails(source_id, source_ordinal)
+            WHERE source_id IS NOT NULL AND source_ordinal IS NOT NULL;
+        """)
+        // §16 DB-native sort keysets.
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_emails_subject_id ON emails(subject COLLATE NOCASE, id);")
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_emails_size_id ON emails(size_bytes, id);")
+        // §3.1 first-class sources.
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS sources(
+                source_id      INTEGER PRIMARY KEY,
+                sha256         TEXT NOT NULL,
+                filename       TEXT NOT NULL DEFAULT '',
+                byte_size      INTEGER NOT NULL DEFAULT 0,
+                parser         TEXT NOT NULL DEFAULT '',
+                parser_version INTEGER NOT NULL DEFAULT 0,
+                account_id     TEXT,
+                imported_at    INTEGER NOT NULL DEFAULT 0,
+                source_kind    TEXT NOT NULL DEFAULT ''
+            );
+        """)
+        try exec(handle, "CREATE UNIQUE INDEX IF NOT EXISTS idx_sources_sha ON sources(sha256);")
+        // §3.5 bounded attachment metadata (bytes stay reconstructable from raw MIME).
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS attachments(
+                attachment_id INTEGER PRIMARY KEY,
+                email_id      TEXT NOT NULL,
+                position      INTEGER NOT NULL DEFAULT 0,
+                filename      TEXT NOT NULL DEFAULT '',
+                mime_type     TEXT NOT NULL DEFAULT '',
+                size_bytes    INTEGER NOT NULL DEFAULT 0,
+                content_id    TEXT,
+                is_inline     INTEGER NOT NULL DEFAULT 0,
+                content_hash  TEXT
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_attachments_email ON attachments(email_id);")
+        // §3.4 normalized participants — the query basis for sender/recipient
+        // filters and contact analytics, instead of re-parsing To:/Cc: strings.
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS email_participants(
+                email_id           TEXT NOT NULL,
+                role               TEXT NOT NULL,
+                address            TEXT NOT NULL,
+                display_name       TEXT,
+                normalized_address TEXT NOT NULL
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_participants_lookup ON email_participants(role, normalized_address, email_id);")
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_participants_email ON email_participants(email_id);")
+        // §3.6 queryable multi-value state.
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS email_tags(
+                email_id TEXT NOT NULL,
+                tag      TEXT NOT NULL,
+                PRIMARY KEY(email_id, tag)
+            ) WITHOUT ROWID;
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_email_tags_tag ON email_tags(tag, email_id);")
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS email_domains(
+                email_id TEXT NOT NULL,
+                domain   TEXT NOT NULL,
+                PRIMARY KEY(email_id, domain)
+            ) WITHOUT ROWID;
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_email_domains_domain ON email_domains(domain, email_id);")
+        // §19 review state: pinned/read/archived/trashed + user tags +
+        // annotations, indexed and page-addressable. Trash is a soft state —
+        // never silent evidence destruction.
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS email_review_state(
+                email_id   TEXT PRIMARY KEY,
+                pinned     INTEGER NOT NULL DEFAULT 0,
+                is_read    INTEGER NOT NULL DEFAULT 0,
+                archived   INTEGER NOT NULL DEFAULT 0,
+                trashed    INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_review_trashed ON email_review_state(trashed) WHERE trashed = 1;")
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_review_pinned ON email_review_state(pinned) WHERE pinned = 1;")
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS email_user_tags(
+                email_id TEXT NOT NULL,
+                tag      TEXT NOT NULL,
+                PRIMARY KEY(email_id, tag)
+            ) WITHOUT ROWID;
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_user_tags_tag ON email_user_tags(tag, email_id);")
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS email_annotations(
+                email_id   TEXT PRIMARY KEY,
+                note       TEXT NOT NULL DEFAULT '',
+                updated_at INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+    }
+
+    /// `PRAGMA integrity_check` — "ok" means healthy. Exposed for the
+    /// activation gate and diagnostics (§49.1).
+    func integrityCheck() throws -> String {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "PRAGMA integrity_check;")
+        defer { sqlite3_finalize(stmt) }
+        guard try stepRow(stmt, db) else { return "no result" }
+        return columnText(stmt, 0)
+    }
+
+    /// Current `PRAGMA user_version` — exposed for tests/diagnostics.
+    func schemaVersion() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "PRAGMA user_version;")
     }
 
     // MARK: - Duplicate findings (Phase 10)
@@ -741,8 +936,76 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return (algo, rev)
     }
 
+    // MARK: - Sources (§3.1)
+
+    struct SourceDescriptor: Sendable {
+        let sha256: String
+        var filename: String = ""
+        var byteSize: Int = 0
+        var parser: String = ""
+        var parserVersion: Int = 0
+        var accountID: String? = nil
+        var sourceKind: String = ""
+    }
+
+    /// Register (or re-touch) an import source, keyed by content SHA-256 —
+    /// two files both named `Inbox.mbox` stay distinguishable (§21.2).
+    /// Returns the stable source_id.
+    @discardableResult
+    func registerSource(_ s: SourceDescriptor) throws -> Int64 {
+        let db = try ensureDB()
+        let upsert = try prepare(db, """
+            INSERT INTO sources(sha256, filename, byte_size, parser, parser_version, account_id, imported_at, source_kind)
+            VALUES (?,?,?,?,?,?,?,?)
+            ON CONFLICT(sha256) DO UPDATE SET imported_at = excluded.imported_at;
+        """)
+        defer { sqlite3_finalize(upsert) }
+        bindText(upsert, 1, s.sha256)
+        bindText(upsert, 2, s.filename)
+        sqlite3_bind_int64(upsert, 3, Int64(s.byteSize))
+        bindText(upsert, 4, s.parser)
+        sqlite3_bind_int64(upsert, 5, Int64(s.parserVersion))
+        bindTextOrNull(upsert, 6, s.accountID)
+        sqlite3_bind_int64(upsert, 7, Int64(Date().timeIntervalSince1970))
+        bindText(upsert, 8, s.sourceKind)
+        guard sqlite3_step(upsert) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        let lookup = try prepare(db, "SELECT source_id FROM sources WHERE sha256 = ?;")
+        defer { sqlite3_finalize(lookup) }
+        bindText(lookup, 1, s.sha256)
+        guard try stepRow(lookup, db) else { throw SQLiteStoreError.step("source row vanished after upsert") }
+        return sqlite3_column_int64(lookup, 0)
+    }
+
+    struct StoredSource: Sendable, Equatable {
+        let sourceID: Int64
+        let sha256: String
+        let filename: String
+        let byteSize: Int
+        let parser: String
+        let importedAt: Date
+    }
+
+    func sources() throws -> [StoredSource] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT source_id, sha256, filename, byte_size, parser, imported_at FROM sources ORDER BY imported_at DESC;")
+        defer { sqlite3_finalize(stmt) }
+        var out: [StoredSource] = []
+        while try stepRow(stmt, db) {
+            out.append(StoredSource(
+                sourceID: sqlite3_column_int64(stmt, 0),
+                sha256: columnText(stmt, 1),
+                filename: columnText(stmt, 2),
+                byteSize: Int(sqlite3_column_int64(stmt, 3)),
+                parser: columnText(stmt, 4),
+                importedAt: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 5)))
+            ))
+        }
+        return out
+    }
+
     // MARK: - Insertion
 
+    /// Protocol witness — legacy signature, Message-ID dedup (v1 semantics).
     func insertBatch(
         _ emails: [MBOXParser.RawEmail],
         sourceFileHash: String?,
@@ -750,16 +1013,43 @@ actor SQLiteEmailStore: EmailArchiveStore {
         batchSize: Int,
         progress: ((Int, Int) -> Void)?
     ) throws {
+        _ = try insertBatch(
+            emails, sourceFileHash: sourceFileHash, accountID: accountID,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID,
+            batchSize: batchSize, progress: progress)
+    }
+
+    /// Full-fidelity, policy-driven insert (§3/§4/§5.3).
+    ///
+    /// When `sourceID`/`firstOrdinal` are provided, each email is stamped with
+    /// its stable source occurrence `(source_id, firstOrdinal + i)`; a re-run
+    /// over the same source (crash resume, repeated parse) hits the occurrence
+    /// uniqueness and is reported in `existingSourceOccurrenceIDs` rather than
+    /// duplicating evidence — even under `.preserveAll`.
+    @discardableResult
+    func insertBatch(
+        _ emails: [MBOXParser.RawEmail],
+        sourceFileHash: String?,
+        accountID: String?,
+        sourceID: Int64?,
+        firstOrdinal: Int?,
+        dedupPolicy: DedupPolicy,
+        batchSize: Int,
+        progress: ((Int, Int) -> Void)?
+    ) throws -> BatchInsertResult {
         let db = try ensureDB()
         let total = emails.count
         var processed = 0
+        var result = BatchInsertResult(attempted: total)
 
         let insertEmail = try prepare(db, """
             INSERT OR IGNORE INTO emails(
                 id, message_id, subject, from_addr, to_addr, cc_addr, bcc_addr,
                 date, body_preview, has_attach, size_bytes, in_reply_to,
-                references_ids, account_id, source_hash
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
+                references_ids, account_id, source_hash,
+                message_type, dedup_key, source_id, source_ordinal,
+                attachment_count, content_revision, imported_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?);
         """)
         let insertBody = try prepare(db, """
             INSERT OR IGNORE INTO email_bodies(id, plain, html, raw, headers_json)
@@ -769,14 +1059,35 @@ actor SQLiteEmailStore: EmailArchiveStore {
             INSERT INTO duplicates(duplicate_id, message_id, source_hash, created_at)
             VALUES (?,?,?,?);
         """)
-        defer { sqlite3_finalize(insertEmail); sqlite3_finalize(insertBody); sqlite3_finalize(insertDup) }
+        let insertAttachment = try prepare(db, """
+            INSERT INTO attachments(email_id, position, filename, mime_type, size_bytes, content_id, is_inline)
+            VALUES (?,?,?,?,?,?,?);
+        """)
+        let insertParticipant = try prepare(db, """
+            INSERT INTO email_participants(email_id, role, address, display_name, normalized_address)
+            VALUES (?,?,?,?,?);
+        """)
+        let insertTag = try prepare(db, "INSERT OR IGNORE INTO email_tags(email_id, tag) VALUES (?,?);")
+        let insertDomain = try prepare(db, "INSERT OR IGNORE INTO email_domains(email_id, domain) VALUES (?,?);")
+        let occurrenceExists = try prepare(db, "SELECT 1 FROM emails WHERE source_id = ? AND source_ordinal = ?;")
+        defer {
+            sqlite3_finalize(insertEmail); sqlite3_finalize(insertBody); sqlite3_finalize(insertDup)
+            sqlite3_finalize(insertAttachment); sqlite3_finalize(insertParticipant)
+            sqlite3_finalize(insertTag); sqlite3_finalize(insertDomain); sqlite3_finalize(occurrenceExists)
+        }
+        let now = Int64(Date().timeIntervalSince1970)
 
+        var offset = 0
         for chunk in emails.chunked(into: max(1, batchSize)) {
             try exec(db, "BEGIN TRANSACTION;")
             do {
-                for email in chunk {
+                for (i, email) in chunk.enumerated() {
                     let idStr = email.id.uuidString
-                    let mid = email.headers["Message-ID"].flatMap { $0.isEmpty ? nil : $0 }
+                    let mid = email.headers["Message-ID"].flatMap {
+                        $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0
+                    }
+                    let dedupKey = Self.dedupKey(for: email, messageID: mid, policy: dedupPolicy)
+                    let ordinal: Int64? = firstOrdinal.map { Int64($0 + offset + i) }
                     let date = Self.parsedDate(from: email.headers["Date"]) ?? Date.distantPast
                     let dateInt = Int64(date.timeIntervalSince1970.rounded())
 
@@ -796,12 +1107,17 @@ actor SQLiteEmailStore: EmailArchiveStore {
                     bindTextOrNull(insertEmail, 13, email.headers["References"])
                     bindTextOrNull(insertEmail, 14, accountID)
                     bindTextOrNull(insertEmail, 15, sourceFileHash)
+                    bindText(insertEmail, 16, email.messageType)
+                    bindTextOrNull(insertEmail, 17, dedupKey)
+                    if let sourceID { sqlite3_bind_int64(insertEmail, 18, sourceID) } else { sqlite3_bind_null(insertEmail, 18) }
+                    if let ordinal { sqlite3_bind_int64(insertEmail, 19, ordinal) } else { sqlite3_bind_null(insertEmail, 19) }
+                    sqlite3_bind_int64(insertEmail, 20, Int64(email.attachments.count))
+                    sqlite3_bind_int64(insertEmail, 21, now)
                     guard sqlite3_step(insertEmail) == SQLITE_DONE else {
                         throw SQLiteStoreError.step(lastError(db))
                     }
-                    // Only write the body if the email row was actually inserted
-                    // (not a deduped duplicate) — keeps the two tables in step.
                     if sqlite3_changes(db) == 1 {
+                        result.insertedIDs.append(email.id)
                         sqlite3_reset(insertBody); sqlite3_clear_bindings(insertBody)
                         bindText(insertBody, 1, idStr)
                         bindBlob(insertBody, 2, email.plainBody.data(using: .utf8))
@@ -811,15 +1127,71 @@ actor SQLiteEmailStore: EmailArchiveStore {
                         guard sqlite3_step(insertBody) == SQLITE_DONE else {
                             throw SQLiteStoreError.step(lastError(db))
                         }
-                    } else if let mid {
-                        // INSERT OR IGNORE skipped a row with a present Message-ID
-                        // → exact duplicate. Record the finding (Phase 10).
-                        sqlite3_reset(insertDup); sqlite3_clear_bindings(insertDup)
-                        bindText(insertDup, 1, idStr)
-                        bindText(insertDup, 2, mid)
-                        bindTextOrNull(insertDup, 3, sourceFileHash)
-                        sqlite3_bind_int64(insertDup, 4, dateInt)
-                        _ = sqlite3_step(insertDup)   // best-effort; never fails the import
+                        for (pos, att) in email.attachments.enumerated() {
+                            sqlite3_reset(insertAttachment); sqlite3_clear_bindings(insertAttachment)
+                            bindText(insertAttachment, 1, idStr)
+                            sqlite3_bind_int64(insertAttachment, 2, Int64(pos))
+                            bindText(insertAttachment, 3, att.filename)
+                            bindText(insertAttachment, 4, att.mimeType)
+                            sqlite3_bind_int64(insertAttachment, 5, Int64(att.size))
+                            bindTextOrNull(insertAttachment, 6, att.contentID)
+                            sqlite3_bind_int(insertAttachment, 7, att.isInline ? 1 : 0)
+                            guard sqlite3_step(insertAttachment) == SQLITE_DONE else {
+                                throw SQLiteStoreError.step(lastError(db))
+                            }
+                        }
+                        for (role, header) in [("FROM", "From"), ("TO", "To"), ("CC", "Cc"), ("BCC", "Bcc")] {
+                            guard let raw = email.headers[header], !raw.isEmpty else { continue }
+                            for p in Self.parseAddressList(raw) {
+                                sqlite3_reset(insertParticipant); sqlite3_clear_bindings(insertParticipant)
+                                bindText(insertParticipant, 1, idStr)
+                                bindText(insertParticipant, 2, role)
+                                bindText(insertParticipant, 3, p.address)
+                                bindTextOrNull(insertParticipant, 4, p.display)
+                                bindText(insertParticipant, 5, p.address.lowercased())
+                                guard sqlite3_step(insertParticipant) == SQLITE_DONE else {
+                                    throw SQLiteStoreError.step(lastError(db))
+                                }
+                            }
+                        }
+                        for tag in email.tags where !tag.isEmpty {
+                            sqlite3_reset(insertTag); sqlite3_clear_bindings(insertTag)
+                            bindText(insertTag, 1, idStr); bindText(insertTag, 2, tag)
+                            guard sqlite3_step(insertTag) == SQLITE_DONE else {
+                                throw SQLiteStoreError.step(lastError(db))
+                            }
+                        }
+                        for domain in email.domains where !domain.isEmpty {
+                            sqlite3_reset(insertDomain); sqlite3_clear_bindings(insertDomain)
+                            bindText(insertDomain, 1, idStr); bindText(insertDomain, 2, domain)
+                            guard sqlite3_step(insertDomain) == SQLITE_DONE else {
+                                throw SQLiteStoreError.step(lastError(db))
+                            }
+                        }
+                    } else {
+                        // INSERT OR IGNORE skipped the row. Distinguish "this
+                        // exact source occurrence is already stored" (resume)
+                        // from "the dedup policy dropped it" (duplicate).
+                        var isExistingOccurrence = false
+                        if let sourceID, let ordinal {
+                            sqlite3_reset(occurrenceExists); sqlite3_clear_bindings(occurrenceExists)
+                            sqlite3_bind_int64(occurrenceExists, 1, sourceID)
+                            sqlite3_bind_int64(occurrenceExists, 2, ordinal)
+                            isExistingOccurrence = try stepRow(occurrenceExists, db)
+                        }
+                        if isExistingOccurrence {
+                            result.existingSourceOccurrenceIDs.append(email.id)
+                        } else {
+                            result.duplicateIDs.append(email.id)
+                            sqlite3_reset(insertDup); sqlite3_clear_bindings(insertDup)
+                            bindText(insertDup, 1, idStr)
+                            bindTextOrNull(insertDup, 2, mid)
+                            bindTextOrNull(insertDup, 3, sourceFileHash)
+                            sqlite3_bind_int64(insertDup, 4, dateInt)
+                            guard sqlite3_step(insertDup) == SQLITE_DONE else {
+                                throw SQLiteStoreError.step(lastError(db))
+                            }
+                        }
                     }
                 }
                 try exec(db, "COMMIT;")
@@ -827,9 +1199,72 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 try? exec(db, "ROLLBACK;")
                 throw error
             }
+            offset += chunk.count
             processed += chunk.count
             progress?(processed, total)
         }
+        return result
+    }
+
+    // MARK: - Dedup key / address parsing helpers
+
+    /// §4/§4.1: the nullable dedup key. NULL never collides (SQLite partial
+    /// unique index), so `.preserveAll` stores everything.
+    static func dedupKey(for email: MBOXParser.RawEmail, messageID: String?, policy: DedupPolicy) -> String? {
+        let normalizedMID = messageID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch policy {
+        case .preserveAll:
+            return nil
+        case .messageID:
+            return (normalizedMID?.isEmpty == false) ? normalizedMID : nil
+        case .messageIDOrCanonicalFingerprint:
+            if let normalizedMID, !normalizedMID.isEmpty { return normalizedMID }
+            return "fp:" + canonicalFingerprint(for: email)
+        }
+    }
+
+    /// §4.2 canonical fallback fingerprint: SHA-256 over normalized
+    /// From|To|Date|Subject plus a hash of the plain body. Deterministic and
+    /// documented; collisions require all five normalized inputs to match,
+    /// which is the product definition of "the same message without an ID".
+    static func canonicalFingerprint(for email: MBOXParser.RawEmail) -> String {
+        func norm(_ s: String?) -> String {
+            (s ?? "").lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let bodyHash = sha256Hex(Data(email.plainBody.utf8))
+        let material = [
+            norm(email.headers["From"]), norm(email.headers["To"]),
+            norm(email.headers["Date"]), norm(email.headers["Subject"]),
+            bodyHash
+        ].joined(separator: "|")
+        return sha256Hex(Data(material.utf8))
+    }
+
+    static func sha256Hex(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Minimal RFC-5322-ish address-list split for participant rows: handles
+    /// `Name <a@b>`, bare `a@b`, and comma-separated lists. Quoted display
+    /// names containing commas are treated best-effort (split then re-checked
+    /// for an @-bearing token), which is sufficient for filter/analytics use.
+    static func parseAddressList(_ raw: String) -> [(display: String?, address: String)] {
+        var out: [(String?, String)] = []
+        for piece in raw.components(separatedBy: ",") {
+            let part = piece.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !part.isEmpty else { continue }
+            if let lt = part.firstIndex(of: "<"), let gt = part.lastIndex(of: ">"), lt < gt {
+                let addr = String(part[part.index(after: lt)..<gt]).trimmingCharacters(in: .whitespaces)
+                guard addr.contains("@") else { continue }
+                var display: String? = String(part[part.startIndex..<lt])
+                    .trimmingCharacters(in: CharacterSet(charactersIn: " \"'"))
+                if display?.isEmpty == true { display = nil }
+                out.append((display, addr))
+            } else if part.contains("@") {
+                out.append((nil, part.trimmingCharacters(in: CharacterSet(charactersIn: " \"'<>"))))
+            }
+        }
+        return out
     }
 
     // MARK: - Counts
@@ -1100,15 +1535,21 @@ actor SQLiteEmailStore: EmailArchiveStore {
             let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
             let stmt = try prepare(db, """
                 SELECT e.id, e.message_id, e.in_reply_to, e.references_ids, e.date,
-                       b.plain, b.html, b.raw, b.headers_json
-                FROM emails e LEFT JOIN email_bodies b ON e.id = b.id
+                       b.plain, b.html, b.raw, b.headers_json,
+                       e.message_type, t.thread_key
+                FROM emails e
+                LEFT JOIN email_bodies b ON e.id = b.id
+                LEFT JOIN thread_keys t ON e.id = t.email_id
                 WHERE e.id IN (\(placeholders));
             """)
             defer { sqlite3_finalize(stmt) }
             for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            var base: [MBOXParser.RawEmail] = []
             while try stepRow(stmt, db) {
-                if let email = rawEmailFromRow(stmt) { out.append(email) }
+                if let email = rawEmailFromRow(stmt) { base.append(email) }
             }
+            try hydrateSideTables(db, into: &base)
+            out.append(contentsOf: base)
         }
         return out
     }
@@ -1117,14 +1558,69 @@ actor SQLiteEmailStore: EmailArchiveStore {
         let db = try ensureDB()
         let stmt = try prepare(db, """
             SELECT e.id, e.message_id, e.in_reply_to, e.references_ids, e.date,
-                   b.plain, b.html, b.raw, b.headers_json
-            FROM emails e LEFT JOIN email_bodies b ON e.id = b.id
+                   b.plain, b.html, b.raw, b.headers_json,
+                   e.message_type, t.thread_key
+            FROM emails e
+            LEFT JOIN email_bodies b ON e.id = b.id
+            LEFT JOIN thread_keys t ON e.id = t.email_id
             WHERE e.id = ?;
         """)
         defer { sqlite3_finalize(stmt) }
         bindText(stmt, 1, id.uuidString)
         guard try stepRow(stmt, db) else { return nil }
-        return rawEmailFromRow(stmt)
+        guard let email = rawEmailFromRow(stmt) else { return nil }
+        var one = [email]
+        try hydrateSideTables(db, into: &one)
+        return one.first
+    }
+
+    /// §3 full fidelity: attach the normalized side-table state (attachments
+    /// metadata, parser tags, domains) to hydrated rows — one IN query per
+    /// table per chunk, never per-email round-trips.
+    private func hydrateSideTables(_ db: OpaquePointer, into emails: inout [MBOXParser.RawEmail]) throws {
+        guard !emails.isEmpty else { return }
+        let idStrings = emails.map { $0.id.uuidString }
+        let placeholders = Array(repeating: "?", count: idStrings.count).joined(separator: ",")
+
+        var attachmentsByEmail: [String: [AttachmentMetadata]] = [:]
+        let attStmt = try prepare(db, """
+            SELECT email_id, filename, mime_type, size_bytes, content_id, is_inline
+            FROM attachments WHERE email_id IN (\(placeholders)) ORDER BY email_id, position;
+        """)
+        defer { sqlite3_finalize(attStmt) }
+        for (i, id) in idStrings.enumerated() { bindText(attStmt, Int32(i + 1), id) }
+        while try stepRow(attStmt, db) {
+            attachmentsByEmail[columnText(attStmt, 0), default: []].append(AttachmentMetadata(
+                filename: columnText(attStmt, 1),
+                mimeType: columnText(attStmt, 2),
+                size: Int(sqlite3_column_int64(attStmt, 3)),
+                isInline: sqlite3_column_int(attStmt, 5) != 0,
+                contentID: columnTextOptional(attStmt, 4)
+            ))
+        }
+
+        var tagsByEmail: [String: [String]] = [:]
+        let tagStmt = try prepare(db, "SELECT email_id, tag FROM email_tags WHERE email_id IN (\(placeholders));")
+        defer { sqlite3_finalize(tagStmt) }
+        for (i, id) in idStrings.enumerated() { bindText(tagStmt, Int32(i + 1), id) }
+        while try stepRow(tagStmt, db) {
+            tagsByEmail[columnText(tagStmt, 0), default: []].append(columnText(tagStmt, 1))
+        }
+
+        var domainsByEmail: [String: [String]] = [:]
+        let domStmt = try prepare(db, "SELECT email_id, domain FROM email_domains WHERE email_id IN (\(placeholders));")
+        defer { sqlite3_finalize(domStmt) }
+        for (i, id) in idStrings.enumerated() { bindText(domStmt, Int32(i + 1), id) }
+        while try stepRow(domStmt, db) {
+            domainsByEmail[columnText(domStmt, 0), default: []].append(columnText(domStmt, 1))
+        }
+
+        for i in emails.indices {
+            let key = emails[i].id.uuidString
+            emails[i].attachments = attachmentsByEmail[key] ?? []
+            emails[i].tags = (tagsByEmail[key] ?? []).sorted()
+            emails[i].domains = (domainsByEmail[key] ?? []).sorted()
+        }
     }
 
     // MARK: - Mutation
@@ -1139,7 +1635,11 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 // (table, id column) — derived tables are keyed by email_id.
                 for (table, col) in [("emails", "id"), ("email_bodies", "id"), ("derived", "email_id"),
                                      ("thread_keys", "email_id"), ("predictive_records", "email_id"),
-                                     ("near_dup_findings", "email_id")] {
+                                     ("near_dup_findings", "email_id"),
+                                     ("attachments", "email_id"), ("email_participants", "email_id"),
+                                     ("email_tags", "email_id"), ("email_domains", "email_id"),
+                                     ("email_review_state", "email_id"), ("email_user_tags", "email_id"),
+                                     ("email_annotations", "email_id")] {
                     let stmt = try prepare(db, "DELETE FROM \(table) WHERE \(col) IN (\(placeholders));")
                     defer { sqlite3_finalize(stmt) }
                     for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
@@ -1155,13 +1655,12 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     func clearAll() throws {
         let db = try ensureDB()
-        try exec(db, "DELETE FROM emails;")
-        try exec(db, "DELETE FROM email_bodies;")
-        try exec(db, "DELETE FROM derived;")
-        try exec(db, "DELETE FROM duplicates;")
-        try exec(db, "DELETE FROM thread_keys;")
-        try exec(db, "DELETE FROM predictive_records;")
-        try exec(db, "DELETE FROM near_dup_findings;")
+        for table in ["emails", "email_bodies", "derived", "duplicates", "thread_keys",
+                      "predictive_records", "near_dup_findings", "sources", "attachments",
+                      "email_participants", "email_tags", "email_domains",
+                      "email_review_state", "email_user_tags", "email_annotations"] {
+            try exec(db, "DELETE FROM \(table);")
+        }
     }
 
     /// Fold the WAL back into the main db file. Keeps the on-disk footprint
@@ -1173,6 +1672,10 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     // MARK: - Row → RawEmail
 
+    /// Base-row hydration. Side-table state (attachments/tags/domains) is
+    /// attached afterwards by `hydrateSideTables` — this only reads columns.
+    /// `message_type` is empty for rows persisted by pre-v2 builds (their
+    /// structured metadata was never stored); those hydrate as "stored".
     private func rawEmailFromRow(_ stmt: OpaquePointer?) -> MBOXParser.RawEmail? {
         guard let id = columnUUID(stmt, 0) else { return nil }
         let messageID = columnTextOptional(stmt, 1)
@@ -1182,6 +1685,8 @@ actor SQLiteEmailStore: EmailArchiveStore {
         let plain = columnBlobString(stmt, 5) ?? ""
         let html = columnBlobString(stmt, 6) ?? ""
         let raw = columnBlobString(stmt, 7) ?? ""
+        let messageType = columnTextOptional(stmt, 9).flatMap { $0.isEmpty ? nil : $0 } ?? "stored"
+        let threadKey = columnTextOptional(stmt, 10)
 
         var headers: [String: String] = [:]
         if let hdata = columnBlobData(stmt, 8),
@@ -1193,14 +1698,14 @@ actor SQLiteEmailStore: EmailArchiveStore {
             id: id,
             headers: headers,
             rawSource: raw,
-            messageType: "stored",
+            messageType: messageType,
             attachments: [],
             timestamp: ISO8601DateFormatter().string(from: date),
             domains: [],
             plainBody: plain,
             htmlBody: html,
             mimeRoot: nil, mimeSummary: nil, mimeDiagnostics: [],
-            threadID: messageID,
+            threadID: threadKey ?? messageID,
             inReplyTo: inReplyTo,
             references: references.map { $0.components(separatedBy: "\n") },
             tags: [], anomalies: []
@@ -1300,13 +1805,14 @@ actor SQLiteEmailStore: EmailArchiveStore {
 }
 
 enum SQLiteStoreError: LocalizedError {
-    case open(String), exec(String), prepare(String), step(String)
+    case open(String), exec(String), prepare(String), step(String), schema(String)
     var errorDescription: String? {
         switch self {
         case .open(let m): return "SQLite open failed: \(m)"
         case .exec(let m): return "SQLite exec failed: \(m)"
         case .prepare(let m): return "SQLite prepare failed: \(m)"
         case .step(let m): return "SQLite step failed: \(m)"
+        case .schema(let m): return "SQLite schema error: \(m)"
         }
     }
 }

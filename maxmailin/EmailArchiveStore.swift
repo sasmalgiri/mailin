@@ -17,6 +17,32 @@
 
 import Foundation
 
+/// §4: the user-facing duplicate policy, decided at the import entry point —
+/// never inferred deep inside SQLite.
+///   preserveAll                      → dedup_key = NULL (every occurrence kept)
+///   messageID                        → normalized Message-ID, NULL if missing
+///   messageIDOrCanonicalFingerprint  → Message-ID, else a deterministic
+///                                      fingerprint of From|To|Date|Subject|body hash
+enum DedupPolicy: String, Sendable, Codable {
+    case preserveAll
+    case messageID
+    case messageIDOrCanonicalFingerprint
+}
+
+/// §5.3: structured outcome of a store insert — the coordinator indexes ONLY
+/// `insertedIDs` into FTS, so a deduped/reinserted row can never become a
+/// ghost search hit.
+struct BatchInsertResult: Sendable {
+    var attempted = 0
+    /// Rows actually written this call (new canonical emails).
+    var insertedIDs: [UUID] = []
+    /// Rows skipped because the same (source_id, source_ordinal) occurrence is
+    /// already stored — crash-resume / repeated parse of the same source.
+    var existingSourceOccurrenceIDs: [UUID] = []
+    /// Rows skipped by the dedup policy (recorded as duplicate findings).
+    var duplicateIDs: [UUID] = []
+}
+
 protocol EmailArchiveStore: Sendable {
     /// Persist a batch. Idempotent on non-empty Message-ID (duplicates skipped),
     /// committed in chunks of `batchSize`.

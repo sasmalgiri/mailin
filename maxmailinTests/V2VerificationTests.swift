@@ -2470,3 +2470,271 @@ actor GatedRepository: EmailRepository {
     func count(query: EmailQuery) async throws -> Int { (datasets[key(query)] ?? []).count }
     func delete(ids: [EmailID]) async throws {}
 }
+
+// MARK: - §2/§3/§4 — schema versioning, full-fidelity persistence, dedup policy
+
+import SQLite3
+
+final class V2StorageSchemaTests: XCTestCase {
+
+    private func tempRoot() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-schema-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    private func fixture(
+        mid: String?, subject: String, body: String,
+        messageType: String = "received",
+        attachments: [AttachmentMetadata] = [],
+        tags: [String] = [], domains: [String] = ["b.com"],
+        from: String = "Alice <a@b.com>", to: String = "c@d.com, Dave <dave@e.org>"
+    ) -> MBOXParser.RawEmail {
+        var headers: [String: String] = [
+            "Subject": subject, "From": from, "To": to,
+            "Date": "Wed, 15 Jan 2025 14:30:00 +0000"
+        ]
+        if let mid { headers["Message-ID"] = mid }
+        return MBOXParser.RawEmail(
+            headers: headers, rawSource: "From a@b.com\n\(body)", messageType: messageType,
+            attachments: attachments, timestamp: "2025-01-15T14:30:00Z", domains: domains,
+            plainBody: body, htmlBody: "", tags: tags
+        )
+    }
+
+    // §2: a brand-new store lands at the latest schema version and is healthy.
+    func testFreshStore_atLatestSchemaVersion_integrityOK() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root)
+        let v = try await store.schemaVersion()
+        XCTAssertEqual(v, SQLiteEmailStore.currentSchemaVersion)
+        let health = try await store.integrityCheck()
+        XCTAssertEqual(health, "ok")
+    }
+
+    // §2: a populated PRE-VERSIONING (implicit v1) store migrates in place —
+    // rows preserved, dedup_key backfilled from message_id, user_version = 2.
+    func testV1Store_populated_migratesInPlacePreservingRows() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let dbURL = root.appendingPathComponent("emails.db")
+
+        // Build the v1 store byte-for-byte the way the pre-versioning code did.
+        var raw: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(dbURL.path, &raw), SQLITE_OK)
+        let v1DDL = """
+            CREATE TABLE emails(
+                id TEXT PRIMARY KEY, message_id TEXT,
+                subject TEXT NOT NULL DEFAULT '', from_addr TEXT NOT NULL DEFAULT '',
+                to_addr TEXT NOT NULL DEFAULT '', cc_addr TEXT, bcc_addr TEXT,
+                date INTEGER NOT NULL, body_preview TEXT NOT NULL DEFAULT '',
+                has_attach INTEGER NOT NULL DEFAULT 0, size_bytes INTEGER NOT NULL DEFAULT 0,
+                in_reply_to TEXT, references_ids TEXT, account_id TEXT, source_hash TEXT
+            );
+            CREATE TABLE email_bodies(id TEXT PRIMARY KEY, plain BLOB, html BLOB, raw BLOB, headers_json BLOB);
+            CREATE UNIQUE INDEX idx_emails_msgid ON emails(message_id) WHERE message_id IS NOT NULL;
+            INSERT INTO emails(id, message_id, subject, from_addr, to_addr, date)
+                VALUES ('11111111-1111-1111-1111-111111111111', '<v1-a@t>', 'Old A', 'a@b.com', 'c@d.com', 1700000000);
+            INSERT INTO emails(id, message_id, subject, from_addr, to_addr, date)
+                VALUES ('22222222-2222-2222-2222-222222222222', NULL, 'Old B no-mid', 'a@b.com', 'c@d.com', 1700000001);
+            INSERT INTO email_bodies(id, plain) VALUES ('11111111-1111-1111-1111-111111111111', X'414243');
+        """
+        XCTAssertEqual(sqlite3_exec(raw, v1DDL, nil, nil, nil), SQLITE_OK)
+        sqlite3_close(raw)
+
+        // Opening the store must migrate in place (v0-implicit → v1 → v2).
+        let store = SQLiteEmailStore(directory: root)
+        let v = try await store.schemaVersion()
+        XCTAssertEqual(v, 2, "populated v1 store upgrades to v2")
+        let count = try await store.totalCount()
+        XCTAssertEqual(count, 2, "no rows lost in migration")
+
+        // dedup_key backfill: importing the SAME Message-ID under .messageID
+        // must be recognized as a duplicate of the migrated row.
+        let dup = fixture(mid: "<v1-a@t>", subject: "New dup", body: "dup body")
+        let result = try await store.insertBatch(
+            [dup], sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID,
+            batchSize: 10, progress: nil)
+        XCTAssertEqual(result.duplicateIDs, [dup.id], "migrated dedup_key catches the duplicate")
+        let after = try await store.totalCount()
+        XCTAssertEqual(after, 2, "duplicate not stored")
+
+        // Re-open: migration must be a no-op (idempotent, restart-safe).
+        let reopened = SQLiteEmailStore(directory: root)
+        let v2 = try await reopened.schemaVersion()
+        XCTAssertEqual(v2, 2)
+        let count2 = try await reopened.totalCount()
+        XCTAssertEqual(count2, 2)
+    }
+
+    // §2: a store STAMPED NEWER than this build refuses to open — it is never
+    // silently recreated or downgraded.
+    func testNewerSchemaVersion_refusesToOpen() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let dbURL = root.appendingPathComponent("emails.db")
+        var raw: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(dbURL.path, &raw), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(raw, "PRAGMA user_version = 99; CREATE TABLE emails(id TEXT PRIMARY KEY, date INTEGER NOT NULL);", nil, nil, nil), SQLITE_OK)
+        sqlite3_close(raw)
+
+        let store = SQLiteEmailStore(directory: root)
+        do {
+            _ = try await store.totalCount()
+            XCTFail("opening a v99 store must throw, not silently proceed")
+        } catch {
+            XCTAssertTrue("\(error)".contains("newer"), "error explains the refusal: \(error)")
+        }
+    }
+
+    // §3: the differential persist → close → fresh reopen → hydrate contract.
+    // Every shipping-relevant RawEmail semantic must survive.
+    func testFullFidelity_persistReopenHydration() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let att = AttachmentMetadata(filename: "report.pdf", mimeType: "application/pdf",
+                                     size: 12_345, isInline: false, contentID: "<cid-1@t>")
+        let inline = AttachmentMetadata(filename: "logo.png", mimeType: "image/png",
+                                        size: 42, isInline: true, contentID: "<cid-2@t>")
+        var email = fixture(mid: "<fid-1@t>", subject: "Fidelity ✓ नमस्ते", body: "hello fidelity",
+                            messageType: "sent", attachments: [att, inline],
+                            tags: ["Important", "Work"], domains: ["b.com", "e.org"])
+        email.headers["In-Reply-To"] = "<parent@t>"
+        email.headers["References"] = "<grand@t> <parent@t>"
+
+        do {
+            let writer = SQLiteEmailStore(directory: root)
+            let r = try await writer.insertBatch(
+                [email], sourceFileHash: "shatest", accountID: "acct-1",
+                sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID,
+                batchSize: 10, progress: nil)
+            XCTAssertEqual(r.insertedIDs, [email.id])
+        }
+
+        // Fresh connection — nothing may come from in-memory state.
+        let reopened = SQLiteEmailStore(directory: root)
+        let full = try await reopened.fullEmail(id: email.id)
+        let hydrated = try XCTUnwrap(full)
+
+        XCTAssertEqual(hydrated.id, email.id)
+        XCTAssertEqual(hydrated.messageType, "sent", "message type must not be a placeholder")
+        XCTAssertEqual(hydrated.plainBody, "hello fidelity")
+        XCTAssertEqual(hydrated.rawSource, email.rawSource)
+        XCTAssertEqual(hydrated.headers["Subject"], "Fidelity ✓ नमस्ते", "non-ASCII header survives")
+        XCTAssertEqual(hydrated.headers["Message-ID"], "<fid-1@t>")
+        XCTAssertEqual(hydrated.inReplyTo, "<parent@t>")
+        XCTAssertEqual(hydrated.tags.sorted(), ["Important", "Work"], "user-visible tags survive")
+        XCTAssertEqual(hydrated.domains.sorted(), ["b.com", "e.org"], "domains survive")
+        XCTAssertEqual(hydrated.attachments.count, 2, "attachment metadata survives")
+        let pdf = try XCTUnwrap(hydrated.attachments.first { $0.filename == "report.pdf" })
+        XCTAssertEqual(pdf.mimeType, "application/pdf")
+        XCTAssertEqual(pdf.size, 12_345)
+        XCTAssertFalse(pdf.isInline)
+        XCTAssertEqual(pdf.contentID, "<cid-1@t>")
+        let png = try XCTUnwrap(hydrated.attachments.first { $0.filename == "logo.png" })
+        XCTAssertTrue(png.isInline)
+    }
+
+    // §4: the three dedup policies behave as documented.
+    func testDedupPolicies_preserveAll_messageID_fingerprint() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root)
+
+        // preserveAll: identical Message-IDs are BOTH kept.
+        let p1 = fixture(mid: "<same@t>", subject: "one", body: "b1")
+        let p2 = fixture(mid: "<same@t>", subject: "two", body: "b2")
+        let rp = try await store.insertBatch(
+            [p1, p2], sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .preserveAll,
+            batchSize: 10, progress: nil)
+        XCTAssertEqual(rp.insertedIDs.count, 2, "preserveAll keeps explicit duplicates")
+
+        // messageID: a repeated Message-ID is dropped + recorded as a finding.
+        let m1 = fixture(mid: "<mid@t>", subject: "m1", body: "b")
+        let m2 = fixture(mid: "<mid@t>", subject: "m2", body: "b")
+        let rm = try await store.insertBatch(
+            [m1, m2], sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID,
+            batchSize: 10, progress: nil)
+        XCTAssertEqual(rm.insertedIDs, [m1.id])
+        XCTAssertEqual(rm.duplicateIDs, [m2.id])
+
+        // messageID: rows WITHOUT a Message-ID are never collapsed.
+        let n1 = fixture(mid: nil, subject: "n", body: "identical")
+        let n2 = fixture(mid: nil, subject: "n", body: "identical")
+        let rn = try await store.insertBatch(
+            [n1, n2], sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID,
+            batchSize: 10, progress: nil)
+        XCTAssertEqual(rn.insertedIDs.count, 2, "no-MID rows are preserved under .messageID")
+
+        // fingerprint: identical no-MID messages collapse; different bodies don't.
+        let f1 = fixture(mid: nil, subject: "fp", body: "fingerprint body")
+        let f2 = fixture(mid: nil, subject: "fp", body: "fingerprint body")
+        let f3 = fixture(mid: nil, subject: "fp", body: "DIFFERENT body")
+        let rf = try await store.insertBatch(
+            [f1, f2, f3], sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageIDOrCanonicalFingerprint,
+            batchSize: 10, progress: nil)
+        XCTAssertEqual(rf.insertedIDs.count, 2, "identical fingerprint collapses; different body kept")
+        XCTAssertEqual(rf.duplicateIDs, [f2.id])
+    }
+
+    // §3.2: re-processing the same source occurrence (crash resume / re-parse
+    // with fresh UUIDs) never duplicates evidence — even under preserveAll —
+    // and is reported as an existing occurrence, not a policy duplicate.
+    func testSourceOccurrence_reparseIsIdempotent_notDuplicate() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root)
+        let sid = try await store.registerSource(SQLiteEmailStore.SourceDescriptor(
+            sha256: "aaaa", filename: "Inbox.mbox", byteSize: 100,
+            parser: "mbox", parserVersion: 3, accountID: nil, sourceKind: "mbox"))
+
+        let a = fixture(mid: nil, subject: "s0", body: "b0")
+        let b = fixture(mid: nil, subject: "s1", body: "b1")
+        let first = try await store.insertBatch(
+            [a, b], sourceFileHash: "aaaa", accountID: nil,
+            sourceID: sid, firstOrdinal: 0, dedupPolicy: .preserveAll,
+            batchSize: 10, progress: nil)
+        XCTAssertEqual(first.insertedIDs.count, 2)
+
+        // Re-parse of the same file: same ordinals, brand-new UUIDs.
+        let a2 = fixture(mid: nil, subject: "s0", body: "b0")
+        let b2 = fixture(mid: nil, subject: "s1", body: "b1")
+        let second = try await store.insertBatch(
+            [a2, b2], sourceFileHash: "aaaa", accountID: nil,
+            sourceID: sid, firstOrdinal: 0, dedupPolicy: .preserveAll,
+            batchSize: 10, progress: nil)
+        XCTAssertEqual(second.insertedIDs.count, 0, "no re-imported rows")
+        XCTAssertEqual(second.existingSourceOccurrenceIDs.count, 2, "reported as existing occurrences")
+        XCTAssertEqual(second.duplicateIDs.count, 0, "NOT misreported as policy duplicates")
+        let count = try await store.totalCount()
+        XCTAssertEqual(count, 2)
+    }
+
+    // §21.2: two sources with the same filename remain distinguishable by SHA.
+    func testSameFilenameDifferentSHA_distinctSources() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root)
+        let s1 = try await store.registerSource(SQLiteEmailStore.SourceDescriptor(
+            sha256: "hash-one", filename: "Inbox.mbox", byteSize: 10,
+            parser: "mbox", parserVersion: 1, accountID: nil, sourceKind: "mbox"))
+        let s2 = try await store.registerSource(SQLiteEmailStore.SourceDescriptor(
+            sha256: "hash-two", filename: "Inbox.mbox", byteSize: 20,
+            parser: "mbox", parserVersion: 1, accountID: nil, sourceKind: "mbox"))
+        XCTAssertNotEqual(s1, s2, "same name, different content → different sources")
+        let rows = try await store.sources()
+        XCTAssertEqual(rows.count, 2)
+        // Re-registering the same content returns the same id (stable).
+        let s1Again = try await store.registerSource(SQLiteEmailStore.SourceDescriptor(
+            sha256: "hash-one", filename: "Inbox.mbox", byteSize: 10,
+            parser: "mbox", parserVersion: 1, accountID: nil, sourceKind: "mbox"))
+        XCTAssertEqual(s1, s1Again)
+    }
+}

@@ -68,7 +68,15 @@ enum MailinStoreMigration {
             let missing = ids.filter { !existing.contains($0) }
             if !missing.isEmpty {
                 let emails = try await source.emails(withIDs: missing)   // full bodies
-                try await dest.insertBatch(emails, batchSize: 1_000)
+                // §10.2: migration PRESERVES existing user state exactly —
+                // legitimate v1 rows that share a Message-ID must not be
+                // dropped by the import-time dedup policy. Resume-idempotency
+                // comes from the preserved v1 UUIDs (id PRIMARY KEY), not
+                // from Message-ID uniqueness.
+                try await dest.insertBatch(
+                    emails, sourceFileHash: nil, accountID: nil,
+                    sourceID: nil, firstOrdinal: nil, dedupPolicy: .preserveAll,
+                    batchSize: 1_000, progress: nil)
                 copied += emails.count
             }
             beforeDate = page.last!.date

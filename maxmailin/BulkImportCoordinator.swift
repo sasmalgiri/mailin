@@ -74,6 +74,11 @@ final class BulkImportCoordinator {
         var maxEmails: Int? = nil
         /// Upper bound on emails delivered through `onPreviewBatch` (1e).
         var previewCap: Int = 5_000
+        /// §4: the user's duplicate policy, resolved at the entry point (the
+        /// legacy `removeDuplicates` toggle maps to .messageID / .preserveAll).
+        var dedupPolicy: DedupPolicy = .messageID
+        /// Optional account attribution for imported rows.
+        var accountID: String? = nil
     }
 
     /// UI/side-effect hooks. All are invoked on the main actor.
@@ -247,6 +252,18 @@ final class BulkImportCoordinator {
                     sha256: hash, parser: parserID.name, parserVersion: parserID.version
                 ))
 
+                // §3.1/§3.2: first-class source identity. Every row this file
+                // produces is stamped (source_id, source_ordinal), so resume /
+                // re-parse can never duplicate an occurrence — regardless of
+                // dedup policy — and forensic evidence stays locatable.
+                let sourceID = try await SQLiteEmailStore.shared.registerSource(
+                    SQLiteEmailStore.SourceDescriptor(
+                        sha256: hash, filename: sourceName, byteSize: sizeBytes,
+                        parser: parserID.name, parserVersion: parserID.version,
+                        accountID: options.accountID,
+                        sourceKind: url.pathExtension.lowercased()
+                    ))
+
                 // 2. Skip if we have already fully ingested this file.
                 if await ImportCheckpointStore.shared.isImported(sha256: hash) {
                     summary.skippedFiles += 1
@@ -332,11 +349,15 @@ final class BulkImportCoordinator {
                         // batch: counted, logged, and it fails THIS FILE. The
                         // checkpoint stays at the last committed ordinal, so
                         // a retry resumes exactly at the failure point.
+                        let insertResult: BatchInsertResult
                         do {
-                            try await SQLiteEmailStore.shared.insertBatch(
+                            insertResult = try await SQLiteEmailStore.shared.insertBatch(
                                 pending,
                                 sourceFileHash: hash,
-                                accountID: nil,
+                                accountID: options.accountID,
+                                sourceID: sourceID,
+                                firstOrdinal: batchStart + range.lowerBound,
+                                dedupPolicy: options.dedupPolicy,
                                 batchSize: batchSize,
                                 progress: nil
                             )
@@ -358,9 +379,16 @@ final class BulkImportCoordinator {
                                 total: processedBefore + pending.count
                             )
                         }
+                        // §5.3: index ONLY rows the store actually committed —
+                        // a policy-deduped or resume-skipped row must never
+                        // become a ghost FTS hit.
+                        let insertedSet = Set(insertResult.insertedIDs)
+                        let toIndex = pending.filter { insertedSet.contains($0.id) }
                         do {
-                            try await FTSSearchIndex.shared.indexBatch(pending)
-                            summary.indexed += pending.count
+                            if !toIndex.isEmpty {
+                                try await FTSSearchIndex.shared.indexBatch(toIndex)
+                            }
+                            summary.indexed += toIndex.count
                         } catch {
                             summary.ftsDegraded = true
                             summary.ftsFailedBatchCount += 1
