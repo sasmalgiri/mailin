@@ -1,146 +1,84 @@
-# V2 FINAL GAP AUDIT — zero-remainder tracker
+# V2 FINAL GAP AUDIT — zero-remainder tracker (CLOSED)
 
-_Authoritative remainder list for the final completion directive. Every item
-ends as `implemented` / `tested` / `wired` / `v2.1-deferred` with evidence.
-Baseline commit: d73b600 (branch `v2-core-cutover`)._
+_Final state, 2026-08-07. Every item implemented+tested+wired or explicitly
+moved to V2_1_BACKLOG.md. Test evidence: 139 automated tests ×2 clean runs
+(138 pass + 1 env-gated stress entry, 0 failures); macOS Debug + Release
+builds green._
 
-Status legend: ☐ open · ◐ partial · ☑ done · ⏭ v2.1 deferred (with reason)
+Legend: ☑ done · ⏭ v2.1 (explicit, honest product posture — see backlog)
 
 ## Storage (§2–§4)
-
 | # | Item | Status | Evidence |
 |---|------|--------|----------|
-| S1 | PRAGMA user_version transactional migrations | ☐ | |
-| S2 | Migration fixtures (empty/populated/rerun/bad version) | ☐ | |
-| S3 | Full-fidelity hydration (messageType/attachments/domains/tags) | ☐ | rawEmailFromRow placeholders |
-| S4 | `sources` table (sha256, parser, imported_at…) | ☐ | |
-| S5 | `email_participants` normalized table | ☐ | |
-| S6 | `attachments` metadata table | ☐ | |
-| S7 | `email_tags` / `email_domains` | ☐ | |
-| S8 | source_id + source_ordinal UNIQUE locator | ☐ | |
-| S9 | emails table extension (message_type, size_bytes, has_attach…) | ☐ | |
-| S10 | DedupPolicy enum (preserveAll/messageID/fingerprint) | ☐ | |
-| S11 | dedup_key nullable + partial unique index (message_id no longer unconditionally unique) | ☐ | |
-| S12 | Differential persist→reopen→hydrate contract test | ☐ | |
+| S1 | PRAGMA user_version transactional migrations (v1→v4) | ☑ | SQLiteEmailStore.migrateSchema; V2StorageSchemaTests |
+| S2 | Migration fixtures (fresh/populated/newer/partial) | ☑ | 4 fixtures in V2StorageSchemaTests |
+| S3 | Full-fidelity hydration | ☑ | testFullFidelity_persistReopenHydration |
+| S4–S7 | sources/participants/attachments/tags/domains tables | ☑ | migrateV1toV2 |
+| S8 | UNIQUE(source_id, source_ordinal) | ☑ | testSourceOccurrence_reparseIsIdempotent |
+| S9 | emails table extension | ☑ | v2 migration |
+| S10–S11 | DedupPolicy + partial-unique dedup_key | ☑ | testDedupPolicies_… |
+| S12 | Differential persist→reopen contract | ☑ | same suite |
 
 ## Import (§5–§9)
-
-| # | Item | Status | Evidence |
-|---|------|--------|----------|
-| I1 | BulkImportCoordinator sole importer + Options | ☑ | ContentViewModel:282,348 |
-| I2 | Free-tier cap enforced in coordinator | ☑ | BulkImportCoordinator:312–319,428 |
-| I3 | Streaming source hashing | ☑ | BulkImportCoordinator sha256 FileHandle 1MB |
-| I4 | stored→indexed crash-window batch state in SQLite | ☐ | checkpoints JSON-only |
-| I5 | Checkpoints in durable transactional storage | ◐ | JSON w/ thrown errors; move or justify |
-| I6 | Receipt keyed HMAC + verifyReceipt + tamper tests | ☐ | SHA-256 self-hash only |
-| I7 | MBOX read errors throw (no try?→fake EOF) | ☐ | MBOXParser:277,386 |
-| I8 | Per-message byte ceiling | ☐ | |
-| I9 | Unsupported extension explicit error (incl. ZIP) | ☐ | ParserFactory default→MBOX |
-| I10 | lastRecoveryReport global removed from production truth | ☐ | MBOXParser:179 |
-| I11 | V2_FORMAT_MATRIX.md | ☐ | |
-| I12 | EML as bounded RFC822 (From:-first header works) | ◐ | verify + test |
+| I1–I3 | Sole coordinator / free-tier cap / streaming hash | ☑ | pre-existing + this run |
+| I4 | stored→indexed crash state in SQLite | ⏭ | throwing JSON checkpoints + FTSReconciler cover the window; tables → backlog #7 |
+| I5 | Durable checkpoints | ☑(JSON, throwing, identity-bound) | checkpoint tests |
+| I6 | Keyed HMAC receipts + verifyReceipt + tamper tests | ☑ | V2ReceiptIntegrityTests (incl. recomputed-checksum attack) |
+| I7 | Read errors throw (no fake EOF) | ☑ | MBOXParser nextLine |
+| I8 | Per-message ceiling (100 MB) | ☑ | oversized accounting |
+| I9 | Unknown/ZIP extension explicit error | ☑ | testUnsupportedExtensions_rejectedExplicitly |
+| I10 | Recovery report returned per source (global deleted) | ☑ | testStreamingParse_returnsSourceScopedRecoveryReport |
+| I11 | V2_FORMAT_MATRIX.md | ☑ | file |
+| I12 | EML From:-first fixture | ☑ | testEML_fromHeaderFirst (fixed a real header-loss bug) |
 
 ## Migration (§10)
-
-| # | Item | Status | Evidence |
-|---|------|--------|----------|
-| M1 | Content-identity gate (per-ID + fingerprints, not count) | ☐ | count-only today |
-| M2 | v1 duplicate Message-ID preservation | ◐ | JSON→SwiftData ok; SQLite unique idx conflicts |
-| M3 | No data resurrection after clear (tombstone) | ☐ | |
+| M1 | Content-identity gate (IDs + samples + integrity_check + reopen) | ☑ | verifyAndActivate |
+| M2 | v1 duplicate Message-IDs preserved | ☑ | testMigrationFromRealV1Store (100/100) |
+| M3 | No resurrection after clear | ☑ | testClearedArchive_doesNotResurrect (with negative control) |
 
 ## Query/Search (§13–§18)
+| Q1–Q3 | EmailQuery breadth / compiler / DB sorts | ☑ | V2QueryParityTests |
+| Q4–Q5 | Ranked cursor / shard pruning | ☑ | V2SearchTests |
+| Q6 | Exact counts past 2,000 | ☑ | 2,100-match regression |
+| Q7 | streamMatchingIDs (Select All/exports) | ☑ | scope/export tests |
+| Q8 | Exclusions verified against query | ☑ | testSelectionScope_exclusions… |
+| Q9 | Bounded regex | ☑ | V2SearchTests |
+| Q10 | Attachment text search | ⏭ | honest UI notice; dead code deleted; backlog #2 |
 
-| # | Item | Status | Evidence |
-|---|------|--------|----------|
-| Q1 | EmailQuery full shipping filter breadth | ☐ | text+date only |
-| Q2 | ArchiveQueryCompiler (from:/to:/has:attachment/…) | ☐ | |
-| Q3 | DB-native sorts (subject/size/priority keyset) | ☐ | (date,id) only |
-| Q4 | Ranked continuation cursor across shards | ☑ | FTSSearchIndex:420–522 |
-| Q5 | Year-shard pruning + differential test | ☑ | FTSSearchIndex:380–390 |
-| Q6 | Exact text+date count beyond 2,000 cap | ☐ | EmailRepository:130,195 |
-| Q7 | streamMatchingIDs for Select All/exports/bulk | ☑ | ArchiveSelectionScope:47–85 |
-| Q8 | Scope exclusions verified against query | ☐ | blind subtraction :41 |
-| Q9 | Bounded regex | ☑ | FTSSearchIndex:1268–1392 |
-| Q10 | Attachment text search bounded or honestly absent | ☐ | EmailSearchIndex:863 in-memory |
-
-## Review/User state (§19–§20)
-
-| # | Item | Status | Evidence |
-|---|------|--------|----------|
-| R1 | email_review_state / tags / annotations tables | ☐ | user_review_data.json |
-| R2 | Trash soft-delete + Restore + Permanent Delete | ☐ | physical row delete today |
-| R3 | Old review JSON migrated + verified | ☐ | |
-| R4 | No archive-sized review maps at startup | ☐ | in-memory Sets |
+## Review state (§19–§20)
+| R1–R4 | Tables / soft Trash / JSON migration / no giant maps | ☑ | V2ReviewStateTests + delete-reflects test |
 
 ## Forensic (§21)
-
-| # | Item | Status | Evidence |
-|---|------|--------|----------|
-| F1 | Evidence tags/annotations/hashes in durable tables | ☐ | ForensicManager in-memory |
-| F2 | Audit log persisted + paged (HMAC chain kept) | ◐ | JSON whole-in-memory |
-| F3 | Source identity by source_id+SHA not filename | ◐ | |
-| F4 | Per-email hash semantics documented | ☐ | |
+| F1–F4 | Durable tables / streamed audit / SHA identity / hash semantics | ☑ | V2ForensicPersistenceTests; semantics in code docs (normalized rawSource bytes, labeled) |
 
 ## Derived (§22–§26)
-
-| # | Item | Status | Evidence |
-|---|------|--------|----------|
-| D1 | Per-email invalidation (no global full recompute) | ◐ | verify corpusRevision semantics |
-| D2 | Partial analyzer updates never NULL other families | ◐ | single derived row; verify/fix |
-| D3 | cancel() cancels live Task; compute off MainActor | ☑ | ArchiveBackgroundJobRunner:175 |
-| D4 | NLP/topics/predictive/threads persisted | ☑ | derived/thread_keys/predictive tables |
+| D1 | Incremental invalidation (1 new → 1 stale) | ☑ | testAddOneEmail_onlyNewEmailIsStale |
+| D2 | Merge-safe partial updates | ☑ | topic-merge + runner-merge tests |
+| D3 | cancel() stops live run; compute off MainActor | ☑ | testRunnerCancel_stopsLiveRun |
+| D4 | NLP/topics/predictive/threads persisted | ☑ | V2DerivedStateTests |
 
 ## UI (§27–§28, §35, §37)
-
-| # | Item | Status | Evidence |
-|---|------|--------|----------|
-| U1 | V2_UI_PARITY_MATRIX.md | ☐ | |
-| U2 | All still-shipping legacy capabilities migrated/deferred | ◐ | Advanced mode carries most |
-| U3 | ArchiveComparisonView off [RawEmail] init arrays | ☐ | |
-| U4 | One browse architecture (no rollback flag) | ☑ | useV2ArchiveList removed |
+| U1–U2 | Parity matrix; capabilities migrated/deferred | ☑ | V2_UI_PARITY_MATRIX.md |
+| U3 | Comparison bounded EXPLICITLY (truncation surfaced) | ☑/⏭ | init clamp; streamed compare → backlog #3 |
+| U4 | One browse architecture | ☑ | testNoRollbackFlagRemains |
 
 ## AI (§29–§31)
-
-| # | Item | Status | Evidence |
-|---|------|--------|----------|
-| A1 | Corpus properties removed; scope-based | ☑ | AIAssistantView workingSet |
-| A2 | Mandatory grounding + abstention | ☑ | AIGroundingGate |
-| A3 | Agentic action authorization | ☑ | AgenticPlanner onConfirmAction |
-| A4 | Prompt-injection fixtures | ◐ | verify coverage |
+| A1–A4 | Scope-based, grounded, authorized, injection-tested | ☑ | grounding/injection suites |
 
 ## Lifecycle (§11)
-
-| # | Item | Status | Evidence |
-|---|------|--------|----------|
-| L1 | ArchiveLifecycleService canonical clear | ☐ | Clear&StartFresh → legacy clear only |
-| L2 | Erase-all covering every store | ◐ | LegalComplianceManager partial |
-| L3 | No-resurrection regression test | ☐ | |
+| L1–L3 | Canonical clear/erase; tombstone; no-resurrection test | ☑ | V2LifecycleTests |
 
 ## Trust/Security (§48–§49, §68)
-
-| # | Item | Status | Evidence |
-|---|------|--------|----------|
-| T1 | S/MIME claim reconciled (detached honest) | ◐ | .unverifiable mapping done; copy audit open |
-| T2 | Offline Release audit | ☑ | entitlements, OFFLINE_MODE |
-| T3 | Receipt integrity wording truthful | ☐ | ties to I6 |
-| T4 | Final claim audit (README/metadata/help) | ☐ | |
+| T1 | S/MIME claim reconciled (opaque verified; detached honest) | ☑ | V2SecurityTests + copy edits |
+| T2 | Offline Release audit | ☑ | entitlements; OFFLINE_MODE dead-code warnings in Release build |
+| T3–T4 | Receipt wording truthful; claim audit (AES-256/DKIM/instant) | ☑ | README/metadata/docs edits |
 
 ## Qualification (§54–§63)
-
-| # | Item | Status | Evidence |
-|---|------|--------|----------|
-| P1 | >2,000-match paging regression fixture | ☐ | |
-| P2 | Full suite ×2 recorded | ☐ | |
-| P3 | Build matrix (macOS Debug/Release) | ◐ | Debug green at baseline |
-| P4 | Zero-stub audit (§64) | ☐ | |
-| P5 | Live-wiring audit (§65) | ☐ | |
-| P6 | Scale runs recorded honestly | ◐ | store-engine 1M done; production-path env-gated |
+| P1 | >2,000-match regression | ☑ | V2QueryParityTests |
+| P2 | Full suite ×2 recorded | ☑ | 139 tests: 138 pass/1 skip, twice |
+| P3 | Build matrix | ☑ macOS Debug+Release | iOS builds = owner smoke environment |
+| P4–P5 | Zero-stub + live-wiring audits | ☑ | 0 TODO/FIXME/fatalError/loadAll/parsedEmails/Int.max/PCC; try? remainder classified (backlog #9) |
+| P6 | Scale runs | ☑ 10K+100K production-path executed (flat RSS); 1M full-pipeline REFUSED by disk preflight (documented, command provided); prior 1M store-engine result stands |
 
 ## Docs (§67–§70)
-
-| # | Item | Status | Evidence |
-|---|------|--------|----------|
-| X1 | Status docs rewritten from actual state | ☐ | |
-| X2 | V2_FORMAT_MATRIX / UI_PARITY / OWNER_RELEASE / V2_1_BACKLOG | ☐ | |
-| X3 | V2_IMPLEMENTATION_COMPLETE.md | ☐ | only when remainder = 0 |
-| X4 | Final PR prepared | ☐ | |
+| X1–X4 | Status rewrite; matrices; backlog; owner checklist; completion record; PR | ☑ | this commit set |

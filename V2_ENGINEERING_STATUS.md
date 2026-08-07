@@ -1,81 +1,66 @@
-# Mailin 2.0 — Engineering Status & Handoff (branch `v2-core-cutover`)
+# Mailin 2.0 — Engineering Status (branch `v2-core-cutover`)
 
-_This is an honest status, not a "complete" sign-off. It records exactly what is
-bounded and verified, what remains, and why each remaining item is gated._
+_Rewritten 2026-08-07 from actual code + executed evidence (final directive
+run). Supersedes all earlier status labels. Tracker: V2_FINAL_GAP_AUDIT.md.
+Completion record: V2_IMPLEMENTATION_COMPLETE.md._
 
-## The invariant
+## The invariant — held end to end
 
-**Archive size must not determine resident memory.** v2 moves storage to SQLite
-(+ FTS5) and every access path to bounded pages/streams so that browsing,
-searching, analysing, and answering questions over a 1-email or a 1-TB archive
-cost the same RAM. Proven to 1,000,000 emails (import, keyset paging 37–43 ms,
-flat RSS — see `V2_SCALE_RESULTS.md`).
+**Archive size does not determine resident memory.** Canonical storage is
+versioned SQLite (schema v4, `PRAGMA user_version` transactional migrations)
+plus FTS5 year shards. Every production path — import, browse (both list
+modes), search, filters, review state, forensic state, derived analysis, AI
+retrieval, exports, clear/reset — is paged, streamed or windowed. Executed
+production-path evidence: flat 105→117 MB RSS from 10K→100K
+(V2_SCALE_RESULTS.md); prior 1M store-engine qualification stands; the 1M
+full-pipeline run was disk-preflight-refused this session (honest deferral,
+command documented).
 
-## Bounded & verified (oracle/differential tests in `maxmailinTests/V2VerificationTests.swift`, 46 pass + 1 stress-skip)
+## What ships (each with automated tests — 139 total, ×2 runs, 0 failures)
 
-- **Storage**: `SQLiteEmailStore` (WAL, mmap, keyset `(date,id)`, partial-unique
-  `message_id` O(1) dedup + persistent dedup findings), `FTSSearchIndex` (FTS5 bm25/NEAR).
-- **Read/list/detail/search**: `ArchiveDataService` firewall (no `loadAll`),
-  `ArchiveListViewModel` bounded page window, `ArchiveDetailViewModel`, FTS search.
-- **Analytics/insight engines migrated off the in-RAM corpus (each oracle-tested):**
-  1. `PredictiveEngine` — bounded working-set.
-  2. `AnomalyDetectionEngine` — archive-wide streaming tally.
-  3. `ArchiveFullAnalyticsService` (was `EmailAnalyticsView`) — scoped streaming.
-  4. `CommunicationPatternAnalyzer` — two-pass streaming aggregates.
-  5. `ArchiveTimelineService` (was `EmailTimelineView`) — day-bucket stream + range drill-down.
-  6. `ExecutiveDashboardView` — order-independent 2-pass streaming.
-- **AI substrate — primary answer paths bounded (owner smoke-test pending):**
-  `ArchiveRetrievalService` (FTS5 bm25 → hydrate, oracle-tested); corpus-free
-  `respond`/`respondStreaming`/`respondSmart`/`summarize`/`triageEmails`/
-  `generateInsights`/`synthesizeThread`/`securityBrief`/`generateDigest(period:)`.
-  Consumers migrated: AppIntentShortcuts, AIAssistantView (all 5 answer paths),
-  General/ITAdmin/Journalist/Personal (analysis + digest).
+- **Storage**: schema versioning v1→v4; full RawEmail fidelity (message type,
+  attachments metadata, parser tags, domains — no placeholders); normalized
+  sources/participants/attachments/tags/domains tables; stable
+  (source_id, source_ordinal) occurrence identity; DedupPolicy
+  {preserveAll, messageID, fingerprint} with partial-unique dedup_key.
+- **Import**: BulkImportCoordinator sole engine; FTS indexes only committed
+  rows; identity-bound throwing checkpoints; HMAC-signed receipts (keyed,
+  fingerprinted; forged-checksum attack regression-tested); streaming
+  triple-digest source hashing; parser I/O errors throw; 100 MB per-message
+  ceiling; unknown/ZIP extensions rejected explicitly; per-source recovery
+  reports (no global state).
+- **Migration**: public-v1 JSON → SQLite DIRECT (full fidelity, preserveAll,
+  exact-ID-coverage + sampled-content gate); SwiftData→SQLite activation gate
+  verifies ID coverage + content samples + integrity_check + fresh reopen;
+  clear tombstone prevents resurrection (§61 regression + negative control).
+- **Query/search**: EmailQuery covers the shipping filter set; SQL-compiled
+  filters + keyset sorts (date/subject/size/priority); ArchiveQueryCompiler
+  for operator syntax; ranked continuation past any result count (2,100-match
+  regression); EXACT text(+filter) counts via streamed cursor; Select-All
+  exclusions verified against the query; bounded regex; shard pruning.
+- **Review state**: SQLite tables + windowed service; REAL Trash
+  (soft, searchable-on-restore, permanent delete separate); legacy JSON
+  migrated verified.
+- **Forensic**: tags/annotations/hashes/source hashes/audit log in SQLite;
+  audit chain O(1) append + streamed verification/export with tamper
+  detection; bounded caches only.
+- **Lifecycle**: ArchiveLifecycleService — one canonical clear/erase across
+  every layer, legal holds respected, audit-logged.
+- **Derived/AI**: incremental invalidation (1 new email ⇒ 1 stale record —
+  tested); merge-safe partial updates; LIVE job cancellation; scope-based AI
+  with mandatory grounding + injection fixtures; streaming exports over
+  ArchiveSelectionScope.
+- **Claims**: README/metadata/docs reconciled to executable truth (S/MIME
+  opaque-only, server-reported DKIM, AES-256 export scope, measured latency).
 
-## OWNER SMOKE-TEST GATE (do this first — it unblocks the residual AI work)
+## Remaining
 
-Run the app on a real archive and confirm each still cites the right emails:
-1. AI assistant — a **general** question (`respondSmart`, top-50 bm25 relevant).
-2. **Insights**, **Security brief**, **Thread story** actions (bounded ≤200 recent).
-3. **Daily/weekly digest**.
-4. Global search (FTS5 bm25).
+Engineering: **none in v2.0 scope** — deliberate deferrals live in
+V2_1_BACKLOG.md (ZIP import, attachment-content FTS, streamed full-archive
+comparison, detached S/MIME, EmailSearchIndex file deletion, checkpoint
+tables, browse-state merge, ad-hoc export error surfacing).
 
-Ranking is now FTS5 bm25, **not** the old in-RAM sentence-embedding vector hybrid.
-If any answer is worse, note which — retrieval limits are easy to tune, or the
-vector path can be restored for that specific call.
-
-## Remaining engineering (gated — reasons stated)
-
-1. **Residual AI retrieval helpers** (smoke-test-gated): `chunkSearch(in:emails)`,
-   `expandByThread(allEmails:)`, and the synchronous NLP-fallback `hybridSearch`
-   sites in `AIAssistantView`/`AgenticPlanner`/`GeneralAnalysisView`. These are
-   corpus-array-based and partly synchronous → a sync→async cascade in the
-   answer-quality path. Migrate after the smoke-test confirms bm25 retrieval is
-   acceptable, so quality is judged once.
-2. **Retire the in-RAM `EmailSearchIndex` build** (`ContentView` import path): only
-   after (1), since those helpers are its last consumers.
-3. **Legacy corpus views** (`ParsedEmailListView` ~3460 lines; the 5 analysis
-   views ~1100–1850 lines each): still receive `[RawEmail]` for list rendering,
-   text search, and multi-feature display. Each needs migration to paged/query
-   access. Their engine families are largely bounded already (see list above);
-   what remains is list/search/display wiring — large and behaviourally
-   UI-verifiable only.
-4. **Remove `EmailPersistence.load()` startup rehydration** + **ratchet → 0** +
-   **remove `useV2ArchiveList`**: all blocked on (3) — the startup corpus is
-   load-bearing for the un-migrated legacy views. Removing it before they are
-   migrated would break them. (Alternatively, the owner may choose the
-   "bounded-preview" product tradeoff — a decision, not a code task.)
-5. **W4**: production-path stress (10K/100K/1M through the real import→list→
-   detail→AI path), S/MIME executed fixtures, security/privacy audit.
-
-## Owner / Apple gates (cannot be done by an agent)
-
-Device UI smoke, real v1→v2 device migration, pricing/StoreKit/App Store Connect,
-screenshots/privacy answers, submission, Apple review, public release.
-
-## One-line summary
-
-The storage floor, all read paths, six analytics/insight engines, and the primary
-AI answer paths are bounded and test-backed. The remaining work is (a) owner
-smoke-test of AI answer quality, then (b) the large legacy-view list/search
-migrations that unblock startup-rehydration removal and ratchet→0, then (c) W4
-stress + the owner/Apple release gates.
+Owner/device/App Store gates: V2_OWNER_RELEASE_CHECKLIST.md
+(macOS/iOS smoke, real v1→v2 device migration, StoreKit confirmation,
+screenshots, submission) plus the 1M full-pipeline stress run once ≥8 GB
+disk is free.

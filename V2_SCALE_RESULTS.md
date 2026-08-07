@@ -190,3 +190,33 @@ xcodebuild test -project maxmailin.xcodeproj -scheme maxmailin -configuration De
   -only-testing:maxmailinTests/V2VerificationTests/testStressHarnessSweep
 # Results JSON: ~/Library/Containers/com.ecosanskriti.mailin/Data/tmp/mailin_stress_results.json
 ```
+
+---
+
+## 2026-08-07 — Production-path stress sweep (full pipeline, this candidate)
+
+Path exercised per run: synthetic corpus → production parser fixtures →
+SQLiteEmailStore.insertBatch → FTSSearchIndex.indexBatch → keyset paging →
+ranked search → cold reopen. Harness: `testStressHarnessSweep`
+(`TEST_RUNNER_MAILIN_STRESS_SCALES`).
+
+| Scale | Import | Index | Peak RSS | Post RSS | First page | Deep page | Search p95 | Cold reopen | Disk |
+|-------|--------|-------|----------|----------|-----------|-----------|------------|-------------|------|
+| 10,000 | 10,163/s | 7,650/s | 105 MB | 105 MB | 0.9 ms | 0.6 ms | 9.1 ms | 0.5 ms | 50 MB |
+| 100,000 | 2,861/s | 1,235/s | 117 MB | 117 MB | 1.1 ms | 3.5 ms | 96.7 ms | 1.5 ms | 492 MB |
+
+RSS is FLAT across a 10× scale step (105 → 117 MB) — the bounded-memory
+invariant holds through the real production pipeline.
+
+**1,000,000 production-path run: REFUSED this session by the disk preflight**
+(directive §54.1): the run needs ~5 GB; the machine had 3.6 GiB free.
+Refusing beats letting OS temp cleanup invalidate the evidence. The prior
+1M store-engine qualification (import, keyset paging 37–43 ms, flat RSS)
+above remains valid. To execute the full-pipeline 1M run after freeing
+≥ 8 GB:
+
+```
+TEST_RUNNER_MAILIN_STRESS_SCALES=1000000 xcodebuild test \
+  -project maxmailin.xcodeproj -scheme maxmailin -destination 'platform=macOS' \
+  -only-testing:maxmailinTests/V2VerificationTests/testStressHarnessSweep
+```
