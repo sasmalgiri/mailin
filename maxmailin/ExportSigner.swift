@@ -82,6 +82,36 @@ final class ExportSigner {
         return sigURL
     }
 
+    /// Part O: sign a STREAMED export. Large exports are written incrementally
+    /// and their SHA-256 is computed while writing — the finished artifact is
+    /// never re-read into memory. The Ed25519 signature covers the 32-byte
+    /// digest; a `.sha256` sidecar records the digest hex so recipients can
+    /// verify independently (recompute streaming SHA-256, check signature over
+    /// the digest bytes).
+    @discardableResult
+    func signStreamedDigest(_ digest: Data, hex: String, for url: URL) throws -> URL {
+        let signature = try sign(digest)
+        let sigURL = url.appendingPathExtension("sig")
+        try PrivacyHardening.write(signature, to: sigURL)
+        let digestURL = url.appendingPathExtension("sha256")
+        try PrivacyHardening.write(Data(hex.utf8), to: digestURL)
+        logger.info("Signed streamed export: \(url.lastPathComponent) → \(sigURL.lastPathComponent) (digest-based)")
+        return sigURL
+    }
+
+    /// Verify a streamed-export signature: recompute the file's SHA-256 in
+    /// bounded chunks (never loading the whole file) and check the Ed25519
+    /// signature over the digest bytes.
+    func verifyStreamedFile(_ url: URL, signature: Data, publicKey: Data) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        var digest = SHA256()
+        while let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty {
+            digest.update(data: chunk)
+        }
+        return verify(Data(digest.finalize()), signature: signature, publicKey: publicKey)
+    }
+
     /// Verify a signature against arbitrary bytes. Used by the diagnostic
     /// "Verify export" flow.
     func verify(_ data: Data, signature: Data, publicKey: Data) -> Bool {

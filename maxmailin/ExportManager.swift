@@ -11,22 +11,32 @@ struct ExportManager {
 
     // MARK: - vCard Export (6D)
 
-    static func exportContacts(from emails: [MBOXParser.RawEmail]) -> Data? {
-        var contacts: [String: (name: String, email: String)] = [:]
-
-        for email in emails {
-            for key in ["From", "To", "Cc"] {
-                guard let field = email.headers[key] else { continue }
-                for part in field.split(separator: ",") {
-                    let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let (name, addr) = parseEmailAddress(trimmed)
-                    if !addr.isEmpty {
-                        contacts[addr.lowercased()] = (name: name, email: addr)
-                    }
+    /// Part O: accumulate the distinct-contact record from ONE streamed email —
+    /// the export walks the store scope in bounded batches and folds into this.
+    static func collectContacts(from email: MBOXParser.RawEmail,
+                                into contacts: inout [String: (name: String, email: String)]) {
+        for key in ["From", "To", "Cc"] {
+            guard let field = email.headers[key] else { continue }
+            for part in field.split(separator: ",") {
+                let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
+                let (name, addr) = parseEmailAddress(trimmed)
+                if !addr.isEmpty {
+                    contacts[addr.lowercased()] = (name: name, email: addr)
                 }
             }
         }
+    }
 
+    static func exportContacts(from emails: [MBOXParser.RawEmail]) -> Data? {
+        var contacts: [String: (name: String, email: String)] = [:]
+        for email in emails {
+            collectContacts(from: email, into: &contacts)
+        }
+        return vcardData(contacts: contacts)
+    }
+
+    /// Render the small derived contact record as vCard data.
+    static func vcardData(contacts: [String: (name: String, email: String)]) -> Data? {
         guard !contacts.isEmpty else { return nil }
 
         var vcards = ""
@@ -59,23 +69,31 @@ struct ExportManager {
 
     // MARK: - ICS Calendar Export (6E)
 
-    static func exportCalendarEvents(from emails: [MBOXParser.RawEmail]) -> String {
+    /// Part O: extract the VEVENT blocks from ONE streamed email — the ICS
+    /// export streams the store scope and appends these incrementally.
+    static func calendarEventBlocks(from email: MBOXParser.RawEmail) -> [String] {
         var events: [String] = []
-
-        for email in emails {
-            for att in email.attachments {
-                if att.mimeType.lowercased().contains("calendar") || att.filename.lowercased().hasSuffix(".ics") {
-                    if let b64 = att.base64, let data = Data(base64Encoded: b64),
-                       let content = String(data: data, encoding: .utf8) {
-                        let eventParts = content.components(separatedBy: "BEGIN:VEVENT")
-                        for part in eventParts.dropFirst() {
-                            if let eventBody = part.components(separatedBy: "END:VCALENDAR").first {
-                                events.append("BEGIN:VEVENT" + eventBody)
-                            }
+        for att in email.attachments {
+            if att.mimeType.lowercased().contains("calendar") || att.filename.lowercased().hasSuffix(".ics") {
+                if let b64 = att.base64, let data = Data(base64Encoded: b64),
+                   let content = String(data: data, encoding: .utf8) {
+                    let eventParts = content.components(separatedBy: "BEGIN:VEVENT")
+                    for part in eventParts.dropFirst() {
+                        if let eventBody = part.components(separatedBy: "END:VCALENDAR").first {
+                            events.append("BEGIN:VEVENT" + eventBody)
                         }
                     }
                 }
             }
+        }
+        return events
+    }
+
+    static func exportCalendarEvents(from emails: [MBOXParser.RawEmail]) -> String {
+        var events: [String] = []
+
+        for email in emails {
+            events.append(contentsOf: calendarEventBlocks(from: email))
         }
 
         guard !events.isEmpty else { return "" }
@@ -210,48 +228,59 @@ struct ExportManager {
 
     // MARK: - Relativity Load File (6F+)
 
+    static let relativityLoadFileHeader = "Control Number,Custodian,Date Sent,Date Received,From,To,CC,BCC,Subject,Email Message ID,Conversation Index,Attachment Count,Has Attachments,File Size,MD5 Hash,Native File Path"
+
+    private static let relativityDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "MM/dd/yyyy"
+        return f
+    }()
+
+    /// Part O: one streamed Relativity load-file row (no trailing newline).
+    static func relativityRow(
+        email: MBOXParser.RawEmail,
+        index: Int,
+        batesPrefix: String = "MAIL",
+        custodianName: String = "",
+        caseNumber: String = ""
+    ) -> String {
+        let controlNum = String(format: "%@%07d", batesPrefix, index + 1)
+        let from = csvEscape(email.headers["From"] ?? "")
+        let to = csvEscape(email.headers["To"] ?? "")
+        let cc = csvEscape(email.headers["Cc"] ?? "")
+        let bcc = csvEscape(email.headers["Bcc"] ?? "")
+        let subject = csvEscape(email.headers["Subject"] ?? "")
+        let messageID = csvEscape(email.headers["Message-ID"] ?? email.headers["Message-Id"] ?? "")
+        let conversationIdx = csvEscape(email.headers["Thread-Index"] ?? "")
+        let attachCount = email.attachments.count
+        let hasAttach = attachCount > 0 ? "Y" : "N"
+        let fileSize = email.rawSource.utf8.count
+        let nativePath = csvEscape("\(caseNumber)/\(controlNum).eml")
+
+        let parsedDate = MBOXParser.parseDate(email.headers["Date"])
+        let dateSent = parsedDate.map { relativityDateFormatter.string(from: $0) } ?? ""
+
+        var md5 = ""
+        if let data = email.rawSource.data(using: .utf8) {
+            let digest = CryptoKit.Insecure.MD5.hash(data: data)
+            md5 = digest.map { String(format: "%02x", $0) }.joined()
+        }
+
+        return "\(controlNum),\(csvEscape(custodianName)),\(dateSent),,\(from),\(to),\(cc),\(bcc),\(subject),\(messageID),\(conversationIdx),\(attachCount),\(hasAttach),\(fileSize),\(md5),\(nativePath)"
+    }
+
     static func generateRelativityLoadFile(
         from emails: [MBOXParser.RawEmail],
         batesPrefix: String = "MAIL",
         custodianName: String = "",
         caseNumber: String = ""
     ) -> String {
-        var lines = ["Control Number,Custodian,Date Sent,Date Received,From,To,CC,BCC,Subject,Email Message ID,Conversation Index,Attachment Count,Has Attachments,File Size,MD5 Hash,Native File Path"]
-
-        let dateFormatter = DateFormatter()
-        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
-        dateFormatter.dateFormat = "MM/dd/yyyy"
-
-        let timeFormatter = DateFormatter()
-        timeFormatter.locale = Locale(identifier: "en_US_POSIX")
-        timeFormatter.dateFormat = "hh:mm:ss a"
-
+        var lines = [relativityLoadFileHeader]
         for (idx, email) in emails.enumerated() {
-            let controlNum = String(format: "%@%07d", batesPrefix, idx + 1)
-            let from = csvEscape(email.headers["From"] ?? "")
-            let to = csvEscape(email.headers["To"] ?? "")
-            let cc = csvEscape(email.headers["Cc"] ?? "")
-            let bcc = csvEscape(email.headers["Bcc"] ?? "")
-            let subject = csvEscape(email.headers["Subject"] ?? "")
-            let messageID = csvEscape(email.headers["Message-ID"] ?? email.headers["Message-Id"] ?? "")
-            let conversationIdx = csvEscape(email.headers["Thread-Index"] ?? "")
-            let attachCount = email.attachments.count
-            let hasAttach = attachCount > 0 ? "Y" : "N"
-            let fileSize = email.rawSource.utf8.count
-            let nativePath = csvEscape("\(caseNumber)/\(controlNum).eml")
-
-            let parsedDate = MBOXParser.parseDate(email.headers["Date"])
-            let dateSent = parsedDate.map { dateFormatter.string(from: $0) } ?? ""
-
-            var md5 = ""
-            if let data = email.rawSource.data(using: .utf8) {
-                let digest = CryptoKit.Insecure.MD5.hash(data: data)
-                md5 = digest.map { String(format: "%02x", $0) }.joined()
-            }
-
-            lines.append("\(controlNum),\(csvEscape(custodianName)),\(dateSent),,\(from),\(to),\(cc),\(bcc),\(subject),\(messageID),\(conversationIdx),\(attachCount),\(hasAttach),\(fileSize),\(md5),\(nativePath)")
+            lines.append(relativityRow(email: email, index: idx, batesPrefix: batesPrefix,
+                                       custodianName: custodianName, caseNumber: caseNumber))
         }
-
         return lines.joined(separator: "\r\n")
     }
 
@@ -272,6 +301,20 @@ struct ExportManager {
     }
 
     // MARK: - Batch Print (6G)
+
+    /// Part O: one streamed printable block. `total` ≤ 0 omits the "of N".
+    static func batchPrintBlock(email: MBOXParser.RawEmail, index: Int, total: Int) -> String {
+        let separator = String(repeating: "=", count: 72)
+        let counter = total > 0 ? "Email \(index + 1) of \(total)" : "Email \(index + 1)"
+        return """
+        \(separator)
+        \(counter)
+        \(separator)
+        \(formatEmailForPrint(email))
+
+
+        """
+    }
 
     static func batchPrintText(emails: [MBOXParser.RawEmail]) -> String {
         emails.enumerated().map { idx, email in
@@ -524,50 +567,54 @@ struct ExportManager {
 
     // MARK: - Portable HTML Export
 
-    static func exportPortableHTML(emails: [MBOXParser.RawEmail], to folder: URL) throws {
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    private struct PortableHTMLEntry: Encodable {
+        let id: String
+        let date: String
+        let from: String
+        let to: String
+        let cc: String
+        let subject: String
+        let preview: String
+        let body: String
+    }
 
-        struct EmailEntry: Encodable {
-            let id: String
-            let date: String
-            let from: String
-            let to: String
-            let cc: String
-            let subject: String
-            let preview: String
-            let body: String
-        }
-
-        let entries = emails.map { email -> EmailEntry in
-            let plainBody = email.plainBody.isEmpty
-                ? email.htmlBody.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
-                : email.plainBody
-            let preview = String(plainBody.prefix(120)).replacingOccurrences(of: "\n", with: " ")
-            return EmailEntry(
-                id: email.id.uuidString,
-                date: email.headers["Date"] ?? email.timestamp,
-                from: email.headers["From"] ?? "",
-                to: email.headers["To"] ?? "",
-                cc: email.headers["Cc"] ?? "",
-                subject: email.headers["Subject"] ?? "(No Subject)",
-                preview: preview,
-                body: email.htmlBody.isEmpty ? plainBody : email.htmlBody
-            )
-        }
-
+    /// Part O: one streamed portable-HTML data entry (JSON object, already
+    /// script-escaped). The export writes prefix + entries + suffix incrementally.
+    static func portableHTMLEntryJSON(email: MBOXParser.RawEmail) -> String? {
+        let plainBody = email.plainBody.isEmpty
+            ? email.htmlBody.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+            : email.plainBody
+        let preview = String(plainBody.prefix(120)).replacingOccurrences(of: "\n", with: " ")
+        let entry = PortableHTMLEntry(
+            id: email.id.uuidString,
+            date: email.headers["Date"] ?? email.timestamp,
+            from: email.headers["From"] ?? "",
+            to: email.headers["To"] ?? "",
+            cc: email.headers["Cc"] ?? "",
+            subject: email.headers["Subject"] ?? "(No Subject)",
+            preview: preview,
+            body: email.htmlBody.isEmpty ? plainBody : email.htmlBody
+        )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        let jsonData = try encoder.encode(entries)
-        guard let jsonString = String(data: jsonData, encoding: .utf8) else {
-            throw NSError(domain: "ExportManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to encode email data as JSON."])
+        guard let data = try? encoder.encode(entry), let json = String(data: data, encoding: .utf8) else {
+            return nil
         }
+        return json.replacingOccurrences(of: "</script>", with: "<\\/script>")
+    }
 
-        let html = portableHTMLTemplate(emailJSON: jsonString, emailCount: emails.count)
+    static func exportPortableHTML(emails: [MBOXParser.RawEmail], to folder: URL) throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let entries = emails.compactMap { portableHTMLEntryJSON(email: $0) }
+        let html = portableHTMLPrefix(emailCount: emails.count)
+            + entries.joined(separator: ",")
+            + portableHTMLSuffix
         let indexURL = folder.appendingPathComponent("index.html")
         try html.write(to: indexURL, atomically: true, encoding: .utf8)
     }
 
-    private static func portableHTMLTemplate(emailJSON: String, emailCount: Int) -> String {
+    /// Everything up to (and including) the opening `var DATA=[`.
+    static func portableHTMLPrefix(emailCount: Int) -> String {
         return """
         <!DOCTYPE html>
         <html lang="en">
@@ -613,7 +660,14 @@ struct ExportManager {
         <div class="detail" id="detail"><div class="detail-empty">Select an email to view</div></div>
         </div>
         <script>
-        var DATA=\(emailJSON.replacingOccurrences(of: "</script>", with: "<\\/script>"));
+        var DATA=[
+        """
+    }
+
+    /// Everything after the streamed entries, starting with the closing `];`.
+    static let portableHTMLSuffix: String = {
+        return """
+        ];
         var listEl=document.getElementById("list"),detailEl=document.getElementById("detail"),searchEl=document.getElementById("search"),countEl=document.getElementById("count");
         var filtered=DATA.slice(),activeId=null;
         function esc(s){var d=document.createElement("div");d.textContent=s;return d.innerHTML}
@@ -650,7 +704,7 @@ struct ExportManager {
         </body>
         </html>
         """
-    }
+    }()
 
     // MARK: - Helpers
 
@@ -706,6 +760,11 @@ struct ExportManager {
             onProgress?((Double(index + 1)) / total)
         }
         return (succeeded, failed)
+    }
+
+    /// Part O: per-message PDF rendering for the streaming folder export.
+    static func generateSinglePDFData(email: MBOXParser.RawEmail) -> Data {
+        generateSinglePDF(email: email)
     }
 
     private static func generateSinglePDF(email: MBOXParser.RawEmail) -> Data {
@@ -800,16 +859,24 @@ struct ExportManager {
 
     // MARK: - Header-Only CSV Export
 
+    static let defaultHeaderCSVFields = ["Date", "From", "To", "Subject", "Cc", "Return-Path", "Received-SPF", "DKIM-Signature", "X-Originating-IP", "Message-ID"]
+
+    /// Part O: streamed header row + per-email row for the headers-only CSV.
+    static func headersOnlyCSVHeaderRow(fields: [String] = defaultHeaderCSVFields) -> String {
+        fields.map { escapeCSV($0) }.joined(separator: ",") + "\n"
+    }
+
+    static func headersOnlyCSVRow(email: MBOXParser.RawEmail, fields: [String] = defaultHeaderCSVFields) -> String {
+        fields.map { escapeCSV(email.headers[$0] ?? "") }.joined(separator: ",") + "\n"
+    }
+
     static func exportHeadersOnlyCSV(
         from emails: [MBOXParser.RawEmail],
-        fields: [String] = ["Date", "From", "To", "Subject", "Cc", "Return-Path", "Received-SPF", "DKIM-Signature", "X-Originating-IP", "Message-ID"]
+        fields: [String] = defaultHeaderCSVFields
     ) -> String {
-        var csv = fields.map { escapeCSV($0) }.joined(separator: ",") + "\n"
+        var csv = headersOnlyCSVHeaderRow(fields: fields)
         for email in emails {
-            let row = fields.map { field -> String in
-                escapeCSV(email.headers[field] ?? "")
-            }
-            csv += row.joined(separator: ",") + "\n"
+            csv += headersOnlyCSVRow(email: email, fields: fields)
         }
         return csv
     }

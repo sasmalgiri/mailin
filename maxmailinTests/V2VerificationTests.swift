@@ -701,7 +701,7 @@ final class V2VerificationTests: XCTestCase {
     /// `baseline` whenever you retire references. (No hosted CI, so this runs as
     /// a unit test on the dev machine / ⌘U.)
     func testLegacyCorpusConsumerCountOnlyDecreases() throws {
-        let baseline = 194   // Parts G/H: ContentView hub/dock/sheets → bounded working sets, analytics/dashboard/digest/detail/folder/reply-stats off arrays (was 260→252→251→222→194)
+        let baseline = 150   // Parts I-M + O: derived state persisted, streaming exports, symbolic Select All (was 260→252→251→222→194→150)
         let src = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()   // maxmailinTests
             .deletingLastPathComponent()   // repo root

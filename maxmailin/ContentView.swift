@@ -69,6 +69,9 @@ struct ContentView: View {
     @State private var parseFailed = false
     @State private var parsingObserver: NSObjectProtocol?
     @State private var selectedEmailIDs = Set<UUID>()
+    /// O1: true while a "Select All" is symbolic — bulk actions then consume
+    /// `.query(currentArchiveQuery, exclusions:)` instead of a materialized set.
+    @State private var selectAllMatching = false
     @State private var showNewImportConfirmation = false
     @State private var selectedFolder: String?
     @State private var selectedClusterFilter: String?
@@ -3334,71 +3337,124 @@ private func handleMultipleFiles(_ urls: [URL]) {
 
     private static let freeExportLimit = 10
 
+    // MARK: - Part O: streaming export plumbing
+
+    /// Everything matching the current filters, as a SYMBOLIC scope — the
+    /// export service streams it from the store; the bounded preview arrays
+    /// are never the export source.
+    private var filteredScope: ArchiveSelectionScope {
+        .query(modelVM.currentArchiveQuery, exclusions: [])
+    }
+
+    /// O1: the bulk-action selection scope. Explicit checkbox selections stay
+    /// a bounded id set; "Select All" (⌘A) is symbolic — the current query
+    /// plus the (bounded) ids the user has since deselected in the visible
+    /// page — so a bulk action over a million matches never materializes the
+    /// id list.
+    private var selectionScope: ArchiveSelectionScope {
+        if selectAllMatching {
+            let previewIDs = Set(modelVM.filteredEmails.map(\.id))
+            let exclusions = previewIDs.subtracting(selectedEmailIDs)
+            return .query(modelVM.currentArchiveQuery, exclusions: exclusions)
+        }
+        if !selectedEmailIDs.isEmpty { return .explicit(selectedEmailIDs) }
+        return .none
+    }
+
+    /// Free-tier cap on export record counts (nil = unlimited for Pro).
+    private var freeExportCap: Int? {
+        storeManager.isPremium ? nil : Self.freeExportLimit
+    }
+
+    /// Shared runner: progress + Cancel via `ExportRunCenter`; cancellation and
+    /// failure statuses are uniform (partial artifacts are cleaned by the
+    /// service). `operation` returns the success status message.
+    private func runStreamingExport(_ title: String,
+                                    _ operation: @escaping @MainActor (ArchiveExportService) async throws -> String?) {
+        let vm = viewModel
+        ExportRunCenter.shared.run(title: title) {
+            do {
+                if let message = try await operation(ArchiveExportService.shared) {
+                    vm.statusMessage = message
+                    vm.statusColor = .green
+                }
+            } catch is CancellationError {
+                vm.statusMessage = "\(title) cancelled — partial output removed."
+                vm.statusColor = .orange
+            } catch {
+                vm.statusMessage = "\(title) failed: \(error.localizedDescription)"
+                vm.statusColor = .red
+            }
+        }
+    }
+
+    /// Standard progress hook for the runner's overlay.
+    private var exportProgress: @MainActor (Int, Int) -> Void {
+        { done, total in ExportRunCenter.shared.update(done: done, total: total) }
+    }
+
+    /// Free-limit messaging shared by capped exports; returns the status
+    /// message and raises the paywall when the cap truncated the export.
+    private func cappedExportMessage(written: Int, scope: ArchiveSelectionScope,
+                                     what: String) async -> String {
+        if let cap = freeExportCap {
+            let total = (try? await ArchiveDataService.shared.count(scope: scope)) ?? written
+            if total > cap {
+                storeManager.showPaywall = true
+                return "Exported \(written) of \(total) \(what) (free limit). Upgrade for unlimited."
+            }
+        }
+        return "Exported \(written) \(what)."
+    }
+
+    private static let exportCancelledSuffix = "cancelled — partial output removed."
+
     private func exportSelectedEmails() {
-        let isPro = storeManager.isPremium
-        let allSelected = modelVM.allEmails.filter { selectedEmailIDs.contains($0.id) }
-        guard !allSelected.isEmpty else { return }
-        let selected = isPro ? allSelected : Array(allSelected.prefix(Self.freeExportLimit))
+        let scope = selectionScope
+        guard !scope.isEmpty else { return }
         #if os(macOS)
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
-        panel.message = "Export \(selected.count) selected email(s)"
+        panel.message = "Export selected email(s)"
         panel.prompt = "Export"
         guard panel.runModal() == .OK, let folderURL = panel.url else { return }
         let vm = viewModel
-        Task.detached(priority: .userInitiated) {
-            var usedNames = Set<String>()
-            for (index, email) in selected.enumerated() {
-                let safeSubject = (email.headers["Subject"] ?? "(no-subject)")
-                    .replacingOccurrences(of: "[^A-Za-z0-9 ]", with: "_", options: .regularExpression)
-                    .trimmingCharacters(in: .whitespaces)
-                    .prefix(60)
-                var filename = "\(index + 1)_\(safeSubject).eml"
-                var counter = 1
-                while usedNames.contains(filename) {
-                    filename = "\(index + 1)_\(safeSubject)_\(counter).eml"
-                    counter += 1
-                }
-                usedNames.insert(filename)
-                let eml = vm.exportEmailAsEML(email)
-                try? FileUtils.writeData(Data(eml.utf8), to: folderURL.appendingPathComponent(filename).path)
-            }
-            let totalExported = selected.count
-            await MainActor.run {
-                ForensicManager.shared.logAction("Export Selection", detail: "Exported \(totalExported) selected emails as EML")
-            }
+        let cap = freeExportCap
+        runStreamingExport("Exporting selected emails as EML") { service in
+            // Streams the (possibly symbolic) selection; one .eml per message.
+            let result = try await service.exportEMLFiles(
+                scope: scope, to: folderURL, limit: cap,
+                render: { vm.exportEmailAsEML($0) },
+                onProgress: self.exportProgress)
+            if result.cancelled { return "EML export \(Self.exportCancelledSuffix)" }
+            ForensicManager.shared.logAction("Export Selection", detail: "Exported \(result.recordsWritten) selected emails as EML")
+            return await self.cappedExportMessage(written: result.recordsWritten, scope: scope, what: "selected emails")
         }
         #endif
     }
 
     private func exportSelectedAsIndividualPDFs() {
-        let isPro = storeManager.isPremium
-        let allSelected = modelVM.allEmails.filter { selectedEmailIDs.contains($0.id) }
-        guard !allSelected.isEmpty else { return }
-        let selected = isPro ? allSelected : Array(allSelected.prefix(Self.freeExportLimit))
+        let scope = selectionScope
+        guard !scope.isEmpty else { return }
         #if os(macOS)
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
-        panel.message = "Export \(selected.count) email(s) as individual PDFs"
+        panel.message = "Export selected email(s) as individual PDFs"
         panel.prompt = "Export PDFs"
         guard panel.runModal() == .OK, let folderURL = panel.url else { return }
-        appState.exportProgressValue = 0
-        appState.exportProgressMessage = "Exporting \(selected.count) PDFs..."
-        appState.showExportProgress = true
-        Task.detached(priority: .userInitiated) {
-            let result = ExportManager.exportIndividualPDFs(emails: selected, to: folderURL) { progress in
-                Task { @MainActor in
-                    appState.exportProgressValue = progress
-                }
-            }
-            await MainActor.run {
-                appState.showExportProgress = false
-                ForensicManager.shared.logAction("Individual PDF Export", detail: "\(result.succeeded) exported, \(result.failed) failed")
-            }
+        let cap = freeExportCap
+        runStreamingExport("Exporting PDFs") { service in
+            // Streams the selection; each PDF rendered per message (bounded).
+            let result = try await service.exportPDFFiles(
+                scope: scope, to: folderURL, limit: cap,
+                onProgress: self.exportProgress)
+            if result.cancelled { return "PDF export \(Self.exportCancelledSuffix)" }
+            ForensicManager.shared.logAction("Individual PDF Export", detail: "\(result.recordsWritten) exported")
+            return await self.cappedExportMessage(written: result.recordsWritten, scope: scope, what: "PDFs")
         }
         #endif
     }
@@ -3416,136 +3472,49 @@ private func handleMultipleFiles(_ urls: [URL]) {
         let folderURL = FileManager.default.temporaryDirectory.appendingPathComponent("eml_export_\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
         #endif
-        let allFiltered = modelVM.filteredEmails
-        let isPro = storeManager.isPremium
-        let emailsToExport = isPro ? allFiltered : Array(allFiltered.prefix(Self.freeExportLimit))
+        let scope = filteredScope
         let vm = viewModel
-        Task.detached(priority: .userInitiated) {
-            var usedNames = Set<String>()
-            var exportedCount = 0
-            var failedCount = 0
-            var failedSubjects: [String] = []
-            for (index, email) in emailsToExport.enumerated() {
-                let rawSubject = email.headers["Subject"] ?? "(no-subject)"
-                let safeSubject = rawSubject
-                    .replacingOccurrences(of: "[^A-Za-z0-9 ]", with: "_", options: [.regularExpression])
-                    .trimmingCharacters(in: .whitespaces)
-                    .prefix(60)
-                var filename = "\(index + 1)_\(safeSubject).eml"
-                var counter = 1
-                while usedNames.contains(filename) {
-                    filename = "\(index + 1)_\(safeSubject)_\(counter).eml"
-                    counter += 1
-                }
-                usedNames.insert(filename)
-                let fileURL = folderURL.appendingPathComponent(filename)
-                let emlContent = vm.exportEmailAsEML(email)
-                do {
-                    try FileUtils.writeData(Data(emlContent.utf8), to: fileURL.path)
-                    exportedCount += 1
-                } catch {
-                    failedCount += 1
-                    failedSubjects.append(String(rawSubject.prefix(40)))
-                    FileUtilsAudit.logError(error, context: "EML Export", path: fileURL.path)
-                }
-            }
-            let finalExported = exportedCount
-            let finalFailed = failedCount
-            let finalFailedSubjects = failedSubjects
-            let totalAvailable = allFiltered.count
-            await MainActor.run {
-                if !isPro && totalAvailable > Self.freeExportLimit {
-                    vm.statusMessage = "Exported \(finalExported) of \(totalAvailable) emails (free limit). Upgrade for unlimited."
-                    vm.statusColor = .orange
-                    self.storeManager.showPaywall = true
-                } else if finalFailed > 0 {
-                    let failedHint = finalFailedSubjects.prefix(3).joined(separator: ", ")
-                    let moreHint = finalFailed > 3 ? " and \(finalFailed - 3) more" : ""
-                    vm.statusMessage = "Exported \(finalExported) emails. \(finalFailed) failed: \(failedHint)\(moreHint)"
-                    vm.statusColor = .orange
-                } else {
-                    vm.statusMessage = "Exported \(finalExported) emails to \(folderURL.lastPathComponent)."
-                    vm.statusColor = .green
-                }
-                #if os(iOS)
-                if finalExported > 0 {
-                    self.iOSShareFile(at: folderURL)
-                }
-                #endif
-            }
+        let cap = freeExportCap
+        runStreamingExport("Exporting emails as EML") { service in
+            // Streams the whole filtered query from the store — never the
+            // bounded preview arrays.
+            let result = try await service.exportEMLFiles(
+                scope: scope, to: folderURL, limit: cap,
+                render: { vm.exportEmailAsEML($0) },
+                onProgress: self.exportProgress)
+            if result.cancelled { return "EML export \(Self.exportCancelledSuffix)" }
+            #if os(iOS)
+            if result.recordsWritten > 0 { self.iOSShareFile(at: folderURL) }
+            #endif
+            let message = await self.cappedExportMessage(written: result.recordsWritten, scope: scope, what: "emails")
+            return message == "Exported \(result.recordsWritten) emails."
+                ? "Exported \(result.recordsWritten) emails to \(folderURL.lastPathComponent)."
+                : message
         }
     }
 
     private func exportFilteredEmailsAsCSV() {
-        let allEmails = modelVM.filteredEmails
-        guard !allEmails.isEmpty else { return }
-        let isPro = storeManager.isPremium
-        let emails = isPro ? allEmails : Array(allEmails.prefix(Self.freeExportLimit))
-
         #if os(macOS)
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "mailin_export_\(emails.count)_emails.csv"
+        panel.nameFieldStringValue = "mailin_export_emails.csv"
         panel.canCreateDirectories = true
         panel.allowedContentTypes = [.commaSeparatedText]
         guard panel.runModal() == .OK, let url = panel.url else { return }
         #else
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mailin_export_\(emails.count)_emails.csv")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mailin_export_emails.csv")
         #endif
-
-        let vm = viewModel
-        let emailCount = emails.count
-        let totalCount = allEmails.count
-        Task.detached(priority: .userInitiated) {
-            func csvEscape(_ s: String) -> String {
-                var v = s
-                if let first = v.first, "=+@-\t\r".contains(first) { v = "'" + v }
-                let sanitized = v
-                    .replacingOccurrences(of: "\"", with: "\"\"")
-                    .replacingOccurrences(of: "\r\n", with: " ")
-                    .replacingOccurrences(of: "\n", with: " ")
-                    .replacingOccurrences(of: "\r", with: " ")
-                return "\"" + sanitized + "\""
-            }
-
-            var csv = "Date,From,To,CC,Subject,Type,Labels,Has Attachments,Attachment Count,Risk Score,Body Preview\n"
-            for email in emails {
-                let date = email.headers["Date"] ?? ""
-                let from = email.headers["From"] ?? ""
-                let to = email.headers["To"] ?? ""
-                let cc = email.headers["Cc"] ?? email.headers["CC"] ?? ""
-                let subject = email.headers["Subject"] ?? ""
-                let tags = email.tags.joined(separator: "; ")
-                let hasAtt = email.attachments.isEmpty ? "No" : "Yes"
-                let attCount = String(email.attachments.count)
-                let risk = ForensicManager.assessRisk(for: email)
-                let bodyPreview = String(email.plainBody.prefix(200))
-
-                let row = [date, from, to, cc, subject, email.messageType, tags, hasAtt, attCount, "\(risk.score)", bodyPreview]
-                    .map { csvEscape($0) }
-                    .joined(separator: ",")
-                csv += row + "\n"
-            }
-
-            let finalCSV = csv
-            await MainActor.run {
-                do {
-                    try finalCSV.write(to: url, atomically: true, encoding: .utf8)
-                    if !isPro && totalCount > emailCount {
-                        vm.statusMessage = "Exported \(emailCount) of \(totalCount) emails (free limit). Upgrade for unlimited."
-                        vm.statusColor = .orange
-                        self.storeManager.showPaywall = true
-                    } else {
-                        vm.statusMessage = "Exported \(emailCount) emails as CSV."
-                        vm.statusColor = .green
-                    }
-                    #if os(iOS)
-                    self.iOSShareFile(at: url)
-                    #endif
-                } catch {
-                    vm.statusMessage = "Failed to export CSV: \(error.localizedDescription)"
-                    vm.statusColor = .orange
-                }
-            }
+        let scope = filteredScope
+        let cap = freeExportCap
+        runStreamingExport("Exporting CSV") { service in
+            // Streamed row-by-row from the store; incremental file writes.
+            let result = try await service.exportDetailedCSV(
+                scope: scope, to: url, limit: cap,
+                onProgress: self.exportProgress)
+            if result.cancelled { return "CSV export \(Self.exportCancelledSuffix)" }
+            #if os(iOS)
+            self.iOSShareFile(at: url)
+            #endif
+            return await self.cappedExportMessage(written: result.recordsWritten, scope: scope, what: "emails as CSV")
         }
     }
 
@@ -3559,19 +3528,19 @@ private func handleMultipleFiles(_ urls: [URL]) {
         #else
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("forensic_export.csv")
         #endif
-        let emails = modelVM.filteredEmails.isEmpty ? modelVM.allEmails : modelVM.filteredEmails
-        let csv = forensicManager.exportBulkForensicCSV(emails: emails)
-        do {
-            try csv.write(to: url, atomically: true, encoding: .utf8)
-            viewModel.statusMessage = "Exported forensic CSV with \(emails.count) emails."
-            viewModel.statusColor = .green
-            forensicManager.logAction("Bulk Forensic Export", detail: "Exported \(emails.count) emails as forensic CSV to \(url.lastPathComponent)")
+        let scope = filteredScope
+        let forensic = forensicManager
+        runStreamingExport("Exporting forensic CSV") { service in
+            // Streamed + signed: Ed25519 over the incrementally computed SHA-256.
+            let result = try await service.exportForensicCSV(
+                scope: scope, to: url,
+                onProgress: self.exportProgress)
+            if result.cancelled { return "Forensic CSV export \(Self.exportCancelledSuffix)" }
+            forensic.logAction("Bulk Forensic Export", detail: "Exported \(result.recordsWritten) emails as forensic CSV to \(url.lastPathComponent) (signed, sha256 \(result.sha256Hex?.prefix(12) ?? ""))")
             #if os(iOS)
-            iOSShareFile(at: url)
+            self.iOSShareFile(at: url)
             #endif
-        } catch {
-            viewModel.statusMessage = "Failed to export forensic CSV: \(error.localizedDescription)"
-            viewModel.statusColor = .red
+            return "Exported forensic CSV with \(result.recordsWritten) emails (signed)."
         }
     }
 
@@ -3584,26 +3553,25 @@ private func handleMultipleFiles(_ urls: [URL]) {
         #else
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("forensic_export.dat")
         #endif
-        let emails = modelVM.filteredEmails.isEmpty ? modelVM.allEmails : modelVM.filteredEmails
-        let dat = forensicManager.exportConcordanceDAT(emails: emails)
-        do {
-            try dat.write(to: url, atomically: true, encoding: .utf8)
-            viewModel.statusMessage = "Exported Concordance load file with \(emails.count) records."
-            viewModel.statusColor = .green
-            forensicManager.logAction("Concordance Export", detail: "Exported \(emails.count) emails as Concordance .dat")
+        let scope = filteredScope
+        let forensic = forensicManager
+        runStreamingExport("Exporting Concordance load file") { service in
+            let result = try await service.exportConcordanceDAT(
+                scope: scope, to: url,
+                onProgress: self.exportProgress)
+            if result.cancelled { return "Concordance export \(Self.exportCancelledSuffix)" }
+            forensic.logAction("Concordance Export", detail: "Exported \(result.recordsWritten) emails as Concordance .dat (signed)")
             #if os(iOS)
-            iOSShareFile(at: url)
+            self.iOSShareFile(at: url)
             #endif
-        } catch {
-            viewModel.statusMessage = "Failed to export: \(error.localizedDescription)"
-            viewModel.statusColor = .red
+            return "Exported Concordance load file with \(result.recordsWritten) records (signed)."
         }
     }
 
     private func exportTaggedOnly() {
+        // Evidence tags are a bounded user-curated set — an explicit id scope.
         let taggedIDs = Set(forensicManager.evidenceTags.keys)
-        let taggedEmails = (modelVM.filteredEmails.isEmpty ? modelVM.allEmails : modelVM.filteredEmails).filter { taggedIDs.contains($0.id) }
-        guard !taggedEmails.isEmpty else {
+        guard !taggedIDs.isEmpty else {
             viewModel.statusMessage = "No tagged emails to export."
             viewModel.statusColor = .orange
             return
@@ -3616,30 +3584,23 @@ private func handleMultipleFiles(_ urls: [URL]) {
         #else
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("tagged_export.csv")
         #endif
-        let csv = forensicManager.exportBulkForensicCSV(emails: taggedEmails)
-        do {
-            try csv.write(to: url, atomically: true, encoding: .utf8)
-            viewModel.statusMessage = "Exported \(taggedEmails.count) tagged emails."
-            viewModel.statusColor = .green
-            forensicManager.logAction("Tagged Export", detail: "Exported \(taggedEmails.count) tagged emails")
+        let forensic = forensicManager
+        runStreamingExport("Exporting tagged emails") { service in
+            let result = try await service.exportForensicCSV(
+                scope: .explicit(taggedIDs), to: url,
+                onProgress: self.exportProgress)
+            if result.cancelled { return "Tagged export \(Self.exportCancelledSuffix)" }
+            forensic.logAction("Tagged Export", detail: "Exported \(result.recordsWritten) tagged emails (signed)")
             #if os(iOS)
-            iOSShareFile(at: url)
+            self.iOSShareFile(at: url)
             #endif
-        } catch {
-            viewModel.statusMessage = "Failed to export: \(error.localizedDescription)"
-            viewModel.statusColor = .red
+            return "Exported \(result.recordsWritten) tagged emails (signed)."
         }
     }
 
     // MARK: - New Export Actions
 
     private func exportVCard() {
-        let emails = modelVM.filteredEmails.isEmpty ? modelVM.allEmails : modelVM.filteredEmails
-        guard let vcardData = ExportManager.exportContacts(from: emails) else {
-            viewModel.statusMessage = "No contacts found to export."
-            viewModel.statusColor = .orange
-            return
-        }
         #if os(macOS)
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "contacts.vcf"
@@ -3649,27 +3610,21 @@ private func handleMultipleFiles(_ urls: [URL]) {
         #else
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("contacts.vcf")
         #endif
-        do {
-            try vcardData.write(to: url, options: .atomic)
-            viewModel.statusMessage = "Exported contacts as vCard."
-            viewModel.statusColor = .green
+        let scope = filteredScope
+        runStreamingExport("Extracting contacts") { service in
+            // Contacts are a small DERIVED record, but the source is the
+            // streamed scope — not the preview arrays.
+            let contactCount = try await service.exportVCard(
+                scope: scope, to: url,
+                onProgress: self.exportProgress)
             #if os(iOS)
-            iOSShareFile(at: url)
+            self.iOSShareFile(at: url)
             #endif
-        } catch {
-            viewModel.statusMessage = "Failed to export contacts: \(error.localizedDescription)"
-            viewModel.statusColor = .red
+            return "Exported \(contactCount) contacts as vCard."
         }
     }
 
     private func exportICS() {
-        let emails = modelVM.filteredEmails.isEmpty ? modelVM.allEmails : modelVM.filteredEmails
-        let ics = ExportManager.exportCalendarEvents(from: emails)
-        guard !ics.isEmpty else {
-            viewModel.statusMessage = "No calendar events found in emails."
-            viewModel.statusColor = .orange
-            return
-        }
         #if os(macOS)
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "events.ics"
@@ -3678,22 +3633,21 @@ private func handleMultipleFiles(_ urls: [URL]) {
         #else
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("events.ics")
         #endif
-        do {
-            try ics.write(to: url, atomically: true, encoding: .utf8)
-            viewModel.statusMessage = "Exported calendar events as ICS."
-            viewModel.statusColor = .green
+        let scope = filteredScope
+        runStreamingExport("Extracting calendar events") { service in
+            // Events are extracted per streamed email and written incrementally.
+            let events = try await service.exportICS(
+                scope: scope, to: url,
+                onProgress: self.exportProgress)
+            guard events > 0 else { return "ICS export \(Self.exportCancelledSuffix)" }
             #if os(iOS)
-            iOSShareFile(at: url)
+            self.iOSShareFile(at: url)
             #endif
-        } catch {
-            viewModel.statusMessage = "Failed to export events: \(error.localizedDescription)"
-            viewModel.statusColor = .red
+            return "Exported \(events) calendar events as ICS."
         }
     }
 
     private func exportHashManifest() {
-        let emails = modelVM.filteredEmails.isEmpty ? modelVM.allEmails : modelVM.filteredEmails
-        let csv = forensicManager.exportHashManifest(emails)
         #if os(macOS)
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "hash_manifest_\(forensicManager.caseNumber.isEmpty ? "emails" : forensicManager.caseNumber).csv"
@@ -3702,48 +3656,46 @@ private func handleMultipleFiles(_ urls: [URL]) {
         #else
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("hash_manifest.csv")
         #endif
-        do {
-            try csv.write(to: url, atomically: true, encoding: .utf8)
-            viewModel.statusMessage = "Exported hash manifest for \(emails.count) emails."
-            viewModel.statusColor = .green
-            forensicManager.logAction("Hash Manifest Export", detail: "Exported hash manifest for \(emails.count) emails")
+        let scope = filteredScope
+        let forensic = forensicManager
+        runStreamingExport("Exporting hash manifest") { service in
+            let result = try await service.exportHashManifest(
+                scope: scope, to: url,
+                onProgress: self.exportProgress)
+            if result.cancelled { return "Hash manifest export \(Self.exportCancelledSuffix)" }
+            forensic.logAction("Hash Manifest Export", detail: "Exported hash manifest for \(result.recordsWritten) emails (signed)")
             #if os(iOS)
-            iOSShareFile(at: url)
+            self.iOSShareFile(at: url)
             #endif
-        } catch {
-            viewModel.statusMessage = "Failed to export hash manifest: \(error.localizedDescription)"
-            viewModel.statusColor = .red
+            return "Exported hash manifest for \(result.recordsWritten) emails (signed)."
         }
     }
 
     private func batchPrintFiltered() {
-        let emails = modelVM.filteredEmails
-        guard !emails.isEmpty else { return }
-        let text = ExportManager.batchPrintText(emails: emails)
         #if os(macOS)
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "batch_print_\(emails.count)_emails.txt"
+        panel.nameFieldStringValue = "batch_print_emails.txt"
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
         #else
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("batch_print.txt")
         #endif
-        do {
-            try text.write(to: url, atomically: true, encoding: .utf8)
-            viewModel.statusMessage = "Exported batch print file with \(emails.count) emails."
-            viewModel.statusColor = .green
+        let scope = filteredScope
+        runStreamingExport("Building batch print file") { service in
+            // Streamed continuous text — a million-message "print all" never
+            // materializes; the file itself is the print artifact.
+            let result = try await service.exportBatchPrintText(
+                scope: scope, to: url,
+                onProgress: self.exportProgress)
+            if result.cancelled { return "Batch print \(Self.exportCancelledSuffix)" }
             #if os(iOS)
-            iOSShareFile(at: url)
+            self.iOSShareFile(at: url)
             #endif
-        } catch {
-            viewModel.statusMessage = "Failed to export: \(error.localizedDescription)"
-            viewModel.statusColor = .red
+            return "Exported batch print file with \(result.recordsWritten) emails."
         }
     }
 
     private func exportSelectedAsTIFF() {
-        let emails = modelVM.filteredEmails
-        guard !emails.isEmpty else { return }
         #if os(macOS)
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -3756,38 +3708,21 @@ private func handleMultipleFiles(_ urls: [URL]) {
         let folderURL = FileManager.default.temporaryDirectory.appendingPathComponent("tiff_export_\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
         #endif
-        var savedCount = 0
-        for (idx, email) in emails.enumerated() {
-            if let tiffData = ExportManager.exportAsTIFF(email: email) {
-                let subject = (email.headers["Subject"] ?? "email")
-                    .replacingOccurrences(of: "[^A-Za-z0-9 ]", with: "_", options: .regularExpression)
-                    .prefix(50)
-                let filename = "\(idx + 1)_\(subject).tiff"
-                let fileURL = folderURL.appendingPathComponent(filename)
-                do {
-                    try tiffData.write(to: fileURL)
-                    savedCount += 1
-                } catch {
-                    // Skip failed writes without counting them
-                }
-            }
+        let scope = filteredScope
+        runStreamingExport("Exporting TIFF images") { service in
+            // Rendered per streamed message — bounded memory at any scale.
+            let result = try await service.exportTIFFFiles(
+                scope: scope, to: folderURL,
+                onProgress: self.exportProgress)
+            if result.cancelled { return "TIFF export \(Self.exportCancelledSuffix)" }
+            #if os(iOS)
+            if result.recordsWritten > 0 { self.iOSShareFile(at: folderURL) }
+            #endif
+            return "Exported \(result.recordsWritten) emails as TIFF images."
         }
-        viewModel.statusMessage = "Exported \(savedCount) emails as TIFF images."
-        viewModel.statusColor = .green
-        #if os(iOS)
-        if savedCount > 0 {
-            iOSShareFile(at: folderURL)
-        }
-        #endif
     }
 
     private func exportPortableHTML() {
-        let emails = modelVM.filteredEmails
-        guard !emails.isEmpty else {
-            viewModel.statusMessage = "No emails to export."
-            viewModel.statusColor = .orange
-            return
-        }
         #if os(macOS)
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -3800,24 +3735,31 @@ private func handleMultipleFiles(_ urls: [URL]) {
         let baseURL = FileManager.default.temporaryDirectory
         #endif
         let folderURL = baseURL.appendingPathComponent("mailin_html_export")
-        let isPro = storeManager.isPremium
-        let emailsToExport = isPro ? emails : Array(emails.prefix(Self.freeExportLimit))
-        do {
-            try ExportManager.exportPortableHTML(emails: emailsToExport, to: folderURL)
-            let countNote = (!isPro && emails.count > Self.freeExportLimit)
-                ? " (\(Self.freeExportLimit) of \(emails.count) — upgrade for unlimited)"
-                : ""
-            viewModel.statusMessage = "Exported \(emailsToExport.count) emails as portable HTML\(countNote). Open index.html in any browser."
-            viewModel.statusColor = .green
+        let scope = filteredScope
+        let cap = freeExportCap
+        runStreamingExport("Exporting portable HTML") { service in
+            // Streamed into index.html. A single self-contained page must be
+            // loaded whole by the browser, so the format carries an explicit
+            // cap (ArchiveExportService.portableHTMLMaxEmails) — surfaced below.
+            let result = try await service.exportPortableHTML(
+                scope: scope, to: folderURL, limit: cap,
+                onProgress: self.exportProgress)
+            if result.cancelled { return "HTML export \(Self.exportCancelledSuffix)" }
             #if os(macOS)
             NSWorkspace.shared.selectFile(folderURL.appendingPathComponent("index.html").path, inFileViewerRootedAtPath: folderURL.path)
             #endif
             #if os(iOS)
-            iOSShareFile(at: folderURL.appendingPathComponent("index.html"))
+            self.iOSShareFile(at: folderURL.appendingPathComponent("index.html"))
             #endif
-        } catch {
-            viewModel.statusMessage = "HTML export failed: \(error.localizedDescription)"
-            viewModel.statusColor = .red
+            let total = (try? await ArchiveDataService.shared.count(scope: scope)) ?? result.recordsWritten
+            if let cap, total > cap {
+                self.storeManager.showPaywall = true
+                return "Exported \(result.recordsWritten) of \(total) emails as portable HTML (free limit — upgrade for unlimited). Open index.html in any browser."
+            }
+            if total > ArchiveExportService.portableHTMLMaxEmails {
+                return "Exported first \(result.recordsWritten) of \(total) emails as portable HTML (single-page format is capped at \(ArchiveExportService.portableHTMLMaxEmails) — use EML/CSV for the full set). Open index.html in any browser."
+            }
+            return "Exported \(result.recordsWritten) emails as portable HTML. Open index.html in any browser."
         }
     }
 
@@ -3880,19 +3822,27 @@ private func handleMultipleFiles(_ urls: [URL]) {
     }
 
     private func verifyAllEmailIntegrity() {
-        let emails = modelVM.filteredEmails.isEmpty ? modelVM.allEmails : modelVM.filteredEmails
-        let result = forensicManager.batchVerifyAllEmails(emails)
-        var message = "Integrity: \(result.passed) passed"
-        if result.failed > 0 { message += ", \(result.failed) FAILED" }
-        if result.unverified > 0 { message += ", \(result.unverified) unverified" }
-        viewModel.statusMessage = message
-        viewModel.statusColor = result.failed > 0 ? .red : .green
+        let scope = filteredScope
+        let vm = viewModel
+        runStreamingExport("Verifying email integrity") { service in
+            // Streamed verification — same math as batchVerifyAllEmails, but
+            // over bounded batches from the store.
+            let result = try await service.verifyIntegrity(
+                scope: scope,
+                onProgress: self.exportProgress)
+            var message = "Integrity: \(result.passed) passed"
+            if result.failed > 0 { message += ", \(result.failed) FAILED" }
+            if result.unverified > 0 { message += ", \(result.unverified) unverified" }
+            vm.statusMessage = message
+            vm.statusColor = result.failed > 0 ? .red : .green
+            return nil
+        }
     }
 
     // MARK: - MSG/PST/Relativity Export
 
     private func exportMSG() {
-        let emails = modelVM.filteredEmails.isEmpty ? modelVM.allEmails : modelVM.filteredEmails
+        let scope = filteredScope
         #if os(macOS)
         let panel = NSSavePanel()
         panel.title = "Export as MSG"
@@ -3901,35 +3851,37 @@ private func handleMultipleFiles(_ urls: [URL]) {
         panel.prompt = "Export"
         let response = panel.runModal()
         guard response == .OK, let url = panel.url else { return }
-        Task {
-            do {
-                let count = try MSGWriter.writeMultiple(emails: emails, to: url)
-                await MainActor.run {
-                    viewModel.statusMessage = "Exported \(count) MSG files."
-                    viewModel.statusColor = .green
-                }
-            } catch {
-                await MainActor.run {
-                    viewModel.statusMessage = "MSG export failed: \(error.localizedDescription)"
-                    viewModel.statusColor = .red
-                }
-            }
+        runStreamingExport("Exporting MSG files") { service in
+            // MSG is per-message OLE2 — streams unbounded (unlike PST).
+            let result = try await service.exportMSGFiles(
+                scope: scope, to: url,
+                onProgress: self.exportProgress)
+            if result.cancelled { return "MSG export \(Self.exportCancelledSuffix)" }
+            return "Exported \(result.recordsWritten) MSG files."
         }
         #else
-        guard let first = emails.first, let data = MSGWriter.write(email: first) else {
-            viewModel.statusMessage = "MSG export failed."
-            viewModel.statusColor = .red
-            return
-        }
-        if let url = PlatformFileSaver.tempFileURL(name: "export.msg", data: data) {
-            shareItems = [url]
-            showShareSheet = true
+        let vm = viewModel
+        ExportRunCenter.shared.run(title: "Exporting MSG") {
+            // iOS shares a single .msg — hydrate just the first match.
+            let first = try? await ArchiveDataService.shared
+                .page(query: modelVM.currentArchiveQuery, cursor: nil, limit: 1).summaries.first
+            guard let id = first?.id,
+                  let email = try? await ArchiveDataService.shared.fullEmail(id: id),
+                  let data = MSGWriter.write(email: email) else {
+                vm.statusMessage = "MSG export failed."
+                vm.statusColor = .red
+                return
+            }
+            if let url = PlatformFileSaver.tempFileURL(name: "export.msg", data: data) {
+                shareItems = [url]
+                showShareSheet = true
+            }
         }
         #endif
     }
 
     private func exportPST() {
-        let emails = modelVM.filteredEmails.isEmpty ? modelVM.allEmails : modelVM.filteredEmails
+        let scope = filteredScope
         #if os(macOS)
         let panel = NSSavePanel()
         panel.title = "Export as PST"
@@ -3937,41 +3889,48 @@ private func handleMultipleFiles(_ urls: [URL]) {
         panel.nameFieldStringValue = "export.pst"
         let response = panel.runModal()
         guard response == .OK, let url = panel.url else { return }
-        Task {
-            do {
-                let count = try PSTWriter.write(emails: emails, to: url)
-                await MainActor.run {
-                    viewModel.statusMessage = "Exported \(count) emails to PST."
-                    viewModel.statusColor = .green
-                }
-            } catch {
-                await MainActor.run {
-                    viewModel.statusMessage = "PST export failed: \(error.localizedDescription)"
-                    viewModel.statusColor = .red
-                }
+        runStreamingExport("Exporting PST") { service in
+            // KNOWN LIMITATION: the PST container writer builds the whole file
+            // in memory, so this export materializes an EXPLICITLY CAPPED
+            // array (ArchiveExportService.pstExportCap = PSTWriter's 5,000) —
+            // never unbounded. The cap is surfaced to the user below; larger
+            // sets should use the streaming EML/MSG exports.
+            let collected = try await service.collectForPST(
+                scope: scope,
+                onProgress: self.exportProgress)
+            let count = try PSTWriter.write(emails: collected.emails, to: url)
+            if collected.capped {
+                return "Exported first \(count) of \(collected.total) emails to PST (PST export is capped at \(ArchiveExportService.pstExportCap) messages — use EML or MSG for the full set)."
             }
+            return "Exported \(count) emails to PST."
         }
         #else
-        do {
-            let data = try PSTWriter.writeData(emails: emails)
-            if let url = PlatformFileSaver.tempFileURL(name: "export.pst", data: data) {
-                shareItems = [url]
-                showShareSheet = true
+        let vm = viewModel
+        ExportRunCenter.shared.run(title: "Exporting PST") {
+            do {
+                // Same explicit cap as macOS (writer materializes in memory).
+                let collected = try await ArchiveExportService.shared.collectForPST(scope: scope)
+                let data = try PSTWriter.writeData(emails: collected.emails)
+                if let url = PlatformFileSaver.tempFileURL(name: "export.pst", data: data) {
+                    shareItems = [url]
+                    showShareSheet = true
+                }
+                if collected.capped {
+                    vm.statusMessage = "PST export capped at \(ArchiveExportService.pstExportCap) messages — use EML or MSG for the full set."
+                    vm.statusColor = .orange
+                }
+            } catch {
+                vm.statusMessage = "PST export failed: \(error.localizedDescription)"
+                vm.statusColor = .red
             }
-        } catch {
-            viewModel.statusMessage = "PST export failed: \(error.localizedDescription)"
-            viewModel.statusColor = .red
         }
         #endif
     }
 
     private func exportRelativity() {
-        let emails = modelVM.filteredEmails.isEmpty ? modelVM.allEmails : modelVM.filteredEmails
-        let csv = ExportManager.generateRelativityLoadFile(
-            from: emails,
-            custodianName: CustodianManager.shared.defaultCustodian,
-            caseNumber: forensicManager.caseNumber
-        )
+        let scope = filteredScope
+        let custodian = CustodianManager.shared.defaultCustodian
+        let caseNumber = forensicManager.caseNumber
         #if os(macOS)
         let panel = NSSavePanel()
         panel.title = "Export Relativity Load File"
@@ -3979,18 +3938,25 @@ private func handleMultipleFiles(_ urls: [URL]) {
         panel.nameFieldStringValue = "relativity_loadfile.csv"
         let response = panel.runModal()
         guard response == .OK, let url = panel.url else { return }
-        do {
-            try csv.write(to: url, atomically: true, encoding: .utf8)
-            viewModel.statusMessage = "Exported Relativity load file (\(emails.count) records)."
-            viewModel.statusColor = .green
-        } catch {
-            viewModel.statusMessage = "Export failed: \(error.localizedDescription)"
-            viewModel.statusColor = .red
+        runStreamingExport("Exporting Relativity load file") { service in
+            let result = try await service.exportRelativityCSV(
+                scope: scope, to: url,
+                custodianName: custodian, caseNumber: caseNumber,
+                onProgress: self.exportProgress)
+            if result.cancelled { return "Relativity export \(Self.exportCancelledSuffix)" }
+            return "Exported Relativity load file (\(result.recordsWritten) records, signed)."
         }
         #else
-        if let url = PlatformFileSaver.tempFileURL(name: "relativity_loadfile.csv", text: csv) {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("relativity_loadfile.csv")
+        runStreamingExport("Exporting Relativity load file") { service in
+            let result = try await service.exportRelativityCSV(
+                scope: scope, to: url,
+                custodianName: custodian, caseNumber: caseNumber,
+                onProgress: self.exportProgress)
+            if result.cancelled { return "Relativity export \(Self.exportCancelledSuffix)" }
             shareItems = [url]
             showShareSheet = true
+            return "Exported Relativity load file (\(result.recordsWritten) records, signed)."
         }
         #endif
     }
@@ -4044,6 +4010,9 @@ private func handleMultipleFiles(_ urls: [URL]) {
         let validIDs = Set(modelVM.filteredEmails.map(\.id))
         let stale = selectedEmailIDs.subtracting(validIDs)
         if !stale.isEmpty { selectedEmailIDs.subtract(stale) }
+        // O1: a symbolic Select All is tied to the query it was issued for —
+        // any filter change invalidates it (the user re-selects if needed).
+        selectAllMatching = false
     }
 
     // MARK: - Lifecycle Handlers
@@ -4233,7 +4202,12 @@ private func handleMultipleFiles(_ urls: [URL]) {
     private func handleTriggerSelectAll() {
         guard appState.triggerSelectAll else { return }
         appState.triggerSelectAll = false
+        // O1: the list UI shows the (page-bounded) preview as checked, but the
+        // SELECTION ITSELF turns symbolic — bulk actions consume
+        // `selectionScope` = current query + deselected ids, so "Select All"
+        // over a million matches never materializes the id list.
         selectedEmailIDs = Set(modelVM.filteredEmails.map(\.id))
+        selectAllMatching = true
     }
     private func handleTriggerPrint() {
         guard appState.triggerPrint else { return }
@@ -4270,7 +4244,15 @@ private func handleMultipleFiles(_ urls: [URL]) {
     }
 
     private func exportPrivilegeLog() {
-        let content = forensicManager.exportPrivilegeLog(emails: viewModel.parsedEmails)
+        // Part O: privileged messages are a bounded user-tagged set — hydrate
+        // just those ids from the store (never the whole-corpus array).
+        let privilegedIDs = forensicManager.evidenceTags
+            .filter { $0.value == .privileged }.map(\.key)
+        guard !privilegedIDs.isEmpty else {
+            viewModel.statusMessage = "No privileged emails to export."
+            viewModel.statusColor = .orange
+            return
+        }
         #if os(macOS)
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "privilege_log_\(forensicManager.caseNumber.isEmpty ? "mailin" : forensicManager.caseNumber).txt"
@@ -4279,16 +4261,15 @@ private func handleMultipleFiles(_ urls: [URL]) {
         #else
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("privilege_log.txt")
         #endif
-        do {
+        let forensic = forensicManager
+        runStreamingExport("Exporting privilege log") { _ in
+            let emails = try await ArchiveDataService.shared.fullEmails(ids: privilegedIDs)
+            let content = forensic.exportPrivilegeLog(emails: emails)
             try content.write(to: url, atomically: true, encoding: .utf8)
-            viewModel.statusMessage = "Exported privilege log."
-            viewModel.statusColor = .green
             #if os(iOS)
-            iOSShareFile(at: url)
+            self.iOSShareFile(at: url)
             #endif
-        } catch {
-            viewModel.statusMessage = "Failed to export privilege log: \(error.localizedDescription)"
-            viewModel.statusColor = .red
+            return "Exported privilege log."
         }
     }
 
@@ -4414,6 +4395,8 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            // Part O: shared progress + Cancel for streaming exports.
+            .overlay(alignment: .bottom) { ExportProgressOverlayView() }
             .sheet(isPresented: $appState.showDuplicateManager) {
                 DuplicateManagerView(model: modelVM, isPresented: $appState.showDuplicateManager)
                     #if os(macOS)
@@ -4462,12 +4445,17 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
             .onChange(of: appState.triggerExportHeadersCSV) { _, val in
                 if val {
                     appState.triggerExportHeadersCSV = false
-                    // Export path — still preview-array-backed; Part O (exports
-                    // phase) streams this via ArchiveSelectionScope.
-                    let csv = ExportManager.exportHeadersOnlyCSV(
-                        from: modelVM.filteredEmails.isEmpty ? modelVM.allEmails : modelVM.filteredEmails)
+                    // Part O: streamed from the store for the current query —
+                    // never the preview arrays.
                     #if os(macOS)
-                    _ = PlatformFileSaver.saveText(csv, suggestedName: "headers_export.csv")
+                    if let url = PlatformFileSaver.savePanel(suggestedName: "headers_export.csv") {
+                        let scope: ArchiveSelectionScope = .query(modelVM.currentArchiveQuery, exclusions: [])
+                        ExportRunCenter.shared.run(title: "Exporting headers CSV") {
+                            _ = try? await ArchiveExportService.shared.exportHeadersCSV(
+                                scope: scope, to: url,
+                                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
+                        }
+                    }
                     #endif
                 }
             }

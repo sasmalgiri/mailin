@@ -2672,49 +2672,33 @@ struct ParsedEmailListView: View {
             try? FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
             #endif
 
-            var usedNames = Set<String>()
-            var savedCount = 0
-            let remaining = storeManager.isPremium ? Int.max : max(0, Self.freeAttachmentLimit - freeAttachmentDownloadCount)
-            for email in model.filteredEmails {
-                for att in email.attachments {
-                    if savedCount >= remaining {
+            // Part O: streams the current query from the store (bounded
+            // batches) and copies attachment files as it goes — the preview
+            // array is never the source; premium is unlimited via streaming,
+            // not via an Int.max whole-array walk.
+            let scope: ArchiveSelectionScope = .query(model.currentArchiveQuery, exclusions: [])
+            let cap: Int? = storeManager.isPremium ? nil : max(0, Self.freeAttachmentLimit - freeAttachmentDownloadCount)
+            ExportRunCenter.shared.run(title: "Saving attachments") {
+                do {
+                    let outcome = try await ArchiveExportService.shared.exportAttachments(
+                        scope: scope, to: folderURL, maxAttachments: cap,
+                        onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
+                    if !storeManager.isPremium {
+                        freeAttachmentDownloadCount += outcome.saved
+                    }
+                    if outcome.capped {
                         storeManager.showPaywall = true
-                        listExportError = "Free limit: saved \(savedCount) of \(totalAttachments) attachments. Upgrade to Pro for unlimited."
-                        #if os(iOS)
-                        if savedCount > 0 { iOSShareFile(at: folderURL) }
-                        #endif
-                        return
+                        listExportError = "Free limit: saved \(outcome.saved) attachments. Upgrade to Pro for unlimited."
                     }
-                    guard let sourceURL = att.fileURL else { continue }
-                    var filename = att.filename
-                        .replacingOccurrences(of: "/", with: "_")
-                        .replacingOccurrences(of: "\\", with: "_")
-                        .replacingOccurrences(of: "..", with: "_")
-                    var counter = 1
-                    while usedNames.contains(filename) {
-                        let name = (att.filename as NSString).deletingPathExtension
-                        let ext = (att.filename as NSString).pathExtension
-                        filename = ext.isEmpty ? "\(name)_\(counter)" : "\(name)_\(counter).\(ext)"
-                        counter += 1
-                    }
-                    usedNames.insert(filename)
-                    let destinationURL = folderURL.appendingPathComponent(filename)
-                    do {
-                        try FileUtils.copyFile(from: sourceURL, to: destinationURL)
-                        savedCount += 1
-                    } catch {
-                        Task { @MainActor in
-                            listExportError = "Failed to copy \(att.filename): \(error.localizedDescription)"
-                        }
-                    }
+                    #if os(iOS)
+                    if outcome.saved > 0 { iOSShareFile(at: folderURL) }
+                    #endif
+                } catch is CancellationError {
+                    listExportError = "Attachment download cancelled."
+                } catch {
+                    listExportError = "Failed to save attachments: \(error.localizedDescription)"
                 }
             }
-            if !storeManager.isPremium {
-                freeAttachmentDownloadCount += savedCount
-            }
-            #if os(iOS)
-            if savedCount > 0 { iOSShareFile(at: folderURL) }
-            #endif
         }
 
     private var personaListTitle: String {
@@ -2730,44 +2714,48 @@ struct ParsedEmailListView: View {
     private static let freeExportLimit = 10
 
     private func exportFilteredJSON() {
-            let emailsToExport: [MBOXParser.RawEmail]
-            if storeManager.isPremium {
-                emailsToExport = model.filteredEmails
-            } else {
-                emailsToExport = Array(model.filteredEmails.prefix(Self.freeExportLimit))
-            }
-            let exportable = MBOXParser.ExportableParsedMBOXFile(
-                emails: emailsToExport.map { $0.asExportable() },
-                summary: MBOXParser.summarize(emails: emailsToExport)
-            )
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyyMMdd_HHmmss"
+            let suggestedName = "filtered_emails_\(formatter.string(from: Date())).json"
 
-            do {
-                let data = try JSONEncoder().encode(exportable)
-                let formatter = DateFormatter()
-                formatter.dateFormat = "yyyyMMdd_HHmmss"
-                let suggestedName = "filtered_emails_\(formatter.string(from: Date())).json"
+            #if os(macOS)
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = suggestedName
+            panel.canCreateDirectories = true
+            panel.allowedContentTypes = [.json]
 
-                #if os(macOS)
-                let panel = NSSavePanel()
-                panel.nameFieldStringValue = suggestedName
-                panel.canCreateDirectories = true
-                panel.allowedContentTypes = [.json]
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            #else
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(suggestedName)
+            #endif
 
-                guard panel.runModal() == .OK, let url = panel.url else { return }
-                #else
-                let url = FileManager.default.temporaryDirectory.appendingPathComponent(suggestedName)
-                #endif
-
-                try FileUtils.writeData(data, to: url.path)
-                if !storeManager.isPremium && model.filteredEmails.count > Self.freeExportLimit {
-                    storeManager.showPaywall = true
-                    listExportError = "Exported \(Self.freeExportLimit) of \(model.filteredEmails.count) emails. Upgrade to Pro for unlimited export."
+            // Part O: streamed from the store for the CURRENT query — the
+            // emails array is written incrementally, the summary accumulated
+            // while streaming (never a materialized array).
+            let scope: ArchiveSelectionScope = .query(model.currentArchiveQuery, exclusions: [])
+            let cap: Int? = storeManager.isPremium ? nil : Self.freeExportLimit
+            ExportRunCenter.shared.run(title: "Exporting JSON") {
+                do {
+                    let result = try await ArchiveExportService.shared.exportJSONArchive(
+                        scope: scope, to: url, limit: cap,
+                        onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
+                    if result.cancelled {
+                        listExportError = "JSON export cancelled — partial output removed."
+                        return
+                    }
+                    if let cap {
+                        let total = (try? await ArchiveDataService.shared.count(scope: scope)) ?? result.recordsWritten
+                        if total > cap {
+                            storeManager.showPaywall = true
+                            listExportError = "Exported \(result.recordsWritten) of \(total) emails. Upgrade to Pro for unlimited export."
+                        }
+                    }
+                    #if os(iOS)
+                    iOSShareFile(at: url)
+                    #endif
+                } catch {
+                    listExportError = "Failed to export JSON: \(error.localizedDescription)"
                 }
-                #if os(iOS)
-                iOSShareFile(at: url)
-                #endif
-            } catch {
-                listExportError = "Failed to export JSON: \(error.localizedDescription)"
             }
         }
 }

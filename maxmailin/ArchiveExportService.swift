@@ -190,7 +190,12 @@ final class ArchiveExportService {
         if signed {
             // Forensic-integrity formats: signature covers the streamed digest
             // (the artifact is never re-read into memory).
-            sigURL = try ExportSigner.shared.signStreamedDigest(Data(finished), hex: hex, for: url)
+            do {
+                sigURL = try ExportSigner.shared.signStreamedDigest(Data(finished), hex: hex, for: url)
+            } catch {
+                try? FileManager.default.removeItem(at: url)
+                throw error
+            }
         }
         return ArchiveExportResult(recordsWritten: records, bytesWritten: bytes,
                                    completed: true, cancelled: false,
@@ -436,8 +441,13 @@ final class ArchiveExportService {
     @discardableResult
     func exportBatchPrintText(scope: ArchiveSelectionScope, to url: URL,
                               onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
-        try await exportTextDocument(scope: scope, to: url, onProgress: onProgress) { email, index in
-            ExportManager.batchPrintBlock(email: email, index: index)
+        var total = 0
+        return try await exportTextDocument(
+            scope: scope, to: url,
+            header: { t in total = t; return "" },
+            onProgress: onProgress
+        ) { email, index in
+            ExportManager.batchPrintBlock(email: email, index: index, total: total)
         }
     }
 

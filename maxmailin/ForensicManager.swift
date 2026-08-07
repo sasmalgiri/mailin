@@ -398,14 +398,22 @@ class ForensicManager: ObservableObject {
         return (passed, failed, unverified, details)
     }
 
+    static let hashManifestHeader = "EmailID,Subject,From,Date,MD5,SHA1,SHA256,Integrity\n"
+
+    /// One streamed manifest row (Part O: exports build the manifest
+    /// incrementally from a bounded stream, never a whole array).
+    func hashManifestRow(_ email: MBOXParser.RawEmail) -> String {
+        let hash = perEmailHashes[email.id]
+        let verification = verifyEmailIntegrity(email)
+        let subject = (email.headers["Subject"] ?? "").replacingOccurrences(of: ",", with: ";")
+        let from = (email.headers["From"] ?? "").replacingOccurrences(of: ",", with: ";")
+        return "\(email.id),\"\(subject)\",\"\(from)\",\(email.timestamp),\(hash?.md5 ?? "N/A"),\(hash?.sha1 ?? "N/A"),\(hash?.sha256 ?? "N/A"),\(verification.passed ? "PASS" : "FAIL")\n"
+    }
+
     func exportHashManifest(_ emails: [MBOXParser.RawEmail]) -> String {
-        var csv = "EmailID,Subject,From,Date,MD5,SHA1,SHA256,Integrity\n"
+        var csv = Self.hashManifestHeader
         for email in emails {
-            let hash = perEmailHashes[email.id]
-            let verification = verifyEmailIntegrity(email)
-            let subject = (email.headers["Subject"] ?? "").replacingOccurrences(of: ",", with: ";")
-            let from = (email.headers["From"] ?? "").replacingOccurrences(of: ",", with: ";")
-            csv += "\(email.id),\"\(subject)\",\"\(from)\",\(email.timestamp),\(hash?.md5 ?? "N/A"),\(hash?.sha1 ?? "N/A"),\(hash?.sha256 ?? "N/A"),\(verification.passed ? "PASS" : "FAIL")\n"
+            csv += hashManifestRow(email)
         }
         return csv
     }
@@ -843,76 +851,96 @@ class ForensicManager: ObservableObject {
         return report
     }
 
+    static let forensicCSVHeader = "Bates Number,Message-ID,Date,From,To,CC,Subject,MD5,SHA-1,SHA-256,Byte Count,Has Attachments,Attachment Count,Evidence Tag,Annotation,Thread-ID,Spoof Risk,Risk Score,Risk Level\n"
+
+    private static func forensicCSVEscape(_ s: String) -> String {
+        var v = s
+        if let first = v.first, "=+@-\t\r".contains(first) { v = "'" + v }
+        return "\"" + v.replacingOccurrences(of: "\"", with: "\"\"").replacingOccurrences(of: "\r\n", with: " ").replacingOccurrences(of: "\r", with: " ").replacingOccurrences(of: "\n", with: " ") + "\""
+    }
+
+    /// One streamed forensic-CSV row for a running Bates number (Part O:
+    /// exports stream rows from the store — never a whole-array pass).
+    func forensicCSVRow(_ email: MBOXParser.RawEmail, bates: String) -> String {
+        func csvEscape(_ s: String) -> String { Self.forensicCSVEscape(s) }
+        let hash = perEmailHashes[email.id] ?? Self.computeEmailHash(rawSource: email.rawSource)
+        let tag = tagForEmail(email.id).rawValue
+        let note = annotations[email.id]?.text ?? ""
+        let spoofCount = Self.detectSpoofingIndicators(email).count
+        let cc = email.headers["Cc"] ?? email.headers["CC"] ?? ""
+
+        var csv = ""
+        csv += "\(bates),"
+        csv += "\(csvEscape(email.headers["Message-ID"] ?? email.headers["Message-Id"] ?? "")),"
+        csv += "\(csvEscape(email.headers["Date"] ?? "")),"
+        csv += "\(csvEscape(email.headers["From"] ?? "")),"
+        csv += "\(csvEscape(email.headers["To"] ?? "")),"
+        csv += "\(csvEscape(cc)),"
+        csv += "\(csvEscape(email.headers["Subject"] ?? "")),"
+        csv += "\(hash.md5),"
+        csv += "\(hash.sha1),"
+        csv += "\(hash.sha256),"
+        csv += "\(hash.byteCount),"
+        csv += "\(!email.attachments.isEmpty),"
+        csv += "\(email.attachments.count),"
+        csv += "\(csvEscape(tag)),"
+        csv += "\(csvEscape(note)),"
+        csv += "\(csvEscape(email.threadID ?? "")),"
+        csv += "\(spoofCount),"
+        let risk = Self.assessRisk(for: email)
+        csv += "\(risk.score),"
+        csv += "\(csvEscape(risk.level.rawValue))\n"
+        return csv
+    }
+
     func exportBulkForensicCSV(emails: [MBOXParser.RawEmail], batesPrefix: String = "MAIL") -> String {
-        var csv = "Bates Number,Message-ID,Date,From,To,CC,Subject,MD5,SHA-1,SHA-256,Byte Count,Has Attachments,Attachment Count,Evidence Tag,Annotation,Thread-ID,Spoof Risk,Risk Score,Risk Level\n"
-
-        func csvEscape(_ s: String) -> String {
-            var v = s
-            if let first = v.first, "=+@-\t\r".contains(first) { v = "'" + v }
-            return "\"" + v.replacingOccurrences(of: "\"", with: "\"\"").replacingOccurrences(of: "\r\n", with: " ").replacingOccurrences(of: "\r", with: " ").replacingOccurrences(of: "\n", with: " ") + "\""
-        }
-
+        var csv = Self.forensicCSVHeader
         for (i, email) in emails.enumerated() {
-            let bates = Self.batesNumber(prefix: batesPrefix, index: i + 1)
-            let hash = perEmailHashes[email.id] ?? Self.computeEmailHash(rawSource: email.rawSource)
-            let tag = tagForEmail(email.id).rawValue
-            let note = annotations[email.id]?.text ?? ""
-            let spoofCount = Self.detectSpoofingIndicators(email).count
-            let cc = email.headers["Cc"] ?? email.headers["CC"] ?? ""
-
-            csv += "\(bates),"
-            csv += "\(csvEscape(email.headers["Message-ID"] ?? email.headers["Message-Id"] ?? "")),"
-            csv += "\(csvEscape(email.headers["Date"] ?? "")),"
-            csv += "\(csvEscape(email.headers["From"] ?? "")),"
-            csv += "\(csvEscape(email.headers["To"] ?? "")),"
-            csv += "\(csvEscape(cc)),"
-            csv += "\(csvEscape(email.headers["Subject"] ?? "")),"
-            csv += "\(hash.md5),"
-            csv += "\(hash.sha1),"
-            csv += "\(hash.sha256),"
-            csv += "\(hash.byteCount),"
-            csv += "\(!email.attachments.isEmpty),"
-            csv += "\(email.attachments.count),"
-            csv += "\(csvEscape(tag)),"
-            csv += "\(csvEscape(note)),"
-            csv += "\(csvEscape(email.threadID ?? "")),"
-            csv += "\(spoofCount),"
-            let risk = Self.assessRisk(for: email)
-            csv += "\(risk.score),"
-            csv += "\(csvEscape(risk.level.rawValue))\n"
+            csv += forensicCSVRow(email, bates: Self.batesNumber(prefix: batesPrefix, index: i + 1))
         }
         return csv
     }
 
-    func exportConcordanceDAT(emails: [MBOXParser.RawEmail], batesPrefix: String = "MAIL") -> String {
+    static let concordanceDATHeader: String = {
         let sep = "\u{14}"
         let quote = "\u{FE}"
-        var dat = "\(quote)DOCID\(quote)\(sep)\(quote)BEGBATES\(quote)\(sep)\(quote)ENDBATES\(quote)\(sep)\(quote)FROM\(quote)\(sep)\(quote)TO\(quote)\(sep)\(quote)CC\(quote)\(sep)\(quote)BCC\(quote)\(sep)\(quote)SUBJECT\(quote)\(sep)\(quote)DATESENT\(quote)\(sep)\(quote)MSGID\(quote)\(sep)\(quote)HASHSHA256\(quote)\(sep)\(quote)CUSTODIAN\(quote)\(sep)\(quote)TAG\(quote)\n"
+        return "\(quote)DOCID\(quote)\(sep)\(quote)BEGBATES\(quote)\(sep)\(quote)ENDBATES\(quote)\(sep)\(quote)FROM\(quote)\(sep)\(quote)TO\(quote)\(sep)\(quote)CC\(quote)\(sep)\(quote)BCC\(quote)\(sep)\(quote)SUBJECT\(quote)\(sep)\(quote)DATESENT\(quote)\(sep)\(quote)MSGID\(quote)\(sep)\(quote)HASHSHA256\(quote)\(sep)\(quote)CUSTODIAN\(quote)\(sep)\(quote)TAG\(quote)\n"
+    }()
 
+    /// One streamed Concordance .dat row (Part O).
+    func concordanceDATRow(_ email: MBOXParser.RawEmail, bates: String) -> String {
+        let sep = "\u{14}"
+        let quote = "\u{FE}"
+        let hash = perEmailHashes[email.id] ?? Self.computeEmailHash(rawSource: email.rawSource)
+        let tag = tagForEmail(email.id).rawValue
+        let cc = email.headers["Cc"] ?? email.headers["CC"] ?? ""
+        let bcc = email.headers["Bcc"] ?? email.headers["BCC"] ?? ""
+
+        func datEscape(_ s: String) -> String {
+            s.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: "")
+        }
+
+        var dat = ""
+        dat += "\(quote)\(bates)\(quote)\(sep)"
+        dat += "\(quote)\(bates)\(quote)\(sep)"
+        dat += "\(quote)\(bates)\(quote)\(sep)"
+        dat += "\(quote)\(datEscape(email.headers["From"] ?? ""))\(quote)\(sep)"
+        dat += "\(quote)\(datEscape(email.headers["To"] ?? ""))\(quote)\(sep)"
+        dat += "\(quote)\(datEscape(cc))\(quote)\(sep)"
+        dat += "\(quote)\(datEscape(bcc))\(quote)\(sep)"
+        dat += "\(quote)\(datEscape(email.headers["Subject"] ?? ""))\(quote)\(sep)"
+        dat += "\(quote)\(datEscape(email.headers["Date"] ?? ""))\(quote)\(sep)"
+        dat += "\(quote)\(datEscape(email.headers["Message-ID"] ?? ""))\(quote)\(sep)"
+        dat += "\(quote)\(hash.sha256)\(quote)\(sep)"
+        dat += "\(quote)\(datEscape(examinerName))\(quote)\(sep)"
+        dat += "\(quote)\(tag)\(quote)\n"
+        return dat
+    }
+
+    func exportConcordanceDAT(emails: [MBOXParser.RawEmail], batesPrefix: String = "MAIL") -> String {
+        var dat = Self.concordanceDATHeader
         for (i, email) in emails.enumerated() {
-            let bates = Self.batesNumber(prefix: batesPrefix, index: i + 1)
-            let hash = perEmailHashes[email.id] ?? Self.computeEmailHash(rawSource: email.rawSource)
-            let tag = tagForEmail(email.id).rawValue
-            let cc = email.headers["Cc"] ?? email.headers["CC"] ?? ""
-            let bcc = email.headers["Bcc"] ?? email.headers["BCC"] ?? ""
-
-            func datEscape(_ s: String) -> String {
-                s.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: "")
-            }
-
-            dat += "\(quote)\(bates)\(quote)\(sep)"
-            dat += "\(quote)\(bates)\(quote)\(sep)"
-            dat += "\(quote)\(bates)\(quote)\(sep)"
-            dat += "\(quote)\(datEscape(email.headers["From"] ?? ""))\(quote)\(sep)"
-            dat += "\(quote)\(datEscape(email.headers["To"] ?? ""))\(quote)\(sep)"
-            dat += "\(quote)\(datEscape(cc))\(quote)\(sep)"
-            dat += "\(quote)\(datEscape(bcc))\(quote)\(sep)"
-            dat += "\(quote)\(datEscape(email.headers["Subject"] ?? ""))\(quote)\(sep)"
-            dat += "\(quote)\(datEscape(email.headers["Date"] ?? ""))\(quote)\(sep)"
-            dat += "\(quote)\(datEscape(email.headers["Message-ID"] ?? ""))\(quote)\(sep)"
-            dat += "\(quote)\(hash.sha256)\(quote)\(sep)"
-            dat += "\(quote)\(datEscape(examinerName))\(quote)\(sep)"
-            dat += "\(quote)\(tag)\(quote)\n"
+            dat += concordanceDATRow(email, bates: Self.batesNumber(prefix: batesPrefix, index: i + 1))
         }
         return dat
     }
