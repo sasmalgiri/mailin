@@ -86,11 +86,18 @@ struct AgenticPlanner {
 
     // MARK: - Plan Generation
 
+    /// `workingSet` is the BOUNDED, query-relevant retrieval the caller
+    /// (FoundationModelEngine.respondSmart) already produced from the store —
+    /// at most `workingSetCap` emails, never an archive array. Steps that need
+    /// broader search go back through `ArchiveRetrievalService` (FTS5).
+    static let workingSetCap = 50
+
     static func generatePlan(
         query: String,
-        emails: [MBOXParser.RawEmail],
+        workingSet: [MBOXParser.RawEmail],
         profile: String
     ) async -> AgenticPlan? {
+        let emails = Array(workingSet.prefix(workingSetCap))
         guard FoundationModelEngine.isAvailable else { return nil }
 
         do {
@@ -127,14 +134,17 @@ struct AgenticPlanner {
 
     // MARK: - Plan Execution
 
+    /// `workingSet` is the bounded (≤ `workingSetCap`) retrieval from
+    /// respondSmart — never an archive array.
     static func executePlan(
         plan: AgenticPlan,
         query: String,
-        emails: [MBOXParser.RawEmail],
+        workingSet: [MBOXParser.RawEmail],
         profile: String,
         onUpdate: @MainActor @Sendable @escaping (String) -> Void,
         onConfirmAction: (@MainActor @Sendable (String) async -> Bool)? = nil
     ) async throws -> String {
+        let emails = Array(workingSet.prefix(workingSetCap))
         let totalSteps = plan.steps.count
         var stepResults: [StepResult] = []
         var workingEmails = emails
@@ -180,9 +190,16 @@ struct AgenticPlanner {
 
             if !result.emailIDs.isEmpty {
                 let idSet = Set(result.emailIDs)
-                let filtered = emails.filter { idSet.contains($0.id) }
+                var filtered = emails.filter { idSet.contains($0.id) }
+                // A search step may have retrieved store emails outside the
+                // initial working set — hydrate those by id, bounded.
+                let missing = idSet.subtracting(filtered.map(\.id))
+                if !missing.isEmpty {
+                    let hydrated = (try? await ArchiveDataService.shared.fullEmails(ids: Array(missing.prefix(workingSetCap)))) ?? []
+                    filtered.append(contentsOf: hydrated)
+                }
                 if !filtered.isEmpty {
-                    workingEmails = filtered
+                    workingEmails = Array(filtered.prefix(workingSetCap))
                 }
             }
 
@@ -222,7 +239,7 @@ struct AgenticPlanner {
     ) async -> StepResult {
         switch step.stepType {
         case .searchEmails:
-            return executeSearch(step: step, stepIndex: stepIndex, emails: allEmails)
+            return await executeSearch(step: step, stepIndex: stepIndex, emails: allEmails)
         case .filterByDate:
             return executeFilterByDate(step: step, stepIndex: stepIndex, emails: workingEmails)
         case .analyzeSentiment:
@@ -251,18 +268,19 @@ struct AgenticPlanner {
 
     // MARK: - Search Step
 
+    /// Search steps hit the archive-wide FTS5 substrate (bounded results) —
+    /// never the legacy in-RAM index, never a corpus array. `emails` here is
+    /// only the bounded working set used as a last-resort linear fallback.
     private static func executeSearch(
         step: AgenticStep,
         stepIndex: Int,
         emails: [MBOXParser.RawEmail]
-    ) -> StepResult {
+    ) async -> StepResult {
         let terms = EmailNLPEngine.extractSearchTerms(from: step.parameters)
         var results: [MBOXParser.RawEmail] = []
 
-        if !terms.isEmpty {
-            let indexed = EmailSearchIndex.shared.hybridSearch(query: step.parameters, terms: terms, limit: 20)
-            results = indexed.map(\.email)
-        }
+        let retrieved = (try? await ArchiveRetrievalService.shared.retrieve(step.parameters, limit: 20)) ?? []
+        results = retrieved.map(\.email)
 
         if results.isEmpty {
             let nlpResults = EmailNLPEngine.searchEmails(

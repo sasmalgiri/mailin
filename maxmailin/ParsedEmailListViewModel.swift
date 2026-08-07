@@ -10,9 +10,9 @@ class ParsedEmailListViewModel: ObservableObject {
 
     // FTS5-backed match cache. `ftsMatchKey` is the query string the cached IDs
     // correspond to. Free-text / boolean searches are resolved by the SQLite
-    // FTS5 engine (FTSSearchIndex, async); the in-RAM EmailSearchIndex stays as
-    // the synchronous fallback so results appear instantly and there's no
-    // regression when the FTS index is empty.
+    // FTS5 engine (FTSSearchIndex, async). The legacy in-RAM EmailSearchIndex
+    // is no longer built (Part F); interim fallbacks scan only the bounded
+    // preview array already resident for the legacy list.
     private var ftsMatchIDs: Set<UUID>? = nil
     private var ftsMatchKey: String? = nil
     /// Bumped on any content mutation (delete / redact / reindex) so the search
@@ -648,6 +648,29 @@ class ParsedEmailListViewModel: ObservableObject {
         return parsed
     }
 
+    /// Bounded regex scan over the resident preview array (regex has no FTS5
+    /// form). Caps pattern length and per-email scanned characters like the
+    /// retired in-RAM index did.
+    nonisolated static func boundedRegexMatchIDs(pattern: String, in emails: [MBOXParser.RawEmail]) -> Set<UUID> {
+        guard pattern.count <= 1000 else { return [] }
+        let cleanPattern: String
+        if pattern.hasPrefix("/") && pattern.hasSuffix("/") && pattern.count > 2 {
+            cleanPattern = String(pattern.dropFirst().dropLast())
+        } else {
+            cleanPattern = pattern.replacingOccurrences(of: "*", with: ".*")
+        }
+        guard let regex = try? NSRegularExpression(pattern: cleanPattern, options: .caseInsensitive) else { return [] }
+        var ids = Set<UUID>()
+        for email in emails {
+            let text = String(email.fullText.prefix(100_000))
+            let range = NSRange(location: 0, length: (text as NSString).length)
+            if regex.firstMatch(in: text, options: .withoutAnchoringBounds, range: range) != nil {
+                ids.insert(email.id)
+            }
+        }
+        return ids
+    }
+
     // MARK: - Apply Filters (with minReplyCount logic + free limit)
     func applyFilters() {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -715,22 +738,28 @@ class ParsedEmailListViewModel: ObservableObject {
             ftsMatchIDs = nil
         }
 
-        // In-RAM fallback — Boolean/regex only (NOT proximity, which is now
-        // FTS5-only). Used while FTS hasn't produced an authoritative answer.
+        // Bounded fallbacks — the legacy in-RAM EmailSearchIndex is gone
+        // (Part F). Regex (no FTS5 form) scans only the bounded preview array
+        // already resident for the legacy list. Boolean queries simply wait
+        // for FTS (advancedMatchIDs stays nil → plain substring matching
+        // below applies in the meantime).
         if advancedMatchIDs == nil && allowInRAMFallback {
-            if parsed.isBooleanQuery && !parsed.freeText.isEmpty {
-                let results = EmailSearchIndex.shared.booleanSearch(query: parsed.freeText, limit: allEmails.count)
-                advancedMatchIDs = Set(results.map(\.email.id))
-            } else if parsed.isRegexQuery && !parsed.freeText.isEmpty {
-                let results = EmailSearchIndex.shared.regexSearch(pattern: parsed.freeText, limit: allEmails.count)
-                advancedMatchIDs = Set(results.map(\.email.id))
+            if parsed.isRegexQuery && !parsed.freeText.isEmpty {
+                advancedMatchIDs = Self.boundedRegexMatchIDs(pattern: parsed.freeText, in: allEmails)
             }
         }
 
         if parsed.searchInAttachments && !parsed.freeText.isEmpty {
-            let terms = parsed.freeText.split(separator: " ").map(String.init)
-            let results = EmailSearchIndex.shared.searchAttachmentContent(terms: terms, limit: allEmails.count)
-            let attachIDs = Set(results.map(\.email.id))
+            // Degraded but bounded: match attachment FILENAMES over the
+            // resident preview (extracted attachment text lived only in the
+            // retired in-RAM index; FTS attachment text is a later phase).
+            let terms = parsed.freeText.lowercased().split(separator: " ").map(String.init)
+            let attachIDs = Set(allEmails.filter { email in
+                !email.attachments.isEmpty && email.attachments.contains { att in
+                    let name = att.filename.lowercased()
+                    return terms.contains { name.contains($0) }
+                }
+            }.map(\.id))
             if let existing = advancedMatchIDs {
                 advancedMatchIDs = existing.intersection(attachIDs)
             } else {

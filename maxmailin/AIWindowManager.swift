@@ -62,14 +62,23 @@ struct AIWindowButton: View {
         #if os(iOS)
         .sheet(isPresented: $showAISheet) {
             AIAssistantView(
-                allEmails: model.allEmails,
-                filteredEmails: model.filteredEmails,
-                selectedEmails: [],
+                archiveScope: Self.aiScope(for: model),
                 searchContext: model.searchText
             )
             .environmentObject(storeManager)
         }
         #endif
+    }
+
+    /// Part D: map the list's filter state to bounded scope semantics (query +
+    /// selection) instead of handing the AI whole email arrays.
+    static func aiScope(for model: ParsedEmailListViewModel) -> AIAssistantScope {
+        var query = EmailQuery.all
+        let text = model.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !text.isEmpty { query.text = text }
+        if model.startDate > .distantPast { query.afterDate = model.startDate }
+        if model.endDate < .distantFuture { query.beforeDate = model.endDate }
+        return AIAssistantScope(filteredQuery: query, selectedIDs: [])
     }
 
     private func openAIWindow() {
@@ -96,9 +105,7 @@ struct AIWindowButton: View {
 
         newWindow.contentView = NSHostingView(rootView:
             AIAssistantView(
-                allEmails: model.allEmails,
-                filteredEmails: model.filteredEmails,
-                selectedEmails: [],
+                archiveScope: Self.aiScope(for: model),
                 searchContext: model.searchText
             )
             .environmentObject(storeManager)

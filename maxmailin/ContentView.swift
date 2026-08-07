@@ -237,9 +237,7 @@ struct ContentView: View {
         ))
         .sheet(isPresented: $appState.showAIAssistant) {
             AIAssistantView(
-                allEmails: modelVM.allEmails,
-                filteredEmails: modelVM.filteredEmails,
-                selectedEmails: modelVM.filteredEmails.filter { selectedEmailIDs.contains($0.id) },
+                archiveScope: currentAIScope,
                 searchContext: modelVM.searchText,
                 onSelectEmail: { emailID in
                     selectedEmailIDs = [emailID]
@@ -824,9 +822,7 @@ struct ContentView: View {
 
         case .aiAssistant:
             AIAssistantView(
-                allEmails: modelVM.allEmails,
-                filteredEmails: modelVM.filteredEmails,
-                selectedEmails: modelVM.filteredEmails.filter { selectedEmailIDs.contains($0.id) },
+                archiveScope: currentAIScope,
                 searchContext: modelVM.searchText,
                 onSelectEmail: { emailID in
                     selectedEmailIDs = [emailID]
@@ -2987,6 +2983,19 @@ struct ContentView: View {
         .adaptiveHeroBackground()
     }
 
+    /// Part D: the AI assistant consumes scope semantics (query + selected ids)
+    /// instead of corpus arrays. Maps the current legacy filter state onto the
+    /// bounded archive query (text + date bounds — the fields `EmailQuery`
+    /// resolves today).
+    private var currentAIScope: AIAssistantScope {
+        var query = EmailQuery.all
+        let text = modelVM.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !text.isEmpty { query.text = text }
+        if modelVM.startDate > .distantPast { query.afterDate = modelVM.startDate }
+        if modelVM.endDate < .distantFuture { query.beforeDate = modelVM.endDate }
+        return AIAssistantScope(filteredQuery: query, selectedIDs: Array(selectedEmailIDs))
+    }
+
     /// Loads bundled fictional sample emails so users can experience the app
     /// without needing an external archive. Tagged with `SampleData.sampleTag`
     /// so they can be filtered or removed later.
@@ -2995,7 +3004,6 @@ struct ContentView: View {
         viewModel.appendEmails(samples)
         modelVM.loadFromContentViewModel()
         EmailPersistence.save(emails: viewModel.parsedEmails, senderEmail: viewModel.senderEmail)
-        EmailSearchIndex.shared.buildAsync(from: viewModel.parsedEmails)
         NotificationCenter.default.post(name: .parsingFinished, object: nil)
     }
 
@@ -3974,7 +3982,6 @@ private func handleMultipleFiles(_ urls: [URL]) {
         guard !emails.isEmpty else { return }
         viewModel.restoreEmails(emails)
         modelVM.loadFromContentViewModel()
-        EmailSearchIndex.shared.buildAsync(from: emails)
         predictiveEngine.buildVectors(from: emails)
         SpotlightIndexer.shared.indexEmails(emails)
         #if canImport(FoundationModels)
@@ -4045,7 +4052,6 @@ private func handleMultipleFiles(_ urls: [URL]) {
                 modelVM.loadFromContentViewModel()
                 showSpinner = false
                 EmailPersistence.save(emails: viewModel.parsedEmails, senderEmail: viewModel.senderEmail)
-                EmailSearchIndex.shared.buildAsync(from: viewModel.parsedEmails)
                 predictiveEngine.buildVectors(from: viewModel.parsedEmails)
                 SpotlightIndexer.shared.indexAllFromArchive()   // bounded: streams from SQLite, no corpus
                 #if canImport(FoundationModels)
@@ -4084,9 +4090,6 @@ private func handleMultipleFiles(_ urls: [URL]) {
             guard !restorePreview.isEmpty else { return }
             viewModel.restoreEmails(restorePreview)
             modelVM.loadFromContentViewModel()
-            if !EmailSearchIndex.shared.loadFromDisk(emails: restorePreview) {
-                EmailSearchIndex.shared.buildAsync(from: restorePreview)
-            }
             predictiveEngine.buildVectors(from: restorePreview)
             AIAssistantView.invalidateNLPCache()
             AIAssistantView.invalidateNLPPrecomputation()

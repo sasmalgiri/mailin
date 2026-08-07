@@ -148,16 +148,9 @@ struct mailinApp: App {
                                 }
                             }
                         }
-                        // CRITICAL pressure only: drop the in-RAM
-                        // EmailSearchIndex. At a 100K-message archive this
-                        // dictionary set is typically 200–400 MB resident
-                        // — the single biggest reclaimable allocation.
-                        // The disk-persisted index files are untouched;
-                        // the next search rebuilds RAM state from them.
-                        MemoryPressureHandler.shared.register { level in
-                            guard level != .warning else { return }
-                            EmailSearchIndex.shared.dropInMemoryIndices()
-                        }
+                        // (Part F: the legacy in-RAM EmailSearchIndex is no
+                        // longer built in production, so its dedicated
+                        // memory-pressure drop hook was removed with it.)
                         await AppSelfAttestation.shared.compute()
 
                         // maxmailin v2 SwiftData layer: migrate any legacy JSON

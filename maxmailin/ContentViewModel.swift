@@ -117,8 +117,10 @@ class ContentViewModel: ObservableObject {
                 }
             } else if event.contains(.warning) {
                 Task { @MainActor in
-                    // On warning, clear search index caches but keep emails
-                    EmailSearchIndex.shared.clear()
+                    // On warning, release derived caches but keep emails.
+                    // (The legacy in-RAM EmailSearchIndex is no longer built,
+                    // so there is nothing index-related left to drop here.)
+                    self?.subjectList.removeAll()
                 }
             }
         }
@@ -127,19 +129,10 @@ class ContentViewModel: ObservableObject {
     }
 
     private func releaseNonEssentialCaches() {
-        // Clear search index cache and derived data
-        EmailSearchIndex.shared.clear()
-        // Keep parsedEmails in memory but release subject list cache
+        // Keep parsedEmails in memory but release subject list cache.
+        // (The legacy in-RAM EmailSearchIndex is no longer built — search runs
+        // through the SQLite FTS5 substrate, which holds no RAM corpus.)
         subjectList.removeAll()
-    }
-
-    // MARK: - Background Processing Queue
-
-    private func processInBackground(emails: [MBOXParser.RawEmail]) async {
-        // Build search index in background with utility priority
-        await Task.detached(priority: .utility) {
-            EmailSearchIndex.shared.build(from: emails)
-        }.value
     }
 
     // MARK: - Zip Import Support (sandbox-safe, no Process)
@@ -504,12 +497,8 @@ class ContentViewModel: ObservableObject {
         }
 
         NotificationCenter.default.post(name: .parsingFinished, object: nil)
-
-        // Build the bounded in-RAM search index over the preview in background
-        let emailsForIndexing = parsedEmails
-        Task {
-            await self.processInBackground(emails: emailsForIndexing)
-        }
+        // (Part F: the legacy in-RAM EmailSearchIndex is no longer built —
+        // the FTS5 index was already updated during persist.)
     }
 
     // MARK: - Thunderbird Auto-Import

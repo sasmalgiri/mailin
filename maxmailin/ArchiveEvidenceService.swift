@@ -52,6 +52,65 @@ final class ArchiveEvidenceService {
         return try await references(for: ordered)
     }
 
+    /// Chunk-level excerpting over an ALREADY-BOUNDED email set (typically a
+    /// retrieval result). Pure function of its input — replaces the legacy
+    /// `EmailSearchIndex.chunkSearch`, which lived on the in-RAM corpus index.
+    nonisolated static func chunkExcerpts(
+        terms: [String],
+        in emails: [MBOXParser.RawEmail],
+        maxChunksPerEmail: Int = 2,
+        limit: Int = 10,
+        preferredTypes: [ChunkType]? = nil
+    ) -> [(email: MBOXParser.RawEmail, chunk: String, chunkType: ChunkType, score: Double)] {
+        guard !terms.isEmpty else { return [] }
+        let lowerTerms = terms.map { $0.lowercased() }
+        var results: [(email: MBOXParser.RawEmail, chunk: String, chunkType: ChunkType, score: Double)] = []
+
+        for email in emails.prefix(200) {   // hard bound even if a caller regresses
+            guard !email.plainBody.isEmpty || !email.htmlBody.isEmpty else { continue }
+            let rawEmail = RawEmail(
+                headers: email.headers,
+                plainBody: email.plainBody.isEmpty ? nil : email.plainBody,
+                htmlBody: email.htmlBody.isEmpty ? nil : email.htmlBody,
+                attachments: nil
+            )
+            let typedChunks = EmailChunker.chunkEmail(rawEmail, emailIndex: 0, maxTokensPerChunk: 200)
+
+            var scored: [(chunk: String, chunkType: ChunkType, score: Double)] = []
+            for tc in typedChunks {
+                let lower = tc.bodyChunk.lowercased()
+                var score = 0.0
+                var hitCount = 0
+                for term in lowerTerms {
+                    var tf = 0
+                    var searchStart = lower.startIndex
+                    while let range = lower.range(of: term, range: searchStart..<lower.endIndex) {
+                        tf += 1
+                        searchStart = range.upperBound
+                        if tf >= 10 { break }
+                    }
+                    if tf > 0 {
+                        score += Double(tf)
+                        hitCount += 1
+                    }
+                }
+                if hitCount > 1 { score *= 1.0 + Double(hitCount - 1) * 0.5 }
+                if lower.contains("?") { score *= 1.15 }
+                if lower.range(of: #"\d"#, options: .regularExpression) != nil { score *= 1.1 }
+                let wordCount = tc.bodyChunk.split(separator: " ").count
+                if wordCount >= 15 && wordCount <= 200 { score *= 1.1 }
+                if let preferred = preferredTypes, preferred.contains(tc.chunkType) { score *= 2.0 }
+                if score > 0 { scored.append((tc.bodyChunk, tc.chunkType, score)) }
+            }
+
+            for (chunk, type, score) in scored.sorted(by: { $0.score > $1.score }).prefix(maxChunksPerEmail) {
+                results.append((email: email, chunk: chunk, chunkType: type, score: score))
+            }
+        }
+
+        return Array(results.sorted { $0.score > $1.score }.prefix(limit))
+    }
+
     private func references(for summaries: [EmailSummary]) async throws -> [EvidenceReference] {
         guard !summaries.isEmpty else { return [] }
         let emails = try await archive.fullEmails(ids: summaries.map(\.id))
