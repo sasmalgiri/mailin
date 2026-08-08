@@ -78,7 +78,7 @@ Legend: ☑ done · ⏭ v2.1 (explicit, honest product posture — see backlog)
 | P2 | Full suite ×2 recorded | ☑ | 139 tests: 138 pass/1 skip, twice |
 | P3 | Build matrix | ☑ macOS Debug+Release | iOS builds = owner smoke environment |
 | P4–P5 | Zero-stub + live-wiring audits | ☑ | 0 TODO/FIXME/fatalError/loadAll/parsedEmails/Int.max/PCC; try? remainder classified (backlog #9) |
-| P6 | Scale runs | ☑ 10K+100K production-path executed (flat RSS); 1M full-pipeline REFUSED by disk preflight (documented, command provided); prior 1M store-engine result stands |
+| P6 | Scale runs | ☑ 10K + 100K + 1,000,000 production-path EXECUTED (1M passed=YES, 582 MB peak RSS — V2_SCALE_RESULTS.md) |
 
 ## Docs (§67–§70)
 | X1–X4 | Status rewrite; matrices; backlog; owner checklist; completion record; PR | ☑ | this commit set |

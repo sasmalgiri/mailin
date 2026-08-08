@@ -121,7 +121,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// store fully at the previous version — never half-migrated, and a user
     /// DB is NEVER silently recreated. A store newer than this build refuses
     /// to open instead of guessing.
-    static let currentSchemaVersion = 4
+    static let currentSchemaVersion = 5
 
     private func migrateSchema(_ handle: OpaquePointer) throws {
         var v = try scalarInt(handle, "PRAGMA user_version;")
@@ -161,6 +161,18 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 try exec(handle, "PRAGMA user_version = 4;")
             }
             v = 4
+        }
+        if v == 4 {
+            try inExclusiveTransaction(handle) {
+                // v5: fidelity-backfill work list. Rows persisted by pre-v2
+                // builds carry message_type = '' (their structured metadata
+                // was never stored); FidelityBackfillJob re-extracts it from
+                // the raw MIME already in email_bodies. Partial index keeps
+                // the "anything left?" probe O(1) at any archive size.
+                try exec(handle, "CREATE INDEX IF NOT EXISTS idx_emails_fidelity_pending ON emails(id) WHERE message_type = '';")
+                try exec(handle, "PRAGMA user_version = 5;")
+            }
+            v = 5
         }
     }
 
@@ -1621,7 +1633,9 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 bindText(stmt, idx, key); idx += 1
                 bindText(stmt, idx, key); idx += 1
             default:
-                let intKey = Int64(key) ?? 0
+                guard let intKey = Int64(key) else {
+                    throw SQLiteStoreError.schema("unparseable sort cursor '\(key)' for \(query.sort.rawValue)")
+                }
                 sqlite3_bind_int64(stmt, idx, intKey); idx += 1
                 sqlite3_bind_int64(stmt, idx, intKey); idx += 1
             }
@@ -2170,6 +2184,156 @@ actor SQLiteEmailStore: EmailArchiveStore {
         )
     }
 
+    // MARK: - Fidelity backfill (legacy rows: message_type == '')
+
+    struct FidelityCandidate: Sendable {
+        let id: UUID
+        let raw: String
+    }
+
+    /// Legacy rows still awaiting fidelity extraction, with their raw MIME —
+    /// plus the ids whose raw source is missing (the CALLER marks those
+    /// 'unknown' so the outcome accounting sees them).
+    func fidelityBackfillCandidates(limit: Int) throws -> (candidates: [FidelityCandidate], rawless: [UUID]) {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT e.id, b.raw FROM emails e
+            LEFT JOIN email_bodies b ON b.id = e.id
+            WHERE e.message_type = '' LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        var out: [FidelityCandidate] = []
+        var unrecoverable: [UUID] = []
+        // M2: pages are bounded by BYTES as well as rows — raw MIME with
+        // base64 attachments can run tens of MB per message.
+        let maxPageBytes = 32 * 1024 * 1024
+        var pageBytes = 0
+        while try stepRow(stmt, db) {
+            guard let id = columnUUID(stmt, 0) else { continue }
+            if let raw = columnBlobString(stmt, 1), !raw.isEmpty {
+                out.append(FidelityCandidate(id: id, raw: raw))
+                pageBytes += raw.utf8.count
+                if pageBytes >= maxPageBytes { break }
+            } else {
+                unrecoverable.append(id)
+            }
+        }
+        return (out, unrecoverable)
+    }
+
+    func fidelityPendingCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM emails WHERE message_type = '';")
+    }
+
+    /// Rows that cannot be re-extracted (no raw source) exit the work list
+    /// honestly — "unknown", never a fabricated classification.
+    func markFidelityUnknown(ids: [UUID]) throws {
+        guard !ids.isEmpty else { return }
+        let db = try ensureDB()
+        for chunk in ids.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, "UPDATE emails SET message_type = 'unknown' WHERE id IN (\(placeholders));")
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        }
+    }
+
+    /// Apply re-extracted fidelity for one legacy row, in one transaction:
+    /// message type + attachment flags on the email row, plus the normalized
+    /// attachments/tags/domains side tables (§3 parity for old imports).
+    func applyFidelity(id: UUID, from email: MBOXParser.RawEmail) throws {
+        let db = try ensureDB()
+        try exec(db, "BEGIN TRANSACTION;")
+        do {
+            let idStr = id.uuidString
+            let update = try prepare(db, """
+                UPDATE emails SET message_type = ?, has_attach = ?, attachment_count = ?
+                WHERE id = ?;
+            """)
+            defer { sqlite3_finalize(update) }
+            bindText(update, 1, email.messageType.isEmpty ? "unknown" : email.messageType)
+            sqlite3_bind_int(update, 2, email.attachments.isEmpty ? 0 : 1)
+            sqlite3_bind_int64(update, 3, Int64(email.attachments.count))
+            bindText(update, 4, idStr)
+            guard sqlite3_step(update) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+
+            let clearAtt = try prepare(db, "DELETE FROM attachments WHERE email_id = ?;")
+            defer { sqlite3_finalize(clearAtt) }
+            bindText(clearAtt, 1, idStr)
+            guard sqlite3_step(clearAtt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            let insertAtt = try prepare(db, """
+                INSERT INTO attachments(email_id, position, filename, mime_type, size_bytes, content_id, is_inline)
+                VALUES (?,?,?,?,?,?,?);
+            """)
+            defer { sqlite3_finalize(insertAtt) }
+            for (pos, att) in email.attachments.enumerated() {
+                sqlite3_reset(insertAtt); sqlite3_clear_bindings(insertAtt)
+                bindText(insertAtt, 1, idStr)
+                sqlite3_bind_int64(insertAtt, 2, Int64(pos))
+                bindText(insertAtt, 3, att.filename)
+                bindText(insertAtt, 4, att.mimeType)
+                sqlite3_bind_int64(insertAtt, 5, Int64(att.size))
+                bindTextOrNull(insertAtt, 6, att.contentID)
+                sqlite3_bind_int(insertAtt, 7, att.isInline ? 1 : 0)
+                guard sqlite3_step(insertAtt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+
+            let insertTag = try prepare(db, "INSERT OR IGNORE INTO email_tags(email_id, tag) VALUES (?,?);")
+            defer { sqlite3_finalize(insertTag) }
+            for tag in email.tags where !tag.isEmpty {
+                sqlite3_reset(insertTag); sqlite3_clear_bindings(insertTag)
+                bindText(insertTag, 1, idStr); bindText(insertTag, 2, tag)
+                guard sqlite3_step(insertTag) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            let insertDomain = try prepare(db, "INSERT OR IGNORE INTO email_domains(email_id, domain) VALUES (?,?);")
+            defer { sqlite3_finalize(insertDomain) }
+            for domain in email.domains where !domain.isEmpty {
+                sqlite3_reset(insertDomain); sqlite3_clear_bindings(insertDomain)
+                bindText(insertDomain, 1, idStr); bindText(insertDomain, 2, domain)
+                guard sqlite3_step(insertDomain) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            // Participants too — sender auto-detect and recipient filters
+            // depend on them (legacy rows never had these).
+            let clearPart = try prepare(db, "DELETE FROM email_participants WHERE email_id = ?;")
+            defer { sqlite3_finalize(clearPart) }
+            bindText(clearPart, 1, idStr)
+            guard sqlite3_step(clearPart) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            let insertPart = try prepare(db, """
+                INSERT INTO email_participants(email_id, role, address, display_name, normalized_address)
+                VALUES (?,?,?,?,?);
+            """)
+            defer { sqlite3_finalize(insertPart) }
+            for (role, header) in [("FROM", "From"), ("TO", "To"), ("CC", "Cc"), ("BCC", "Bcc")] {
+                guard let raw = email.headers[header], !raw.isEmpty else { continue }
+                for participant in Self.parseAddressList(raw) {
+                    sqlite3_reset(insertPart); sqlite3_clear_bindings(insertPart)
+                    bindText(insertPart, 1, idStr)
+                    bindText(insertPart, 2, role)
+                    bindText(insertPart, 3, participant.address)
+                    bindTextOrNull(insertPart, 4, participant.display)
+                    bindText(insertPart, 5, participant.address.lowercased())
+                    guard sqlite3_step(insertPart) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+                }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    #if DEBUG
+    /// Test fixture: strip the structured fidelity fields so rows look like
+    /// they were persisted by a pre-full-fidelity build.
+    func simulateLegacyRowsForTesting() throws {
+        let db = try ensureDB()
+        try exec(db, "UPDATE emails SET message_type = '', has_attach = 0, attachment_count = 0;")
+        try exec(db, "DELETE FROM attachments;")
+        try exec(db, "DELETE FROM email_tags;")
+        try exec(db, "DELETE FROM email_domains;")
+    }
+    #endif
+
     // MARK: - Forensic state (§21)
 
     struct ForensicEmailHashRow: Sendable, Equatable {
@@ -2489,6 +2653,61 @@ actor SQLiteEmailStore: EmailArchiveStore {
         for table in ["forensic_email_hashes", "forensic_evidence_tags", "forensic_annotations",
                       "forensic_source_hashes", "forensic_audit_log"] {
             try exec(db, "DELETE FROM \(table);")
+        }
+    }
+
+    /// v1-parity auto-detect: the archive owner's address. Primary heuristic:
+    /// the normalized participant present in the most emails (the owner is on
+    /// nearly every message — From when sent, To/Cc when received). Fallback
+    /// (participants empty, e.g. pre-backfill): v1's exact heuristic — the
+    /// most common raw From header.
+    func detectOwnerAddress() throws -> String? {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT normalized_address, COUNT(DISTINCT email_id) AS c
+            FROM email_participants
+            WHERE normalized_address LIKE '%@%'
+            GROUP BY normalized_address ORDER BY c DESC LIMIT 1;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        if try stepRow(stmt, db) {
+            let addr = columnText(stmt, 0)
+            if !addr.isEmpty { return addr }
+        }
+        return try topGrouped(.fromAddr, limit: 1).first?.value
+    }
+
+    /// M1: sent/received is derivable from from_addr in pure SQL — when the
+    /// user's address changes, every already-classified row reclassifies in
+    /// one statement (no re-parse). Rows still pending ('') are untouched;
+    /// the backfill classifies them with the new address.
+    func reclassifyMessageTypes(senderEmail: String) throws {
+        let needle = senderEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return }
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            UPDATE emails SET message_type =
+                CASE WHEN instr(lower(from_addr), lower(?)) > 0 THEN 'sent' ELSE 'received' END
+            WHERE message_type IN ('sent', 'received', 'unknown');
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, needle)
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+    }
+
+    /// M6: per-email forensic rows for EXACTLY the given ids (used when a
+    /// clear preserves legal-hold rows — their forensic state must survive).
+    func forensicPerEmailDelete(ids: [UUID]) throws {
+        guard !ids.isEmpty else { return }
+        let db = try ensureDB()
+        for chunk in ids.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            for table in ["forensic_email_hashes", "forensic_evidence_tags", "forensic_annotations"] {
+                let stmt = try prepare(db, "DELETE FROM \(table) WHERE email_id IN (\(placeholders));")
+                defer { sqlite3_finalize(stmt) }
+                for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
         }
     }
 

@@ -3635,3 +3635,115 @@ final class V2DerivedJobControlTests: XCTestCase {
         XCTAssertLessThan(runner.processed, 40, "run stopped before completing all batches")
     }
 }
+
+// MARK: - Fidelity backfill: legacy rows regain type/attachments/labels/domains
+
+@MainActor
+final class V2FidelityBackfillTests: XCTestCase {
+
+    private func tempRoot() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-backfill-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    /// Raw RFC-822 with a Gmail label, an attachment and a From matching the
+    /// sender — everything the legacy build failed to persist structurally.
+    private func rawMessage(i: Int, from: String) -> String {
+        """
+        From \(from) Wed Jan 15 10:00:0\(i % 10) 2025
+        From: \(from)
+        To: recipient@dest.org
+        Subject: Backfill fixture \(i)
+        Date: Wed, 15 Jan 2025 10:00:00 +0000
+        Message-ID: <bf-\(i)@t>
+        X-Gmail-Labels: Legacy-Label
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="BOUND"
+
+        --BOUND
+        Content-Type: text/plain
+
+        body \(i)
+        --BOUND
+        Content-Type: application/pdf; name="doc\(i).pdf"
+        Content-Disposition: attachment; filename="doc\(i).pdf"
+        Content-Transfer-Encoding: base64
+
+        JVBERi0xLjQ=
+        --BOUND--
+        """
+    }
+
+    func testBackfill_repairsLegacyRows_andIsIdempotent() async throws {
+        let root = tempRoot()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            FidelityBackfillJob.testStoreOverride = nil
+        }
+        let store = SQLiteEmailStore(directory: root)
+        FidelityBackfillJob.testStoreOverride = store
+
+        // Import normally (full fidelity), then STRIP the structured fields
+        // to simulate rows persisted by a pre-fidelity build.
+        var emails: [MBOXParser.RawEmail] = []
+        for i in 0..<25 {
+            let raw = rawMessage(i: i, from: i % 5 == 0 ? "me@self.com" : "other@ext.net")
+            emails.append(try MBOXParser.processRawMessage(raw, senderEmail: "me@self.com"))
+        }
+        _ = try await store.insertBatch(emails, sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 100, progress: nil)
+        try await store.simulateLegacyRowsForTesting()
+        let pendingBefore = try await store.fidelityPendingCount()
+        XCTAssertEqual(pendingBefore, 25, "fixture: all rows look legacy")
+        let folderProbe = try await store.filteredCount({ var q = EmailQuery(); q.messageType = "sent"; return q }())
+        XCTAssertEqual(folderProbe, 0, "legacy rows have no type → folders empty (the reported bug)")
+
+        // Run the backfill.
+        let outcome = await FidelityBackfillJob.shared.run(senderEmail: "me@self.com", batchSize: 10)
+        XCTAssertEqual(outcome.repaired, 25)
+        XCTAssertEqual(outcome.failed, 0)
+
+        // Type / labels / attachments / domains restored — queryable again.
+        let pendingAfter = try await store.fidelityPendingCount()
+        XCTAssertEqual(pendingAfter, 0)
+        var sentQ = EmailQuery(); sentQ.messageType = "sent"
+        let sent = try await store.filteredCount(sentQ)
+        XCTAssertEqual(sent, 5, "sent/received reclassified from raw MIME")
+        var tagQ = EmailQuery(); tagQ.userTag = nil; tagQ.hasAttachments = true
+        let withAttach = try await store.filteredCount(tagQ)
+        XCTAssertEqual(withAttach, 25, "attachment flags restored")
+        let hydrated = try await store.fullEmail(id: emails[0].id)
+        let first = try XCTUnwrap(hydrated)
+        XCTAssertEqual(first.tags, ["Legacy-Label"], "Gmail labels restored")
+        XCTAssertEqual(first.attachments.count, 1, "attachment metadata restored")
+        XCTAssertEqual(first.attachments.first?.filename, "doc0.pdf")
+        XCTAssertFalse(first.domains.isEmpty, "domains restored")
+
+        // Idempotent: a second run finds nothing.
+        let again = await FidelityBackfillJob.shared.run(senderEmail: "me@self.com")
+        XCTAssertEqual(again, FidelityBackfillJob.Outcome())
+    }
+
+    func testBackfill_marksRawlessRowsUnknown_neverLoops() async throws {
+        let root = tempRoot()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            FidelityBackfillJob.testStoreOverride = nil
+        }
+        let store = SQLiteEmailStore(directory: root)
+        FidelityBackfillJob.testStoreOverride = store
+        let email = MBOXParser.RawEmail(
+            headers: ["Message-ID": "<norawbf@t>", "Subject": "S", "From": "a@b.com",
+                      "To": "c@d.com", "Date": "Wed, 15 Jan 2025 10:00:00 +0000"],
+            rawSource: "", messageType: "received", attachments: [],
+            timestamp: "2025-01-15T10:00:00Z", domains: [], plainBody: "b", htmlBody: "")
+        _ = try await store.insertBatch([email], sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        try await store.simulateLegacyRowsForTesting()
+
+        let outcome = await FidelityBackfillJob.shared.run(senderEmail: "")
+        XCTAssertEqual(outcome.unrecoverable, 1, "raw-less row exits the work list as 'unknown'")
+        let pending = try await store.fidelityPendingCount()
+        XCTAssertEqual(pending, 0, "work list converges — no forever-loop")
+    }
+}

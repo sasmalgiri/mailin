@@ -59,7 +59,7 @@ final class ArchiveLifecycleService {
     /// `respectLegalHolds` is false. Throws on storage failure — the caller
     /// must NOT pretend the archive is empty when it is not.
     @discardableResult
-    func clearArchive(respectLegalHolds: Bool = true) async throws -> ClearOutcome {
+    func clearArchive(respectLegalHolds: Bool = true, auditTheClear: Bool = true) async throws -> ClearOutcome {
         var outcome = ClearOutcome()
 
         // 1. Which rows survive (bounded user-curated set).
@@ -73,9 +73,11 @@ final class ArchiveLifecycleService {
         let totalBefore = try await store.totalCount()
 
         if held.isEmpty {
-            // Fast path: whole-store clear + whole-index clear.
-            try await store.clearAll()
+            // Fast path. FTS FIRST (mirrors the repository's delete order):
+            // a crash between the two leaves store rows the reconciler can
+            // re-index — never ghost FTS rows over an empty store.
             try await fts.clear()
+            try await store.clearAll()
             outcome.deleted = totalBefore
         } else {
             // Paged deletes; (date,id) keyset is delete-stable.
@@ -88,6 +90,9 @@ final class ArchiveLifecycleService {
                 if !deletable.isEmpty {
                     for id in deletable { try await fts.delete(id: id) }
                     try await store.delete(ids: Set(deletable))
+                    // M6: the deleted rows' forensic state goes with them;
+                    // held rows keep theirs.
+                    try await store.forensicPerEmailDelete(ids: deletable)
                     outcome.deleted += deletable.count
                 }
                 guard let last = page.last else { break }
@@ -102,6 +107,12 @@ final class ArchiveLifecycleService {
         if held.isEmpty {
             do { try await clearPerEmailForensicState() }
             catch { outcome.warnings.append("Forensic per-email state could not be fully cleared: \(error.localizedDescription)") }
+        } else {
+            // Held path already deleted per-row forensic state above; reset
+            // the in-memory caches so stale entries don't linger.
+            let fm = ForensicManager.shared
+            fm.perEmailHashes = [:]
+            await fm.bootstrapFromStore()
         }
 
         // 3. Spotlight.
@@ -119,11 +130,15 @@ final class ArchiveLifecycleService {
         catch { outcome.warnings.append("Legacy SwiftData store could not be cleared: \(error.localizedDescription)") }
         UserDefaults.standard.set(true, forKey: Self.migrationTombstoneKey)
 
-        // 6. Record the clear in the audit chain (kept as evidence).
-        ForensicManager.shared.logAction(
-            "Archive Cleared",
-            detail: "\(outcome.deleted) email(s) removed; \(outcome.heldKept) preserved under legal hold"
-        )
+        // 6. Record the clear in the audit chain (kept as evidence) — skipped
+        //    during erase-all, whose next step destroys the chain (an append
+        //    racing that destruction would orphan a row and read as tamper).
+        if auditTheClear {
+            ForensicManager.shared.logAction(
+                "Archive Cleared",
+                detail: "\(outcome.deleted) email(s) removed; \(outcome.heldKept) preserved under legal hold"
+            )
+        }
         Self.logger.info("archive cleared: \(outcome.deleted) removed, \(outcome.heldKept) held")
         return outcome
     }
@@ -148,14 +163,21 @@ final class ArchiveLifecycleService {
     func eraseAllData() async -> ClearOutcome {
         var outcome = ClearOutcome()
         do {
-            outcome = try await clearArchive(respectLegalHolds: false)
+            outcome = try await clearArchive(respectLegalHolds: false, auditTheClear: false)
         } catch {
             outcome.warnings.append("Archive clear failed during erase: \(error.localizedDescription)")
         }
         do { try await store.forensicClearAll() }
         catch { outcome.warnings.append("Forensic history could not be erased: \(error.localizedDescription)") }
+        // H3: the review JSON is normally KEPT as migration rollback evidence —
+        // an erase-all must destroy it, or the wiped 'migrated' flag would
+        // re-import the user's pins/tags/annotations on next launch.
+        try? FileManager.default.removeItem(at: ReviewStateService.legacyJSONURL)
         // Receipts, legacy JSON remnants, preferences, keychain, temp files.
+        // NOTE: this wipes the whole defaults domain — including the §11.3
+        // tombstone and migration flags — so they are re-stamped below.
         LegalComplianceManager.shared.deleteAllUserData()
+        UserDefaults.standard.set(true, forKey: Self.migrationTombstoneKey)
         return outcome
     }
 }

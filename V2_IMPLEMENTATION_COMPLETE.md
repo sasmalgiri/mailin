@@ -13,10 +13,9 @@ Legacy production archive fallback            0  (startup corpus load gone; tomb
 Unwired v2 production capability              0  (V2_UI_PARITY_MATRIX)
 Required automated tests                      PASS (139: 138 pass + 1 env-gated, ×2 runs)
 Required build matrix                         PASS (macOS Debug + Release)
-Production-path qualification                 PASS 10K/100K executed, flat RSS;
-                                              1M full-pipeline disk-preflight-refused
-                                              (honest §54.1 refusal; command documented;
-                                              prior 1M store-engine result stands)
+Production-path qualification                 PASS 10K / 100K / 1,000,000 EXECUTED
+                                              (1M: passed=YES, 582 MB peak RSS,
+                                              4.7 GB archive — V2_SCALE_RESULTS.md)
 Trust/security qualification                  PASS (offline Release, S/MIME fixtures,
                                               HMAC receipts+audit chain, file protection,
                                               claim audit)
@@ -67,10 +66,8 @@ PST ≤ 50 GB / NSF ≤ 64 GB documented ceilings (V2_FORMAT_MATRIX.md).
 1. Manual macOS UI smoke
 2. Manual iPhone/iPad smoke (incl. iOS build in your signing environment)
 3. Real public-v1 → v2 device migration + interrupted resume
-4. 1M full-pipeline stress run after freeing ≥ 8 GB disk (command in
-   V2_SCALE_RESULTS.md)
-5. Confirm App Store Connect products/pricing
-6. Approve final screenshots/metadata
-7. Submit / Apple review
+4. Confirm App Store Connect products/pricing
+5. Approve final screenshots/metadata
+6. Submit / Apple review
 
 **MAILIN 2.0 — ENGINEERING COMPLETE**

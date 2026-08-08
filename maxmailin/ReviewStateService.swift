@@ -39,8 +39,13 @@ final class ReviewStateService: ObservableObject {
     /// The most recent persistence failure, for UI surfacing (§5.5).
     @Published private(set) var lastError: String?
 
-    /// Monotonic token so overlapping hydrations can't clobber a newer window.
+    /// Monotonic token so overlapping hydrations can't clobber a newer window
+    /// — and so a MUTATION invalidates any hydration snapshot taken before it
+    /// (otherwise a slow hydrate could visually revert an optimistic toggle).
     private var hydrationToken = 0
+    /// M4b: persists are chained so rapid toggles land in UI order — two
+    /// independent Tasks have no ordering guarantee.
+    private var persistChain: Task<Void, Never>?
 
     init() {}
 
@@ -79,6 +84,7 @@ final class ReviewStateService: ObservableObject {
     // MARK: - Flag mutations (optimistic window + durable write-through)
 
     func setFlag(_ flag: SQLiteEmailStore.ReviewFlag, ids: [UUID], value: Bool) {
+        hydrationToken += 1   // M4a: invalidate any pre-mutation snapshot
         for id in ids {
             var row = windowStates[id] ?? .init()
             switch flag {
@@ -105,9 +111,12 @@ final class ReviewStateService: ObservableObject {
     /// Permanent, explicit destruction: store row + FTS entry. Throws — the
     /// caller must confirm and must surface failures.
     func permanentlyDelete(_ ids: [UUID]) async throws {
+        // M5: FTS FIRST — a failure here leaves the canonical row for the
+        // launch reconciler to re-index; store-first would leave permanent
+        // ghost FTS rows the reconciler never repairs.
+        for id in ids { try await FTSSearchIndex.shared.delete(id: id) }
         try await store.delete(ids: Set(ids))
         for id in ids {
-            try await FTSSearchIndex.shared.delete(id: id)
             windowStates[id] = nil
             windowTags[id] = nil
             windowAnnotations[id] = nil
@@ -128,28 +137,34 @@ final class ReviewStateService: ObservableObject {
     func addTag(_ tag: String, to ids: [UUID]) {
         let cleaned = tag.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { return }
+        hydrationToken += 1
         for id in ids { windowTags[id, default: []].insert(cleaned) }
         if !knownTags.contains(cleaned) { knownTags = (knownTags + [cleaned]).sorted() }
         persist("tag add") { [store] in try await store.userTagAdd(cleaned, ids: ids) }
     }
 
     func removeTag(_ tag: String, from ids: [UUID]) {
+        hydrationToken += 1
         for id in ids { windowTags[id]?.remove(tag) }
         persist("tag remove") { [store] in try await store.userTagRemove(tag, ids: ids) }
     }
 
     func clearAllTags(for ids: [UUID]) {
+        hydrationToken += 1
         for id in ids { windowTags[id] = nil }
         persist("tag clear") { [store] in try await store.userTagsClear(ids: ids) }
     }
 
     func setAnnotation(_ text: String, for id: UUID) {
+        hydrationToken += 1
         if text.isEmpty { windowAnnotations[id] = nil } else { windowAnnotations[id] = text }
         persist("annotation") { [store] in try await store.annotationSet(text.isEmpty ? nil : text, id: id) }
     }
 
     private func persist(_ what: String, _ body: @escaping @Sendable () async throws -> Void) {
-        Task { @MainActor in
+        let previous = persistChain
+        persistChain = Task { @MainActor in
+            await previous?.value   // M4b: writes land in UI order
             do { try await body(); if lastError != nil { lastError = nil } }
             catch {
                 Self.logger.fault("review-state write failed (\(what, privacy: .public)): \(error.localizedDescription, privacy: .public)")
@@ -209,7 +224,9 @@ final class ReviewStateService: ObservableObject {
             // Verify before marking complete: the tables must hold at least as
             // many rows as the JSON contributed.
             let distinctFlagged = Set(pinned + read + trashed + archived).count
-            let expectedTags = tags.values.reduce(0) { $0 + $1.count }
+            // M8: the bulk import skips empty tags — counting them here would
+            // make verification unpassable and re-run (re-clobber) forever.
+            let expectedTags = tags.values.reduce(0) { $0 + $1.filter { !$0.isEmpty }.count }
             let totals = try await store.reviewTotals()
             guard totals.states >= distinctFlagged,
                   totals.tags >= expectedTags,

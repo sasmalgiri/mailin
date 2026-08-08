@@ -98,6 +98,15 @@ struct FolderTreeView: View {
             workingSet = await ArchiveDataService.shared.workingSet(query: .all)
             isLoaded = true
         }
+        // The fidelity backfill repairs legacy rows' message type / labels /
+        // attachments after launch — reload the buckets when it lands so
+        // Inbox/Sent/Labels appear without an app restart.
+        .onReceive(NotificationCenter.default.publisher(for: .fidelityBackfillCompleted)) { _ in
+            Task { @MainActor in
+                archiveTotal = (try? await ArchiveDataService.shared.count()) ?? 0
+                workingSet = await ArchiveDataService.shared.workingSet(query: .all)
+            }
+        }
     }
 
     private func flattenTree(_ nodes: [FolderNode], depth: Int = 0) -> [FlatRow] {

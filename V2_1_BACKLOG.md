@@ -36,3 +36,17 @@ correctness defect in v2.0.
    CSV/JSON/EML/report exports in AIAssistantView now surface write
    failures (toast/alert, partial-failure counts). Remaining `try?` sites
    are internal caches (conversation cache, metrics) — non-authoritative.
+
+## Review follow-ups (2026-08-08 adversarial pass — all HIGH/MED items fixed; these lows remain)
+
+10. **Keyset-page the OFFSET listings** — `reviewIDs`/`idsWithUserTag`/
+    `forensicTagsPage` use LIMIT/OFFSET; concurrent restore/delete between
+    pages can skip/repeat rows in the Trash listing.
+11. **Trim forensic tag/annotation window caches** — `prefetchForensicWindow`
+    trims only the hash cache; tags/annotations grow for the session in
+    heavily-tagged archives (bounded by human tagging volume).
+12. **Incremental backfill notifications** — one `.fidelityBackfillCompleted`
+    per run; long repairs could refresh the folder tree every N pages.
+13. **Spotlight held-row re-index after clear-with-holds** — the canonical
+    clear de-indexes everything including kept legal-hold rows (they reindex
+    on next launch pass).

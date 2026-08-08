@@ -1953,8 +1953,10 @@ struct ContentView: View {
                     }
                     .help("Only show senders you've replied to at least this many times")
 
-                    summarySection
-                        .padding(.bottom, Spacing.xxSmall)
+                    if personaManager.showSection(.summary) || personaManager.showSection(.dateRange) {
+                        summarySection
+                            .padding(.bottom, Spacing.xxSmall)
+                    }
                 }
             }
             .padding(.horizontal, Spacing.small)
@@ -2460,7 +2462,7 @@ struct ContentView: View {
 
     private var summarySection: some View {
         VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
-            if viewModel.duplicatesRemoved > 0 {
+            if viewModel.duplicatesRemoved > 0 && personaManager.showSection(.summary) {
                 Button {
                     showRemovedDuplicates = true
                 } label: {
@@ -2512,18 +2514,20 @@ struct ContentView: View {
                         .padding(Spacing.xxSmall)
                 }
             }
-            HStack(spacing: Spacing.xSmall) {
-                DatePicker("", selection: $modelVM.startDate, displayedComponents: .date)
-                    .labelsHidden()
-                    .frame(maxWidth: 120)
-                    .accessibilityLabel("Start date filter")
-                    .onChange(of: modelVM.startDate) { _, _ in modelVM.dateBoundsChanged() }
-                DatePicker("", selection: $modelVM.endDate, displayedComponents: .date)
-                    .labelsHidden()
-                    .frame(maxWidth: 120)
-                    .accessibilityLabel("End date filter")
-                    .onChange(of: modelVM.endDate) { _, _ in modelVM.dateBoundsChanged() }
-                Spacer()
+            if personaManager.showSection(.dateRange) {
+                HStack(spacing: Spacing.xSmall) {
+                    DatePicker("", selection: $modelVM.startDate, displayedComponents: .date)
+                        .labelsHidden()
+                        .frame(maxWidth: 120)
+                        .accessibilityLabel("Start date filter")
+                        .onChange(of: modelVM.startDate) { _, _ in modelVM.dateBoundsChanged() }
+                    DatePicker("", selection: $modelVM.endDate, displayedComponents: .date)
+                        .labelsHidden()
+                        .frame(maxWidth: 120)
+                        .accessibilityLabel("End date filter")
+                        .onChange(of: modelVM.endDate) { _, _ in modelVM.dateBoundsChanged() }
+                    Spacer()
+                }
             }
         }
     }

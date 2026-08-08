@@ -926,8 +926,34 @@ struct ParsedEmailListView: View {
         activeFilterTags.remove(key)
     }
 
+    /// Persona-recommended chips (PersonaManager.config.showQuickFilters),
+    /// mapped to chip keys. Shown as a promoted section — every other filter
+    /// stays reachable in its category below, so tailoring never hides
+    /// capability.
+    private var personaRecommendedChips: [FilterChipInfo] {
+        let mapping: [PersonaManager.QuickFilter: String] = [
+            .sent: "sent", .received: "received", .attachments: "attachments",
+            .cleanup: "cleanup", .flagged: "flagged", .privileged: "privileged",
+            .unreviewed: "unreviewed", .highPriority: "highPriority",
+            .hasLinks: "hasLinks", .largeEmails: "largeEmails",
+            .aiImportant: "important", .aiSuspicious: "aiSuspicious",
+            .aiNegative: "negative", .aiNewsletter: "newsletter"
+        ]
+        let keys = PersonaManager.shared.config.showQuickFilters.compactMap { mapping[$0] }
+        return keys.compactMap { key in Self.allFilterChips.first { $0.key == key } }
+    }
+
     private var addFilterMenu: some View {
         Menu {
+            let recommended = personaRecommendedChips
+            if !recommended.isEmpty {
+                Section("For \(PersonaManager.shared.selectedPersona.displayName)") {
+                    ForEach(recommended) { chip in
+                        filterChipButton(chip)
+                    }
+                }
+            }
+
             let sections = Dictionary(grouping: Self.allFilterChips, by: \.section)
             let basicSections = ["Type"]
             let aiSections = ["Category", "Sentiment", "Priority", "Security"]
@@ -2119,7 +2145,6 @@ struct ParsedEmailListView: View {
                         .padding(.vertical, 1)
                         .background(tag.color.opacity(0.12))
                         .cornerRadius(3)
-                        .help(Text(verbatim: "Evidence: \(tag.rawValue)"))
                 } else {
                     Image(systemName: "tag")
                         .font(.system(size: 9))
@@ -2953,7 +2978,6 @@ struct EmailRowView: View {
                         .padding(.vertical, 1)
                         .background((riskScore >= 75 ? Color.red : riskScore >= 55 ? Color.orange : Color.yellow).opacity(0.1))
                         .cornerRadius(3)
-                        .help(Text(verbatim: "Risk score: \(riskScore)/100"))
                     }
                     Spacer()
                     Text(parseDate(email.headers["Date"]))
@@ -3225,9 +3249,7 @@ struct AttachmentsPopoverButton: View {
             .padding(Spacing.small)
             .frame(width: 280)
         }
-        #if os(macOS)
-        .help(Text(verbatim: "\(attachments.count) attachment(s)"))
-        #else
+        #if !os(macOS)
         .sheet(isPresented: $showShare) {
             if let url = shareURL {
                 ShareSheet(items: [url])
@@ -3460,6 +3482,10 @@ struct ReplyStatsView: View {
     let senderEmail: String
     @State private var replyData: [String: Int] = [:]
     @State private var isLoading = true
+    /// v1 parity: when no sender address is set, the archive owner is
+    /// auto-detected (v1's annotate() did the same with most-common-From),
+    /// so the stats populate without any manual setup.
+    @State private var resolvedSender: String = ""
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -3495,10 +3521,17 @@ struct ReplyStatsView: View {
                 }
                 .frame(maxWidth: .infinity)
             } else if replyData.isEmpty {
+                // Say WHY it's empty: reply stats count recipients of emails
+                // sent FROM the user's address — different from the sidebar's
+                // per-sender counts, and impossible without a sender address.
                 EmptyStateView(
                     icon: "chart.bar",
-                    title: "No reply data yet",
-                    message: "Reply frequency data will appear once mailin finds sent emails in your archive. Make sure your email address is set correctly in the sidebar."
+                    title: resolvedSender.isEmpty
+                        ? "Couldn't detect your email address"
+                        : "No sent emails found",
+                    message: resolvedSender.isEmpty
+                        ? "Reply statistics count the emails YOU sent to each recipient. mailin couldn't detect your address in this archive \u{2014} enter it in the sidebar's sender field (or Settings \u{25B8} Default Sender)."
+                        : "No emails sent from \(resolvedSender) exist in this archive, so there are no reply statistics. (The sidebar's Reply Frequency list is different \u{2014} it counts emails per sender across the whole archive.)"
                 )
             } else {
                 let sorted = replyData.sorted { $0.value > $1.value }
@@ -3539,7 +3572,15 @@ struct ReplyStatsView: View {
         }
         .padding(Spacing.medium)
         .task {
-            replyData = (try? await ArchiveAggregateService.shared.replyRecipientCounts(senderEmail: senderEmail)) ?? [:]
+            var sender = senderEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+            if sender.isEmpty {
+                sender = (try? await SQLiteEmailStore.shared.detectOwnerAddress()) ?? ""
+                if !sender.isEmpty {
+                    UserDefaults.standard.set(sender, forKey: "defaultSenderEmail")
+                }
+            }
+            resolvedSender = sender
+            replyData = (try? await ArchiveAggregateService.shared.replyRecipientCounts(senderEmail: sender)) ?? [:]
             isLoading = false
         }
     }

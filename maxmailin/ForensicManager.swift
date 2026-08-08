@@ -43,6 +43,11 @@ class ForensicManager: ObservableObject {
     /// Chain cursor for O(1) appends without holding the whole log.
     private var auditSequence = 0
     private var lastAuditHash = "GENESIS"
+    /// H2: appends are queued until the durable chain cursor is loaded —
+    /// otherwise an early logAction would collide with existing seq numbers
+    /// (PRIMARY KEY violation → false 'tampered') or fork the chain.
+    private var chainReady = false
+    private var pendingActions: [(action: String, detail: String)] = []
 
     private static let hmacKeychainKey = "forensicHMACKey"
 
@@ -258,6 +263,8 @@ class ForensicManager: ObservableObject {
                 auditSequence = 0
                 lastAuditHash = "GENESIS"
             }
+            chainReady = true
+            drainPendingActions()
             // Bounded tag/annotation hydration (display cache; SQL is exact).
             var tagOffset = 0
             evidenceTags = [:]; tagTimestamps = [:]
@@ -286,7 +293,19 @@ class ForensicManager: ObservableObject {
             }
         } catch {
             forensicLog.error("forensic bootstrap failed: \(error.localizedDescription, privacy: .public)")
+            // Chain cursor unknown — surface, and unblock queued appends
+            // against the (possibly empty) durable log rather than dropping
+            // them; a residual seq collision throws loudly per-append.
+            integrityStatus = .tampered(details: "Audit chain could not be loaded: \(error.localizedDescription)")
+            chainReady = true
+            drainPendingActions()
         }
+    }
+
+    private func drainPendingActions() {
+        let queued = pendingActions
+        pendingActions = []
+        for entry in queued { logAction(entry.action, detail: entry.detail) }
     }
 
     /// §21: hydrate the visible window's forensic state (hashes, tags,
@@ -416,6 +435,12 @@ class ForensicManager: ObservableObject {
 
     func logAction(_ action: String, detail: String) {
         guard isEnabled else { return }
+        guard chainReady else {
+            // Queued, not dropped: drained by bootstrapFromStore once the
+            // durable (sequence, lastHash) cursor is known.
+            pendingActions.append((action, detail))
+            return
+        }
         let sequence = auditSequence
         let previousHash = lastAuditHash
         let examiner = examinerName.isEmpty ? "Unknown" : examinerName
@@ -1320,6 +1345,8 @@ class ForensicManager: ObservableObject {
         auditTotalCount = 0
         auditSequence = 0
         lastAuditHash = "GENESIS"
+        chainReady = true          // a cleared chain restarts at GENESIS
+        pendingActions = []
         sourceFileHashes = []
         evidenceTags = [:]
         tagTimestamps = [:]

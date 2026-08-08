@@ -173,6 +173,17 @@ struct mailinApp: App {
                             detail: "SQLite activation state: \(storageState.rawValue)"
                         )
 
+                        // Repair archives imported by pre-full-fidelity builds:
+                        // re-extract message type / attachments / labels /
+                        // domains from the stored raw MIME (bounded pages;
+                        // O(1) no-op once nothing is pending). Fixes empty
+                        // folder buckets + type/attachment filters on old
+                        // archives without a re-import.
+                        if storageState == .active {
+                            let sender = UserDefaults.standard.string(forKey: "defaultSenderEmail") ?? ""
+                            FidelityBackfillJob.shared.kickIfNeeded(senderEmail: sender)
+                        }
+
                         // Repair any store↔FTS drift (a crash between the
                         // store commit and the FTS commit can leave a row in
                         // the store but unsearchable). Only runs when drift is

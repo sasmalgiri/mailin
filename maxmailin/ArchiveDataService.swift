@@ -142,18 +142,43 @@ final class ArchiveDataService {
     /// Stream every matching summary in keyset pages of `batchSize`. Only one
     /// page is resident at a time — a derived job (analytics, tagging, …) can
     /// walk the whole archive with bounded memory and cooperative cancellation.
+    /// Walk EVERY summary page of a query. Text queries iterate the RANKED
+    /// CONTINUATION cursor to exhaustion — `page()`'s text path is a single
+    /// bounded page, so streaming through it would silently truncate
+    /// Select All / exports / bulk ops to one page (H1). Non-text queries use
+    /// the keyset page loop.
+    private func forEachSummaryPage(
+        query: EmailQuery, batchSize: Int,
+        _ body: ([EmailSummary]) async throws -> Void
+    ) async throws {
+        if let text = query.text, !text.isEmpty {
+            var cursor: RankedSearchCursor? = nil
+            while true {
+                try Task.checkCancellation()
+                let page = try await searchRanked(query: query, cursor: cursor, limit: batchSize)
+                if !page.summaries.isEmpty { try await body(page.summaries) }
+                guard let next = page.nextCursor else { break }
+                cursor = next
+            }
+            return
+        }
+        var cursor: EmailPageCursor? = nil
+        while true {
+            try Task.checkCancellation()
+            let page = try await repository.page(query: query, cursor: cursor, limit: batchSize)
+            if page.summaries.isEmpty { break }
+            try await body(page.summaries)
+            guard let next = page.nextCursor else { break }
+            cursor = next
+        }
+    }
+
     func streamSummaries(query: EmailQuery = .all, batchSize: Int = 500) -> AsyncThrowingStream<[EmailSummary], Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
-                var cursor: EmailPageCursor? = nil
                 do {
-                    while true {
-                        if Task.isCancelled { break }
-                        let page = try await repository.page(query: query, cursor: cursor, limit: batchSize)
-                        if page.summaries.isEmpty { break }
-                        continuation.yield(page.summaries)
-                        guard let next = page.nextCursor else { break }
-                        cursor = next
+                    try await self.forEachSummaryPage(query: query, batchSize: batchSize) { summaries in
+                        continuation.yield(summaries)
                     }
                     continuation.finish()
                 } catch {
@@ -170,16 +195,10 @@ final class ArchiveDataService {
     func streamFullEmails(query: EmailQuery = .all, batchSize: Int = 200) -> AsyncThrowingStream<[MBOXParser.RawEmail], Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
-                var cursor: EmailPageCursor? = nil
                 do {
-                    while true {
-                        if Task.isCancelled { break }
-                        let page = try await repository.page(query: query, cursor: cursor, limit: batchSize)
-                        if page.summaries.isEmpty { break }
-                        let emails = try await repository.fullEmails(ids: page.summaries.map(\.id))
+                    try await self.forEachSummaryPage(query: query, batchSize: batchSize) { summaries in
+                        let emails = try await self.repository.fullEmails(ids: summaries.map(\.id))
                         continuation.yield(emails)
-                        guard let next = page.nextCursor else { break }
-                        cursor = next
                     }
                     continuation.finish()
                 } catch {

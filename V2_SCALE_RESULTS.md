@@ -208,13 +208,22 @@ ranked search → cold reopen. Harness: `testStressHarnessSweep`
 RSS is FLAT across a 10× scale step (105 → 117 MB) — the bounded-memory
 invariant holds through the real production pipeline.
 
-**1,000,000 production-path run: REFUSED this session by the disk preflight**
-(directive §54.1): the run needs ~5 GB; the machine had 3.6 GiB free.
-Refusing beats letting OS temp cleanup invalidate the evidence. The prior
-1M store-engine qualification (import, keyset paging 37–43 ms, flat RSS)
-above remains valid. To execute the full-pipeline 1M run after freeing
-≥ 8 GB:
+### 1,000,000 — EXECUTED 2026-08-08 (full production pipeline, passed=YES)
 
+| Scale | Import | Index | Peak import RSS | Post RSS | First page | Deep page | Search p95 | Cold reopen | Disk |
+|-------|--------|-------|-----------------|----------|-----------|-----------|------------|-------------|------|
+| 1,000,000 | 965/s | 69/s | 582 MB | 571 MB | 132 ms | 27.3 ms | 1,306 ms | 981 ms | 4.69 GB |
+
+Every correctness invariant green at 1M: paging no-skips/no-dups over the
+full million, Boolean/NEAR/rare-term exact matches, reconcile verified,
+reopen persisted, delete consistent. Peak RSS 582 MB for a 4.7 GB archive —
+memory bounded by page windows, not archive size (Debug configuration;
+wall-clock 7h46m dominated by FTS indexing at this scale). The run was
+initially refused by the §54.1 disk preflight (3.6 GiB free), executed
+after freeing 5.4 GB of unrelated build caches — preflight honored, then
+satisfied.
+
+Rerun command:
 ```
 TEST_RUNNER_MAILIN_STRESS_SCALES=1000000 xcodebuild test \
   -project maxmailin.xcodeproj -scheme maxmailin -destination 'platform=macOS' \

@@ -179,7 +179,13 @@ struct EmailStoreRepository: EmailRepository {
         }
         // §13/§16: structured filters or a non-date sort → the SQL-compiled
         // keyset page (every query field participates; none is ignored).
-        if query.hasStructuredFilters, let sqlite = store as? SQLiteEmailStore {
+        if query.hasStructuredFilters {
+            guard let sqlite = store as? SQLiteEmailStore else {
+                // L8: never silently drop filters on a non-SQLite store —
+                // the query type promises no field is ignored.
+                throw EmailRepositoryError.unsupportedQueryCombination(
+                    "structured filters require the SQLite store")
+            }
             let rows = try await sqlite.filteredSummaryPage(
                 query, cursorSortKey: cursor?.sortKey, cursorID: cursor?.beforeID, limit: limit)
             let next: EmailPageCursor? = (rows.count == limit) ? rows.last.map {
@@ -204,12 +210,14 @@ struct EmailStoreRepository: EmailRepository {
     private func rankedTextSummaries(_ text: String, query: EmailQuery) async throws -> [EmailSummary] {
         let ftsQuery = FTSQueryBuilder.freeTextOrBoolean(text) ?? FTSQueryBuilder.escapeTerm(text)
         let years = FTSSearchIndex.shardYears(after: query.afterDate, before: query.beforeDate)
+        // L3: an FTS failure must SURFACE, not render as "0 results" while
+        // count() for the same query throws.
         let ids: [UUID]
         if years != nil {
-            let ranked = try? await fts.searchRanked(ftsQuery, years: years, limit: Self.textSearchCap)
-            ids = ranked?.hits.map(\.id) ?? []
+            let ranked = try await fts.searchRanked(ftsQuery, years: years, limit: Self.textSearchCap)
+            ids = ranked.hits.map(\.id)
         } else {
-            ids = (try? await fts.searchRaw(ftsQuery, limit: Self.textSearchCap)) ?? []
+            ids = try await fts.searchRaw(ftsQuery, limit: Self.textSearchCap)
         }
         var sums = try await store.summaries(ids: ids)
         sums = try await applyingStructuredFilters(sums, query: query)
@@ -272,7 +280,11 @@ struct EmailStoreRepository: EmailRepository {
             // never a first-window approximation.
             return try await exactStreamedTextCount(ftsQuery: ftsQuery, query: query)
         }
-        if query.hasStructuredFilters, let sqlite = store as? SQLiteEmailStore {
+        if query.hasStructuredFilters {
+            guard let sqlite = store as? SQLiteEmailStore else {
+                throw EmailRepositoryError.unsupportedQueryCombination(
+                    "structured filters require the SQLite store")
+            }
             return try await sqlite.filteredCount(query)
         }
         return try await store.count(after: query.afterDate, before: query.beforeDate)
