@@ -122,7 +122,18 @@ struct ContentView: View {
 
     var body: some View {
         @Bindable var appState = appState
-        ZStack {
+        bodyContent
+            // ONE sheet for the Feature Guide, at the root: attaching the
+            // same isPresented binding to several nodes makes the sheets
+            // suppress each other (observed on iOS).
+            .sheet(isPresented: $showFeatureGuide) {
+                FeatureGuideView(isPresented: $showFeatureGuide)
+            }
+    }
+
+    private var bodyContent: some View {
+        @Bindable var appState = appState
+        return ZStack {
             VStack(spacing: 0) {
                 if forensicManager.isEnabled {
                     forensicModeBanner
@@ -649,9 +660,6 @@ struct ContentView: View {
         }
         .listStyle(.sidebar)
         .navigationTitle("mailin")
-        .sheet(isPresented: $showFeatureGuide) {
-            FeatureGuideView(isPresented: $showFeatureGuide)
-        }
         .sheet(isPresented: $showGlossary) {
             NavigationStack {
                 GlossaryView()
@@ -1123,9 +1131,6 @@ struct ContentView: View {
                         searchText: modelVM.searchText
                     )
                 }
-            }
-            .sheet(isPresented: $showFeatureGuide) {
-                FeatureGuideView(isPresented: $showFeatureGuide)
             }
             .sheet(isPresented: $showFiltersSheet) {
                 NavigationStack {

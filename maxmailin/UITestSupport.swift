@@ -21,6 +21,17 @@ enum UITestSupport {
         defaults.set(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "",
                      forKey: "lastSeenVersion")
         defaults.set(true, forKey: "maxmailin.selfTestCompletedV1")
+        // Fresh installs show the Terms/Privacy consent sheet, which blocks
+        // every interaction — pre-accept for the automated click-through
+        // (mirrors LegalComplianceManager.accept()).
+        defaults.set(true, forKey: "hasAcceptedTerms")
+        defaults.set(LegalComplianceManager.currentTermsVersion, forKey: "acceptedTermsVersion")
+        // Also flip the LIVE instances — both gates were read into memory
+        // before this hook runs on first launch.
+        LegalComplianceManager.shared.hasAcceptedTerms = true
+        LegalComplianceManager.shared.acceptedTermsVersion = LegalComplianceManager.currentTermsVersion
+        defaults.set(true, forKey: "hasCompletedPersonaSelection")
+        PersonaManager.shared.hasCompletedPersonaSelection = true
 
         Task { @MainActor in
             let count = (try? await SQLiteEmailStore.shared.totalCount()) ?? 0

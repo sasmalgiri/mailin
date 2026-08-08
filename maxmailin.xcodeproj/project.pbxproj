@@ -8,7 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		1D0190B9A4314C4F1E974268 /* SmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C03A43C05B823F769A9169F /* SmokeTests.swift */; };
-		8015816EC0A0B955592FD4BB /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5904199535DD4B29D57E7CA6 /* Cocoa.framework */; };
 		A1B2C3D4E5F60718293A4B5C /* V2DerivedStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5D /* V2DerivedStateTests.swift */; };
 		AB12CD34EF5601789ABCDE02 /* V2ExportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB12CD34EF5601789ABCDE01 /* V2ExportTests.swift */; };
 		AB12CD34EF5601789ABCDE04 /* V2SecurityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB12CD34EF5601789ABCDE03 /* V2SecurityTests.swift */; };
@@ -89,7 +88,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				8015816EC0A0B955592FD4BB /* Cocoa.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -387,12 +385,14 @@
 				ENABLE_HARDENED_RUNTIME = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ecosanskriti.maxmailinTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
-				SUPPORTED_PLATFORMS = macosx;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				TARGETED_DEVICE_FAMILY = "1,2";
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/maxmailin.app/Contents/MacOS/maxmailin";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/maxmailin.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/maxmailin";
 			};
 			name = Debug;
 		};
@@ -635,12 +635,14 @@
 				CODE_SIGN_STYLE = Automatic;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ecosanskriti.maxmailinTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
-				SUPPORTED_PLATFORMS = macosx;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				TARGETED_DEVICE_FAMILY = "1,2";
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/maxmailin.app/Contents/MacOS/maxmailin";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/maxmailin.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/maxmailin";
 			};
 			name = Release;
 		};
@@ -649,12 +651,14 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				MACOSX_DEPLOYMENT_TARGET = 14.6;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ecosanskriti.maxmailinUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
-				SUPPORTED_PLATFORMS = macosx;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
 				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_TARGET_NAME = maxmailin;
 			};
 			name = Debug;
@@ -664,12 +668,14 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				MACOSX_DEPLOYMENT_TARGET = 14.6;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ecosanskriti.maxmailinUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
-				SUPPORTED_PLATFORMS = macosx;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
 				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_TARGET_NAME = maxmailin;
 			};
 			name = Release;

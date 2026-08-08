@@ -2154,7 +2154,7 @@ struct ParsedEmailListView: View {
                     Menu("Evidence Tag") {
                         ForEach(ForensicManager.EvidenceTag.allCases, id: \.self) { tag in
                             Button {
-                                forensicManager.tag(email.id, as: tagOption)
+                                forensicManager.tag(email.id, as: tag)
                                 model.applyFilters()
                             } label: {
                                 HStack {
