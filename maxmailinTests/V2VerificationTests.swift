@@ -3866,6 +3866,71 @@ final class V2FidelityBackfillTests: XCTestCase {
         XCTAssertEqual(again, FidelityBackfillJob.Outcome())
     }
 
+    /// Full Fidelity Restore: re-parsing the ORIGINAL file heals a migrated
+    /// (rawless) row in place — raw source, attachments, labels — without
+    /// inserting duplicates; rows already complete are untouched.
+    func testHealFidelity_restoresRawlessRowsInPlace() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root)
+
+        // The migrated shape: a row with headers but NO raw source.
+        let migrated = MBOXParser.RawEmail(
+            headers: ["Message-ID": "<heal-1@t>", "Subject": "Original", "From": "a@b.com",
+                      "To": "c@d.com", "Date": "Wed, 15 Jan 2025 10:00:00 +0000"],
+            rawSource: "", messageType: "received", attachments: [],
+            timestamp: "2025-01-15T10:00:00Z", domains: [], plainBody: "short", htmlBody: "")
+        _ = try await store.insertBatch([migrated], sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+
+        // The ORIGINAL message (same Message-ID) with an attachment.
+        let attachmentBody = Data("attached content".utf8).base64EncodedString()
+        let raw = """
+        From a@b.com Wed Jan 15 10:00:00 2025
+        From: a@b.com
+        To: c@d.com
+        Subject: Original
+        Date: Wed, 15 Jan 2025 10:00:00 +0000
+        Message-ID: <heal-1@t>
+        X-Gmail-Labels: Inbox, Healed
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain
+
+        full original body
+        --B
+        Content-Type: text/plain; name="doc.txt"
+        Content-Disposition: attachment; filename="doc.txt"
+        Content-Transfer-Encoding: base64
+
+        \(attachmentBody)
+        --B--
+        """
+        let original = try MBOXParser.processRawMessage(raw, senderEmail: "")
+        let unknown = try MBOXParser.processRawMessage(
+            raw.replacingOccurrences(of: "<heal-1@t>", with: "<not-imported@t>"), senderEmail: "")
+
+        let result = try await store.healFidelity(from: [original, unknown])
+        XCTAssertEqual(result.healed, 1, "the migrated row healed")
+        XCTAssertEqual(result.unmatched, 1, "unknown message skipped — heal never inserts")
+        let count = try await store.totalCount()
+        XCTAssertEqual(count, 1, "no duplicates created")
+
+        let hydratedOptional = try await store.fullEmail(id: migrated.id)
+        let hydrated = try XCTUnwrap(hydratedOptional)
+        XCTAssertFalse(hydrated.rawSource.isEmpty, "raw source restored")
+        XCTAssertEqual(hydrated.attachments.map(\.filename), ["doc.txt"], "attachment metadata restored")
+        XCTAssertEqual(Set(hydrated.tags), ["Inbox", "Healed"], "labels restored")
+        XCTAssertTrue(hydrated.plainBody.contains("full original body"), "body upgraded")
+
+        // Idempotent: a second heal reports already-complete, changes nothing.
+        let again = try await store.healFidelity(from: [original])
+        XCTAssertEqual(again.healed, 0)
+        XCTAssertEqual(again.alreadyFull, 1)
+    }
+
     func testBackfill_marksRawlessRowsUnknown_neverLoops() async throws {
         let root = tempRoot()
         let suite = try XCTUnwrap(UserDefaults(suiteName: "backfill-\(UUID().uuidString)"))

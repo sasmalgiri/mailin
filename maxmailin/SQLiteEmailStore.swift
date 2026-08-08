@@ -2447,6 +2447,64 @@ actor SQLiteEmailStore: EmailArchiveStore {
         }
     }
 
+    struct FidelityHealResult: Sendable, Equatable {
+        var healed = 0        // matched an existing row and restored fidelity
+        var alreadyFull = 0   // matched but the row already has raw source
+        var unmatched = 0     // no existing row (not imported — heal skips it)
+    }
+
+    /// Full Fidelity Restore: match re-parsed ORIGINAL messages to existing
+    /// rows (Message-ID identity) and heal them in place — raw MIME, bodies,
+    /// headers, then the full §3 fidelity (type/attachments/tags/domains/
+    /// participants). Never inserts, never duplicates, never touches review
+    /// or forensic state. Rows that already carry raw source are left alone.
+    func healFidelity(from emails: [MBOXParser.RawEmail]) throws -> FidelityHealResult {
+        let db = try ensureDB()
+        var result = FidelityHealResult()
+        let lookup = try prepare(db, """
+            SELECT e.id, COALESCE(length(b.raw), 0) FROM emails e
+            LEFT JOIN email_bodies b ON b.id = e.id
+            WHERE e.message_id = ? LIMIT 1;
+        """)
+        defer { sqlite3_finalize(lookup) }
+        let upsertBody = try prepare(db, """
+            INSERT INTO email_bodies(id, plain, html, raw, headers_json)
+            VALUES (?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET
+                plain = excluded.plain, html = excluded.html,
+                raw = excluded.raw, headers_json = excluded.headers_json;
+        """)
+        defer { sqlite3_finalize(upsertBody) }
+
+        for email in emails {
+            guard let mid = email.headers["Message-ID"], !mid.isEmpty else {
+                result.unmatched += 1
+                continue
+            }
+            sqlite3_reset(lookup); sqlite3_clear_bindings(lookup)
+            bindText(lookup, 1, mid)
+            guard try stepRow(lookup, db), let existingID = columnUUID(lookup, 0) else {
+                result.unmatched += 1
+                continue
+            }
+            let rawLength = sqlite3_column_int64(lookup, 1)
+            if rawLength > 0 {
+                result.alreadyFull += 1
+                continue
+            }
+            sqlite3_reset(upsertBody); sqlite3_clear_bindings(upsertBody)
+            bindText(upsertBody, 1, existingID.uuidString)
+            bindBlob(upsertBody, 2, Data(email.plainBody.utf8))
+            bindBlob(upsertBody, 3, Data(email.htmlBody.utf8))
+            bindBlob(upsertBody, 4, Data(email.rawSource.utf8))
+            bindBlob(upsertBody, 5, try? JSONEncoder().encode(email.headers))
+            guard sqlite3_step(upsertBody) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            try applyFidelity(id: existingID, from: email)
+            result.healed += 1
+        }
+        return result
+    }
+
     func fidelityPendingCount() throws -> Int {
         let db = try ensureDB()
         return try scalarInt(db, "SELECT COUNT(*) FROM emails WHERE message_type = '';")

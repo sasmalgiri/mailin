@@ -55,6 +55,52 @@ struct SettingsView: View {
     @AppStorage("customModelName") private var customModelName = ""
     @State private var savedDataCleared = false
     @State private var showClearConfirmation = false
+    @State private var fidelityHealRunning = false
+    @State private var fidelityHealReport: String?
+
+    /// Full Fidelity Restore: pick original archive files, re-parse, and
+    /// heal matching rows in place (SQLiteEmailStore.healFidelity).
+    private func runFidelityHeal() {
+        #if os(macOS)
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.message = "Choose the ORIGINAL archive files (.mbox/.eml) you imported before"
+        panel.prompt = "Restore"
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        let urls = panel.urls
+        #else
+        return   // iOS uses the standard import flow (full fidelity already)
+        #endif
+        fidelityHealRunning = true
+        fidelityHealReport = nil
+        Task { @MainActor in
+            var total = SQLiteEmailStore.FidelityHealResult()
+            var failures: [String] = []
+            for url in urls {
+                do {
+                    let emails = try await Task.detached(priority: .userInitiated) {
+                        try MBOXParser.parse(fileURL: url, senderEmail: "")
+                    }.value
+                    let result = try await SQLiteEmailStore.shared.healFidelity(from: emails)
+                    total.healed += result.healed
+                    total.alreadyFull += result.alreadyFull
+                    total.unmatched += result.unmatched
+                } catch {
+                    failures.append(url.lastPathComponent)
+                }
+            }
+            fidelityHealRunning = false
+            var report = "Restored full detail for \(total.healed) email(s); \(total.alreadyFull) already complete; \(total.unmatched) not in your archive."
+            if !failures.isEmpty { report += " Could not read: \(failures.joined(separator: ", "))." }
+            fidelityHealReport = report
+            if total.healed > 0 {
+                NotificationCenter.default.post(name: .fidelityBackfillCompleted, object: nil)
+                AttachmentTextIndexJob.shared.kickIfNeeded()   // new raw → contents indexable
+            }
+        }
+    }
     @State private var clearError: String?
     @AppStorage(DigestScheduler.enabledKey) private var weeklyDigestEnabled = false
     #if os(macOS)
@@ -469,6 +515,20 @@ struct SettingsView: View {
             }
 
             Section {
+                // Full Fidelity Restore — heals archives migrated from v1
+                // (labels/attachments/raw source restored IN PLACE from the
+                // original files; no duplicates, review state untouched).
+                Button(fidelityHealRunning ? "Restoring…" : "Restore Full Fidelity from Original Files…") {
+                    runFidelityHeal()
+                }
+                .disabled(fidelityHealRunning)
+                .help("Re-read your original .mbox files and restore full detail (attachments, raw source) to already-imported emails — nothing is duplicated")
+                if let report = fidelityHealReport {
+                    Text(report)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
                 Button("Clear saved email data") {
                     showClearConfirmation = true
                 }
