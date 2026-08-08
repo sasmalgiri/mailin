@@ -2311,6 +2311,108 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return (out, unrecoverable)
     }
 
+    struct HeaderFidelityCandidate: Sendable {
+        let id: UUID
+        let headersJSON: String
+    }
+
+    /// Header-recovery pass source: rows with NO raw MIME (pre-v2 migrated
+    /// archives never stored it) whose persisted headers survive. Labels,
+    /// the attachment flag and the source filename are recoverable from the
+    /// headers alone. Keyset-paged by id; byte-capped.
+    func headerFidelityCandidates(afterID: String?, limit: Int) throws -> [HeaderFidelityCandidate] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT e.id, CAST(b.headers_json AS TEXT) FROM emails e
+            JOIN email_bodies b ON b.id = e.id
+            WHERE (b.raw IS NULL OR length(b.raw) = 0)
+              AND b.headers_json IS NOT NULL AND length(b.headers_json) > 2
+              AND e.id > ?
+            ORDER BY e.id LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, afterID ?? "")
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+        var out: [HeaderFidelityCandidate] = []
+        let maxPageBytes = 8 * 1024 * 1024
+        var pageBytes = 0
+        while try stepRow(stmt, db) {
+            guard let id = columnUUID(stmt, 0) else { continue }
+            let json = columnText(stmt, 1)
+            guard !json.isEmpty else { continue }
+            out.append(HeaderFidelityCandidate(id: id, headersJSON: json))
+            pageBytes += json.utf8.count
+            if pageBytes >= maxPageBytes { break }
+        }
+        return out
+    }
+
+    struct HeaderFidelityUpdate: Sendable {
+        let id: UUID
+        let tags: [String]
+        let hasAttachment: Bool
+        let sourceFilename: String?
+    }
+
+    /// Write one page of header-recovered fidelity in a single transaction.
+    /// Additive and idempotent: tags INSERT OR IGNORE, has_attach only ever
+    /// upgrades 0→1, and source identity is only filled where absent (a
+    /// synthetic `legacy-header:` source keyed by filename — pre-v2 imports
+    /// never recorded a content hash).
+    func applyHeaderFidelity(_ updates: [HeaderFidelityUpdate]) throws {
+        guard !updates.isEmpty else { return }
+        let db = try ensureDB()
+        try exec(db, "BEGIN TRANSACTION;")
+        do {
+            let insertTag = try prepare(db, "INSERT OR IGNORE INTO email_tags(email_id, tag) VALUES (?,?);")
+            defer { sqlite3_finalize(insertTag) }
+            let setAttach = try prepare(db, "UPDATE emails SET has_attach = 1 WHERE id = ? AND has_attach = 0;")
+            defer { sqlite3_finalize(setAttach) }
+            let upsertSource = try prepare(db, """
+                INSERT INTO sources(sha256, filename, source_kind, imported_at)
+                VALUES (?,?, 'legacy-header', ?)
+                ON CONFLICT(sha256) DO NOTHING;
+            """)
+            defer { sqlite3_finalize(upsertSource) }
+            let setHash = try prepare(db, """
+                UPDATE emails SET source_hash = ?
+                WHERE id = ? AND (source_hash IS NULL OR source_hash = '');
+            """)
+            defer { sqlite3_finalize(setHash) }
+            let now = Int64(Date().timeIntervalSince1970)
+
+            for update in updates {
+                let idStr = update.id.uuidString
+                for tag in update.tags where !tag.isEmpty {
+                    sqlite3_reset(insertTag); sqlite3_clear_bindings(insertTag)
+                    bindText(insertTag, 1, idStr); bindText(insertTag, 2, tag)
+                    guard sqlite3_step(insertTag) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+                }
+                if update.hasAttachment {
+                    sqlite3_reset(setAttach); sqlite3_clear_bindings(setAttach)
+                    bindText(setAttach, 1, idStr)
+                    guard sqlite3_step(setAttach) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+                }
+                if let filename = update.sourceFilename, !filename.isEmpty {
+                    let syntheticSHA = "legacy-header:" + filename
+                    sqlite3_reset(upsertSource); sqlite3_clear_bindings(upsertSource)
+                    bindText(upsertSource, 1, syntheticSHA)
+                    bindText(upsertSource, 2, filename)
+                    sqlite3_bind_int64(upsertSource, 3, now)
+                    guard sqlite3_step(upsertSource) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+                    sqlite3_reset(setHash); sqlite3_clear_bindings(setHash)
+                    bindText(setHash, 1, syntheticSHA)
+                    bindText(setHash, 2, idStr)
+                    guard sqlite3_step(setHash) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+                }
+            }
+            try exec(db, "COMMIT;")
+        } catch {
+            try? exec(db, "ROLLBACK;")
+            throw error
+        }
+    }
+
     func fidelityPendingCount() throws -> Int {
         let db = try ensureDB()
         return try scalarInt(db, "SELECT COUNT(*) FROM emails WHERE message_type = '';")

@@ -3802,6 +3802,70 @@ final class V2FidelityBackfillTests: XCTestCase {
         XCTAssertEqual(hydrated?.tags, ["Legacy-Label"], "labels restored by the pass too")
     }
 
+    /// The user's real archive state: migrated rows with NO raw MIME (raw was
+    /// never stored pre-v2) but intact headers_json. Labels, the attachment
+    /// flag and the source filename must be recovered from headers alone —
+    /// and the sweep is one-shot (version-flagged) and idempotent.
+    func testBackfill_headerPass_recoversTagsAttachFlagAndSource() async throws {
+        let root = tempRoot()
+        let suite = try XCTUnwrap(UserDefaults(suiteName: "backfill-\(UUID().uuidString)"))
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            FidelityBackfillJob.testStoreOverride = nil
+            FidelityBackfillJob.testDefaultsOverride = nil
+        }
+        let store = SQLiteEmailStore(directory: root)
+        FidelityBackfillJob.testStoreOverride = store
+        FidelityBackfillJob.testDefaultsOverride = suite
+
+        func rawlessEmail(mid: String, extra: [String: String]) -> MBOXParser.RawEmail {
+            var headers = ["Message-ID": mid, "Subject": "S", "From": "a@b.com",
+                           "To": "c@d.com", "Date": "Wed, 15 Jan 2025 10:00:00 +0000"]
+            headers.merge(extra) { _, new in new }
+            return MBOXParser.RawEmail(
+                headers: headers, rawSource: "", messageType: "received", attachments: [],
+                timestamp: "2025-01-15T10:00:00Z", domains: [], plainBody: "b", htmlBody: "")
+        }
+        let labeled = rawlessEmail(mid: "<hp-1@t>", extra: [
+            "X-Gmail-Labels": "Inbox, Important,Boxbe Waiting List",
+            "Content-Type": "multipart/mixed; boundary=\"X\"",
+            "sourceFile": "Sent.mbox"])
+        let plainOne = rawlessEmail(mid: "<hp-2@t>", extra: [
+            "X-Gmail-Labels": "Inbox",
+            "Content-Type": "multipart/alternative; boundary=\"Y\"",
+            "sourceFile": "Inbox.mbox"])
+        _ = try await store.insertBatch([labeled, plainOne], sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+
+        // Pre-state matches the field report: typed rows, zero labels/flags.
+        let tagsBefore = try await store.parserTagCounts(limit: 10)
+        XCTAssertTrue(tagsBefore.isEmpty)
+        let attachBefore = try await store.attachmentCount()
+        XCTAssertEqual(attachBefore, 0)
+
+        let outcome = await FidelityBackfillJob.shared.run(senderEmail: "me@self.com")
+        XCTAssertEqual(outcome.repaired, 2, "both header-recoverable rows repaired")
+        XCTAssertEqual(outcome.failed, 0)
+
+        let labels = try await store.parserTagCounts(limit: 10)
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: labels.map { ($0.value, $0.count) }),
+                       ["Inbox": 2, "Important": 1, "Boxbe Waiting List": 1],
+                       "Gmail labels recovered from headers_json")
+        let attachAfter = try await store.attachmentCount()
+        XCTAssertEqual(attachAfter, 1, "multipart/mixed row flagged; alternative row not")
+        let sources = try await store.sourceFileCounts(limit: 10)
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: sources.map { ($0.value, $0.count) }),
+                       ["Sent.mbox": 1, "Inbox.mbox": 1], "legacy sources reconstructed by filename")
+
+        var bySource = EmailQuery(); bySource.sourceFileName = "Sent"
+        let sourceHits = try await store.filteredCount(bySource)
+        XCTAssertEqual(sourceHits, 1, "source: SQL filter reaches recovered sources")
+
+        // One-shot: the version flag makes the second run a no-op.
+        let again = await FidelityBackfillJob.shared.run(senderEmail: "me@self.com")
+        XCTAssertEqual(again, FidelityBackfillJob.Outcome())
+    }
+
     func testBackfill_marksRawlessRowsUnknown_neverLoops() async throws {
         let root = tempRoot()
         let suite = try XCTUnwrap(UserDefaults(suiteName: "backfill-\(UUID().uuidString)"))

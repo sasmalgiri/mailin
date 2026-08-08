@@ -54,6 +54,10 @@ final class FidelityBackfillJob {
     /// sent/received reclassifies in one SQL pass (from_addr is stored).
     private static let senderUsedKey = "mailin.fidelity.senderUsed"
 
+    /// One-shot header-recovery sweep marker (bump to re-run for all users).
+    static let headerPassKey = "mailin.fidelity.headerPassVersion"
+    static let headerPassVersion = 1
+
     struct Outcome: Sendable, Equatable {
         var repaired = 0
         var unrecoverable = 0
@@ -104,7 +108,9 @@ final class FidelityBackfillJob {
         do {
             let pending = try await store.fidelityPendingCount()
             let participantsPending = try await store.participantsBackfillCandidates(limit: 1)
-            guard pending > 0 || !participantsPending.candidates.isEmpty || !participantsPending.rawless.isEmpty else {
+            let headerPassNeeded = defaults.integer(forKey: Self.headerPassKey) < Self.headerPassVersion
+            guard pending > 0 || !participantsPending.candidates.isEmpty || !participantsPending.rawless.isEmpty
+                    || headerPassNeeded else {
                 return outcome
             }
             Self.logger.info("fidelity backfill starting: \(pending) legacy row(s)")
@@ -215,6 +221,59 @@ final class FidelityBackfillJob {
                     pageProgress += unparseable.count
                 }
                 if pageProgress == 0 { break }
+            }
+
+            // Third pass — header recovery for rows with NO raw MIME (pre-v2
+            // migrated archives): the parse passes above can't touch them, but
+            // the persisted headers still carry the Gmail labels, the
+            // multipart/mixed attachment signal, and the source filename.
+            // One converging keyset sweep per version flag; every write is
+            // additive + idempotent, so an interrupted sweep just redoes work.
+            if headerPassNeeded && !Task.isCancelled {
+                var cursor: String? = nil
+                var sweepFailed = false
+                while true {
+                    if Task.isCancelled { sweepFailed = true; break }
+                    let page = try await store.headerFidelityCandidates(afterID: cursor, limit: batchSize)
+                    guard let last = page.last else { break }
+                    cursor = last.id.uuidString
+                    let updates: [SQLiteEmailStore.HeaderFidelityUpdate] = await Task.detached(priority: .utility) {
+                        page.compactMap { candidate in
+                            guard let data = candidate.headersJSON.data(using: .utf8),
+                                  let headers = try? JSONDecoder().decode([String: String].self, from: data)
+                            else { return nil }
+                            // Identical label split to the production parser.
+                            var tags: [String] = []
+                            if let labels = headers["X-Gmail-Labels"] ?? headers["X-gmail-labels"] {
+                                tags = labels.split(separator: ",")
+                                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                                    .filter { !$0.isEmpty }
+                            }
+                            let contentType = (headers["Content-Type"] ?? "").lowercased()
+                            let hasAttachment = contentType.contains("multipart/mixed")
+                            let sourceFile = headers["sourceFile"] ?? headers["X-Source-File"]
+                            guard !tags.isEmpty || hasAttachment || !(sourceFile ?? "").isEmpty else { return nil }
+                            return SQLiteEmailStore.HeaderFidelityUpdate(
+                                id: candidate.id, tags: tags,
+                                hasAttachment: hasAttachment, sourceFilename: sourceFile)
+                        }
+                    }.value
+                    if !updates.isEmpty {
+                        do {
+                            try await store.applyHeaderFidelity(updates)
+                            outcome.repaired += updates.count
+                        } catch {
+                            sweepFailed = true
+                            outcome.failed += updates.count
+                            Self.logger.error("header fidelity apply failed: \(error.localizedDescription, privacy: .public)")
+                            break
+                        }
+                    }
+                }
+                if !sweepFailed {
+                    defaults.set(Self.headerPassVersion, forKey: Self.headerPassKey)
+                    Self.logger.info("header fidelity sweep complete")
+                }
             }
 
             Self.logger.info("fidelity backfill done: \(outcome.repaired) repaired, \(outcome.unrecoverable) unknown, \(outcome.failed) failed")
