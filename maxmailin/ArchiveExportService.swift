@@ -512,6 +512,46 @@ final class ArchiveExportService {
         }
     }
 
+    /// Word (.doc): ONE Office-namespace HTML document containing every email
+    /// in the scope — streamed section by section (page break between emails),
+    /// never a materialized array. Opens in Microsoft Word / Pages.
+    @discardableResult
+    func exportWordArchive(scope: ArchiveSelectionScope, to url: URL,
+                           limit: Int? = nil,
+                           onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
+        func esc(_ s: String) -> String {
+            s.replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;")
+        }
+        return try await exportTextDocument(
+            scope: scope, to: url, limit: limit,
+            header: { _ in """
+                <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word">
+                <head><meta charset="utf-8"><title>mailin email export</title>
+                <!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View></w:WordDocument></xml><![endif]-->
+                <style>body{font-family:Calibri,Helvetica,sans-serif;font-size:11pt} table.hdr{border-bottom:1px solid #999;margin-bottom:10px;font-size:10pt} div.email{margin-bottom:24px} br.sep{page-break-before:always}</style>
+                </head><body>
+
+                """ },
+            footer: { _ in "</body></html>" },
+            onProgress: onProgress
+        ) { email, index in
+            var rows = ""
+            for (label, key) in [("Subject", "Subject"), ("From", "From"), ("To", "To"),
+                                 ("Cc", "Cc"), ("Date", "Date")] {
+                if let value = email.headers[key], !value.isEmpty {
+                    rows += "<tr><td style=\"font-weight:bold;padding:2px 12px 2px 0;white-space:nowrap;vertical-align:top\">\(label)</td><td style=\"padding:2px 0\">\(esc(value))</td></tr>"
+                }
+            }
+            let body = email.htmlBody.isEmpty
+                ? "<p>" + esc(email.plainBody).replacingOccurrences(of: "\n", with: "<br>") + "</p>"
+                : email.htmlBody
+            let pageBreak = index == 0 ? "" : "<br class=\"sep\">"
+            return "\(pageBreak)<div class=\"email\"><table class=\"hdr\">\(rows)</table>\(body)</div>\n"
+        }
+    }
+
     /// vCard: contacts are a SMALL derived record (distinct addresses), but the
     /// source is the streamed scope — never a preview array.
     @discardableResult

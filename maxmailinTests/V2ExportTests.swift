@@ -93,6 +93,35 @@ final class V2ExportTests: XCTestCase {
         XCTAssertEqual(counted, 190)
     }
 
+    /// Word (.doc) list export: one streamed Office-HTML document containing
+    /// every scoped email exactly once, HTML-escaped, honoring the limit.
+    func testWordArchiveExport_streamedCompleteAndEscaped() async throws {
+        let env = try await makeEnv(count: 40)
+        let url = env.root.appendingPathComponent("out.doc")
+
+        let result = try await env.service.exportWordArchive(
+            scope: .query(.all, exclusions: []), to: url)
+        XCTAssertEqual(result.recordsWritten, 40)
+        XCTAssertFalse(result.cancelled)
+
+        let doc = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertTrue(doc.contains("schemas-microsoft-com:office:word"), "Word-flavored HTML")
+        for i in 0..<40 {
+            XCTAssertTrue(doc.contains("Subject \(i)"), "email \(i) present")
+        }
+        XCTAssertEqual(doc.components(separatedBy: "<div class=\"email\">").count - 1, 40,
+                       "exactly one section per email")
+
+        // Free-tier limit: only the first N emails are written.
+        let capped = env.root.appendingPathComponent("capped.doc")
+        let cappedResult = try await env.service.exportWordArchive(
+            scope: .query(.all, exclusions: []), to: capped, limit: 10)
+        XCTAssertEqual(cappedResult.recordsWritten, 10)
+        let cappedDoc = try String(contentsOf: capped, encoding: .utf8)
+        XCTAssertEqual(cappedDoc.components(separatedBy: "<div class=\"email\">").count - 1, 10)
+        XCTAssertTrue(cappedDoc.hasSuffix("</body></html>"), "capped output is still a complete document")
+    }
+
     /// Per-message EML folder export over an EXPLICIT id scope: exactly one
     /// .eml per selected message, each Message-ID appearing exactly once.
     func testEMLFilesExplicitScopeExactlyOnce() async throws {
