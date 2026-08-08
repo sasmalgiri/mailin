@@ -38,6 +38,7 @@ struct EmailDetailView: View {
     @State private var exportError: String?
     @State private var cachedSHA256: String = ""
     @State private var cachedMD5: String = ""
+    @State private var showThreadStory = false
     #if os(iOS)
     @State private var showShareSheet = false
     @State private var shareItems: [Any] = []
@@ -133,6 +134,11 @@ struct EmailDetailView: View {
             printEmail()
         }
         .animation(AnimationTiming.normal, value: showCleanView)
+        .sheet(isPresented: $showThreadStory) {
+            ThreadStoryView(email: email) { id in
+                onNavigate?(id)
+            }
+        }
         #if os(iOS)
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(items: shareItems)
@@ -184,6 +190,9 @@ struct EmailDetailView: View {
                         }
                     }
                     #endif
+                    mailIconButton(icon: "text.bubble", tooltip: "Thread Story — the whole conversation as a timeline", color: AppColors.primary) {
+                        showThreadStory = true
+                    }
                     mailIconButton(icon: "translate", tooltip: "Translate", color: AppColors.secondary) {
                         showTranslation = true
                     }
@@ -213,6 +222,9 @@ struct EmailDetailView: View {
                         Label("Archive", systemImage: "archivebox")
                     }
                     Divider()
+                    Button { showThreadStory = true } label: {
+                        Label("Thread Story", systemImage: "text.bubble")
+                    }
                     Button { showTranslation = true } label: {
                         Label("Translate", systemImage: "translate")
                     }

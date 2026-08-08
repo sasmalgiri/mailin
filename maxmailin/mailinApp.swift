@@ -46,6 +46,9 @@ struct mailinApp: App {
     @ObservedObject private var biometricLock = BiometricLockManager.shared
     @AppStorage("enableAIFeatures") private var enableAIFeatures = true
     @AppStorage("hasSeenLaunchAnimation") private var hasSeenLaunchAnimation = false
+    #if os(macOS)
+    @AppStorage("menuBarSearchEnabled") private var menuBarSearchEnabled = true
+    #endif
     @State private var showLaunchAnimation = false
     @Environment(\.openWindow) private var openWindow
     @Environment(\.scenePhase) private var scenePhase
@@ -182,6 +185,12 @@ struct mailinApp: App {
                         if storageState == .active {
                             let sender = UserDefaults.standard.string(forKey: "defaultSenderEmail") ?? ""
                             FidelityBackfillJob.shared.kickIfNeeded(senderEmail: sender)
+                            // Attachment-content index (in:attachments searches
+                            // file CONTENTS): bounded background extraction;
+                            // O(1) no-op once everything is indexed.
+                            AttachmentTextIndexJob.shared.kickIfNeeded()
+                            // Weekly saved-search digest (opt-in; ≤1/week).
+                            DigestScheduler.shared.checkAndDeliver()
                         }
 
                         // Repair any store↔FTS drift (a crash between the
@@ -303,6 +312,14 @@ struct mailinApp: App {
         }
         .windowResizability(.contentSize)
         .defaultSize(width: 400, height: 500)
+
+        // Menu-bar quick search: search the whole archive without switching
+        // apps (minimum-touch). Removable via Settings ▸ Display.
+        MenuBarExtra("Search mailin", systemImage: "envelope.badge.person.crop",
+                     isInserted: $menuBarSearchEnabled) {
+            MenuBarSearchView()
+        }
+        .menuBarExtraStyle(.window)
         #endif
     }
     

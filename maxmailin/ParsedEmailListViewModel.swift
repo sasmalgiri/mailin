@@ -418,9 +418,26 @@ class ParsedEmailListViewModel: ObservableObject {
         // §20: one-time migration of the legacy review JSON into SQLite —
         // idempotent, verified, keeps the JSON as rollback evidence.
         Task { @MainActor [review] in await review.migrateLegacyJSONIfNeeded() }
+        // New attachment text indexed → cached in:attachments results are stale.
+        attachmentIndexObserver = NotificationCenter.default.addObserver(
+            forName: .attachmentIndexUpdated, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.attachmentSearchCache.removeAll()
+                self?.applyFilters()
+            }
+        }
     }
 
     private var reviewChangeForwarder: AnyCancellable?
+
+    /// Attachment-content search: per-query id cache + indexing progress for
+    /// the honest notice. Cache clears when the index job reports new data.
+    private var attachmentSearchCache: [String: Set<UUID>] = [:]
+    private var attachmentIndexProgress: (attempted: Int, pending: Int)?
+    /// Test-visible: awaitable handle for the async attachment lookup.
+    var lastAttachmentSearchTask: Task<Void, Never>?
+    private var attachmentIndexObserver: NSObjectProtocol?
 
     // MARK: - Paging (Part S)
 
@@ -900,25 +917,33 @@ class ParsedEmailListViewModel: ObservableObject {
         }
 
         if parsed.searchInAttachments && !parsed.freeText.isEmpty {
-            // Degraded but bounded: match attachment FILENAMES over the
-            // resident window. No attachment-text extraction runs in the v2
-            // import/index pipeline, so there is no extracted text to index
-            // into FTS — indexing attachment content is a later phase. The
-            // limitation is USER-VISIBLE via `searchNotice`, not silent.
-            if searchNotice == nil {
-                searchNotice = "in:attachments matches attachment file names only — attachment contents aren't indexed yet."
-            }
-            let terms = parsed.freeText.lowercased().split(separator: " ").map(String.init)
-            let attachIDs = Set(residentEmails.filter { email in
-                !email.attachments.isEmpty && email.attachments.contains { att in
-                    let name = att.filename.lowercased()
-                    return terms.contains { name.contains($0) }
+            // Attachment-CONTENT search: filenames AND extracted text (PDF,
+            // text families) via the persisted attachment_search FTS table.
+            // Results are cached per query; a cache miss dispatches one
+            // bounded async lookup and re-applies when it lands.
+            let cacheKey = parsed.freeText.lowercased()
+            if let cached = attachmentSearchCache[cacheKey] {
+                if let existing = advancedMatchIDs {
+                    advancedMatchIDs = existing.intersection(cached)
+                } else {
+                    advancedMatchIDs = cached
                 }
-            }.map(\.id))
-            if let existing = advancedMatchIDs {
-                advancedMatchIDs = existing.intersection(attachIDs)
+                if let progress = attachmentIndexProgress, progress.pending > 0 {
+                    searchNotice = "Searching attachment names + contents — \(progress.pending) email(s) still being indexed."
+                } else if searchNotice == nil && cached.isEmpty {
+                    searchNotice = "No attachments matched. Contents of PDF and text files are searched; other binary formats match by filename."
+                }
             } else {
-                advancedMatchIDs = attachIDs
+                advancedMatchIDs = advancedMatchIDs ?? []   // empty until the lookup lands
+                searchNotice = "Searching attachment contents…"
+                lastAttachmentSearchTask = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let ftsQuery = FTSQueryBuilder.freeTextOrBoolean(parsed.freeText) ?? FTSQueryBuilder.escapeTerm(parsed.freeText)
+                    let ids = (try? await SQLiteEmailStore.shared.attachmentTextSearch(ftsQuery)) ?? []
+                    self.attachmentSearchCache[cacheKey] = ids
+                    self.attachmentIndexProgress = try? await SQLiteEmailStore.shared.attachmentTextProgress()
+                    self.applyFilters()
+                }
             }
         }
 

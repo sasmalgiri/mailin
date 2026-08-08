@@ -56,6 +56,10 @@ struct SettingsView: View {
     @State private var savedDataCleared = false
     @State private var showClearConfirmation = false
     @State private var clearError: String?
+    @AppStorage(DigestScheduler.enabledKey) private var weeklyDigestEnabled = false
+    #if os(macOS)
+    @AppStorage("menuBarSearchEnabled") private var menuBarSearchEnabled = true
+    #endif
     @State private var showClearTempConfirmation = false
     @State private var showResetSettingsConfirmation = false
     @State private var showClearForensicConfirmation = false
@@ -238,6 +242,40 @@ struct SettingsView: View {
             } header: {
                 Text("Email Identity")
                     .font(.headline)
+            }
+
+            #if os(macOS)
+            Section {
+                Toggle("Menu Bar Quick Search", isOn: $menuBarSearchEnabled)
+                    .help("Search your whole archive from the menu bar without opening the app")
+                    .accessibilityLabel("Menu bar quick search")
+            } header: {
+                Text("Menu Bar")
+                    .font(.headline)
+            } footer: {
+                Text("Adds a mailin icon to the menu bar — type to search, Return opens the top result.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            #endif
+
+            Section {
+                Toggle("Weekly Digest", isOn: $weeklyDigestEnabled)
+                    .onChange(of: weeklyDigestEnabled) { _, enabled in
+                        if enabled {
+                            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+                            DigestScheduler.shared.checkAndDeliver()
+                        }
+                    }
+                    .help("Once a week, a notification summarizes how many new emails matched each of your saved searches")
+                    .accessibilityLabel("Weekly digest notification")
+            } header: {
+                Text("Weekly Digest")
+                    .font(.headline)
+            } footer: {
+                Text("One local notification per week with new-match counts for your saved searches. Computed entirely on-device; nothing leaves your Mac.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
 
             #if os(iOS)

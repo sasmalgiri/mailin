@@ -121,7 +121,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// store fully at the previous version — never half-migrated, and a user
     /// DB is NEVER silently recreated. A store newer than this build refuses
     /// to open instead of guessing.
-    static let currentSchemaVersion = 5
+    static let currentSchemaVersion = 6
 
     private func migrateSchema(_ handle: OpaquePointer) throws {
         var v = try scalarInt(handle, "PRAGMA user_version;")
@@ -173,6 +173,31 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 try exec(handle, "PRAGMA user_version = 5;")
             }
             v = 5
+        }
+        if v == 5 {
+            try inExclusiveTransaction(handle) {
+                // v6: attachment-content search. Extracted attachment text
+                // (PDF/plain-text families) is indexed into a dedicated FTS5
+                // table; the state registry is the extraction job's work-list
+                // complement (an email row here = extraction attempted).
+                try exec(handle, """
+                    CREATE VIRTUAL TABLE IF NOT EXISTS attachment_search USING fts5(
+                        email_id UNINDEXED,
+                        filename,
+                        content,
+                        tokenize='porter unicode61 remove_diacritics 1'
+                    );
+                """)
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS attachment_text_state(
+                        email_id   TEXT PRIMARY KEY,
+                        indexed_at INTEGER NOT NULL DEFAULT 0,
+                        text_count INTEGER NOT NULL DEFAULT 0
+                    );
+                """)
+                try exec(handle, "PRAGMA user_version = 6;")
+            }
+            v = 6
         }
     }
 
@@ -2348,6 +2373,112 @@ actor SQLiteEmailStore: EmailArchiveStore {
     }
     #endif
 
+    // MARK: - Attachment-content search (v6)
+
+    /// Emails with attachments whose text extraction hasn't been attempted —
+    /// with raw MIME, byte-capped pages (the extraction job's work list).
+    func attachmentTextCandidates(limit: Int) throws -> (candidates: [FidelityCandidate], rawless: [UUID]) {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT e.id, b.raw FROM emails e
+            LEFT JOIN email_bodies b ON b.id = e.id
+            WHERE e.has_attach = 1
+              AND NOT EXISTS (SELECT 1 FROM attachment_text_state s WHERE s.email_id = e.id)
+            LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        var out: [FidelityCandidate] = []
+        var rawless: [UUID] = []
+        let maxPageBytes = 32 * 1024 * 1024
+        var pageBytes = 0
+        while try stepRow(stmt, db) {
+            guard let id = columnUUID(stmt, 0) else { continue }
+            if let raw = columnBlobString(stmt, 1), !raw.isEmpty {
+                out.append(FidelityCandidate(id: id, raw: raw))
+                pageBytes += raw.utf8.count
+                if pageBytes >= maxPageBytes { break }
+            } else {
+                rawless.append(id)
+            }
+        }
+        return (out, rawless)
+    }
+
+    /// Record one email's extracted attachment texts (possibly none) — FTS
+    /// rows + the attempted-state marker in ONE transaction, idempotent via
+    /// delete-then-insert.
+    func attachmentTextIndex(emailID: UUID, texts: [(filename: String, content: String)]) throws {
+        let db = try ensureDB()
+        try exec(db, "BEGIN TRANSACTION;")
+        do {
+            let clear = try prepare(db, "DELETE FROM attachment_search WHERE email_id = ?;")
+            defer { sqlite3_finalize(clear) }
+            bindText(clear, 1, emailID.uuidString)
+            guard sqlite3_step(clear) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+
+            let insert = try prepare(db, "INSERT INTO attachment_search(email_id, filename, content) VALUES (?,?,?);")
+            defer { sqlite3_finalize(insert) }
+            for text in texts {
+                sqlite3_reset(insert); sqlite3_clear_bindings(insert)
+                bindText(insert, 1, emailID.uuidString)
+                bindText(insert, 2, text.filename)
+                bindText(insert, 3, text.content)
+                guard sqlite3_step(insert) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            let state = try prepare(db, """
+                INSERT INTO attachment_text_state(email_id, indexed_at, text_count) VALUES (?,?,?)
+                ON CONFLICT(email_id) DO UPDATE SET indexed_at = excluded.indexed_at, text_count = excluded.text_count;
+            """)
+            defer { sqlite3_finalize(state) }
+            bindText(state, 1, emailID.uuidString)
+            sqlite3_bind_int64(state, 2, Int64(Date().timeIntervalSince1970))
+            sqlite3_bind_int64(state, 3, Int64(texts.count))
+            guard sqlite3_step(state) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    /// Emails whose attachment FILENAME or extracted CONTENT matches the FTS
+    /// query — bounded by `limit`, never a materialized result set.
+    func attachmentTextSearch(_ ftsQuery: String, limit: Int = 2_000) throws -> Set<UUID> {
+        let trimmed = ftsQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        do {
+            return try attachmentTextMatch(trimmed, limit: limit)
+        } catch {
+            // Raw user text can be FTS5 syntax (hyphens = column filters,
+            // stray quotes). Retry with every token phrase-quoted — a search
+            // must degrade to literal matching, never throw at the user.
+            let quoted = trimmed.split(separator: " ")
+                .map { "\"" + $0.replacingOccurrences(of: "\"", with: "") + "\"" }
+                .joined(separator: " ")
+            return try attachmentTextMatch(quoted, limit: limit)
+        }
+    }
+
+    private func attachmentTextMatch(_ query: String, limit: Int) throws -> Set<UUID> {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT DISTINCT email_id FROM attachment_search WHERE attachment_search MATCH ? LIMIT ?;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, query)
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+        var out = Set<UUID>()
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.insert(id) } }
+        return out
+    }
+
+    /// (attempted, pending) — powers the honest indexing-progress notice.
+    func attachmentTextProgress() throws -> (attempted: Int, pending: Int) {
+        let db = try ensureDB()
+        let attempted = try scalarInt(db, "SELECT COUNT(*) FROM attachment_text_state;")
+        let pending = try scalarInt(db, """
+            SELECT COUNT(*) FROM emails e WHERE e.has_attach = 1
+              AND NOT EXISTS (SELECT 1 FROM attachment_text_state s WHERE s.email_id = e.id);
+        """)
+        return (attempted, pending)
+    }
+
     // MARK: - Forensic state (§21)
 
     struct ForensicEmailHashRow: Sendable, Equatable {
@@ -2807,7 +2938,8 @@ actor SQLiteEmailStore: EmailArchiveStore {
                                      ("attachments", "email_id"), ("email_participants", "email_id"),
                                      ("email_tags", "email_id"), ("email_domains", "email_id"),
                                      ("email_review_state", "email_id"), ("email_user_tags", "email_id"),
-                                     ("email_annotations", "email_id")] {
+                                     ("email_annotations", "email_id"),
+                                     ("attachment_search", "email_id"), ("attachment_text_state", "email_id")] {
                     let stmt = try prepare(db, "DELETE FROM \(table) WHERE \(col) IN (\(placeholders));")
                     defer { sqlite3_finalize(stmt) }
                     for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
@@ -2826,7 +2958,8 @@ actor SQLiteEmailStore: EmailArchiveStore {
         for table in ["emails", "email_bodies", "derived", "duplicates", "thread_keys",
                       "predictive_records", "near_dup_findings", "sources", "attachments",
                       "email_participants", "email_tags", "email_domains",
-                      "email_review_state", "email_user_tags", "email_annotations"] {
+                      "email_review_state", "email_user_tags", "email_annotations",
+                      "attachment_search", "attachment_text_state"] {
             try exec(db, "DELETE FROM \(table);")
         }
     }

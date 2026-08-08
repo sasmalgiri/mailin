@@ -3828,3 +3828,67 @@ final class V2FidelityBackfillTests: XCTestCase {
         XCTAssertEqual(pending, 0, "work list converges — no forever-loop")
     }
 }
+
+// MARK: - Attachment-CONTENT search (in:attachments)
+
+@MainActor
+final class V2AttachmentSearchTests: XCTestCase {
+
+    func testAttachmentContentIndexed_andSearchableByContent() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-attsearch-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            AttachmentTextIndexJob.testStoreOverride = nil
+        }
+        let store = SQLiteEmailStore(directory: root)
+        AttachmentTextIndexJob.testStoreOverride = store
+
+        // A text attachment whose CONTENT (not filename) carries the term.
+        let secret = "xylophone-covenant"
+        let attachmentBody = Data("Meeting notes: the \(secret) clause was accepted.".utf8).base64EncodedString()
+        let raw = """
+        From sender@example.com Wed Jan 15 10:00:00 2025
+        From: sender@example.com
+        To: user@dest.org
+        Subject: Notes attached
+        Date: Wed, 15 Jan 2025 10:00:00 +0000
+        Message-ID: <att-1@t>
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="B"
+
+        --B
+        Content-Type: text/plain
+
+        see attached
+        --B
+        Content-Type: text/plain; name="notes.txt"
+        Content-Disposition: attachment; filename="notes.txt"
+        Content-Transfer-Encoding: base64
+
+        \(attachmentBody)
+        --B--
+        """
+        let email = try MBOXParser.processRawMessage(raw, senderEmail: "")
+        XCTAssertFalse(email.attachments.isEmpty, "fixture parses with an attachment")
+        _ = try await store.insertBatch([email], sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+
+        // Index → the term INSIDE the attachment finds the email.
+        let outcome = await AttachmentTextIndexJob.shared.run()
+        XCTAssertEqual(outcome.indexedEmails, 1)
+        XCTAssertGreaterThanOrEqual(outcome.extractedTexts, 1, "text attachment extracted")
+        let hits = try await store.attachmentTextSearch(secret)
+        XCTAssertEqual(hits, [email.id], "content term inside the attachment matches")
+        let byFilename = try await store.attachmentTextSearch("notes")
+        XCTAssertEqual(byFilename, [email.id], "filename still matches too")
+        let miss = try await store.attachmentTextSearch("nonexistent-term-zzz")
+        XCTAssertTrue(miss.isEmpty)
+
+        // Work list converged; a second run is a no-op.
+        let progress = try await store.attachmentTextProgress()
+        XCTAssertEqual(progress.pending, 0)
+        let again = await AttachmentTextIndexJob.shared.run()
+        XCTAssertEqual(again, AttachmentTextIndexJob.Outcome())
+    }
+}
