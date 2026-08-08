@@ -29,6 +29,12 @@ struct FolderTreeView: View {
     static let maxLabels = 30
     static let maxSourceFiles = 50
 
+    /// Operator-safe value: multiword labels/filenames must be quoted or the
+    /// search parser splits them ("tag:Boxbe Waiting List" → tag:Boxbe + text).
+    private static func operatorValue(_ v: String) -> String {
+        v.contains(" ") ? "\"\(v)\"" : v
+    }
+
     private struct FlatRow: Identifiable {
         var id: String { "\(node.id)-\(depth)" }
         let node: FolderNode
@@ -173,7 +179,7 @@ struct FolderTreeView: View {
 
         if !labelBuckets.isEmpty {
             let labelChildren = labelBuckets.map {
-                FolderNode(name: $0.value, icon: "tag.fill", children: [], emailCount: $0.count, filterValue: "tag:\($0.value)")
+                FolderNode(name: $0.value, icon: "tag.fill", children: [], emailCount: $0.count, filterValue: "tag:\(Self.operatorValue($0.value))")
             }
             // v1 showed the label-application total on the parent row
             // (labels overlap, so this can exceed the email count).
@@ -183,7 +189,7 @@ struct FolderTreeView: View {
 
         if sourceBuckets.count > 1 {
             let sourceChildren = sourceBuckets.map {
-                FolderNode(name: $0.value, icon: "doc.fill", children: [], emailCount: $0.count, filterValue: "source:\($0.value)")
+                FolderNode(name: $0.value, icon: "doc.fill", children: [], emailCount: $0.count, filterValue: "source:\(Self.operatorValue($0.value))")
             }
             nodes.append(FolderNode(name: "Source Files", icon: "folder.fill", children: sourceChildren,
                                     emailCount: archiveTotal, filterValue: ""))

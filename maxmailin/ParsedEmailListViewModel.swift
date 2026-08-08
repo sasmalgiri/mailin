@@ -443,23 +443,24 @@ class ParsedEmailListViewModel: ObservableObject {
 
     // MARK: - Paging (Part S)
 
-    /// The pager's query: free text / Boolean route to the repository's ranked
-    /// search (archive-wide, cursor-paged). Regex and proximity have no
-    /// repository text form — they page by date bounds only and refine the
-    /// window (regex ids come from BoundedRegexSearch; proximity from a native
-    /// FTS5 NEAR over the window ids).
+    /// The pager's query. §13: EVERY structured operator (tag:/source:/type:/
+    /// from:/…) compiles into the repository query so matches page in from the
+    /// WHOLE archive — a window-only refinement silently misses matches that
+    /// live outside the resident pages (e.g. a 9-email label deep in history).
+    /// Free text / Boolean route to the ranked FTS search. Regex and proximity
+    /// have no repository text form, and in:attachments resolves to an id set —
+    /// those page by their date/structured bounds and refine the window.
     private var pagerQuery: EmailQuery {
-        var query = EmailQuery.all
+        var base = EmailQuery.all
+        if startDate > .distantPast { base.afterDate = startDate }
+        if endDate < .distantFuture { base.beforeDate = endDate }
         let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty {
-            let parsed = parseSearchQuery(trimmed)
-            if !parsed.isRegexQuery && !parsed.isProximityQuery {
-                let free = parsed.freeText.trimmingCharacters(in: .whitespaces)
-                if !free.isEmpty { query.text = free }
-            }
+        guard !trimmed.isEmpty else { return base }
+        let parsed = parseSearchQuery(trimmed)
+        var query = ArchiveQueryCompiler.compile(trimmed, base: base)
+        if parsed.isRegexQuery || parsed.isProximityQuery || parsed.searchInAttachments {
+            query.text = nil
         }
-        if startDate > .distantPast { query.afterDate = startDate }
-        if endDate < .distantFuture { query.beforeDate = endDate }
         return query
     }
 
@@ -729,7 +730,17 @@ class ParsedEmailListViewModel: ObservableObject {
     private func parseSearchQuery(_ raw: String) -> ParsedSearch {
         var parsed = ParsedSearch()
         var freeWords: [String] = []
-        let parts = raw.components(separatedBy: " ")
+        // Quote-aware tokenization (shared with the SQL compiler): keeps
+        // `tag:"Boxbe Waiting List"` one token so multiword operator values
+        // survive — a bare space-split cut them in half.
+        let parts = ArchiveQueryCompiler.tokenize(raw)
+        func unquoted(_ value: String) -> String {
+            var v = value.trimmingCharacters(in: .whitespaces)
+            if v.hasPrefix("\"") && v.hasSuffix("\"") && v.count >= 2 {
+                v = String(v.dropFirst().dropLast())
+            }
+            return v
+        }
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd"
         dateFormatter.locale = Locale(identifier: "en_US_POSIX")
@@ -739,11 +750,11 @@ class ParsedEmailListViewModel: ObservableObject {
             let part = parts[i]
             let lower = part.lowercased()
             if lower.hasPrefix("from:") {
-                parsed.fromOperator = String(part.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+                parsed.fromOperator = unquoted(String(part.dropFirst(5)))
             } else if lower.hasPrefix("to:") {
-                parsed.toOperator = String(part.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                parsed.toOperator = unquoted(String(part.dropFirst(3)))
             } else if lower.hasPrefix("subject:") {
-                parsed.subjectOperator = String(part.dropFirst(8)).trimmingCharacters(in: .whitespaces)
+                parsed.subjectOperator = unquoted(String(part.dropFirst(8)))
             } else if lower == "has:attachment" || lower == "has:attachments" {
                 parsed.hasAttachment = true
             } else if lower == "in:attachments" || lower == "in:attachment" {
@@ -755,11 +766,11 @@ class ParsedEmailListViewModel: ObservableObject {
                 let dateStr = String(part.dropFirst(6))
                 parsed.afterDate = dateFormatter.date(from: dateStr)
             } else if lower.hasPrefix("type:") {
-                parsed.typeOperator = String(part.dropFirst(5)).trimmingCharacters(in: .whitespaces).lowercased()
+                parsed.typeOperator = unquoted(String(part.dropFirst(5))).lowercased()
             } else if lower.hasPrefix("tag:") {
-                parsed.tagOperator = String(part.dropFirst(4)).trimmingCharacters(in: .whitespaces)
+                parsed.tagOperator = unquoted(String(part.dropFirst(4)))
             } else if lower.hasPrefix("source:") {
-                parsed.sourceOperator = String(part.dropFirst(7)).trimmingCharacters(in: .whitespaces)
+                parsed.sourceOperator = unquoted(String(part.dropFirst(7)))
             } else {
                 freeWords.append(part)
             }
@@ -1008,8 +1019,13 @@ class ParsedEmailListViewModel: ObservableObject {
 
             let matchesType = parsed.typeOperator.map { email.messageType == $0 } ?? true
             let matchesTag = parsed.tagOperator.map { tag in
-                let emailTags = email.headers["X-Keywords"] ?? email.headers["X-Gmail-Labels"] ?? ""
-                return emailTags.localizedCaseInsensitiveContains(tag)
+                // Parser labels live in email.tags (side table) and headers;
+                // user tags in the review service. Any of the three counts —
+                // the SQL page already restricted to true matches.
+                let headerTags = email.headers["X-Keywords"] ?? email.headers["X-Gmail-Labels"] ?? ""
+                return headerTags.localizedCaseInsensitiveContains(tag)
+                    || email.tags.contains { $0.caseInsensitiveCompare(tag) == .orderedSame }
+                    || review.tags(for: email.id).contains { $0.caseInsensitiveCompare(tag) == .orderedSame }
             } ?? true
             let matchesSource = parsed.sourceOperator.map { source in
                 let emailSource = email.headers["sourceFile"] ?? email.headers["X-Source-File"] ?? ""

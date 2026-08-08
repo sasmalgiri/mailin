@@ -230,6 +230,35 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(vm.residentEmails.count, 10, "back to plain first page")
     }
 
+    /// THE folder-click regression: a structured operator (tag:) must page
+    /// its matches from the WHOLE archive via SQL — not merely refine the
+    /// resident window. The only tagged email here is the OLDEST row, which
+    /// never enters the first page of a 10-row window; before the fix this
+    /// query showed "no matching emails" while the folder tree counted 1.
+    func testPartS_structuredOperatorsPageArchiveWide() async throws {
+        let env = try makeEnv()
+        var fixtures = (0..<30).map { makeEmail(i: $0, total: 30, body: "plain body \($0)") }
+        fixtures[0].tags = ["Boxbe Waiting List"]   // oldest date → outside page 1
+        try await env.store.insertBatch(fixtures, batchSize: 200)
+        try await env.fts.indexBatch(fixtures)
+
+        let vm = ParsedEmailListViewModel(viewModel: ContentViewModel(), archive: env.archive,
+                                          pageSize: 10, maxRetained: 50)
+        vm.isPremiumUser = true
+        vm.searchText = "tag:\"Boxbe Waiting List\""
+        await vm.reloadForQueryChangeNow()
+
+        XCTAssertEqual(vm.queryTotalCount, 1, "SQL-side match count, not window count")
+        XCTAssertEqual(vm.visibleEmails.map(\.id), [fixtures[0].id],
+            "the tagged email pages in even though it is 30 rows deep")
+
+        // source:-style operators ride the same compiled path; a miss must be
+        // an honest zero, not a silently unfiltered list.
+        vm.searchText = "tag:NoSuchLabel"
+        await vm.reloadForQueryChangeNow()
+        XCTAssertEqual(vm.visibleEmails.count, 0)
+    }
+
     // MARK: - Free-tier paging gate from store counts
 
     /// Non-premium paging depth is capped at `StoreManager.freeEmailLimit`
