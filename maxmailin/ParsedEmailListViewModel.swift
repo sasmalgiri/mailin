@@ -354,6 +354,10 @@ class ParsedEmailListViewModel: ObservableObject {
         if let evidence = selectedEvidenceTag, evidence != .none { base.evidenceTag = evidence.rawValue }
         if hasAttachmentFilter { base.hasAttachments = true }
         if let quickType = quickTypeFilter { base.messageType = quickType }
+        if let minPriority = quickMinPriority { base.minPriority = minPriority }
+        if quickPhishingOnly { base.phishingOnly = true }
+        if quickNegativeOnly { base.sentimentBelow = -0.4 }
+        if quickNewsletterOnly { base.classifications = ["newsletter", "promotional"] }
         if showPinnedOnly { base.pinnedOnly = true }
         switch sortBy {
         case .dateDesc: base.sort = .dateDesc
@@ -383,6 +387,15 @@ class ParsedEmailListViewModel: ObservableObject {
     /// so the chips filter the WHOLE archive, including header-recovered
     /// rows that have flags but no re-parsable metadata.
     @Published var quickTypeFilter: String? = nil
+    /// AI-chip filters — compile to SQL over the persisted `derived` table
+    /// (archive-wide). Unanalyzed rows don't match; the coverage notice says
+    /// so honestly and the background analysis is kicked to close the gap.
+    @Published var quickMinPriority: Int? = nil
+    @Published var quickPhishingOnly = false
+    @Published var quickNegativeOnly = false
+    @Published var quickNewsletterOnly = false
+    /// Cached derived-analysis coverage (refreshed on reload paths).
+    private(set) var derivedCoverage: (analyzed: Int, total: Int) = (0, 0)
 
     func togglePin(_ emailID: UUID) { review.togglePin(emailID); applyFilters() }
     func isPinned(_ emailID: UUID) -> Bool { review.isPinned(emailID) }
@@ -473,6 +486,25 @@ class ParsedEmailListViewModel: ObservableObject {
         return query
     }
 
+    /// Archive-wide AI chips are only as complete as the persisted analysis:
+    /// while coverage is partial, say so and kick the background analysis so
+    /// the gap closes (minimum-touch: using the chip starts the work).
+    private var derivedChipActive: Bool {
+        quickMinPriority != nil || quickPhishingOnly || quickNegativeOnly || quickNewsletterOnly
+    }
+
+    @MainActor
+    func refreshDerivedCoverageNotice() async {
+        guard derivedChipActive, isProductionArchive else { return }
+        if let coverage = try? await SQLiteEmailStore.shared.derivedAnalysisCoverage() {
+            derivedCoverage = coverage
+            if coverage.analyzed < coverage.total {
+                searchNotice = "AI filters cover \(coverage.analyzed) of \(coverage.total) emails — analysis running for the rest."
+                await BackgroundAnalysisManager.shared.runAnalysis()
+            }
+        }
+    }
+
     /// The query the pager last ran — applyFilters() re-pages when the
     /// compiled query ACTUALLY changed (sidebar selections, sort, operators)
     /// and only refines in-window otherwise. Equality-guarded, so the
@@ -523,6 +555,7 @@ class ParsedEmailListViewModel: ObservableObject {
         let revision = windowRevision &+ 1
         windowRevision = revision
         isLoadingPage = true
+        await refreshDerivedCoverageNotice()
         let compiled = pagerQuery
         lastPagedQuery = compiled
         await pager.setQuery(compiled)

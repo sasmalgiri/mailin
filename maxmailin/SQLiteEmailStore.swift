@@ -1554,6 +1554,15 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return out
     }
 
+    /// How much of the archive the AI analysis has covered — the archive-wide
+    /// AI chips surface an honest notice while coverage is incomplete.
+    func derivedAnalysisCoverage() throws -> (analyzed: Int, total: Int) {
+        let db = try ensureDB()
+        let analyzed = try scalarInt(db, "SELECT COUNT(*) FROM derived WHERE priority IS NOT NULL;")
+        let total = try scalarInt(db, "SELECT COUNT(*) FROM emails;")
+        return (analyzed, total)
+    }
+
     /// Whitelisted grouping columns — the raw value is the actual column, so no
     /// user string is ever interpolated into SQL.
     enum GroupColumn: String, Sendable { case fromAddr = "from_addr", subject = "subject", toAddr = "to_addr" }
@@ -1656,6 +1665,26 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 """)
             binds.append(contentsOf: q.tags.map { .text($0) })
             binds.append(contentsOf: q.tags.map { .text($0) })
+        }
+        // Derived-analysis filters: EXISTS over the persisted `derived` rows.
+        if let minPriority = q.minPriority {
+            sql.append("EXISTS (SELECT 1 FROM derived d2 WHERE d2.email_id = e.id AND d2.priority >= ?)")
+            binds.append(.int(Int64(minPriority)))
+        }
+        if q.phishingOnly {
+            sql.append("EXISTS (SELECT 1 FROM derived d3 WHERE d3.email_id = e.id AND d3.phishing = 1)")
+        }
+        if let sentimentBelow = q.sentimentBelow {
+            sql.append("""
+                EXISTS (SELECT 1 FROM derived d4 WHERE d4.email_id = e.id
+                        AND d4.sentiment IS NOT NULL AND CAST(d4.sentiment AS REAL) < ?)
+                """)
+            binds.append(.text(String(sentimentBelow)))
+        }
+        if !q.classifications.isEmpty {
+            let marks = Array(repeating: "?", count: q.classifications.count).joined(separator: ",")
+            sql.append("EXISTS (SELECT 1 FROM derived d5 WHERE d5.email_id = e.id AND d5.classification IN (\(marks)))")
+            binds.append(contentsOf: q.classifications.map { .text($0) })
         }
         if let sourceName = q.sourceFileName, !sourceName.isEmpty {
             sql.append("""

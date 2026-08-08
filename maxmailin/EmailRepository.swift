@@ -87,6 +87,12 @@ struct EmailQuery: Sendable, Equatable {
     var tags: [String] = []
     /// Source file name contains (resolved via `sources`/`forensic_source_hashes`).
     var sourceFileName: String? = nil
+    /// Derived-analysis filters (persisted `derived` table — archive-wide AI
+    /// chips). Rows not yet analyzed don't match; callers surface coverage.
+    var minPriority: Int? = nil
+    var phishingOnly = false
+    var sentimentBelow: Double? = nil
+    var classifications: [String] = []
     /// Exact forensic evidence tag (`forensic_evidence_tags`).
     var evidenceTag: String? = nil
     var hasAttachments: Bool? = nil
@@ -107,6 +113,7 @@ struct EmailQuery: Sendable, Equatable {
             || messageType != nil || pinnedOnly || includeTrashed || sort != .dateDesc
             || !senders.isEmpty || !recipients.isEmpty || !subjects.isEmpty
             || !domains.isEmpty || !tags.isEmpty
+            || minPriority != nil || phishingOnly || sentimentBelow != nil || !classifications.isEmpty
     }
 
     var isEmpty: Bool {
@@ -399,15 +406,25 @@ extension EmailStoreRepository: RankedSearchRepository {
     static func rankedQueryFingerprint(ftsQuery: String, query: EmailQuery, years: Set<Int>?) -> UInt64 {
         let loSecs = query.afterDate.map { String(Int64($0.timeIntervalSince1970.rounded())) } ?? "-"
         let hiSecs = query.beforeDate.map { String(Int64($0.timeIntervalSince1970.rounded())) } ?? "-"
-        let filters = [
+        // Split into typed sub-arrays: one big literal exceeds the
+        // type-checker's expression budget.
+        let scalarFilters: [String] = [
             query.sender ?? "-", query.recipient ?? "-", query.subjectContains ?? "-",
-            query.domain ?? "-", query.userTag ?? "-", query.sourceFileName ?? "-", query.evidenceTag ?? "-",
+            query.domain ?? "-", query.userTag ?? "-", query.sourceFileName ?? "-",
+            query.evidenceTag ?? "-", query.hasAttachments.map(String.init) ?? "-",
+            query.messageType ?? "-", String(query.pinnedOnly),
+            String(query.includeTrashed), query.sort.rawValue
+        ]
+        let listFilters: [String] = [
             query.senders.joined(separator: ","), query.recipients.joined(separator: ","),
             query.subjects.joined(separator: ","), query.domains.joined(separator: ","),
-            query.tags.joined(separator: ","),
-            query.hasAttachments.map(String.init) ?? "-", query.messageType ?? "-",
-            String(query.pinnedOnly), String(query.includeTrashed), query.sort.rawValue
-        ].joined(separator: "\u{1}")
+            query.tags.joined(separator: ","), query.classifications.joined(separator: ",")
+        ]
+        let derivedFilters: [String] = [
+            query.minPriority.map(String.init) ?? "-", String(query.phishingOnly),
+            query.sentimentBelow.map { String($0) } ?? "-"
+        ]
+        let filters = (scalarFilters + listFilters + derivedFilters).joined(separator: "\u{1}")
         return FTSSearchIndex.rankedFingerprint(
             query: ftsQuery + "\u{1}" + loSecs + "\u{1}" + hiSecs + "\u{1}" + filters, years: years
         )

@@ -337,6 +337,49 @@ final class V2CutoverTests: XCTestCase {
             "Attachments chip matches the recovered has_attach flag even with no metadata rows")
     }
 
+    /// AI chips (priority/phishing/sentiment/classification) compile to SQL
+    /// over the persisted derived table — matches page in from the whole
+    /// archive, not just the resident window.
+    func testPartU_aiChipsFilterViaPersistedDerivedRecords() async throws {
+        let env = try makeEnv()
+        let fixtures = (0..<30).map { makeEmail(i: $0, total: 30, body: "plain body \($0)") }
+        try await env.store.insertBatch(fixtures, batchSize: 200)
+        try await env.fts.indexBatch(fixtures)
+        // Persisted analysis: only the OLDEST row is high priority + phishing.
+        var record = DerivedRecord(emailID: fixtures[0].id)
+        record.corpusRevision = 1
+        record.analysisVersion = 1
+        record.sentiment = "-0.8000"
+        record.classification = "newsletter"
+        record.priority = 5
+        record.phishing = true
+        try await env.store.derivedUpsert([record])
+
+        let vm = ParsedEmailListViewModel(viewModel: ContentViewModel(), archive: env.archive,
+                                          pageSize: 10, maxRetained: 50)
+        vm.isPremiumUser = true
+
+        vm.quickMinPriority = 4
+        await vm.reloadForQueryChangeNow()
+        XCTAssertEqual(vm.visibleEmails.map(\.id), [fixtures[0].id],
+            "High Priority chip pages the archive via derived.priority")
+
+        vm.quickMinPriority = nil
+        vm.quickPhishingOnly = true
+        await vm.reloadForQueryChangeNow()
+        XCTAssertEqual(vm.visibleEmails.map(\.id), [fixtures[0].id], "phishing flag via SQL")
+
+        vm.quickPhishingOnly = false
+        vm.quickNegativeOnly = true
+        await vm.reloadForQueryChangeNow()
+        XCTAssertEqual(vm.visibleEmails.map(\.id), [fixtures[0].id], "sentiment threshold via SQL")
+
+        vm.quickNegativeOnly = false
+        vm.quickNewsletterOnly = true
+        await vm.reloadForQueryChangeNow()
+        XCTAssertEqual(vm.visibleEmails.map(\.id), [fixtures[0].id], "classification via SQL")
+    }
+
     // MARK: - Free-tier paging gate from store counts
 
     /// Non-premium paging depth is capped at `StoreManager.freeEmailLimit`

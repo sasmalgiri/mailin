@@ -105,30 +105,15 @@ struct ParsedEmailListView: View {
                 let tag = ForensicManager.shared.evidenceTags[email.id] ?? .none
                 if tag != .privileged { return false }
             }
-            if quickFilterHighPriority {
-                let score = model.priorityScores[email.id] ?? 0
-                if score < 4 { return false }
-            }
+            // High Priority / AI Important / Suspicious / Negative /
+            // Newsletter compile to SQL over persisted derived records (see
+            // syncQuickFiltersToQuery) — no in-window re-check, which would
+            // disagree with the persisted scores and drop SQL matches.
             if quickFilterHasLinks {
                 let body = email.plainBody.lowercased()
                 if !body.contains("http://") && !body.contains("https://") && !body.contains("www.") { return false }
             }
-            // AI Smart Filters
-            if quickFilterAIImportant {
-                let score = model.priorityScores[email.id] ?? 0
-                if score < 3 { return false }
-            }
-            if quickFilterAISuspicious {
-                if !model.phishingEmailIDs.contains(email.id) { return false }
-            }
-            if quickFilterAINegative {
-                let sentiment = model.sentimentScores[email.id] ?? 0
-                if sentiment >= -0.4 { return false }
-            }
-            if quickFilterAINewsletter {
-                let cat = model.emailClassifications[email.id] ?? .unknown
-                if cat != .newsletter && cat != .promotional { return false }
-            }
+
             let active = activeTags(for: email)
             let activeSet = Set(active)
             if quickFilterTagPersonal && !activeSet.contains(.personal) { return false }
@@ -695,6 +680,12 @@ struct ParsedEmailListView: View {
         model.quickTypeFilter = quickFilterSent && !quickFilterReceived ? "sent"
             : (quickFilterReceived && !quickFilterSent ? "received" : nil)
         model.hasAttachmentFilter = quickFilterAttachments
+        // AI chips: archive-wide via persisted derived records. High
+        // Priority (>=4) wins over AI Important (>=3) when both are on.
+        model.quickMinPriority = quickFilterHighPriority ? 4 : (quickFilterAIImportant ? 3 : nil)
+        model.quickPhishingOnly = quickFilterAISuspicious
+        model.quickNegativeOnly = quickFilterAINegative
+        model.quickNewsletterOnly = quickFilterAINewsletter
         model.applyFilters()
     }
 
@@ -949,13 +940,23 @@ struct ParsedEmailListView: View {
         case "unreviewed": return $quickFilterUnreviewed
         case "largeEmails": return $quickFilterLargeEmails
         case "privileged": return $quickFilterPrivileged
-        case "highPriority": return $quickFilterHighPriority
+        case "highPriority": return Binding(
+            get: { quickFilterHighPriority },
+            set: { quickFilterHighPriority = $0; syncQuickFiltersToQuery() })
         case "hasLinks": return $quickFilterHasLinks
         case "cleanup": return $showCleanupMode
-        case "important": return $quickFilterAIImportant
-        case "aiSuspicious": return $quickFilterAISuspicious
-        case "negative": return $quickFilterAINegative
-        case "newsletter": return $quickFilterAINewsletter
+        case "important": return Binding(
+            get: { quickFilterAIImportant },
+            set: { quickFilterAIImportant = $0; syncQuickFiltersToQuery() })
+        case "aiSuspicious": return Binding(
+            get: { quickFilterAISuspicious },
+            set: { quickFilterAISuspicious = $0; syncQuickFiltersToQuery() })
+        case "negative": return Binding(
+            get: { quickFilterAINegative },
+            set: { quickFilterAINegative = $0; syncQuickFiltersToQuery() })
+        case "newsletter": return Binding(
+            get: { quickFilterAINewsletter },
+            set: { quickFilterAINewsletter = $0; syncQuickFiltersToQuery() })
         case "personal": return $quickFilterTagPersonal
         case "transactional": return $quickFilterTagTransactional
         case "promotional": return $quickFilterTagPromotional
