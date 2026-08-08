@@ -51,13 +51,11 @@ struct AIDigestView: View {
 
                 if selectedPeriod == .custom {
                     HStack(spacing: Spacing.medium) {
-                        DatePicker("From", selection: $customStart, displayedComponents: .date)
-                            .labelsHidden()
+                        ModernDateField(label: "From", date: $customStart)
                         Text("to")
                             .font(Typography.caption1)
                             .foregroundColor(AppColors.secondary)
-                        DatePicker("To", selection: $customEnd, displayedComponents: .date)
-                            .labelsHidden()
+                        ModernDateField(label: "To", date: $customEnd)
                     }
                 }
 

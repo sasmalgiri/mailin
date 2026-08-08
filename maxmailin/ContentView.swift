@@ -2516,15 +2516,12 @@ struct ContentView: View {
             }
             if personaManager.showSection(.dateRange) {
                 HStack(spacing: Spacing.xSmall) {
-                    DatePicker("", selection: $modelVM.startDate, displayedComponents: .date)
-                        .labelsHidden()
-                        .frame(maxWidth: 120)
-                        .accessibilityLabel("Start date filter")
+                    ModernDateField(label: "Start date filter", date: $modelVM.startDate)
                         .onChange(of: modelVM.startDate) { _, _ in modelVM.dateBoundsChanged() }
-                    DatePicker("", selection: $modelVM.endDate, displayedComponents: .date)
-                        .labelsHidden()
-                        .frame(maxWidth: 120)
-                        .accessibilityLabel("End date filter")
+                    Text("–")
+                        .font(Typography.caption1)
+                        .foregroundColor(AppColors.secondary)
+                    ModernDateField(label: "End date filter", date: $modelVM.endDate)
                         .onChange(of: modelVM.endDate) { _, _ in modelVM.dateBoundsChanged() }
                     Spacer()
                 }

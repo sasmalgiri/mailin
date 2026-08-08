@@ -1102,3 +1102,81 @@ extension View {
         modifier(PageTransitionModifier(isActive: isActive))
     }
 }
+
+// MARK: - Modern Date Field
+
+/// Modern date picker: a compact chip (calendar glyph + formatted date) that
+/// opens the graphical month-grid calendar in a popover on macOS — replacing
+/// the legacy stepper-field picker and its cramped drop-down. One click to
+/// open, one click to pick (minimum-touch). On iOS the system compact picker
+/// already presents the modern calendar, so it is used as-is.
+struct ModernDateField: View {
+    let label: String
+    @Binding var date: Date
+
+    #if os(macOS)
+    @State private var showPicker = false
+    #endif
+
+    var body: some View {
+        #if os(macOS)
+        Button {
+            showPicker = true
+        } label: {
+            HStack(spacing: Spacing.xxSmall) {
+                Image(systemName: "calendar")
+                    .foregroundColor(AppColors.primary)
+                Text(date.formatted(date: .abbreviated, time: .omitted))
+                    .foregroundColor(.primary)
+            }
+            .font(Typography.caption1)
+            .padding(.horizontal, Spacing.xSmall)
+            .padding(.vertical, Spacing.xxSmall)
+            .background(AppColors.secondary.opacity(0.08))
+            .cornerRadius(CornerRadius.small)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(label)
+        .accessibilityLabel(label)
+        .popover(isPresented: $showPicker, arrowEdge: .bottom) {
+            VStack(spacing: Spacing.xSmall) {
+                DatePicker(label, selection: $date, displayedComponents: .date)
+                    .datePickerStyle(.graphical)
+                    .labelsHidden()
+                HStack {
+                    Button("Today") { date = Calendar.current.startOfDay(for: Date()) }
+                        .font(Typography.caption1)
+                        .help("Jump to today")
+                    Spacer()
+                    Button("Done") { showPicker = false }
+                        .font(Typography.caption1)
+                        .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(Spacing.small)
+            .frame(width: 280)
+        }
+        #else
+        DatePicker(label, selection: $date, displayedComponents: .date)
+            .labelsHidden()
+            .accessibilityLabel(label)
+        #endif
+    }
+}
+
+#Preview("Modern Date Field") {
+    struct Demo: View {
+        @State private var start = Date(timeIntervalSince1970: 1_693_600_000)
+        @State private var end = Date(timeIntervalSince1970: 1_762_200_000)
+        var body: some View {
+            HStack(spacing: Spacing.xSmall) {
+                ModernDateField(label: "Start date filter", date: $start)
+                Text("–").font(Typography.caption1).foregroundColor(AppColors.secondary)
+                ModernDateField(label: "End date filter", date: $end)
+            }
+            .padding()
+        }
+    }
+    return Demo()
+}

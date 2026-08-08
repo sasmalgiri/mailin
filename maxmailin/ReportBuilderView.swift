@@ -561,13 +561,11 @@ struct ReportBuilderView: View {
 
                     if useDateRange {
                         HStack {
-                            DatePicker("From", selection: $dateFrom, displayedComponents: .date)
-                                .labelsHidden()
+                            ModernDateField(label: "From", date: $dateFrom)
                             Text("to")
                                 .font(Typography.caption1)
                                 .foregroundColor(AppColors.secondary)
-                            DatePicker("To", selection: $dateTo, displayedComponents: .date)
-                                .labelsHidden()
+                            ModernDateField(label: "To", date: $dateTo)
                         }
                     }
                 }
