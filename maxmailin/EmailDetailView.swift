@@ -157,10 +157,10 @@ struct EmailDetailView: View {
 
                 mailActionGroup(
                     actions: [
-                        ("trash", "Delete", {
+                        ("trash", "Move to Trash — restorable from the Trash view, never a permanent delete", {
                             NotificationCenter.default.post(name: .deleteCurrentEmail, object: email.id)
                         }),
-                        ("archivebox", "Archive", {
+                        ("archivebox", "Archive — hides it from the main list; find it again with the Archived filter", {
                             NotificationCenter.default.post(name: .archiveCurrentEmail, object: email.id)
                         }),
                     ]
@@ -170,10 +170,10 @@ struct EmailDetailView: View {
 
                 mailActionGroup(
                     actions: [
-                        ("envelope.badge.fill", "Mark Read/Unread", {
+                        ("envelope.badge.fill", "Toggle read/unread — unread emails show with a highlighted row", {
                             NotificationCenter.default.post(name: .toggleReadCurrentEmail, object: email.id)
                         }),
-                        ("flag.fill", "Flag", {
+                        ("flag.fill", "Pin/flag this email — pinned emails surface with the Pinned filter and stay marked across restarts", {
                             NotificationCenter.default.post(name: .togglePinEmail, object: email.id)
                         }),
                     ]
@@ -185,7 +185,7 @@ struct EmailDetailView: View {
                     #if canImport(FoundationModels)
                     if #available(macOS 26, iOS 26, *) {
                         if FoundationModelEngine.isAvailable {
-                            mailIconButton(icon: "sparkles", tooltip: "AI Reply", color: .purple) {
+                            mailIconButton(icon: "sparkles", tooltip: "Draft a reply with on-device AI — pick a tone, edit before sending; nothing leaves your Mac", color: .purple) {
                                 showReplySheet = true
                             }
                         }
@@ -194,14 +194,14 @@ struct EmailDetailView: View {
                     mailIconButton(icon: "text.bubble", tooltip: "Thread Story — the whole conversation as a timeline", color: AppColors.primary) {
                         showThreadStory = true
                     }
-                    mailIconButton(icon: "translate", tooltip: "Translate", color: AppColors.secondary) {
+                    mailIconButton(icon: "translate", tooltip: "Translate this email using the system translator — fully offline once a language is downloaded", color: AppColors.secondary) {
                         showTranslation = true
                     }
                     .translationPresentation(
                         isPresented: $showTranslation,
                         text: !email.plainBody.isEmpty ? email.plainBody : email.htmlBody.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
                     )
-                    mailIconButton(icon: "printer", tooltip: "Print", color: AppColors.secondary) {
+                    mailIconButton(icon: "printer", tooltip: "Print this email with its headers (⌘P)", color: AppColors.secondary) {
                         printEmail()
                     }
                     .keyboardShortcut("p", modifiers: .command)
@@ -254,7 +254,7 @@ struct EmailDetailView: View {
                         }
                         .buttonStyle(.plain)
                         .disabled(!hasPrev)
-                        .help("Previous email")
+                        .help("Open the previous email in the current filtered list (↑ or K)")
                         .keyboardShortcut(.upArrow, modifiers: [.command])
 
                         if let idx = currentIndex {
@@ -274,7 +274,7 @@ struct EmailDetailView: View {
                         }
                         .buttonStyle(.plain)
                         .disabled(!hasNext)
-                        .help("Next email")
+                        .help("Open the next email in the current filtered list (↓ or J)")
                         .keyboardShortcut(.downArrow, modifiers: [.command])
                     }
                     .padding(.horizontal, 6)
@@ -284,7 +284,7 @@ struct EmailDetailView: View {
                 }
 
                 #if os(macOS)
-                mailIconButton(icon: "xmark", tooltip: "Close", color: AppColors.secondary) {
+                mailIconButton(icon: "xmark", tooltip: "Close this email and return to the list (Esc)", color: AppColors.secondary) {
                     onClose?()
                 }
                 .padding(.leading, 6)
@@ -562,6 +562,7 @@ struct EmailDetailView: View {
                                         .font(Typography.caption1)
                                 }
                                 .buttonStyle(.plain)
+                            .help("Preview this attachment without saving it")
                                 .foregroundColor(AppColors.primary)
                                 .accessibilityLabel("Preview \(att.filename)")
                             }
@@ -574,6 +575,7 @@ struct EmailDetailView: View {
                                     .font(Typography.caption1)
                             }
                             .buttonStyle(SecondaryButtonStyle())
+                            .help("Save this attachment to a folder you choose")
                             .disabled(att.fileURL == nil)
                             .accessibilityLabel("Download \(att.filename.isEmpty ? "attachment" : att.filename)")
                         }
@@ -708,6 +710,9 @@ struct EmailDetailView: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .help(tag == .none
+                      ? "Clear the evidence tag from this email"
+                      : "Tag as \(tag.rawValue) for the review — tags persist, feed the evidence filters, and are logged in the audit trail\(autoAdvanceAfterTag ? "; auto-advances to the next unreviewed email" : "")")
                 .accessibilityLabel("Tag as \(tag.rawValue)")
             }
             Spacer()

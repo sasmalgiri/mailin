@@ -496,7 +496,7 @@ struct ContentView: View {
                     } label: {
                         Label("Back", systemImage: "chevron.left")
                     }
-                    .help("Back (⌘[)")
+                    .help("Go back to the previous view (⌘[) — steps through your navigation history")
                     .keyboardShortcut("[", modifiers: .command)
                 }
             }
@@ -505,7 +505,7 @@ struct ContentView: View {
                     Button { sidebarSelection = .emailInbox } label: {
                         Label("Inbox", systemImage: "envelope")
                     }
-                    .help("Email Inbox")
+                    .help("Open the email list — browse, search and filter your whole archive")
 
                     Button {
                         if forensicManager.isEnabled {
@@ -957,7 +957,7 @@ struct ContentView: View {
                         .foregroundColor(personaManager.selectedPersona.accentColor)
                     }
                     .buttonStyle(.plain)
-                    .help("Back to Home")
+                    .help("Return to the home hub with all tools and settings")
 
                     Spacer()
                 }
@@ -1924,6 +1924,7 @@ struct ContentView: View {
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(CompactSecondaryButtonStyle())
+                        .help("Start over with a different archive — clears the current view and opens the import picker")
                         .accessibilityLabel("Start new import")
                         .accessibilityHint("Go back to the welcome screen to import a different archive")
 
@@ -1934,6 +1935,7 @@ struct ContentView: View {
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(CompactSecondaryButtonStyle())
+                        .help("Import more .mbox/.eml files INTO the current archive — duplicates are detected and skipped")
                         .accessibilityLabel("Add more email files")
                     }
 
@@ -1978,7 +1980,7 @@ struct ContentView: View {
                         .accessibilityLabel("Minimum reply count: \(modelVM.minReplyCount)")
                         .accessibilityHint("Filter senders by minimum number of replies")
                     }
-                    .help("Only show senders you've replied to at least this many times")
+                    .help("Hide emails from senders you've replied to fewer than this many times — 0 shows everyone; raise it to focus on people you actually correspond with")
 
                     if personaManager.showSection(.summary) || personaManager.showSection(.dateRange) {
                         summarySection
@@ -2545,12 +2547,12 @@ struct ContentView: View {
             }
             if personaManager.showSection(.dateRange) {
                 HStack(spacing: Spacing.xSmall) {
-                    ModernDateField(label: "Start date filter", date: $modelVM.startDate)
+                    ModernDateField(label: "Start date — hide emails older than this (click for calendar)", date: $modelVM.startDate)
                         .onChange(of: modelVM.startDate) { _, _ in modelVM.dateBoundsChanged() }
                     Text("–")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
-                    ModernDateField(label: "End date filter", date: $modelVM.endDate)
+                    ModernDateField(label: "End date — hide emails newer than this (click for calendar)", date: $modelVM.endDate)
                         .onChange(of: modelVM.endDate) { _, _ in modelVM.dateBoundsChanged() }
                     Spacer()
                 }
@@ -2564,17 +2566,17 @@ struct ContentView: View {
 
             if personaManager.showSection(.senders) {
                 SidebarSectionHeader(title: "From (Senders)", icon: "arrow.up.forward", color: AppColors.sentEmail, helpText: "Filter emails by sender address")
-                multiToggleList(items: modelVM.allFromEmails, selection: $modelVM.selectedFromEmails)
+                multiToggleList(items: modelVM.allFromEmails, selection: $modelVM.selectedFromEmails, helpVerb: "sent by")
             }
 
             if personaManager.showSection(.recipients) {
                 SidebarSectionHeader(title: "To (Recipients)", icon: "arrow.down.backward", color: AppColors.receivedEmail, helpText: "Filter emails by recipient address")
-                multiToggleList(items: modelVM.allToEmails, selection: $modelVM.selectedToEmails)
+                multiToggleList(items: modelVM.allToEmails, selection: $modelVM.selectedToEmails, helpVerb: "addressed to")
             }
 
             if !modelVM.allTags.isEmpty && personaManager.showSection(.labels) {
                 SidebarSectionHeader(title: "Labels", icon: "tag", color: .purple, helpText: "Filter emails by Gmail labels or tags")
-                multiToggleList(items: modelVM.allTags, selection: $modelVM.selectedTags)
+                multiToggleList(items: modelVM.allTags, selection: $modelVM.selectedTags, helpVerb: "labeled")
             }
 
             if !modelVM.smartTagCounts.isEmpty {
@@ -2606,6 +2608,7 @@ struct ContentView: View {
                             }
                         }
                         .buttonStyle(.plain)
+                        .help("Show only the \(entry.count) emails the AI tagged “\(entry.tag.rawValue)” — click again to turn off")
                         .accessibilityLabel("\(entry.tag.rawValue), \(entry.count) emails\(modelVM.selectedSmartTags.contains(entry.tag) ? ", selected" : "")")
                     }
                     if !modelVM.selectedSmartTags.isEmpty {
@@ -3067,7 +3070,8 @@ struct ContentView: View {
         .accessibilityLabel("Step \(number): \(title)\(subtitle.map { ". \($0)" } ?? "")")
     }
 
-    private func multiToggleList(items: [String], selection: Binding<[String]>) -> some View {
+    private func multiToggleList(items: [String], selection: Binding<[String]>,
+                                 helpVerb: String = "matching") -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.xSmall) {
                 ForEach(items, id: \.self) { item in
@@ -3084,6 +3088,7 @@ struct ContentView: View {
                     )) {
                         Text(item.prefix(38)).font(Typography.caption1)
                     }
+                    .help("Show only emails \(helpVerb) \(item) — check several to include all of them; searches the whole archive")
                 }
             }
         }

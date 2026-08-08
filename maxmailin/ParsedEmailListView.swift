@@ -516,7 +516,7 @@ struct ParsedEmailListView: View {
                 }
                 .toggleStyle(.button)
                 #if os(macOS)
-                .help("Group emails into conversation threads")
+                .help("Group replies with their original message so each conversation is one row — click a thread to expand it")
                 #endif
                 .accessibilityLabel("Group by thread")
                 .accessibilityHint("Toggle conversation threading")
@@ -545,7 +545,7 @@ struct ParsedEmailListView: View {
                     }
                 }
                 #if os(macOS)
-                .help("Change the order emails are displayed")
+                .help("Sort the whole archive — newest/oldest, subject A→Z, largest first, or AI priority")
                 #endif
                 .accessibilityLabel("Sort order: \(model.sortBy.label)")
             }
@@ -571,6 +571,9 @@ struct ParsedEmailListView: View {
                     .textFieldStyle(.plain)
                     .font(.footnote)
                     .focused($isSearchFieldFocused)
+                    .help(model.isNaturalLanguageMode
+                          ? "Ask in plain words — e.g. “invoices from Priya last March” — mailin turns it into a search"
+                          : "Searches subjects, senders and full text across the whole archive. Power operators: from: to: subject: tag: type:sent has:attachment in:attachments before:2024-01-01 — quotes for exact phrases")
                     .accessibilityLabel(model.isNaturalLanguageMode ? "Natural language search" : "Search emails")
                     .accessibilityHint(model.isNaturalLanguageMode ? "Type a natural language query to filter emails" : "Supports operators: from:, to:, subject:, has:attachment, before:, after:")
                     .onChange(of: model.searchText) { _, newValue in
@@ -620,7 +623,7 @@ struct ParsedEmailListView: View {
                     }
                     .buttonStyle(.plain)
                     #if os(macOS)
-                    .help("Save this search")
+                    .help("Save this query for one-click reuse — saved searches also feed the weekly digest")
                     #endif
                     .accessibilityLabel("Save current search")
 
@@ -660,7 +663,7 @@ struct ParsedEmailListView: View {
                     }
                     .buttonStyle(.plain)
                     #if os(macOS)
-                    .help("Saved searches")
+                    .help("Run one of your saved searches — the query fills in and the list updates instantly")
                     #endif
                 }
             }
@@ -831,7 +834,7 @@ struct ParsedEmailListView: View {
                     }
                     .buttonStyle(.plain)
                     #if os(macOS)
-                    .help("Clear all filters")
+                    .help("Turn off every active filter chip and show the full list again")
                     #endif
                 }
             }
@@ -1079,7 +1082,7 @@ struct ParsedEmailListView: View {
         }
         .buttonStyle(.plain)
         #if os(macOS)
-        .help("Add filter")
+        .help("Add a quick filter chip — email type, attachments, links, size, evidence tags, or AI tags")
         #endif
         .accessibilityLabel("Add a filter")
     }
@@ -1158,7 +1161,7 @@ struct ParsedEmailListView: View {
         }
         .buttonStyle(.plain)
         #if os(macOS)
-        .help("Filter presets")
+        .help("Save the current chip combination as a preset, or load one you saved before")
         #endif
         .accessibilityLabel("Filter presets")
     }
@@ -1489,7 +1492,7 @@ struct ParsedEmailListView: View {
                 .foregroundColor(.secondary)
             }
             .buttonStyle(.plain)
-            .help("Random 10% quality check sample")
+            .help("Select a random 10% of the current list for quality-control re-review — standard e-discovery practice")
 
             Button {
                 forensicManager.runPrivilegeScan(on: emails)
@@ -1507,7 +1510,7 @@ struct ParsedEmailListView: View {
                 .foregroundColor(forensicManager.privilegeFlags.isEmpty ? .secondary : .orange)
             }
             .buttonStyle(.plain)
-            .help("Auto-detect potentially privileged emails")
+            .help("Scan the list for attorney-client and legal-privilege signals — flagged emails then show under the Privileged chip")
 
             Button {
                 showReviewerStats.toggle()
@@ -1517,7 +1520,7 @@ struct ParsedEmailListView: View {
                     .foregroundColor(.secondary)
             }
             .buttonStyle(.plain)
-            .help("Reviewer statistics")
+            .help("How many emails each reviewer has tagged, by category — useful for tracking review progress")
             .popover(isPresented: $showReviewerStats) {
                 reviewerStatsPopover
                     .frame(width: 280)
@@ -1533,6 +1536,7 @@ struct ParsedEmailListView: View {
                     .font(.system(size: 10))
                     .foregroundColor(.blue)
                 TextField("From contains...", text: $crossPartyFrom)
+                    .help("Narrow the review table to senders whose address or name contains this text")
                     .font(.system(size: 10))
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 140)
@@ -1540,6 +1544,7 @@ struct ParsedEmailListView: View {
                     .font(.system(size: 9))
                     .foregroundColor(.secondary)
                 TextField("To contains...", text: $crossPartyTo)
+                    .help("Narrow the review table to recipients whose address or name contains this text")
                     .font(.system(size: 10))
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 140)
@@ -3109,6 +3114,9 @@ struct DismissableFilterChip: View {
                 .padding(.vertical, 5)
             }
             .buttonStyle(.plain)
+            .help(isActive
+                  ? "“\(label)” filter is ON — click to turn it off"
+                  : "Filter the list to \(label) emails — combines with the other active chips")
 
             if let onRemove {
                 Button {
