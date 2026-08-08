@@ -282,79 +282,79 @@ extension View {
 
 // MARK: - Custom Button Styles
 
-struct PrimaryButtonStyle: ButtonStyle {
+// The four app-wide button styles delegate to SYSTEM styles so every button
+// automatically wears each OS's current design — Liquid Glass on macOS 26 /
+// iOS 26, bordered styles on older systems — instead of a hand-drawn look
+// frozen in time. PrimitiveButtonStyle lets the 90+ existing
+// `.buttonStyle(PrimaryButtonStyle())` call sites stay unchanged.
+
+struct PrimaryButtonStyle: PrimitiveButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(Typography.headline)
-            .foregroundColor(.white)
-            .padding(.horizontal, Spacing.large)
-            .padding(.vertical, Spacing.small)
-            .background(
-                RoundedRectangle(cornerRadius: CornerRadius.medium)
-                    .fill(AppColors.primary)
-            )
-            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
-            .animation(AnimationTiming.fast, value: configuration.isPressed)
+        if #available(macOS 26, iOS 26, *) {
+            Button(configuration)
+                .buttonStyle(.glassProminent)
+                .tint(AppColors.primary)
+                .font(Typography.headline)
+                .controlSize(.large)
+        } else {
+            Button(configuration)
+                .buttonStyle(.borderedProminent)
+                .tint(AppColors.primary)
+                .font(Typography.headline)
+                .controlSize(.large)
+        }
     }
 }
 
-struct SecondaryButtonStyle: ButtonStyle {
+struct SecondaryButtonStyle: PrimitiveButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(Typography.headline)
-            .foregroundColor(AppColors.primary)
-            .padding(.horizontal, Spacing.large)
-            .padding(.vertical, Spacing.small)
-            .background(
-                RoundedRectangle(cornerRadius: CornerRadius.medium)
-                    .fill(AppColors.backgroundSecondary)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: CornerRadius.medium)
-                            .stroke(AppColors.primary.opacity(0.3), lineWidth: 1)
-                    )
-            )
-            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
-            .animation(AnimationTiming.fast, value: configuration.isPressed)
+        if #available(macOS 26, iOS 26, *) {
+            Button(configuration)
+                .buttonStyle(.glass)
+                .font(Typography.headline)
+                .controlSize(.large)
+        } else {
+            Button(configuration)
+                .buttonStyle(.bordered)
+                .font(Typography.headline)
+                .controlSize(.large)
+        }
     }
 }
 
 // MARK: - Compact Button Styles (for sidebar/toolbar use)
 
-struct CompactPrimaryButtonStyle: ButtonStyle {
+struct CompactPrimaryButtonStyle: PrimitiveButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(Typography.callout)
-            .fontWeight(.semibold)
-            .foregroundColor(.white)
-            .padding(.horizontal, Spacing.small)
-            .padding(.vertical, Spacing.xSmall)
-            .background(
-                RoundedRectangle(cornerRadius: CornerRadius.medium)
-                    .fill(AppColors.primary)
-            )
-            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
-            .animation(AnimationTiming.fast, value: configuration.isPressed)
+        if #available(macOS 26, iOS 26, *) {
+            Button(configuration)
+                .buttonStyle(.glassProminent)
+                .tint(AppColors.primary)
+                .font(Typography.callout.weight(.semibold))
+                .controlSize(.regular)
+        } else {
+            Button(configuration)
+                .buttonStyle(.borderedProminent)
+                .tint(AppColors.primary)
+                .font(Typography.callout.weight(.semibold))
+                .controlSize(.regular)
+        }
     }
 }
 
-struct CompactSecondaryButtonStyle: ButtonStyle {
+struct CompactSecondaryButtonStyle: PrimitiveButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(Typography.callout)
-            .fontWeight(.medium)
-            .foregroundColor(AppColors.primary)
-            .padding(.horizontal, Spacing.small)
-            .padding(.vertical, Spacing.xSmall)
-            .background(
-                RoundedRectangle(cornerRadius: CornerRadius.medium)
-                    .fill(AppColors.backgroundSecondary)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: CornerRadius.medium)
-                            .stroke(AppColors.primary.opacity(0.3), lineWidth: 1)
-                    )
-            )
-            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
-            .animation(AnimationTiming.fast, value: configuration.isPressed)
+        if #available(macOS 26, iOS 26, *) {
+            Button(configuration)
+                .buttonStyle(.glass)
+                .font(Typography.callout.weight(.medium))
+                .controlSize(.regular)
+        } else {
+            Button(configuration)
+                .buttonStyle(.bordered)
+                .font(Typography.callout.weight(.medium))
+                .controlSize(.regular)
+        }
     }
 }
 
@@ -1179,4 +1179,16 @@ struct ModernDateField: View {
         }
     }
     return Demo()
+}
+
+#Preview("Button Styles") {
+    VStack(spacing: Spacing.medium) {
+        Button("Apply") {}.buttonStyle(PrimaryButtonStyle())
+        Button("Clear") {}.buttonStyle(SecondaryButtonStyle())
+        HStack {
+            Button("New Import") {}.buttonStyle(CompactPrimaryButtonStyle())
+            Button("Add Files") {}.buttonStyle(CompactSecondaryButtonStyle())
+        }
+    }
+    .padding()
 }
