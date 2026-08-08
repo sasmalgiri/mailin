@@ -122,6 +122,36 @@ final class V2ExportTests: XCTestCase {
         XCTAssertTrue(cappedDoc.hasSuffix("</body></html>"), "capped output is still a complete document")
     }
 
+    /// mbox export is a REAL mailbox: the file re-parses with the same
+    /// message count and Message-IDs (round-trip through our own parser).
+    func testMBOXArchiveExport_roundTripsThroughParser() async throws {
+        let env = try await makeEnv(count: 25)
+        let url = env.root.appendingPathComponent("out.mbox")
+        let result = try await env.service.exportMBOXArchive(
+            scope: .query(.all, exclusions: []), to: url)
+        XCTAssertEqual(result.recordsWritten, 25)
+
+        let reparsed = try MBOXParser.parse(fileURL: url, senderEmail: "")
+        XCTAssertEqual(reparsed.count, 25, "every exported message re-parses")
+        XCTAssertEqual(Set(reparsed.compactMap { $0.headers["Message-ID"] }),
+                       Set(env.fixtures.map { $0.headers["Message-ID"]! }),
+                       "Message-IDs survive the round trip")
+    }
+
+    /// Markdown export contains every subject once, with the header block.
+    func testMarkdownArchiveExport_completeAndOrdered() async throws {
+        let env = try await makeEnv(count: 12)
+        let url = env.root.appendingPathComponent("out.md")
+        let result = try await env.service.exportMarkdownArchive(
+            scope: .query(.all, exclusions: []), to: url)
+        XCTAssertEqual(result.recordsWritten, 12)
+        let doc = try String(contentsOf: url, encoding: .utf8)
+        for i in 0..<12 { XCTAssertTrue(doc.contains("Subject \(i)")) }
+        XCTAssertTrue(doc.hasPrefix("# mailin email export — 12 email(s)"))
+        XCTAssertEqual(doc.components(separatedBy: "\n---\n").count - 1, 12,
+                       "one section per email")
+    }
+
     /// Per-message EML folder export over an EXPLICIT id scope: exactly one
     /// .eml per selected message, each Message-ID appearing exactly once.
     func testEMLFilesExplicitScopeExactlyOnce() async throws {

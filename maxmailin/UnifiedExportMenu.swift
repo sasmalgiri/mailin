@@ -23,8 +23,8 @@ import AppKit
 import UniformTypeIdentifiers
 
 enum UnifiedExportFormat: CaseIterable {
-    case word, csv, json, printText      // single-document formats
-    case emlFiles, pdfFiles, tiffFiles   // one file per email
+    case word, csv, json, printText, markdown, headersCSV, mbox   // single documents
+    case emlFiles, pdfFiles, tiffFiles, msgFiles                  // one file per email
     case portableHTML                    // folder with index.html viewer
     case vcard, ics                      // derived extracts
 }
@@ -72,6 +72,18 @@ struct UnifiedExportSections: View {
             button("Batch Print Text (.txt)", icon: "printer",
                    help: "Plain text ready for printing") { exportPrintText() }
         }
+        if included(.markdown) {
+            button("Markdown (.md)", icon: "number",
+                   help: "Notes-friendly document — Obsidian, GitHub") { exportMarkdown() }
+        }
+        if included(.headersCSV) {
+            button("Headers-Only CSV", icon: "list.bullet.rectangle",
+                   help: "Metadata only, no bodies — safe to share") { exportHeadersOnly() }
+        }
+        if included(.mbox) {
+            button("mbox Archive", icon: "archivebox",
+                   help: "Standard mailbox file — reimportable anywhere") { exportMBOX() }
+        }
         if !omit.isSuperset(of: [.emlFiles, .pdfFiles, .tiffFiles]) { Divider() }
         if included(.emlFiles) {
             button("Individual .eml Files", icon: "envelope",
@@ -84,6 +96,10 @@ struct UnifiedExportSections: View {
         if included(.tiffFiles) {
             button("TIFF Images (one per email)", icon: "photo",
                    help: "Court-friendly image per email") { exportTIFFs() }
+        }
+        if included(.msgFiles) {
+            button("Outlook Messages (.msg)", icon: "envelope.badge",
+                   help: "One Outlook-compatible file per email") { exportMSGs() }
         }
         Divider()
         if included(.portableHTML) {
@@ -299,6 +315,55 @@ struct UnifiedExportSections: View {
                 onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
                             what: "HTML", scope: scope, deliver: folder)
+        }
+    }
+
+    private func exportMarkdown() {
+        guard let url = documentDestination(timestampName("mailin_emails", ext: "md"), type: .plainText) else { return }
+        let scope = scope(), cap = cap
+        run("Exporting Markdown") { service in
+            let result = try await service.exportMarkdownArchive(
+                scope: scope, to: url, limit: cap,
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
+            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
+                            what: "Markdown", scope: scope, deliver: url)
+        }
+    }
+
+    private func exportHeadersOnly() {
+        guard let url = documentDestination(timestampName("mailin_headers", ext: "csv"), type: .commaSeparatedText) else { return }
+        let scope = scope(), cap = cap
+        run("Exporting headers CSV") { service in
+            let result = try await service.exportHeadersCSV(
+                scope: scope, to: url, limit: cap,
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
+            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
+                            what: "Headers CSV", scope: scope, deliver: url)
+        }
+    }
+
+    private func exportMBOX() {
+        guard let url = documentDestination(timestampName("mailin_emails", ext: "mbox"), type: nil) else { return }
+        let scope = scope(), cap = cap
+        run("Exporting mbox") { service in
+            let result = try await service.exportMBOXArchive(
+                scope: scope, to: url, limit: cap,
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
+            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
+                            what: "mbox", scope: scope, deliver: url)
+        }
+    }
+
+    private func exportMSGs() {
+        guard let folder = folderDestination(message: "Select a folder to save .msg files",
+                                             fallbackName: "msg_export_\(UUID().uuidString)") else { return }
+        let scope = scope(), cap = cap
+        run("Exporting Outlook messages") { service in
+            let result = try await service.exportMSGFiles(
+                scope: scope, to: folder, limit: cap,
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
+            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
+                            what: "MSG", scope: scope, deliver: folder)
         }
     }
 

@@ -552,6 +552,57 @@ final class ArchiveExportService {
         }
     }
 
+    /// mbox: ONE standard mbox archive of the scope — reimportable by any
+    /// mail tool (and mailin itself). Uses stored raw MIME when present;
+    /// synthesizes minimal RFC-822 otherwise. Streamed message by message.
+    @discardableResult
+    func exportMBOXArchive(scope: ArchiveSelectionScope, to url: URL,
+                           limit: Int? = nil,
+                           onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
+        try await exportTextDocument(
+            scope: scope, to: url, limit: limit,
+            onProgress: onProgress
+        ) { email, _ in
+            let raw: String
+            if email.rawSource.isEmpty {
+                var head = ""
+                for (label, key) in [("From", "From"), ("To", "To"), ("Subject", "Subject"),
+                                     ("Date", "Date"), ("Message-ID", "Message-ID")] {
+                    if let value = email.headers[key], !value.isEmpty { head += "\(label): \(value)\n" }
+                }
+                raw = head + "\n" + email.plainBody
+            } else {
+                raw = email.rawSource
+            }
+            // mbox framing: From_ line + >From quoting inside the body.
+            let quoted = raw.replacingOccurrences(of: "\nFrom ", with: "\n>From ")
+            let envelope = "From MAILER-DAEMON Thu Jan  1 00:00:00 1970\n"
+            return envelope + quoted + "\n\n"
+        }
+    }
+
+    /// Markdown: ONE .md document — headers as a definition block, body as
+    /// text — pastes cleanly into Notes/Obsidian/GitHub. Streamed.
+    @discardableResult
+    func exportMarkdownArchive(scope: ArchiveSelectionScope, to url: URL,
+                               limit: Int? = nil,
+                               onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
+        try await exportTextDocument(
+            scope: scope, to: url, limit: limit,
+            header: { total in "# mailin email export — \(total) email(s)\n\n" },
+            onProgress: onProgress
+        ) { email, index in
+            var block = "---\n\n## \(index + 1). \(email.headers["Subject"] ?? "(No Subject)")\n\n"
+            for (label, key) in [("From", "From"), ("To", "To"), ("Cc", "Cc"), ("Date", "Date")] {
+                if let value = email.headers[key], !value.isEmpty {
+                    block += "**\(label):** \(value)  \n"
+                }
+            }
+            block += "\n" + email.plainBody + "\n\n"
+            return block
+        }
+    }
+
     /// vCard: contacts are a SMALL derived record (distinct addresses), but the
     /// source is the streamed scope — never a preview array.
     @discardableResult
