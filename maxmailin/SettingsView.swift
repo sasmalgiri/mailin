@@ -71,7 +71,9 @@ struct SettingsView: View {
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
         let urls = panel.urls
         #else
-        return   // iOS uses the standard import flow (full fidelity already)
+        // iOS uses the standard import flow (full fidelity already).
+        let urls: [URL] = []
+        guard !urls.isEmpty else { return }
         #endif
         fidelityHealRunning = true
         fidelityHealReport = nil
