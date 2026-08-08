@@ -161,6 +161,36 @@ struct ParsedEmailListView: View {
         }
     }
 
+    #if os(macOS)
+    /// One inspector serves stats / raw source / analytics — whichever was
+    /// requested last; closing it clears every request.
+    private var detailInspectorPresented: Binding<Bool> {
+        Binding(
+            get: { activeSheet != nil || showAnalyticsSheet },
+            set: { shown in
+                if !shown {
+                    activeSheet = nil
+                    showAnalyticsSheet = false
+                }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var detailInspectorContent: some View {
+        if let sheet = activeSheet {
+            switch sheet {
+            case .stats:
+                ReplyStatsView(senderEmail: model.viewModel.senderEmail)
+            case .rawSource(let rfc822):
+                RawSourceView(rawText: rfc822)
+            }
+        } else if showAnalyticsSheet {
+            EmailAnalyticsView(query: model.currentArchiveQuery)
+        }
+    }
+    #endif
+
     // MARK: - UI
     var body: some View {
         #if os(iOS)
@@ -380,31 +410,30 @@ struct ParsedEmailListView: View {
         .padding(.horizontal, Spacing.xSmall)
         .padding(.vertical, Spacing.xxSmall)
         .background(AppColors.backgroundPrimary)
+        // macOS: stats / raw source / analytics live in a native resizable
+        // inspector panel (the modern macOS detail affordance) instead of
+        // modal sheets; iOS keeps sheets, its native pattern.
+        #if os(macOS)
+        .inspector(isPresented: detailInspectorPresented) {
+            detailInspectorContent
+                .inspectorColumnWidth(min: 380, ideal: 480, max: 720)
+        }
+        #else
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
             case .stats:
                 ReplyStatsView(senderEmail: model.viewModel.senderEmail)
-                    #if os(macOS)
-                    .frame(minWidth: 500, minHeight: 400)
-                    #else
                     .presentationDetents([.large])
-                    #endif
             case .rawSource(let rfc822):
                 RawSourceView(rawText: rfc822)
-                    #if os(macOS)
-                    .frame(minWidth: 480, minHeight: 380)
-                    #else
                     .presentationDetents([.large])
-                    #endif
             }
         }
-
         .sheet(isPresented: $showAnalyticsSheet) {
             EmailAnalyticsView(query: model.currentArchiveQuery)
-                #if os(iOS)
                 .presentationDetents([.large])
-                #endif
         }
+        #endif
         #if !DEBUG
         .sheet(isPresented: $showAIPaywall) {
             PaywallView()
