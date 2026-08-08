@@ -3676,12 +3676,15 @@ final class V2FidelityBackfillTests: XCTestCase {
 
     func testBackfill_repairsLegacyRows_andIsIdempotent() async throws {
         let root = tempRoot()
+        let suite = try XCTUnwrap(UserDefaults(suiteName: "backfill-\(UUID().uuidString)"))
         defer {
             try? FileManager.default.removeItem(at: root)
             FidelityBackfillJob.testStoreOverride = nil
+            FidelityBackfillJob.testDefaultsOverride = nil
         }
         let store = SQLiteEmailStore(directory: root)
         FidelityBackfillJob.testStoreOverride = store
+        FidelityBackfillJob.testDefaultsOverride = suite
 
         // Import normally (full fidelity), then STRIP the structured fields
         // to simulate rows persisted by a pre-fidelity build.
@@ -3724,14 +3727,92 @@ final class V2FidelityBackfillTests: XCTestCase {
         XCTAssertEqual(again, FidelityBackfillJob.Outcome())
     }
 
-    func testBackfill_marksRawlessRowsUnknown_neverLoops() async throws {
+    /// THE pollution regression: an auto-detecting backfill run must never
+    /// write into UserDefaults.standard (app-hosted tests share the app's
+    /// real preferences — this exact leak once overwrote the user's sender
+    /// address with a fixture value).
+    func testBackfill_autoDetect_neverTouchesStandardDefaults() async throws {
         let root = tempRoot()
+        let suite = try XCTUnwrap(UserDefaults(suiteName: "backfill-\(UUID().uuidString)"))
         defer {
             try? FileManager.default.removeItem(at: root)
             FidelityBackfillJob.testStoreOverride = nil
+            FidelityBackfillJob.testDefaultsOverride = nil
         }
         let store = SQLiteEmailStore(directory: root)
         FidelityBackfillJob.testStoreOverride = store
+        FidelityBackfillJob.testDefaultsOverride = suite
+
+        let raw = rawMessage(i: 1, from: "owner@real.com")
+        let email = try MBOXParser.processRawMessage(raw, senderEmail: "")
+        _ = try await store.insertBatch([email], sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        try await store.simulateLegacyRowsForTesting()
+
+        let realBefore = UserDefaults.standard.string(forKey: "defaultSenderEmail")
+        _ = await FidelityBackfillJob.shared.run(senderEmail: "")   // auto-detect path
+        let realAfter = UserDefaults.standard.string(forKey: "defaultSenderEmail")
+        XCTAssertEqual(realBefore, realAfter,
+            "auto-detect wrote into the REAL preferences — must use the injected defaults")
+        XCTAssertNotNil(suite.string(forKey: "defaultSenderEmail"),
+            "detected sender lands in the injected suite instead")
+    }
+
+    /// Rows classified by an earlier build / SQL reclassify (type set, no
+    /// participants) get their participants extracted by the second pass —
+    /// so owner detection and recipient filters work on old archives.
+    func testBackfill_participantsPass_repairsClassifiedRows() async throws {
+        let root = tempRoot()
+        let suite = try XCTUnwrap(UserDefaults(suiteName: "backfill-\(UUID().uuidString)"))
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            FidelityBackfillJob.testStoreOverride = nil
+            FidelityBackfillJob.testDefaultsOverride = nil
+        }
+        let store = SQLiteEmailStore(directory: root)
+        FidelityBackfillJob.testStoreOverride = store
+        FidelityBackfillJob.testDefaultsOverride = suite
+
+        // Realistic mix: 5 sent by the owner, 3 received from a correspondent
+        // (the owner participates in all 8 emails across BOTH roles).
+        var emails: [MBOXParser.RawEmail] = []
+        for i in 0..<5 {
+            emails.append(try MBOXParser.processRawMessage(rawMessage(i: i, from: "owner@real.com"), senderEmail: "owner@real.com"))
+        }
+        for i in 5..<8 {
+            var raw = rawMessage(i: i, from: "other@ext.net")
+            raw = raw.replacingOccurrences(of: "To: recipient@dest.org", with: "To: owner@real.com")
+            emails.append(try MBOXParser.processRawMessage(raw, senderEmail: "owner@real.com"))
+        }
+        _ = try await store.insertBatch(emails, sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 100, progress: nil)
+        // Simulate the earlier-build state: TYPED rows without side tables
+        // (reclassify skips ''-typed rows by design, so mark them first).
+        try await store.simulateLegacyRowsForTesting()
+        try await store.markFidelityUnknown(ids: emails.map(\.id))
+        try await store.reclassifyMessageTypes(senderEmail: "owner@real.com")
+        let pending = try await store.fidelityPendingCount()
+        XCTAssertEqual(pending, 0, "fixture: no ''-typed rows — main pass alone would skip these")
+
+        let outcome = await FidelityBackfillJob.shared.run(senderEmail: "owner@real.com", batchSize: 3)
+        XCTAssertEqual(outcome.repaired, 8, "participants pass repaired the classified rows")
+        let owner = try await store.detectOwnerAddress()
+        XCTAssertEqual(owner, "owner@real.com", "owner detectable from restored participants")
+        let hydrated = try await store.fullEmail(id: emails[0].id)
+        XCTAssertEqual(hydrated?.tags, ["Legacy-Label"], "labels restored by the pass too")
+    }
+
+    func testBackfill_marksRawlessRowsUnknown_neverLoops() async throws {
+        let root = tempRoot()
+        let suite = try XCTUnwrap(UserDefaults(suiteName: "backfill-\(UUID().uuidString)"))
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            FidelityBackfillJob.testStoreOverride = nil
+            FidelityBackfillJob.testDefaultsOverride = nil
+        }
+        let store = SQLiteEmailStore(directory: root)
+        FidelityBackfillJob.testStoreOverride = store
+        FidelityBackfillJob.testDefaultsOverride = suite
         let email = MBOXParser.RawEmail(
             headers: ["Message-ID": "<norawbf@t>", "Subject": "S", "From": "a@b.com",
                       "To": "c@d.com", "Date": "Wed, 15 Jan 2025 10:00:00 +0000"],

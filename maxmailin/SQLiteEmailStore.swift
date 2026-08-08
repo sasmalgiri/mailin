@@ -2306,6 +2306,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 VALUES (?,?,?,?,?);
             """)
             defer { sqlite3_finalize(insertPart) }
+            var participantsInserted = 0
             for (role, header) in [("FROM", "From"), ("TO", "To"), ("CC", "Cc"), ("BCC", "Bcc")] {
                 guard let raw = email.headers[header], !raw.isEmpty else { continue }
                 for participant in Self.parseAddressList(raw) {
@@ -2316,7 +2317,19 @@ actor SQLiteEmailStore: EmailArchiveStore {
                     bindTextOrNull(insertPart, 4, participant.display)
                     bindText(insertPart, 5, participant.address.lowercased())
                     guard sqlite3_step(insertPart) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+                    participantsInserted += 1
                 }
+            }
+            if participantsInserted == 0 {
+                // Sentinel so the participants work list converges (see
+                // markParticipantsNone).
+                sqlite3_reset(insertPart); sqlite3_clear_bindings(insertPart)
+                bindText(insertPart, 1, idStr)
+                bindText(insertPart, 2, "NONE")
+                bindText(insertPart, 3, "")
+                sqlite3_bind_null(insertPart, 4)
+                bindText(insertPart, 5, "")
+                guard sqlite3_step(insertPart) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
             }
             try exec(db, "COMMIT;")
         } catch { try? exec(db, "ROLLBACK;"); throw error }
@@ -2331,6 +2344,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
         try exec(db, "DELETE FROM attachments;")
         try exec(db, "DELETE FROM email_tags;")
         try exec(db, "DELETE FROM email_domains;")
+        try exec(db, "DELETE FROM email_participants;")
     }
     #endif
 
@@ -2656,6 +2670,61 @@ actor SQLiteEmailStore: EmailArchiveStore {
         }
     }
 
+    /// Rows that HAVE a message type but NO participants rows (classified by
+    /// an earlier build or by SQL reclassification, which skips extraction).
+    /// Returns (id, raw) pages plus raw-less ids the caller marks done via a
+    /// sentinel so the list converges.
+    func participantsBackfillCandidates(limit: Int) throws -> (candidates: [FidelityCandidate], rawless: [UUID]) {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT e.id, b.raw FROM emails e
+            LEFT JOIN email_bodies b ON b.id = e.id
+            WHERE e.message_type <> ''
+              AND NOT EXISTS (SELECT 1 FROM email_participants p WHERE p.email_id = e.id)
+            LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        var out: [FidelityCandidate] = []
+        var rawless: [UUID] = []
+        let maxPageBytes = 32 * 1024 * 1024
+        var pageBytes = 0
+        while try stepRow(stmt, db) {
+            guard let id = columnUUID(stmt, 0) else { continue }
+            if let raw = columnBlobString(stmt, 1), !raw.isEmpty {
+                out.append(FidelityCandidate(id: id, raw: raw))
+                pageBytes += raw.utf8.count
+                if pageBytes >= maxPageBytes { break }
+            } else {
+                rawless.append(id)
+            }
+        }
+        return (out, rawless)
+    }
+
+    /// Sentinel participant row (role NONE, empty address) — marks an email as
+    /// "extraction attempted, nothing parseable" so the participants work list
+    /// converges. Every consumer filters real roles / LIKE '%@%', so the
+    /// sentinel is invisible to queries.
+    func markParticipantsNone(ids: [UUID]) throws {
+        guard !ids.isEmpty else { return }
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            INSERT INTO email_participants(email_id, role, address, display_name, normalized_address)
+            VALUES (?,'NONE','',NULL,'');
+        """)
+        defer { sqlite3_finalize(stmt) }
+        try exec(db, "BEGIN TRANSACTION;")
+        do {
+            for id in ids {
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, id.uuidString)
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
     /// v1-parity auto-detect: the archive owner's address. Primary heuristic:
     /// the normalized participant present in the most emails (the owner is on
     /// nearly every message — From when sent, To/Cc when received). Fallback
@@ -2667,7 +2736,9 @@ actor SQLiteEmailStore: EmailArchiveStore {
             SELECT normalized_address, COUNT(DISTINCT email_id) AS c
             FROM email_participants
             WHERE normalized_address LIKE '%@%'
-            GROUP BY normalized_address ORDER BY c DESC LIMIT 1;
+            GROUP BY normalized_address
+            ORDER BY c DESC, COUNT(DISTINCT role) DESC, normalized_address
+            LIMIT 1;
         """)
         defer { sqlite3_finalize(stmt) }
         if try stepRow(stmt, db) {

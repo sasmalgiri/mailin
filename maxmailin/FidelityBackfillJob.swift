@@ -36,9 +36,13 @@ final class FidelityBackfillJob {
 
     private static let logger = Logger(subsystem: "com.ecosanskriti.mailin", category: "FidelityBackfill")
 
-    /// Test seam.
+    /// Test seams. App-hosted tests share the app's REAL UserDefaults, so
+    /// every defaults write goes through this handle — a test that forgets
+    /// the override can pollute the user's actual sender address (it did).
     static var testStoreOverride: SQLiteEmailStore?
+    static var testDefaultsOverride: UserDefaults?
     private var store: SQLiteEmailStore { Self.testStoreOverride ?? .shared }
+    private var defaults: UserDefaults { Self.testDefaultsOverride ?? .standard }
 
     private var task: Task<Void, Never>?
     /// M3: a finished/cancelled run may only clear ITS OWN handle — otherwise
@@ -75,11 +79,11 @@ final class FidelityBackfillJob {
     /// the new address during the normal backfill.
     private func reclassifyIfSenderChanged(_ senderEmail: String) async {
         let sender = senderEmail.trimmingCharacters(in: .whitespacesAndNewlines)
-        let recorded = UserDefaults.standard.string(forKey: Self.senderUsedKey) ?? ""
+        let recorded = defaults.string(forKey: Self.senderUsedKey) ?? ""
         guard !sender.isEmpty, sender.caseInsensitiveCompare(recorded) != .orderedSame else { return }
         do {
             try await store.reclassifyMessageTypes(senderEmail: sender)
-            UserDefaults.standard.set(sender, forKey: Self.senderUsedKey)
+            defaults.set(sender, forKey: Self.senderUsedKey)
             NotificationCenter.default.post(name: .fidelityBackfillCompleted, object: nil)
             Self.logger.info("message types reclassified for updated sender address")
         } catch {
@@ -99,7 +103,10 @@ final class FidelityBackfillJob {
         var outcome = Outcome()
         do {
             let pending = try await store.fidelityPendingCount()
-            guard pending > 0 else { return outcome }
+            let participantsPending = try await store.participantsBackfillCandidates(limit: 1)
+            guard pending > 0 || !participantsPending.candidates.isEmpty || !participantsPending.rawless.isEmpty else {
+                return outcome
+            }
             Self.logger.info("fidelity backfill starting: \(pending) legacy row(s)")
 
             // v1 parity: an EMPTY sender address auto-detects from the archive
@@ -109,7 +116,7 @@ final class FidelityBackfillJob {
             let autoDetected = sender.isEmpty
             if autoDetected, let detected = try await store.detectOwnerAddress(), !detected.isEmpty {
                 sender = detected
-                UserDefaults.standard.set(sender, forKey: "defaultSenderEmail")
+                defaults.set(sender, forKey: "defaultSenderEmail")
                 Self.logger.info("sender auto-detected from archive")
             }
 
@@ -167,6 +174,49 @@ final class FidelityBackfillJob {
                 if pageProgress == 0 { break }
             }
 
+            // Second pass: rows that already HAVE a type but no participants
+            // (older-build backfills and SQL reclassification skip extraction).
+            // Same convergence rules: sentinel rows mark unparseable emails.
+            while true {
+                if Task.isCancelled { break }
+                let page = try await store.participantsBackfillCandidates(limit: batchSize)
+                if !page.rawless.isEmpty {
+                    try await store.markParticipantsNone(ids: page.rawless)
+                }
+                if page.candidates.isEmpty {
+                    if page.rawless.isEmpty { break }
+                    continue
+                }
+                let batchSender = sender
+                let parsed: [(UUID, MBOXParser.RawEmail?)] = await Task.detached(priority: .utility) {
+                    page.candidates.map { candidate in
+                        (candidate.id, try? MBOXParser.processRawMessage(candidate.raw, senderEmail: batchSender))
+                    }
+                }.value
+                var pageProgress = page.rawless.count
+                var unparseable: [UUID] = []
+                for (id, email) in parsed {
+                    if Task.isCancelled { break }
+                    if let email {
+                        do {
+                            try await store.applyFidelity(id: id, from: email)
+                            outcome.repaired += 1
+                            pageProgress += 1
+                        } catch {
+                            outcome.failed += 1
+                            Self.logger.error("participants backfill failed for \(id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                        }
+                    } else {
+                        unparseable.append(id)
+                    }
+                }
+                if !unparseable.isEmpty {
+                    try await store.markParticipantsNone(ids: unparseable)
+                    pageProgress += unparseable.count
+                }
+                if pageProgress == 0 { break }
+            }
+
             Self.logger.info("fidelity backfill done: \(outcome.repaired) repaired, \(outcome.unrecoverable) unknown, \(outcome.failed) failed")
 
             // Self-correct an auto-detected sender: the participants tables now
@@ -176,11 +226,11 @@ final class FidelityBackfillJob {
                let better = try await store.detectOwnerAddress(), !better.isEmpty,
                better.caseInsensitiveCompare(sender) != .orderedSame {
                 try await store.reclassifyMessageTypes(senderEmail: better)
-                UserDefaults.standard.set(better, forKey: "defaultSenderEmail")
-                UserDefaults.standard.set(better, forKey: Self.senderUsedKey)
+                defaults.set(better, forKey: "defaultSenderEmail")
+                defaults.set(better, forKey: Self.senderUsedKey)
                 Self.logger.info("sender re-detected after backfill; message types reclassified")
             } else if !sender.isEmpty {
-                UserDefaults.standard.set(sender, forKey: Self.senderUsedKey)
+                defaults.set(sender, forKey: Self.senderUsedKey)
             }
         } catch {
             Self.logger.error("fidelity backfill aborted: \(error.localizedDescription, privacy: .public)")
