@@ -6,7 +6,7 @@
 //
 
 import Foundation
-import Combine
+import SwiftUI
 
 extension Notification.Name {
     static let newEmailsImported = Notification.Name("com.mailin.newEmailsImported")
@@ -51,7 +51,7 @@ final class WatchFolderManager: ObservableObject {
     private var dispatchSource: DispatchSourceFileSystemObject?
     private var fileDescriptor: Int32 = -1
     #else
-    private var pollingTimer: Timer?
+    private var pollingTask: Task<Void, Never>?
     #endif
 
     /// Tracks already-imported file names so the same file is not imported twice.
@@ -99,8 +99,8 @@ final class WatchFolderManager: ObservableObject {
             fileDescriptor = -1
         }
         #else
-        pollingTimer?.invalidate()
-        pollingTimer = nil
+        pollingTask?.cancel()
+        pollingTask = nil
         #endif
     }
 
@@ -141,9 +141,11 @@ final class WatchFolderManager: ObservableObject {
 
     #if os(iOS)
     private func startIOSWatcher(directory: URL) {
-        pollingTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
-            self?.importQueue.async {
-                self?.scanForNewFiles()
+        pollingTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                guard !Task.isCancelled, let self else { break }
+                self.importQueue.async { self.scanForNewFiles() }
             }
         }
     }
@@ -201,7 +203,7 @@ final class WatchFolderManager: ObservableObject {
 
             let logEntry = ImportLogEntry(date: Date(), fileName: fileURL.lastPathComponent, count: emails.count)
 
-            DispatchQueue.main.async { [weak self] in
+            Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 self.lastImportDate = logEntry.date
                 self.importLog.insert(logEntry, at: 0)

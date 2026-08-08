@@ -4010,7 +4010,8 @@ private func handleMultipleFiles(_ urls: [URL]) {
         // sheet here would race SwiftUI's "one sheet at a time" rule and the
         // tour would silently drop. Re-check on a slightly later tick.
         if UserDefaults.standard.bool(forKey: "hasSeenGettingStarted") == false {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 350000000)
                 tryShowGettingStartedWhenReady(attempt: 0)
             }
         }
@@ -4059,7 +4060,8 @@ private func handleMultipleFiles(_ urls: [URL]) {
             modelVM.refreshFromStore()
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+        Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 500000000)
             if WhatsNewView.shouldShow() {
                 appState.showWhatsNew = true
             }
@@ -4085,7 +4087,8 @@ private func handleMultipleFiles(_ urls: [URL]) {
         let termsBlocking = LegalComplianceManager.shared.needsTermsAcceptance
         let personaBlocking = !PersonaManager.shared.hasCompletedPersonaSelection
         guard !termsBlocking, !personaBlocking else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 400000000)
                 tryShowGettingStartedWhenReady(attempt: attempt + 1)
             }
             return

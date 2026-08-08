@@ -23,6 +23,21 @@ struct AIAssistantScope {
     static let all = AIAssistantScope()
 }
 
+/// Kept out of AIAssistantView's body chain — that expression is at the
+/// type-checker's complexity limit; a modifier adds one cheap call.
+private struct ReportExportErrorAlert: ViewModifier {
+    @Binding var error: String?
+    func body(content: Content) -> some View {
+        content.alert("Report export failed", isPresented: Binding(
+            get: { error != nil }, set: { if !$0 { error = nil } }
+        )) {
+            Button("OK", role: .cancel) { error = nil }
+        } message: {
+            Text(error ?? "")
+        }
+    }
+}
+
 struct AIAssistantView: View {
     let archiveScope: AIAssistantScope
     var searchContext: String = ""
@@ -56,6 +71,7 @@ struct AIAssistantView: View {
     @State private var showShareSheet = false
     @State private var shareItems: [Any] = []
     #endif
+    @State private var reportExportError: String?
 
     @Environment(\.dismiss) private var dismiss
 
@@ -279,6 +295,7 @@ struct AIAssistantView: View {
         } message: {
             Text("The AI wants to: \(pendingActionDescription)\n\nThis action will modify your data. Proceed?")
         }
+        .modifier(ReportExportErrorAlert(error: $reportExportError))
         #if os(iOS)
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(items: shareItems)
@@ -865,7 +882,8 @@ struct AIAssistantView: View {
                                 UIPasteboard.general.string = answer
                                 #endif
                                 showActionToast = "Copied!"
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1500000000)
                                     if showActionToast == "Copied!" { showActionToast = nil }
                                 }
                             } label: {
@@ -894,7 +912,8 @@ struct AIAssistantView: View {
                                     }
                                 }
                                 showActionToast = "Thanks for the feedback!"
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1500000000)
                                     if showActionToast == "Thanks for the feedback!" { showActionToast = nil }
                                 }
                             } label: {
@@ -916,7 +935,8 @@ struct AIAssistantView: View {
                                     }
                                 }
                                 showActionToast = "We'll improve!"
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1500000000)
                                     if showActionToast == "We'll improve!" { showActionToast = nil }
                                 }
                             } label: {
@@ -965,7 +985,8 @@ struct AIAssistantView: View {
                                 UIPasteboard.general.string = answer
                                 #endif
                                 showActionToast = "Copied!"
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1500000000)
                                     if showActionToast == "Copied!" { showActionToast = nil }
                                 }
                             } label: {
@@ -1351,7 +1372,8 @@ struct AIAssistantView: View {
 
     private func showToast(_ message: String) {
         withAnimation(AnimationTiming.fast) { showActionToast = message }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+        Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 2000000000)
             withAnimation(AnimationTiming.fast) { showActionToast = nil }
         }
     }
@@ -5730,10 +5752,7 @@ struct AIAssistantView: View {
         if panel.runModal() == .OK, let url = panel.url {
             do { try markdown.write(to: url, atomically: true, encoding: .utf8) }
             catch {
-                let alert = NSAlert()
-                alert.messageText = "Report export failed"
-                alert.informativeText = error.localizedDescription
-                alert.runModal()
+                reportExportError = error.localizedDescription
             }
         }
         #else

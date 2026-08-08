@@ -436,7 +436,8 @@ struct BatchOperationsView: View {
         let ids = Array(selectedIDs)
         let total = Double(ids.count)
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 50000000)
             for (index, id) in ids.enumerated() {
                 progressValue = Double(index + 1) / total
                 _ = id // Tag application handled via callback
@@ -470,7 +471,8 @@ struct BatchOperationsView: View {
         let ids = Array(selectedIDs)
         let total = Double(ids.count)
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 50000000)
             for (index, _) in ids.enumerated() {
                 progressValue = Double(index + 1) / total
             }
@@ -502,7 +504,8 @@ struct BatchOperationsView: View {
         let ids = Array(selectedIDs)
         let total = Double(ids.count)
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 50000000)
             for (index, _) in ids.enumerated() {
                 progressValue = Double(index + 1) / total
             }
@@ -532,7 +535,8 @@ struct BatchOperationsView: View {
         let ids = Array(selectedIDs)
         let total = Double(ids.count)
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 50000000)
             for (index, _) in ids.enumerated() {
                 progressValue = Double(index + 1) / total
             }
@@ -562,7 +566,8 @@ struct BatchOperationsView: View {
         let toExport = selectedEmails
         let format = exportFormat.rawValue
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 50000000)
             let total = Double(toExport.count)
             for (index, _) in toExport.enumerated() {
                 progressValue = Double(index + 1) / total
@@ -593,7 +598,8 @@ struct BatchOperationsView: View {
         let (allowed, blocked) = CustodianManager.shared.filterProtected(selectedIDs)
         deletedIDs = allowed
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 50000000)
             progressValue = 1.0
 
             ForensicManager.shared.logAction(
@@ -616,7 +622,8 @@ struct BatchOperationsView: View {
     }
 
     private func clearResultAfterDelay() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
+        Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 4000000000)
             withAnimation(AnimationTiming.fast) {
                 resultMessage = nil
                 progressValue = 0

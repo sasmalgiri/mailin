@@ -1,5 +1,7 @@
 import Foundation
 import GroupActivities
+// Combine stays ONLY for `.values` bridging — GroupActivities exposes session
+// state as Combine publishers; we consume them as async sequences.
 import Combine
 
 // MARK: - GroupActivity for sharing email review sessions
@@ -44,7 +46,6 @@ class SharePlayManager: ObservableObject {
 
     private var groupSession: GroupSession<EmailReviewActivity>?
     private var messenger: GroupSessionMessenger?
-    private var subscriptions = Set<AnyCancellable>()
     private var tasks = Set<Task<Void, Never>>()
 
     private var sessionListenerTask: Task<Void, Never>?
@@ -84,17 +85,19 @@ class SharePlayManager: ObservableObject {
         let messenger = GroupSessionMessenger(session: session)
         self.messenger = messenger
 
-        session.$state.sink { [weak self] state in
-            Task { @MainActor in
-                self?.isSessionActive = (state == .joined)
+        let stateTask = Task { [weak self] in
+            for await state in session.$state.values {
+                await MainActor.run { self?.isSessionActive = (state == .joined) }
             }
-        }.store(in: &subscriptions)
+        }
+        tasks.insert(stateTask)
 
-        session.$activeParticipants.sink { [weak self] participants in
-            Task { @MainActor in
-                self?.participantCount = participants.count
+        let participantsTask = Task { [weak self] in
+            for await participants in session.$activeParticipants.values {
+                await MainActor.run { self?.participantCount = participants.count }
             }
-        }.store(in: &subscriptions)
+        }
+        tasks.insert(participantsTask)
 
         let task = Task {
             for await (message, _) in messenger.messages(of: ReviewSyncMessage.self) {
@@ -126,7 +129,6 @@ class SharePlayManager: ObservableObject {
         groupSession?.end()
         groupSession = nil
         messenger = nil
-        subscriptions.removeAll()
         tasks.forEach { $0.cancel() }
         tasks.removeAll()
         isSessionActive = false

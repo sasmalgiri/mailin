@@ -34,7 +34,7 @@ class ContentViewModel: ObservableObject {
     @Published var totalParsedCount: Int = 0
     private(set) var metadata: [String: Any] = [:]
     private var isParsing = false
-    private var memoryTimer: Timer?
+    private var memoryMonitorTask: Task<Void, Never>?
     private var pendingTempDirs: [URL] = []
     private var memoryPressureSource: DispatchSourceMemoryPressure?
 
@@ -44,7 +44,7 @@ class ContentViewModel: ObservableObject {
     }
 
     deinit {
-        memoryTimer?.invalidate()
+        memoryMonitorTask?.cancel()
         memoryPressureSource?.cancel()
     }
 
@@ -93,18 +93,18 @@ class ContentViewModel: ObservableObject {
     }
 
     private func startMemoryMonitoring() {
-        memoryTimer?.invalidate()
-        memoryTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            let usage = ContentViewModel.currentMemoryUsageMB()
-            Task { @MainActor in
-                self?.memoryUsageMB = usage
+        memoryMonitorTask?.cancel()
+        memoryMonitorTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                self?.memoryUsageMB = ContentViewModel.currentMemoryUsageMB()
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
     }
 
     private func stopMemoryMonitoring() {
-        memoryTimer?.invalidate()
-        memoryTimer = nil
+        memoryMonitorTask?.cancel()
+        memoryMonitorTask = nil
     }
 
     // MARK: - System Memory Pressure Monitoring

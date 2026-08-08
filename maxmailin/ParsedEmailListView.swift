@@ -3212,8 +3212,8 @@ struct AttachmentsPopoverButton: View {
     #if os(iOS)
     @State private var shareURL: URL?
     @State private var showShare = false
-    @State private var saveError: String?
     #endif
+    @State private var saveError: String?
     let attachments: [AttachmentMetadata]
     @State private var showPopover = false
 
@@ -3284,6 +3284,7 @@ struct AttachmentsPopoverButton: View {
                 ShareSheet(items: [url])
             }
         }
+        #endif
         .alert("Save Failed", isPresented: Binding(
             get: { saveError != nil },
             set: { if !$0 { saveError = nil } }
@@ -3292,7 +3293,6 @@ struct AttachmentsPopoverButton: View {
         } message: {
             Text(saveError ?? "")
         }
-        #endif
         .accessibilityLabel("\(attachments.count) attachments")
     }
 
@@ -3328,11 +3328,7 @@ struct AttachmentsPopoverButton: View {
             do {
                 try FileUtils.copyFile(from: sourceURL, to: dest)
             } catch {
-                let alert = NSAlert()
-                alert.messageText = "Save Failed"
-                alert.informativeText = "Failed to save \(att.filename): \(error.localizedDescription)"
-                alert.alertStyle = .warning
-                alert.runModal()
+                saveError = "Failed to save \(att.filename): \(error.localizedDescription)"
             }
         }
         #else
@@ -3343,12 +3339,14 @@ struct AttachmentsPopoverButton: View {
             // Dismiss the popover first; on iPhone it presents as a sheet and
             // would conflict with the share sheet otherwise.
             showPopover = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 300000000)
                 showShare = true
             }
         } catch {
             showPopover = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 300000000)
                 saveError = "Failed to save \(att.filename): \(error.localizedDescription)"
             }
         }

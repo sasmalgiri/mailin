@@ -18,7 +18,7 @@ class CollaborationManager: ObservableObject {
 
     private var folderMonitor: DispatchSourceFileSystemObject?
     private var monitoredFD: Int32 = -1
-    private var pollTimer: Timer?
+    private var pollTask: Task<Void, Never>?
 
     struct ReviewStateFile: Identifiable {
         let id = UUID()
@@ -118,8 +118,10 @@ class CollaborationManager: ObservableObject {
         source.resume()
         folderMonitor = source
 
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            Task { @MainActor in
+        pollTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                guard !Task.isCancelled else { break }
                 self?.scanForReviewFiles()
             }
         }
@@ -133,8 +135,8 @@ class CollaborationManager: ObservableObject {
             close(monitoredFD)
         }
         monitoredFD = -1
-        pollTimer?.invalidate()
-        pollTimer = nil
+        pollTask?.cancel()
+        pollTask = nil
     }
 
     // MARK: - Scan & Detect

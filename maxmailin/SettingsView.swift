@@ -699,7 +699,10 @@ struct SettingsView: View {
                 Button("Reset All Tips") {
                     try? Tips.resetDatastore()
                     tipsReset = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { tipsReset = false }
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 2_000_000_000)
+                        tipsReset = false
+                    }
                 }
 
                 if tipsReset {

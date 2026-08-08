@@ -666,11 +666,13 @@ struct LaunchAnimationView: View {
             withAnimation(.easeOut(duration: 0.3).delay(1.2)) {
                 ringOpacity = 0
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1600000000)
                 withAnimation(.easeInOut(duration: 0.4)) {
                     dismissOpacity = 0
                 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 400000000)
                     onComplete()
                 }
             }

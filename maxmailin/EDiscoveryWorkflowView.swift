@@ -1614,7 +1614,8 @@ struct EDiscoveryWorkflowView: View {
         withAnimation(AnimationTiming.fast) {
             actionMessage = message
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+        Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 3000000000)
             withAnimation(AnimationTiming.fast) {
                 actionMessage = nil
             }

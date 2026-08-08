@@ -1,5 +1,7 @@
 import Foundation
 import SwiftUI
+// Combine stays ONLY for the ObservableObject objectWillChange forwarder in
+// init — removable when the VM stack migrates to @Observable (v2.1 backlog).
 import Combine
 
 // Part S (v2-core-cutover): the "Advanced" list mode's view model, rebuilt on
