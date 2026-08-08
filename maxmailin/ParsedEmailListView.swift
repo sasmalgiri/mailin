@@ -1400,6 +1400,7 @@ struct ParsedEmailListView: View {
                         for id in selectedEmailIDs {
                             forensicManager.tag(id, as: tag)
                         }
+                        model.applyFilters()
                     } label: {
                         Image(systemName: tag.icon)
                             .font(.system(size: 10))
@@ -1457,6 +1458,10 @@ struct ParsedEmailListView: View {
 
             Button {
                 forensicManager.runPrivilegeScan(on: emails)
+                // Surface the results immediately: the Privileged quick
+                // filter shows exactly the rows the scan flagged.
+                quickFilterPrivileged = true
+                model.applyFilters()
             } label: {
                 HStack(spacing: 2) {
                     Image(systemName: "lock.shield")
@@ -1721,6 +1726,7 @@ struct ParsedEmailListView: View {
                 ForEach(ForensicManager.EvidenceTag.allCases, id: \.self) { tagOption in
                     Button {
                         forensicManager.tag(email.id, as: tagOption)
+                        model.applyFilters()
                     } label: {
                         HStack {
                             Label(tagOption.rawValue, systemImage: tagOption.icon)
@@ -2148,7 +2154,8 @@ struct ParsedEmailListView: View {
                     Menu("Evidence Tag") {
                         ForEach(ForensicManager.EvidenceTag.allCases, id: \.self) { tag in
                             Button {
-                                forensicManager.tag(email.id, as: tag)
+                                forensicManager.tag(email.id, as: tagOption)
+                                model.applyFilters()
                             } label: {
                                 HStack {
                                     Label(tag.rawValue, systemImage: tag.icon)
@@ -2334,6 +2341,7 @@ struct ParsedEmailListView: View {
                     ForEach(ForensicManager.EvidenceTag.allCases, id: \.self) { tag in
                         Button {
                             forensicManager.tag(email.id, as: tag)
+                            model.applyFilters()
                         } label: {
                             HStack {
                                 Label(tag.rawValue, systemImage: tag.icon)

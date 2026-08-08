@@ -838,14 +838,16 @@ class ParsedEmailListViewModel: ObservableObject {
     /// (`matchingSubset` over the window ids); regex uses BoundedRegexSearch;
     /// proximity compiles to a native FTS5 NEAR — no in-RAM corpus engine.
     func applyFilters() {
-        // Part U: sidebar selections / sort now COMPILE into the pager query —
-        // when it changed, re-page the archive first (the reload calls back
-        // into applyFilters with an unchanged query, so this cannot loop).
+        // Part U: sidebar selections / sort COMPILE into the pager query —
+        // when it changed, kick an archive re-page AND still refine the
+        // current residents below for instant feedback (the reload re-runs
+        // applyFilters with an unchanged query, so this cannot loop). The
+        // nil guard keeps legacy/preview-mode VMs (never paged) in pure
+        // in-window refinement.
         let compiled = pagerQuery
-        if compiled != lastPagedQuery {
+        if let lastPaged = lastPagedQuery, compiled != lastPaged {
             lastPagedQuery = compiled
             reloadPagesForQueryChange()
-            return
         }
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let parsed = parseSearchQuery(query)
