@@ -353,6 +353,7 @@ class ParsedEmailListViewModel: ObservableObject {
         base.tags = selectedTags
         if let evidence = selectedEvidenceTag, evidence != .none { base.evidenceTag = evidence.rawValue }
         if hasAttachmentFilter { base.hasAttachments = true }
+        if let quickType = quickTypeFilter { base.messageType = quickType }
         if showPinnedOnly { base.pinnedOnly = true }
         switch sortBy {
         case .dateDesc: base.sort = .dateDesc
@@ -377,6 +378,11 @@ class ParsedEmailListViewModel: ObservableObject {
     let review = ReviewStateService.shared
 
     @Published var showPinnedOnly = false { didSet { if !isResettingFilters { applyFilters() } } }
+
+    /// Quick-chip type filter (Sent/Received) — compiles to SQL messageType
+    /// so the chips filter the WHOLE archive, including header-recovered
+    /// rows that have flags but no re-parsable metadata.
+    @Published var quickTypeFilter: String? = nil
 
     func togglePin(_ emailID: UUID) { review.togglePin(emailID); applyFilters() }
     func isPinned(_ emailID: UUID) -> Bool { review.isPinned(emailID) }
@@ -1039,7 +1045,10 @@ class ParsedEmailListViewModel: ObservableObject {
                 matchesSmartTag = resolveSmartTag(for: email).map { selectedSmartTags.contains($0) } ?? false
             }
 
-            let matchesNLAttachment = !hasAttachmentFilter || !email.attachments.isEmpty
+            // hasAttachmentFilter is SQL-compiled (currentArchiveQuery →
+            // has_attach flag) — an in-window attachments.isEmpty re-check
+            // would wrongly drop header-recovered rows whose flag is set
+            // but whose metadata is unrecoverable.
 
             let matchesType = parsed.typeOperator.map { email.messageType == $0 } ?? true
             let matchesTag = parsed.tagOperator.map { tag in
@@ -1057,7 +1066,7 @@ class ParsedEmailListViewModel: ObservableObject {
             } ?? true
 
             return filterMatch(email) && replyCount >= minReplyCount
-                && matchesFromOp && matchesToOp && matchesSubjectOp && matchesHasAttachment && matchesDateOps && matchesEvidenceTag && matchesSmartTag && matchesNLAttachment && matchesType && matchesTag && matchesSource
+                && matchesFromOp && matchesToOp && matchesSubjectOp && matchesHasAttachment && matchesDateOps && matchesEvidenceTag && matchesSmartTag && matchesType && matchesTag && matchesSource
         }
         // Free-tier visibility cap — gated from the store-count-driven paging
         // depth; this is a defensive second bound on the visible list.

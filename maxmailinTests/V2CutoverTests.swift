@@ -306,6 +306,37 @@ final class V2CutoverTests: XCTestCase {
             "first page is the archive-wide sort order, not a re-sorted window")
     }
 
+    /// Quick-chip parity: the Sent/Received/Attachments chips compile to
+    /// SQL. Critically, an email whose has_attach FLAG was recovered from
+    /// headers (no attachment metadata rows — rawless archives) must still
+    /// match the Attachments filter.
+    func testPartU_quickChipsFilterViaSQLIncludingRecoveredFlags() async throws {
+        let env = try makeEnv()
+        var fixtures = (0..<30).map { makeEmail(i: $0, total: 30, body: "plain body \($0)") }
+        fixtures[0].messageType = "sent"     // oldest — outside page 1
+        try await env.store.insertBatch(fixtures, batchSize: 200)
+        try await env.fts.indexBatch(fixtures)
+        // Recovered-flag shape: has_attach set in SQL, attachments table empty.
+        try await env.store.applyHeaderFidelity([
+            .init(id: fixtures[1].id, tags: [], hasAttachment: true, sourceFilename: nil)
+        ])
+
+        let vm = ParsedEmailListViewModel(viewModel: ContentViewModel(), archive: env.archive,
+                                          pageSize: 10, maxRetained: 50)
+        vm.isPremiumUser = true
+
+        vm.quickTypeFilter = "sent"
+        await vm.reloadForQueryChangeNow()
+        XCTAssertEqual(vm.visibleEmails.map(\.id), [fixtures[0].id],
+            "Sent chip pages the whole archive via SQL")
+
+        vm.quickTypeFilter = nil
+        vm.hasAttachmentFilter = true
+        await vm.reloadForQueryChangeNow()
+        XCTAssertEqual(vm.visibleEmails.map(\.id), [fixtures[1].id],
+            "Attachments chip matches the recovered has_attach flag even with no metadata rows")
+    }
+
     // MARK: - Free-tier paging gate from store counts
 
     /// Non-premium paging depth is capped at `StoreManager.freeEmailLimit`

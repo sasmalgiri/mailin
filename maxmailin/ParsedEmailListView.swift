@@ -85,9 +85,10 @@ struct ParsedEmailListView: View {
 
     private var quickFilteredEmails: [MBOXParser.RawEmail] {
         model.visibleEmails.filter { email in
-            if quickFilterSent && email.messageType != "sent" { return false }
-            if quickFilterReceived && email.messageType != "received" { return false }
-            if quickFilterAttachments && email.attachments.isEmpty { return false }
+            // Sent/Received/Attachments chips compile to SQL (see
+            // syncQuickFiltersToQuery) — visibleEmails is already
+            // restricted, and the SQL flag knows about header-recovered
+            // rows whose attachment METADATA is unrecoverable.
             if quickFilterFlagged {
                 let tag = ForensicManager.shared.evidenceTags[email.id] ?? .none
                 if tag != .flagged && tag != .suspicious { return false }
@@ -688,6 +689,15 @@ struct ParsedEmailListView: View {
         quickFilterSent || quickFilterReceived || quickFilterAttachments || quickFilterFlagged || quickFilterUnreviewed || quickFilterLargeEmails || quickFilterPrivileged || quickFilterHighPriority || quickFilterHasLinks || quickFilterAIImportant || quickFilterAISuspicious || quickFilterAINegative || quickFilterAINewsletter || quickFilterTagPersonal || quickFilterTagTransactional || quickFilterTagPromotional || quickFilterTagAutomated || quickFilterTagRelevant || quickFilterTagPositive || quickFilterTagPhishing || quickFilterTagNeutral || quickFilterTagIrrelevant || quickFilterTagSuspicious || quickFilterTagMediumPriority
     }
 
+    /// Push the SQL-capable chips into the compiled archive query (the
+    /// other chips stay window refinements — they filter derived/AI state).
+    private func syncQuickFiltersToQuery() {
+        model.quickTypeFilter = quickFilterSent && !quickFilterReceived ? "sent"
+            : (quickFilterReceived && !quickFilterSent ? "received" : nil)
+        model.hasAttachmentFilter = quickFilterAttachments
+        model.applyFilters()
+    }
+
     private func clearAllQuickFilters() {
         quickFilterSent = false
         quickFilterReceived = false
@@ -713,6 +723,7 @@ struct ParsedEmailListView: View {
         quickFilterTagIrrelevant = false
         quickFilterTagSuspicious = false
         quickFilterTagMediumPriority = false
+        syncQuickFiltersToQuery()
         activeFilterTags.removeAll()
     }
 
@@ -925,9 +936,15 @@ struct ParsedEmailListView: View {
 
     private func filterBinding(for key: String) -> Binding<Bool> {
         switch key {
-        case "sent": return Binding(get: { quickFilterSent }, set: { quickFilterSent = $0; if $0 { quickFilterReceived = false } })
-        case "received": return Binding(get: { quickFilterReceived }, set: { quickFilterReceived = $0; if $0 { quickFilterSent = false } })
-        case "attachments": return $quickFilterAttachments
+        case "sent": return Binding(
+            get: { quickFilterSent },
+            set: { quickFilterSent = $0; if $0 { quickFilterReceived = false }; syncQuickFiltersToQuery() })
+        case "received": return Binding(
+            get: { quickFilterReceived },
+            set: { quickFilterReceived = $0; if $0 { quickFilterSent = false }; syncQuickFiltersToQuery() })
+        case "attachments": return Binding(
+            get: { quickFilterAttachments },
+            set: { quickFilterAttachments = $0; syncQuickFiltersToQuery() })
         case "flagged": return $quickFilterFlagged
         case "unreviewed": return $quickFilterUnreviewed
         case "largeEmails": return $quickFilterLargeEmails
