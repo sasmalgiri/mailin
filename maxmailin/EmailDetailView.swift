@@ -611,6 +611,8 @@ struct EmailDetailView: View {
                     scope: { .explicit([email.id]) },
                     gate: { storeManager.requirePremium() },
                     omit: [.word, .csv, .pdfFiles, .tiffFiles, .printText],
+                    emailCount: 1,
+                    requiresPremium: true,
                     share: { url in
                         #if os(iOS)
                         iOSShareFile(at: url)

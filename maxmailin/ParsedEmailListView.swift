@@ -2843,6 +2843,7 @@ struct ParsedEmailListView: View {
         UnifiedExportSections(
             scope: { .query(model.currentArchiveQuery, exclusions: []) },
             emlRender: { model.viewModel.exportEmailAsEML($0) },
+            emailCount: model.queryTotalCount,
             share: { url in
                 #if os(iOS)
                 iOSShareFile(at: url)

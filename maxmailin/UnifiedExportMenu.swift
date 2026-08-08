@@ -39,6 +39,13 @@ struct UnifiedExportSections: View {
     var emlRender: (@MainActor (MBOXParser.RawEmail) -> String)? = nil
     /// Formats the host already offers with its own (single-email) rendition.
     var omit: Set<UnifiedExportFormat> = []
+    /// Exact number of emails the scope will export (shown as the menu
+    /// header so the user knows the size BEFORE picking a format).
+    var emailCount: Int? = nil
+    /// The host's policy locks these formats behind Premium (detail view).
+    /// Free users still SEE every option — labeled "(Pro)" — so the full
+    /// feature surface is discoverable; clicking opens the paywall.
+    var requiresPremium: Bool = false
     /// iOS delivery: hand the finished artifact to the host's share sheet.
     var share: (URL) -> Void = { _ in }
     @Binding var errorMessage: String?
@@ -46,44 +53,73 @@ struct UnifiedExportSections: View {
     @EnvironmentObject private var storeManager: StoreManager
 
     var body: some View {
+        if let headline = countHeadline {
+            Section(headline) { EmptyView() }
+        }
         if included(.word) {
-            button("Word Document (.doc)", icon: "doc.richtext") { exportWord() }
+            button("Word Document (.doc)", icon: "doc.richtext",
+                   help: "One Word document, one page per email") { exportWord() }
         }
         if included(.csv) {
-            button("Spreadsheet (.csv)", icon: "tablecells") { exportCSV() }
+            button("Spreadsheet (.csv)", icon: "tablecells",
+                   help: "One row per email — opens in Excel/Numbers") { exportCSV() }
         }
         if included(.json) {
-            button("JSON Archive", icon: "curlybraces") { exportJSON() }
+            button("JSON Archive", icon: "curlybraces",
+                   help: "Machine-readable full archive") { exportJSON() }
         }
         if included(.printText) {
-            button("Batch Print Text (.txt)", icon: "printer") { exportPrintText() }
+            button("Batch Print Text (.txt)", icon: "printer",
+                   help: "Plain text ready for printing") { exportPrintText() }
         }
         if !omit.isSuperset(of: [.emlFiles, .pdfFiles, .tiffFiles]) { Divider() }
         if included(.emlFiles) {
-            button("Individual .eml Files", icon: "envelope") { exportEML() }
+            button("Individual .eml Files", icon: "envelope",
+                   help: "One standard email file each — reimportable") { exportEML() }
         }
         if included(.pdfFiles) {
-            button("PDF Files (one per email)", icon: "doc.viewfinder") { exportPDFs() }
+            button("PDF Files (one per email)", icon: "doc.viewfinder",
+                   help: "One PDF per email") { exportPDFs() }
         }
         if included(.tiffFiles) {
-            button("TIFF Images (one per email)", icon: "photo") { exportTIFFs() }
+            button("TIFF Images (one per email)", icon: "photo",
+                   help: "Court-friendly image per email") { exportTIFFs() }
         }
         Divider()
         if included(.portableHTML) {
-            button("Portable HTML Viewer", icon: "globe") { exportHTML() }
+            button("Portable HTML Viewer", icon: "globe",
+                   help: "Self-contained browser viewer folder") { exportHTML() }
         }
         if included(.vcard) {
-            button("Contacts (vCard)", icon: "person.crop.rectangle.stack") { exportVCard() }
+            button("Contacts (vCard)", icon: "person.crop.rectangle.stack",
+                   help: "Every address as importable contacts") { exportVCard() }
         }
         if included(.ics) {
-            button("Calendar Events (.ics)", icon: "calendar") { exportICS() }
+            button("Calendar Events (.ics)", icon: "calendar",
+                   help: "Detected events as a calendar file") { exportICS() }
         }
+    }
+
+    /// "Export 222 emails (current filter)" — plus the free-tier bound when
+    /// it will actually bite.
+    private var countHeadline: String? {
+        guard let emailCount else { return nil }
+        var text = emailCount == 1 ? "Export 1 email" : "Export \(emailCount) emails (current filter)"
+        if !storeManager.isPremium && emailCount > StoreManager.freeEmailLimit {
+            text += " — free exports first \(StoreManager.freeEmailLimit)"
+        }
+        return text
     }
 
     private func included(_ format: UnifiedExportFormat) -> Bool { !omit.contains(format) }
 
-    private func button(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Label(title, systemImage: icon) }
+    private func button(_ title: String, icon: String, help: String,
+                        action: @escaping () -> Void) -> some View {
+        let locked = requiresPremium && !storeManager.isPremium
+        return Button(action: action) {
+            Label(locked ? "\(title) (Pro)" : title, systemImage: locked ? "lock" : icon)
+        }
+        .help(locked ? "\(help) — unlocked with Pro" : help)
     }
 
     // MARK: - Shared plumbing

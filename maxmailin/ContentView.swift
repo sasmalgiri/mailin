@@ -461,6 +461,16 @@ struct ContentView: View {
             }
         }
         .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showFeatureGuide = true
+                } label: {
+                    Image(systemName: "questionmark.circle")
+                }
+                .help("Feature Guide — search any feature")
+                .accessibilityLabel("Feature Guide")
+                .keyboardShortcut("/", modifiers: [.command, .shift])
+            }
             ToolbarItemGroup(placement: .navigation) {
                 if modelVM.showParsedList && sidebarSelection != nil {
                     Button {
@@ -639,6 +649,9 @@ struct ContentView: View {
         }
         .listStyle(.sidebar)
         .navigationTitle("mailin")
+        .sheet(isPresented: $showFeatureGuide) {
+            FeatureGuideView(isPresented: $showFeatureGuide)
+        }
         .sheet(isPresented: $showGlossary) {
             NavigationStack {
                 GlossaryView()
@@ -1007,6 +1020,12 @@ struct ContentView: View {
                     }
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        showFeatureGuide = true
+                    } label: {
+                        Image(systemName: "questionmark.circle")
+                    }
+                    .accessibilityLabel("Feature Guide")
                     if viewModel.isParsed {
                         Button { appState.showAIAssistant = true } label: {
                             Image(systemName: "sparkles")
@@ -1104,6 +1123,9 @@ struct ContentView: View {
                         searchText: modelVM.searchText
                     )
                 }
+            }
+            .sheet(isPresented: $showFeatureGuide) {
+                FeatureGuideView(isPresented: $showFeatureGuide)
             }
             .sheet(isPresented: $showFiltersSheet) {
                 NavigationStack {
@@ -2721,6 +2743,7 @@ struct ContentView: View {
                 UnifiedExportSections(
                     scope: { filteredScope },
                     emlRender: { viewModel.exportEmailAsEML($0) },
+                    emailCount: modelVM.displayedEmailCount,
                     share: { url in
                         #if os(iOS)
                         iOSShareFile(at: url)
@@ -3329,6 +3352,8 @@ private func handleMultipleFiles(_ urls: [URL]) {
     /// are never the export source.
     /// Error surface for the unified sidebar export menu.
     @State private var sidebarExportError: String?
+    /// Searchable guide to every feature (Help ? button, ⇧⌘/).
+    @State private var showFeatureGuide = false
 
     private var filteredScope: ArchiveSelectionScope {
         .query(modelVM.currentArchiveQuery, exclusions: [])
