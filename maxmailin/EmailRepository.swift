@@ -74,8 +74,11 @@ struct EmailQuery: Sendable, Equatable {
     var subjectContains: String? = nil
     /// Exact domain (normalized `email_domains`).
     var domain: String? = nil
-    /// Exact user tag (`email_user_tags`).
+    /// Exact tag — matches user tags (`email_user_tags`) OR parser labels
+    /// (`email_tags`, e.g. Gmail labels), mirroring the in-memory `tag:` filter.
     var userTag: String? = nil
+    /// Source file name contains (resolved via `sources`/`forensic_source_hashes`).
+    var sourceFileName: String? = nil
     /// Exact forensic evidence tag (`forensic_evidence_tags`).
     var evidenceTag: String? = nil
     var hasAttachments: Bool? = nil
@@ -92,7 +95,7 @@ struct EmailQuery: Sendable, Equatable {
     /// True when only text/date are set (the pre-§13 fast paths apply).
     var hasStructuredFilters: Bool {
         sender != nil || recipient != nil || subjectContains != nil || domain != nil
-            || userTag != nil || evidenceTag != nil || hasAttachments != nil
+            || userTag != nil || sourceFileName != nil || evidenceTag != nil || hasAttachments != nil
             || messageType != nil || pinnedOnly || includeTrashed || sort != .dateDesc
     }
 
@@ -388,7 +391,7 @@ extension EmailStoreRepository: RankedSearchRepository {
         let hiSecs = query.beforeDate.map { String(Int64($0.timeIntervalSince1970.rounded())) } ?? "-"
         let filters = [
             query.sender ?? "-", query.recipient ?? "-", query.subjectContains ?? "-",
-            query.domain ?? "-", query.userTag ?? "-", query.evidenceTag ?? "-",
+            query.domain ?? "-", query.userTag ?? "-", query.sourceFileName ?? "-", query.evidenceTag ?? "-",
             query.hasAttachments.map(String.init) ?? "-", query.messageType ?? "-",
             String(query.pinnedOnly), String(query.includeTrashed), query.sort.rawValue
         ].joined(separator: "\u{1}")

@@ -47,6 +47,8 @@ enum ArchiveQueryCompiler {
                 query.domain = value.lowercased()
             case "tag", "label":
                 query.userTag = value
+            case "source":
+                query.sourceFileName = value
             case "evidence":
                 query.evidenceTag = value
             case "type":

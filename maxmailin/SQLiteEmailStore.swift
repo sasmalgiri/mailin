@@ -1506,6 +1506,54 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return out
     }
 
+    /// Parser tags (Gmail labels etc.) with archive-wide counts — the folder
+    /// tree's Labels subtree, as one GROUP BY (never a corpus walk).
+    func parserTagCounts(limit: Int) throws -> [AggregateBucket] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT t.tag, COUNT(*) AS c FROM email_tags t
+            JOIN emails e ON e.id = t.email_id
+            GROUP BY t.tag ORDER BY c DESC, t.tag ASC LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        var out: [AggregateBucket] = []
+        while try stepRow(stmt, db) {
+            out.append(AggregateBucket(value: columnText(stmt, 0), count: Int(sqlite3_column_int64(stmt, 1))))
+        }
+        return out
+    }
+
+    /// Archive-wide sent/received/unknown counts (folder tree Inbox/Sent).
+    func messageTypeCounts() throws -> [String: Int] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT message_type, COUNT(*) FROM emails GROUP BY message_type;")
+        defer { sqlite3_finalize(stmt) }
+        var out: [String: Int] = [:]
+        while try stepRow(stmt, db) { out[columnText(stmt, 0)] = Int(sqlite3_column_int64(stmt, 1)) }
+        return out
+    }
+
+    /// Emails per source file (name resolved via the sources/forensic tables
+    /// where known) — the folder tree's Source Files subtree.
+    func sourceFileCounts(limit: Int) throws -> [AggregateBucket] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT COALESCE(NULLIF(s.filename, ''), NULLIF(f.filename, ''), 'Unknown source') AS name, COUNT(*) AS c
+            FROM emails e
+            LEFT JOIN sources s ON s.sha256 = e.source_hash
+            LEFT JOIN forensic_source_hashes f ON f.sha256 = e.source_hash
+            GROUP BY name ORDER BY c DESC, name ASC LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        var out: [AggregateBucket] = []
+        while try stepRow(stmt, db) {
+            out.append(AggregateBucket(value: columnText(stmt, 0), count: Int(sqlite3_column_int64(stmt, 1))))
+        }
+        return out
+    }
+
     /// Whitelisted grouping columns — the raw value is the actual column, so no
     /// user string is ever interpolated into SQL.
     enum GroupColumn: String, Sendable { case fromAddr = "from_addr", subject = "subject", toAddr = "to_addr" }
@@ -1566,8 +1614,24 @@ actor SQLiteEmailStore: EmailArchiveStore {
             binds.append(.text(domain))
         }
         if let tag = q.userTag, !tag.isEmpty {
-            sql.append("EXISTS (SELECT 1 FROM email_user_tags ut WHERE ut.email_id = e.id AND ut.tag = ?)")
+            // User tags OR parser labels (Gmail labels) — the folder tree's
+            // Labels subtree and the in-memory tag: filter are parser tags.
+            sql.append("""
+                (EXISTS (SELECT 1 FROM email_user_tags ut WHERE ut.email_id = e.id AND ut.tag = ?)
+                 OR EXISTS (SELECT 1 FROM email_tags pt WHERE pt.email_id = e.id AND pt.tag = ?))
+                """)
             binds.append(.text(tag))
+            binds.append(.text(tag))
+        }
+        if let sourceName = q.sourceFileName, !sourceName.isEmpty {
+            sql.append("""
+                e.source_hash IN (
+                    SELECT sha256 FROM sources WHERE instr(lower(filename), lower(?)) > 0
+                    UNION
+                    SELECT sha256 FROM forensic_source_hashes WHERE instr(lower(filename), lower(?)) > 0)
+                """)
+            binds.append(.text(sourceName))
+            binds.append(.text(sourceName))
         }
         if let etag = q.evidenceTag, !etag.isEmpty {
             sql.append("EXISTS (SELECT 1 FROM forensic_evidence_tags ft WHERE ft.email_id = e.id AND ft.tag = ?)")

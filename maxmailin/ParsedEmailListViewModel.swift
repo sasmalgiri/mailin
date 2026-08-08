@@ -1010,7 +1010,7 @@ class ParsedEmailListViewModel: ObservableObject {
                 return emailTags.localizedCaseInsensitiveContains(tag)
             } ?? true
             let matchesSource = parsed.sourceOperator.map { source in
-                let emailSource = email.headers["X-Source-File"] ?? ""
+                let emailSource = email.headers["sourceFile"] ?? email.headers["X-Source-File"] ?? ""
                 return emailSource.localizedCaseInsensitiveContains(source)
             } ?? true
 

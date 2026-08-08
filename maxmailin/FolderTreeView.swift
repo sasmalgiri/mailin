@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct FolderNode: Identifiable {
-    var id: String { filterValue }
+    var id: String { filterValue.isEmpty ? name : filterValue }
     let name: String
     let icon: String
     var children: [FolderNode]
@@ -9,21 +9,28 @@ struct FolderNode: Identifiable {
     var filterValue: String
 }
 
-/// Part G7: self-loading folder tree. The "All Emails" total is the store
-/// COUNT (archive truth); the folder buckets (sent/received, attachments,
-/// labels, source files) are computed over a bounded most-recent working set
-/// streamed from the store — tags/source-file metadata have no SQL column yet,
-/// so their counts are working-set-scoped, exactly like the preview array this
-/// view used to receive. No injected corpus.
+/// Part G7 + v1 parity: self-loading folder tree with ARCHIVE-WIDE counts.
+/// v1.0 computed every folder bucket over the whole corpus (it held all
+/// emails in memory); v2 reproduces the same tree — Inbox / Sent /
+/// Has Attachments / Labels / Source Files with exact totals — via SQL
+/// aggregates (GROUP BY over indexed tables), so counts stay exact and
+/// memory stays bounded at any archive size. No injected corpus.
 struct FolderTreeView: View {
     @Binding var selectedFolder: String?
 
     @State private var archiveTotal = 0
-    @State private var workingSet: [MBOXParser.RawEmail] = []
+    @State private var typeCounts: [String: Int] = [:]
+    @State private var attachmentTotal = 0
+    @State private var labelBuckets: [AggregateBucket] = []
+    @State private var sourceBuckets: [AggregateBucket] = []
     @State private var isLoaded = false
 
+    /// Bounded label subtree, matching v1's most-used-first ordering.
+    static let maxLabels = 30
+    static let maxSourceFiles = 50
+
     private struct FlatRow: Identifiable {
-        var id: String { "\(node.filterValue)-\(depth)" }
+        var id: String { "\(node.id)-\(depth)" }
         let node: FolderNode
         let depth: Int
     }
@@ -58,6 +65,7 @@ struct FolderTreeView: View {
                         .cornerRadius(CornerRadius.small)
                     }
                     .buttonStyle(.plain)
+                    .help("Show every email in the archive")
                     .accessibilityLabel("All Emails, \(archiveTotal)")
                     .accessibilityAddTraits(selectedFolder == nil ? .isSelected : [])
 
@@ -86,6 +94,9 @@ struct FolderTreeView: View {
                             .cornerRadius(CornerRadius.small)
                         }
                         .buttonStyle(.plain)
+                        .help(row.node.filterValue.isEmpty
+                              ? "\(row.node.name) — \(row.node.emailCount) emails"
+                              : "Show only: \(row.node.name)")
                         .accessibilityLabel("\(row.node.name), \(row.node.emailCount) emails")
                         .accessibilityAddTraits(selectedFolder == row.node.filterValue ? .isSelected : [])
                     }
@@ -94,19 +105,28 @@ struct FolderTreeView: View {
         }
         .task {
             guard !isLoaded else { return }
-            archiveTotal = (try? await ArchiveDataService.shared.count()) ?? 0
-            workingSet = await ArchiveDataService.shared.workingSet(query: .all)
+            await reload()
             isLoaded = true
         }
         // The fidelity backfill repairs legacy rows' message type / labels /
-        // attachments after launch — reload the buckets when it lands so
-        // Inbox/Sent/Labels appear without an app restart.
+        // attachments after launch, and imports add rows — reload the exact
+        // aggregates when either lands so the tree updates without a restart.
         .onReceive(NotificationCenter.default.publisher(for: .fidelityBackfillCompleted)) { _ in
-            Task { @MainActor in
-                archiveTotal = (try? await ArchiveDataService.shared.count()) ?? 0
-                workingSet = await ArchiveDataService.shared.workingSet(query: .all)
-            }
+            Task { @MainActor in await reload() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .parsingFinished)) { _ in
+            Task { @MainActor in await reload() }
+        }
+    }
+
+    @MainActor
+    private func reload() async {
+        archiveTotal = (try? await ArchiveDataService.shared.count()) ?? 0
+        let store = SQLiteEmailStore.shared
+        typeCounts = (try? await store.messageTypeCounts()) ?? [:]
+        attachmentTotal = (try? await store.attachmentCount()) ?? 0
+        labelBuckets = (try? await store.parserTagCounts(limit: Self.maxLabels)) ?? []
+        sourceBuckets = (try? await store.sourceFileCounts(limit: Self.maxSourceFiles)) ?? []
     }
 
     private func flattenTree(_ nodes: [FolderNode], depth: Int = 0) -> [FlatRow] {
@@ -129,44 +149,40 @@ struct FolderTreeView: View {
         return AppColors.secondary
     }
 
-    /// Folder buckets over the bounded working set (see type comment).
+    /// v1's folder buckets, from exact archive-wide aggregates. Empty
+    /// buckets are hidden — identical to v1.0's behavior.
     private func buildTree() -> [FolderNode] {
         var nodes: [FolderNode] = []
-        let emails = workingSet
 
-        let sent = emails.filter { $0.messageType == "sent" }
-        let received = emails.filter { $0.messageType == "received" }
-        if !received.isEmpty {
-            nodes.append(FolderNode(name: "Inbox", icon: "tray.fill", children: [], emailCount: received.count, filterValue: "type:received"))
+        let received = typeCounts["received"] ?? 0
+        let sent = typeCounts["sent"] ?? 0
+        if received > 0 {
+            nodes.append(FolderNode(name: "Inbox", icon: "tray.fill", children: [], emailCount: received, filterValue: "type:received"))
         }
-        if !sent.isEmpty {
-            nodes.append(FolderNode(name: "Sent", icon: "paperplane.fill", children: [], emailCount: sent.count, filterValue: "type:sent"))
-        }
-
-        let withAttachments = emails.filter { !$0.attachments.isEmpty }
-        if !withAttachments.isEmpty {
-            nodes.append(FolderNode(name: "Has Attachments", icon: "paperclip", children: [], emailCount: withAttachments.count, filterValue: "has:attachment"))
+        if sent > 0 {
+            nodes.append(FolderNode(name: "Sent", icon: "paperplane.fill", children: [], emailCount: sent, filterValue: "type:sent"))
         }
 
-        let tagGroups = Dictionary(grouping: emails.flatMap { email in
-            email.tags.map { (tag: $0, email: email) }
-        }, by: { $0.tag })
-
-        var labelChildren: [FolderNode] = []
-        for (tag, items) in tagGroups.sorted(by: { $0.value.count > $1.value.count }).prefix(20) {
-            labelChildren.append(FolderNode(name: tag, icon: "tag.fill", children: [], emailCount: items.count, filterValue: "tag:\(tag)"))
-        }
-        if !labelChildren.isEmpty {
-            nodes.append(FolderNode(name: "Labels", icon: "tag.fill", children: labelChildren, emailCount: labelChildren.reduce(0) { $0 + $1.emailCount }, filterValue: ""))
+        if attachmentTotal > 0 {
+            nodes.append(FolderNode(name: "Has Attachments", icon: "paperclip", children: [], emailCount: attachmentTotal, filterValue: "has:attachment"))
         }
 
-        let sourceFiles = Dictionary(grouping: emails, by: { $0.headers["sourceFile"] ?? "Unknown" })
-        if sourceFiles.count > 1 {
-            var sourceChildren: [FolderNode] = []
-            for (file, items) in sourceFiles.sorted(by: { $0.key < $1.key }) {
-                sourceChildren.append(FolderNode(name: file, icon: "doc.fill", children: [], emailCount: items.count, filterValue: "source:\(file)"))
+        if !labelBuckets.isEmpty {
+            let labelChildren = labelBuckets.map {
+                FolderNode(name: $0.value, icon: "tag.fill", children: [], emailCount: $0.count, filterValue: "tag:\($0.value)")
             }
-            nodes.append(FolderNode(name: "Source Files", icon: "folder.fill", children: sourceChildren, emailCount: emails.count, filterValue: ""))
+            // v1 showed the label-application total on the parent row
+            // (labels overlap, so this can exceed the email count).
+            nodes.append(FolderNode(name: "Labels", icon: "tag.fill", children: labelChildren,
+                                    emailCount: labelChildren.reduce(0) { $0 + $1.emailCount }, filterValue: ""))
+        }
+
+        if sourceBuckets.count > 1 {
+            let sourceChildren = sourceBuckets.map {
+                FolderNode(name: $0.value, icon: "doc.fill", children: [], emailCount: $0.count, filterValue: "source:\($0.value)")
+            }
+            nodes.append(FolderNode(name: "Source Files", icon: "folder.fill", children: sourceChildren,
+                                    emailCount: archiveTotal, filterValue: ""))
         }
 
         return nodes

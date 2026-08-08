@@ -3892,3 +3892,122 @@ final class V2AttachmentSearchTests: XCTestCase {
         XCTAssertEqual(again, AttachmentTextIndexJob.Outcome())
     }
 }
+
+// MARK: - Folder tree v1 parity: archive-wide aggregates + tag/source SQL operators
+
+final class V2FolderAggregateTests: XCTestCase {
+
+    private func tempRoot() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-folderagg-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    private func fixture(
+        mid: String, subject: String,
+        messageType: String = "received",
+        tags: [String] = [],
+        attachments: [AttachmentMetadata] = []
+    ) -> MBOXParser.RawEmail {
+        MBOXParser.RawEmail(
+            headers: ["Subject": subject, "From": "Alice <a@b.com>", "To": "c@d.com",
+                      "Date": "Wed, 15 Jan 2025 14:30:00 +0000", "Message-ID": mid],
+            rawSource: "From a@b.com\nbody", messageType: messageType,
+            attachments: attachments, timestamp: "2025-01-15T14:30:00Z",
+            domains: ["b.com"], plainBody: "body \(subject)", htmlBody: "", tags: tags
+        )
+    }
+
+    // The folder tree's buckets (Inbox/Sent, Has Attachments, Labels, Source
+    // Files) come from exact archive-wide aggregates — v1's tree at any scale.
+    func testFolderAggregates_exactArchiveWideCounts() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root)
+
+        let srcA = try await store.registerSource(
+            SQLiteEmailStore.SourceDescriptor(sha256: "sha-a", filename: "Inbox.mbox"))
+        let srcB = try await store.registerSource(
+            SQLiteEmailStore.SourceDescriptor(sha256: "sha-b", filename: "boxbe_export.mbox"))
+
+        let att = AttachmentMetadata(filename: "f.pdf", mimeType: "application/pdf", size: 10)
+        let batchA: [MBOXParser.RawEmail] = [
+            fixture(mid: "<fa-1@t>", subject: "one", messageType: "received", tags: ["Inbox", "Important"]),
+            fixture(mid: "<fa-2@t>", subject: "two", messageType: "received", tags: ["Inbox"]),
+            fixture(mid: "<fa-3@t>", subject: "three", messageType: "sent", tags: ["Sent"], attachments: [att]),
+        ]
+        let batchB: [MBOXParser.RawEmail] = [
+            fixture(mid: "<fb-1@t>", subject: "four", messageType: "received", tags: ["Inbox", "Boxbe Waiting List"]),
+        ]
+        _ = try await store.insertBatch(batchA, sourceFileHash: "sha-a", accountID: nil,
+            sourceID: srcA, firstOrdinal: 0, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        _ = try await store.insertBatch(batchB, sourceFileHash: "sha-b", accountID: nil,
+            sourceID: srcB, firstOrdinal: 0, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+
+        let types = try await store.messageTypeCounts()
+        XCTAssertEqual(types["received"], 3)
+        XCTAssertEqual(types["sent"], 1)
+
+        let attachTotal = try await store.attachmentCount()
+        XCTAssertEqual(attachTotal, 1)
+
+        let labels = try await store.parserTagCounts(limit: 30)
+        XCTAssertEqual(labels.first?.value, "Inbox", "most-used label first (v1 ordering)")
+        XCTAssertEqual(labels.first?.count, 3)
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: labels.map { ($0.value, $0.count) }),
+                       ["Inbox": 3, "Important": 1, "Sent": 1, "Boxbe Waiting List": 1])
+
+        let sources = try await store.sourceFileCounts(limit: 50)
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: sources.map { ($0.value, $0.count) }),
+                       ["Inbox.mbox": 3, "boxbe_export.mbox": 1])
+    }
+
+    // tag: must match PARSER labels via SQL (the Labels folders are Gmail
+    // labels in email_tags, not user tags) — and still match user tags.
+    func testTagQuery_matchesParserLabelsAndUserTags() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root)
+
+        let labeled = fixture(mid: "<tg-1@t>", subject: "labeled", tags: ["Boxbe Waiting List"])
+        let plain = fixture(mid: "<tg-2@t>", subject: "plain")
+        _ = try await store.insertBatch([labeled, plain], sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+
+        var byLabel = EmailQuery(); byLabel.userTag = "Boxbe Waiting List"
+        let labelCount = try await store.filteredCount(byLabel)
+        XCTAssertEqual(labelCount, 1, "parser label reachable through the tag: SQL path")
+
+        try await store.userTagAdd("Case-7", ids: [plain.id])
+        var byUserTag = EmailQuery(); byUserTag.userTag = "Case-7"
+        let userCount = try await store.filteredCount(byUserTag)
+        XCTAssertEqual(userCount, 1, "user tags still match")
+    }
+
+    // source: must compile to SQL — filename resolved via the sources table
+    // from each row's source_hash (case-insensitive contains, v1 semantics).
+    func testSourceQuery_filtersBySourceFilename() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root)
+
+        let srcA = try await store.registerSource(
+            SQLiteEmailStore.SourceDescriptor(sha256: "sha-src-a", filename: "Takeout-2020.mbox"))
+        let srcB = try await store.registerSource(
+            SQLiteEmailStore.SourceDescriptor(sha256: "sha-src-b", filename: "Work.mbox"))
+        _ = try await store.insertBatch([fixture(mid: "<sf-1@t>", subject: "from takeout")],
+            sourceFileHash: "sha-src-a", accountID: nil, sourceID: srcA, firstOrdinal: 0,
+            dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        _ = try await store.insertBatch([fixture(mid: "<sf-2@t>", subject: "from work")],
+            sourceFileHash: "sha-src-b", accountID: nil, sourceID: srcB, firstOrdinal: 0,
+            dedupPolicy: .messageID, batchSize: 10, progress: nil)
+
+        var q = ArchiveQueryCompiler.compile("source:takeout")
+        XCTAssertEqual(q.sourceFileName, "takeout", "compiler recognizes source:")
+        let hits = try await store.filteredCount(q)
+        XCTAssertEqual(hits, 1)
+
+        q = ArchiveQueryCompiler.compile("source:.mbox")
+        let all = try await store.filteredCount(q)
+        XCTAssertEqual(all, 2, "contains-match spans both sources")
+    }
+}
