@@ -40,6 +40,16 @@
                ReferencedContainer = "container:maxmailin.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "FACE7E570000000000000002"
+               BuildableName = "maxmailinUITests.xctest"
+               BlueprintName = "maxmailinUITests"
+               ReferencedContainer = "container:maxmailin.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction

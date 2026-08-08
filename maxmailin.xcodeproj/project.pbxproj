@@ -25,6 +25,13 @@
 			remoteGlobalIDString = C3F77F6F2E21F62600351625;
 			remoteInfo = maxmailin;
 		};
+		FACE7E570000000000000009 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C3F77F682E21F62600351625 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C3F77F6F2E21F62600351625;
+			remoteInfo = maxmailin;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -54,12 +61,18 @@
 		C3B6F5B12E2F3AD2009C208C /* ModelRunner.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = ModelRunner.xcodeproj; sourceTree = "<group>"; };
 		C3F77F702E21F62600351625 /* maxmailin.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = maxmailin.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C3F7A7222E2ED24F00351625 /* ModelRunner.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = ModelRunner.xcodeproj; sourceTree = "<group>"; };
+		FACE7E570000000000000003 /* maxmailinUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = maxmailinUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		C3F77F722E21F62600351625 /* maxmailin */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = maxmailin;
+			sourceTree = "<group>";
+		};
+		FACE7E570000000000000001 /* maxmailinUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = maxmailinUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -80,6 +93,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		FACE7E570000000000000008 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -97,6 +117,14 @@
 				5904199535DD4B29D57E7CA6 /* Cocoa.framework */,
 			);
 			name = "OS X";
+			sourceTree = "<group>";
+		};
+		B41DA8C330271EB900768F2E /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				FACE7E570000000000000001 /* maxmailinUITests */,
+			);
+			name = "Recovered References";
 			sourceTree = "<group>";
 		};
 		BE24C855A58BA09F68BE5BCE /* maxmailinTests */ = {
@@ -141,6 +169,7 @@
 				C3F77F712E21F62600351625 /* Products */,
 				1DB56D68AE982DF73D8746ED /* Frameworks */,
 				BE24C855A58BA09F68BE5BCE /* maxmailinTests */,
+				B41DA8C330271EB900768F2E /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};
@@ -149,6 +178,7 @@
 			children = (
 				C3F77F702E21F62600351625 /* maxmailin.app */,
 				9CF2C7D0B60FDC821DB65ADF /* maxmailinTests.xctest */,
+				FACE7E570000000000000003 /* maxmailinUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -201,6 +231,26 @@
 			productName = mailin;
 			productReference = C3F77F702E21F62600351625 /* maxmailin.app */;
 			productType = "com.apple.product-type.application";
+		};
+		FACE7E570000000000000002 /* maxmailinUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FACE7E570000000000000004 /* Build configuration list for PBXNativeTarget "maxmailinUITests" */;
+			buildPhases = (
+				FACE7E570000000000000007 /* Sources */,
+				FACE7E570000000000000008 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				FACE7E57000000000000000A /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				FACE7E570000000000000001 /* maxmailinUITests */,
+			);
+			name = maxmailinUITests;
+			productName = maxmailinUITests;
+			productReference = FACE7E570000000000000003 /* maxmailinUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 /* End PBXNativeTarget section */
 
@@ -261,6 +311,7 @@
 			targets = (
 				C3F77F6F2E21F62600351625 /* maxmailin */,
 				9264030F775FE81D554EE5E4 /* maxmailinTests */,
+				FACE7E570000000000000002 /* maxmailinUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -304,6 +355,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		FACE7E570000000000000007 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -312,6 +370,11 @@
 			name = maxmailin;
 			target = C3F77F6F2E21F62600351625 /* maxmailin */;
 			targetProxy = 481E20DFCEF7A0B2B4AB3379 /* PBXContainerItemProxy */;
+		};
+		FACE7E57000000000000000A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C3F77F6F2E21F62600351625 /* maxmailin */;
+			targetProxy = FACE7E570000000000000009 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -581,6 +644,36 @@
 			};
 			name = Release;
 		};
+		FACE7E570000000000000005 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ecosanskriti.maxmailinUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = maxmailin;
+			};
+			name = Debug;
+		};
+		FACE7E570000000000000006 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ecosanskriti.maxmailinUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = maxmailin;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -607,6 +700,15 @@
 			buildConfigurations = (
 				E206DC789E04CD49BB728C5E /* Release */,
 				83E229A7FCC2C94E4EBCDAF1 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		FACE7E570000000000000004 /* Build configuration list for PBXNativeTarget "maxmailinUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FACE7E570000000000000005 /* Debug */,
+				FACE7E570000000000000006 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

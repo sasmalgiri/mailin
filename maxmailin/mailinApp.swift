@@ -182,6 +182,14 @@ struct mailinApp: App {
                         // O(1) no-op once nothing is pending). Fixes empty
                         // folder buckets + type/attachment filters on old
                         // archives without a re-import.
+                        // UI-test harness: "--uitest" launches into a clean,
+                        // deterministic state — onboarding suppressed, demo
+                        // archive imported — so XCUITests can click through
+                        // every surface against real data.
+                        if storageState == .active,
+                           ProcessInfo.processInfo.arguments.contains("--uitest") {
+                            UITestSupport.prepareForUITests()
+                        }
                         if storageState == .active {
                             let sender = UserDefaults.standard.string(forKey: "defaultSenderEmail") ?? ""
                             FidelityBackfillJob.shared.kickIfNeeded(senderEmail: sender)
