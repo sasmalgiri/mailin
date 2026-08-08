@@ -4140,3 +4140,89 @@ final class V2FolderAggregateTests: XCTestCase {
         XCTAssertEqual(all, 2, "contains-match spans both sources")
     }
 }
+
+// MARK: - AI output quality: the narrative must be a story, never parroted noise
+
+final class V2AIOutputQualityTests: XCTestCase {
+
+    private func fixture(_ i: Int, from: String, subject: String, body: String, day: Int) -> MBOXParser.RawEmail {
+        MBOXParser.RawEmail(
+            headers: ["Message-ID": "<probe-\(i)@t>", "Subject": subject,
+                      "From": from, "To": "team@corp.com",
+                      "Date": "Wed, \(String(format: "%02d", day)) Jan 2025 10:00:00 +0000"],
+            rawSource: "", messageType: "received", attachments: [],
+            timestamp: "2025-01-\(String(format: "%02d", day))T10:00:00Z",
+            domains: ["corp.com"], plainBody: body, htmlBody: "")
+    }
+
+    private var thread: [MBOXParser.RawEmail] {
+        [fixture(1, from: "Priya Sharma <priya@corp.com>", subject: "Q1 launch date",
+                 body: "Proposing we launch the billing page on Feb 3. Need legal signoff first.", day: 6),
+         fixture(2, from: "Michael Brown <michael@corp.com>", subject: "Re: Q1 launch date",
+                 body: "Feb 3 works for engineering. Legal flagged clause 4 — Sarah needs until Jan 20.", day: 8),
+         fixture(3, from: "Priya Sharma <priya@corp.com>", subject: "Re: Q1 launch date",
+                 body: "Locking Feb 3 contingent on clause 4 by Jan 20. Michael to prep the rollout checklist.", day: 9)]
+    }
+
+    /// The garbage gate catches the EXACT failure shape observed in the field
+    /// (per-email header dumps) and passes real prose.
+    func testParrotingDetector_matchesObservedFailureShape() throws {
+        guard #available(macOS 26, iOS 26, *) else { throw XCTSkip("engine requires OS 26") }
+        let observedGarbage = """
+        **Email 9**
+        **Date:** Wed, 12 Mar 2025 19:00:00 +0000
+        **From:** File Processing System <sasmalgiri@gmail.com>
+        **Subject:** Re: CSV Processing Error
+        **Body:** Hi, thank you for your feedback.
+        **Email 10**
+        **Date:** Wed, 12 Mar 2025 20:00:00 +0000
+        """
+        XCTAssertTrue(FoundationModelEngine.looksLikeParroting(observedGarbage),
+                      "the field-observed dump is detected")
+
+        let goodProse = """
+        On 6 Jan, Priya Sharma proposed launching the billing page on Feb 3, \
+        pending legal signoff. Michael Brown confirmed engineering was ready \
+        but relayed that legal flagged clause 4, with Sarah needing until \
+        Jan 20. Priya locked the date contingent on that rewrite.
+
+        Open items: clause 4 rewrite due Jan 20; rollout checklist owed by Michael.
+        """
+        XCTAssertFalse(FoundationModelEngine.looksLikeParroting(goodProse),
+                       "flowing prose passes the gate")
+    }
+
+    /// The deterministic fallback is honest and complete: participants,
+    /// dates, subject, per-message outline — never model noise.
+    func testDeterministicFallback_isFactualAndComplete() throws {
+        guard #available(macOS 26, iOS 26, *) else { throw XCTSkip("engine requires OS 26") }
+        let summary = FoundationModelEngine.deterministicThreadSummary(thread)
+        XCTAssertTrue(summary.contains("Q1 launch date"), "subject present")
+        XCTAssertTrue(summary.contains("Priya Sharma") && summary.contains("Michael Brown"),
+                      "participants named")
+        XCTAssertTrue(summary.contains("3 message(s)"), "count exact")
+        XCTAssertTrue(summary.contains("rollout checklist"), "content excerpted")
+        XCTAssertFalse(FoundationModelEngine.looksLikeParroting(summary),
+                       "fallback itself passes the gate")
+    }
+
+    /// Live model check — runs only where Apple Intelligence is available
+    /// (owner's Mac): the generated narrative must pass the garbage gate.
+    func testLiveNarrative_passesGarbageGate() async throws {
+        #if canImport(FoundationModels)
+        guard #available(macOS 26, iOS 26, *), FoundationModelEngine.isAvailable else {
+            throw XCTSkip("Apple Intelligence not available in this environment")
+        }
+        let narrative = try await FoundationModelEngine.synthesizeThread(thread) { _ in }
+        print("LIVE-NARRATIVE >>>\n\(narrative)\n<<< LIVE-NARRATIVE")
+        XCTAssertFalse(FoundationModelEngine.looksLikeParroting(narrative),
+                       "live model output is a narrative, not a header dump")
+        XCTAssertGreaterThan(narrative.count, 100, "substantive output")
+        XCTAssertTrue(narrative.localizedCaseInsensitiveContains("Priya")
+                      || narrative.localizedCaseInsensitiveContains("launch"),
+                      "grounded in the actual thread")
+        #else
+        throw XCTSkip("FoundationModels not available at build time")
+        #endif
+    }
+}

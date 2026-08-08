@@ -1785,46 +1785,108 @@ struct FoundationModelEngine {
             (MBOXParser.parseDate($1.headers["Date"]) ?? .distantPast)
         }
 
-        var context = "CONVERSATION THREAD — \(sorted.count) emails:\n\n"
-        for (_, email) in sorted.enumerated() {
+        // Small on-device models MIMIC input shape: never feed labeled
+        // header blocks (From:/To:/Body:) or the output parrots them back.
+        // Give the model prose-shaped facts instead.
+        let dateFmt = DateFormatter()
+        dateFmt.dateStyle = .medium
+        var context = ""
+        for email in sorted {
             let subj = email.headers["Subject"] ?? "(No Subject)"
-            context += """
-                --- \(subj) ---
-                From: \(email.headers["From"] ?? "Unknown")
-                To: \(email.headers["To"] ?? "Unknown")
-                Subject: \(subj)
-                Date: \(email.headers["Date"] ?? "")
-                Body: \(bodySnippet(for: email, maxLength: 600))
-
-                """
+            let sender = displayName(from: email.headers["From"] ?? "someone")
+            let when = MBOXParser.parseDate(email.headers["Date"]).map { dateFmt.string(from: $0) } ?? "an unknown date"
+            let snippet = bodySnippet(for: email, maxLength: 500)
+                .replacingOccurrences(of: "\n", with: " ")
+            context += "On \(when), \(sender) wrote about “\(subj)”: \(snippet)\n\n"
         }
 
         let instructions = """
             You are an email conversation narrator in mailin, a privacy-first Mac app. \
-            Create a narrative timeline of the conversation thread.
+            Summarize the thread as a SHORT STORY someone could read in 30 seconds.
 
-            Rules:
-            - ALWAYS refer to emails by their actual **Subject** line (in bold), never as \
-              "Email 1" or "Message 2"
-            - Narrate the conversation chronologically like a story
-            - Highlight key decisions, turning points, and action items
-            - Note tone shifts and sentiment changes between messages
-            - Use **bold** for participant names, dates, and key decisions
-            - Call out any unresolved questions or pending action items at the end
-            - Be concise — focus on what matters, skip pleasantries
-            - Use a timeline format with dates as anchors
+            Output rules — follow them exactly:
+            - Write 2 to 4 flowing paragraphs of plain prose
+            - NEVER list the emails one by one; weave them into one narrative
+            - NEVER write labels like "Email 1", "From:", "To:", "Body:", "Date:" or section headings
+            - Refer to people by name and to messages by their subject in quotes
+            - Mention dates inline as anchors ("On 12 Mar, …")
+            - End with one final line starting "Open items:" listing anything unresolved
+              (or "Open items: none")
+            - Only state facts present in the messages; never invent details
             """
 
         let session = LanguageModelSession(instructions: instructions)
-        let prompt = "Create a narrative timeline for this email thread:\n\n\(context)"
+        let prompt = "Tell the story of this conversation:\n\n\(context)"
 
-        let stream = session.streamResponse(to: prompt)
-        var finalContent = ""
-        for try await snapshot in stream {
-            finalContent = snapshot.content
-            await onUpdate(finalContent)
+        func generate(_ prompt: String) async throws -> String {
+            let stream = session.streamResponse(to: prompt)
+            var finalContent = ""
+            for try await snapshot in stream {
+                finalContent = snapshot.content
+                await onUpdate(finalContent)
+            }
+            return finalContent
         }
-        return finalContent
+
+        var narrative = try await generate(prompt)
+        // Garbage gate: a small model can still parrot structure. Detect the
+        // known failure shapes and retry ONCE with a corrective instruction;
+        // if it still parrots, return an honest deterministic summary
+        // instead of noise.
+        if Self.looksLikeParroting(narrative) {
+            narrative = try await generate(prompt + """
+
+
+                IMPORTANT: your previous attempt listed emails with labels. \
+                Do NOT list emails. Write flowing paragraphs of prose only.
+                """)
+        }
+        if Self.looksLikeParroting(narrative) {
+            let fallback = Self.deterministicThreadSummary(sorted)
+            await onUpdate(fallback)
+            return fallback
+        }
+        return narrative
+    }
+
+    /// True when generated text regurgitates input structure instead of
+    /// narrating — the known small-model failure shape.
+    static func looksLikeParroting(_ text: String) -> Bool {
+        if text.contains("Body:") { return true }
+        if text.range(of: #"\*\*Email \d"#, options: .regularExpression) != nil { return true }
+        let fromLabels = text.components(separatedBy: "From:").count - 1
+        let dateLabels = text.components(separatedBy: "Date:").count - 1
+        return fromLabels >= 2 || dateLabels >= 3
+    }
+
+    /// Deterministic, always-correct fallback: who, when, about what — built
+    /// from the messages themselves, no model involved.
+    static func deterministicThreadSummary(_ sorted: [MBOXParser.RawEmail]) -> String {
+        let dateFmt = DateFormatter()
+        dateFmt.dateStyle = .medium
+        let participants = Set(sorted.compactMap { $0.headers["From"] }.map { displayName(from: $0) })
+        let subject = sorted.first?.headers["Subject"] ?? "(No Subject)"
+        let first = sorted.first.flatMap { MBOXParser.parseDate($0.headers["Date"]) }.map { dateFmt.string(from: $0) } ?? "?"
+        let last = sorted.last.flatMap { MBOXParser.parseDate($0.headers["Date"]) }.map { dateFmt.string(from: $0) } ?? "?"
+        var summary = "This thread — “\(subject)” — spans \(sorted.count) message(s) from \(first) to \(last) between \(participants.sorted().joined(separator: ", ")).\n\n"
+        summary += "The AI narrative wasn't reliable for this thread, so here is the factual outline instead:\n"
+        for email in sorted.prefix(8) {
+            let when = MBOXParser.parseDate(email.headers["Date"]).map { dateFmt.string(from: $0) } ?? "?"
+            let sender = displayName(from: email.headers["From"] ?? "?")
+            let snippet = String(email.plainBody.replacingOccurrences(of: "\n", with: " ").prefix(120))
+            summary += "• \(when) — \(sender): \(snippet)\n"
+        }
+        if sorted.count > 8 { summary += "• … and \(sorted.count - 8) more message(s)\n" }
+        return summary
+    }
+
+    /// "Jane Doe <jane@x.com>" → "Jane Doe"; bare addresses stay as-is.
+    static func displayName(from header: String) -> String {
+        if let angle = header.firstIndex(of: "<") {
+            let name = header[..<angle].trimmingCharacters(in: CharacterSet(charactersIn: " \"'"))
+            if !name.isEmpty { return name }
+        }
+        return header.trimmingCharacters(in: .whitespaces)
     }
 
     // MARK: - Security Brief
