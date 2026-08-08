@@ -259,6 +259,53 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(vm.visibleEmails.count, 0)
     }
 
+    /// THE sidebar-filters regression ("filters not working"): checkbox
+    /// selections must COMPILE into the pager query and re-page the archive.
+    /// Only the OLDEST 5 rows match the selected sender — none are in the
+    /// first 10-row page, so a window-only refinement shows zero.
+    func testPartU_sidebarSelectionsPageArchiveWide() async throws {
+        let env = try makeEnv()
+        var fixtures = (0..<30).map { makeEmail(i: $0, total: 30, body: "plain body \($0)") }
+        for i in 0..<5 {   // oldest dates → outside page 1
+            fixtures[i].headers["From"] = "old.sender@legacy.com"
+        }
+        fixtures[2].tags = ["Boxbe Waiting List"]
+        try await env.store.insertBatch(fixtures, batchSize: 200)
+        try await env.fts.indexBatch(fixtures)
+
+        let vm = ParsedEmailListViewModel(viewModel: ContentViewModel(), archive: env.archive,
+                                          pageSize: 10, maxRetained: 50)
+        vm.isPremiumUser = true
+
+        // Multi-select senders: SQL OR-group, archive-wide.
+        vm.selectedFromEmails = ["old.sender@legacy.com"]
+        await vm.reloadForQueryChangeNow()
+        XCTAssertEqual(vm.queryTotalCount, 5, "SQL-side sender match count")
+        XCTAssertEqual(Set(vm.visibleEmails.map(\.id)), Set(fixtures.prefix(5).map(\.id)),
+            "all 5 old-sender emails page in despite being 25+ rows deep")
+
+        // Selections AND together with label checkboxes.
+        vm.selectedTags = ["Boxbe Waiting List"]
+        await vm.reloadForQueryChangeNow()
+        XCTAssertEqual(vm.visibleEmails.map(\.id), [fixtures[2].id],
+            "sender AND label intersect archive-wide")
+
+        // applyFilters() itself must detect the changed compiled query and
+        // re-page (the sidebar Apply button path) — await the async reload.
+        vm.selectedTags = []
+        vm.applyFilters()
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertEqual(vm.queryTotalCount, 5, "Apply re-paged after selection change")
+
+        // Sort compiles too: subject A→Z ordering comes from SQL, whole archive.
+        vm.selectedFromEmails = []
+        vm.sortBy = .subjectAsc
+        await vm.reloadForQueryChangeNow()
+        let subjects = vm.visibleEmails.map { $0.headers["Subject"] ?? "" }
+        XCTAssertEqual(subjects, subjects.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending },
+            "first page is the archive-wide sort order, not a re-sorted window")
+    }
+
     // MARK: - Free-tier paging gate from store counts
 
     /// Non-premium paging depth is capped at `StoreManager.freeEmailLimit`

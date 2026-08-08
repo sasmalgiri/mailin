@@ -344,11 +344,13 @@ class ParsedEmailListViewModel: ObservableObject {
         var base = EmailQuery.all
         if startDate > .distantPast { base.afterDate = startDate }
         if endDate < .distantFuture { base.beforeDate = endDate }
-        if selectedFromEmails.count == 1 { base.sender = selectedFromEmails[0] }
-        if selectedToEmails.count == 1 { base.recipient = selectedToEmails[0].lowercased() }
-        if selectedDomains.count == 1 { base.domain = selectedDomains[0].lowercased() }
-        if selectedSubjects.count == 1 { base.subjectContains = selectedSubjects[0] }
-        if selectedTags.count == 1 { base.userTag = selectedTags[0] }
+        // v1 parity: EVERY sidebar checkbox selection compiles to SQL, so the
+        // filters apply to the whole archive — not just the resident window.
+        base.senders = selectedFromEmails
+        base.recipients = selectedToEmails.map { $0.lowercased() }
+        base.domains = selectedDomains.map { $0.lowercased() }
+        base.subjects = selectedSubjects
+        base.tags = selectedTags
         if let evidence = selectedEvidenceTag, evidence != .none { base.evidenceTag = evidence.rawValue }
         if hasAttachmentFilter { base.hasAttachments = true }
         if showPinnedOnly { base.pinnedOnly = true }
@@ -451,18 +453,25 @@ class ParsedEmailListViewModel: ObservableObject {
     /// have no repository text form, and in:attachments resolves to an id set —
     /// those page by their date/structured bounds and refine the window.
     private var pagerQuery: EmailQuery {
-        var base = EmailQuery.all
-        if startDate > .distantPast { base.afterDate = startDate }
-        if endDate < .distantFuture { base.beforeDate = endDate }
+        // The FULL archive query — search operators AND every sidebar
+        // selection AND the sort — so pages come back already filtered and
+        // ordered archive-wide (v1 semantics at any scale).
+        var query = currentArchiveQuery
         let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return base }
-        let parsed = parseSearchQuery(trimmed)
-        var query = ArchiveQueryCompiler.compile(trimmed, base: base)
-        if parsed.isRegexQuery || parsed.isProximityQuery || parsed.searchInAttachments {
-            query.text = nil
+        if !trimmed.isEmpty {
+            let parsed = parseSearchQuery(trimmed)
+            if parsed.isRegexQuery || parsed.isProximityQuery || parsed.searchInAttachments {
+                query.text = nil
+            }
         }
         return query
     }
+
+    /// The query the pager last ran — applyFilters() re-pages when the
+    /// compiled query ACTUALLY changed (sidebar selections, sort, operators)
+    /// and only refines in-window otherwise. Equality-guarded, so the
+    /// applyFilters that follows the reload cannot loop.
+    private var lastPagedQuery: EmailQuery? = nil
 
     /// Reload the page window from the first page of the current query, then
     /// re-apply the in-window refinements. Also refreshes archive-truth counts
@@ -483,7 +492,9 @@ class ParsedEmailListViewModel: ObservableObject {
         isParsed = total > 0
         showParsedList = total > 0
         await refreshSenderAggregates()
-        await pager.setQuery(pagerQuery)
+        let compiled = pagerQuery
+        lastPagedQuery = compiled
+        await pager.setQuery(compiled)
         forwardPagesLoaded = 1
         guard revision == windowRevision else { return }
         await hydrateWindow(revision: revision)
@@ -506,7 +517,9 @@ class ParsedEmailListViewModel: ObservableObject {
         let revision = windowRevision &+ 1
         windowRevision = revision
         isLoadingPage = true
-        await pager.setQuery(pagerQuery)
+        let compiled = pagerQuery
+        lastPagedQuery = compiled
+        await pager.setQuery(compiled)
         forwardPagesLoaded = 1
         guard revision == windowRevision else { return }
         await hydrateWindow(revision: revision)
@@ -825,6 +838,15 @@ class ParsedEmailListViewModel: ObservableObject {
     /// (`matchingSubset` over the window ids); regex uses BoundedRegexSearch;
     /// proximity compiles to a native FTS5 NEAR — no in-RAM corpus engine.
     func applyFilters() {
+        // Part U: sidebar selections / sort now COMPILE into the pager query —
+        // when it changed, re-page the archive first (the reload calls back
+        // into applyFilters with an unchanged query, so this cannot loop).
+        let compiled = pagerQuery
+        if compiled != lastPagedQuery {
+            lastPagedQuery = compiled
+            reloadPagesForQueryChange()
+            return
+        }
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let parsed = parseSearchQuery(query)
         let isoFmt = isoFormatter

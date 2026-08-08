@@ -1623,6 +1623,40 @@ actor SQLiteEmailStore: EmailArchiveStore {
             binds.append(.text(tag))
             binds.append(.text(tag))
         }
+        // Sidebar multi-selections: each list ORs internally, ANDs with the
+        // rest — matching v1's whole-corpus checkbox semantics in SQL.
+        if !q.senders.isEmpty {
+            let ors = q.senders.map { _ in "instr(lower(e.from_addr), lower(?)) > 0" }.joined(separator: " OR ")
+            sql.append("(\(ors))")
+            binds.append(contentsOf: q.senders.map { .text($0) })
+        }
+        if !q.recipients.isEmpty {
+            let ors = q.recipients.map { _ in "instr(p.normalized_address, lower(?)) > 0" }.joined(separator: " OR ")
+            sql.append("""
+                EXISTS (SELECT 1 FROM email_participants p WHERE p.email_id = e.id
+                        AND p.role IN ('TO','CC','BCC') AND (\(ors)))
+                """)
+            binds.append(contentsOf: q.recipients.map { .text($0) })
+        }
+        if !q.subjects.isEmpty {
+            let ors = q.subjects.map { _ in "instr(lower(e.subject), lower(?)) > 0" }.joined(separator: " OR ")
+            sql.append("(\(ors))")
+            binds.append(contentsOf: q.subjects.map { .text($0) })
+        }
+        if !q.domains.isEmpty {
+            let marks = Array(repeating: "?", count: q.domains.count).joined(separator: ",")
+            sql.append("EXISTS (SELECT 1 FROM email_domains dm WHERE dm.email_id = e.id AND dm.domain IN (\(marks)))")
+            binds.append(contentsOf: q.domains.map { .text($0) })
+        }
+        if !q.tags.isEmpty {
+            let marks = Array(repeating: "?", count: q.tags.count).joined(separator: ",")
+            sql.append("""
+                (EXISTS (SELECT 1 FROM email_user_tags ut WHERE ut.email_id = e.id AND ut.tag IN (\(marks)))
+                 OR EXISTS (SELECT 1 FROM email_tags pt WHERE pt.email_id = e.id AND pt.tag IN (\(marks))))
+                """)
+            binds.append(contentsOf: q.tags.map { .text($0) })
+            binds.append(contentsOf: q.tags.map { .text($0) })
+        }
         if let sourceName = q.sourceFileName, !sourceName.isEmpty {
             sql.append("""
                 e.source_hash IN (

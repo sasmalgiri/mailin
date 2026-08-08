@@ -77,6 +77,14 @@ struct EmailQuery: Sendable, Equatable {
     /// Exact tag — matches user tags (`email_user_tags`) OR parser labels
     /// (`email_tags`, e.g. Gmail labels), mirroring the in-memory `tag:` filter.
     var userTag: String? = nil
+    /// Sidebar multi-selections (v1 parity: checkbox filters must apply to
+    /// the WHOLE archive, so they compile to SQL OR-groups — one list ORs
+    /// internally, lists AND with every other filter).
+    var senders: [String] = []
+    var recipients: [String] = []
+    var subjects: [String] = []
+    var domains: [String] = []
+    var tags: [String] = []
     /// Source file name contains (resolved via `sources`/`forensic_source_hashes`).
     var sourceFileName: String? = nil
     /// Exact forensic evidence tag (`forensic_evidence_tags`).
@@ -97,6 +105,8 @@ struct EmailQuery: Sendable, Equatable {
         sender != nil || recipient != nil || subjectContains != nil || domain != nil
             || userTag != nil || sourceFileName != nil || evidenceTag != nil || hasAttachments != nil
             || messageType != nil || pinnedOnly || includeTrashed || sort != .dateDesc
+            || !senders.isEmpty || !recipients.isEmpty || !subjects.isEmpty
+            || !domains.isEmpty || !tags.isEmpty
     }
 
     var isEmpty: Bool {
@@ -392,6 +402,9 @@ extension EmailStoreRepository: RankedSearchRepository {
         let filters = [
             query.sender ?? "-", query.recipient ?? "-", query.subjectContains ?? "-",
             query.domain ?? "-", query.userTag ?? "-", query.sourceFileName ?? "-", query.evidenceTag ?? "-",
+            query.senders.joined(separator: ","), query.recipients.joined(separator: ","),
+            query.subjects.joined(separator: ","), query.domains.joined(separator: ","),
+            query.tags.joined(separator: ","),
             query.hasAttachments.map(String.init) ?? "-", query.messageType ?? "-",
             String(query.pinnedOnly), String(query.includeTrashed), query.sort.rawValue
         ].joined(separator: "\u{1}")
