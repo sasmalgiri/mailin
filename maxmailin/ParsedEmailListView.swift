@@ -314,14 +314,10 @@ struct ParsedEmailListView: View {
                     }
                 }
                 if !model.visibleEmails.isEmpty {
-                    Button { exportFilteredWord() } label: {
-                        Label("Export as Word (.doc)", systemImage: "doc.richtext")
-                    }
-                    Button { exportFilteredCSV() } label: {
-                        Label("Export as CSV", systemImage: "tablecells")
-                    }
-                    Button { exportFilteredJSON() } label: {
-                        Label("Export as JSON", systemImage: "square.and.arrow.up")
+                    Menu {
+                        unifiedExportSections
+                    } label: {
+                        Label("Export…", systemImage: "square.and.arrow.up")
                     }
                 }
                 Button { showAnalyticsSheet = true } label: {
@@ -371,22 +367,14 @@ struct ParsedEmailListView: View {
 
                         if !model.visibleEmails.isEmpty {
                             Menu {
-                                Button { exportFilteredWord() } label: {
-                                    Label("Word Document (.doc)", systemImage: "doc.richtext")
-                                }
-                                Button { exportFilteredCSV() } label: {
-                                    Label("Spreadsheet (.csv)", systemImage: "tablecells")
-                                }
-                                Button { exportFilteredJSON() } label: {
-                                    Label("JSON Archive", systemImage: "curlybraces")
-                                }
+                                unifiedExportSections
                             } label: {
                                 Label("Export", systemImage: "square.and.arrow.up")
                                     .font(Typography.caption1)
                             }
                             .controlSize(.small)
                             .fixedSize()
-                            .help("Export the filtered email list as Word, CSV, or JSON")
+                            .help("Export the filtered email list — documents, per-email files, contacts, events")
                             .accessibilityLabel("Export filtered emails")
                         }
 
@@ -2848,141 +2836,23 @@ struct ParsedEmailListView: View {
         }
     }
 
-    // MARK: - Export Filtered Emails (Word / CSV / JSON)
-    private static let freeExportLimit = 10
-
-    /// One Word document containing the whole FILTERED list — the same
-    /// streamed query scope as the JSON export, .doc Office-HTML output.
-    private func exportFilteredWord() {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd_HHmmss"
-        let suggestedName = "filtered_emails_\(formatter.string(from: Date())).doc"
-
-        #if os(macOS)
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = suggestedName
-        panel.canCreateDirectories = true
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        #else
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(suggestedName)
-        #endif
-
-        let scope: ArchiveSelectionScope = .query(model.currentArchiveQuery, exclusions: [])
-        let cap: Int? = storeManager.isPremium ? nil : Self.freeExportLimit
-        ExportRunCenter.shared.run(title: "Exporting Word document") {
-            do {
-                let result = try await ArchiveExportService.shared.exportWordArchive(
-                    scope: scope, to: url, limit: cap,
-                    onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-                if result.cancelled {
-                    listExportError = "Word export cancelled — partial output removed."
-                    return
-                }
-                if let cap {
-                    let total = (try? await ArchiveDataService.shared.count(scope: scope)) ?? result.recordsWritten
-                    if total > cap {
-                        storeManager.showPaywall = true
-                        listExportError = "Exported \(result.recordsWritten) of \(total) emails. Upgrade to Pro for unlimited export."
-                    }
-                }
+    // MARK: - Export Filtered Emails — THE unified format list
+    /// Same formats as the sidebar and the open-email menu, over the CURRENT
+    /// filtered query, streamed from the store.
+    private var unifiedExportSections: some View {
+        UnifiedExportSections(
+            scope: { .query(model.currentArchiveQuery, exclusions: []) },
+            emlRender: { model.viewModel.exportEmailAsEML($0) },
+            share: { url in
                 #if os(iOS)
                 iOSShareFile(at: url)
                 #endif
-            } catch {
-                listExportError = "Failed to export Word document: \(error.localizedDescription)"
-            }
-        }
+            },
+            errorMessage: $listExportError
+        )
+        .environmentObject(storeManager)
     }
 
-    /// Detailed CSV over the FILTERED list (same columns as the sidebar's
-    /// spreadsheet export), streamed from the store.
-    private func exportFilteredCSV() {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd_HHmmss"
-        let suggestedName = "filtered_emails_\(formatter.string(from: Date())).csv"
-
-        #if os(macOS)
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = suggestedName
-        panel.canCreateDirectories = true
-        panel.allowedContentTypes = [.commaSeparatedText]
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        #else
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(suggestedName)
-        #endif
-
-        let scope: ArchiveSelectionScope = .query(model.currentArchiveQuery, exclusions: [])
-        let cap: Int? = storeManager.isPremium ? nil : Self.freeExportLimit
-        ExportRunCenter.shared.run(title: "Exporting CSV") {
-            do {
-                let result = try await ArchiveExportService.shared.exportDetailedCSV(
-                    scope: scope, to: url, limit: cap,
-                    onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-                if result.cancelled {
-                    listExportError = "CSV export cancelled — partial output removed."
-                    return
-                }
-                if let cap {
-                    let total = (try? await ArchiveDataService.shared.count(scope: scope)) ?? result.recordsWritten
-                    if total > cap {
-                        storeManager.showPaywall = true
-                        listExportError = "Exported \(result.recordsWritten) of \(total) emails. Upgrade to Pro for unlimited export."
-                    }
-                }
-                #if os(iOS)
-                iOSShareFile(at: url)
-                #endif
-            } catch {
-                listExportError = "Failed to export CSV: \(error.localizedDescription)"
-            }
-        }
-    }
-
-    private func exportFilteredJSON() {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "yyyyMMdd_HHmmss"
-            let suggestedName = "filtered_emails_\(formatter.string(from: Date())).json"
-
-            #if os(macOS)
-            let panel = NSSavePanel()
-            panel.nameFieldStringValue = suggestedName
-            panel.canCreateDirectories = true
-            panel.allowedContentTypes = [.json]
-
-            guard panel.runModal() == .OK, let url = panel.url else { return }
-            #else
-            let url = FileManager.default.temporaryDirectory.appendingPathComponent(suggestedName)
-            #endif
-
-            // Part O: streamed from the store for the CURRENT query — the
-            // emails array is written incrementally, the summary accumulated
-            // while streaming (never a materialized array).
-            let scope: ArchiveSelectionScope = .query(model.currentArchiveQuery, exclusions: [])
-            let cap: Int? = storeManager.isPremium ? nil : Self.freeExportLimit
-            ExportRunCenter.shared.run(title: "Exporting JSON") {
-                do {
-                    let result = try await ArchiveExportService.shared.exportJSONArchive(
-                        scope: scope, to: url, limit: cap,
-                        onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-                    if result.cancelled {
-                        listExportError = "JSON export cancelled — partial output removed."
-                        return
-                    }
-                    if let cap {
-                        let total = (try? await ArchiveDataService.shared.count(scope: scope)) ?? result.recordsWritten
-                        if total > cap {
-                            storeManager.showPaywall = true
-                            listExportError = "Exported \(result.recordsWritten) of \(total) emails. Upgrade to Pro for unlimited export."
-                        }
-                    }
-                    #if os(iOS)
-                    iOSShareFile(at: url)
-                    #endif
-                } catch {
-                    listExportError = "Failed to export JSON: \(error.localizedDescription)"
-                }
-            }
-        }
 }
 
 // MARK: - Email Row

@@ -601,6 +601,24 @@ struct EmailDetailView: View {
                 Button { if storeManager.requirePremium() { exportAsTIFF() } } label: {
                     Label("TIFF Image (.tiff)", systemImage: "photo.artframe")
                 }
+
+                Divider()
+
+                // Parity with the sidebar / list Export menus: the remaining
+                // unified formats over THIS email (the persona buttons above
+                // already provide single-email Word/CSV/PDF/TIFF/plain text).
+                UnifiedExportSections(
+                    scope: { .explicit([email.id]) },
+                    gate: { storeManager.requirePremium() },
+                    omit: [.word, .csv, .pdfFiles, .tiffFiles, .printText],
+                    share: { url in
+                        #if os(iOS)
+                        iOSShareFile(at: url)
+                        #endif
+                    },
+                    errorMessage: $exportError
+                )
+                .environmentObject(storeManager)
             } label: {
                 Label(storeManager.isPremium ? "Export Email" : "Export Email (Pro)", systemImage: "square.and.arrow.up")
             }

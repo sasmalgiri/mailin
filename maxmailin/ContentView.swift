@@ -2716,50 +2716,33 @@ struct ContentView: View {
             }
 
             Menu {
-                Button {
-                    exportFilteredEmailsAsEML()
-                } label: {
-                    Label("Individual .eml files", systemImage: "envelope")
-                }
-                Button {
-                    exportFilteredEmailsAsCSV()
-                } label: {
-                    Label("Spreadsheet (.csv)", systemImage: "tablecells")
-                }
-                Divider()
-                Button {
-                    exportVCard()
-                } label: {
-                    Label("Contacts (vCard)", systemImage: "person.crop.rectangle.stack")
-                }
-                Button {
-                    exportICS()
-                } label: {
-                    Label("Calendar Events (ICS)", systemImage: "calendar")
-                }
-                Button {
-                    batchPrintFiltered()
-                } label: {
-                    Label("Batch Print Text", systemImage: "printer")
-                }
-                Button {
-                    exportSelectedAsTIFF()
-                } label: {
-                    Label("Export as TIFF Image", systemImage: "photo")
-                }
-                Divider()
-                Button {
-                    exportPortableHTML()
-                } label: {
-                    Label("Portable HTML Viewer", systemImage: "globe")
-                }
+                // THE unified format list — identical to the list footer's
+                // Export menu and the open-email export menu.
+                UnifiedExportSections(
+                    scope: { filteredScope },
+                    emlRender: { viewModel.exportEmailAsEML($0) },
+                    share: { url in
+                        #if os(iOS)
+                        iOSShareFile(at: url)
+                        #endif
+                    },
+                    errorMessage: $sidebarExportError
+                )
+                .environmentObject(storeManager)
             } label: {
                 Label("Export Emails", systemImage: "square.and.arrow.up")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(CompactSecondaryButtonStyle())
-            .help("Export filtered emails")
+            .help("Export filtered emails — documents, per-email files, contacts, events")
             .accessibilityLabel("Export filtered emails")
+            .alert("Export Error", isPresented: Binding(
+                get: { sidebarExportError != nil },
+                set: { if !$0 { sidebarExportError = nil } }
+            )) {
+                Button("OK") { sidebarExportError = nil }
+            } message: {
+                Text(sidebarExportError ?? "An unknown error occurred.")
+            }
 
             if showAdvancedFeatures && (forensicManager.isEnabled || personaManager.selectedPersona == .legal) {
                 let isLegalOnly = !forensicManager.isEnabled && personaManager.selectedPersona == .legal
@@ -3344,6 +3327,9 @@ private func handleMultipleFiles(_ urls: [URL]) {
     /// Everything matching the current filters, as a SYMBOLIC scope — the
     /// export service streams it from the store; the bounded preview arrays
     /// are never the export source.
+    /// Error surface for the unified sidebar export menu.
+    @State private var sidebarExportError: String?
+
     private var filteredScope: ArchiveSelectionScope {
         .query(modelVM.currentArchiveQuery, exclusions: [])
     }
