@@ -4141,6 +4141,45 @@ final class V2FolderAggregateTests: XCTestCase {
     }
 }
 
+// MARK: - RFC-822 reconstruction emits only real header fields
+
+final class V2RFC822ReconstructionTests: XCTestCase {
+
+    /// The field-observed junk: the v1 parser stored the mbox ENVELOPE line
+    /// as a fake header (split at the colon inside its timestamp), and
+    /// mailin's internal sourceFile key leaked into the display. Both must
+    /// be filtered; real headers (canonical order first) must survive.
+    func testReconstruction_dropsEnvelopeJunkAndInternalKeys() {
+        let headers: [String: String] = [
+            "From": "File Processing Bot <sasmalgiri@gmail.com>",
+            "To": "sasmalgiri@gmail.com",
+            "Subject": "CSV Processing Error",
+            "Date": "Tue, 11 Mar 2025 07:09:51 +0000",
+            "Message-ID": "<fafee08e@gmail.com>",
+            "X-Gmail-Labels": "Sent,Inbox,Unread",
+            "Content-Type": "text/plain; charset=utf-8",
+            "From 1826208697608613715xxx Tue Mar 11 07": "09:51 +0000 2025",
+            "sourceFile": "Sent.mbox"
+        ]
+        let text = RFC822Reconstruction.build(headers: headers, body: "File: valid_test.csv")
+
+        XCTAssertFalse(text.contains("1826208697608613715"), "envelope junk dropped")
+        XCTAssertFalse(text.contains("sourceFile"), "internal key dropped")
+        XCTAssertTrue(text.hasPrefix("From: File Processing Bot"), "canonical order first")
+        XCTAssertTrue(text.contains("X-Gmail-Labels: Sent,Inbox,Unread"), "real extension headers kept")
+        XCTAssertTrue(text.hasSuffix("File: valid_test.csv"), "body appended after blank line")
+        XCTAssertTrue(text.contains("\n\nFile:"), "header/body separator present")
+    }
+
+    func testFieldNameValidation_matchesRFC5322() {
+        XCTAssertTrue(RFC822Reconstruction.isValidFieldName("X-GM-THRID"))
+        XCTAssertTrue(RFC822Reconstruction.isValidFieldName("Received"))
+        XCTAssertFalse(RFC822Reconstruction.isValidFieldName("From 12345 Tue Mar 11 07"))
+        XCTAssertFalse(RFC822Reconstruction.isValidFieldName("has:colon"))
+        XCTAssertFalse(RFC822Reconstruction.isValidFieldName(""))
+    }
+}
+
 // MARK: - AI output quality: the narrative must be a story, never parroted noise
 
 final class V2AIOutputQualityTests: XCTestCase {

@@ -30,17 +30,7 @@ struct ParsedEmailListView: View {
         if !email.rawSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return (email.rawSource, false)
         }
-        // Reconstruct: canonical headers first, remaining headers sorted,
-        // blank line, stored plain body.
-        var lines: [String] = []
-        let canonical = ["From", "To", "Cc", "Bcc", "Subject", "Date", "Message-ID"]
-        for key in canonical {
-            if let value = email.headers[key], !value.isEmpty { lines.append("\(key): \(value)") }
-        }
-        for key in email.headers.keys.sorted() where !canonical.contains(key) {
-            if let value = email.headers[key], !value.isEmpty { lines.append("\(key): \(value)") }
-        }
-        return (lines.joined(separator: "\n") + "\n\n" + email.plainBody, true)
+        return (RFC822Reconstruction.build(headers: email.headers, body: email.plainBody), true)
     }
 
     private enum ActiveSheet: Identifiable {
