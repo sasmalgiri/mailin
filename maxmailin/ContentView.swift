@@ -2485,6 +2485,8 @@ struct ContentView: View {
                 Label("\(modelVM.displayedEmailCount) Emails", systemImage: "chart.bar.fill")
                     .font(Typography.title3)
                     .foregroundColor(AppColors.secondary)
+                    .contentTransition(.numericText())
+                    .adaptiveAnimation(modelVM.displayedEmailCount)
                 if modelVM.aiPinnedIDs != nil {
                     Button {
                         modelVM.aiPinnedIDs = nil

@@ -27,6 +27,7 @@ struct MenuBarSearchView: View {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                     .foregroundColor(.secondary)
+                    .symbolEffect(.pulse, isActive: isSearching)
                 TextField("Search your archive…", text: $query)
                     .textFieldStyle(.plain)
                     .focused($searchFocused)

@@ -58,6 +58,8 @@ struct FolderTreeView: View {
                             Text("\(archiveTotal)")
                                 .font(Typography.caption2)
                                 .foregroundColor(AppColors.secondary)
+                                .contentTransition(.numericText())
+                                .adaptiveAnimation(archiveTotal)
                         }
                         .padding(.horizontal, Spacing.small)
                         .padding(.vertical, Spacing.xxSmall)
@@ -86,6 +88,8 @@ struct FolderTreeView: View {
                                 Text("\(row.node.emailCount)")
                                     .font(Typography.caption2)
                                     .foregroundColor(AppColors.secondary)
+                                    .contentTransition(.numericText())
+                                    .adaptiveAnimation(row.node.emailCount)
                             }
                             .padding(.leading, CGFloat(row.depth * 16) + Spacing.small)
                             .padding(.trailing, Spacing.small)

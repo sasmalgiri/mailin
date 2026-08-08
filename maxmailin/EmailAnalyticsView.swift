@@ -1055,6 +1055,8 @@ struct StatCard: View {
                 .fontWeight(.bold)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
+                .contentTransition(.numericText())
+                .adaptiveAnimation(value)
             Text(title)
                 .font(Typography.caption1)
                 .foregroundColor(AppColors.secondary)
