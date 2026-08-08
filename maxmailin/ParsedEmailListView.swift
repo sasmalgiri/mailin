@@ -16,9 +16,36 @@ struct ParsedEmailListView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     #endif
  
+
+    /// The raw-source display text. Migrated archives may have NO stored raw
+    /// MIME — never show a silent blank panel: reconstruct a readable RFC-822
+    /// view from the saved headers + body and say so (`reconstructed`).
+    private func rawSourceDisplay(for email: MBOXParser.RawEmail) -> (text: String, reconstructed: Bool) {
+        let rawData = email.rawSource.data(using: .utf8) ?? Data()
+        let kit = SwiftEmailMessage(rawSource: rawData)
+        let kitString = kit.asRFC822String()
+        if !kitString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return (kitString, false)
+        }
+        if !email.rawSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return (email.rawSource, false)
+        }
+        // Reconstruct: canonical headers first, remaining headers sorted,
+        // blank line, stored plain body.
+        var lines: [String] = []
+        let canonical = ["From", "To", "Cc", "Bcc", "Subject", "Date", "Message-ID"]
+        for key in canonical {
+            if let value = email.headers[key], !value.isEmpty { lines.append("\(key): \(value)") }
+        }
+        for key in email.headers.keys.sorted() where !canonical.contains(key) {
+            if let value = email.headers[key], !value.isEmpty { lines.append("\(key): \(value)") }
+        }
+        return (lines.joined(separator: "\n") + "\n\n" + email.plainBody, true)
+    }
+
     private enum ActiveSheet: Identifiable {
         case stats
-        case rawSource(String)
+        case rawSource(String, reconstructed: Bool)
 
         var id: String {
             switch self {
@@ -168,8 +195,8 @@ struct ParsedEmailListView: View {
             switch sheet {
             case .stats:
                 ReplyStatsView(senderEmail: model.viewModel.senderEmail)
-            case .rawSource(let rfc822):
-                RawSourceView(rawText: rfc822)
+            case .rawSource(let rfc822, let reconstructed):
+                RawSourceView(rawText: rfc822, reconstructed: reconstructed)
             }
         } else if showAnalyticsSheet {
             EmailAnalyticsView(query: model.currentArchiveQuery)
@@ -204,8 +231,8 @@ struct ParsedEmailListView: View {
             switch sheet {
             case .stats:
                 ReplyStatsView(senderEmail: model.viewModel.senderEmail)
-            case .rawSource(let rfc822):
-                RawSourceView(rawText: rfc822)
+            case .rawSource(let rfc822, let reconstructed):
+                RawSourceView(rawText: rfc822, reconstructed: reconstructed)
             }
         }
         .sheet(isPresented: $showAnalyticsSheet) {
@@ -414,8 +441,8 @@ struct ParsedEmailListView: View {
             case .stats:
                 ReplyStatsView(senderEmail: model.viewModel.senderEmail)
                     .presentationDetents([.large])
-            case .rawSource(let rfc822):
-                RawSourceView(rawText: rfc822)
+            case .rawSource(let rfc822, let reconstructed):
+                RawSourceView(rawText: rfc822, reconstructed: reconstructed)
                     .presentationDetents([.large])
             }
         }
@@ -1729,11 +1756,8 @@ struct ParsedEmailListView: View {
         }
         .contextMenu {
             Button {
-                let rawData = email.rawSource.data(using: .utf8) ?? Data()
-                let kit = SwiftEmailMessage(rawSource: rawData)
-                let kitString = kit.asRFC822String()
-                let rawRFC822 = !kitString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? kitString : email.rawSource
-                activeSheet = .rawSource(rawRFC822)
+                let display = rawSourceDisplay(for: email)
+                activeSheet = .rawSource(display.text, reconstructed: display.reconstructed)
             } label: {
                 Label("View Raw Source", systemImage: "doc.plaintext")
             }
@@ -2130,11 +2154,8 @@ struct ParsedEmailListView: View {
             .contentShape(Rectangle())
             .contextMenu {
                 Button {
-                    let rawData = email.rawSource.data(using: .utf8) ?? Data()
-                    let kit = SwiftEmailMessage(rawSource: rawData)
-                    let kitString = kit.asRFC822String()
-                    let rawRFC822 = !kitString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? kitString : email.rawSource
-                    activeSheet = .rawSource(rawRFC822)
+                        let display = rawSourceDisplay(for: email)
+                    activeSheet = .rawSource(display.text, reconstructed: display.reconstructed)
                 } label: {
                     Label("View Raw Source", systemImage: "doc.plaintext")
                 }
@@ -2269,12 +2290,8 @@ struct ParsedEmailListView: View {
             emailTagPills(for: email)
 
             Button {
-                let rawData = email.rawSource.data(using: .utf8) ?? Data()
-                let kit = SwiftEmailMessage(rawSource: rawData)
-                let kitString = kit.asRFC822String()
-                let fallback = email.rawSource
-                let rawRFC822 = !kitString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? kitString : fallback
-                activeSheet = .rawSource(rawRFC822)
+                let display = rawSourceDisplay(for: email)
+                activeSheet = .rawSource(display.text, reconstructed: display.reconstructed)
             } label: {
                 Image(systemName: "doc.plaintext")
                     .foregroundColor(AppColors.secondary)
@@ -2312,11 +2329,8 @@ struct ParsedEmailListView: View {
             #endif
 
             Button {
-                let rawData = email.rawSource.data(using: .utf8) ?? Data()
-                let kit = SwiftEmailMessage(rawSource: rawData)
-                let kitString = kit.asRFC822String()
-                let rawRFC822 = !kitString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? kitString : email.rawSource
-                activeSheet = .rawSource(rawRFC822)
+                let display = rawSourceDisplay(for: email)
+                activeSheet = .rawSource(display.text, reconstructed: display.reconstructed)
             } label: {
                 Label("View Raw Source", systemImage: "doc.plaintext")
             }
@@ -3357,6 +3371,7 @@ struct AttachmentsPopoverButton: View {
 // MARK: - Raw Source View
 struct RawSourceView: View {
     let rawText: String
+    var reconstructed: Bool = false
     @Environment(\.dismiss) private var dismiss
     @State private var highlightedSource: AttributedString?
 
@@ -3366,7 +3381,9 @@ struct RawSourceView: View {
                 VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
                     Label("Raw RFC 822 Source", systemImage: "doc.plaintext")
                         .font(Typography.title2)
-                    Text("The original email source including all headers and MIME encoding")
+                    Text(reconstructed
+                         ? "Reconstructed from saved headers and body"
+                         : "The original email source including all headers and MIME encoding")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
                 }
@@ -3399,6 +3416,15 @@ struct RawSourceView: View {
             .padding(Spacing.medium)
 
             Divider()
+            if reconstructed {
+                Label("The original raw source wasn't stored when this email was imported by an older version — this is a reconstruction from the saved headers and body. Restore the original via Settings ▸ Restore Full Fidelity from Original Files.",
+                      systemImage: "info.circle")
+                    .font(Typography.caption1)
+                    .foregroundColor(.orange)
+                    .padding(Spacing.small)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.orange.opacity(0.08))
+            }
             ScrollView([.vertical, .horizontal]) {
                 if let highlighted = highlightedSource {
                     Text(highlighted)
