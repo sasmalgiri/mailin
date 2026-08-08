@@ -49,6 +49,7 @@ struct EmailDetailView: View {
     @State private var showReplySheet = false
     @State private var replyText = ""
     @State private var isGeneratingReply = false
+    @State private var replyGenerationTask: Task<Void, Never>?
     @State private var selectedReplyTone: Int = 0
 
     // Compose / Reply / Forward
@@ -1171,22 +1172,20 @@ struct EmailDetailView: View {
                 #if canImport(FoundationModels)
                 if #available(macOS 26, iOS 26, *) {
                     Button {
-                        generateReply()
+                        if isGeneratingReply { stopReplyGeneration() } else { generateReply() }
                     } label: {
                         HStack(spacing: Spacing.xSmall) {
                             if isGeneratingReply {
-                                ProgressView()
-                                    .scaleEffect(0.7)
-                                    .frame(width: 16, height: 16)
+                                Image(systemName: "stop.fill")
                             } else {
                                 Image(systemName: "sparkles")
                             }
-                            Text(isGeneratingReply ? "Generating..." : "Generate Reply")
+                            Text(isGeneratingReply ? "Stop" : "Generate Reply")
                         }
                         .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(PrimaryButtonStyle())
-                    .disabled(isGeneratingReply)
+                    .help(isGeneratingReply ? "Stop generating — keeps the draft so far" : "Draft a reply with on-device AI")
                 }
                 #endif
 
@@ -1240,19 +1239,28 @@ struct EmailDetailView: View {
             replyText = ""
             let tones = FoundationModelEngine.ReplyTone.allCases
             let tone = tones.indices.contains(selectedReplyTone) ? tones[selectedReplyTone] : .professional
-            Task { @MainActor in
+            replyGenerationTask = Task { @MainActor in
                 do {
                     let _ = try await FoundationModelEngine.suggestReply(to: email, tone: tone) { text in
+                        guard !Task.isCancelled else { return }
                         replyText = text
                     }
-                    isGeneratingReply = false
+                    if !Task.isCancelled { isGeneratingReply = false }
                 } catch {
+                    guard !Task.isCancelled else { return }
                     replyText = "Failed to generate reply: \(error.localizedDescription)"
                     isGeneratingReply = false
                 }
             }
         }
         #endif
+    }
+
+    /// Stop keeps the partial draft — interrupting isn't discarding.
+    private func stopReplyGeneration() {
+        replyGenerationTask?.cancel()
+        replyGenerationTask = nil
+        isGeneratingReply = false
     }
 
     private var subjectLine: String {

@@ -26,6 +26,7 @@ struct ThreadStoryView: View {
     @State private var truncated = false
     @State private var narrative: String = ""
     @State private var isNarrating = false
+    @State private var narrativeTask: Task<Void, Never>?
 
     static let maxThreadEmails = 200
 
@@ -56,6 +57,7 @@ struct ThreadStoryView: View {
         }
         .frame(minWidth: 460, idealWidth: 560, minHeight: 420, idealHeight: 640)
         .task { await load() }
+        .onDisappear { stopNarrative() }
         .accessibilityIdentifier("threadStory")
     }
 
@@ -108,16 +110,26 @@ struct ThreadStoryView: View {
                     Label("AI Narrative", systemImage: "sparkles")
                         .font(Typography.subheadline).fontWeight(.semibold)
                     Spacer()
-                    if narrative.isEmpty && !isNarrating {
+                    if isNarrating {
+                        Button {
+                            stopNarrative()
+                        } label: {
+                            Label("Stop", systemImage: "stop.fill")
+                        }
+                        .help("Stop generating — keeps what's written so far")
+                    } else if narrative.isEmpty {
                         Button("Generate") { generateNarrative() }
                             .help("Summarize this thread's story — grounded in exactly the messages below")
+                    } else {
+                        Button("Regenerate") { generateNarrative() }
+                            .help("Generate the narrative again")
                     }
                 }
                 if isNarrating && narrative.isEmpty {
                     ProgressView().controlSize(.small)
                 }
                 if !narrative.isEmpty {
-                    Text(narrative)
+                    Text(markdownNarrative)
                         .font(Typography.callout)
                         .textSelection(.enabled)
                         .padding(Spacing.small)
@@ -207,17 +219,36 @@ struct ThreadStoryView: View {
         }
     }
 
+    /// The model streams markdown — render it formatted, not as raw
+    /// asterisks (falls back to plain text if parsing fails mid-stream).
+    private var markdownNarrative: AttributedString {
+        (try? AttributedString(
+            markdown: narrative,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            ?? AttributedString(narrative)
+    }
+
     private func generateNarrative() {
         #if canImport(FoundationModels)
         guard #available(macOS 26, iOS 26, *) else { return }
         isNarrating = true
+        narrative = ""
         let thread = members
-        Task {
+        narrativeTask = Task {
             _ = try? await FoundationModelEngine.synthesizeThread(thread) { partial in
+                guard !Task.isCancelled else { return }
                 narrative = partial
             }
-            isNarrating = false
+            if !Task.isCancelled { isNarrating = false }
         }
         #endif
+    }
+
+    /// Stop keeps the partial narrative — the user chose to interrupt, not
+    /// to discard.
+    private func stopNarrative() {
+        narrativeTask?.cancel()
+        narrativeTask = nil
+        isNarrating = false
     }
 }
