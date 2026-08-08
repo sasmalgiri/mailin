@@ -256,6 +256,7 @@ struct MainNavigationHubView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
+        .help(label)
     }
 
     // MARK: - Email Inbox Hero
@@ -303,6 +304,7 @@ struct MainNavigationHubView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Open Email Inbox, \(emailCount) emails")
+        .help("Browse, search and filter all \(emailCount) emails in your archive")
     }
 
     // MARK: - Persona Workflow (Featured Row)
@@ -434,6 +436,7 @@ struct MainNavigationHubView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Open \(title)")
+        .help("\(title) — \(subtitle)")
     }
 
     private func workflowRow(title: String, icon: String, color: Color,
@@ -782,5 +785,6 @@ struct MainNavigationHubView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(title), \(subtitle)")
+        .help("\(title) — \(subtitle)")
     }
 }

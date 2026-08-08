@@ -50,3 +50,14 @@ correctness defect in v2.0.
 13. **Spotlight held-row re-index after clear-with-holds** — the canonical
     clear de-indexes everything including kept legal-hold rows (they reindex
     on next launch pass).
+
+## UX round (2026-08-08, user feedback)
+
+14. **App-wide tooltip sweep** — hub tiles + detail action groups now have
+    tooltips; remaining surfaces (settings rows, analysis-view controls,
+    export sheets) should each get `.help(...)` on icon-only controls.
+    Inventory: `grep -rn 'Image(systemName' maxmailin/*.swift | grep -v help`.
+15. **Minimum-touch quick wins** — candidates: right-click any email →
+    full action menu (partially present); type-to-filter focuses search
+    from anywhere; Enter opens selection; J/K next/prev everywhere;
+    drag-file-anywhere imports; remember last filter set per persona.

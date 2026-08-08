@@ -306,6 +306,7 @@ struct EmailDetailView: View {
                     .background(AppColors.secondary.opacity(0.06))
                     .cornerRadius(5)
                 }
+                .help(action.1)
                 .buttonStyle(.plain)
                 .help(action.1)
             }
@@ -619,6 +620,10 @@ struct EmailDetailView: View {
         case .pdf:
             Button { if storeManager.requirePremium() { exportAsPDF() } } label: {
                 Label("PDF Document", systemImage: "doc.richtext")
+            }
+        case .word:
+            Button { if storeManager.requirePremium() { exportAsWord() } } label: {
+                Label("Word Document (.doc)", systemImage: "doc.badge.ellipsis")
             }
         case .batesPDF:
             Button { if storeManager.requireProfessional() { exportBatesStampedPDF() } } label: {
@@ -1478,6 +1483,65 @@ struct EmailDetailView: View {
                 }
             }
         }
+    }
+
+    /// Word export: an HTML document with the Office XML namespace header —
+    /// the HTML-based .doc interchange format Word has opened natively for
+    /// two decades (no third-party dependency, preserves formatting).
+    private func exportAsWord() {
+        let sanitized = subjectLine
+            .replacingOccurrences(of: " ", with: "_")
+            .filter { !"/\\:*?\"<>|".contains($0) }
+            .prefix(100)
+        let fileName = "\(sanitized.isEmpty ? "email" : String(sanitized)).doc"
+
+        func htmlEscape(_ s: String) -> String {
+            s.replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;")
+        }
+        let bodyHTML = email.htmlBody.isEmpty
+            ? "<p>" + htmlEscape(emailBody).replacingOccurrences(of: "\n", with: "<br>") + "</p>"
+            : email.htmlBody
+        var headerRows = ""
+        for (label, key) in [("Subject", "Subject"), ("From", "From"), ("To", "To"),
+                             ("Cc", "Cc"), ("Date", "Date"), ("Message-ID", "Message-ID")] {
+            let value = header(key)
+            if !value.isEmpty {
+                headerRows += "<tr><td style=\"font-weight:bold;padding:2px 12px 2px 0;white-space:nowrap;vertical-align:top\">\(label)</td><td style=\"padding:2px 0\">\(htmlEscape(value))</td></tr>"
+            }
+        }
+        let doc = """
+        <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word">
+        <head><meta charset="utf-8"><title>\(htmlEscape(subjectLine))</title>
+        <!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View></w:WordDocument></xml><![endif]-->
+        <style>body{font-family:Calibri,Helvetica,sans-serif;font-size:11pt} table.hdr{border-bottom:1px solid #999;margin-bottom:14px;font-size:10pt}</style>
+        </head><body>
+        <table class="hdr">\(headerRows)</table>
+        \(bodyHTML)
+        </body></html>
+        """
+
+        #if os(macOS)
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = fileName
+        panel.canCreateDirectories = true
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                try FileUtils.writeString(doc, to: url)
+            } catch {
+                exportError = "Failed to export as Word: \(error.localizedDescription)"
+            }
+        }
+        #else
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+        do {
+            try FileUtils.writeString(doc, to: url)
+            iOSShareFile(at: url)
+        } catch {
+            exportError = "Failed to export as Word: \(error.localizedDescription)"
+        }
+        #endif
     }
 
     private func exportAsPlainText() {
