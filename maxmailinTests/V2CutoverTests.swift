@@ -785,6 +785,61 @@ final class V2CutoverTests: XCTestCase {
             "fact labels are advanced-only: Simple mode never shows them, even with the option on")
     }
 
+    /// Field regression: a v1-migrated archive (rows WITHOUT source
+    /// identity) + a fresh import of the original file under preserveAll
+    /// doubled every email — the occurrence guard can't match NULL-source
+    /// rows and preserveAll skips Message-ID dedup. The archive-wide
+    /// resolver must return exactly the redundant copies, preferring to
+    /// KEEP the source-identified (full-fidelity) row.
+    func testExactDuplicateResolver_migratedPlusReimport() async throws {
+        let env = try makeEnv()
+
+        // 'Migrated' rows: message-ids, NO source identity.
+        var migrated: [MBOXParser.RawEmail] = []
+        for i in 0..<5 {
+            var e = makeEmail(i: i, total: 10, body: "body \(i)")
+            e.headers["Message-ID"] = "<shared-\(i)@test>"
+            migrated.append(e)
+        }
+        try await env.store.insertBatch(
+            migrated, sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .preserveAll,
+            batchSize: 10, progress: nil)
+
+        // Fresh import of the same file: same message-ids, NEW UUIDs,
+        // WITH source identity, preserveAll (Auto-Remove off).
+        let sid = try await env.store.registerSource(SQLiteEmailStore.SourceDescriptor(
+            sha256: "ffff", filename: "Sent.mbox", byteSize: 10,
+            parser: "mbox", parserVersion: 3, accountID: nil, sourceKind: "mbox"))
+        var imported: [MBOXParser.RawEmail] = []
+        for i in 0..<6 {   // one extra email only in the file
+            var e = makeEmail(i: 100 + i, total: 10, body: "body \(i)")
+            e.headers["Message-ID"] = "<shared-\(i)@test>"
+            imported.append(e)
+        }
+        let result = try await env.store.insertBatch(
+            imported, sourceFileHash: "ffff", accountID: nil,
+            sourceID: sid, firstOrdinal: 0, dedupPolicy: .preserveAll,
+            batchSize: 10, progress: nil)
+        XCTAssertEqual(result.insertedIDs.count, 6, "preserveAll re-inserts everything — the doubling")
+        let doubled = try await env.archive.count()
+        XCTAssertEqual(doubled, 11)
+
+        // Resolver: exactly the 5 redundant copies — and the KEPT rows are
+        // the source-identified imports, not the migrated ones.
+        let toRemove = try await env.store.exactMessageIDDuplicateIDs()
+        XCTAssertEqual(toRemove.count, 5)
+        let migratedIDs = Set(migrated.map(\.id))
+        XCTAssertTrue(Set(toRemove).isSubset(of: migratedIDs),
+                      "the migrated (source-less) copies are the ones removed")
+
+        try await env.store.delete(ids: Set(toRemove))
+        let remaining = try await env.archive.count()
+        XCTAssertEqual(remaining, 6, "one copy per email survives")
+        let after = try await env.store.exactMessageIDDuplicateIDs()
+        XCTAssertTrue(after.isEmpty, "idempotent — nothing left to remove")
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default

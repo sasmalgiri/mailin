@@ -1236,7 +1236,7 @@ struct ContentView: View {
                             .font(.body)
                         }
                         .toggleStyle(.switch)
-                        .help("When enabled, duplicate emails are skipped during the next import. To find duplicates in the currently loaded archive, use the Duplicate Manager from the Tools menu.")
+                        .help("Skip emails whose Message-ID is already in the archive during imports. Turning this OFF keeps every copy (forensic preserve-all) — importing a file that overlaps the archive will then double those emails.")
                         .padding(.top, 4)
                     }
                     .padding(20)
@@ -1899,7 +1899,7 @@ struct ContentView: View {
                 }
                 .toggleStyle(.switch)
                 .controlSize(.small)
-                .help("When enabled, duplicate emails are skipped during the next import. To find duplicates in the currently loaded archive, tap \"Find Duplicates Now\" below.")
+                .help("Skip emails whose Message-ID is already in the archive during imports. OFF keeps every copy (forensic preserve-all) — overlapping imports will then double those emails. Use Find Duplicates Now to clean up.")
 
                 if modelVM.isParsed {
                     Button {

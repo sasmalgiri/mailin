@@ -111,6 +111,8 @@ struct DuplicateManagerView: View {
     private var resultsList: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.medium) {
+                archiveWideDedupCard
+
                 if !duplicateGroups.isEmpty {
                     Text("Exact Duplicates (\(duplicateGroups.count) groups)")
                         .font(Typography.headline)
@@ -246,6 +248,58 @@ struct DuplicateManagerView: View {
 
     private func closeSheet() {
         if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
+    }
+
+    @State private var archiveDupIDs: [UUID] = []
+    @State private var archiveDupChecked = false
+    @State private var showArchiveDedupConfirm = false
+
+    /// Archive-wide exact dedup — one click, SQL over the WHOLE store (the
+    /// group list below is window-bounded). Keeps the best copy per
+    /// Message-ID (source-identified over migrated, then earliest import).
+    private var archiveWideDedupCard: some View {
+        Group {
+            if archiveDupChecked && !archiveDupIDs.isEmpty {
+                HStack(spacing: Spacing.small) {
+                    Image(systemName: "doc.on.doc.fill")
+                        .foregroundColor(.orange)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(archiveDupIDs.count) exact duplicate\(archiveDupIDs.count == 1 ? "" : "s") across the whole archive")
+                            .font(Typography.callout)
+                            .fontWeight(.semibold)
+                        Text("Same Message-ID stored more than once — typically a migrated archive plus a fresh import of the original file. One copy of each email is kept (the full-fidelity one).")
+                            .font(Typography.caption1)
+                            .foregroundColor(AppColors.secondary)
+                    }
+                    Spacer()
+                    Button {
+                        showArchiveDedupConfirm = true
+                    } label: {
+                        Label("Remove All", systemImage: "trash")
+                    }
+                    .help("Delete every redundant copy in one step — each email keeps exactly one row")
+                }
+                .padding(Spacing.small)
+                .background(Color.orange.opacity(0.1))
+                .cornerRadius(CornerRadius.small)
+                .padding(.horizontal, Spacing.medium)
+                .adaptiveDestructiveConfirmation(
+                    "Remove \(archiveDupIDs.count) Duplicates",
+                    isPresented: $showArchiveDedupConfirm,
+                    message: "Every email keeps exactly one copy — \(archiveDupIDs.count) redundant row\(archiveDupIDs.count == 1 ? "" : "s") will be deleted. Review state on the removed copies is discarded.",
+                    actionTitle: "Remove Duplicates"
+                ) {
+                    let ids = Set(archiveDupIDs)
+                    archiveDupIDs = []
+                    model.removeDuplicateEmails(ids: ids)
+                }
+            }
+        }
+        .task {
+            guard !archiveDupChecked else { return }
+            archiveDupIDs = (try? await SQLiteEmailStore.shared.exactMessageIDDuplicateIDs()) ?? []
+            archiveDupChecked = true
+        }
     }
 
     private func scanForDuplicates() {

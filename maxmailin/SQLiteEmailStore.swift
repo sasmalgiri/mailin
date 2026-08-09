@@ -1317,6 +1317,32 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     /// §4/§4.1: the nullable dedup key. NULL never collides (SQLite partial
     /// unique index), so `.preserveAll` stores everything.
+    /// Archive-wide exact duplicates: rows sharing a Message-ID beyond the
+    /// best copy. Keeps the source-identified row (full fidelity, from a real
+    /// import) over migrated rows without source identity, then the earliest
+    /// import. Returns the ids to DELETE. Fixes the migrated-archive +
+    /// re-imported-original doubling (each copy passes the occurrence guard,
+    /// and preserveAll skips message-id dedup at insert).
+    func exactMessageIDDuplicateIDs() throws -> [EmailID] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT id FROM (
+                SELECT id, ROW_NUMBER() OVER (
+                    PARTITION BY message_id
+                    ORDER BY (source_id IS NULL) ASC, imported_at ASC, rowid ASC
+                ) AS rn
+                FROM emails
+                WHERE message_id IS NOT NULL AND trim(message_id) <> ''
+            ) WHERE rn > 1;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        var out: [EmailID] = []
+        while try stepRow(stmt, db) {
+            if let id = UUID(uuidString: columnText(stmt, 0)) { out.append(id) }
+        }
+        return out
+    }
+
     static func dedupKey(for email: MBOXParser.RawEmail, messageID: String?, policy: DedupPolicy) -> String? {
         let normalizedMID = messageID?.trimmingCharacters(in: .whitespacesAndNewlines)
         switch policy {
