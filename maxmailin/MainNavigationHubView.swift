@@ -6,6 +6,7 @@ enum HubDestination: String, Hashable {
     case emailInbox
     case eDiscovery, predictiveCoding, gdprCompliance
     case anomalyDetection, iocExtractor, smartAlerts, keywordMonitor, nearDuplicates, chainOfCustody
+    case phishingTriage, reviewDashboard
     case emailAnalytics, topicClusters, timeline, communicationPatterns, relationshipGraph
     case duplicateManager, threadSummarizer, attachmentGallery, executiveDashboard
     case reportBuilder, batchOperations, archiveComparison, forensicReview
@@ -30,7 +31,8 @@ enum HubDestination: String, Hashable {
         // Professional — legal, forensic, compliance, IOC
         case .eDiscovery, .predictiveCoding, .gdprCompliance, .chainOfCustody,
              .forensicReview, .investigationReport, .batesNumbering,
-             .reviewBatches, .custodianPanel, .legalWorkspace, .iocExtractor:
+             .reviewBatches, .custodianPanel, .legalWorkspace, .iocExtractor,
+             .phishingTriage, .reviewDashboard:
             return .professional
         // Personal — premium analytics, AI, automation
         default:
@@ -346,6 +348,7 @@ struct MainNavigationHubView: View {
             workflowRow(
                 title: "Security Operations", icon: "shield", color: .red,
                 tiles: [
+                    (.phishingTriage, "Phishing Triage", "Verdict queue", "shield.lefthalf.filled", .red),
                     (.iocExtractor, "IOC Extractor", "Threat indicators", "exclamationmark.shield", .red),
                     (.anomalyDetection, "Anomaly Detection", "Outlier analysis", "waveform.path.ecg", .red),
                     (.smartAlerts, "Smart Alerts", "Pattern monitoring", "bell.badge", .orange),
@@ -512,6 +515,7 @@ struct MainNavigationHubView: View {
         case .forensic:
             return [
                 (.anomalyDetection, "Anomaly Detection", "Statistical outliers", "waveform.path.ecg", .red),
+                (.phishingTriage, "Phishing Triage", "Verdict queue", "shield.lefthalf.filled", .red),
                 (.iocExtractor, "IOC Extractor", "Threat indicators", "exclamationmark.shield", .red),
                 (.smartAlerts, "Smart Alerts", "Pattern monitoring", "bell.badge", .orange),
                 (.keywordMonitor, "Keyword Monitor", "Term tracking", "text.magnifyingglass", .teal),
@@ -523,6 +527,7 @@ struct MainNavigationHubView: View {
                 (.gdprCompliance, "GDPR Compliance", "Data protection", "hand.raised", .green),
                 (.redaction, "Redaction", "PII removal", "eye.slash", .gray),
                 (.reviewBatches, "Review Batches", "Batch workflow", "list.bullet.rectangle", .mint),
+                (.reviewDashboard, "Review Dashboard", "Progress & privilege log", "chart.bar.doc.horizontal", .indigo),
                 (.custodianPanel, "Custodian Panel", "Data custodians", "person.badge.key", .cyan),
                 (.predictiveCoding, "Predictive Coding", "TAR Classifier", "brain", .pink),
                 (.keywordMonitor, "Keyword Monitor", "Term tracking", "text.magnifyingglass", .teal),

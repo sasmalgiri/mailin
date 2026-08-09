@@ -735,7 +735,7 @@ struct ContentView: View {
              .forensicReview, .investigationReport, .batesNumbering,
              .reviewBatches, .custodianPanel, .legalWorkspace:
             if storeManager.requireProfessional() { sidebarSelection = destination }
-        case .iocExtractor:
+        case .iocExtractor, .phishingTriage, .reviewDashboard:
             if storeManager.requireProfessional() { sidebarSelection = destination }
         case .anomalyDetection, .smartAlerts, .keywordMonitor, .nearDuplicates,
              .emailAnalytics, .topicClusters, .timeline, .communicationPatterns,
@@ -794,6 +794,12 @@ struct ContentView: View {
         case .iocExtractor:
             hubWorkingSet { IOCExtractorView(emails: $0) }
                 .navigationTitle("IOC Extractor")
+        case .phishingTriage:
+            TriageQueueView()
+                .navigationTitle("Phishing Triage")
+        case .reviewDashboard:
+            ReviewDashboardView()
+                .navigationTitle("Review Dashboard")
         case .smartAlerts:
             hubWorkingSet { SmartAlertsView(emails: $0) }
                 .navigationTitle("Smart Alerts")

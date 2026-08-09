@@ -30,6 +30,8 @@ extension HubDestination {
 
         case .anomalyDetection:     return "Flag unusual sending patterns or timing."
         case .iocExtractor:         return "Extract suspicious IPs, URLs, and file hashes (IOCs)."
+        case .phishingTriage:       return "Verdict queue for user-reported suspicious emails — auto-scored, one-click verdicts, IOC blocklist export."
+        case .reviewDashboard:      return "Review progress, pace, and privilege-log completeness — the defensibility numbers."
         case .smartAlerts:          return "Get notified when specific email patterns appear."
         case .keywordMonitor:       return "Watch for emails containing key terms."
         case .nearDuplicates:       return "Find emails that are almost identical."
