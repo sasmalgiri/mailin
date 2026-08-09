@@ -494,6 +494,87 @@ final class V2CutoverTests: XCTestCase {
         }, "a rare-sender row leaked through minSenderMessages")
     }
 
+    // MARK: - Natural-language search (NLQueryInterpreter)
+
+    /// The heuristic tier (pre-26 OS fallback) extracts sender, attachment
+    /// and topic words without clobbering anything else.
+    func testNLHeuristicIntent_extractsFilters() {
+        let intent = NLQueryInterpreter.heuristicIntent(
+            "emails from alice@example.com about invoices with attachments")
+        XCTAssertEqual(intent.sender, "alice@example.com")
+        XCTAssertTrue(intent.hasAttachments)
+        XCTAssertTrue(intent.keywords.contains("invoices"),
+                      "topic words survive as FTS keywords, got: '\(intent.keywords)'")
+        XCTAssertFalse(intent.keywords.contains("emails"), "stop words are dropped")
+    }
+
+    /// An interpreted intent compiles to SQL and yields exactly the right
+    /// rows archive-wide — the 'proper result' check the NL mode rests on.
+    func testNLIntent_appliedQueryYieldsCorrectRows() async throws {
+        let env = try makeEnv()
+        var fixtures: [MBOXParser.RawEmail] = []
+        for i in 0..<12 {
+            var e = makeEmail(i: i, total: 12,
+                              body: i < 4 ? "quarterly invoice details \(i)" : "meeting notes \(i)")
+            e.headers["From"] = i < 4 ? "alice@corp.com" : "bob@corp.com"
+            fixtures.append(e)
+        }
+        try await env.store.insertBatch(fixtures, batchSize: 50)
+        try await env.fts.indexBatch(fixtures)
+
+        // "invoices from alice" as an interpreted intent:
+        var intent = NLSearchIntent()
+        intent.sender = "alice"
+        intent.keywords = "invoice"
+        let query = intent.apply(to: .all)
+        XCTAssertEqual(query.sender, "alice")
+        XCTAssertEqual(query.text, "invoice")
+
+        // Sender-only slice (structured clause).
+        var senderOnly = NLSearchIntent()
+        senderOnly.sender = "alice"
+        let senderCount = try await env.archive.count(query: senderOnly.apply(to: .all))
+        XCTAssertEqual(senderCount, 4, "sender filter must be archive-wide SQL")
+
+        // Keywords go through FTS.
+        var keywordOnly = NLSearchIntent()
+        keywordOnly.keywords = "invoice"
+        let page = try await env.archive.searchRanked(
+            query: keywordOnly.apply(to: .all), cursor: nil, limit: 50)
+        XCTAssertEqual(page.summaries.count, 4, "FTS keyword slice")
+        XCTAssertTrue(page.summaries.allSatisfy { $0.from.contains("alice@") })
+
+        // Date bounds map to SQL clauses.
+        var dated = NLSearchIntent()
+        dated.afterDate = ISO8601DateFormatter().date(from: "2023-01-01T00:00:00Z")
+        let datedQuery = dated.apply(to: .all)
+        XCTAssertNotNil(datedQuery.afterDate)
+    }
+
+    /// Live Apple-Intelligence interpretation (skips where the model is
+    /// unavailable): a real sentence must come back as structured filters,
+    /// not free text.
+    func testNLModelInterpretation_live() async throws {
+        guard NLQueryInterpreter.isModelBacked else {
+            throw XCTSkip("on-device foundation model unavailable")
+        }
+        let intent = await NLQueryInterpreter.interpret(
+            "invoices from alice with attachments since January 2026")
+        XCTAssertTrue(intent.sender.lowercased().contains("alice"),
+                      "sender extracted, got: '\(intent.sender)'")
+        XCTAssertTrue(intent.hasAttachments, "attachment constraint extracted")
+        XCTAssertTrue(intent.keywords.lowercased().contains("invoice"),
+                      "topic keywords extracted, got: '\(intent.keywords)'")
+        if let after = intent.afterDate {
+            let cal = Calendar.current
+            let jan2026 = cal.date(from: DateComponents(year: 2026, month: 1, day: 1))!
+            XCTAssertTrue(abs(after.timeIntervalSince(jan2026)) < 45 * 86_400,
+                          "'since January 2026' resolved near 2026-01-01, got \(after)")
+        } else {
+            XCTFail("'since January 2026' must produce a start date")
+        }
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default

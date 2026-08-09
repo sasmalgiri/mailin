@@ -1973,12 +1973,23 @@ struct ContentView: View {
                             .font(Typography.caption1)
                             .fontWeight(.semibold)
                         Spacer()
-                        Stepper(value: $modelVM.minReplyCount, in: 0...modelVM.maxReplyCount, step: 1) {
-                            Text("\(modelVM.minReplyCount)")
-                                .frame(width: 32, alignment: .center)
-                        }
+                        TextField("0", value: Binding(
+                            get: { modelVM.minReplyCount },
+                            set: { modelVM.minReplyCount = max(0, $0) }
+                        ), format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.center)
+                        .frame(width: 44)
+                        #if os(iOS)
+                        .keyboardType(.numberPad)
+                        #endif
                         .accessibilityLabel("Minimum reply count: \(modelVM.minReplyCount)")
-                        .accessibilityHint("Filter senders by minimum number of replies")
+                        Stepper(value: $modelVM.minReplyCount, in: 0...max(0, modelVM.maxReplyCount), step: 1) {
+                            EmptyView()
+                        }
+                        .labelsHidden()
+                        .accessibilityLabel("Adjust minimum reply count")
+                        .accessibilityHint("Filter senders by minimum number of messages")
                     }
                     .help("Hide emails from senders you've replied to fewer than this many times — 0 shows everyone; raise it to focus on people you actually correspond with")
 

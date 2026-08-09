@@ -696,6 +696,40 @@ struct ParsedEmailListView: View {
             .padding(.vertical, Spacing.xxSmall)
             .adaptiveGlass(in: RoundedRectangle(cornerRadius: CornerRadius.medium))
 
+            // NL mode: echo what the AI understood so the user can verify
+            // the interpretation (and see that filtering is in progress).
+            if model.isNaturalLanguageMode && !model.searchText.isEmpty {
+                HStack(spacing: Spacing.xxSmall) {
+                    if model.isInterpretingNL {
+                        ProgressView()
+                            .controlSize(.mini)
+                        Text(NLQueryInterpreter.isModelBacked
+                             ? "Apple Intelligence is reading your request…"
+                             : "Interpreting your request…")
+                            .font(Typography.caption2)
+                            .foregroundColor(AppColors.secondary)
+                    } else if let intent = model.nlIntent {
+                        Image(systemName: NLQueryInterpreter.isModelBacked ? "sparkles" : "text.magnifyingglass")
+                            .font(.caption2)
+                            .foregroundColor(AppColors.primary)
+                        Text("Searching: \(intent.summary)")
+                            .font(Typography.caption2)
+                            .foregroundColor(AppColors.secondary)
+                            .lineLimit(1)
+                            .help("How your request was understood — refine the wording if this isn't what you meant")
+                    } else {
+                        Image(systemName: "questionmark.circle")
+                            .font(.caption2)
+                            .foregroundColor(.orange)
+                        Text("Couldn't find filters in that — try naming a person, topic, or time period")
+                            .font(Typography.caption2)
+                            .foregroundColor(AppColors.secondary)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, Spacing.small)
+            }
+
             // Part P: user-visible search caveats (regex cap truncation /
             // attachment filename-only matching) — never silently truncated.
             if let notice = model.searchNotice {

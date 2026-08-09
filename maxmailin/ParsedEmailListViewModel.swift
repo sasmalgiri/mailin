@@ -100,8 +100,24 @@ class ParsedEmailListViewModel: ObservableObject {
         didSet { if !isResettingFilters { applyFilters() } }
     }
 
-    // Natural language search mode
-    @Published var isNaturalLanguageMode: Bool = false
+    // Natural language search mode. The interpreted intent (on-device
+    // foundation model on macOS 26/iOS 26, heuristic parser otherwise)
+    // compiles into currentArchiveQuery — SQL, archive-wide.
+    @Published var isNaturalLanguageMode: Bool = false {
+        didSet {
+            guard !isResettingFilters, oldValue != isNaturalLanguageMode else { return }
+            nlIntent = nil
+            nlInterpretTask?.cancel()
+            if isNaturalLanguageMode {
+                applyNaturalLanguageFilter(searchText)
+            } else {
+                reloadPagesForQueryChange()
+            }
+        }
+    }
+    @Published var nlIntent: NLSearchIntent? = nil
+    @Published var isInterpretingNL: Bool = false
+    private var nlInterpretTask: Task<Void, Never>? = nil
     @Published var hasAttachmentFilter: Bool = false
 
     // Topic cluster filter
@@ -366,6 +382,12 @@ class ParsedEmailListViewModel: ObservableObject {
         case .subjectAsc: base.sort = .subjectAZ
         case .sizeDesc: base.sort = .sizeDesc
         case .priorityDesc: base.sort = .priorityDesc
+        }
+        if isNaturalLanguageMode {
+            // The raw sentence is NOT an FTS/operator query — the interpreted
+            // intent is. While interpretation is in flight (or yielded
+            // nothing) show the unnarrowed base rather than garbage matches.
+            return nlIntent?.apply(to: base) ?? base
         }
         return ArchiveQueryCompiler.compile(
             searchText.trimmingCharacters(in: .whitespacesAndNewlines), base: base)
@@ -677,50 +699,28 @@ class ParsedEmailListViewModel: ObservableObject {
         reloadPagesForQueryChange()
     }
 
-    /// Interprets a natural language query and applies structured filters.
-    /// Supports date ranges, sender filters, attachment filters, and sentiment.
+    /// Interprets a natural-language query into structured SQL filters via
+    /// NLQueryInterpreter (Apple's on-device foundation model when available,
+    /// heuristic parser otherwise) and re-pages the archive. Unlike the old
+    /// regex version this never clobbers the user's sidebar selections or
+    /// the search field text.
     func applyNaturalLanguageFilter(_ query: String) {
+        nlInterpretTask?.cancel()
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            hasAttachmentFilter = false
+            nlIntent = nil
+            isInterpretingNL = false
             reloadPagesForQueryChange()
             return
         }
-
-        // Parse date ranges: "from last week", "in January", "before March 2024"
-        if let dateRange = EmailNLPEngine.parseDateRange(from: trimmed) {
-            startDate = dateRange.start
-            endDate = dateRange.end
+        isInterpretingNL = true
+        nlInterpretTask = Task { @MainActor [weak self] in
+            let intent = await NLQueryInterpreter.interpret(trimmed)
+            guard let self, !Task.isCancelled else { return }
+            self.nlIntent = intent.isEmpty ? nil : intent
+            self.isInterpretingNL = false
+            self.reloadPagesForQueryChange()
         }
-
-        // Parse sender filters: "from John", "emails from alice@example.com"
-        let fromPattern = try? NSRegularExpression(pattern: #"(?:from|by)\s+([^\s,]+(?:\s+[^\s,]+)?)"#, options: .caseInsensitive)
-        if let fromMatch = fromPattern?.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)),
-           let nameRange = Range(fromMatch.range(at: 1), in: trimmed) {
-            let name = String(trimmed[nameRange])
-            // Avoid matching date-related "from" like "from last week"
-            let dateWords: Set<String> = ["last", "past", "this", "yesterday", "today", "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]
-            if !dateWords.contains(name.lowercased()) {
-                // Check if it matches a known sender in the loaded window
-                let matchingSenders = allFromEmails.filter { $0.localizedCaseInsensitiveContains(name) }
-                if !matchingSenders.isEmpty {
-                    selectedFromEmails = matchingSenders
-                } else {
-                    // Fall back to free-text search with the name
-                    searchText = name
-                }
-            }
-        }
-
-        // Parse attachment filter: "with attachments", "has attachments"
-        let lower = trimmed.lowercased()
-        if lower.contains("attachment") || lower.contains("with file") || lower.contains("has file") {
-            hasAttachmentFilter = true
-        } else {
-            hasAttachmentFilter = false
-        }
-
-        reloadPagesForQueryChange()
     }
 
     func removeDuplicateEmails(ids: Set<UUID>) {
@@ -751,6 +751,9 @@ class ParsedEmailListViewModel: ObservableObject {
         minReplyCount = 0
         hasAttachmentFilter = false
         isNaturalLanguageMode = false
+        nlIntent = nil
+        nlInterpretTask?.cancel()
+        isInterpretingNL = false
         selectedSmartTags.removeAll()
         selectedEvidenceTag = nil
         clusterFilterIDs = nil
