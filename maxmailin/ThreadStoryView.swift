@@ -55,7 +55,7 @@ struct ThreadStoryView: View {
                 }
             }
         }
-        .frame(minWidth: 460, idealWidth: 560, minHeight: 420, idealHeight: 640)
+        .toolWindowFrame()
         .task { await load() }
         .onDisappear { stopNarrative() }
         .accessibilityIdentifier("threadStory")

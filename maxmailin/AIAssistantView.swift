@@ -249,7 +249,7 @@ struct AIAssistantView: View {
             inputArea
         }
         #if os(macOS)
-        .frame(minWidth: 460, idealWidth: 700, minHeight: 380, idealHeight: 650)
+        .toolWindowFrame()
         #endif
         .background(AppColors.backgroundTertiary)
         .onAppear {

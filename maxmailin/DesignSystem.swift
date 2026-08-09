@@ -993,6 +993,24 @@ struct GlassInfoBanner: View {
     }
 }
 
+// MARK: - Tool Window Frame
+
+extension View {
+    /// Standard sizing for full-tool windows and sheets on macOS: OPEN LARGE
+    /// (sheets open at their ideal size — without an ideal they open at the
+    /// minimum, which made every tool feel cramped), stay resizable down to
+    /// a working minimum and up without a cap. No-op on iOS (sheets are
+    /// governed by presentation detents there).
+    func toolWindowFrame() -> some View {
+        #if os(macOS)
+        return frame(minWidth: 680, idealWidth: 1020, maxWidth: .infinity,
+                     minHeight: 520, idealHeight: 800, maxHeight: .infinity)
+        #else
+        return self
+        #endif
+    }
+}
+
 // MARK: - Help Dot
 
 /// A small "?" that explains the control next to it two ways:

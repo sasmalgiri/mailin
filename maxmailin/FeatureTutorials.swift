@@ -1036,5 +1036,34 @@ extension FeatureTutorial {
             TutorialTip(icon: "gearshape", text: "Simple tells you what to do (category, importance, phishing). Turn on Pro for analyst labels — sentiment, medium priority, evidence.")
         ]
     )
+
+    static let piiReport = FeatureTutorial(
+        title: "PII Report",
+        icon: "person.text.rectangle",
+        overview: "Finds personally identifiable information hiding in your emails — phone numbers, credit cards, SSNs, IP addresses, passports and more. Everything is detected on this Mac; nothing is uploaded. Useful before sharing or producing emails, and for GDPR/privacy reviews.",
+        quickStart: "Click the PII button under the email list (or Scan for PII in the e-discovery workflow). Findings arrive grouped by type with the source email named for each. Use the chips to jump to one type, AI Clean-up to remove wrong matches, and Export CSV for the full list.",
+        steps: [
+            TutorialStep(title: "Scan the Current Filter", icon: "magnifyingglass", color: .blue,
+                what: "The report covers exactly what the list shows.",
+                how: "Whatever filter is active (a sender, a date range, a search) defines the scan. Up to 2,000 emails are scanned per run — the report says so plainly if your filter is larger.",
+                tip: "Narrow the filter first to scan a specific person or period."),
+            TutorialStep(title: "Read the Findings", icon: "list.bullet", color: .purple,
+                what: "Grouped by type, riskiest first.",
+                how: "Each type (SSN, credit card, phone…) shows its count and risk score; every value names the email it was found in. Click a chip to see only that type.",
+                tip: "Risk 7+ types (SSN, cards, passports) deserve review before any export leaves your hands."),
+            TutorialStep(title: "Clean Up Wrong Matches", icon: "sparkles", color: .orange,
+                what: "Pattern matching makes mistakes — one click fixes them.",
+                how: "AI Clean-up (Apple Intelligence, on-device) re-checks entries and removes ones that aren't really PII, like timestamps or order numbers. Undo restores them all.",
+                tip: "Repeated clicks are safe — checked entries are never re-judged."),
+            TutorialStep(title: "Export the Evidence", icon: "square.and.arrow.up", color: .green,
+                what: "A spreadsheet of every finding.",
+                how: "Export CSV writes type, value, risk, context and source email for the complete list — including entries past the 200-per-type display cap.",
+                tip: "Attach the CSV to a privacy review or redaction pass.")
+        ],
+        tips: [
+            TutorialTip(icon: "checkmark.shield", text: "Detection is 100% on-device. The report exists only while open — nothing is stored unless you export."),
+            TutorialTip(icon: "exclamationmark.triangle", text: "Automated pattern detection — some entries may not be correct; the header says so and the tools above fix it.")
+        ]
+    )
 }
 // swiftlint:enable type_body_length file_length

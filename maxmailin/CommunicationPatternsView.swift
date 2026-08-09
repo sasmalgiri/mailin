@@ -505,7 +505,7 @@ struct CommunicationPatternsView: View {
             }
         }
         #if os(macOS)
-        .frame(minWidth: 480, minHeight: 380)
+        .toolWindowFrame()
         #endif
         .background(AppColors.backgroundTertiary)
         .featureTutorial(.communicationPatterns, key: "communication_patterns_tutorial_seen", isPresented: $showTutorial)

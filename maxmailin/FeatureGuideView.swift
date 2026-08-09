@@ -13,7 +13,7 @@ import SwiftUI
 extension FeatureTutorial {
     /// The complete catalog (every tutorial the app ships).
     static let allFeatures: [FeatureTutorial] = [
-        .general, .emailTags, .emailAnalytics, .emailTimeline, .communicationPatterns,
+        .general, .emailTags, .piiReport, .emailAnalytics, .emailTimeline, .communicationPatterns,
         .relationshipGraph, .executiveDashboard, .aiAssistant, .aiDigest,
         .knowledgeGraph, .threadSummarizer, .anomalyDetection, .iocExtractor,
         .keywordMonitor, .duplicateManager, .nearDuplicates, .topicClusters,
@@ -113,7 +113,7 @@ struct FeatureGuideView: View {
                 .frame(minWidth: 440, minHeight: 480)
             }
         }
-        .frame(minWidth: 480, idealWidth: 560, minHeight: 480, idealHeight: 620)
+        .toolWindowFrame()
     }
 
     /// FeatureTutorial has no stable Identifiable conformance — wrap for .sheet(item:).

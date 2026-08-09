@@ -217,7 +217,7 @@ struct PIIReportView: View {
                 }
             }
         }
-        .frame(minWidth: 460, minHeight: 400)
+        .toolWindowFrame()
         .task { await scan() }
         .alert("PII Export Failed", isPresented: Binding(
             get: { exportError != nil }, set: { if !$0 { exportError = nil } }

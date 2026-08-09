@@ -222,7 +222,7 @@ struct EmailTimelineView: View {
         .onChange(of: selectedBucket) { _, bucket in Task { await loadDrill(for: bucket) } }
         .featureTutorial(.emailTimeline, key: "email_timeline_tutorial_seen", isPresented: $showTutorial)
         #if os(macOS)
-        .frame(minWidth: 480, minHeight: 380)
+        .toolWindowFrame()
         #endif
     }
 

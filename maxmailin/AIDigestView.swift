@@ -102,7 +102,7 @@ struct AIDigestView: View {
             }
         }
         #if os(macOS)
-        .frame(minWidth: 480, minHeight: 380)
+        .toolWindowFrame()
         #endif
         .featureTutorial(.aiDigest, key: "ai_digest_tutorial_seen", isPresented: $showTutorial)
     }

@@ -404,10 +404,7 @@ struct EDiscoveryWorkflowView: View {
             phaseDetailView
         }
         .background(AppColors.backgroundPrimary)
-        #if os(macOS)
-        .frame(minWidth: 480, idealWidth: 780, maxWidth: 960,
-               minHeight: 420, idealHeight: 720, maxHeight: 900)
-        #endif
+        .toolWindowFrame()
         .adaptiveDestructiveConfirmation(
             "Reset Workflow",
             isPresented: $showResetConfirmation,

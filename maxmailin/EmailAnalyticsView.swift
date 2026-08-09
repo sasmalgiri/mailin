@@ -69,7 +69,7 @@ struct EmailAnalyticsView: View {
             }
         }
         #if os(macOS)
-        .frame(minWidth: 480, idealWidth: 900, minHeight: 380, idealHeight: 700)
+        .toolWindowFrame()
         #endif
         .background(AppColors.backgroundTertiary)
         .featureTutorial(.emailAnalytics, key: "email_analytics_tutorial_seen", isPresented: $showTutorial)

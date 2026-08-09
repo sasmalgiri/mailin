@@ -57,7 +57,7 @@ struct ExecutiveDashboardView: View {
             }
         }
         #if os(macOS)
-        .frame(minWidth: 480, minHeight: 380)
+        .toolWindowFrame()
         #endif
         .background(AppColors.backgroundTertiary)
         .featureTutorial(.executiveDashboard, key: "executive_dashboard_tutorial_seen", isPresented: $showTutorial)

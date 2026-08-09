@@ -218,7 +218,7 @@ struct KeywordMonitorView: View {
             #endif
         }
         #if os(macOS)
-        .frame(minWidth: 480, minHeight: 360)
+        .toolWindowFrame()
         #endif
         .background(AppColors.backgroundTertiary)
         .featureTutorial(.keywordMonitor, key: "keyword_monitor_tutorial_seen", isPresented: $showTutorial)

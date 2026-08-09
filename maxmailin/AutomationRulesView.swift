@@ -32,7 +32,7 @@ struct AutomationRulesView: View {
         }
         .background(AppColors.backgroundPrimary)
         #if os(macOS)
-        .frame(minWidth: 500, idealWidth: 650, minHeight: 400, idealHeight: 600)
+        .toolWindowFrame()
         #endif
         .sheet(isPresented: $showingAddSheet) {
             RuleEditorSheet(engine: engine, rule: nil)

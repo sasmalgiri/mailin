@@ -99,7 +99,7 @@ struct SmartAutoTaggerView: View {
         }
         .onAppear { startTagging() }
         #if os(macOS)
-        .frame(minWidth: 480, minHeight: 380)
+        .toolWindowFrame()
         #endif
     }
 

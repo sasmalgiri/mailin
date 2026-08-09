@@ -126,7 +126,7 @@ struct NearDuplicateDetectionView: View {
         .onAppear { loadPersistedOrAnalyze() }
         .featureTutorial(.nearDuplicates, key: "near_duplicates_tutorial_seen", isPresented: $showTutorial)
         #if os(macOS)
-        .frame(minWidth: 460, minHeight: 360)
+        .toolWindowFrame()
         #endif
         .resizableSheet()
     }

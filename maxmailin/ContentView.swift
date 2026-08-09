@@ -273,7 +273,7 @@ struct ContentView: View {
         .sheet(isPresented: $appState.showReplyStatsSheet) {
             ReplyStatsView(senderEmail: viewModel.senderEmail)
                 #if os(macOS)
-                .frame(minWidth: 500, minHeight: 400)
+                .toolWindowFrame()
                 #else
                 .presentationDetents([.large])
                 #endif
@@ -353,7 +353,7 @@ struct ContentView: View {
         .sheet(isPresented: $showRemovedDuplicates) {
             RemovedDuplicatesView(findings: viewModel.removedDuplicates)
                 #if os(macOS)
-                .frame(minWidth: 480, minHeight: 350)
+                .toolWindowFrame()
                 #else
                 .presentationDetents([.large])
                 #endif
@@ -4385,7 +4385,7 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
             .sheet(isPresented: $appState.showDuplicateManager) {
                 DuplicateManagerView(model: modelVM, isPresented: $appState.showDuplicateManager)
                     #if os(macOS)
-                    .frame(minWidth: 460, minHeight: 340)
+                    .toolWindowFrame()
                     #else
                     .presentationDetents([.large])
                     #endif
@@ -4395,7 +4395,7 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
                     PredictiveCodingView(emails: emails, engine: predictiveEngine, isPresented: $appState.showPredictiveCoding)
                 }
                     #if os(macOS)
-                    .frame(minWidth: 460, minHeight: 350)
+                    .toolWindowFrame()
                     #else
                     .presentationDetents([.large])
                     #endif
@@ -4403,7 +4403,7 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
             .sheet(isPresented: $appState.showCustodianPanel) {
                 CustodianPanelView(manager: custodianManager, isPresented: $appState.showCustodianPanel)
                     #if os(macOS)
-                    .frame(minWidth: 460, minHeight: 340)
+                    .toolWindowFrame()
                     #else
                     .presentationDetents([.large])
                     #endif
@@ -4413,7 +4413,7 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
                     ReviewBatchPanelView(emails: emails, manager: reviewBatchManager, isPresented: $appState.showReviewBatches)
                 }
                     #if os(macOS)
-                    .frame(minWidth: 460, minHeight: 340)
+                    .toolWindowFrame()
                     #else
                     .presentationDetents([.large])
                     #endif
@@ -4464,7 +4464,7 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
                     AttachmentGridView(emails: emails)
                 }
                     #if os(macOS)
-                    .frame(minWidth: 480, minHeight: 360)
+                    .toolWindowFrame()
                     #else
                     .presentationDetents([.large])
                     #endif
@@ -4491,7 +4491,7 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
                     ArchiveComparisonSheetWrapper(archiveA: emails)
                 }
                     #if os(macOS)
-                    .frame(minWidth: 480, minHeight: 360)
+                    .toolWindowFrame()
                     #else
                     .presentationDetents([.large])
                     #endif

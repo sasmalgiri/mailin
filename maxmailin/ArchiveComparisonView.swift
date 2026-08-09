@@ -101,7 +101,7 @@ struct ArchiveComparisonView: View {
         }
         .featureTutorial(.archiveComparison, key: "archive_comparison_tutorial_seen", isPresented: $showTutorial)
         #if os(macOS)
-        .frame(minWidth: 480, idealWidth: 850, minHeight: 360, idealHeight: 650)
+        .toolWindowFrame()
         #endif
         .onAppear {
             computeComparison()
