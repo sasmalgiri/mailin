@@ -1173,5 +1173,34 @@ extension FeatureTutorial {
             TutorialTip(icon: "clock.arrow.circlepath", text: "Pair with Email History on any cited email to show its provenance — when and from which dump it arrived.")
         ]
     )
+
+    static let auditTrail = FeatureTutorial(
+        title: "Audit Trail",
+        icon: "clock.badge.checkmark",
+        overview: "The case's tamper-evident history. Every meaningful action — imports, evidence tags, triage verdicts, exports, verifications — is recorded with a hash that links to the entry before it, like links in a chain. Change one entry and the chain breaks visibly. The badge at the top shows the live verdict.",
+        quickStart: "Open the Audit Trail (forensic mode). Green 'Chain verified' means the log is exactly as written. Search or click a category chip to narrow the timeline; use Today / 7 Days for recent work. Click any entry to see its chain hashes. Daily Report copies today's log for the case file.",
+        steps: [
+            TutorialStep(title: "Trust the Badge", icon: "checkmark.shield", color: .green,
+                what: "The live integrity verdict.",
+                how: "On open, every entry's hash is recomputed and compared to the chain. Green = intact. Red TAMPERED = the log was altered — treat the case record as compromised and investigate.",
+                tip: "The check reruns every time you generate a Daily Report, so the report always states a fresh verdict."),
+            TutorialStep(title: "Find Anything", icon: "magnifyingglass", color: .blue,
+                what: "Search plus one-click categories.",
+                how: "Type to search actions, details and examiner names. The chips group entries by kind (Imports, Verdicts, Exports…) with counts — click one to see only that kind. Today / 7 Days / All narrows by date.",
+                tip: "Chip + search combine: 'Triage verdict' chip + a sender's name finds every verdict on their emails."),
+            TutorialStep(title: "Read an Entry", icon: "doc.text", color: .purple,
+                what: "Who did what, when — and the proof.",
+                how: "Each row shows the action, its detail, the time, sequence number and examiner. Click a row to reveal its hash and the hash it links to — the fingerprint that makes tampering visible.",
+                tip: "Sequence numbers never repeat or skip within an intact chain — a gap is itself evidence."),
+            TutorialStep(title: "Produce the Record", icon: "square.and.arrow.up", color: .orange,
+                what: "Reports and exports, one click.",
+                how: "Daily Report verifies the chain and copies today's activity log for the case file. Export saves the complete trail.",
+                tip: "Both actions are themselves logged — the record shows its own production.")
+        ],
+        tips: [
+            TutorialTip(icon: "lock.shield", text: "The trail lives only on this Mac. Nothing is sent anywhere."),
+            TutorialTip(icon: "building.columns", text: "In court terms: this is your contemporaneous record. Green badge + export = the defensibility exhibit.")
+        ]
+    )
 }
 // swiftlint:enable type_body_length file_length

@@ -464,9 +464,10 @@ struct ContentView: View {
         if modelVM.showParsedList && sidebarSelection == .emailInbox {
             emailInboxDestination
                 .liquidGlassToolbar()
-                .sheet(isPresented: $appState.showAuditTrail) {
-                    AuditTrailSheet(forensicManager: forensicManager, onExport: { exportAuditLog() })
-                        .environmentObject(storeManager)
+                .onChange(of: appState.showAuditTrail) { _, shown in
+                    guard shown else { return }
+                    appState.showAuditTrail = false
+                    openAuditTrailWindow()
                 }
         } else {
         NavigationSplitView {
@@ -551,9 +552,10 @@ struct ContentView: View {
             }
         }
         .liquidGlassToolbar()
-        .sheet(isPresented: $appState.showAuditTrail) {
-            AuditTrailSheet(forensicManager: forensicManager, onExport: { exportAuditLog() })
-                .environmentObject(storeManager)
+        .onChange(of: appState.showAuditTrail) { _, shown in
+            guard shown else { return }
+            appState.showAuditTrail = false
+            openAuditTrailWindow()
         }
         }
         #else
@@ -1521,8 +1523,9 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $appState.showAuditTrail) {
-            AuditTrailSheet(forensicManager: forensicManager, onExport: { exportAuditLog() })
-                .environmentObject(storeManager)
+            AuditTrailView(forensicManager: forensicManager,
+                           storeManager: storeManager,
+                           onExport: { exportAuditLog() })
         }
         .sheet(isPresented: $showFiltersSheet) {
             NavigationStack {
@@ -4246,6 +4249,18 @@ private func handleMultipleFiles(_ urls: [URL]) {
         showNewImportConfirmation = true
     }
 
+    #if os(macOS)
+    private func openAuditTrailWindow() {
+        ToolWindowPresenter.shared.open(title: "Audit Trail") {
+            AnyView(AuditTrailView(
+                forensicManager: forensicManager,
+                storeManager: storeManager,
+                onExport: { exportAuditLog() },
+                onClose: { ToolWindowPresenter.shared.close(title: "Audit Trail") }))
+        }
+    }
+    #endif
+
     private func exportAuditLog() {
         #if os(macOS)
         let panel = NSSavePanel()
@@ -5887,214 +5902,6 @@ struct FeatureBadge: View {
 
 // MARK: - Audit Trail Sheet
 
-struct AuditTrailSheet: View {
-    @EnvironmentObject var storeManager: StoreManager
-    @ObservedObject var forensicManager: ForensicManager
-    var onExport: () -> Void
-    @Environment(\.dismiss) private var dismiss
-    private static let freeViewLimit = 10
-
-    private var visibleEntries: [ForensicManager.AuditEntry] {
-        let reversed = forensicManager.auditLog.reversed()
-        if storeManager.isProfessional {
-            return Array(reversed)
-        }
-        return Array(reversed.prefix(Self.freeViewLimit))
-    }
-
-    private var hasMore: Bool {
-        !storeManager.isProfessional && forensicManager.auditLog.count > Self.freeViewLimit
-    }
-
-    @State private var isGeneratingDailyReport = false
-    @State private var dailyReportNote: String? = nil
-
-    /// End-of-day artifact: verify the chain, build today's report, put it
-    /// on the clipboard — and log the generation itself into the chain, so
-    /// the case history records the reporting too.
-    private func generateDailyReport() async {
-        isGeneratingDailyReport = true
-        defer { isGeneratingDailyReport = false }
-        let status = await forensicManager.verifyAuditLogIntegrityStreamed()
-        let chainOK: Bool?
-        switch status {
-        case .verified: chainOK = true
-        case .tampered: chainOK = false
-        case .unknown, .noData: chainOK = nil
-        }
-        var inputs = CaseActivityReportBuilder.Inputs()
-        inputs.caseNumber = forensicManager.caseNumber
-        inputs.examiner = forensicManager.examinerName
-        inputs.day = Date()
-        inputs.auditEntries = forensicManager.auditLog.map {
-            ($0.timestamp, $0.sequence, $0.action, $0.detail, $0.examiner)
-        }
-        inputs.chainVerified = chainOK
-        let report = CaseActivityReportBuilder.build(inputs)
-        PlatformClipboard.copyString(report)
-        forensicManager.logAction(
-            "Daily activity report generated",
-            detail: "Chain \(chainOK == true ? "verified" : chainOK == false ? "FAILED verification" : "not verifiable"); report copied to clipboard")
-        dailyReportNote = chainOK == false
-            ? "Report copied — WARNING: the audit chain FAILED verification."
-            : "Report copied — paste it into the case file."
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Audit Trail")
-                    .font(Typography.title3)
-                    .fontWeight(.bold)
-                Spacer()
-                Button {
-                    Task { await generateDailyReport() }
-                } label: {
-                    if isGeneratingDailyReport {
-                        Label("Verifying…", systemImage: "doc.badge.clock")
-                    } else {
-                        Label("Daily Report", systemImage: "doc.badge.clock")
-                    }
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(isGeneratingDailyReport)
-                .help("End-of-day case log: verifies the audit chain, then copies today's activity report (case, examiner, every logged action, summary) to the clipboard for the case file")
-
-                if storeManager.isProfessional {
-                    Button("Export") { onExport() }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                } else {
-                    Button("Export (Pro)") { storeManager.showPaywall = true }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .foregroundColor(.purple)
-                }
-                Button { dismiss() } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(AppColors.secondary.opacity(0.6))
-                }
-                .buttonStyle(.plain)
-            }
-            .padding()
-
-            if let note = dailyReportNote {
-                Label(note, systemImage: note.contains("WARNING") ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                    .font(Typography.caption1)
-                    .foregroundColor(note.contains("WARNING") ? .red : .green)
-                    .padding(.horizontal)
-                    .padding(.bottom, Spacing.xxSmall)
-            }
-
-            Divider()
-
-            if forensicManager.auditLog.isEmpty {
-                VStack(spacing: Spacing.medium) {
-                    Image(systemName: "clock.arrow.circlepath")
-                        .font(.system(size: 40))
-                        .foregroundColor(AppColors.secondary.opacity(0.4))
-                    Text("No audit entries yet")
-                        .font(Typography.headline)
-                        .foregroundColor(AppColors.secondary)
-                    Text("Actions like importing files, tagging evidence, and verifying hashes are recorded here.")
-                        .font(Typography.caption1)
-                        .foregroundColor(AppColors.secondary)
-                        .multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding()
-            } else {
-                HStack {
-                    if storeManager.isProfessional {
-                        Text("\(forensicManager.auditLog.count) entries")
-                            .font(Typography.caption1)
-                            .foregroundColor(AppColors.secondary)
-                    } else {
-                        Text("Showing \(min(forensicManager.auditLog.count, Self.freeViewLimit)) of \(forensicManager.auditLog.count) entries")
-                            .font(Typography.caption1)
-                            .foregroundColor(AppColors.secondary)
-                    }
-                    Spacer()
-                    let status = forensicManager.integrityStatus
-                    switch status {
-                    case .verified:
-                        Label("Chain Verified", systemImage: "checkmark.seal.fill")
-                            .font(Typography.caption1)
-                            .foregroundColor(.green)
-                    case .tampered:
-                        Label("TAMPERED", systemImage: "exclamationmark.triangle.fill")
-                            .font(Typography.caption1)
-                            .foregroundColor(.red)
-                    case .noData:
-                        Text("No data")
-                            .font(Typography.caption1)
-                            .foregroundColor(AppColors.secondary)
-                    case .unknown:
-                        Button("Verify Integrity") {
-                            _ = forensicManager.verifyAuditLogIntegrity()
-                        }
-                        .font(Typography.caption1)
-                        .controlSize(.small)
-                    }
-                }
-                .padding(.horizontal)
-                .padding(.vertical, Spacing.xSmall)
-
-                List(visibleEntries) { entry in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text("#\(entry.sequence)")
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundColor(AppColors.secondary)
-                            Text(entry.action)
-                                .font(Typography.callout)
-                                .fontWeight(.semibold)
-                            Spacer()
-                            Text(entry.timestamp.formatted(date: .abbreviated, time: .shortened))
-                                .font(Typography.caption2)
-                                .foregroundColor(AppColors.secondary)
-                        }
-                        if !entry.detail.isEmpty {
-                            Text(entry.detail)
-                                .font(Typography.caption1)
-                                .foregroundColor(AppColors.secondary)
-                                .lineLimit(2)
-                        }
-                        if !entry.examiner.isEmpty {
-                            Text("by \(entry.examiner)")
-                                .font(Typography.caption2)
-                                .foregroundColor(AppColors.secondary.opacity(0.7))
-                        }
-                        Text(entry.entryHash.prefix(16) + "...")
-                            .font(.system(.caption2, design: .monospaced))
-                            .foregroundColor(AppColors.secondary.opacity(0.4))
-                    }
-                    .padding(.vertical, 2)
-                }
-
-                if hasMore {
-                    HStack {
-                        Image(systemName: "lock.fill")
-                            .foregroundColor(.purple)
-                        Text("Upgrade to Professional to view all \(forensicManager.auditLog.count) entries and export.")
-                            .font(Typography.caption1)
-                            .foregroundColor(AppColors.secondary)
-                        Spacer()
-                        Button("Upgrade") { storeManager.showPaywall = true }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                    }
-                    .padding()
-                    .background(Color.purple.opacity(0.05))
-                }
-            }
-        }
-        #if os(macOS)
-        .frame(minWidth: 500, idealWidth: 600, minHeight: 400, idealHeight: 550)
-        #endif
-    }
-}
 
 #if os(iOS)
 private struct ReviewImporterModifier: ViewModifier {

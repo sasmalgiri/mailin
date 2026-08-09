@@ -1022,6 +1022,44 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(empty.contains("No findings yet"), "honest empty state, no fake content")
     }
 
+    /// Audit-trail filtering: kind extraction, search across all fields,
+    /// date scopes against a fixed calendar, and chip+search combination.
+    func testAuditTrailFilter_searchKindsAndScopes() {
+        XCTAssertEqual(AuditTrailFilter.kind(of: "Triage verdict: Confirmed Phishing"), "Triage verdict")
+        XCTAssertEqual(AuditTrailFilter.kind(of: "Import completed"), "Import completed")
+
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        let now = cal.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 12))!
+        let today = cal.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 8))!
+        let lastWeek = cal.date(from: DateComponents(year: 2026, month: 8, day: 5))!
+        let lastMonth = cal.date(from: DateComponents(year: 2026, month: 7, day: 1))!
+
+        func match(_ ts: Date, search: String = "", kind: String? = nil,
+                   scope: AuditTrailFilter.DateScope = .all) -> Bool {
+            AuditTrailFilter.matches(
+                action: "Triage verdict: Confirmed Phishing",
+                detail: "Invoice scam — reported by alice@corp.com",
+                examiner: "Examiner A", timestamp: ts,
+                search: search, kind: kind, scope: scope, now: now, calendar: cal)
+        }
+
+        XCTAssertTrue(match(today, scope: .today))
+        XCTAssertFalse(match(lastWeek, scope: .today))
+        XCTAssertTrue(match(lastWeek, scope: .week))
+        XCTAssertFalse(match(lastMonth, scope: .week))
+        XCTAssertTrue(match(lastMonth, scope: .all))
+
+        XCTAssertTrue(match(today, search: "alice"), "search hits details")
+        XCTAssertTrue(match(today, search: "examiner a"), "search hits examiner, case-insensitive")
+        XCTAssertFalse(match(today, search: "bob"))
+
+        XCTAssertTrue(match(today, kind: "Triage verdict"))
+        XCTAssertFalse(match(today, kind: "Import completed"))
+        XCTAssertTrue(match(today, search: "invoice", kind: "Triage verdict", scope: .today),
+                      "chip + search + scope combine")
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default
