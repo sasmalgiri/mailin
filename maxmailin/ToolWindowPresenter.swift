@@ -62,5 +62,11 @@ final class ToolWindowPresenter {
     func close(title: String) {
         windows[title]?.close()
     }
+
+    /// Drop-in replacement for a sheet's isPresented binding: reads true,
+    /// and setting it false closes the hosting window.
+    static func closeBinding(title: String) -> Binding<Bool> {
+        Binding(get: { true }, set: { if !$0 { Task { @MainActor in shared.close(title: title) } } })
+    }
 }
 #endif
