@@ -1090,5 +1090,63 @@ extension FeatureTutorial {
             TutorialTip(icon: "building.columns", text: "For legal/forensic work this answers the defensibility question: what happened to this email, and can you prove it?")
         ]
     )
+
+    static let phishingTriage = FeatureTutorial(
+        title: "Phishing Triage",
+        icon: "shield.lefthalf.filled",
+        overview: "A daily verdict queue for suspicious emails your users report. Point it at a folder — every .eml or .mbox dropped there auto-imports, gets scored on-device, and waits for your one-click verdict. Confirmed phishing feeds a blocklist export, and every intake and verdict lands in the audit trail, so your incident record writes itself.",
+        quickStart: "Open Phishing Triage and choose the watched folder (the one users forward suspicious emails into). New arrivals appear pre-scored with a suggested verdict. Click Confirmed Phishing / Safe / Needs Info — or press ⌘1 / ⌘2 / ⌘3 for the top email. Export the IOC blocklist when you need to update your mail filter.",
+        steps: [
+            TutorialStep(title: "Set the Watched Folder", icon: "eye", color: .blue,
+                what: "The intake point for reported emails.",
+                how: "Click Choose Folder and pick a shared or synced folder. Anything saved there as .eml or .mbox imports automatically and joins the queue — duplicates are skipped by Message-ID.",
+                tip: "A folder your mail rule or users can drop into works best — intake then needs zero clicks."),
+            TutorialStep(title: "Read the Scores", icon: "gauge.with.needle", color: .orange,
+                what: "Each email arrives pre-analyzed.",
+                how: "The risk chip is the on-device phishing analysis; the IOC chip counts suspicious URLs, IPs, domains and hashes found inside. The lightbulb line explains the suggested verdict in one sentence.",
+                tip: "Suggestions are hints — your verdict is what goes on the record."),
+            TutorialStep(title: "Issue Verdicts", icon: "hand.tap", color: .green,
+                what: "One click per email; keyboard for speed.",
+                how: "Confirmed Phishing, Safe, or Needs Info. ⌘1/⌘2/⌘3 apply to the email at the top of the queue. The email leaves the queue and the verdict is written to the audit trail with your examiner name.",
+                tip: "Needs Info is a real verdict — use it when you're waiting on the reporter, and the email stays findable under its tag."),
+            TutorialStep(title: "Export the Blocklist", icon: "square.and.arrow.up", color: .red,
+                what: "Turn verdicts into protection.",
+                how: "Export IOC Blocklist writes a CSV of every indicator from confirmed-phishing emails — feed it to your mail gateway or firewall. The export is also audit-logged.",
+                tip: "Weekly is a good cadence; the count in the footer tells you when it's worth a fresh export.")
+        ],
+        tips: [
+            TutorialTip(icon: "checkmark.shield", text: "Analysis is on-device; the queue and verdicts never leave this Mac."),
+            TutorialTip(icon: "doc.badge.clock", text: "Compliance asks for your incident log? The audit trail already has every intake and verdict — export it from Audit Trail.")
+        ]
+    )
+
+    static let reviewDashboard = FeatureTutorial(
+        title: "Review Dashboard",
+        icon: "chart.bar.doc.horizontal",
+        overview: "The reviewer's morning answer to three questions: what's assigned to me, how fast am I moving, and is the privilege log complete? Progress comes from your Review Batches; velocity from the audit trail; and the privilege-log check finds the gap opposing counsel looks for — privileged-coded emails with no annotation explaining why.",
+        quickStart: "Open Review Dashboard. The top row shows assigned / reviewed / pending / velocity / estimated finish. The batch list shows each batch's progress. The Privilege log section turns red if any privileged email lacks an annotation — fix those before production. Copy Defensibility Summary puts the numbers on the clipboard.",
+        steps: [
+            TutorialStep(title: "Check the Numbers", icon: "number", color: .blue,
+                what: "Assignment and pace at a glance.",
+                how: "Velocity counts reviewed emails per active day (days with review actions in the audit trail); the estimate divides what's pending by that pace.",
+                tip: "A dropping velocity is the early warning that the production date is at risk."),
+            TutorialStep(title: "Work the Batches", icon: "rectangle.stack", color: .purple,
+                what: "Each batch's completion in one bar.",
+                how: "Batches come from Review Batches (Tools). Reviewed and skipped both count as processed; pending is what's left.",
+                tip: "Finish batches fully rather than sampling across them — partial batches are hard to defend."),
+            TutorialStep(title: "Close the Privilege Log", icon: "lock.shield", color: .red,
+                what: "Every withheld email needs a reason on record.",
+                how: "The dashboard lists privileged-coded emails that have no annotation. Open each and add the annotation stating the privilege basis.",
+                tip: "Do this daily, not at production time — memories of why something was privileged fade fast."),
+            TutorialStep(title: "Copy the Summary", icon: "doc.on.doc", color: .green,
+                what: "The defensibility numbers as text.",
+                how: "Copy Defensibility Summary includes assignment, velocity, per-batch progress and the privilege-log status — paste into the matter file. Copying is itself audit-logged.",
+                tip: "Attach it to the production letter; it answers the process questions before they're asked.")
+        ],
+        tips: [
+            TutorialTip(icon: "person", text: "This records a single reviewer's work on this Mac — it says so on the report, so nobody over-claims team coverage."),
+            TutorialTip(icon: "building.columns", text: "Pairs with eDiscovery: identification and collection there, daily review discipline here.")
+        ]
+    )
 }
 // swiftlint:enable type_body_length file_length

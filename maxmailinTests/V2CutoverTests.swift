@@ -929,6 +929,70 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(empty.contains("not verified"))
     }
 
+    /// Triage suggestions: high risk → Confirmed; medium risk or heavy IOC
+    /// load → Needs Info; light signals → Needs Info; clean → Safe. The
+    /// reason line always says why.
+    func testTriageVerdictPolicy_suggestions() {
+        let high = TriageVerdictPolicy.suggestion(phishingRisk: "High", iocCount: 3, hasAttachments: false)
+        XCTAssertEqual(high.verdict, .confirmedPhishing)
+        XCTAssertTrue(high.reason.contains("High phishing risk"))
+
+        let medium = TriageVerdictPolicy.suggestion(phishingRisk: "Medium", iocCount: 0, hasAttachments: false)
+        XCTAssertEqual(medium.verdict, .needsInfo)
+
+        let heavyIOC = TriageVerdictPolicy.suggestion(phishingRisk: nil, iocCount: 5, hasAttachments: false)
+        XCTAssertEqual(heavyIOC.verdict, .needsInfo)
+        XCTAssertTrue(heavyIOC.reason.contains("5 suspicious indicators"))
+
+        let attachment = TriageVerdictPolicy.suggestion(phishingRisk: nil, iocCount: 0, hasAttachments: true)
+        XCTAssertEqual(attachment.verdict, .needsInfo)
+
+        let clean = TriageVerdictPolicy.suggestion(phishingRisk: nil, iocCount: 0, hasAttachments: false)
+        XCTAssertEqual(clean.verdict, .safe)
+
+        // The queue query compiles to a user-tag SQL filter.
+        XCTAssertEqual(TriageQueueService.pendingQuery.userTag, "triage:pending")
+    }
+
+    /// Review dashboard math: totals across batches, velocity per active
+    /// day, honest estimate, and the privilege-log gap detection.
+    func testReviewProgressModel_summaryAndPrivilegeGap() {
+        let ids = (0..<10).map { _ in UUID() }
+        let priv1 = UUID(), priv2 = UUID()
+        let batches: [(id: UUID, name: String, emailIDs: [UUID], reviewed: Set<UUID>, skipped: Set<UUID>)] = [
+            (UUID(), "Batch 1", Array(ids[0..<6]), Set(ids[0..<4]), Set([ids[4]])),
+            (UUID(), "Batch 2", Array(ids[6..<10]), Set([ids[6], ids[7]]), []),
+        ]
+        let summary = ReviewProgressModel.summarize(
+            batches: batches,
+            reviewActivityDays: ["2026-08-08", "2026-08-09"],
+            privilegedIDs: [priv1, priv2],
+            annotatedIDs: [priv1])
+
+        XCTAssertEqual(summary.totalAssigned, 10)
+        XCTAssertEqual(summary.totalReviewed, 6)
+        XCTAssertEqual(summary.totalSkipped, 1)
+        XCTAssertEqual(summary.pending, 3)
+        XCTAssertEqual(summary.velocityPerDay, 3.0, accuracy: 0.001)
+        XCTAssertEqual(summary.estimatedDaysRemaining ?? -1, 1.0, accuracy: 0.001)
+        XCTAssertFalse(summary.privilegeLogComplete)
+        XCTAssertEqual(summary.privilegedMissingAnnotation, [priv2],
+                       "the unannotated privileged email is the defensibility gap")
+
+        let report = ReviewProgressModel.defensibilityReport(
+            summary, caseNumber: "MATTER-7", examiner: "Reviewer B")
+        XCTAssertTrue(report.contains("MATTER-7"))
+        XCTAssertTrue(report.contains("WARNING: 1 privileged email"))
+        XCTAssertTrue(report.contains("Batch 1: 4/6 reviewed, 1 skipped"))
+
+        // No activity days → no velocity claims, no fabricated estimate.
+        let idle = ReviewProgressModel.summarize(
+            batches: batches, reviewActivityDays: [], privilegedIDs: [], annotatedIDs: [])
+        XCTAssertEqual(idle.velocityPerDay, 0)
+        XCTAssertNil(idle.estimatedDaysRemaining)
+        XCTAssertTrue(idle.privilegeLogComplete, "no privileged emails = nothing missing")
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default

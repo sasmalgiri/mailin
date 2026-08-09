@@ -18,6 +18,7 @@ extension FeatureTutorial {
         .knowledgeGraph, .threadSummarizer, .anomalyDetection, .iocExtractor,
         .keywordMonitor, .duplicateManager, .nearDuplicates, .topicClusters,
         .batchOperations, .smartAlerts, .automationRules, .attachmentGallery,
+        .phishingTriage, .reviewDashboard,
         .archiveComparison, .backgroundFindings, .forensicReview, .legalReview,
         .predictiveCoding, .gdprCompliance, .custodianPanel, .chainOfCustody,
         .batesNumbering, .reviewBatches, .itAdmin, .journalist, .personal
