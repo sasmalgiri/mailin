@@ -551,6 +551,57 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertNotNil(datedQuery.afterDate)
     }
 
+    /// Hallucination guard: the exact failure from the field — the model
+    /// answered 'show me patent related emails' with an invented date range,
+    /// 'sent', a duplicate subject clause and '-' placeholders, ANDing to
+    /// zero matches. Every unsupported filter must be stripped.
+    func testNLSanitizer_dropsInventedFilters() {
+        var raw = NLSearchIntent()
+        raw.keywords = "patent"
+        raw.subject = "patent"                 // duplicate of keywords
+        raw.sender = "-"                       // placeholder junk
+        raw.recipient = "n/a"
+        raw.messageType = "sent"               // never asked for
+        raw.hasAttachments = true              // never asked for
+        raw.afterDate = Date(timeIntervalSince1970: 1_785_000_000)   // invented
+        raw.beforeDate = Date(timeIntervalSince1970: 1_786_000_000)
+
+        let clean = NLQueryInterpreter.sanitized(raw, query: "show me patent related emails")
+        XCTAssertEqual(clean.keywords, "patent")
+        XCTAssertEqual(clean.subject, "", "unrequested subject clause dropped")
+        XCTAssertEqual(clean.sender, "", "'-' placeholder stripped")
+        XCTAssertEqual(clean.recipient, "", "'n/a' placeholder stripped")
+        XCTAssertNil(clean.messageType, "'sent' was never requested")
+        XCTAssertFalse(clean.hasAttachments, "attachments were never requested")
+        XCTAssertNil(clean.afterDate, "no time period in the sentence → no date bound")
+        XCTAssertNil(clean.beforeDate)
+
+        // And stated filters SURVIVE sanitization.
+        let kept = NLQueryInterpreter.sanitized(raw, query:
+            "patent emails I sent with attachments since January 2026")
+        XCTAssertEqual(kept.messageType, "sent")
+        XCTAssertTrue(kept.hasAttachments)
+        XCTAssertNotNil(kept.afterDate)
+    }
+
+    /// Live model on the exact sentence from the bug report: a topic-only
+    /// request must come back topic-only after sanitization.
+    func testNLModelInterpretation_topicOnlyQueryStaysTopicOnly() async throws {
+        guard NLQueryInterpreter.isModelBacked else {
+            throw XCTSkip("on-device foundation model unavailable")
+        }
+        let intent = await NLQueryInterpreter.interpret("show me patent related emails")
+        XCTAssertTrue(intent.keywords.lowercased().contains("patent"),
+                      "topic extracted, got: '\(intent.keywords)'")
+        XCTAssertNil(intent.afterDate, "no dates were mentioned — none may be invented")
+        XCTAssertNil(intent.beforeDate)
+        XCTAssertNil(intent.messageType, "sent/received was never mentioned")
+        XCTAssertFalse(intent.hasAttachments)
+        XCTAssertTrue(intent.sender.isEmpty, "no sender mentioned, got: '\(intent.sender)'")
+        XCTAssertTrue(intent.subject.isEmpty || intent.keywords.isEmpty == false,
+                      "subject-only interpretation would over-restrict")
+    }
+
     /// Live Apple-Intelligence interpretation (skips where the model is
     /// unavailable): a real sentence must come back as structured filters,
     /// not free text.
