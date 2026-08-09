@@ -993,6 +993,40 @@ struct GlassInfoBanner: View {
     }
 }
 
+// MARK: - Help Dot
+
+/// A small "?" that explains the control next to it two ways:
+/// HOVER shows the text as a tooltip (macOS), CLICK shows the same text
+/// in a popover — so the help also works for people who never hover,
+/// and on touch devices where hover doesn't exist.
+struct HelpDot: View {
+    let text: String
+    @State private var isShown = false
+
+    var body: some View {
+        Button {
+            isShown.toggle()
+        } label: {
+            Image(systemName: "questionmark.circle")
+                .font(.caption)
+                .foregroundColor(AppColors.secondary)
+        }
+        .buttonStyle(.plain)
+        #if os(macOS)
+        .help(text)
+        #endif
+        .popover(isPresented: $isShown, arrowEdge: .bottom) {
+            Text(text)
+                .font(Typography.caption1)
+                .padding(Spacing.small)
+                .frame(maxWidth: 280)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityLabel("Help")
+        .accessibilityHint(text)
+    }
+}
+
 // MARK: - Glass Progress Indicator
 
 struct GlassProgressView: View {

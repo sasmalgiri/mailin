@@ -877,14 +877,13 @@ struct ParsedEmailListView: View {
                     VStack(alignment: .leading, spacing: Spacing.small) {
                         Text("Advanced Options")
                             .font(Typography.headline)
-                        Toggle("Show fact labels (advanced)", isOn: $showBasicTagPills)
-                            .disabled(!showAdvancedFeatures)
-                        Text(showAdvancedFeatures
-                             ? "Also show gray pills for plain facts (Sent, Received, Has Attachment) on every row. Off keeps the list clean."
-                             : "Fact labels are an advanced feature — turn on Pro (the gear button) first.")
-                            .font(Typography.caption2)
-                            .foregroundColor(AppColors.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: Spacing.xxSmall) {
+                            Toggle("Show fact labels (advanced)", isOn: $showBasicTagPills)
+                                .disabled(!showAdvancedFeatures)
+                            HelpDot(text: showAdvancedFeatures
+                                ? "Also show gray pills for plain facts (Sent, Received, Has Attachment) on every row. Off keeps the list clean — those facts are already visible elsewhere."
+                                : "Fact labels are an advanced feature — turn on Pro (the gear button) first, then this switch shows gray pills for plain facts (Sent, Received, Has Attachment).")
+                        }
                         Divider()
                         Button {
                             showAdvancedOptions = false

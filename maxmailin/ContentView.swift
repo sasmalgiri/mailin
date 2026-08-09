@@ -1972,6 +1972,7 @@ struct ContentView: View {
                         Text("Min Reply Count")
                             .font(Typography.caption1)
                             .fontWeight(.semibold)
+                        HelpDot(text: "Only show emails from senders with at least this many messages in the archive. 0 shows everyone; raise it to focus on people you actually correspond with. Type a number or use the arrows.")
                         Spacer()
                         TextField("0", value: Binding(
                             get: { modelVM.minReplyCount },
