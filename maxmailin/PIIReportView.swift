@@ -30,7 +30,13 @@ struct PIIReportView: View {
     @State private var exportError: String?
     @State private var selectedType: EmailNLPEngine.PIIType? = nil
     @State private var isAICleaning = false
-    @State private var aiRemovedCount: Int? = nil
+    @State private var aiNote: String? = nil
+    /// Entries the AI already checked — clicking the button again never
+    /// re-rolls the dice on them (repeated clicks used to erode the whole
+    /// list one nondeterministic pass at a time).
+    @State private var aiVerifiedIDs: Set<UUID> = []
+    /// What the AI removed, kept for one-click Undo.
+    @State private var aiRemoved: [EmailNLPEngine.PIIFinding] = []
 
     static let scanCap = 2_000
 
@@ -122,13 +128,25 @@ struct PIIReportView: View {
                     .padding(.horizontal, Spacing.medium)
                     .padding(.vertical, Spacing.xxSmall)
                 }
-                if let removed = aiRemovedCount {
-                    Label("AI clean-up removed \(removed) entr\(removed == 1 ? "y" : "ies") that weren't real PII (timestamps, order refs, tracking numbers). Re-open the report to rescan from scratch.",
-                          systemImage: "sparkles")
-                        .font(Typography.caption2)
-                        .foregroundColor(AppColors.secondary)
-                        .padding(.horizontal, Spacing.medium)
-                        .padding(.bottom, Spacing.xxSmall)
+                if let note = aiNote {
+                    HStack(spacing: Spacing.xxSmall) {
+                        Label(note, systemImage: "sparkles")
+                            .font(Typography.caption2)
+                            .foregroundColor(AppColors.secondary)
+                        if !aiRemoved.isEmpty {
+                            Button("Undo") {
+                                findings.append(contentsOf: aiRemoved)
+                                aiVerifiedIDs.subtract(aiRemoved.map(\.id))
+                                aiRemoved = []
+                                aiNote = "Removed entries restored."
+                            }
+                            .font(Typography.caption2)
+                            .help("Put every AI-removed entry back into the report")
+                        }
+                        Spacer()
+                    }
+                    .padding(.horizontal, Spacing.medium)
+                    .padding(.bottom, Spacing.xxSmall)
                 }
                 Divider()
             }
@@ -243,30 +261,42 @@ struct PIIReportView: View {
     }
 
     /// On-device model re-checks entries and removes non-PII junk the regex
-    /// let through. Bounded (batches of 30, max 300 rechecked) so the pass
-    /// stays fast; email addresses are skipped — the regex is reliable there.
+    /// let through. Bounded (batches of 30, max 300 per click), IDEMPOTENT
+    /// (checked entries are never re-rolled on later clicks), guarded (a
+    /// batch where the model flags more than half is distrusted and kept),
+    /// and reversible (Undo restores everything removed). Email addresses
+    /// are skipped — the regex is reliable there.
     private func runAICleanup() async {
         guard #available(macOS 26, iOS 26, *) else { return }
         #if canImport(FoundationModels)
         isAICleaning = true
         defer { isAICleaning = false }
-        let candidates = findings.enumerated()
-            .filter { $0.element.type != .emailAddress }
+        let candidates = findings
+            .filter { $0.type != .emailAddress && !aiVerifiedIDs.contains($0.id) }
             .prefix(300)
+        guard !candidates.isEmpty else {
+            aiNote = "Every non-email entry has already been AI-checked — nothing left to review."
+            return
+        }
         var junkIDs = Set<UUID>()
         for batchStart in stride(from: 0, to: candidates.count, by: 30) {
             let batch = Array(candidates.dropFirst(batchStart).prefix(30))
             guard !batch.isEmpty else { break }
-            if let verdicts = try? await PIIAICleaner.junkOffsets(
-                items: batch.map { (type: $0.element.type.rawValue, value: $0.element.value) }) {
-                for offset in verdicts where offset >= 0 && offset < batch.count {
-                    junkIDs.insert(batch[offset].element.id)
-                }
-            }
+            let raw = (try? await PIIAICleaner.junkOffsets(
+                items: batch.map { (type: $0.type.rawValue, value: $0.value) })) ?? []
+            let accepted = PIIAICleanupPolicy.acceptedOffsets(raw, batchCount: batch.count)
+            for offset in accepted { junkIDs.insert(batch[offset].id) }
+            // Everything the model saw counts as checked, flagged or not.
+            aiVerifiedIDs.formUnion(batch.map(\.id))
         }
-        guard !junkIDs.isEmpty else { aiRemovedCount = 0; return }
+        guard !junkIDs.isEmpty else {
+            aiNote = "AI checked \(candidates.count) entr\(candidates.count == 1 ? "y" : "ies") — all look like real PII."
+            return
+        }
+        let removed = findings.filter { junkIDs.contains($0.id) }
         findings.removeAll { junkIDs.contains($0.id) }
-        aiRemovedCount = junkIDs.count
+        aiRemoved.append(contentsOf: removed)
+        aiNote = "AI removed \(aiRemoved.count) entr\(aiRemoved.count == 1 ? "y" : "ies") that aren't real PII (timestamps, order refs, tracking numbers)."
         #endif
     }
 
@@ -296,6 +326,21 @@ struct PIIReportView: View {
 
 
 // MARK: - AI clean-up (on-device model verifies regex hits)
+
+/// Pure verdict policy — testable without the model or OS gates.
+enum PIIAICleanupPolicy {
+    /// A model that flags MORE THAN HALF of a batch is hallucinating (after
+    /// the deterministic filters, real scans are mostly genuine PII) — the
+    /// whole batch is distrusted and kept. This is what stops repeated
+    /// clicks from eroding the entire report. Out-of-range offsets and
+    /// duplicates are dropped.
+    static func acceptedOffsets(_ raw: [Int], batchCount: Int) -> [Int] {
+        guard batchCount > 0 else { return [] }
+        let valid = Array(Set(raw.filter { $0 >= 0 && $0 < batchCount })).sorted()
+        guard valid.count * 2 <= batchCount else { return [] }
+        return valid
+    }
+}
 
 #if canImport(FoundationModels)
 import FoundationModels

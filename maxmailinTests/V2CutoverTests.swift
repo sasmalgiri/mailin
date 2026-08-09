@@ -672,6 +672,24 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(findings.contains { $0.type == .emailAddress && $0.value == "assistant@example.org" })
     }
 
+    /// Field regression: repeated AI Clean-up clicks wiped the whole report.
+    /// The verdict policy must distrust over-flagging batches (hallucination)
+    /// and drop invalid offsets — accepting only clearly-minority junk.
+    func testPIICleanupPolicy_distrustsOverFlaggingBatches() {
+        // Model flags everything → hallucination → keep the whole batch.
+        XCTAssertEqual(PIIAICleanupPolicy.acceptedOffsets(Array(0..<30), batchCount: 30), [])
+        // Flags just over half → still distrusted.
+        XCTAssertEqual(PIIAICleanupPolicy.acceptedOffsets(Array(0..<16), batchCount: 30), [])
+        // Minority flags → accepted, deduped, sorted, in-range only.
+        XCTAssertEqual(PIIAICleanupPolicy.acceptedOffsets([7, 3, 3, -1, 99, 12], batchCount: 30),
+                       [3, 7, 12])
+        // Exactly half is the boundary — allowed (small mixed batches).
+        XCTAssertEqual(PIIAICleanupPolicy.acceptedOffsets([0, 1], batchCount: 4), [0, 1])
+        // Empty batch or no flags.
+        XCTAssertEqual(PIIAICleanupPolicy.acceptedOffsets([], batchCount: 30), [])
+        XCTAssertEqual(PIIAICleanupPolicy.acceptedOffsets([0], batchCount: 0), [])
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default
