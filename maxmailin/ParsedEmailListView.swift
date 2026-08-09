@@ -877,8 +877,11 @@ struct ParsedEmailListView: View {
                     VStack(alignment: .leading, spacing: Spacing.small) {
                         Text("Advanced Options")
                             .font(Typography.headline)
-                        Toggle("Show basic fact pills", isOn: $showBasicTagPills)
-                        Text("Also show gray pills for plain facts (Sent, Received, Has Attachment) on every row. Off keeps the list clean — pills then appear only for AI labels, evidence tags and your own labels.")
+                        Toggle("Show fact labels (advanced)", isOn: $showBasicTagPills)
+                            .disabled(!showAdvancedFeatures)
+                        Text(showAdvancedFeatures
+                             ? "Also show gray pills for plain facts (Sent, Received, Has Attachment) on every row. Off keeps the list clean."
+                             : "Fact labels are an advanced feature — turn on Pro (the gear button) first.")
                             .font(Typography.caption2)
                             .foregroundColor(AppColors.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -2851,7 +2854,7 @@ struct ParsedEmailListView: View {
                 .accessibilityLabel("AI tags: \(autoTags.map(\.rawValue).joined(separator: ", "))")
             } else if !aiTagsApplied && !autoTags.isEmpty {
                 Menu {
-                    Section("Basic Tags") {
+                    Section("Advanced Labels — plain facts") {
                         ForEach(autoTags, id: \.self) { tag in
                             Label(tag.rawValue, systemImage: tag.icon)
                         }
@@ -2871,14 +2874,14 @@ struct ParsedEmailListView: View {
                             .font(.caption2)
                     }
                 } label: {
-                    tagPillLabel(badge: "BS", badgeColor: .gray, tags: autoTags)
+                    tagPillLabel(badge: "ADV", badgeColor: .gray, tags: autoTags)
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
                 #if os(macOS)
-                .help("Basic labels — plain facts read from the email (Sent, Received, attachment). Turn on the brain (AI) button for smart labels.")
+                .help("Advanced labels — plain facts read from the email (Sent, Received, attachment). Shown only with Pro on and the fact-pill option enabled.")
                 #endif
-                .accessibilityLabel("Basic tags: \(autoTags.map(\.rawValue).joined(separator: ", "))")
+                .accessibilityLabel("Advanced labels: \(autoTags.map(\.rawValue).joined(separator: ", "))")
             }
 
             if !manualTags.isEmpty {

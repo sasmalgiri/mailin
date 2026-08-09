@@ -466,8 +466,8 @@ struct SettingsView: View {
                 Toggle("Show email previews", isOn: $showEmailPreviews)
                     .help("Show a snippet of the email body in the list view")
 
-                Toggle("Show basic fact pills", isOn: $showBasicTagPills)
-                    .help("Advanced: also show gray pills for plain facts (Sent, Received, Has Attachment) on every row. Off keeps the list clean — those facts are already visible elsewhere; pills then appear only for AI labels, evidence tags and your own labels.")
+                Toggle("Show fact labels (advanced)", isOn: $showBasicTagPills)
+                    .help("Advanced labels: gray pills for plain facts (Sent, Received, Has Attachment) on every row. They appear only when Pro mode is also on — off keeps the list clean; those facts are already visible elsewhere.")
             } header: {
                 Text("Email List")
                     .font(.headline)

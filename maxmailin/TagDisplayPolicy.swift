@@ -25,10 +25,11 @@ enum TagDisplayPolicy {
 
     /// Filter a list of auto-label names down to what the current mode
     /// shows. Manual labels are never passed through this — the user's
-    /// own labels are always visible.
+    /// own labels are always visible. Fact labels are an advanced-mode
+    /// feature: they need Pro ON and the fact-pill option ON.
     static func visible(_ tags: [String], advancedMode: Bool, showFacts: Bool) -> [String] {
         tags.filter { tag in
-            if !showFacts && factTags.contains(tag) { return false }
+            if factTags.contains(tag) { return advancedMode && showFacts }
             if !advancedMode && advancedOnlyTags.contains(tag) { return false }
             return true
         }

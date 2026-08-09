@@ -781,8 +781,8 @@ final class V2CutoverTests: XCTestCase {
             "Pro + fact pills on shows everything")
         XCTAssertEqual(
             TagDisplayPolicy.visible(["Sent"], advancedMode: false, showFacts: true),
-            ["Sent"],
-            "fact-pill option works in Simple mode too")
+            [],
+            "fact labels are advanced-only: Simple mode never shows them, even with the option on")
     }
 
     /// No production source references the retired flag name.
