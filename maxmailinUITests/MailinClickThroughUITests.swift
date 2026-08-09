@@ -146,6 +146,18 @@ final class MailinClickThroughUITests: XCTestCase {
             searchField.typeKey(.delete, modifierFlags: [])
         }
 
+        // ── Date chip: opens the modern calendar with month/year jump ──
+        let dateChip = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH 'Start date'")).firstMatch
+        if dateChip.waitForExistence(timeout: 5) {
+            dateChip.click()
+            let monthPicker = app.popUpButtons.firstMatch
+            XCTAssertTrue(monthPicker.waitForExistence(timeout: 5),
+                "date popover offers direct month/year pickers")
+            let doneButton = app.buttons["Done"].firstMatch
+            if doneButton.exists { doneButton.click() } else { app.typeKey(.escape, modifierFlags: []) }
+        }
+
         // ── Apply / Clear filter buttons ──
         let apply = app.buttons["Apply filters"].firstMatch
         if apply.waitForExistence(timeout: 3) {

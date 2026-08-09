@@ -1143,6 +1143,24 @@ struct ModernDateField: View {
         .accessibilityLabel(label)
         .popover(isPresented: $showPicker, arrowEdge: .bottom) {
             VStack(spacing: Spacing.xSmall) {
+                // Direct month + year jump — archives span decades; nobody
+                // should click through 130 months to reach an old email.
+                HStack(spacing: Spacing.xSmall) {
+                    Picker("Month", selection: monthBinding) {
+                        ForEach(1...12, id: \.self) { month in
+                            Text(Self.monthSymbols[month - 1]).tag(month)
+                        }
+                    }
+                    .labelsHidden()
+                    .help("Jump straight to a month")
+                    Picker("Year", selection: yearBinding) {
+                        ForEach(Self.yearRange, id: \.self) { year in
+                            Text(verbatim: String(year)).tag(year)
+                        }
+                    }
+                    .labelsHidden()
+                    .help("Jump straight to a year — no clicking through months")
+                }
                 DatePicker(label, selection: $date, displayedComponents: .date)
                     .datePickerStyle(.graphical)
                     .labelsHidden()
@@ -1165,6 +1183,59 @@ struct ModernDateField: View {
             .accessibilityLabel(label)
         #endif
     }
+
+    #if os(macOS)
+    private static let monthSymbols: [String] = {
+        let formatter = DateFormatter()
+        return formatter.standaloneMonthSymbols ?? formatter.monthSymbols
+    }()
+
+    /// Emails go back decades; a year ahead covers "until next year" filters.
+    private static let yearRange: [Int] = {
+        let current = Calendar.current.component(.year, from: Date())
+        return Array((1970...(current + 1)).reversed())
+    }()
+
+    /// Move to the picked month/year keeping the day (clamped to the target
+    /// month's length, so Jan 31 → Feb picks Feb 28/29, never an invalid date).
+    private func jump(toYear year: Int? = nil, month: Int? = nil) {
+        let calendar = Calendar.current
+        var comps = calendar.dateComponents([.year, .month, .day], from: date)
+        comps.year = year ?? comps.year
+        comps.month = month ?? comps.month
+        let day = comps.day ?? 1
+        comps.day = 1
+        guard let firstOfMonth = calendar.date(from: comps),
+              let daysInMonth = calendar.range(of: .day, in: .month, for: firstOfMonth)?.count
+        else { return }
+        comps.day = min(day, daysInMonth)
+        if let jumped = calendar.date(from: comps) { date = jumped }
+    }
+
+    private var monthBinding: Binding<Int> {
+        Binding(get: { Calendar.current.component(.month, from: date) },
+                set: { jump(month: $0) })
+    }
+
+    private var yearBinding: Binding<Int> {
+        Binding(get: { Calendar.current.component(.year, from: date) },
+                set: { jump(toYear: $0) })
+    }
+    #endif
+}
+
+#Preview("Date Popover") {
+    struct PopoverDemo: View {
+        @State private var date = Date(timeIntervalSince1970: 1_431_648_000)  // May 2015
+        var body: some View {
+            VStack(spacing: Spacing.xSmall) {
+                ModernDateField(label: "Demo", date: $date)
+            }
+            .padding(40)
+            .onAppear { }
+        }
+    }
+    return PopoverDemo()
 }
 
 #Preview("Modern Date Field") {
