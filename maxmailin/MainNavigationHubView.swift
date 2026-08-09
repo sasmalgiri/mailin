@@ -6,7 +6,7 @@ enum HubDestination: String, Hashable {
     case emailInbox
     case eDiscovery, predictiveCoding, gdprCompliance
     case anomalyDetection, iocExtractor, smartAlerts, keywordMonitor, nearDuplicates, chainOfCustody
-    case phishingTriage, reviewDashboard
+    case phishingTriage, reviewDashboard, storyFile
     case emailAnalytics, topicClusters, timeline, communicationPatterns, relationshipGraph
     case duplicateManager, threadSummarizer, attachmentGallery, executiveDashboard
     case reportBuilder, batchOperations, archiveComparison, forensicReview
@@ -362,6 +362,7 @@ struct MainNavigationHubView: View {
             workflowRow(
                 title: "Research Tools", icon: "magnifyingglass", color: .purple,
                 tiles: [
+                    (.storyFile, "Story File", "Cited findings", "text.book.closed", .purple),
                     (.timeline, "Timeline", "Event chronology", "calendar.day.timeline.left", .purple),
                     (.relationshipGraph, "Relationship Graph", "Contact network", "point.3.connected.trianglepath.dotted", .mint),
                     (.communicationPatterns, "Comm Patterns", "Who talks to whom", "person.2", .cyan),

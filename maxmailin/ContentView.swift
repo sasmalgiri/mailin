@@ -737,6 +737,8 @@ struct ContentView: View {
             if storeManager.requireProfessional() { sidebarSelection = destination }
         case .iocExtractor, .phishingTriage, .reviewDashboard:
             if storeManager.requireProfessional() { sidebarSelection = destination }
+        case .storyFile:
+            if storeManager.requirePremium() { sidebarSelection = destination }
         case .anomalyDetection, .smartAlerts, .keywordMonitor, .nearDuplicates,
              .emailAnalytics, .topicClusters, .timeline, .communicationPatterns,
              .relationshipGraph, .duplicateManager, .threadSummarizer,
@@ -797,6 +799,9 @@ struct ContentView: View {
         case .phishingTriage:
             TriageQueueView()
                 .navigationTitle("Phishing Triage")
+        case .storyFile:
+            StoryFileView()
+                .navigationTitle("Story File")
         case .reviewDashboard:
             ReviewDashboardView()
                 .navigationTitle("Review Dashboard")

@@ -993,6 +993,35 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(idle.privilegeLogComplete, "no privileged emails = nothing missing")
     }
 
+    /// Story file: findings ordered by when they were recorded, each with
+    /// its citation; empty input produces an honest guidance line.
+    func testStoryFileBuilder_citedFindings() {
+        let early = StoryFileBuilder.Finding(
+            claim: "Payment authorized on March 3", claimDate: Date(timeIntervalSince1970: 1_000),
+            subject: "Re: Q1 payments", from: "cfo@corp.com", sentDate: "Tue, 3 Mar 2026",
+            messageID: "<pay@corp>", evidenceTag: "Relevant")
+        let late = StoryFileBuilder.Finding(
+            claim: "Board was informed a week later", claimDate: Date(timeIntervalSince1970: 2_000),
+            subject: "Board minutes", from: "sec@corp.com", sentDate: "Tue, 10 Mar 2026",
+            messageID: nil, evidenceTag: nil)
+
+        let md = StoryFileBuilder.markdown(title: "Payments Story", author: "R. Khan",
+                                           findings: [late, early])
+        XCTAssertTrue(md.contains("# Payments Story"))
+        XCTAssertTrue(md.contains("*Researched by R. Khan*"))
+        XCTAssertTrue(md.contains("### 1. Payment authorized on March 3"),
+                      "recording order, not input order")
+        XCTAssertTrue(md.contains("### 2. Board was informed a week later"))
+        XCTAssertTrue(md.contains("cfo@corp.com"))
+        XCTAssertTrue(md.contains("`<pay@corp>`"), "Message-ID cited for verification")
+        XCTAssertTrue(md.contains("coded Relevant"))
+        XCTAssertTrue(md.contains("## Source Index"))
+
+        let empty = StoryFileBuilder.markdown(title: "", author: "", findings: [])
+        XCTAssertTrue(empty.contains("# Story File"))
+        XCTAssertTrue(empty.contains("No findings yet"), "honest empty state, no fake content")
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default

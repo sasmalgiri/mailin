@@ -1148,5 +1148,30 @@ extension FeatureTutorial {
             TutorialTip(icon: "building.columns", text: "Pairs with eDiscovery: identification and collection there, daily review discipline here.")
         ]
     )
+
+    static let storyFile = FeatureTutorial(
+        title: "Story File",
+        icon: "text.book.closed",
+        overview: "For journalists and researchers: every annotation you make while reading becomes a numbered finding in one Markdown document, with its source email cited — sender, date, subject, and Message-ID. It's the answer to the editor's and the lawyer's question: how do you know this?",
+        quickStart: "Annotate emails as you research (the note button in forensic review). Open Story File from the Journalist hub — your findings appear in the order you recorded them, each with its citation. Give the story a working title, then Copy Markdown or Save it beside your draft.",
+        steps: [
+            TutorialStep(title: "Annotate While You Read", icon: "note.text", color: .purple,
+                what: "The annotation IS the finding.",
+                how: "When an email proves something, write the claim as its annotation: 'Confirms the payment was authorized on March 3.' Plain sentences make the best findings.",
+                tip: "One claim per annotation — compound notes are hard to cite."),
+            TutorialStep(title: "Review the File", icon: "text.book.closed", color: .blue,
+                what: "Findings in investigation order.",
+                how: "Findings are ordered by when you recorded them — the shape of the investigation itself. Each carries its source line and Message-ID, so anyone can verify against the original.",
+                tip: "A finding that reads wrong here usually means the annotation needs rewriting — fix it at the email."),
+            TutorialStep(title: "Export", icon: "square.and.arrow.up", color: .green,
+                what: "Markdown for your draft and your fact-checker.",
+                how: "Copy Markdown pastes anywhere; Save writes a .md file. The Source Index at the bottom doubles as the fact-checking worksheet.",
+                tip: "Everything stays on this Mac until you choose to share the file — source protection is the default.")
+        ],
+        tips: [
+            TutorialTip(icon: "checkmark.shield", text: "The archive never leaves your machine; the story file contains only what you wrote plus citation lines."),
+            TutorialTip(icon: "clock.arrow.circlepath", text: "Pair with Email History on any cited email to show its provenance — when and from which dump it arrived.")
+        ]
+    )
 }
 // swiftlint:enable type_body_length file_length
