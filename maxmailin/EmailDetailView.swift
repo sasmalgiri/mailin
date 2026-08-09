@@ -157,10 +157,12 @@ struct EmailDetailView: View {
 
                 mailActionGroup(
                     actions: [
-                        ("trash", "Move to Trash — restorable from the Trash view, never a permanent delete", {
+                        ("trash", "Trash",
+                         "Move to Trash — restorable from the Trash view, never a permanent delete", {
                             NotificationCenter.default.post(name: .deleteCurrentEmail, object: email.id)
                         }),
-                        ("archivebox", "Archive — hides it from the main list; find it again with the Archived filter", {
+                        ("archivebox", "Archive",
+                         "Archive — hides it from the main list; find it again with the Archived filter", {
                             NotificationCenter.default.post(name: .archiveCurrentEmail, object: email.id)
                         }),
                     ]
@@ -170,14 +172,18 @@ struct EmailDetailView: View {
 
                 mailActionGroup(
                     actions: [
-                        ("envelope.badge.fill", "Toggle read/unread — unread emails show with a highlighted row", {
+                        ("envelope.badge.fill", "Read",
+                         "Toggle read/unread — unread emails show with a highlighted row", {
                             NotificationCenter.default.post(name: .toggleReadCurrentEmail, object: email.id)
                         }),
-                        ("flag.fill", "Pin/flag this email — pinned emails surface with the Pinned filter and stay marked across restarts", {
+                        ("flag.fill", "Pin",
+                         "Pin/flag this email — pinned emails surface with the Pinned filter and stay marked across restarts", {
                             NotificationCenter.default.post(name: .togglePinEmail, object: email.id)
                         }),
                     ]
                 )
+
+                HelpDot(text: "Trash is always restorable. Archive hides an email from the main list. Read/unread and Pin mark emails and stick across restarts — hover any button for details.")
 
                 mailActionDivider
 
@@ -303,10 +309,12 @@ struct EmailDetailView: View {
     }
 
     #if os(macOS)
-    private func mailActionGroup(actions: [(String, String, () -> Void)]) -> some View {
+    /// (icon, short visible label, long hover help, action) — the sentence
+    /// belongs in the tooltip, never in the button face.
+    private func mailActionGroup(actions: [(String, String, String, () -> Void)]) -> some View {
         HStack(spacing: 1) {
             ForEach(Array(actions.enumerated()), id: \.offset) { _, action in
-                Button(action: action.2) {
+                Button(action: action.3) {
                     HStack(spacing: 4) {
                         Image(systemName: action.0)
                             .font(.system(size: 11, weight: .medium))
@@ -319,9 +327,10 @@ struct EmailDetailView: View {
                     .background(AppColors.secondary.opacity(0.06))
                     .cornerRadius(5)
                 }
-                .help(action.1)
                 .buttonStyle(.plain)
-                .help(action.1)
+                .help(action.2)
+                .accessibilityLabel(action.1)
+                .accessibilityHint(action.2)
             }
         }
     }
