@@ -937,6 +937,34 @@ struct EmailNLPEngine {
         return true
     }
 
+    /// Card-number plausibility. Luhn alone is not enough: all-zero runs
+    /// pass Luhn trivially, and paired reference numbers ("67698703
+    /// 67698713") sum to valid checksums by chance. A real card is Luhn-
+    /// valid AND grouped like a card AND starts with a known issuer prefix.
+    static func isPlausibleCardNumber(_ raw: String) -> Bool {
+        let digits = raw.filter(\.isNumber)
+        guard digits.count >= 13, digits.count <= 19, luhnCheck(digits) else { return false }
+        // Degenerate values: all zeros / a single repeated digit.
+        guard Set(digits).count > 1 else { return false }
+        // Grouping: contiguous digits, 4-4-4-4(-…) blocks, or Amex 4-6-5.
+        let groups = raw.split(whereSeparator: { $0 == "-" || $0 == " " }).map(\.count)
+        let groupedLikeCard = groups.count == 1
+            || groups.dropLast().allSatisfy { $0 == 4 } && (1...4).contains(groups.last ?? 0)
+            || groups == [4, 6, 5]
+        guard groupedLikeCard else { return false }
+        // Known issuer prefixes (IIN ranges).
+        guard let two = Int(digits.prefix(2)), let four = Int(digits.prefix(4)) else { return false }
+        let first = digits.first
+        return first == "4"                                   // Visa
+            || (51...55).contains(two)                        // Mastercard
+            || (2221...2720).contains(four)                   // Mastercard 2-series
+            || two == 34 || two == 37                         // Amex
+            || four == 6011 || two == 65 || (644...649).contains(Int(digits.prefix(3)) ?? 0)  // Discover
+            || two == 35                                      // JCB
+            || two == 62                                      // UnionPay
+            || two == 50 || (56...69).contains(two)           // Maestro/RuPay
+    }
+
     /// Per-type validation applied to every regex hit — used by the section
     /// scan AND the header fallback (which previously skipped it).
     private static func passesPIIValidation(_ type: PIIType, _ value: String) -> Bool {
@@ -944,8 +972,7 @@ struct EmailNLPEngine {
         case .phoneNumber:
             return isPlausiblePhoneNumber(value)
         case .creditCard:
-            let digits = value.filter(\.isNumber)
-            return digits.count >= 13 && digits.count <= 19 && luhnCheck(digits)
+            return isPlausibleCardNumber(value)
         case .ipAddress:
             let octets = value.split(separator: ".").compactMap { Int($0) }
             guard octets.count == 4, !octets.allSatisfy({ $0 == 0 }) else { return false }

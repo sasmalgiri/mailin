@@ -114,7 +114,10 @@ enum NLQueryInterpreter {
         func cleaned(_ value: String) -> String {
             let t = value.trimmingCharacters(in: .whitespacesAndNewlines)
             let placeholders: Set<String> = ["-", "--", "n/a", "na", "none", "null",
-                                             "nil", "empty", "unknown", "*", "any", "all"]
+                                             "nil", "empty", "unknown", "*", "any", "all",
+                                             // Filler the model sometimes echoes as a value:
+                                             "from", "to", "by", "sender", "recipient",
+                                             "someone", "anyone", "me", "user", "email", "emails"]
             return placeholders.contains(t.lowercased()) ? "" : t
         }
         var intent = raw

@@ -77,6 +77,11 @@ struct PIIReportView: View {
                          : "\(findings.count) finding(s) in \(scannedCount) email(s) — detected on-device, nothing leaves this Mac")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
+                    if !isScanning && !findings.isEmpty {
+                        Text("Automated pattern detection — some entries may not be correct. Use AI Clean-up or Export CSV to review.")
+                            .font(Typography.caption2)
+                            .foregroundColor(.orange)
+                    }
                 }
                 Spacer()
                 if !findings.isEmpty {

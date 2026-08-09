@@ -672,6 +672,29 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(findings.contains { $0.type == .emailAddress && $0.value == "assistant@example.org" })
     }
 
+    /// Field regression: the Credit Card Pattern section showed all-zero
+    /// runs (Luhn-valid by accident!) and paired 8-digit reference numbers.
+    /// A card finding must be Luhn-valid AND card-grouped AND carry a known
+    /// issuer prefix.
+    func testCardValidator_rejectsPatternJunk_keepsRealCards() {
+        let junk = ["0000-0000-0000-0000", "00000000-0000-0000",
+                    "0000-000000000000", "67698703 67698713",
+                    "1111-1111-1111-1111"]
+        for value in junk {
+            XCTAssertFalse(EmailNLPEngine.isPlausibleCardNumber(value),
+                           "'\(value)' is not a card number")
+        }
+        // Industry-standard test numbers (Luhn-valid, real IINs).
+        let real = ["4111 1111 1111 1111", "4111-1111-1111-1111",
+                    "4111111111111111", "5500 0000 0000 0004",
+                    "378282246310005", "3782 822463 10005",
+                    "6011 0009 9013 9424"]
+        for value in real {
+            XCTAssertTrue(EmailNLPEngine.isPlausibleCardNumber(value),
+                          "'\(value)' is a valid card format")
+        }
+    }
+
     /// Field regression: repeated AI Clean-up clicks wiped the whole report.
     /// The verdict policy must distrust over-flagging batches (hallucination)
     /// and drop invalid offsets — accepting only clearly-minority junk.
