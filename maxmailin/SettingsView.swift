@@ -50,6 +50,7 @@ struct SettingsView: View {
     // toolkit list. Both are bounded + repository-backed (Part S).
     @AppStorage(ListModePreference.key) private var preferSimpleList = ListModePreference.defaultSimple
     @AppStorage("showEmailPreviews") private var showEmailPreviews = true
+    @AppStorage("showBasicTagPills") private var showBasicTagPills = false
     @AppStorage("autoAdvanceAfterTag") private var autoAdvanceAfterTag = true
     @AppStorage("hasConsentedToCloudAI") private var hasConsentedToCloudAI = false
     @AppStorage("customModelName") private var customModelName = ""
@@ -464,6 +465,9 @@ struct SettingsView: View {
 
                 Toggle("Show email previews", isOn: $showEmailPreviews)
                     .help("Show a snippet of the email body in the list view")
+
+                Toggle("Show basic fact pills", isOn: $showBasicTagPills)
+                    .help("Advanced: also show gray pills for plain facts (Sent, Received, Has Attachment) on every row. Off keeps the list clean — those facts are already visible elsewhere; pills then appear only for AI labels, evidence tags and your own labels.")
             } header: {
                 Text("Email List")
                     .font(.headline)

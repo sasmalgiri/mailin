@@ -95,6 +95,13 @@ struct ParsedEmailListView: View {
     @State private var presetName = ""
     @AppStorage("savedFilterPresets") private var savedPresetsData: Data = Data()
     @AppStorage("aiTagsApplied") private var aiTagsApplied = false
+    /// Advanced option (Settings → Display → Email List): show the gray
+    /// "basic facts" pills (Sent / Received / Has Attachment). OFF by
+    /// default — those facts are already visible on the row, so the default
+    /// list shows pills only when they say something new (AI, evidence,
+    /// manual labels).
+    @AppStorage("showBasicTagPills") private var showBasicTagPills = false
+    @State private var showTagsGuide = false
     @AppStorage("showAdvancedFeatures") private var showAdvancedFeatures = false
     @AppStorage("personaFiltersInitialized") private var personaFiltersInitialized = false
     @State private var showAIPaywall = false
@@ -841,6 +848,19 @@ struct ParsedEmailListView: View {
 
             HStack(spacing: 4) {
                 Button {
+                    showTagsGuide = true
+                } label: {
+                    Image(systemName: "questionmark.circle")
+                        .font(.system(size: 11))
+                        .foregroundColor(AppColors.secondary)
+                }
+                .buttonStyle(.plain)
+                #if os(macOS)
+                .help("What do the AI / labels mean? Opens the plain-language guide to email labels")
+                #endif
+                .accessibilityLabel("Explain email labels")
+
+                Button {
                     aiTagsApplied.toggle()
                     Task { await AIToggleTip.filtersUsed.donate() }
                 } label: {
@@ -859,6 +879,14 @@ struct ParsedEmailListView: View {
                 .buttonStyle(.plain)
                 .popoverTip(AIToggleTip(), arrowEdge: .bottom)
                 .popoverTip(EmailTagsTip(), arrowEdge: .bottom)
+                .contextMenu {
+                    Toggle("Show basic fact pills (Sent / Received / Attachment)", isOn: $showBasicTagPills)
+                    Button {
+                        showTagsGuide = true
+                    } label: {
+                        Label("What do these labels mean?", systemImage: "questionmark.circle")
+                    }
+                }
                 #if os(macOS)
                 .help(aiTagsApplied
                       ? "AI labels are ON — every email shows what the AI thinks it is (category, mood, priority, phishing). Click to show plain facts only."
@@ -911,6 +939,9 @@ struct ParsedEmailListView: View {
             initializePersonaFilters()
             loadTagCorrections()
             Task { await EmailTagsTip.listSeen.donate() }
+        }
+        .sheet(isPresented: $showTagsGuide) {
+            FeatureTutorialSheet(tutorial: .emailTags, isPresented: $showTagsGuide)
         }
         .onChange(of: personaFiltersInitialized) { _, newValue in
             if !newValue { initializePersonaFilters() }
@@ -2639,6 +2670,13 @@ struct ParsedEmailListView: View {
         return tags
     }
 
+    /// Sent/Received/Has-Attachment restate what the row already shows —
+    /// they appear in pills only when the advanced option is on.
+    private func factsVisible(_ tags: [EmailQuickTag]) -> [EmailQuickTag] {
+        guard !showBasicTagPills else { return tags }
+        return tags.filter { $0 != .sent && $0 != .received && $0 != .hasAttachment }
+    }
+
     private func basicTags(for email: MBOXParser.RawEmail) -> [EmailQuickTag] {
         var tags: [EmailQuickTag] = []
         if email.messageType == "sent" { tags.append(.sent) }
@@ -2663,9 +2701,9 @@ struct ParsedEmailListView: View {
         let hidden = suppressedAITags[email.id] ?? []
         var all: [EmailQuickTag] = []
         if enableAIFeatures && aiTagsApplied {
-            all.append(contentsOf: aiTags(for: email).filter { !hidden.contains($0) })
+            all.append(contentsOf: factsVisible(aiTags(for: email)).filter { !hidden.contains($0) })
         } else {
-            all.append(contentsOf: basicTags(for: email))
+            all.append(contentsOf: factsVisible(basicTags(for: email)))
         }
         if let manual = manualOverrideTags[email.id], !manual.isEmpty {
             all.append(contentsOf: manual.sorted { $0.rawValue < $1.rawValue })
@@ -2674,7 +2712,7 @@ struct ParsedEmailListView: View {
     }
 
     private func autoTagsOnly(for email: MBOXParser.RawEmail) -> [EmailQuickTag] {
-        let auto = aiTagsApplied ? aiTags(for: email) : basicTags(for: email)
+        let auto = factsVisible(aiTagsApplied ? aiTags(for: email) : basicTags(for: email))
         let manual = manualOverrideTags[email.id] ?? []
         let hidden = suppressedAITags[email.id] ?? []
         return auto.filter { !manual.contains($0) && !hidden.contains($0) }
