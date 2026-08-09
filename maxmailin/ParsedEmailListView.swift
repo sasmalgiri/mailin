@@ -2704,11 +2704,16 @@ struct ParsedEmailListView: View {
         return tags
     }
 
-    /// Sent/Received/Has-Attachment restate what the row already shows —
-    /// they appear in pills only when the advanced option is on.
+    /// Simple mode shows labels you ACT on (category, High Priority,
+    /// Phishing); Pro adds analyst labels (sentiment, Medium Priority);
+    /// fact pills obey the "Show basic fact pills" advanced option.
+    /// Display-only — nothing is removed from storage or filters.
     private func factsVisible(_ tags: [EmailQuickTag]) -> [EmailQuickTag] {
-        guard !showBasicTagPills else { return tags }
-        return tags.filter { $0 != .sent && $0 != .received && $0 != .hasAttachment }
+        let visible = Set(TagDisplayPolicy.visible(
+            tags.map(\.rawValue),
+            advancedMode: showAdvancedFeatures,
+            showFacts: showBasicTagPills))
+        return tags.filter { visible.contains($0.rawValue) }
     }
 
     private func basicTags(for email: MBOXParser.RawEmail) -> [EmailQuickTag] {
@@ -2914,10 +2919,12 @@ struct ParsedEmailListView: View {
                 manualTagToggle(.promotional, current: currentManual, email: email)
                 manualTagToggle(.automated, current: currentManual, email: email)
             }
-            Section("Sentiment") {
-                manualTagToggle(.positive, current: currentManual, email: email)
-                manualTagToggle(.negative, current: currentManual, email: email)
-                manualTagToggle(.neutral, current: currentManual, email: email)
+            if showAdvancedFeatures {
+                Section("Sentiment") {
+                    manualTagToggle(.positive, current: currentManual, email: email)
+                    manualTagToggle(.negative, current: currentManual, email: email)
+                    manualTagToggle(.neutral, current: currentManual, email: email)
+                }
             }
             if showAdvancedFeatures {
                 Section("Evidence") {
@@ -2930,7 +2937,9 @@ struct ParsedEmailListView: View {
             }
             Section("Other") {
                 manualTagToggle(.highPriority, current: currentManual, email: email)
-                manualTagToggle(.mediumPriority, current: currentManual, email: email)
+                if showAdvancedFeatures {
+                    manualTagToggle(.mediumPriority, current: currentManual, email: email)
+                }
                 manualTagToggle(.phishing, current: currentManual, email: email)
             }
             if let hidden = suppressedAITags[email.id], !hidden.isEmpty {

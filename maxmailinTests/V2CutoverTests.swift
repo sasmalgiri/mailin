@@ -761,6 +761,30 @@ final class V2CutoverTests: XCTestCase {
         }
     }
 
+    /// Simple/Advanced label split: Simple shows act-on labels only
+    /// (category, High Priority, Phishing); Pro adds sentiment and Medium
+    /// Priority; fact pills obey their own option. Display-only policy.
+    func testTagDisplayPolicy_simpleVsAdvanced() {
+        let tags = ["Newsletter", "Positive", "Medium Priority", "High Priority",
+                    "Phishing", "Sent", "Has Attachment"]
+        XCTAssertEqual(
+            TagDisplayPolicy.visible(tags, advancedMode: false, showFacts: false),
+            ["Newsletter", "High Priority", "Phishing"],
+            "Simple mode: category + importance + danger, nothing else")
+        XCTAssertEqual(
+            TagDisplayPolicy.visible(tags, advancedMode: true, showFacts: false),
+            ["Newsletter", "Positive", "Medium Priority", "High Priority", "Phishing"],
+            "Pro adds analyst labels but fact pills still obey their option")
+        XCTAssertEqual(
+            TagDisplayPolicy.visible(tags, advancedMode: true, showFacts: true),
+            tags,
+            "Pro + fact pills on shows everything")
+        XCTAssertEqual(
+            TagDisplayPolicy.visible(["Sent"], advancedMode: false, showFacts: true),
+            ["Sent"],
+            "fact-pill option works in Simple mode too")
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default

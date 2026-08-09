@@ -1032,7 +1032,8 @@ extension FeatureTutorial {
         tips: [
             TutorialTip(icon: "checkmark.shield", text: "All analysis happens on this Mac. Your emails never leave your computer."),
             TutorialTip(icon: "exclamationmark.triangle", text: "AI labels are good guesses, not facts — the pill menu says so, and correcting a wrong one takes one click."),
-            TutorialTip(icon: "arrow.uturn.backward", text: "Removed a label by mistake? Open the pill menu and click Restore.")
+            TutorialTip(icon: "arrow.uturn.backward", text: "Removed a label by mistake? Open the pill menu and click Restore."),
+            TutorialTip(icon: "gearshape", text: "Simple tells you what to do (category, importance, phishing). Turn on Pro for analyst labels — sentiment, medium priority, evidence.")
         ]
     )
 }
