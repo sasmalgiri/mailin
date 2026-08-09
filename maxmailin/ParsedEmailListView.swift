@@ -102,6 +102,7 @@ struct ParsedEmailListView: View {
     /// manual labels).
     @AppStorage("showBasicTagPills") private var showBasicTagPills = false
     @State private var showTagsGuide = false
+    @State private var showAdvancedOptions = false
     @AppStorage("showAdvancedFeatures") private var showAdvancedFeatures = false
     @AppStorage("personaFiltersInitialized") private var personaFiltersInitialized = false
     @State private var showAIPaywall = false
@@ -859,6 +860,39 @@ struct ParsedEmailListView: View {
                 .help("What do the AI / labels mean? Opens the plain-language guide to email labels")
                 #endif
                 .accessibilityLabel("Explain email labels")
+
+                Button {
+                    showAdvancedOptions = true
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 10))
+                        .foregroundColor(showBasicTagPills ? AppColors.primary : AppColors.secondary)
+                }
+                .buttonStyle(.plain)
+                #if os(macOS)
+                .help("Advanced options — choose which label pills the list shows")
+                #endif
+                .accessibilityLabel("Advanced label options")
+                .popover(isPresented: $showAdvancedOptions, arrowEdge: .bottom) {
+                    VStack(alignment: .leading, spacing: Spacing.small) {
+                        Text("Advanced Options")
+                            .font(Typography.headline)
+                        Toggle("Show basic fact pills", isOn: $showBasicTagPills)
+                        Text("Also show gray pills for plain facts (Sent, Received, Has Attachment) on every row. Off keeps the list clean — pills then appear only for AI labels, evidence tags and your own labels.")
+                            .font(Typography.caption2)
+                            .foregroundColor(AppColors.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Divider()
+                        Button {
+                            showAdvancedOptions = false
+                            showTagsGuide = true
+                        } label: {
+                            Label("What do these labels mean?", systemImage: "questionmark.circle")
+                        }
+                    }
+                    .padding(Spacing.medium)
+                    .frame(width: 300)
+                }
 
                 Button {
                     aiTagsApplied.toggle()
