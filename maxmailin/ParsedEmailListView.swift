@@ -51,6 +51,7 @@ struct ParsedEmailListView: View {
     @State private var activeSheet: ActiveSheet?
     @State private var hoveringEmailID: UUID? = nil
     @State private var showAnalyticsSheet = false
+    @State private var showPIIReport = false
     @State private var quickFilterSent = false
     @State private var quickFilterReceived = false
     @State private var quickFilterAttachments = false
@@ -169,11 +170,12 @@ struct ParsedEmailListView: View {
     /// requested last; closing it clears every request.
     private var detailInspectorPresented: Binding<Bool> {
         Binding(
-            get: { activeSheet != nil || showAnalyticsSheet },
+            get: { activeSheet != nil || showAnalyticsSheet || showPIIReport },
             set: { shown in
                 if !shown {
                     activeSheet = nil
                     showAnalyticsSheet = false
+                    showPIIReport = false
                 }
             }
         )
@@ -184,12 +186,18 @@ struct ParsedEmailListView: View {
         if let sheet = activeSheet {
             switch sheet {
             case .stats:
-                ReplyStatsView(senderEmail: model.viewModel.senderEmail)
+                ReplyStatsView(onClose: { activeSheet = nil },
+                               senderEmail: model.viewModel.senderEmail)
             case .rawSource(let rfc822, let reconstructed):
-                RawSourceView(rawText: rfc822, reconstructed: reconstructed)
+                RawSourceView(rawText: rfc822, reconstructed: reconstructed,
+                              onClose: { activeSheet = nil })
             }
         } else if showAnalyticsSheet {
-            EmailAnalyticsView(query: model.currentArchiveQuery)
+            EmailAnalyticsView(onClose: { showAnalyticsSheet = false },
+                               query: model.currentArchiveQuery)
+        } else if showPIIReport {
+            PIIReportView(query: model.currentArchiveQuery,
+                          onClose: { showPIIReport = false })
         }
     }
     #endif
@@ -326,6 +334,9 @@ struct ParsedEmailListView: View {
                 Button { showAnalyticsSheet = true } label: {
                     Label("Analytics", systemImage: "chart.bar.xaxis")
                 }
+                Button { showPIIReport = true } label: {
+                    Label("PII Report", systemImage: "person.text.rectangle")
+                }
             } label: {
                 Image(systemName: "ellipsis.circle")
                     .font(.title3)
@@ -403,6 +414,16 @@ struct ParsedEmailListView: View {
                         .buttonStyle(.plain)
                         .accessibilityLabel("Email analytics")
 
+                        Button {
+                            showPIIReport = true
+                        } label: {
+                            Label("PII", systemImage: "person.text.rectangle")
+                                .font(Typography.caption1)
+                        }
+                        .controlSize(.small)
+                        .help("Scan the current filter for personally identifiable information — emails, phones, cards, SSNs, IPs — with a CSV export")
+                        .accessibilityLabel("PII report")
+
                         if enableAIFeatures {
                             AIWindowButton(model: model)
                                 .environmentObject(storeManager)
@@ -438,6 +459,10 @@ struct ParsedEmailListView: View {
         }
         .sheet(isPresented: $showAnalyticsSheet) {
             EmailAnalyticsView(query: model.currentArchiveQuery)
+                .presentationDetents([.large])
+        }
+        .sheet(isPresented: $showPIIReport) {
+            PIIReportView(query: model.currentArchiveQuery)
                 .presentationDetents([.large])
         }
         #endif
@@ -3370,6 +3395,7 @@ struct AttachmentsPopoverButton: View {
 struct RawSourceView: View {
     let rawText: String
     var reconstructed: Bool = false
+    var onClose: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var highlightedSource: AttributedString?
 
@@ -3400,7 +3426,7 @@ struct RawSourceView: View {
                 #endif
                 .accessibilityLabel("Copy raw source")
 
-                Button(action: { dismiss() }) {
+                Button(action: { if let onClose { onClose() } else { dismiss() } }) {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(AppColors.secondary)
                         .imageScale(.large)
@@ -3527,6 +3553,9 @@ struct RawSourceView: View {
 
 // MARK: - Reply Stats View
 struct ReplyStatsView: View {
+    /// Inspector hosting: dismiss() would close the WINDOW — hosts pass a
+    /// closure clearing their own presentation state instead.
+    var onClose: (() -> Void)? = nil
     /// Part G4: reply frequency comes from a bounded SQL GROUP BY over the
     /// store (ArchiveAggregateService.replyRecipientCounts), not a preview-
     /// array walk. The view loads its own data for the given sender.
@@ -3546,7 +3575,7 @@ struct ReplyStatsView: View {
                     .font(Typography.title2)
                     .accessibilityAddTraits(.isHeader)
                 Spacer()
-                Button { dismiss() } label: {
+                Button { if let onClose { onClose() } else { dismiss() } } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(AppColors.secondary)
                         .imageScale(.large)

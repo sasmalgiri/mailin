@@ -1666,6 +1666,15 @@ actor SQLiteEmailStore: EmailArchiveStore {
             binds.append(contentsOf: q.tags.map { .text($0) })
             binds.append(contentsOf: q.tags.map { .text($0) })
         }
+        // v1's Min Reply Count: sender-frequency filter as a HAVING subquery —
+        // archive-wide, exactly the per-sender counts the sidebar shows.
+        if let minSender = q.minSenderMessages, minSender > 0 {
+            sql.append("""
+                e.from_addr IN (SELECT from_addr FROM emails
+                                GROUP BY from_addr HAVING COUNT(*) >= ?)
+                """)
+            binds.append(.int(Int64(minSender)))
+        }
         // Derived-analysis filters: EXISTS over the persisted `derived` rows.
         if let minPriority = q.minPriority {
             sql.append("EXISTS (SELECT 1 FROM derived d2 WHERE d2.email_id = e.id AND d2.priority >= ?)")

@@ -5,6 +5,9 @@ import AppKit
 #endif
 
 struct EmailAnalyticsView: View {
+    /// Inspector hosting: dismiss() would close the WINDOW — the host passes
+    /// a closure that clears its own presentation state instead.
+    var onClose: (() -> Void)? = nil
     /// Part G2: the view never receives an archive array. Callers inject the
     /// CURRENT filter as an `EmailQuery` (default: whole archive) and every
     /// figure streams from the activated SQLite store in bounded pages via
@@ -116,7 +119,7 @@ struct EmailAnalyticsView: View {
 
             TutorialHelpButton(showTutorial: $showTutorial)
 
-            Button("Close") { dismiss() }
+            Button("Close") { if let onClose { onClose() } else { dismiss() } }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
                 .keyboardShortcut(.cancelAction)

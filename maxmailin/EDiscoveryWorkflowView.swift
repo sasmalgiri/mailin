@@ -379,6 +379,7 @@ struct EDiscoveryWorkflowView: View {
     @State private var showResetConfirmation = false
     @State private var showingReleaseConfirmation = false
     @State private var showTutorial = false
+    @State private var showPIIReport = false
     @State private var actionMessage: String?
     @State private var aiProcessingInsights: String?
     @State private var isLoadingAI = false
@@ -428,6 +429,10 @@ struct EDiscoveryWorkflowView: View {
         }
         .sheet(isPresented: $showTutorial) {
             ediscoveryTutorialSheet
+        }
+        .sheet(isPresented: $showPIIReport) {
+            PIIReportView(presetEmails: emails,
+                          onClose: { showPIIReport = false })
         }
         .onAppear {
             if !UserDefaults.standard.bool(forKey: "ediscovery_tutorial_seen") {
@@ -1030,6 +1035,15 @@ struct EDiscoveryWorkflowView: View {
             }
             .buttonStyle(PrimaryButtonStyle())
             .accessibilityLabel("Run NLP analysis on all emails")
+
+            Button {
+                showPIIReport = true
+            } label: {
+                Label("Scan for PII", systemImage: "person.text.rectangle")
+            }
+            .buttonStyle(SecondaryButtonStyle())
+            .help("Detect SSNs, credit cards, phone numbers and other personal data in this collection — with a CSV report for privilege review")
+            .accessibilityLabel("Scan collection for personally identifiable information")
 
             Divider()
 

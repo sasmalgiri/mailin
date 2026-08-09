@@ -447,6 +447,53 @@ final class V2CutoverTests: XCTestCase {
             "default list mode must be Advanced (v1 feature parity); Simple is opt-in")
     }
 
+    // MARK: - Min Reply Count (v1 behavior): per-sender frequency in SQL
+
+    /// v1's Min Reply Count filtered by how many messages each SENDER has in
+    /// the whole archive. v2 compiles it to a HAVING subquery
+    /// (EmailQuery.minSenderMessages) so it is archive-wide and never depends
+    /// on the resident window or the 500-sender rollup (the 'weird behavior').
+    func testMinSenderMessagesCompilesArchiveWide() async throws {
+        let env = try makeEnv()
+        // heavy@ 5 messages, mid@ 3, rare@ 1 — explicit per-sender counts.
+        var fixtures: [MBOXParser.RawEmail] = []
+        let plan: [(String, Int)] = [("heavy@example.com", 5),
+                                     ("mid@example.com", 3),
+                                     ("rare@example.com", 1)]
+        var serial = 0
+        for (sender, n) in plan {
+            for _ in 0..<n {
+                var email = makeEmail(i: serial, total: 9, body: "reply-count body \(serial)")
+                email.headers["From"] = sender
+                fixtures.append(email)
+                serial += 1
+            }
+        }
+        try await env.store.insertBatch(fixtures, batchSize: 50)
+
+        func count(min: Int) async throws -> Int {
+            var q = EmailQuery.all
+            q.minSenderMessages = min
+            return try await env.archive.count(query: q)
+        }
+        let atLeast3 = try await count(min: 3)
+        XCTAssertEqual(atLeast3, 8, "senders with ≥3 messages: heavy(5) + mid(3)")
+        let atLeast5 = try await count(min: 5)
+        XCTAssertEqual(atLeast5, 5, "only heavy has ≥5 messages")
+        let atLeast6 = try await count(min: 6)
+        XCTAssertEqual(atLeast6, 0, "no sender reaches 6")
+
+        // Paging must honor it too (SQL, not window refinement): every row
+        // returned for min=3 is from heavy@ or mid@.
+        var q = EmailQuery.all
+        q.minSenderMessages = 3
+        let page = try await env.archive.page(query: q, cursor: nil, limit: 100)
+        XCTAssertEqual(page.summaries.count, 8)
+        XCTAssertTrue(page.summaries.allSatisfy {
+            $0.from.contains("heavy@") || $0.from.contains("mid@")
+        }, "a rare-sender row leaked through minSenderMessages")
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default

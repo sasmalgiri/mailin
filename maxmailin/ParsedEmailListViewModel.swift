@@ -354,6 +354,7 @@ class ParsedEmailListViewModel: ObservableObject {
         if let evidence = selectedEvidenceTag, evidence != .none { base.evidenceTag = evidence.rawValue }
         if hasAttachmentFilter { base.hasAttachments = true }
         if let quickType = quickTypeFilter { base.messageType = quickType }
+        if minReplyCount > 0 { base.minSenderMessages = minReplyCount }
         if let minPriority = quickMinPriority { base.minPriority = minPriority }
         if quickPhishingOnly { base.phishingOnly = true }
         if quickNegativeOnly { base.sentimentBelow = -0.4 }
@@ -1034,8 +1035,9 @@ class ParsedEmailListViewModel: ObservableObject {
                 if !pinnedIDs.contains(email.id) { return false }
             }
 
-            let fromEmail = email.headers["From"] ?? ""
-            let replyCount = replyCountPerSender[fromEmail] ?? 0
+            // Min Reply Count is SQL-compiled (minSenderMessages) — the old
+            // in-window lookup against the 500-sender rollup dropped rows
+            // whose sender fell outside the rollup (the 'weird behavior').
 
             if let matchIDs = advancedMatchIDs {
                 if !matchIDs.contains(email.id) { return false }
@@ -1098,7 +1100,7 @@ class ParsedEmailListViewModel: ObservableObject {
                 return emailSource.localizedCaseInsensitiveContains(source)
             } ?? true
 
-            return filterMatch(email) && replyCount >= minReplyCount
+            return filterMatch(email)
                 && matchesFromOp && matchesToOp && matchesSubjectOp && matchesHasAttachment && matchesDateOps && matchesEvidenceTag && matchesSmartTag && matchesType && matchesTag && matchesSource
         }
         // Free-tier visibility cap — gated from the store-count-driven paging

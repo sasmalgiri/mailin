@@ -91,6 +91,9 @@ struct EmailQuery: Sendable, Equatable {
     /// chips). Rows not yet analyzed don't match; callers surface coverage.
     var minPriority: Int? = nil
     var phishingOnly = false
+    /// v1's "Min Reply Count": only emails whose SENDER has at least this
+    /// many messages in the archive (per-sender frequency, SQL HAVING).
+    var minSenderMessages: Int? = nil
     var sentimentBelow: Double? = nil
     var classifications: [String] = []
     /// Exact forensic evidence tag (`forensic_evidence_tags`).
@@ -114,6 +117,7 @@ struct EmailQuery: Sendable, Equatable {
             || !senders.isEmpty || !recipients.isEmpty || !subjects.isEmpty
             || !domains.isEmpty || !tags.isEmpty
             || minPriority != nil || phishingOnly || sentimentBelow != nil || !classifications.isEmpty
+            || minSenderMessages != nil
     }
 
     var isEmpty: Bool {
@@ -422,7 +426,8 @@ extension EmailStoreRepository: RankedSearchRepository {
         ]
         let derivedFilters: [String] = [
             query.minPriority.map(String.init) ?? "-", String(query.phishingOnly),
-            query.sentimentBelow.map { String($0) } ?? "-"
+            query.sentimentBelow.map { String($0) } ?? "-",
+            query.minSenderMessages.map(String.init) ?? "-"
         ]
         let filters = (scalarFilters + listFilters + derivedFilters).joined(separator: "\u{1}")
         return FTSSearchIndex.rankedFingerprint(
