@@ -626,6 +626,52 @@ final class V2CutoverTests: XCTestCase {
         }
     }
 
+    // MARK: - PII detection quality
+
+    /// The exact junk from the field report: timestamps, year-prefixed refs,
+    /// long tracking numbers and decimal fragments must NOT pass as phone
+    /// numbers, while genuinely formatted numbers must.
+    func testPhoneValidator_rejectsScreenshotJunk_keepsRealNumbers() {
+        let junk = ["1693660628", "1662556449", "18175944444394", "2023 1775931",
+                    "20233181965", "1771216833082", "0000000000169",
+                    "104.15350994113", "1.1724930082", "+0000 1848193",
+                    "78293080000", "1007847871189"]
+        for value in junk {
+            XCTAssertFalse(EmailNLPEngine.isPlausiblePhoneNumber(value),
+                           "'\(value)' is not a phone number")
+        }
+        let real = ["+91 120 3132513", "+91-4009026817", "(817) 594-4444",
+                    "817.594.4444", "1-800-555-0123", "+1 (212) 555-0187"]
+        for value in real {
+            XCTAssertTrue(EmailNLPEngine.isPlausiblePhoneNumber(value),
+                          "'\(value)' is a real phone number")
+        }
+    }
+
+    /// End-to-end: an email whose body mixes junk digits with real PII yields
+    /// only the real findings — and the header fallback is validated too.
+    func testDetectPII_filtersJunkAcrossBodyAndHeaders() {
+        var email = makeEmail(i: 0, total: 1, body:
+            "Call me at +91-120-3132513 about order 18175944444394. " +
+            "Logged at 1693660628 from 8.8.8.8 and 192.168.1.10. " +
+            "Reach my assistant: assistant@example.org")
+        email.headers["X-Junk"] = "ref 1662556449 batch 20233181965"
+
+        let findings = EmailNLPEngine.detectPII(in: [email])
+        let phones = findings.filter { $0.type == .phoneNumber }.map(\.value)
+        XCTAssertTrue(phones.contains { $0.contains("3132513") }, "real phone found")
+        XCTAssertFalse(phones.contains { $0.filter(\.isNumber).contains("18175944444394") },
+                       "tracking number not a phone")
+        XCTAssertFalse(phones.contains { $0.filter(\.isNumber) == "1693660628" },
+                       "epoch timestamp not a phone")
+        XCTAssertFalse(phones.contains { $0.filter(\.isNumber) == "1662556449" },
+                       "header fallback validates too")
+        let ips = findings.filter { $0.type == .ipAddress }.map(\.value)
+        XCTAssertTrue(ips.contains("8.8.8.8"), "public IP found")
+        XCTAssertFalse(ips.contains("192.168.1.10"), "private range excluded")
+        XCTAssertTrue(findings.contains { $0.type == .emailAddress && $0.value == "assistant@example.org" })
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default
