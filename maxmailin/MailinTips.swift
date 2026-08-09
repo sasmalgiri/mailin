@@ -183,6 +183,28 @@ struct ProToggleTip: Tip {
     }
 }
 
+struct EmailTagsTip: Tip {
+    static let listSeen = Event(id: "emailTagsListSeen")
+
+    var title: Text {
+        Text("What are these labels?")
+    }
+
+    var message: Text? {
+        Text("Gray = plain facts (Sent, attachment). Blue AI = the computer's best guess — click a wrong one to remove it. Purple MN = labels you added. The brain button turns AI labels on and off. Full guide: Help (?) → \"Email Labels & AI Tags\".")
+    }
+
+    var image: Image? {
+        Image(systemName: "tag.fill")
+    }
+
+    var rules: [Rule] {
+        #Rule(Self.listSeen) {
+            $0.donations.count >= 2
+        }
+    }
+}
+
 struct SearchSyntaxTip: Tip {
     static let searchUsed = Event(id: "searchSyntaxSearchUsed")
 

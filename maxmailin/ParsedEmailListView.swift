@@ -858,8 +858,11 @@ struct ParsedEmailListView: View {
                 }
                 .buttonStyle(.plain)
                 .popoverTip(AIToggleTip(), arrowEdge: .bottom)
+                .popoverTip(EmailTagsTip(), arrowEdge: .bottom)
                 #if os(macOS)
-                .help(aiTagsApplied ? "AI tags active — click to show basic tags only" : "Apply AI classification, sentiment & priority tags")
+                .help(aiTagsApplied
+                      ? "AI labels are ON — every email shows what the AI thinks it is (category, mood, priority, phishing). Click to show plain facts only."
+                      : "Turn ON AI labels — the on-device AI marks each email's category, mood, priority and phishing risk. Analysis is saved on this Mac; nothing goes online.")
                 #endif
 
                 Button {
@@ -907,6 +910,7 @@ struct ParsedEmailListView: View {
         .onAppear {
             initializePersonaFilters()
             loadTagCorrections()
+            Task { await EmailTagsTip.listSeen.donate() }
         }
         .onChange(of: personaFiltersInitialized) { _, newValue in
             if !newValue { initializePersonaFilters() }
@@ -2764,6 +2768,9 @@ struct ParsedEmailListView: View {
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
+                #if os(macOS)
+                .help("The AI's best guess about this email. Click to see every AI label — click a wrong one to remove it.")
+                #endif
                 .accessibilityLabel("AI tags: \(autoTags.map(\.rawValue).joined(separator: ", "))")
             } else if !aiTagsApplied && !autoTags.isEmpty {
                 Menu {
@@ -2791,6 +2798,9 @@ struct ParsedEmailListView: View {
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
+                #if os(macOS)
+                .help("Basic labels — plain facts read from the email (Sent, Received, attachment). Turn on the brain (AI) button for smart labels.")
+                #endif
                 .accessibilityLabel("Basic tags: \(autoTags.map(\.rawValue).joined(separator: ", "))")
             }
 
@@ -2812,6 +2822,9 @@ struct ParsedEmailListView: View {
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
+                #if os(macOS)
+                .help("Your own labels for this email — they always win over the AI's. Click to review or clear them.")
+                #endif
                 .accessibilityLabel("Manual tags: \(manualTags.map(\.rawValue).joined(separator: ", "))")
             }
 
@@ -2874,7 +2887,7 @@ struct ParsedEmailListView: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         #if os(macOS)
-        .help("Set manual tags")
+        .help("Add your own label to this email — category, mood, priority or phishing. Checkmarks show what's applied; click again to remove.")
         #endif
         .accessibilityLabel("Set manual tags")
     }

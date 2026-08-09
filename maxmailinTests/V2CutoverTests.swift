@@ -743,6 +743,24 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(TagOverridePersistence.load(key: "corrupt", defaults: defaults).isEmpty)
     }
 
+    /// The layman's tags explainer must be in the searchable Feature Guide
+    /// catalog, and every catalog entry must be substantive (a title match in
+    /// the guide search that opens an empty tutorial would be worse than none).
+    func testFeatureGuide_containsTagsTutorial_allEntriesSubstantive() {
+        let all = FeatureTutorial.allFeatures
+        guard let tags = all.first(where: { $0.title == "Email Labels & AI Tags" }) else {
+            return XCTFail("tags tutorial missing from Feature Guide catalog")
+        }
+        XCTAssertGreaterThanOrEqual(tags.steps.count, 4,
+            "tags tutorial covers pills, toggle, correction, manual labels, filtering")
+        XCTAssertTrue(tags.overview.contains("one click"),
+            "overview promises the one-click correction")
+        for tutorial in all {
+            XCTAssertFalse(tutorial.overview.isEmpty, "\(tutorial.title): empty overview")
+            XCTAssertFalse(tutorial.quickStart.isEmpty, "\(tutorial.title): empty quick start")
+        }
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default

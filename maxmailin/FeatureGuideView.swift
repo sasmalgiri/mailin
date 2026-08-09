@@ -13,7 +13,7 @@ import SwiftUI
 extension FeatureTutorial {
     /// The complete catalog (every tutorial the app ships).
     static let allFeatures: [FeatureTutorial] = [
-        .general, .emailAnalytics, .emailTimeline, .communicationPatterns,
+        .general, .emailTags, .emailAnalytics, .emailTimeline, .communicationPatterns,
         .relationshipGraph, .executiveDashboard, .aiAssistant, .aiDigest,
         .knowledgeGraph, .threadSummarizer, .anomalyDetection, .iocExtractor,
         .keywordMonitor, .duplicateManager, .nearDuplicates, .topicClusters,

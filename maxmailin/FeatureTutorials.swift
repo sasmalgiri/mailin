@@ -1001,5 +1001,39 @@ extension FeatureTutorial {
             TutorialTip(icon: "chart.pie", text: "The coding distribution chart helps identify if your relevance criteria are too broad or too narrow.")
         ]
     )
+
+    static let emailTags = FeatureTutorial(
+        title: "Email Labels & AI Tags",
+        icon: "tag.fill",
+        overview: "Every email in the list can carry small colored labels (pills) that tell you what it is at a glance. Some labels are plain facts, some are the AI's best guess, and some are labels you add yourself. You are always in charge — anything the AI gets wrong takes one click to fix.",
+        quickStart: "Click the brain button (AI) above the list to turn smart labels on. Blue AI pills show what the computer thinks each email is. If a label is wrong, click the pill and then click the wrong label to remove it. Use the small tag button on any row to add your own labels.",
+        steps: [
+            TutorialStep(title: "Read the Pills", icon: "tag", color: .blue,
+                what: "Three kinds of labels, three colors.",
+                how: "GRAY (BS = Basic) shows plain facts read straight from the email: Sent, Received, Has Attachment. BLUE (AI) shows what the on-device AI concluded: a category like Newsletter or Personal, a mood, a priority, or a phishing warning. PURPLE (MN = Manual) shows labels you added yourself.",
+                tip: "Your purple manual labels always win — they are never overwritten by the AI."),
+            TutorialStep(title: "Turn AI Labels On", icon: "brain", color: .purple,
+                what: "The brain button switches between facts-only and smart labels.",
+                how: "Click the brain (AI) button above the list. Off = every row shows only plain facts. On = rows show the AI's analysis, and the AI filter chips (High Priority, Phishing…) light up so you can filter by them.",
+                tip: "The analysis runs once on your Mac and is saved — turning AI on later is instant, and nothing is sent to the internet."),
+            TutorialStep(title: "Fix a Wrong AI Label", icon: "hand.tap", color: .orange,
+                what: "One click removes a wrong label.",
+                how: "Click the blue AI pill on the email, then click the label that is wrong — it disappears from that email everywhere (pills, counts, filters). Changed your mind? The same menu has 'Restore removed AI tags'.",
+                tip: "Corrections are remembered — they survive closing and reopening the app."),
+            TutorialStep(title: "Add Your Own Label", icon: "plus.circle", color: .green,
+                what: "Tag emails the way YOU think about them.",
+                how: "Click the small tag button at the end of any row. Pick a category (Personal, Newsletter…), a mood, a priority, or Phishing. A checkmark shows what is applied; click again to remove. Your labels appear as a purple MN pill.",
+                tip: "Manual labels are great for marking emails the AI cannot know about — 'this one matters to my case'."),
+            TutorialStep(title: "Filter by Labels", icon: "line.3.horizontal.decrease.circle", color: .cyan,
+                what: "Labels become one-click filters.",
+                how: "The chip row above the list and the Smart Tags section in the sidebar filter the WHOLE archive by these labels — click 'High Priority' to see only high-priority emails, however many thousands there are.",
+                tip: "Combine chips with search: 'invoice' + the Phishing chip finds suspicious invoice emails.")
+        ],
+        tips: [
+            TutorialTip(icon: "checkmark.shield", text: "All analysis happens on this Mac. Your emails never leave your computer."),
+            TutorialTip(icon: "exclamationmark.triangle", text: "AI labels are good guesses, not facts — the pill menu says so, and correcting a wrong one takes one click."),
+            TutorialTip(icon: "arrow.uturn.backward", text: "Removed a label by mistake? Open the pill menu and click Restore.")
+        ]
+    )
 }
 // swiftlint:enable type_body_length file_length
