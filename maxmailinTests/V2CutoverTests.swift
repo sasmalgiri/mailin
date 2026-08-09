@@ -713,6 +713,36 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(PIIAICleanupPolicy.acceptedOffsets([0], batchCount: 0), [])
     }
 
+    /// Tag corrections (manual adds + suppressed AI tags) must survive
+    /// relaunch: UserDefaults round-trip, junk keys dropped, empties pruned.
+    func testTagOverridePersistence_roundTrip() {
+        let suite = "tag-override-test-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let a = UUID(), b = UUID()
+        let corrections: [UUID: Set<String>] = [
+            a: ["Personal", "High Priority"],
+            b: ["Newsletter"],
+        ]
+        TagOverridePersistence.save(corrections, key: TagOverridePersistence.manualKey,
+                                    defaults: defaults)
+        let loaded = TagOverridePersistence.load(key: TagOverridePersistence.manualKey,
+                                                 defaults: defaults)
+        XCTAssertEqual(loaded, corrections)
+
+        // Empty sets are pruned on save.
+        TagOverridePersistence.save([a: [], b: ["Phishing"]],
+                                    key: TagOverridePersistence.suppressedKey, defaults: defaults)
+        let pruned = TagOverridePersistence.load(key: TagOverridePersistence.suppressedKey,
+                                                 defaults: defaults)
+        XCTAssertEqual(pruned, [b: ["Phishing"]])
+
+        // Corrupt payloads load as empty, never crash.
+        defaults.set(Data("not json".utf8), forKey: "corrupt")
+        XCTAssertTrue(TagOverridePersistence.load(key: "corrupt", defaults: defaults).isEmpty)
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default

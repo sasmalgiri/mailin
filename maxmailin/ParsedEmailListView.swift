@@ -85,6 +85,11 @@ struct ParsedEmailListView: View {
     @State private var quickFilterTagMediumPriority = false
     @State private var activeFilterTags: Set<String> = []
     @State private var manualOverrideTags: [UUID: Set<EmailQuickTag>] = [:]
+    /// AI tags the user marked WRONG for a given email — hidden from display
+    /// and filters. Persisted (with manual tags) so corrections survive
+    /// relaunch; loaded once in loadTagCorrections().
+    @State private var suppressedAITags: [UUID: Set<EmailQuickTag>] = [:]
+    @State private var tagCorrectionsLoaded = false
     @State private var tagPopoverEmailID: UUID? = nil
     @State private var showPresetSaveAlert = false
     @State private var presetName = ""
@@ -899,7 +904,10 @@ struct ParsedEmailListView: View {
             }
             .padding(.trailing, Spacing.xSmall)
         }
-        .onAppear { initializePersonaFilters() }
+        .onAppear {
+            initializePersonaFilters()
+            loadTagCorrections()
+        }
         .onChange(of: personaFiltersInitialized) { _, newValue in
             if !newValue { initializePersonaFilters() }
         }
@@ -2537,6 +2545,40 @@ struct ParsedEmailListView: View {
         }
     }
 
+    // MARK: - Tag Corrections (persistence + mutation)
+
+    private func loadTagCorrections() {
+        guard !tagCorrectionsLoaded else { return }
+        tagCorrectionsLoaded = true
+        manualOverrideTags = TagOverridePersistence.load(key: TagOverridePersistence.manualKey)
+            .mapValues { Set($0.compactMap(EmailQuickTag.init(rawValue:))) }
+        suppressedAITags = TagOverridePersistence.load(key: TagOverridePersistence.suppressedKey)
+            .mapValues { Set($0.compactMap(EmailQuickTag.init(rawValue:))) }
+    }
+
+    private func setManualTags(_ tags: Set<EmailQuickTag>?, for id: UUID) {
+        manualOverrideTags[id] = (tags?.isEmpty ?? true) ? nil : tags
+        TagOverridePersistence.save(
+            manualOverrideTags.mapValues { Set($0.map(\.rawValue)) },
+            key: TagOverridePersistence.manualKey)
+    }
+
+    private func suppressAITag(_ tag: EmailQuickTag, for id: UUID) {
+        var hidden = suppressedAITags[id] ?? []
+        hidden.insert(tag)
+        suppressedAITags[id] = hidden
+        TagOverridePersistence.save(
+            suppressedAITags.mapValues { Set($0.map(\.rawValue)) },
+            key: TagOverridePersistence.suppressedKey)
+    }
+
+    private func restoreAITags(for id: UUID) {
+        suppressedAITags[id] = nil
+        TagOverridePersistence.save(
+            suppressedAITags.mapValues { Set($0.map(\.rawValue)) },
+            key: TagOverridePersistence.suppressedKey)
+    }
+
     // MARK: - Tag Resolution
 
     private func aiTags(for email: MBOXParser.RawEmail) -> [EmailQuickTag] {
@@ -2614,9 +2656,10 @@ struct ParsedEmailListView: View {
     }
 
     private func activeTags(for email: MBOXParser.RawEmail) -> [EmailQuickTag] {
+        let hidden = suppressedAITags[email.id] ?? []
         var all: [EmailQuickTag] = []
         if enableAIFeatures && aiTagsApplied {
-            all.append(contentsOf: aiTags(for: email))
+            all.append(contentsOf: aiTags(for: email).filter { !hidden.contains($0) })
         } else {
             all.append(contentsOf: basicTags(for: email))
         }
@@ -2629,8 +2672,8 @@ struct ParsedEmailListView: View {
     private func autoTagsOnly(for email: MBOXParser.RawEmail) -> [EmailQuickTag] {
         let auto = aiTagsApplied ? aiTags(for: email) : basicTags(for: email)
         let manual = manualOverrideTags[email.id] ?? []
-        guard !manual.isEmpty else { return auto }
-        return auto.filter { !manual.contains($0) }
+        let hidden = suppressedAITags[email.id] ?? []
+        return auto.filter { !manual.contains($0) && !hidden.contains($0) }
     }
 
     private func manualTagsOnly(for email: MBOXParser.RawEmail) -> [EmailQuickTag] {
@@ -2694,14 +2737,26 @@ struct ParsedEmailListView: View {
         HStack(spacing: 3) {
             if enableAIFeatures && aiTagsApplied && !autoTags.isEmpty {
                 Menu {
-                    Section("AI Tags") {
+                    Section("AI Tags — click one to remove it") {
                         ForEach(autoTags, id: \.self) { tag in
-                            Label(tag.rawValue, systemImage: tag.icon)
+                            Button {
+                                suppressAITag(tag, for: email.id)
+                            } label: {
+                                Label(tag.rawValue, systemImage: tag.icon)
+                            }
+                        }
+                    }
+                    if let hidden = suppressedAITags[email.id], !hidden.isEmpty {
+                        Button {
+                            restoreAITags(for: email.id)
+                        } label: {
+                            Label("Restore \(hidden.count) removed AI tag\(hidden.count == 1 ? "" : "s")",
+                                  systemImage: "arrow.uturn.backward")
                         }
                     }
                     Divider()
                     Section {
-                        Label("AI can make mistakes. Verify important tags.", systemImage: "exclamationmark.triangle")
+                        Label("AI can make mistakes — click a wrong tag above to remove it; use the tag button to add the right one.", systemImage: "exclamationmark.triangle")
                             .font(.caption2)
                     }
                 } label: {
@@ -2748,7 +2803,7 @@ struct ParsedEmailListView: View {
                     }
                     Divider()
                     Button {
-                        manualOverrideTags[email.id] = nil
+                        setManualTags(nil, for: email.id)
                     } label: {
                         Label("Clear Manual Tags", systemImage: "xmark.circle")
                     }
@@ -2793,10 +2848,20 @@ struct ParsedEmailListView: View {
                 manualTagToggle(.mediumPriority, current: currentManual, email: email)
                 manualTagToggle(.phishing, current: currentManual, email: email)
             }
+            if let hidden = suppressedAITags[email.id], !hidden.isEmpty {
+                Section {
+                    Button {
+                        restoreAITags(for: email.id)
+                    } label: {
+                        Label("Restore \(hidden.count) removed AI tag\(hidden.count == 1 ? "" : "s")",
+                              systemImage: "arrow.uturn.backward")
+                    }
+                }
+            }
             if !currentManual.isEmpty {
                 Divider()
                 Button {
-                    manualOverrideTags[email.id] = nil
+                    setManualTags(nil, for: email.id)
                 } label: {
                     Label("Clear All Manual Tags", systemImage: "xmark.circle")
                 }
@@ -2823,7 +2888,7 @@ struct ParsedEmailListView: View {
             } else {
                 tags.insert(tag)
             }
-            manualOverrideTags[email.id] = tags.isEmpty ? nil : tags
+            setManualTags(tags, for: email.id)
         } label: {
             HStack {
                 Label(tag.rawValue, systemImage: tag.icon)
