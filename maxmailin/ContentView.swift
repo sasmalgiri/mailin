@@ -5895,6 +5895,40 @@ struct AuditTrailSheet: View {
         !storeManager.isProfessional && forensicManager.auditLog.count > Self.freeViewLimit
     }
 
+    @State private var isGeneratingDailyReport = false
+    @State private var dailyReportNote: String? = nil
+
+    /// End-of-day artifact: verify the chain, build today's report, put it
+    /// on the clipboard — and log the generation itself into the chain, so
+    /// the case history records the reporting too.
+    private func generateDailyReport() async {
+        isGeneratingDailyReport = true
+        defer { isGeneratingDailyReport = false }
+        let status = await forensicManager.verifyAuditLogIntegrityStreamed()
+        let chainOK: Bool?
+        switch status {
+        case .verified: chainOK = true
+        case .tampered: chainOK = false
+        case .unknown, .noData: chainOK = nil
+        }
+        var inputs = CaseActivityReportBuilder.Inputs()
+        inputs.caseNumber = forensicManager.caseNumber
+        inputs.examiner = forensicManager.examinerName
+        inputs.day = Date()
+        inputs.auditEntries = forensicManager.auditLog.map {
+            ($0.timestamp, $0.sequence, $0.action, $0.detail, $0.examiner)
+        }
+        inputs.chainVerified = chainOK
+        let report = CaseActivityReportBuilder.build(inputs)
+        PlatformClipboard.copyString(report)
+        forensicManager.logAction(
+            "Daily activity report generated",
+            detail: "Chain \(chainOK == true ? "verified" : chainOK == false ? "FAILED verification" : "not verifiable"); report copied to clipboard")
+        dailyReportNote = chainOK == false
+            ? "Report copied — WARNING: the audit chain FAILED verification."
+            : "Report copied — paste it into the case file."
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack {
@@ -5902,6 +5936,20 @@ struct AuditTrailSheet: View {
                     .font(Typography.title3)
                     .fontWeight(.bold)
                 Spacer()
+                Button {
+                    Task { await generateDailyReport() }
+                } label: {
+                    if isGeneratingDailyReport {
+                        Label("Verifying…", systemImage: "doc.badge.clock")
+                    } else {
+                        Label("Daily Report", systemImage: "doc.badge.clock")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(isGeneratingDailyReport)
+                .help("End-of-day case log: verifies the audit chain, then copies today's activity report (case, examiner, every logged action, summary) to the clipboard for the case file")
+
                 if storeManager.isProfessional {
                     Button("Export") { onExport() }
                         .buttonStyle(.bordered)
@@ -5919,6 +5967,14 @@ struct AuditTrailSheet: View {
                 .buttonStyle(.plain)
             }
             .padding()
+
+            if let note = dailyReportNote {
+                Label(note, systemImage: note.contains("WARNING") ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                    .font(Typography.caption1)
+                    .foregroundColor(note.contains("WARNING") ? .red : .green)
+                    .padding(.horizontal)
+                    .padding(.bottom, Spacing.xxSmall)
+            }
 
             Divider()
 

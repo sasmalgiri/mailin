@@ -886,6 +886,49 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(empty.state.isEmpty)
     }
 
+    /// Daily activity report: selects exactly the chosen day's audit
+    /// entries (chronological), states the chain verdict honestly, and
+    /// summarizes by action kind. The end-of-day case artifact.
+    func testCaseActivityReport_daySliceAndVerdict() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        let day = cal.date(from: DateComponents(year: 2026, month: 8, day: 9, hour: 12))!
+        let sameDayEarly = cal.date(from: DateComponents(year: 2026, month: 8, day: 9, hour: 8))!
+        let sameDayLate = cal.date(from: DateComponents(year: 2026, month: 8, day: 9, hour: 18))!
+        let otherDay = cal.date(from: DateComponents(year: 2026, month: 8, day: 8, hour: 12))!
+
+        var inputs = CaseActivityReportBuilder.Inputs()
+        inputs.caseNumber = "SMOKE-TEST-001"
+        inputs.examiner = "Examiner A"
+        inputs.day = day
+        inputs.calendar = cal
+        inputs.chainVerified = true
+        inputs.auditEntries = [
+            (sameDayLate, 3, "Evidence tagged: Relevant", "email X", "Examiner A"),
+            (otherDay, 1, "Import completed", "Sent.mbox", "Examiner A"),
+            (sameDayEarly, 2, "Import completed", "Inbox.mbox", "Examiner A"),
+        ]
+        let report = CaseActivityReportBuilder.build(inputs)
+        XCTAssertTrue(report.contains("SMOKE-TEST-001"))
+        XCTAssertTrue(report.contains("Audit chain: VERIFIED"))
+        XCTAssertTrue(report.contains("ACTIONS (2)"), "only the chosen day's entries")
+        XCTAssertFalse(report.contains("Sent.mbox"), "other-day entry excluded")
+        // Chronological: the 08:00 import precedes the 18:00 tagging.
+        let importPos = report.range(of: "Inbox.mbox")!.lowerBound
+        let tagPos = report.range(of: "Evidence tagged")!.lowerBound
+        XCTAssertTrue(importPos < tagPos)
+        XCTAssertTrue(report.contains("SUMMARY"))
+
+        // Tampered chain is stated in plain words; empty day is honest.
+        inputs.chainVerified = false
+        XCTAssertTrue(CaseActivityReportBuilder.build(inputs).contains("FAILED VERIFICATION"))
+        inputs.auditEntries = []
+        inputs.chainVerified = nil
+        let empty = CaseActivityReportBuilder.build(inputs)
+        XCTAssertTrue(empty.contains("No audit-logged actions"))
+        XCTAssertTrue(empty.contains("not verified"))
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default
