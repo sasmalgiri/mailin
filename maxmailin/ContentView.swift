@@ -4582,15 +4582,32 @@ struct V7ForensicSheetsModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            #if os(macOS)
+            // A workflow this large gets its OWN window (movable, resizable,
+            // sits beside the list) — never a sheet pinned over the app.
+            .onChange(of: appState.showEDiscovery) { _, shown in
+                guard shown else { return }
+                appState.showEDiscovery = false
+                let capturedQuery = query
+                ToolWindowPresenter.shared.open(title: "E-Discovery Workflow") {
+                    ArchiveWorkingSetView(query: capturedQuery) { emails in
+                        EDiscoveryWorkflowView(
+                            emails: emails,
+                            isPresented: Binding(
+                                get: { true },
+                                set: { if !$0 { ToolWindowPresenter.shared.close(title: "E-Discovery Workflow") } }
+                            ))
+                    }
+                }
+            }
+            #else
             .sheet(isPresented: $appState.showEDiscovery) {
                 ArchiveWorkingSetView(query: query) { emails in
                     EDiscoveryWorkflowView(emails: emails, isPresented: $appState.showEDiscovery)
                 }
                     .resizableSheet()
-                    #if os(macOS)
-                    .frame(minWidth: 480, minHeight: 380)
-                    #endif
             }
+            #endif
             .sheet(isPresented: $appState.showBatesNumbering) {
                 ArchiveWorkingSetView(query: query) { emails in
                     BatesConfigView(emails: emails)
