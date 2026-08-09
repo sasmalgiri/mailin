@@ -39,6 +39,7 @@ struct EmailDetailView: View {
     @State private var cachedSHA256: String = ""
     @State private var cachedMD5: String = ""
     @State private var showThreadStory = false
+    @State private var showHistory = false
     #if os(iOS)
     @State private var showShareSheet = false
     @State private var shareItems: [Any] = []
@@ -141,6 +142,12 @@ struct EmailDetailView: View {
             }
         }
         #if os(iOS)
+        .sheet(isPresented: $showHistory) {
+            EmailHistoryView(email: email)
+                .presentationDetents([.large])
+        }
+        #endif
+        #if os(iOS)
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(items: shareItems)
         }
@@ -200,6 +207,18 @@ struct EmailDetailView: View {
                     mailIconButton(icon: "text.bubble", tooltip: "Thread Story — the whole conversation as a timeline", color: AppColors.primary) {
                         showThreadStory = true
                     }
+                    mailIconButton(icon: "clock.arrow.circlepath", tooltip: "History — everything that happened to this email: when it arrived, from which file, every action taken, and its current labels and holds", color: AppColors.primary) {
+                        #if os(macOS)
+                        let historyEmail = email
+                        ToolWindowPresenter.shared.open(title: "Email History") {
+                            AnyView(EmailHistoryView(
+                                email: historyEmail,
+                                onClose: { ToolWindowPresenter.shared.close(title: "Email History") }))
+                        }
+                        #else
+                        showHistory = true
+                        #endif
+                    }
                     mailIconButton(icon: "translate", tooltip: "Translate this email using the system translator — fully offline once a language is downloaded", color: AppColors.secondary) {
                         showTranslation = true
                     }
@@ -231,6 +250,9 @@ struct EmailDetailView: View {
                     Divider()
                     Button { showThreadStory = true } label: {
                         Label("Thread Story", systemImage: "text.bubble")
+                    }
+                    Button { showHistory = true } label: {
+                        Label("Email History", systemImage: "clock.arrow.circlepath")
                     }
                     Button { showTranslation = true } label: {
                         Label("Translate", systemImage: "translate")

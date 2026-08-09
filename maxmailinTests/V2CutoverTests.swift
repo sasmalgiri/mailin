@@ -840,6 +840,52 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(after.isEmpty, "idempotent — nothing left to remove")
     }
 
+    /// Email History (document flow): dated events sort oldest-first into
+    /// the timeline; undated facts land in current state; empty inputs
+    /// produce empty sections (never placeholder junk); the report carries
+    /// every event.
+    func testEmailHistoryBuilder_timelineAndState() {
+        var inputs = EmailHistoryBuilder.Inputs()
+        inputs.sentDate = Date(timeIntervalSince1970: 1_000)
+        inputs.messageType = "received"
+        inputs.importedAt = Date(timeIntervalSince1970: 5_000)
+        inputs.sourceFilename = "Sent.mbox"
+        inputs.sourceSHA256 = "99bd7573f3ae0011"
+        inputs.sourceOrdinal = 4
+        inputs.annotation = ("Key evidence for claim 2", "Examiner A", Date(timeIntervalSince1970: 9_000))
+        inputs.auditEntries = [(Date(timeIntervalSince1970: 7_000), "Tagged as Relevant", "id", "Examiner A")]
+        inputs.evidenceTag = "Relevant"
+        inputs.batesNumber = "ACME-000123"
+        inputs.underLegalHold = true
+        inputs.isPinned = true
+        inputs.manualLabels = ["Personal"]
+        inputs.removedAILabels = ["Newsletter"]
+
+        let (timeline, state) = EmailHistoryBuilder.build(inputs)
+        XCTAssertEqual(timeline.map(\.title),
+                       ["Received", "Imported", "Tagged as Relevant", "Annotated by Examiner A"],
+                       "oldest-first: sent → imported → audit → annotation")
+        XCTAssertTrue(timeline[1].detail.contains("Sent.mbox"))
+        XCTAssertTrue(timeline[1].detail.contains("message #5"), "ordinal is 1-based for humans")
+        let stateTitles = state.map(\.title)
+        XCTAssertTrue(stateTitles.contains("Evidence: Relevant"))
+        XCTAssertTrue(stateTitles.contains("Bates ACME-000123"))
+        XCTAssertTrue(stateTitles.contains("Under legal hold"))
+        XCTAssertTrue(stateTitles.contains("Review state"))
+        XCTAssertTrue(stateTitles.contains("Manual labels"))
+        XCTAssertTrue(stateTitles.contains("AI labels you removed"))
+
+        let report = EmailHistoryBuilder.report(subject: "S", messageID: "<m@x>",
+                                                timeline: timeline, state: state)
+        XCTAssertTrue(report.contains("Bates ACME-000123"))
+        XCTAssertTrue(report.contains("Tagged as Relevant"))
+
+        // Empty inputs stay empty.
+        let empty = EmailHistoryBuilder.build(EmailHistoryBuilder.Inputs())
+        XCTAssertTrue(empty.timeline.isEmpty)
+        XCTAssertTrue(empty.state.isEmpty)
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default

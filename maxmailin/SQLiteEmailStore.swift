@@ -1317,6 +1317,36 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     /// §4/§4.1: the nullable dedup key. NULL never collides (SQLite partial
     /// unique index), so `.preserveAll` stores everything.
+    /// Where one email came from and when it arrived — the root of its
+    /// document-flow history.
+    struct EmailProvenance: Sendable {
+        let importedAt: Date?
+        let sourceFilename: String?
+        let sourceSHA256: String?
+        let sourceOrdinal: Int?
+    }
+
+    func provenance(for id: EmailID) throws -> EmailProvenance? {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT e.imported_at, s.filename, s.sha256, e.source_ordinal
+            FROM emails e LEFT JOIN sources s ON s.source_id = e.source_id
+            WHERE e.id = ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, id.uuidString)
+        guard try stepRow(stmt, db) else { return nil }
+        let importedRaw = sqlite3_column_int64(stmt, 0)
+        let filename = sqlite3_column_type(stmt, 1) == SQLITE_NULL ? nil : columnText(stmt, 1)
+        let sha = sqlite3_column_type(stmt, 2) == SQLITE_NULL ? nil : columnText(stmt, 2)
+        let ordinal = sqlite3_column_type(stmt, 3) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(stmt, 3))
+        return EmailProvenance(
+            importedAt: importedRaw > 0 ? Date(timeIntervalSince1970: Double(importedRaw)) : nil,
+            sourceFilename: filename,
+            sourceSHA256: sha,
+            sourceOrdinal: ordinal)
+    }
+
     /// Archive-wide exact duplicates: rows sharing a Message-ID beyond the
     /// best copy. Keeps the source-identified row (full fidelity, from a real
     /// import) over migrated rows without source identity, then the earliest
@@ -3337,7 +3367,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     // MARK: - Date parsing (aligned with FTS shard-year)
 
-    private static func parsedDate(from raw: String?) -> Date? {
+    static func parsedDate(from raw: String?) -> Date? {
         guard let raw, !raw.isEmpty else { return nil }
         return MBOXParser.parseDate(raw)
     }

@@ -1065,5 +1065,30 @@ extension FeatureTutorial {
             TutorialTip(icon: "exclamationmark.triangle", text: "Automated pattern detection — some entries may not be correct; the header says so and the tools above fix it.")
         ]
     )
+
+    static let emailHistory = FeatureTutorial(
+        title: "Email History (Document Flow)",
+        icon: "clock.arrow.circlepath",
+        overview: "One timeline showing everything the archive knows about a single email — like SAP's document flow for a document number. When it was sent, when and from which file it entered the archive (with the file's fingerprint), every audit-logged action, annotations, and its current labels, Bates number, custodian and legal hold. Assembled from records the app already keeps.",
+        quickStart: "Open any email and click the clock button in the toolbar. The Timeline section lists dated events oldest-first; Current State lists what applies right now. Copy Report puts the whole history on the clipboard for case notes.",
+        steps: [
+            TutorialStep(title: "Read the Timeline", icon: "clock", color: .blue,
+                what: "Dated events, oldest first.",
+                how: "Sent/Received (the email's own date), Imported (when it entered this archive, from which file, at which position), annotations, and every audit-trail action that references this email.",
+                tip: "The import line names the source file and its SHA-256 — that's your provenance answer in one line."),
+            TutorialStep(title: "Check Current State", icon: "flag", color: .purple,
+                what: "What applies to the email right now.",
+                how: "Content fingerprint, evidence coding, Bates number, custodian and legal hold, review flags (pinned/read/archived/trash), your tags and label corrections.",
+                tip: "The content fingerprint proves the email hasn't changed since import — verify it any time from Forensic tools."),
+            TutorialStep(title: "Copy the Report", icon: "doc.on.doc", color: .green,
+                what: "The whole history as plain text.",
+                how: "Click Copy Report and paste into case notes, an incident ticket, or a court exhibit appendix.",
+                tip: "Investigators: paste it into the daily activity log so the case file carries per-email provenance.")
+        ],
+        tips: [
+            TutorialTip(icon: "checkmark.shield", text: "Nothing new is collected for this view — it reads the audit trail, custody records and review state the app already keeps."),
+            TutorialTip(icon: "building.columns", text: "For legal/forensic work this answers the defensibility question: what happened to this email, and can you prove it?")
+        ]
+    )
 }
 // swiftlint:enable type_body_length file_length
