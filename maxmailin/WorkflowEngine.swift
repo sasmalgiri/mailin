@@ -271,6 +271,55 @@ enum WorkflowCatalog {
     }
 }
 
+/// SAP "determination": values the app can compute from live data, so the
+/// human keys almost nothing. Pure — the context is gathered by the runner
+/// and passed in, keeping this testable.
+struct DerivationContext: Sendable {
+    var caseNumber: String = ""
+    var examiner: String = ""
+    var relevantCount: Int = 0
+    var privilegedCount: Int = 0
+    var privilegedUnannotated: Int = 0
+    var irrelevantCount: Int = 0
+    var archiveDuplicateCount: Int = 0
+    var archiveTotal: Int = 0
+}
+
+enum FieldDerivation {
+    /// Field values to PREFILL for one operation (only used where the field
+    /// is still empty — the user's own entry always wins).
+    static func derive(defID: String, opKey: String, ctx: DerivationContext) -> [String: String] {
+        var out: [String: String] = [:]
+        switch (defID, opKey) {
+        case ("builtin.forensic.intake", "receive"):
+            if !ctx.caseNumber.isEmpty { out["caseNumber"] = ctx.caseNumber }
+        case ("builtin.forensic.intake", "preserve"):
+            out["hashAlg"] = "SHA-256"                 // the forensic default
+        case ("builtin.legal.production", "review"):
+            if ctx.relevantCount > 0 { out["responsive"] = String(ctx.relevantCount) }
+            if ctx.irrelevantCount > 0 { out["nonResponsive"] = String(ctx.irrelevantCount) }
+        case ("builtin.legal.production", "privilege"):
+            if ctx.privilegedCount > 0 { out["privCount"] = String(ctx.privilegedCount) }
+            // The gate opens only at "Yes"; derive it truthfully so the human
+            // isn't asked to assert completeness the data contradicts.
+            if ctx.privilegedCount > 0 && ctx.privilegedUnannotated == 0 {
+                out["logComplete"] = "Yes"
+            }
+        case ("builtin.personal.cleanup", "dedupe"):
+            if ctx.archiveDuplicateCount > 0 { out["removed"] = String(ctx.archiveDuplicateCount) }
+        default:
+            break
+        }
+        return out
+    }
+
+    /// Which of an operation's fields would be auto-filled (for the "derived"
+    /// note in the UI).
+    static func derivedKeys(defID: String, opKey: String, ctx: DerivationContext) -> Set<String> {
+        Set(derive(defID: defID, opKey: opKey, ctx: ctx).keys)
+    }
+}
+
 /// One run assembled for display/report: the definition plus what happened.
 struct WorkflowInstanceReport {
     let wfNumber: String

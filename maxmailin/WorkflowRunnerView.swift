@@ -33,6 +33,8 @@ struct WorkflowRunnerView: View {
     @State private var fieldValues: [String: String] = [:]
     @State private var savedValues: [Int: [String: String]] = [:]
     @State private var validationError: String? = nil
+    @State private var derivation = DerivationContext()
+    @State private var derivedKeys: Set<String> = []
     @State private var isLoading = true
 
     var body: some View {
@@ -145,11 +147,7 @@ struct WorkflowRunnerView: View {
                                     : "Locked — \(locks.first ?? "")")
             }
             Button(conf != nil ? "Reconfirm" : "Confirm") {
-                resultText = conf?.result ?? ""
-                noteText = conf?.note ?? ""
-                fieldValues = savedValues[op.seq] ?? [:]
-                validationError = nil
-                activeOp = op
+                openStep(op)
             }
             .disabled(!locks.isEmpty)
             .controlSize(.small)
@@ -181,6 +179,11 @@ struct WorkflowRunnerView: View {
                 VStack(alignment: .leading, spacing: Spacing.medium) {
                     ForEach(op.fields) { field in
                         fieldEditor(field)
+                    }
+                    if !derivedKeys.isEmpty {
+                        Label("Some fields were filled in from your archive — check and adjust before confirming.",
+                              systemImage: "wand.and.stars")
+                            .font(Typography.caption2).foregroundColor(AppColors.primary)
                     }
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Note (optional)").font(Typography.caption1).fontWeight(.semibold)
@@ -278,6 +281,22 @@ struct WorkflowRunnerView: View {
         confirmations = Dictionary(uniqueKeysWithValues: confs.map { ($0.seq, $0) })
         savedValues = (try? await SQLiteEmailStore.shared.fieldValues(wf: wfNumber)) ?? [:]
         if let inst = try? await SQLiteEmailStore.shared.instance(wf: wfNumber) { status = inst.status }
+        await gatherDerivation()
+    }
+
+    private func openStep(_ op: WorkflowOperation) {
+        var values = savedValues[op.seq] ?? [:]
+        let derived = FieldDerivation.derive(defID: definition.defID, opKey: op.key, ctx: derivation)
+        var filled: Set<String> = []
+        for (k, v) in derived where (values[k] ?? "").isEmpty {
+            values[k] = v; filled.insert(k)
+        }
+        fieldValues = values
+        derivedKeys = filled
+        resultText = confirmations[op.seq]?.result ?? ""
+        noteText = confirmations[op.seq]?.note ?? ""
+        validationError = nil
+        activeOp = op
     }
 
     @MainActor
@@ -304,6 +323,23 @@ struct WorkflowRunnerView: View {
         activeOp = nil
         resultText = ""; noteText = ""; fieldValues = [:]; validationError = nil
         await refreshConfirmations()
+    }
+
+    @MainActor
+    private func gatherDerivation() async {
+        var ctx = DerivationContext()
+        ctx.caseNumber = ForensicManager.shared.caseNumber
+        ctx.examiner = ForensicManager.shared.examinerName
+        let tags = ForensicManager.shared.evidenceTags
+        ctx.relevantCount = tags.values.filter { $0 == .relevant }.count
+        ctx.irrelevantCount = tags.values.filter { $0 == .irrelevant }.count
+        let privileged = tags.filter { $0.value == .privileged }.map(\.key)
+        ctx.privilegedCount = privileged.count
+        let annotated = Set(ForensicManager.shared.annotations.keys)
+        ctx.privilegedUnannotated = privileged.filter { !annotated.contains($0) }.count
+        ctx.archiveTotal = (try? await ArchiveDataService.shared.count()) ?? 0
+        ctx.archiveDuplicateCount = ((try? await SQLiteEmailStore.shared.exactMessageIDDuplicateIDs())?.count) ?? 0
+        derivation = ctx
     }
 
     private func renderReport() -> String {

@@ -1361,6 +1361,41 @@ final class V2CutoverTests: XCTestCase {
             state: .init(confirmed: [1,2,3,4], fieldValues: [2: ["method": "Write-blocked image"]])).isEmpty)
     }
 
+    /// Determination: the app fills what it can compute so the human keys
+    /// almost nothing — and it fills the privilege-log-complete gate field
+    /// ONLY when the data truly supports it (never asserts completeness the
+    /// data contradicts).
+    func testFieldDerivation_prefillsFromContext() {
+        var ctx = DerivationContext()
+        ctx.caseNumber = "CASE-2026-0009"
+        ctx.relevantCount = 42
+        ctx.irrelevantCount = 5
+        ctx.privilegedCount = 8
+        ctx.privilegedUnannotated = 3
+        ctx.archiveDuplicateCount = 17
+
+        XCTAssertEqual(FieldDerivation.derive(defID: "builtin.forensic.intake", opKey: "receive", ctx: ctx)["caseNumber"], "CASE-2026-0009")
+        XCTAssertEqual(FieldDerivation.derive(defID: "builtin.forensic.intake", opKey: "preserve", ctx: ctx)["hashAlg"], "SHA-256")
+
+        let review = FieldDerivation.derive(defID: "builtin.legal.production", opKey: "review", ctx: ctx)
+        XCTAssertEqual(review["responsive"], "42")
+        XCTAssertEqual(review["nonResponsive"], "5")
+
+        // Privilege log NOT auto-completed while docs are unannotated.
+        let privNotDone = FieldDerivation.derive(defID: "builtin.legal.production", opKey: "privilege", ctx: ctx)
+        XCTAssertEqual(privNotDone["privCount"], "8")
+        XCTAssertNil(privNotDone["logComplete"], "must not assert completeness the data contradicts")
+
+        // Once every privileged doc is annotated, the gate field derives Yes.
+        ctx.privilegedUnannotated = 0
+        XCTAssertEqual(FieldDerivation.derive(defID: "builtin.legal.production", opKey: "privilege", ctx: ctx)["logComplete"], "Yes")
+
+        XCTAssertEqual(FieldDerivation.derive(defID: "builtin.personal.cleanup", opKey: "dedupe", ctx: ctx)["removed"], "17")
+
+        // Nothing derived for a step with no computable fields.
+        XCTAssertTrue(FieldDerivation.derive(defID: "builtin.it.phishing", opKey: "close", ctx: ctx).isEmpty)
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default
