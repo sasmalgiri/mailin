@@ -1396,6 +1396,37 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(FieldDerivation.derive(defID: "builtin.it.phishing", opKey: "close", ctx: ctx).isEmpty)
     }
 
+    /// Selection variants: a run's field entries flatten/expand losslessly
+    /// and round-trip through the store, so a recurring job starts pre-filled.
+    func testWorkflowVariants_flattenAndRoundTrip() async throws {
+        let values: [Int: [String: String]] = [
+            1: ["reporter": "alice@corp.com", "subject": "Overdue invoice"],
+            3: ["disposition": "Confirmed phishing", "severity": "P2 — High"],
+        ]
+        let flat = VariantCodec.flatten(values)
+        XCTAssertEqual(flat["1|reporter"], "alice@corp.com")
+        XCTAssertEqual(flat["3|disposition"], "Confirmed phishing")
+        XCTAssertEqual(VariantCodec.expand(flat), values, "flatten∘expand is identity")
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-var-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root)
+        try await store.saveVariant(defID: "builtin.it.phishing", name: "Standard invoice scam",
+                                    values: flat, createdBy: "Admin A")
+        // Upsert (same name) doesn't duplicate.
+        try await store.saveVariant(defID: "builtin.it.phishing", name: "Standard invoice scam",
+                                    values: flat, createdBy: "Admin A")
+        let variants = try await store.variants(defID: "builtin.it.phishing")
+        XCTAssertEqual(variants.count, 1)
+        XCTAssertEqual(variants.first?.name, "Standard invoice scam")
+        XCTAssertEqual(VariantCodec.expand(variants.first!.values), values,
+                       "the saved variant re-expands to the original run setup")
+        // Isolated per definition.
+        let legalVariants = try await store.variants(defID: "builtin.legal.production")
+        XCTAssertTrue(legalVariants.isEmpty)
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default

@@ -28,6 +28,8 @@ struct WorkCenterView: View {
     @State private var personaTemplates: [WorkflowDefinition] = []
     @State private var runnerDef: WorkflowDefinition? = nil
     @State private var resumeWF: String? = nil
+    @State private var startVariant: SQLiteEmailStore.StoredVariant? = nil
+    @State private var variantsByDef: [String: [SQLiteEmailStore.StoredVariant]] = [:]
     @State private var expandedDoc: String? = nil
     @State private var docNotes: [SQLiteEmailStore.DocNote] = []
     @State private var newNote = ""
@@ -285,6 +287,7 @@ struct WorkCenterView: View {
                 ForEach(personaTemplates) { def in
                     Button {
                         resumeWF = nil
+                        startVariant = nil
                         runnerDef = def
                     } label: {
                         HStack {
@@ -302,6 +305,21 @@ struct WorkCenterView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Start a new run of this workflow — it gets its own WF number")
+
+                    ForEach(variantsByDef[def.defID] ?? []) { variant in
+                        Button {
+                            resumeWF = nil
+                            startVariant = variant
+                            runnerDef = def
+                        } label: {
+                            Label("Variant: \(variant.name)", systemImage: "square.stack.3d.up")
+                                .font(Typography.caption1)
+                                .foregroundColor(AppColors.secondary)
+                                .padding(.leading, Spacing.medium)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Start a run pre-filled from this saved variant")
+                    }
                 }
             } header: {
                 Text("Start a workflow")
@@ -318,6 +336,7 @@ struct WorkCenterView: View {
                     Button {
                         if let def = WorkflowCatalog.all.first(where: { $0.defID == inst.defID }) {
                             resumeWF = inst.wfNumber
+                            startVariant = nil
                             runnerDef = def
                         }
                     } label: {
@@ -337,7 +356,7 @@ struct WorkCenterView: View {
             }
         }
         .sheet(item: $runnerDef) { def in
-            WorkflowRunnerView(definition: def, resumeWF: resumeWF,
+            WorkflowRunnerView(definition: def, resumeWF: resumeWF, startVariant: startVariant,
                                onOpenDestination: { dest in
                                    runnerDef = nil
                                    onOpenDestination?(dest)
@@ -510,6 +529,11 @@ struct WorkCenterView: View {
         if personaTemplates.isEmpty { personaTemplates = WorkflowCatalog.all }
         openRuns = ((try? await store.instances(status: "open")) ?? [])
             + ((try? await store.instances(status: "released")) ?? [])
+        var vmap: [String: [SQLiteEmailStore.StoredVariant]] = [:]
+        for def in personaTemplates {
+            vmap[def.defID] = (try? await store.variants(defID: def.defID)) ?? []
+        }
+        variantsByDef = vmap
 
         var inputs = WorkCenterModel.Inputs()
         inputs.triagePending = (try? await ArchiveDataService.shared.count(

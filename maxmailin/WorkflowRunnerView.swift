@@ -17,6 +17,8 @@ struct WorkflowRunnerView: View {
     let definition: WorkflowDefinition
     /// nil = start a fresh run; non-nil = resume an existing WF number.
     var resumeWF: String? = nil
+    /// Optional saved variant to pre-fill a fresh run from (SAP variant).
+    var startVariant: SQLiteEmailStore.StoredVariant? = nil
     /// Opens the tool a step performs its work in — this is what lets the
     /// user DO the job from the workflow, not just record it.
     var onOpenDestination: ((HubDestination) -> Void)? = nil
@@ -35,6 +37,8 @@ struct WorkflowRunnerView: View {
     @State private var validationError: String? = nil
     @State private var derivation = DerivationContext()
     @State private var derivedKeys: Set<String> = []
+    @State private var showSaveVariant = false
+    @State private var variantName = ""
     @State private var isLoading = true
 
     var body: some View {
@@ -63,6 +67,24 @@ struct WorkflowRunnerView: View {
         .sheet(item: $activeOp) { op in
             confirmSheet(op)
         }
+        .alert("Save as Variant", isPresented: $showSaveVariant) {
+            TextField("Variant name", text: $variantName)
+            Button("Cancel", role: .cancel) {}
+            Button("Save") { Task { await saveVariant() } }
+        } message: {
+            Text("Reuse this run's field entries next time by starting from this variant.")
+        }
+    }
+
+    @MainActor
+    private func saveVariant() async {
+        let name = variantName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        try? await SQLiteEmailStore.shared.saveVariant(
+            defID: definition.defID, name: name,
+            values: VariantCodec.flatten(savedValues),
+            createdBy: ForensicManager.shared.examinerName)
+        ForensicManager.shared.logAction("Workflow variant saved", detail: "\(definition.name): \(name)")
     }
 
     private var header: some View {
@@ -85,6 +107,12 @@ struct WorkflowRunnerView: View {
             }
             Spacer()
             HelpDot(text: "This is one run of the \(definition.name) recipe. Work top to bottom: Confirm each step when done — mailin records who did it, when, and the document number it produced. You can close and reopen; progress is saved. Copy or Print the report for the file.")
+            Button {
+                variantName = ""
+                showSaveVariant = true
+            } label: { Label("Save as Variant", systemImage: "square.and.arrow.down.on.square") }
+            .disabled(wfNumber.isEmpty)
+            .help("Save this run's entries as a reusable variant — next time, start a run pre-filled in one click")
             Button {
                 PlatformClipboard.copyString(renderReport())
             } label: { Label("Copy Report", systemImage: "doc.on.doc") }
@@ -269,6 +297,12 @@ struct WorkflowRunnerView: View {
             title = definition.name
             wfNumber = await WorkflowService.start(definition, title: title) ?? ""
             status = "open"
+            if let v = startVariant {
+                let expanded = VariantCodec.expand(v.values)
+                for (seq, fields) in expanded {
+                    try? await SQLiteEmailStore.shared.saveFieldValues(wf: wfNumber, seq: seq, values: fields)
+                }
+            }
         }
         await refreshConfirmations()
         isLoading = false
@@ -321,8 +355,15 @@ struct WorkflowRunnerView: View {
             wf: wfNumber, seq: op.seq, totalOps: definition.operations.count,
             result: auto ?? "done", note: noteText, docNumber: docNumber)
         activeOp = nil
-        resultText = ""; noteText = ""; fieldValues = [:]; validationError = nil
+        resultText = ""; noteText = ""; fieldValues = [:]; validationError = nil; derivedKeys = []
         await refreshConfirmations()
+        // Auto-advance: jump straight to the next step that's now unlocked and
+        // not yet confirmed — no hunting for "what's next".
+        if let next = definition.operations.first(where: {
+            confirmations[$0.seq] == nil && lockedReasons($0).isEmpty
+        }) {
+            openStep(next)
+        }
     }
 
     @MainActor

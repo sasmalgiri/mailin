@@ -285,6 +285,29 @@ struct DerivationContext: Sendable {
     var archiveTotal: Int = 0
 }
 
+/// Flatten/expand the per-operation field map for storage as one blob —
+/// a saved "selection variant" (SAP): the setup of a run, reusable.
+enum VariantCodec {
+    /// [seq: [key: value]] -> ["seq|key": value]
+    static func flatten(_ values: [Int: [String: String]]) -> [String: String] {
+        var out: [String: String] = [:]
+        for (seq, fields) in values {
+            for (k, v) in fields where !v.isEmpty { out["\(seq)|\(k)"] = v }
+        }
+        return out
+    }
+    /// inverse
+    static func expand(_ flat: [String: String]) -> [Int: [String: String]] {
+        var out: [Int: [String: String]] = [:]
+        for (compound, v) in flat {
+            let parts = compound.split(separator: "|", maxSplits: 1)
+            guard parts.count == 2, let seq = Int(parts[0]) else { continue }
+            out[seq, default: [:]][String(parts[1])] = v
+        }
+        return out
+    }
+}
+
 enum FieldDerivation {
     /// Field values to PREFILL for one operation (only used where the field
     /// is still empty — the user's own entry always wins).

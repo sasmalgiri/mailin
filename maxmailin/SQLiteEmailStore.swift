@@ -121,7 +121,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// store fully at the previous version — never half-migrated, and a user
     /// DB is NEVER silently recreated. A store newer than this build refuses
     /// to open instead of guessing.
-    static let currentSchemaVersion = 10
+    static let currentSchemaVersion = 11
 
     private func migrateSchema(_ handle: OpaquePointer) throws {
         var v = try scalarInt(handle, "PRAGMA user_version;")
@@ -336,6 +336,25 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 try exec(handle, "PRAGMA user_version = 10;")
             }
             v = 10
+        }
+        if v == 10 {
+            try inExclusiveTransaction(handle) {
+                // v11: selection variants — a saved parameter set for a
+                // workflow definition, so a recurring job starts pre-filled.
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS workflow_variants(
+                        variant_id  TEXT PRIMARY KEY,
+                        def_id      TEXT NOT NULL,
+                        name        TEXT NOT NULL,
+                        created_at  INTEGER NOT NULL,
+                        created_by  TEXT NOT NULL DEFAULT '',
+                        values_json TEXT NOT NULL DEFAULT '{}'
+                    );
+                """)
+                try exec(handle, "CREATE INDEX IF NOT EXISTS idx_wf_variants_def ON workflow_variants(def_id, name);")
+                try exec(handle, "PRAGMA user_version = 11;")
+            }
+            v = 11
         }
     }
 
@@ -1605,6 +1624,46 @@ actor SQLiteEmailStore: EmailArchiveStore {
             bindText(hist, 3, confirmedBy); bindText(hist, 4, prior); bindText(hist, 5, newStatus)
             _ = sqlite3_step(hist)
         }
+    }
+
+    struct StoredVariant: Sendable, Identifiable {
+        var id: String { variantID }
+        let variantID: String
+        let defID: String
+        let name: String
+        let values: [String: String]   // flattened "seq|key" -> value
+    }
+
+    func saveVariant(defID: String, name: String, values: [String: String],
+                     createdBy: String = "", now: Date = Date()) throws {
+        let db = try ensureDB()
+        let json = String(data: (try? JSONEncoder().encode(values)) ?? Data("{}".utf8), encoding: .utf8) ?? "{}"
+        let vid = "\(defID)#\(name.lowercased())"
+        let stmt = try prepare(db, """
+            INSERT INTO workflow_variants(variant_id, def_id, name, created_at, created_by, values_json)
+            VALUES (?,?,?,?,?,?)
+            ON CONFLICT(variant_id) DO UPDATE SET values_json=excluded.values_json, created_at=excluded.created_at;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, vid); bindText(stmt, 2, defID); bindText(stmt, 3, name)
+        sqlite3_bind_int64(stmt, 4, Int64(now.timeIntervalSince1970)); bindText(stmt, 5, createdBy)
+        bindText(stmt, 6, json)
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+    }
+
+    func variants(defID: String) throws -> [StoredVariant] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT variant_id, def_id, name, values_json FROM workflow_variants WHERE def_id = ? ORDER BY name;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, defID)
+        var out: [StoredVariant] = []
+        while try stepRow(stmt, db) {
+            let json = columnText(stmt, 3)
+            let values = (try? JSONDecoder().decode([String: String].self, from: Data(json.utf8))) ?? [:]
+            out.append(StoredVariant(variantID: columnText(stmt, 0), defID: columnText(stmt, 1),
+                                     name: columnText(stmt, 2), values: values))
+        }
+        return out
     }
 
     func instances(status: String? = nil, limit: Int = 200) throws -> [StoredInstance] {
