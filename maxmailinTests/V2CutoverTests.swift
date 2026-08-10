@@ -1236,6 +1236,18 @@ final class V2CutoverTests: XCTestCase {
                 }
             }
         }
+        // Each workflow launches real tools — the user does the job from the
+        // workflow, not just records it. Most steps open a tool; a handful
+        // are deliberate manual/record steps.
+        for def in WorkflowCatalog.all {
+            let launching = def.operations.filter { $0.launches != nil }.count
+            XCTAssertGreaterThanOrEqual(launching, 3,
+                "\(def.defID) should perform most of its work through tools")
+        }
+        XCTAssertEqual(WorkflowCatalog.itAdmin.operations.first { $0.key == "verdict" }?.launches, .phishingTriage)
+        XCTAssertEqual(WorkflowCatalog.legal.operations.first { $0.key == "bates" }?.launches, .batesNumbering)
+        XCTAssertEqual(WorkflowCatalog.personal.operations.first { $0.key == "dedupe" }?.launches, .duplicateManager)
+
         // Grounded specifics: forensic step 1 requires case + custodian.
         let receive = WorkflowCatalog.forensic.operations.first!
         let reqLabels = receive.fields.filter(\.required).map(\.key)

@@ -36,6 +36,9 @@ struct WorkflowOperation: Identifiable, Equatable, Sendable {
     let hint: String
     /// The DocumentType this step posts on confirmation (nil = manual step).
     let postsDocType: DocumentType?
+    /// The tool this step opens so the user actually DOES the work from the
+    /// workflow (nil = a manual/record-only step).
+    var launches: HubDestination? = nil
     /// The data the user records at this step — saved into the completion
     /// document so the whole run is reusable later.
     var fields: [WorkflowField] = []
@@ -65,8 +68,10 @@ struct WorkflowDefinition: Identifiable, Equatable, Sendable {
 enum WorkflowCatalog {
 
     static func op(_ seq: Int, _ key: String, _ title: String, _ hint: String,
-                   _ doc: DocumentType? = nil, _ fields: [WorkflowField] = []) -> WorkflowOperation {
-        WorkflowOperation(seq: seq, key: key, title: title, hint: hint, postsDocType: doc, fields: fields)
+                   _ doc: DocumentType? = nil, launches: HubDestination? = nil,
+                   _ fields: [WorkflowField] = []) -> WorkflowOperation {
+        WorkflowOperation(seq: seq, key: key, title: title, hint: hint,
+                          postsDocType: doc, launches: launches, fields: fields)
     }
     static func f(_ key: String, _ label: String, _ kind: WorkflowField.Kind, _ help: String,
                   placeholder: String = "", required: Bool = false, options: [String] = []) -> WorkflowField {
@@ -77,26 +82,26 @@ enum WorkflowCatalog {
     static let forensic = WorkflowDefinition(
         defID: "builtin.forensic.intake", name: "Evidence Intake & Review",
         persona: "forensic", builtin: true, operations: [
-            op(1, "receive", "Receive & Identify", "Record the case and custodian; import the source. Posts an Import document.", .importRun, [
+            op(1, "receive", "Receive & Identify", "Record the case and custodian; import the source. Posts an Import document.", .importRun, launches: .emailInbox, [
                 f("caseNumber", "Case / Matter number", .text, "Links this evidence to the investigation. Use your lab's case-numbering scheme.", placeholder: "CASE-2026-0001", required: true),
                 f("custodian", "Custodian / owner", .text, "Whose mailbox or account this evidence came from.", placeholder: "jdoe@corp.com", required: true),
                 f("sourceLocation", "Source location", .text, "Where the data resided — server, cloud tenant, device.", placeholder: "Exchange Online tenant"),
                 f("purpose", "Purpose of collection", .longText, "Why this evidence is being collected — the authority or request behind it."),
             ]),
-            op(2, "preserve", "Preserve & Hash", "Compute and verify per-email SHA-256 so integrity is provable.", nil, [
+            op(2, "preserve", "Preserve & Hash", "Compute and verify per-email SHA-256 so integrity is provable.", nil, launches: .chainOfCustody, [
                 f("method", "Acquisition method", .choice, "How the copy was made without altering the source.", required: true, options: ["Write-blocked image", "Cloud/API export", "Server backup", "EML/PST export"]),
                 f("hashAlg", "Hash algorithm", .choice, "The integrity fingerprint algorithm used.", options: ["SHA-256", "SHA-1", "MD5"]),
                 f("sealNote", "Seal / storage note", .text, "Where the acquired evidence is stored and how it's sealed."),
             ]),
-            op(3, "examine", "Examine & Code", "Tag evidence, flag items of interest.", nil, [
+            op(3, "examine", "Examine & Code", "Tag evidence, flag items of interest.", nil, launches: .forensicReview, [
                 f("itemsOfInterest", "Items of interest", .number, "How many emails you flagged as relevant this pass."),
                 f("codingNotes", "Examination notes", .longText, "What you looked for and what stood out — the examiner's contemporaneous notes."),
             ]),
-            op(4, "analyze", "Analyze", "Extract IOCs and anomalies across the set.", nil, [
+            op(4, "analyze", "Analyze", "Extract IOCs and anomalies across the set.", nil, launches: .iocExtractor, [
                 f("iocSummary", "IOC / findings summary", .longText, "Indicators (domains, IPs, hashes) and authentication anomalies (SPF/DKIM/DMARC) found."),
                 f("anomalies", "Anomalies present", .bool, "Turn on if the set shows tampering, spoofing, or routing anomalies worth noting."),
             ]),
-            op(5, "report", "Document & Report", "Generate the daily activity report for the case file. Posts a Report document.", .report, [
+            op(5, "report", "Document & Report", "Generate the daily activity report for the case file. Posts a Report document.", .report, launches: .investigationReport, [
                 f("findings", "Findings summary", .longText, "The conclusions this run supports — written for the case file.", required: true),
             ]),
         ])
@@ -104,28 +109,28 @@ enum WorkflowCatalog {
     static let legal = WorkflowDefinition(
         defID: "builtin.legal.production", name: "Production Run",
         persona: "legal", builtin: true, operations: [
-            op(1, "assemble", "Assemble Batch", "Create/assign the review batch (EDRM Review).", nil, [
+            op(1, "assemble", "Assemble Batch", "Create/assign the review batch (EDRM Review).", nil, launches: .reviewBatches, [
                 f("matter", "Matter name", .text, "The litigation or matter this production serves.", placeholder: "Acme v. Roe", required: true),
                 f("requestNo", "Request / RFP reference", .text, "The discovery request this responds to."),
                 f("reviewer", "Reviewer", .text, "Who is coding this batch (goes on the defensibility record)."),
                 f("batchSize", "Batch size", .number, "How many documents are in this batch."),
             ]),
-            op(2, "review", "Review & Code", "Responsive / non-responsive / privileged.", nil, [
+            op(2, "review", "Review & Code", "Responsive / non-responsive / privileged.", nil, launches: .emailInbox, [
                 f("responsive", "Responsive count", .number, "Documents coded responsive to the request."),
                 f("nonResponsive", "Non-responsive count", .number, "Documents coded not responsive."),
                 f("confidentiality", "Confidentiality designation", .choice, "Highest confidentiality applied in this batch.", options: ["None", "Confidential", "Highly Confidential — AEO"]),
             ]),
-            op(3, "privilege", "Privilege Log", "Annotate every privileged document — the defensibility gate.", nil, [
+            op(3, "privilege", "Privilege Log", "Annotate every privileged document — the defensibility gate.", nil, launches: .reviewDashboard, [
                 f("privCount", "Privileged count", .number, "Documents withheld as privileged."),
                 f("privBasis", "Privilege basis", .choice, "The ground for withholding — recorded in the privilege log.", options: ["Attorney-Client", "Work Product", "Both", "Not applicable"]),
                 f("logComplete", "Privilege log complete", .bool, "Turn on only when every privileged doc has an annotation explaining the basis."),
             ]),
-            op(4, "bates", "Bates & Redact", "Stamp production numbers; redact as needed.", nil, [
+            op(4, "bates", "Bates & Redact", "Stamp production numbers; redact as needed.", nil, launches: .batesNumbering, [
                 f("batesPrefix", "Bates prefix", .text, "Production prefix for sequential stamping.", placeholder: "ACME"),
                 f("batesStart", "Bates start", .text, "First Bates number in this production.", placeholder: "ACME-000001"),
                 f("redactions", "Redactions applied", .number, "How many documents required redaction."),
             ]),
-            op(5, "produce", "Produce", "Export the set and copy the defensibility summary. Posts Export + Report.", .export, [
+            op(5, "produce", "Produce", "Export the set and copy the defensibility summary. Posts Export + Report.", .export, launches: .eDiscovery, [
                 f("productionName", "Production set name", .text, "Label for this production volume.", placeholder: "PROD001", required: true),
                 f("format", "Production format", .choice, "How the set is produced.", options: ["Native", "PDF (Bates-stamped)", "Load file (DAT/Opticon)"]),
             ]),
@@ -134,22 +139,22 @@ enum WorkflowCatalog {
     static let itAdmin = WorkflowDefinition(
         defID: "builtin.it.phishing", name: "Phishing Incident",
         persona: "it_admin", builtin: true, operations: [
-            op(1, "intake", "Intake", "Reported email enters the triage queue (watch folder auto-imports).", .importRun, [
+            op(1, "intake", "Intake", "Reported email enters the triage queue (watch folder auto-imports).", .importRun, launches: .phishingTriage, [
                 f("reporter", "Reporter", .text, "Who reported the suspicious email.", placeholder: "user@corp.com", required: true),
                 f("sender", "Sender (From)", .text, "The email's From address — check it against Reply-To/Return-Path."),
                 f("subject", "Subject", .text, "The reported email's subject line."),
             ]),
-            op(2, "analyze", "Analyze", "Headers/auth, URLs, attachment hashes; IOC extraction.", nil, [
+            op(2, "analyze", "Analyze", "Headers/auth, URLs, attachment hashes; IOC extraction.", nil, launches: .iocExtractor, [
                 f("auth", "Authentication result", .choice, "SPF/DKIM/DMARC outcome — a fail is a strong phishing signal.", options: ["All pass", "SPF fail", "DKIM fail", "DMARC fail", "Multiple fail"]),
                 f("iocCount", "IOCs found", .number, "How many indicators (URLs, IPs, hashes) you extracted."),
                 f("iocNotes", "IOC notes", .longText, "The indicators themselves and why they're suspicious."),
             ]),
-            op(3, "verdict", "Verdict", "Confirmed / Safe / Needs-info. Posts the Verdict document your ticket cites.", .triageVerdict, [
+            op(3, "verdict", "Verdict", "Confirmed / Safe / Needs-info. Posts the Verdict document your ticket cites.", .triageVerdict, launches: .phishingTriage, [
                 f("disposition", "Disposition", .choice, "The verdict — this is the number your ticket cites.", required: true, options: ["Confirmed phishing", "Safe", "Suspicious — needs info"]),
                 f("severity", "Severity", .choice, "Business impact tier.", options: ["P1 — Critical", "P2 — High", "P3 — Medium", "P4 — Low"]),
                 f("confidence", "Confidence", .choice, "How sure you are of the verdict.", options: ["High", "Medium", "Low"]),
             ]),
-            op(4, "contain", "Contain", "Export the IOC blocklist for the gateway/firewall. Posts Export.", .export, [
+            op(4, "contain", "Contain", "Export the IOC blocklist for the gateway/firewall. Posts Export.", .export, launches: .phishingTriage, [
                 f("actions", "Actions taken", .longText, "Containment steps — blocks added, mailboxes purged, accounts reset."),
                 f("affected", "Affected users", .number, "How many recipients received it; note any who clicked."),
             ]),
@@ -161,20 +166,20 @@ enum WorkflowCatalog {
     static let journalist = WorkflowDefinition(
         defID: "builtin.journalist.story", name: "Story Build",
         persona: "journalist", builtin: true, operations: [
-            op(1, "ingest", "Ingest & Verify", "Import the leak/FOIA set with its provenance receipt. Posts Import.", .importRun, [
+            op(1, "ingest", "Ingest & Verify", "Import the leak/FOIA set with its provenance receipt. Posts Import.", .importRun, launches: .emailInbox, [
                 f("dataset", "Dataset name", .text, "What this set is and where it came from.", placeholder: "Acme leak 2026", required: true),
                 f("provenance", "Provenance", .longText, "How you obtained it and why you trust it — the five-pillars provenance note."),
             ]),
-            op(2, "leads", "Find Leads", "Search; identify the threads worth pursuing.", nil, [
+            op(2, "leads", "Find Leads", "Search; identify the threads worth pursuing.", nil, launches: .emailInbox, [
                 f("lead", "Lead description", .longText, "The thread you're chasing and why it matters."),
             ]),
-            op(3, "annotate", "Annotate Findings", "One claim per annotation — each becomes a cited finding.", nil, [
+            op(3, "annotate", "Annotate Findings", "One claim per annotation — each becomes a cited finding.", nil, launches: .emailInbox, [
                 f("claims", "Claims recorded", .number, "How many cited findings you annotated."),
             ]),
-            op(4, "compile", "Compile Story", "Build the cited Markdown story file. Posts a Story version.", .storyVersion, [
+            op(4, "compile", "Compile Story", "Build the cited Markdown story file. Posts a Story version.", .storyVersion, launches: .storyFile, [
                 f("title", "Story title", .text, "Working title for this version.", required: true),
             ]),
-            op(5, "factcheck", "Fact-check & Version", "Verify each claim; save the versioned story. Posts a Story version.", .storyVersion, [
+            op(5, "factcheck", "Fact-check & Version", "Verify each claim; save the versioned story. Posts a Story version.", .storyVersion, launches: .storyFile, [
                 f("corroboration", "Independent corroborating sources", .number, "At least one independent source per explosive claim."),
                 f("rightOfReply", "Right of reply obtained", .bool, "Turn on once subjects have been given a chance to respond."),
             ]),
@@ -183,16 +188,16 @@ enum WorkflowCatalog {
     static let personal = WorkflowDefinition(
         defID: "builtin.personal.cleanup", name: "Archive Cleanup",
         persona: "personal", builtin: true, operations: [
-            op(1, "import", "Import / Backup", "Bring the archive in. Posts Import.", .importRun, [
+            op(1, "import", "Import / Backup", "Bring the archive in. Posts Import.", .importRun, launches: .emailInbox, [
                 f("archive", "Archive name", .text, "What you're cleaning up.", placeholder: "Gmail export 2026"),
             ]),
-            op(2, "dedupe", "Dedupe", "Remove exact duplicates archive-wide. Posts Cleanup.", .cleanup, [
+            op(2, "dedupe", "Dedupe", "Remove exact duplicates archive-wide. Posts Cleanup.", .cleanup, launches: .duplicateManager, [
                 f("removed", "Duplicates removed", .number, "How many exact duplicates were cleared."),
             ]),
-            op(3, "categorize", "Categorize", "Labels and folders.", nil, [
+            op(3, "categorize", "Categorize", "Labels and folders.", nil, launches: .emailInbox, [
                 f("labels", "Labels applied", .longText, "How you organized it — labels or folders used."),
             ]),
-            op(4, "export", "Export", "Final backup. Posts Export.", .export, [
+            op(4, "export", "Export", "Final backup. Posts Export.", .export, launches: .emailInbox, [
                 f("backup", "Backup location", .text, "Where the cleaned archive is saved."),
             ]),
         ])

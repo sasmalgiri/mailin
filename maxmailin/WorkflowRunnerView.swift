@@ -17,6 +17,9 @@ struct WorkflowRunnerView: View {
     let definition: WorkflowDefinition
     /// nil = start a fresh run; non-nil = resume an existing WF number.
     var resumeWF: String? = nil
+    /// Opens the tool a step performs its work in — this is what lets the
+    /// user DO the job from the workflow, not just record it.
+    var onOpenDestination: ((HubDestination) -> Void)? = nil
     var onClose: (() -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
@@ -120,6 +123,13 @@ struct WorkflowRunnerView: View {
                 }
             }
             Spacer()
+            if let dest = op.launches {
+                Button {
+                    onOpenDestination?(dest)
+                } label: { Label("Open", systemImage: "arrow.up.forward.app") }
+                .controlSize(.small)
+                .help("Open the tool this step is done in — do the work, then come back and Confirm")
+            }
             Button(conf != nil ? "Reconfirm" : "Confirm") {
                 resultText = conf?.result ?? ""
                 noteText = conf?.note ?? ""
@@ -171,6 +181,12 @@ struct WorkflowRunnerView: View {
             }
             Divider()
             HStack {
+                if let dest = op.launches {
+                    Button {
+                        onOpenDestination?(dest)
+                    } label: { Label("Open tool", systemImage: "arrow.up.forward.app") }
+                    .help("Open the tool to do this step now")
+                }
                 Spacer()
                 Button("Cancel") { activeOp = nil }
                 Button("Confirm & Save") { Task { await confirm(op) } }

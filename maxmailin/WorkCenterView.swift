@@ -338,6 +338,10 @@ struct WorkCenterView: View {
         }
         .sheet(item: $runnerDef) { def in
             WorkflowRunnerView(definition: def, resumeWF: resumeWF,
+                               onOpenDestination: { dest in
+                                   runnerDef = nil
+                                   onOpenDestination?(dest)
+                               },
                                onClose: { runnerDef = nil; Task { await reload() } })
         }
     }
