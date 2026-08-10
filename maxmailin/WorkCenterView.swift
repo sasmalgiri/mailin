@@ -24,6 +24,14 @@ struct WorkCenterView: View {
     @State private var coverage: (analyzed: Int, total: Int) = (0, 0)
     @State private var documents: [SQLiteEmailStore.IssuedDocument] = []
     @State private var docSearch = ""
+    @State private var openRuns: [SQLiteEmailStore.StoredInstance] = []
+    @State private var personaTemplates: [WorkflowDefinition] = []
+    @State private var runnerDef: WorkflowDefinition? = nil
+    @State private var resumeWF: String? = nil
+    @State private var expandedDoc: String? = nil
+    @State private var docNotes: [SQLiteEmailStore.DocNote] = []
+    @State private var newNote = ""
+    @AppStorage("selectedPersona") private var personaRaw = "general"
     @State private var isLoading = true
     @AppStorage(DigestScheduler.enabledKey) private var digestEnabled = false
 
@@ -52,6 +60,8 @@ struct WorkCenterView: View {
             Divider()
 
             TabView {
+                workflowsTab
+                    .tabItem { Label("Workflows", systemImage: "flowchart") }
                 myWorkTab
                     .tabItem { Label("My Work", systemImage: "checklist") }
                 intakeTab
@@ -263,6 +273,75 @@ struct WorkCenterView: View {
         .padding(.vertical, 2)
     }
 
+    // MARK: Workflows
+
+    private var workflowsTab: some View {
+        List {
+            Section {
+                if personaTemplates.isEmpty {
+                    Text("No workflow templates for this persona.")
+                        .foregroundColor(AppColors.secondary)
+                }
+                ForEach(personaTemplates) { def in
+                    Button {
+                        resumeWF = nil
+                        runnerDef = def
+                    } label: {
+                        HStack {
+                            Image(systemName: "flowchart").foregroundColor(AppColors.primary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(def.name).font(Typography.callout).fontWeight(.semibold)
+                                Text(def.operations.map(\.title).joined(separator: " → "))
+                                    .font(Typography.caption2).foregroundColor(AppColors.secondary)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            Image(systemName: "play.circle").foregroundColor(AppColors.primary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Start a new run of this workflow — it gets its own WF number")
+                }
+            } header: {
+                Text("Start a workflow")
+            } footer: {
+                Text("A workflow is a saved recipe for a job. Running one creates a numbered record (WF-…) you confirm step by step; each step posts the document it produces.")
+                    .font(Typography.caption2)
+            }
+
+            Section("Resume open runs") {
+                if openRuns.isEmpty {
+                    Text("No runs in progress.").foregroundColor(AppColors.secondary)
+                }
+                ForEach(openRuns) { inst in
+                    Button {
+                        if let def = WorkflowCatalog.all.first(where: { $0.defID == inst.defID }) {
+                            resumeWF = inst.wfNumber
+                            runnerDef = def
+                        }
+                    } label: {
+                        HStack {
+                            Text(inst.wfNumber).font(Typography.monoSmall).fontWeight(.semibold)
+                            Text(inst.title).font(Typography.caption1).lineLimit(1)
+                            Spacer()
+                            Text(inst.status).font(Typography.caption2)
+                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(Color.blue.opacity(0.12)).clipShape(Capsule())
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Resume this run where you left off")
+                }
+            }
+        }
+        .sheet(item: $runnerDef) { def in
+            WorkflowRunnerView(definition: def, resumeWF: resumeWF,
+                               onClose: { runnerDef = nil; Task { await reload() } })
+        }
+    }
+
     // MARK: Documents
 
     private var documentsTab: some View {
@@ -322,9 +401,85 @@ struct WorkCenterView: View {
                         }
                     }
                     .help("Quote this number anywhere — the record behind it is always one lookup away")
+                    .contentShape(Rectangle())
+                    .onTapGesture { Task { await toggleDocDetail(doc.number) } }
+
+                    if expandedDoc == doc.number {
+                        documentDetail(doc)
+                    }
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func documentDetail(_ doc: SQLiteEmailStore.IssuedDocument) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.xSmall) {
+            if !doc.createdBy.isEmpty {
+                Text("By \(doc.createdBy)").font(Typography.caption2).foregroundColor(AppColors.secondary)
+            }
+            if let rev = doc.reversedBy {
+                Label("Reversed by \(rev)", systemImage: "arrow.uturn.backward")
+                    .font(Typography.caption2).foregroundColor(.orange)
+            }
+            if let orig = doc.reverses {
+                Label("Reverses \(orig)", systemImage: "arrow.uturn.backward")
+                    .font(Typography.caption2).foregroundColor(.orange)
+            }
+            if !docNotes.isEmpty {
+                ForEach(docNotes) { note in
+                    HStack(alignment: .top, spacing: 4) {
+                        Image(systemName: "note.text").font(.caption2).foregroundColor(AppColors.secondary)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(note.note).font(Typography.caption2)
+                            Text("\(note.createdBy.isEmpty ? "" : note.createdBy + " · ")\(note.createdAt.formatted(date: .abbreviated, time: .shortened))")
+                                .font(Typography.caption2).foregroundColor(AppColors.secondary)
+                        }
+                    }
+                }
+            }
+            HStack(spacing: Spacing.xSmall) {
+                TextField("Add a note…", text: $newNote)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { Task { await addNote(doc.number) } }
+                Button("Add") { Task { await addNote(doc.number) } }
+                    .controlSize(.small).disabled(newNote.trimmingCharacters(in: .whitespaces).isEmpty)
+                if doc.reversedBy == nil && doc.reverses == nil {
+                    Button("Reverse") { Task { await reverse(doc) } }
+                        .controlSize(.small).tint(.orange)
+                        .help("Post a reversal (storno) — the correction model; the record is never edited in place")
+                }
+            }
+        }
+        .padding(.leading, 26)
+        .padding(.vertical, 2)
+    }
+
+    @MainActor
+    private func toggleDocDetail(_ number: String) async {
+        if expandedDoc == number { expandedDoc = nil; return }
+        expandedDoc = number
+        docNotes = (try? await SQLiteEmailStore.shared.documentNotes(number)) ?? []
+        newNote = ""
+    }
+
+    @MainActor
+    private func addNote(_ number: String) async {
+        let text = newNote.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { return }
+        try? await SQLiteEmailStore.shared.addDocumentNote(number, note: text,
+            createdBy: ForensicManager.shared.examinerName)
+        newNote = ""
+        docNotes = (try? await SQLiteEmailStore.shared.documentNotes(number)) ?? []
+    }
+
+    @MainActor
+    private func reverse(_ doc: SQLiteEmailStore.IssuedDocument) async {
+        _ = try? await SQLiteEmailStore.shared.reverseDocument(
+            doc.number, type: doc.type, reason: "corrected by examiner",
+            createdBy: ForensicManager.shared.examinerName)
+        ForensicManager.shared.logAction("Document reversed: \(doc.number)", detail: doc.summary)
+        await reloadDocuments()
     }
 
     @MainActor
@@ -346,6 +501,11 @@ struct WorkCenterView: View {
         intakeRows = (try? await store.intakeRegister()) ?? []
         migratedCount = (try? await store.migratedRowCount()) ?? 0
         await reloadDocuments()
+        await WorkflowService.seedBuiltins()
+        personaTemplates = WorkflowCatalog.templates(for: personaRaw)
+        if personaTemplates.isEmpty { personaTemplates = WorkflowCatalog.all }
+        openRuns = ((try? await store.instances(status: "open")) ?? [])
+            + ((try? await store.instances(status: "released")) ?? [])
 
         var inputs = WorkCenterModel.Inputs()
         inputs.triagePending = (try? await ArchiveDataService.shared.count(
