@@ -372,7 +372,7 @@ struct WorkCenterView: View {
             HStack(spacing: Spacing.xxSmall) {
                 Image(systemName: "magnifyingglass")
                     .foregroundColor(AppColors.secondary)
-                TextField("Look up a document number or summary — e.g. IMP-2026 or 'blocklist'", text: $docSearch)
+                TextField("Search by number, client/matter, job comment, or any entered value — e.g. WF-2026 or a case name", text: $docSearch)
                     .textFieldStyle(.plain)
                     .onChange(of: docSearch) { _, _ in
                         Task { await reloadDocuments() }

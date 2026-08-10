@@ -1427,6 +1427,35 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(legalVariants.isEmpty)
     }
 
+    /// On completion the run's document is enriched so it's findable later
+    /// by client/matter, job comment, and inner field data — not just number.
+    func testCompletedWorkflow_searchableByClientAndInnerData() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-wfsearch-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root)
+        let wf = try await store.createInstance(defID: "builtin.legal.production",
+                                                title: "Acme v. Roe", createdBy: "Reviewer B")
+        // Simulate the runner folding client + inner data into search text.
+        try await store.updateDocumentSearchText(
+            wf,
+            summary: "Workflow: Production Run · Client: Acme v. Roe · Matter name: Acme v. Roe · Privilege basis: Work Product · Note: withheld 12 memos",
+            refs: "Acme v. Roe")
+
+        // Findable by client/matter…
+        let byClient = try await store.lookupDocuments(matching: "Acme v. Roe")
+        XCTAssertTrue(byClient.contains { $0.number == wf })
+        // …by inner field value…
+        let byValue = try await store.lookupDocuments(matching: "Work Product")
+        XCTAssertTrue(byValue.contains { $0.number == wf })
+        // …by job comment…
+        let byNote = try await store.lookupDocuments(matching: "withheld 12 memos")
+        XCTAssertTrue(byNote.contains { $0.number == wf })
+        // …and still by number.
+        let byNumber = try await store.lookupDocuments(matching: wf)
+        XCTAssertEqual(byNumber.map(\.number), [wf])
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default

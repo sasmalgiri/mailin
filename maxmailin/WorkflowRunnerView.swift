@@ -39,6 +39,8 @@ struct WorkflowRunnerView: View {
     @State private var derivedKeys: Set<String> = []
     @State private var showSaveVariant = false
     @State private var variantName = ""
+    @State private var completedNumber: String? = nil
+    @State private var clientName = ""
     @State private var isLoading = true
 
     var body: some View {
@@ -88,6 +90,7 @@ struct WorkflowRunnerView: View {
     }
 
     private var header: some View {
+      VStack(alignment: .leading, spacing: Spacing.xSmall) {
         HStack {
             VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
                 Label(definition.name, systemImage: "flowchart")
@@ -103,6 +106,14 @@ struct WorkflowRunnerView: View {
                         .padding(.horizontal, 6).padding(.vertical, 2)
                         .background((status == "confirmed" ? Color.green : status == "released" ? Color.blue : Color.gray).opacity(0.15))
                         .clipShape(Capsule())
+                }
+                HStack(spacing: Spacing.xxSmall) {
+                    Text("Client / matter").font(Typography.caption2).foregroundColor(AppColors.secondary)
+                    TextField("name this job so you can find it later", text: $clientName)
+                        .textFieldStyle(.roundedBorder)
+                        .font(Typography.caption1)
+                        .frame(maxWidth: 320)
+                        .onSubmit { Task { await persistTitle() } }
                 }
             }
             Spacer()
@@ -126,7 +137,26 @@ struct WorkflowRunnerView: View {
             }
             .buttonStyle(.plain).help("Close").accessibilityLabel("Close workflow")
         }
-        .padding(Spacing.medium)
+        if let done = completedNumber {
+            HStack(spacing: Spacing.xSmall) {
+                Image(systemName: "checkmark.seal.fill").foregroundColor(.green)
+                Text("Executed — document ")
+                    .font(Typography.callout) +
+                Text(done).font(Typography.monoBody).fontWeight(.bold)
+                Text("saved. Find it later in Work Center ▸ Documents by this number, the client/matter, the date, or any value you entered.")
+                    .font(Typography.caption2).foregroundColor(AppColors.secondary)
+                Spacer()
+                Button { PlatformClipboard.copyString(done) } label: {
+                    Image(systemName: "doc.on.doc")
+                }
+                .buttonStyle(.plain).help("Copy the document number")
+            }
+            .padding(Spacing.xSmall)
+            .background(Color.green.opacity(0.1))
+            .cornerRadius(CornerRadius.small)
+        }
+      }
+      .padding(Spacing.medium)
     }
 
     private func lockedReasons(_ op: WorkflowOperation) -> [String] {
@@ -293,6 +323,8 @@ struct WorkflowRunnerView: View {
         await WorkflowService.seedBuiltins()
         if let resume = resumeWF, let inst = try? await SQLiteEmailStore.shared.instance(wf: resume) {
             wfNumber = inst.wfNumber; title = inst.title; status = inst.status
+            if inst.title != definition.name { clientName = inst.title }
+            if inst.status == "confirmed" { completedNumber = inst.wfNumber }
         } else {
             title = definition.name
             wfNumber = await WorkflowService.start(definition, title: title) ?? ""
@@ -357,6 +389,8 @@ struct WorkflowRunnerView: View {
         activeOp = nil
         resultText = ""; noteText = ""; fieldValues = [:]; validationError = nil; derivedKeys = []
         await refreshConfirmations()
+        await refreshSearchText()
+        if status == "confirmed" { completedNumber = wfNumber }
         // Auto-advance: jump straight to the next step that's now unlocked and
         // not yet confirmed — no hunting for "what's next".
         if let next = definition.operations.first(where: {
@@ -364,6 +398,39 @@ struct WorkflowRunnerView: View {
         }) {
             openStep(next)
         }
+    }
+
+    @MainActor
+    private func persistTitle() async {
+        guard !wfNumber.isEmpty else { return }
+        let t = clientName.trimmingCharacters(in: .whitespaces)
+        title = t.isEmpty ? definition.name : t
+        // Fold into the document's searchable text immediately.
+        await refreshSearchText()
+    }
+
+    /// Build one searchable blob = client/matter + every entered value +
+    /// confirmation notes, and write it into the WF document's summary/refs
+    /// so Documents-tab lookup finds the run by any of them.
+    @MainActor
+    private func refreshSearchText() async {
+        guard !wfNumber.isEmpty else { return }
+        var parts: [String] = ["Workflow: \(definition.name)"]
+        let client = clientName.trimmingCharacters(in: .whitespaces)
+        if !client.isEmpty { parts.append("Client: \(client)") }
+        for op in definition.operations {
+            for f in op.fields {
+                if let v = savedValues[op.seq]?[f.key], !v.isEmpty {
+                    parts.append("\(f.label): \(v)")
+                }
+            }
+            if let note = confirmations[op.seq]?.note, !note.isEmpty {
+                parts.append("Note: \(note)")
+            }
+        }
+        let summary = parts.joined(separator: " · ")
+        try? await SQLiteEmailStore.shared.updateDocumentSearchText(
+            wfNumber, summary: summary, refs: client.isEmpty ? definition.defID : client)
     }
 
     @MainActor

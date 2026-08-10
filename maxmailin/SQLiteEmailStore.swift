@@ -1853,6 +1853,17 @@ actor SQLiteEmailStore: EmailArchiveStore {
                           refs: original, createdBy: createdBy, reverses: original, now: now)
     }
 
+    /// Enrich a document's searchable text — used when a workflow completes,
+    /// so it becomes findable by client/matter, job comment, and the inner
+    /// field data the user entered (Documents-tab lookup LIKE-matches both).
+    func updateDocumentSearchText(_ docNumber: String, summary: String, refs: String) throws {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "UPDATE documents SET summary = ?, refs = ? WHERE doc_number = ?;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, summary); bindText(stmt, 2, refs); bindText(stmt, 3, docNumber)
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+    }
+
     func addDocumentNote(_ docNumber: String, note: String, createdBy: String = "", now: Date = Date()) throws {
         let db = try ensureDB()
         let stmt = try prepare(db, "INSERT INTO doc_notes(doc_number, created_at, created_by, note) VALUES (?,?,?,?);")
