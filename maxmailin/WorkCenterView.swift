@@ -35,6 +35,8 @@ struct WorkCenterView: View {
     @State private var newNote = ""
     @AppStorage("selectedPersona") private var personaRaw = "general"
     @State private var isLoading = true
+    @State private var topSuggestion: NextBestAction.Suggestion? = nil
+    @State private var selectedTab = 0
     @AppStorage(DigestScheduler.enabledKey) private var digestEnabled = false
 
     var body: some View {
@@ -61,17 +63,24 @@ struct WorkCenterView: View {
             .padding(Spacing.medium)
             Divider()
 
-            TabView {
+            if let s = topSuggestion { suggestionBanner(s) }
+
+            TabView(selection: $selectedTab) {
                 workflowsTab
                     .tabItem { Label("Workflows", systemImage: "flowchart") }
+                    .tag(0)
                 myWorkTab
                     .tabItem { Label("My Work", systemImage: "checklist") }
+                    .tag(1)
                 intakeTab
                     .tabItem { Label("Intake Register", systemImage: "square.and.arrow.down.on.square") }
+                    .tag(2)
                 jobsTab
                     .tabItem { Label("Jobs", systemImage: "gearshape.arrow.triangle.2.circlepath") }
+                    .tag(3)
                 documentsTab
                     .tabItem { Label("Documents", systemImage: "number.square") }
+                    .tag(4)
             }
             .padding(.top, Spacing.xxSmall)
         }
@@ -80,6 +89,44 @@ struct WorkCenterView: View {
         .onReceive(NotificationCenter.default.publisher(for: .parsingFinished)) { _ in
             Task { await reload() }
         }
+    }
+
+    // MARK: Next best action (discoverability)
+
+    private func suggestionBanner(_ s: NextBestAction.Suggestion) -> some View {
+        HStack(alignment: .top, spacing: Spacing.small) {
+            Image(systemName: s.icon)
+                .foregroundColor(AppColors.primary)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: Spacing.xxSmall) {
+                    Text("Suggested next")
+                        .font(Typography.caption2).fontWeight(.semibold)
+                        .foregroundColor(AppColors.primary)
+                    Text("·").foregroundColor(AppColors.secondary)
+                    Text(s.title).font(Typography.callout).fontWeight(.semibold)
+                }
+                Text(s.rationale)
+                    .font(Typography.caption1).foregroundColor(AppColors.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Button(s.cta) {
+                if s.opensWorkflows {
+                    selectedTab = 0
+                } else if let hub = s.hub {
+                    onOpenDestination?(hub)
+                }
+            }
+            .controlSize(.small)
+            .buttonStyle(.borderedProminent)
+            .help("Do this next — it's one step away")
+        }
+        .padding(Spacing.small)
+        .background(AppColors.primary.opacity(0.07))
+        .cornerRadius(CornerRadius.small)
+        .padding(.horizontal, Spacing.medium)
+        .padding(.top, Spacing.xSmall)
     }
 
     // MARK: My Work
@@ -550,6 +597,23 @@ struct WorkCenterView: View {
         inputs.analysisTotal = coverage.total
         inputs.digestEnabled = digestEnabled
         items = WorkCenterModel.items(inputs)
+
+        // Next best action (discoverability): the single most valuable step
+        // the persona hasn't taken yet — kept one tap away.
+        let archiveTotal = (try? await ArchiveDataService.shared.count()) ?? 0
+        let personaDefIDs = Set(personaTemplates.map(\.defID))
+        let confirmedRuns = (try? await store.instances(status: "confirmed")) ?? []
+        let startedPersona = (openRuns + confirmedRuns).contains { personaDefIDs.contains($0.defID) }
+        let dupeCount = ((try? await store.exactMessageIDDuplicateIDs())?.count) ?? 0
+        var nba = NextBestAction.State()
+        nba.persona = personaRaw
+        nba.archiveEmpty = archiveTotal == 0
+        nba.startedPersonaWorkflow = startedPersona
+        nba.watchFolderOff = !watchManager.isWatching
+        nba.privilegeGaps = inputs.privilegeGaps
+        nba.duplicateCount = dupeCount
+        topSuggestion = NextBestAction.suggestions(nba).first
+
         isLoading = false
     }
 }

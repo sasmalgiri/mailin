@@ -1518,6 +1518,48 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(restored[1]?["subject"], "Overdue")
     }
 
+    /// Phase E — discoverability. An empty archive always yields exactly one
+    /// suggestion: import first. Nothing else is offered until there's data.
+    func testNextBestAction_emptyArchiveSuggestsImportOnly() {
+        var s = NextBestAction.State()
+        s.persona = "forensic"; s.archiveEmpty = true
+        let out = NextBestAction.suggestions(s)
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out.first?.hub, .emailInbox)
+        XCTAssertTrue(out.first?.title.contains("Import") == true)
+    }
+
+    /// With data but no workflow started, the top suggestion steers to the
+    /// guided Workflows tab (not a raw tool) — the governance layer is the
+    /// thing users most miss.
+    func testNextBestAction_prioritizesGuidedWorkflow() {
+        var s = NextBestAction.State()
+        s.persona = "legal"; s.archiveEmpty = false; s.startedPersonaWorkflow = false
+        let out = NextBestAction.suggestions(s)
+        XCTAssertEqual(out.first?.opensWorkflows, true, "guided workflow wins over tool discovery")
+        XCTAssertNil(out.first?.hub)
+        XCTAssertTrue(out.first?.rationale.contains("EDRM") == true, "carries the legal framework rationale")
+    }
+
+    /// Once the workflow is under way, the persona-specific capability they're
+    /// likely missing surfaces — and it differs per persona.
+    func testNextBestAction_personaSpecificDiscovery() {
+        func top(_ persona: String, _ mutate: (inout NextBestAction.State) -> Void = { _ in }) -> NextBestAction.Suggestion? {
+            var s = NextBestAction.State()
+            s.persona = persona; s.archiveEmpty = false; s.startedPersonaWorkflow = true
+            mutate(&s)
+            return NextBestAction.suggestions(s).first
+        }
+        XCTAssertEqual(top("forensic")?.hub, .chainOfCustody)
+        XCTAssertEqual(top("journalist")?.hub, .storyFile)
+        XCTAssertEqual(top("it_admin") { $0.watchFolderOff = true }?.hub, .phishingTriage)
+        XCTAssertEqual(top("legal") { $0.privilegeGaps = 0 }?.hub, .reviewDashboard)
+        XCTAssertEqual(top("personal") { $0.duplicateCount = 5 }?.hub, .duplicateManager)
+        // No noise when there's nothing persona-specific left to surface.
+        XCTAssertNil(top("it_admin") { $0.watchFolderOff = false })
+        XCTAssertNil(top("personal") { $0.duplicateCount = 0 })
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default
