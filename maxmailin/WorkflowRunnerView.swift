@@ -99,8 +99,16 @@ struct WorkflowRunnerView: View {
         .padding(Spacing.medium)
     }
 
+    private func lockedReasons(_ op: WorkflowOperation) -> [String] {
+        let state = GatePolicy.RunState(
+            confirmed: Set(confirmations.keys),
+            fieldValues: savedValues)
+        return GatePolicy.lockedReasons(op, state: state)
+    }
+
     private func operationRow(_ op: WorkflowOperation) -> some View {
         let conf = confirmations[op.seq]
+        let locks = conf == nil ? lockedReasons(op) : []   // confirmed steps show no lock
         return HStack(alignment: .top, spacing: Spacing.small) {
             Image(systemName: conf != nil ? "checkmark.circle.fill" : "circle")
                 .foregroundColor(conf != nil ? .green : AppColors.secondary)
@@ -121,6 +129,10 @@ struct WorkflowRunnerView: View {
                     }
                     .font(Typography.caption2).foregroundColor(AppColors.secondary)
                 }
+                if let lock = locks.first {
+                    Label(lock, systemImage: "lock.fill")
+                        .font(Typography.caption2).foregroundColor(.orange)
+                }
             }
             Spacer()
             if let dest = op.launches {
@@ -128,7 +140,9 @@ struct WorkflowRunnerView: View {
                     onOpenDestination?(dest)
                 } label: { Label("Open", systemImage: "arrow.up.forward.app") }
                 .controlSize(.small)
-                .help("Open the tool this step is done in — do the work, then come back and Confirm")
+                .disabled(!locks.isEmpty)
+                .help(locks.isEmpty ? "Open the tool this step is done in — do the work, then come back and Confirm"
+                                    : "Locked — \(locks.first ?? "")")
             }
             Button(conf != nil ? "Reconfirm" : "Confirm") {
                 resultText = conf?.result ?? ""
@@ -137,6 +151,7 @@ struct WorkflowRunnerView: View {
                 validationError = nil
                 activeOp = op
             }
+            .disabled(!locks.isEmpty)
             .controlSize(.small)
             .disabled(wfNumber.isEmpty)
             .help(op.postsDocType != nil

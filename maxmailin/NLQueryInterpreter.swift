@@ -117,7 +117,8 @@ enum NLQueryInterpreter {
                                              "nil", "empty", "unknown", "*", "any", "all",
                                              // Filler the model sometimes echoes as a value:
                                              "from", "to", "by", "sender", "recipient",
-                                             "someone", "anyone", "me", "user", "email", "emails"]
+                                             "someone", "anyone", "me", "user", "email", "emails",
+                                             "no-one", "no one", "noone", "nobody", "not specified", "unspecified"]
             return placeholders.contains(t.lowercased()) ? "" : t
         }
         var intent = raw

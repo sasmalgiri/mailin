@@ -121,7 +121,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// store fully at the previous version — never half-migrated, and a user
     /// DB is NEVER silently recreated. A store newer than this build refuses
     /// to open instead of guessing.
-    static let currentSchemaVersion = 9
+    static let currentSchemaVersion = 10
 
     private func migrateSchema(_ handle: OpaquePointer) throws {
         var v = try scalarInt(handle, "PRAGMA user_version;")
@@ -317,6 +317,25 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 try exec(handle, "PRAGMA user_version = 9;")
             }
             v = 9
+        }
+        if v == 9 {
+            try inExclusiveTransaction(handle) {
+                // v10: workflow status history — every status transition of an
+                // instance (open→released→confirmed), who/when, for the
+                // governed state machine and its audit.
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS workflow_status_history(
+                        wf_number  TEXT NOT NULL,
+                        changed_at INTEGER NOT NULL,
+                        changed_by TEXT NOT NULL DEFAULT '',
+                        from_status TEXT NOT NULL DEFAULT '',
+                        to_status  TEXT NOT NULL
+                    );
+                """)
+                try exec(handle, "CREATE INDEX IF NOT EXISTS idx_wf_status_hist ON workflow_status_history(wf_number, changed_at);")
+                try exec(handle, "PRAGMA user_version = 10;")
+            }
+            v = 10
         }
     }
 
@@ -1574,7 +1593,18 @@ actor SQLiteEmailStore: EmailArchiveStore {
         guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
         let done = try scalarInt(db, "SELECT COUNT(*) FROM workflow_confirmations WHERE wf_number = '\(wf)';")
         let newStatus = done >= totalOps ? "confirmed" : "released"
+        let prior = columnScalarText(db, "SELECT status FROM workflow_instances WHERE wf_number = '\(wf)';") ?? ""
         try exec(db, "UPDATE workflow_instances SET status = '\(newStatus)', updated_at = \(Int64(now.timeIntervalSince1970)) WHERE wf_number = '\(wf)';")
+        if prior != newStatus {
+            let hist = try prepare(db, """
+                INSERT INTO workflow_status_history(wf_number, changed_at, changed_by, from_status, to_status)
+                VALUES (?,?,?,?,?);
+            """)
+            defer { sqlite3_finalize(hist) }
+            bindText(hist, 1, wf); sqlite3_bind_int64(hist, 2, Int64(now.timeIntervalSince1970))
+            bindText(hist, 3, confirmedBy); bindText(hist, 4, prior); bindText(hist, 5, newStatus)
+            _ = sqlite3_step(hist)
+        }
     }
 
     func instances(status: String? = nil, limit: Int = 200) throws -> [StoredInstance] {
@@ -1631,6 +1661,13 @@ actor SQLiteEmailStore: EmailArchiveStore {
             out[seq, default: [:]][columnText(stmt, 1)] = columnText(stmt, 2)
         }
         return out
+    }
+
+    private func columnScalarText(_ db: OpaquePointer, _ sql: String) -> String? {
+        guard let stmt = try? prepare(db, sql) else { return nil }
+        defer { sqlite3_finalize(stmt) }
+        guard (try? stepRow(stmt, db)) == true else { return nil }
+        return sqlite3_column_type(stmt, 0) == SQLITE_NULL ? nil : columnText(stmt, 0)
     }
 
     func confirmations(wf: String) throws -> [StoredConfirmation] {

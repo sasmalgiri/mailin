@@ -1327,6 +1327,40 @@ final class V2CutoverTests: XCTestCase {
         _ = root
     }
 
+    /// Status gates: the documented defensibility holes are structurally
+    /// impossible — Legal can't Produce before the privilege log is complete,
+    /// IT can't Close without a verdict, Forensic can't Report before the
+    /// acquisition method (hash custody) is recorded.
+    func testWorkflowGates_blockUnsafeTransitions() {
+        // Legal Produce (seq 5) gated on privilege log complete = Yes (seq 3).
+        let produce = WorkflowCatalog.legal.operations.first { $0.key == "produce" }!
+        let notReady = GatePolicy.RunState(
+            confirmed: [1, 2, 3, 4],
+            fieldValues: [3: ["logComplete": ""]])
+        let blocked = GatePolicy.lockedReasons(produce, state: notReady)
+        XCTAssertTrue(blocked.contains { $0.contains("privilege log") },
+                      "Produce must be locked until the privilege log is complete")
+        let ready = GatePolicy.RunState(
+            confirmed: [1, 2, 3, 4],
+            fieldValues: [3: ["logComplete": "Yes"]])
+        XCTAssertTrue(GatePolicy.lockedReasons(produce, state: ready).isEmpty,
+                      "with the log complete, Produce opens")
+
+        // IT Close (seq 5) gated on a verdict (disposition present, seq 3).
+        let close = WorkflowCatalog.itAdmin.operations.first { $0.key == "close" }!
+        XCTAssertFalse(GatePolicy.lockedReasons(close,
+            state: .init(confirmed: [1,2,3,4], fieldValues: [3: ["disposition": ""]])).isEmpty)
+        XCTAssertTrue(GatePolicy.lockedReasons(close,
+            state: .init(confirmed: [1,2,3,4], fieldValues: [3: ["disposition": "Confirmed phishing"]])).isEmpty)
+
+        // Forensic Report (seq 5) needs the acquisition method recorded (seq 2).
+        let report = WorkflowCatalog.forensic.operations.first { $0.key == "report" }!
+        XCTAssertFalse(GatePolicy.lockedReasons(report,
+            state: .init(confirmed: [1,2,3,4], fieldValues: [2: [:]])).isEmpty)
+        XCTAssertTrue(GatePolicy.lockedReasons(report,
+            state: .init(confirmed: [1,2,3,4], fieldValues: [2: ["method": "Write-blocked image"]])).isEmpty)
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default

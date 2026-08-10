@@ -42,6 +42,52 @@ struct WorkflowOperation: Identifiable, Equatable, Sendable {
     /// The data the user records at this step — saved into the completion
     /// document so the whole run is reusable later.
     var fields: [WorkflowField] = []
+    /// Preconditions that must hold before this step may be confirmed — the
+    /// SAP status-gate. Empty = always available.
+    var gates: [WorkflowGate] = []
+}
+
+/// A precondition on an operation. Governs whether the step can run, so the
+/// documented defensibility holes (produce-before-privilege, close-without-
+/// verdict, report-before-hash) become structurally impossible.
+struct WorkflowGate: Equatable, Sendable {
+    enum Rule: Equatable, Sendable {
+        /// The operation at this seq must be confirmed first.
+        case operationConfirmed(seq: Int)
+        /// A field on a specific operation must be non-empty.
+        case fieldPresent(seq: Int, key: String)
+        /// A field on a specific operation must equal a value (e.g. "Yes").
+        case fieldEquals(seq: Int, key: String, value: String)
+    }
+    let rule: Rule
+    /// Plain-language reason shown when the gate is closed.
+    let reason: String
+}
+
+/// Pure gate evaluation — unit-tested, no store/UI.
+enum GatePolicy {
+    struct RunState {
+        /// seqs that are confirmed.
+        let confirmed: Set<Int>
+        /// seq -> [fieldKey: value] captured so far.
+        let fieldValues: [Int: [String: String]]
+    }
+
+    /// Returns the reasons this operation is currently locked (empty = open).
+    static func lockedReasons(_ op: WorkflowOperation, state: RunState) -> [String] {
+        op.gates.compactMap { gate in
+            let satisfied: Bool
+            switch gate.rule {
+            case .operationConfirmed(let seq):
+                satisfied = state.confirmed.contains(seq)
+            case .fieldPresent(let seq, let key):
+                satisfied = !((state.fieldValues[seq]?[key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            case .fieldEquals(let seq, let key, let value):
+                satisfied = (state.fieldValues[seq]?[key] ?? "") == value
+            }
+            return satisfied ? nil : gate.reason
+        }
+    }
 }
 
 /// Pure validation — required fields must be non-empty. Returns the missing
@@ -69,9 +115,14 @@ enum WorkflowCatalog {
 
     static func op(_ seq: Int, _ key: String, _ title: String, _ hint: String,
                    _ doc: DocumentType? = nil, launches: HubDestination? = nil,
-                   _ fields: [WorkflowField] = []) -> WorkflowOperation {
+                   _ fields: [WorkflowField] = [], gates: [WorkflowGate] = []) -> WorkflowOperation {
         WorkflowOperation(seq: seq, key: key, title: title, hint: hint,
-                          postsDocType: doc, launches: launches, fields: fields)
+                          postsDocType: doc, launches: launches, fields: fields, gates: gates)
+    }
+    /// The default sequential gate: each step waits on the one before it.
+    static func afterPrevious(_ seq: Int) -> [WorkflowGate] {
+        seq <= 1 ? [] : [WorkflowGate(rule: .operationConfirmed(seq: seq - 1),
+                                      reason: "Finish step \(seq - 1) first.")]
     }
     static func f(_ key: String, _ label: String, _ kind: WorkflowField.Kind, _ help: String,
                   placeholder: String = "", required: Bool = false, options: [String] = []) -> WorkflowField {
@@ -103,6 +154,10 @@ enum WorkflowCatalog {
             ]),
             op(5, "report", "Document & Report", "Generate the daily activity report for the case file. Posts a Report document.", .report, launches: .investigationReport, [
                 f("findings", "Findings summary", .longText, "The conclusions this run supports — written for the case file.", required: true),
+            ], gates: [
+                WorkflowGate(rule: .operationConfirmed(seq: 4), reason: "Finish Analyze first."),
+                WorkflowGate(rule: .fieldPresent(seq: 2, key: "method"),
+                             reason: "Record the acquisition method in Preserve & Hash — a report can't rest on unverified custody."),
             ]),
         ])
 
@@ -133,6 +188,10 @@ enum WorkflowCatalog {
             op(5, "produce", "Produce", "Export the set and copy the defensibility summary. Posts Export + Report.", .export, launches: .eDiscovery, [
                 f("productionName", "Production set name", .text, "Label for this production volume.", placeholder: "PROD001", required: true),
                 f("format", "Production format", .choice, "How the set is produced.", options: ["Native", "PDF (Bates-stamped)", "Load file (DAT/Opticon)"]),
+            ], gates: [
+                WorkflowGate(rule: .operationConfirmed(seq: 4), reason: "Finish Bates & Redact first."),
+                WorkflowGate(rule: .fieldEquals(seq: 3, key: "logComplete", value: "Yes"),
+                             reason: "Complete the privilege log first — producing before every privileged doc is annotated is the gap opposing counsel finds."),
             ]),
         ])
 
@@ -160,6 +219,9 @@ enum WorkflowCatalog {
             ]),
             op(5, "close", "Close", "Incident note and metrics.", nil, [
                 f("rootCause", "Root cause / lessons", .longText, "What let it through and what to improve."),
+            ], gates: [
+                WorkflowGate(rule: .fieldPresent(seq: 3, key: "disposition"),
+                             reason: "Set a verdict first — an incident can't be closed without a disposition on record."),
             ]),
         ])
 
