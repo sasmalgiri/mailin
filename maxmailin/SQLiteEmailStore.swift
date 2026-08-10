@@ -1317,6 +1317,53 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     /// §4/§4.1: the nullable dedup key. NULL never collides (SQLite partial
     /// unique index), so `.preserveAll` stores everything.
+    /// One row per source that ever entered this archive — the MB51-style
+    /// movement register: what arrived, when, how many rows it holds now,
+    /// and how many duplicates the policy skipped.
+    struct IntakeRow: Sendable, Identifiable {
+        var id: Int64 { sourceID }
+        let sourceID: Int64
+        let filename: String
+        let sha256: String
+        let kind: String
+        let importedAt: Date
+        let byteSize: Int
+        let storedCount: Int
+        let duplicateCount: Int
+    }
+
+    func intakeRegister() throws -> [IntakeRow] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT s.source_id, s.filename, s.sha256, s.source_kind,
+                   s.imported_at, s.byte_size,
+                   (SELECT COUNT(*) FROM emails e WHERE e.source_id = s.source_id),
+                   (SELECT COUNT(*) FROM duplicates d WHERE d.source_hash = s.sha256)
+            FROM sources s ORDER BY s.imported_at DESC;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        var out: [IntakeRow] = []
+        while try stepRow(stmt, db) {
+            out.append(IntakeRow(
+                sourceID: sqlite3_column_int64(stmt, 0),
+                filename: columnText(stmt, 1),
+                sha256: columnText(stmt, 2),
+                kind: columnText(stmt, 3),
+                importedAt: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 4))),
+                byteSize: Int(sqlite3_column_int64(stmt, 5)),
+                storedCount: Int(sqlite3_column_int64(stmt, 6)),
+                duplicateCount: Int(sqlite3_column_int64(stmt, 7))))
+        }
+        return out
+    }
+
+    /// Rows without source identity (v1 migration) — the register's
+    /// synthetic "Migration" movement.
+    func migratedRowCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM emails WHERE source_id IS NULL;")
+    }
+
     /// Where one email came from and when it arrived — the root of its
     /// document-flow history.
     struct EmailProvenance: Sendable {

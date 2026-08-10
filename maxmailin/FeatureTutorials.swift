@@ -1202,5 +1202,30 @@ extension FeatureTutorial {
             TutorialTip(icon: "building.columns", text: "In court terms: this is your contemporaneous record. Green badge + export = the defensibility exhibit.")
         ]
     )
+
+    static let workCenter = FeatureTutorial(
+        title: "Work Center",
+        icon: "tray.full.fill",
+        overview: "The daily front door, borrowed from how big ERP systems run a workday: your work finds you. Three tabs — MY WORK lists everything waiting on you, most urgent first; INTAKE REGISTER is the archive's movement log (every file that ever entered, with counts and fingerprints); JOBS shows the background workers with a Run Now button.",
+        quickStart: "Open Work Center first thing. Red items are defensibility holes (fix today); blue items are work queues; gray items are background state. Click any item to jump to its tool. Check the Intake Register when anyone asks what entered the archive; check Jobs if analysis seems incomplete.",
+        steps: [
+            TutorialStep(title: "Work the List", icon: "checklist", color: .blue,
+                what: "Prioritized, clickable, honest.",
+                how: "Privilege-log gaps come first (red), then triage verdicts and review batches (blue), then background notes (gray). Each item jumps to its tool. 'All clear' means exactly that.",
+                tip: "Make it the first click of the day — if it's green, you choose your work; if not, it chose for you."),
+            TutorialStep(title: "Read the Intake Register", icon: "square.and.arrow.down.on.square", color: .purple,
+                what: "Every movement into the archive.",
+                how: "One row per source file, newest first: kind, when, how many emails it holds now, how many duplicates were skipped, size, and the file's SHA-256 fingerprint. Migrated v1 rows appear as their own line, honestly marked as pre-register.",
+                tip: "The fingerprint is the provenance answer: anyone holding the original file can verify it matches."),
+            TutorialStep(title: "Mind the Jobs", icon: "gearshape.arrow.triangle.2.circlepath", color: .orange,
+                what: "The invisible workers, visible.",
+                how: "AI analysis (with live progress and Run Now), the watch folder, and the weekly digest — each with its current status and what it powers.",
+                tip: "If AI chips look sparse, this tab tells you why: analysis still running, or AI features disabled.")
+        ],
+        tips: [
+            TutorialTip(icon: "person", text: "This is YOUR work on THIS Mac — single-user by design until review sharing matures."),
+            TutorialTip(icon: "checkmark.shield", text: "Everything here is assembled from records the app already keeps; nothing new is collected and nothing leaves the machine.")
+        ]
+    )
 }
 // swiftlint:enable type_body_length file_length

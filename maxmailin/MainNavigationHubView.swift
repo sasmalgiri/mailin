@@ -6,7 +6,7 @@ enum HubDestination: String, Hashable {
     case emailInbox
     case eDiscovery, predictiveCoding, gdprCompliance
     case anomalyDetection, iocExtractor, smartAlerts, keywordMonitor, nearDuplicates, chainOfCustody
-    case phishingTriage, reviewDashboard, storyFile
+    case phishingTriage, reviewDashboard, storyFile, workCenter
     case emailAnalytics, topicClusters, timeline, communicationPatterns, relationshipGraph
     case duplicateManager, threadSummarizer, attachmentGallery, executiveDashboard
     case reportBuilder, batchOperations, archiveComparison, forensicReview
@@ -157,6 +157,11 @@ struct MainNavigationHubView: View {
     }
 
     private var personaCoreFeatureTiles: [(HubDestination, String, String, String, Color)] {
+        // The Work Center leads every persona's grid — your work finds you.
+        [(.workCenter, "Work Center", "What's waiting on you", "tray.full.fill", .blue)] + personaSpecificTiles
+    }
+
+    private var personaSpecificTiles: [(HubDestination, String, String, String, Color)] {
         switch persona {
         case .forensic:
             return [

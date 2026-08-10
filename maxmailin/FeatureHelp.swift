@@ -33,6 +33,7 @@ extension HubDestination {
         case .phishingTriage:       return "Verdict queue for user-reported suspicious emails — auto-scored, one-click verdicts, IOC blocklist export."
         case .reviewDashboard:      return "Review progress, pace, and privilege-log completeness — the defensibility numbers."
         case .storyFile:            return "Your annotations as a cited findings document — the answer to 'how do you know this?'"
+        case .workCenter:           return "Your work, the archive's intake register, and background jobs — the daily front door."
         case .smartAlerts:          return "Get notified when specific email patterns appear."
         case .keywordMonitor:       return "Watch for emails containing key terms."
         case .nearDuplicates:       return "Find emails that are almost identical."

@@ -741,6 +741,8 @@ struct ContentView: View {
             if storeManager.requireProfessional() { sidebarSelection = destination }
         case .storyFile:
             if storeManager.requirePremium() { sidebarSelection = destination }
+        case .workCenter:
+            sidebarSelection = destination
         case .anomalyDetection, .smartAlerts, .keywordMonitor, .nearDuplicates,
              .emailAnalytics, .topicClusters, .timeline, .communicationPatterns,
              .relationshipGraph, .duplicateManager, .threadSummarizer,
@@ -804,6 +806,11 @@ struct ContentView: View {
         case .storyFile:
             StoryFileView()
                 .navigationTitle("Story File")
+        case .workCenter:
+            WorkCenterView(onOpenDestination: { destination in
+                handleHubNavigation(destination)
+            })
+                .navigationTitle("Work Center")
         case .reviewDashboard:
             ReviewDashboardView()
                 .navigationTitle("Review Dashboard")

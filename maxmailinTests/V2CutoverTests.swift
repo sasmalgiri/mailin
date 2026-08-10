@@ -1060,6 +1060,36 @@ final class V2CutoverTests: XCTestCase {
                       "chip + search + scope combine")
     }
 
+    /// Work Center: privilege gaps outrank queues, queues outrank info,
+    /// never-configured watch folder stays silent, complete analysis stays
+    /// silent, and a clear desk produces an empty list.
+    func testWorkCenterModel_prioritiesAndHonesty() {
+        var inputs = WorkCenterModel.Inputs()
+        inputs.privilegeGaps = 2
+        inputs.triagePending = 7
+        inputs.reviewPending = 40
+        inputs.batchCount = 2
+        inputs.watchFolderActive = false
+        inputs.analysisAnalyzed = 80
+        inputs.analysisTotal = 100
+
+        let items = WorkCenterModel.items(inputs)
+        XCTAssertEqual(items.first?.severity, .critical, "privilege gaps lead")
+        XCTAssertTrue(items[0].title.contains("2 privileged"))
+        let severities = items.map(\.severity)
+        XCTAssertEqual(severities, severities.sorted(), "critical → action → info")
+        XCTAssertTrue(items.contains { $0.title.contains("7 emails awaiting triage") })
+        XCTAssertTrue(items.contains { $0.title.contains("Watch folder is off") })
+        XCTAssertTrue(items.contains { $0.title.contains("AI analysis 80%") })
+
+        // Never-configured watch folder and finished analysis are silent.
+        var quiet = WorkCenterModel.Inputs()
+        quiet.watchFolderActive = nil
+        quiet.analysisAnalyzed = 50
+        quiet.analysisTotal = 50
+        XCTAssertTrue(WorkCenterModel.items(quiet).isEmpty, "a clear desk shows nothing")
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default
