@@ -41,6 +41,8 @@ struct WorkflowRunnerView: View {
     @State private var variantName = ""
     @State private var completedNumber: String? = nil
     @State private var clientName = ""
+    @State private var showSummary = false
+    @State private var draftSaved = false
     @State private var isLoading = true
 
     var body: some View {
@@ -68,6 +70,9 @@ struct WorkflowRunnerView: View {
         .task { await bootstrap() }
         .sheet(item: $activeOp) { op in
             confirmSheet(op)
+        }
+        .sheet(isPresented: $showSummary) {
+            summarySheet
         }
         .alert("Save as Variant", isPresented: $showSaveVariant) {
             TextField("Variant name", text: $variantName)
@@ -124,6 +129,11 @@ struct WorkflowRunnerView: View {
             } label: { Label("Save as Variant", systemImage: "square.and.arrow.down.on.square") }
             .disabled(wfNumber.isEmpty)
             .help("Save this run's entries as a reusable variant — next time, start a run pre-filled in one click")
+            Button {
+                showSummary = true
+            } label: { Label("Summary", systemImage: "doc.richtext") }
+            .disabled(wfNumber.isEmpty)
+            .help("A clean, plain-language summary you can hand to a non-technical reader — counsel, a manager, a prosecutor. Copy or print it.")
             Button {
                 PlatformClipboard.copyString(renderReport())
             } label: { Label("Copy Report", systemImage: "doc.on.doc") }
@@ -217,6 +227,43 @@ struct WorkflowRunnerView: View {
         .padding(.vertical, 2)
     }
 
+    private var summarySheet: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Stakeholder summary").font(Typography.title3)
+                    Text("Plain-language, no jargon — for counsel, a manager, or a prosecutor.")
+                        .font(Typography.caption1).foregroundColor(AppColors.secondary)
+                }
+                Spacer()
+                if !wfNumber.isEmpty {
+                    Text(wfNumber).font(Typography.monoSmall).foregroundColor(AppColors.secondary)
+                }
+            }
+            .padding(Spacing.medium)
+            Divider()
+            ScrollView {
+                Text(renderSummary())
+                    .font(Typography.body)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(Spacing.medium)
+            }
+            Divider()
+            HStack {
+                Spacer()
+                Button("Copy") { PlatformClipboard.copyString(renderSummary()) }
+                #if os(macOS)
+                Button { printSummary() } label: { Label("Print", systemImage: "printer") }
+                    .buttonStyle(.borderedProminent)
+                #endif
+                Button("Done") { showSummary = false }
+            }
+            .padding(Spacing.medium)
+        }
+        .frame(minWidth: 520, minHeight: 480)
+    }
+
     private func confirmSheet(_ op: WorkflowOperation) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
@@ -263,6 +310,11 @@ struct WorkflowRunnerView: View {
                     } label: { Label("Open tool", systemImage: "arrow.up.forward.app") }
                     .help("Open the tool to do this step now")
                 }
+                if draftSaved {
+                    Label("Draft saved", systemImage: "checkmark.circle")
+                        .font(Typography.caption2).foregroundColor(.green)
+                        .transition(.opacity)
+                }
                 Spacer()
                 Button("Cancel") { activeOp = nil }
                 Button("Confirm & Save") { Task { await confirm(op) } }
@@ -271,6 +323,9 @@ struct WorkflowRunnerView: View {
             .padding(Spacing.medium)
         }
         .frame(minWidth: 460, minHeight: 380)
+        .onChange(of: fieldValues) {
+            Task { await autosaveDraft(op) }
+        }
     }
 
     @ViewBuilder
@@ -362,6 +417,7 @@ struct WorkflowRunnerView: View {
         resultText = confirmations[op.seq]?.result ?? ""
         noteText = confirmations[op.seq]?.note ?? ""
         validationError = nil
+        draftSaved = false
         activeOp = op
     }
 
@@ -398,6 +454,19 @@ struct WorkflowRunnerView: View {
         }) {
             openStep(next)
         }
+    }
+
+    /// Persist in-progress entries the moment they change — so closing the
+    /// window, or an interruption, never loses what was typed (the Relativity
+    /// "times out and loses your place in the queue" complaint). Reopening the
+    /// step restores the draft; refreshSearchText keeps it findable meanwhile.
+    @MainActor
+    private func autosaveDraft(_ op: WorkflowOperation) async {
+        guard !wfNumber.isEmpty, activeOp?.seq == op.seq else { return }
+        try? await SQLiteEmailStore.shared.saveFieldValues(wf: wfNumber, seq: op.seq, values: fieldValues)
+        savedValues[op.seq] = fieldValues
+        await refreshSearchText()
+        draftSaved = true
     }
 
     @MainActor
@@ -461,12 +530,27 @@ struct WorkflowRunnerView: View {
         ).rendered()
     }
 
+    private func renderSummary() -> String {
+        StakeholderSummary(
+            wfNumber: wfNumber, title: title, persona: definition.persona, status: status,
+            preparedBy: ForensicManager.shared.examinerName, preparedAt: Date(),
+            operations: definition.operations,
+            confirmations: Dictionary(uniqueKeysWithValues: confirmations.map {
+                ($0.key, ($0.value.confirmedAt, $0.value.confirmedBy, $0.value.result, $0.value.note, $0.value.docNumber)) }),
+            fieldValues: savedValues
+        ).rendered()
+    }
+
     #if os(macOS)
-    private func printReport() {
-        let text = renderReport()
+    private func printReport() { printText(renderReport(), monospace: true) }
+    private func printSummary() { printText(renderSummary(), monospace: false) }
+
+    private func printText(_ text: String, monospace: Bool) {
         let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 468, height: 648))
         textView.string = text
-        textView.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
+        textView.font = monospace
+            ? NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
+            : NSFont.systemFont(ofSize: 11)
         let op = NSPrintOperation(view: textView)
         op.jobTitle = wfNumber
         op.run()

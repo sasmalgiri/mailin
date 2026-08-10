@@ -1456,6 +1456,68 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(byNumber.map(\.number), [wf])
     }
 
+    /// Phase D — the stakeholder summary is plain-language: it names the
+    /// readable title, spells out completed vs. pending steps in prose, lists
+    /// the records produced, and omits the technical jargon of the raw report.
+    func testStakeholderSummary_isReaderFriendly() throws {
+        let def = WorkflowCatalog.legal
+        let day = Date(timeIntervalSince1970: 1_754_800_000)   // fixed, deterministic
+        let summary = StakeholderSummary(
+            wfNumber: "WF-2026-0007", title: "Acme v. Roe", persona: "legal",
+            status: "confirmed", preparedBy: "Reviewer B", preparedAt: day,
+            operations: def.operations,
+            confirmations: [
+                1: (day, "Reviewer B", "Acme v. Roe", "", "BATCH-2026-0002"),
+                5: (day, "Reviewer B", "PROD001", "produced to opposing counsel", "EXP-2026-0009"),
+            ],
+            fieldValues: [
+                1: ["matter": "Acme v. Roe", "reviewer": "Reviewer B"],
+                5: ["productionName": "PROD001", "format": "PDF (Bates-stamped)"],
+            ]
+        ).rendered()
+
+        // Reads for a non-technical audience.
+        XCTAssertTrue(summary.contains("# Acme v. Roe"), "leads with the readable title")
+        XCTAssertTrue(summary.contains("WF-2026-0007"))
+        XCTAssertTrue(summary.contains("Prepared by:"))
+        XCTAssertTrue(summary.contains("counsel"), "carries the legal-persona intro")
+        // Completed steps described in prose; the field data surfaced.
+        XCTAssertTrue(summary.contains("Assemble Batch"))
+        XCTAssertTrue(summary.contains("completed"))
+        XCTAssertTrue(summary.contains("Production set name: PROD001"))
+        XCTAssertTrue(summary.contains("produced to opposing counsel"))
+        // Pending steps say so, not left blank.
+        XCTAssertTrue(summary.contains("Review & Code** — not yet started."))
+        // Records produced are listed.
+        XCTAssertTrue(summary.contains("BATCH-2026-0002"))
+        XCTAssertTrue(summary.contains("EXP-2026-0009"))
+        // No raw-report scaffolding leaks in.
+        XCTAssertFalse(summary.contains("[x]"), "no technical checkbox markers")
+        XCTAssertFalse(summary.contains("========"), "no monospace rule")
+    }
+
+    /// Phase D — in-progress entries persist before Confirm, so closing the
+    /// window (or a session timeout) never loses what was typed: the saved
+    /// draft re-reads back exactly.
+    func testInProgressFieldDraft_persistsBeforeConfirm() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-wfdraft-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root)
+        let wf = try await store.createInstance(defID: "builtin.it.phishing",
+                                                title: "Reported invoice", createdBy: "Admin A")
+        // Autosave writes a partial draft for a step that is NOT confirmed.
+        try await store.saveFieldValues(wf: wf, seq: 1,
+                                        values: ["reporter": "alice@corp.com", "subject": "Overdue"])
+        // No confirmation exists yet — the draft stands on its own.
+        let confs = try await store.confirmations(wf: wf)
+        XCTAssertFalse(confs.contains { $0.seq == 1 }, "draft is not a confirmation")
+        // Reopening the run restores exactly what was typed.
+        let restored = try await store.fieldValues(wf: wf)
+        XCTAssertEqual(restored[1]?["reporter"], "alice@corp.com")
+        XCTAssertEqual(restored[1]?["subject"], "Overdue")
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default

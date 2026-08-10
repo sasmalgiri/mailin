@@ -392,3 +392,88 @@ struct WorkflowInstanceReport {
         return out
     }
 }
+
+/// A clean, plain-language rendering of a run for a NON-technical reader —
+/// the "portable case" / executive summary the reviews say the incumbents do
+/// badly (AXIOM "portable case is difficult for detectives and prosecutors";
+/// Relativity "improve executive summary reports"). No seqs, no jargon, no
+/// key dumps — prose a stakeholder can read. Pure and unit-tested.
+struct StakeholderSummary {
+    let wfNumber: String
+    let title: String
+    let persona: String
+    let status: String
+    let preparedBy: String
+    let preparedAt: Date
+    let operations: [WorkflowOperation]
+    /// seq -> (confirmedAt, by, result, note, docNumber)
+    let confirmations: [Int: (Date, String, String, String, String?)]
+    var fieldValues: [Int: [String: String]] = [:]
+
+    private var intro: String {
+        switch persona {
+        case "forensic":
+            return "This is a plain-language summary of the evidence handling and review performed on this matter, for case reviewers, counsel, and other stakeholders who need to understand what was done without technical detail."
+        case "legal":
+            return "This is a plain-language summary of the document review and production performed for this matter, for counsel and stakeholders."
+        case "it_admin":
+            return "This is a plain-language summary of how this reported email was investigated and resolved, for management and the teams involved."
+        case "journalist":
+            return "This is a plain-language summary of the sourcing, verification, and reporting steps behind this story."
+        default:
+            return "This is a plain-language summary of the work performed on this archive."
+        }
+    }
+
+    /// Reader-friendly Markdown. Prints with a proportional font, not the
+    /// monospace technical report.
+    func rendered() -> String {
+        let fmt = DateFormatter()
+        fmt.dateStyle = .long; fmt.timeStyle = .short
+        let dayFmt = DateFormatter(); dayFmt.dateStyle = .long
+
+        let done = confirmations.count
+        let total = operations.count
+        let readableTitle = title.isEmpty ? wfNumber : title
+
+        var out = "# \(readableTitle)\n\n"
+        out += "**Reference:** \(wfNumber)  \n"
+        out += "**Prepared by:** \(preparedBy.isEmpty ? "—" : preparedBy)  \n"
+        out += "**Date:** \(fmt.string(from: preparedAt))  \n"
+        let statusLine = done == total
+            ? "Complete — all \(total) steps done"
+            : "In progress — \(done) of \(total) steps done"
+        out += "**Status:** \(statusLine)\n\n"
+        out += intro + "\n\n"
+
+        out += "## What was done\n\n"
+        for opn in operations {
+            if let c = confirmations[opn.seq] {
+                out += "**\(opn.title)** — completed \(dayFmt.string(from: c.0))"
+                if !c.1.isEmpty { out += " by \(c.1)" }
+                out += ".\n"
+                let vals = fieldValues[opn.seq] ?? [:]
+                for field in opn.fields {
+                    let v = vals[field.key] ?? ""
+                    guard !v.isEmpty else { continue }
+                    out += "- \(field.label): \(v)\n"
+                }
+                if !c.3.isEmpty { out += "- Note: \(c.3)\n" }
+                out += "\n"
+            } else {
+                out += "**\(opn.title)** — not yet started.\n\n"
+            }
+        }
+
+        let docs = operations.compactMap { confirmations[$0.seq]?.4 }
+        if !docs.isEmpty {
+            out += "## Records produced\n\n"
+            for d in docs { out += "- \(d)\n" }
+            out += "\n"
+        }
+
+        out += "---\n"
+        out += "_This document was produced automatically by mailin as the work was performed. All records are kept on this device._\n"
+        return out
+    }
+}
