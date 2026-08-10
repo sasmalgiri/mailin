@@ -109,13 +109,20 @@ final class TriageQueueService: ObservableObject {
         NotificationCenter.default.post(name: .parsingFinished, object: nil)
     }
 
-    /// Issue a verdict: swap pending → verdict tag, audit-log it.
+    /// Issue a verdict: swap pending → verdict tag, post a VRD document,
+    /// audit-log both. The VRD number is what an incident ticket cites.
     func issueVerdict(_ verdict: TriageVerdict, for email: MBOXParser.RawEmail) {
         ReviewStateService.shared.removeTag(TriageVerdict.pendingTag, from: [email.id])
         ReviewStateService.shared.addTag(verdict.rawValue, to: [email.id])
         let subject = email.headers["Subject"] ?? "(No Subject)"
-        ForensicManager.shared.logAction(
-            "Triage verdict: \(verdict.displayName)",
-            detail: "\(subject) — \(email.id.uuidString)")
+        Task { @MainActor in
+            let number = await DocumentRegistry.post(
+                .triageVerdict,
+                summary: "\(verdict.displayName): \(subject)",
+                refs: email.id.uuidString)
+            ForensicManager.shared.logAction(
+                "Triage verdict: \(verdict.displayName)",
+                detail: "\(number.map { "\($0) — " } ?? "")\(subject) — \(email.id.uuidString)")
+        }
     }
 }

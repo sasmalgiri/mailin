@@ -279,8 +279,10 @@ struct TriageQueueView: View {
             guard panel.runModal() == .OK, let url = panel.url else { return }
             do {
                 try csv.write(to: url, atomically: true, encoding: .utf8)
-                ForensicManager.shared.logAction("IOC blocklist exported",
-                    detail: "\(iocs.count) indicators from \(confirmed.count) confirmed emails")
+                _ = await DocumentRegistry.post(
+                    .export,
+                    summary: "IOC blocklist: \(iocs.count) indicators from \(confirmed.count) confirmed emails",
+                    refs: url.lastPathComponent)
             } catch { exportError = error.localizedDescription }
             #else
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("mailin_ioc_blocklist.csv")

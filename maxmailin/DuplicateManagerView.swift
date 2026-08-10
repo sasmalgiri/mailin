@@ -291,6 +291,10 @@ struct DuplicateManagerView: View {
                 ) {
                     let ids = Set(archiveDupIDs)
                     archiveDupIDs = []
+                    Task { @MainActor in
+                        _ = await DocumentRegistry.post(
+                            .cleanup, summary: "Removed \(ids.count) exact duplicate(s) archive-wide")
+                    }
                     model.removeDuplicateEmails(ids: ids)
                 }
             }

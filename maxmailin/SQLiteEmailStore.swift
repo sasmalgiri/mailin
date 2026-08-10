@@ -121,7 +121,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// store fully at the previous version — never half-migrated, and a user
     /// DB is NEVER silently recreated. A store newer than this build refuses
     /// to open instead of guessing.
-    static let currentSchemaVersion = 6
+    static let currentSchemaVersion = 7
 
     private func migrateSchema(_ handle: OpaquePointer) throws {
         var v = try scalarInt(handle, "PRAGMA user_version;")
@@ -198,6 +198,36 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 try exec(handle, "PRAGMA user_version = 6;")
             }
             v = 6
+        }
+        if v == 6 {
+            try inExclusiveTransaction(handle) {
+                // v7: the document registry (SAP-style). Every completed
+                // workflow posts a typed, numbered document (IMP-2026-0001,
+                // VRD-…, EXP-…, RPT-…, STY-…, CLN-…). Number ranges are
+                // per-type-per-year counters, advanced in the same
+                // transaction as the insert — numbers never repeat or skip
+                // (a gap would itself be evidence).
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS documents(
+                        doc_number  TEXT PRIMARY KEY,
+                        doc_type    TEXT NOT NULL,
+                        created_at  INTEGER NOT NULL,
+                        summary     TEXT NOT NULL,
+                        refs        TEXT NOT NULL DEFAULT ''
+                    );
+                """)
+                try exec(handle, "CREATE INDEX IF NOT EXISTS idx_documents_created ON documents(created_at DESC);")
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS doc_counters(
+                        doc_type TEXT NOT NULL,
+                        year     INTEGER NOT NULL,
+                        next_seq INTEGER NOT NULL,
+                        PRIMARY KEY(doc_type, year)
+                    );
+                """)
+                try exec(handle, "PRAGMA user_version = 7;")
+            }
+            v = 7
         }
     }
 
@@ -1317,6 +1347,85 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     /// §4/§4.1: the nullable dedup key. NULL never collides (SQLite partial
     /// unique index), so `.preserveAll` stores everything.
+    // MARK: - Document registry (v7)
+
+    struct IssuedDocument: Sendable, Identifiable {
+        var id: String { number }
+        let number: String
+        let type: String
+        let createdAt: Date
+        let summary: String
+        let refs: String
+    }
+
+    /// Issue the next number in the type's yearly range and record the
+    /// document — one transaction, so numbers never repeat or skip.
+    func issueDocument(type: String, summary: String, refs: String = "",
+                       now: Date = Date()) throws -> String {
+        let db = try ensureDB()
+        let year = Calendar.current.component(.year, from: now)
+        var number = ""
+        try exec(db, "BEGIN IMMEDIATE TRANSACTION;")
+        do {
+            try exec(db, "INSERT OR IGNORE INTO doc_counters(doc_type, year, next_seq) VALUES ('\(type)', \(year), 1);")
+            let seq = try scalarInt(db, "SELECT next_seq FROM doc_counters WHERE doc_type = '\(type)' AND year = \(year);")
+            number = DocumentNumberFormat.format(type: type, year: year, sequence: seq)
+            let insert = try prepare(db, """
+                INSERT INTO documents(doc_number, doc_type, created_at, summary, refs)
+                VALUES (?,?,?,?,?);
+            """)
+            defer { sqlite3_finalize(insert) }
+            bindText(insert, 1, number)
+            bindText(insert, 2, type)
+            sqlite3_bind_int64(insert, 3, Int64(now.timeIntervalSince1970))
+            bindText(insert, 4, summary)
+            bindText(insert, 5, refs)
+            guard sqlite3_step(insert) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            try exec(db, "UPDATE doc_counters SET next_seq = next_seq + 1 WHERE doc_type = '\(type)' AND year = \(year);")
+            try exec(db, "COMMIT;")
+        } catch {
+            try? exec(db, "ROLLBACK;")
+            throw error
+        }
+        return number
+    }
+
+    func recentDocuments(limit: Int = 200) throws -> [IssuedDocument] {
+        try documentQuery(where: "1=1", bind: nil, limit: limit)
+    }
+
+    /// Case-insensitive match on number or summary — the "display document"
+    /// lookup.
+    func lookupDocuments(matching needle: String, limit: Int = 200) throws -> [IssuedDocument] {
+        try documentQuery(
+            where: "doc_number LIKE ? COLLATE NOCASE OR summary LIKE ? COLLATE NOCASE",
+            bind: "%\(needle)%", limit: limit)
+    }
+
+    private func documentQuery(where clause: String, bind: String?, limit: Int) throws -> [IssuedDocument] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT doc_number, doc_type, created_at, summary, refs
+            FROM documents WHERE \(clause)
+            ORDER BY created_at DESC, doc_number DESC LIMIT \(limit);
+        """)
+        defer { sqlite3_finalize(stmt) }
+        if let bind {
+            bindText(stmt, 1, bind)
+            bindText(stmt, 2, bind)
+        }
+        var out: [IssuedDocument] = []
+        while try stepRow(stmt, db) {
+            out.append(IssuedDocument(
+                number: columnText(stmt, 0),
+                type: columnText(stmt, 1),
+                createdAt: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 2))),
+                summary: columnText(stmt, 3),
+                refs: columnText(stmt, 4)))
+        }
+        return out
+    }
+
     /// One row per source that ever entered this archive — the MB51-style
     /// movement register: what arrived, when, how many rows it holds now,
     /// and how many duplicates the policy skipped.

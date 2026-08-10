@@ -14,6 +14,7 @@ import Foundation
 enum CaseActivityReportBuilder {
 
     struct Inputs {
+        var documentNumber: String? = nil
         var caseNumber: String = ""
         var examiner: String = ""
         var day: Date = .distantPast
@@ -39,6 +40,7 @@ enum CaseActivityReportBuilder {
 
         var out = "DAILY ACTIVITY REPORT\n"
         out += "=====================\n"
+        if let doc = i.documentNumber { out += "Document:  \(doc)\n" }
         out += "Case:      \(i.caseNumber.isEmpty ? "(no case number set)" : i.caseNumber)\n"
         out += "Examiner:  \(i.examiner.isEmpty ? "(not set)" : i.examiner)\n"
         out += "Date:      \(dayFmt.string(from: i.day))\n"

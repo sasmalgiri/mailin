@@ -4269,6 +4269,10 @@ private func handleMultipleFiles(_ urls: [URL]) {
     #endif
 
     private func exportAuditLog() {
+        Task { @MainActor in
+            _ = await DocumentRegistry.post(
+                .export, summary: "Audit trail exported — \(forensicManager.auditLog.count) entries")
+        }
         #if os(macOS)
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "audit_log_\(forensicManager.caseNumber.isEmpty ? "mailin" : forensicManager.caseNumber).txt"

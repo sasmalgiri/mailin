@@ -386,6 +386,17 @@ class ContentViewModel: ObservableObject {
         isParsing = false
         stopMemoryMonitoring()
 
+        // Post the import document: the run's number for custody logs and
+        // intake references (IMP-2026-0001).
+        let fileNames = urls.map(\.lastPathComponent).joined(separator: ", ")
+        let persisted = summary.persistAttempted
+        Task { @MainActor in
+            _ = await DocumentRegistry.post(
+                .importRun,
+                summary: "\(persisted) email(s) from \(fileNames)",
+                refs: fileNames)
+        }
+
         var errors = summary.fileErrors.map { "\($0.filename): \($0.message)" }
         if summary.persistFailed > 0 {
             errors.append("\(summary.persistFailed) email(s) could not be saved to the archive and were not imported. Please retry; if this persists, free up disk space and check the log.")

@@ -22,6 +22,8 @@ struct WorkCenterView: View {
     @State private var intakeRows: [SQLiteEmailStore.IntakeRow] = []
     @State private var migratedCount = 0
     @State private var coverage: (analyzed: Int, total: Int) = (0, 0)
+    @State private var documents: [SQLiteEmailStore.IssuedDocument] = []
+    @State private var docSearch = ""
     @State private var isLoading = true
     @AppStorage(DigestScheduler.enabledKey) private var digestEnabled = false
 
@@ -56,6 +58,8 @@ struct WorkCenterView: View {
                     .tabItem { Label("Intake Register", systemImage: "square.and.arrow.down.on.square") }
                 jobsTab
                     .tabItem { Label("Jobs", systemImage: "gearshape.arrow.triangle.2.circlepath") }
+                documentsTab
+                    .tabItem { Label("Documents", systemImage: "number.square") }
             }
             .padding(.top, Spacing.xxSmall)
         }
@@ -149,6 +153,9 @@ struct WorkCenterView: View {
                                 .foregroundColor(AppColors.primary)
                             Text(row.filename)
                                 .font(Typography.callout).fontWeight(.semibold)
+                            Text(DocumentNumberFormat.sourceAlias(row.sourceID))
+                                .font(Typography.monoSmall)
+                                .foregroundColor(AppColors.secondary)
                             Text(row.kind.uppercased())
                                 .font(Typography.caption2)
                                 .padding(.horizontal, 5).padding(.vertical, 1)
@@ -256,6 +263,80 @@ struct WorkCenterView: View {
         .padding(.vertical, 2)
     }
 
+    // MARK: Documents
+
+    private var documentsTab: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: Spacing.xxSmall) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(AppColors.secondary)
+                TextField("Look up a document number or summary — e.g. IMP-2026 or 'blocklist'", text: $docSearch)
+                    .textFieldStyle(.plain)
+                    .onChange(of: docSearch) { _, _ in
+                        Task { await reloadDocuments() }
+                    }
+            }
+            .padding(.horizontal, Spacing.small)
+            .padding(.vertical, 6)
+            .adaptiveGlass(in: RoundedRectangle(cornerRadius: CornerRadius.small))
+            .padding(Spacing.small)
+
+            List {
+                if documents.isEmpty {
+                    Text(docSearch.isEmpty
+                         ? "No documents posted yet — every completed import, verdict, export, report, story version and cleanup posts one automatically."
+                         : "No document matches “\(docSearch)”.")
+                        .foregroundColor(AppColors.secondary)
+                }
+                ForEach(documents) { doc in
+                    HStack(alignment: .top, spacing: Spacing.small) {
+                        Image(systemName: DocumentType(rawValue: doc.type)?.icon ?? "doc")
+                            .foregroundColor(AppColors.primary)
+                            .frame(width: 20)
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                Text(doc.number)
+                                    .font(Typography.monoBody)
+                                    .fontWeight(.semibold)
+                                    .textSelection(.enabled)
+                                Text(DocumentType(rawValue: doc.type)?.displayName ?? doc.type)
+                                    .font(Typography.caption2)
+                                    .padding(.horizontal, 5).padding(.vertical, 1)
+                                    .background(AppColors.primary.opacity(0.1))
+                                    .clipShape(Capsule())
+                                Spacer()
+                                Text(doc.createdAt.formatted(date: .abbreviated, time: .shortened))
+                                    .font(Typography.caption1)
+                                    .foregroundColor(AppColors.secondary)
+                            }
+                            Text(doc.summary)
+                                .font(Typography.caption1)
+                                .foregroundColor(AppColors.secondary)
+                                .textSelection(.enabled)
+                            if !doc.refs.isEmpty {
+                                Text(doc.refs)
+                                    .font(Typography.monoSmall)
+                                    .foregroundColor(AppColors.secondary.opacity(0.7))
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
+                    .help("Quote this number anywhere — the record behind it is always one lookup away")
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func reloadDocuments() async {
+        let needle = docSearch.trimmingCharacters(in: .whitespaces)
+        if needle.isEmpty {
+            documents = (try? await SQLiteEmailStore.shared.recentDocuments()) ?? []
+        } else {
+            documents = (try? await SQLiteEmailStore.shared.lookupDocuments(matching: needle)) ?? []
+        }
+    }
+
     // MARK: data
 
     @MainActor
@@ -264,6 +345,7 @@ struct WorkCenterView: View {
         coverage = (try? await store.derivedAnalysisCoverage()) ?? (0, 0)
         intakeRows = (try? await store.intakeRegister()) ?? []
         migratedCount = (try? await store.migratedRowCount()) ?? 0
+        await reloadDocuments()
 
         var inputs = WorkCenterModel.Inputs()
         inputs.triagePending = (try? await ArchiveDataService.shared.count(

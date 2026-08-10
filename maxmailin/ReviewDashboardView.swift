@@ -70,9 +70,11 @@ enum ReviewProgressModel {
     }
 
     /// The defensibility numbers as plain text for the production record.
-    static func defensibilityReport(_ s: Summary, caseNumber: String, examiner: String) -> String {
+    static func defensibilityReport(_ s: Summary, caseNumber: String, examiner: String,
+                                    documentNumber: String? = nil) -> String {
         var out = "REVIEW DEFENSIBILITY SUMMARY\n"
         out += "============================\n"
+        if let doc = documentNumber { out += "Document:  \(doc)\n" }
         out += "Case:      \(caseNumber.isEmpty ? "(no case number set)" : caseNumber)\n"
         out += "Reviewer:  \(examiner.isEmpty ? "(not set)" : examiner)\n\n"
         out += "Assigned:  \(s.totalAssigned) emails in \(s.batches.count) batch(es)\n"
@@ -125,12 +127,16 @@ struct ReviewDashboardView: View {
                 Spacer()
                 HelpDot(text: "Batches come from Review Batches; velocity counts reviewed emails per active day (days with review actions in the audit trail). The privilege-log check lists privileged-coded emails that still lack an annotation — complete those before production.")
                 Button {
-                    PlatformClipboard.copyString(ReviewProgressModel.defensibilityReport(
-                        summary, caseNumber: forensicManager.caseNumber,
-                        examiner: forensicManager.examinerName))
-                    copied = true
-                    forensicManager.logAction("Defensibility summary copied",
-                        detail: "\(summary.totalReviewed)/\(summary.totalAssigned) reviewed; privilege log \(summary.privilegeLogComplete ? "complete" : "INCOMPLETE")")
+                    let snapshot = summary
+                    Task { @MainActor in
+                        let number = await DocumentRegistry.post(
+                            .report, summary: "Defensibility summary — \(snapshot.totalReviewed)/\(snapshot.totalAssigned) reviewed")
+                        PlatformClipboard.copyString(ReviewProgressModel.defensibilityReport(
+                            snapshot, caseNumber: forensicManager.caseNumber,
+                            examiner: forensicManager.examinerName,
+                            documentNumber: number))
+                        copied = true
+                    }
                 } label: {
                     Label(copied ? "Copied" : "Copy Defensibility Summary", systemImage: "doc.on.doc")
                 }

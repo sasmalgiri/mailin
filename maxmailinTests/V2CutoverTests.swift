@@ -1090,6 +1090,44 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(WorkCenterModel.items(quiet).isEmpty, "a clear desk shows nothing")
     }
 
+    /// Document numbers: format, per-type-per-year ranges that never repeat
+    /// or skip, persistence across reopen, and the display-document lookup.
+    func testDocumentRegistry_rangesLookupAndPersistence() async throws {
+        XCTAssertEqual(DocumentNumberFormat.format(type: "imp", year: 2026, sequence: 7),
+                       "IMP-2026-0007")
+        XCTAssertEqual(DocumentNumberFormat.sourceAlias(3), "SRC-0003")
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-docs-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root)
+        let now = Date(timeIntervalSince1970: 1_786_000_000)   // 2026
+
+        // Ranges advance per type independently; no repeats, no skips.
+        let imp1 = try await store.issueDocument(type: "IMP", summary: "first import", now: now)
+        let imp2 = try await store.issueDocument(type: "IMP", summary: "second import", now: now)
+        let vrd1 = try await store.issueDocument(type: "VRD", summary: "Confirmed Phishing: invoice scam", now: now)
+        XCTAssertTrue(imp1.hasSuffix("-0001"))
+        XCTAssertTrue(imp2.hasSuffix("-0002"))
+        XCTAssertTrue(vrd1.hasSuffix("-0001"), "each type has its own range")
+
+        // Lookup by number fragment and by summary, case-insensitive.
+        let byNumber = try await store.lookupDocuments(matching: imp2)
+        XCTAssertEqual(byNumber.map(\.number), [imp2])
+        let bySummary = try await store.lookupDocuments(matching: "PHISHING")
+        XCTAssertEqual(bySummary.map(\.number), [vrd1])
+        let recent = try await store.recentDocuments()
+        XCTAssertEqual(recent.count, 3)
+
+        // Second connection to the same store: the range continues where it
+        // left off — a repeated number would be a defensibility disaster.
+        let reopened = SQLiteEmailStore(directory: root)
+        let imp3 = try await reopened.issueDocument(type: "IMP", summary: "after reopen", now: now)
+        XCTAssertTrue(imp3.hasSuffix("-0003"))
+        let all = try await reopened.recentDocuments()
+        XCTAssertEqual(all.count, 4)
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default

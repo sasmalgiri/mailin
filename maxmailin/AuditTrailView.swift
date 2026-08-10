@@ -399,6 +399,8 @@ struct AuditTrailView: View {
         case .unknown, .noData: chainOK = nil
         }
         var inputs = CaseActivityReportBuilder.Inputs()
+        inputs.documentNumber = await DocumentRegistry.post(
+            .report, summary: "Daily activity report — case \(forensicManager.caseNumber.isEmpty ? "(none)" : forensicManager.caseNumber)")
         inputs.caseNumber = forensicManager.caseNumber
         inputs.examiner = forensicManager.examinerName
         inputs.day = Date()

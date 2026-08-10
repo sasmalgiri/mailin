@@ -18,6 +18,7 @@ struct StoryFileView: View {
     @ObservedObject private var forensicManager = ForensicManager.shared
     @State private var title = ""
     @State private var markdown = ""
+    @State private var currentFindings: [StoryFileBuilder.Finding] = []
     @State private var findingCount = 0
     @State private var isLoading = true
     @State private var copied = false
@@ -115,6 +116,7 @@ struct StoryFileView: View {
                 messageID: email.headers["Message-ID"],
                 evidenceTag: tag == .none ? nil : tag.rawValue)
         }
+        currentFindings = findings
         findingCount = findings.count
         markdown = StoryFileBuilder.markdown(
             title: title, author: forensicManager.examinerName, findings: findings)
@@ -126,8 +128,17 @@ struct StoryFileView: View {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = (title.isEmpty ? "story_file" : title.replacingOccurrences(of: " ", with: "_")) + ".md"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do { try markdown.write(to: url, atomically: true, encoding: .utf8) }
-        catch { exportError = error.localizedDescription }
+        let savedTitle = title
+        Task { @MainActor in
+            let number = await DocumentRegistry.post(
+                .storyVersion, summary: "Story file saved: \(savedTitle.isEmpty ? "Story File" : savedTitle)",
+                refs: url.lastPathComponent)
+            let versioned = StoryFileBuilder.markdown(
+                title: savedTitle, author: forensicManager.examinerName,
+                findings: currentFindings, documentNumber: number)
+            do { try versioned.write(to: url, atomically: true, encoding: .utf8) }
+            catch { exportError = error.localizedDescription }
+        }
     }
     #endif
 }
