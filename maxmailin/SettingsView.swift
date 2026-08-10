@@ -9,6 +9,30 @@ import SwiftUI
 import TipKit
 import UserNotifications
 
+/// Part S: the List Mode preference is a PURE presentation choice — both modes
+/// (Simple `ArchiveListView`, Advanced `ParsedEmailListView`) page the same
+/// bounded repository-backed architecture. The old key `useV2ArchiveList`
+/// carried rollback connotations from the cutover and is migrated once.
+enum ListModePreference {
+    static let key = "listModeSimple"
+    /// §27 "no silent feature loss": the DEFAULT list is Advanced — the full
+    /// v1-parity toolkit (sorts, filters, multi-select, tags, threads, bulk
+    /// actions). Simple is an opt-in minimal mode, never the surprise a v1
+    /// user upgrades into. Guarded by testDefaultListModeIsAdvanced.
+    static let defaultSimple = false
+    private static let legacyKey = "useV2ArchiveList"
+
+    /// One-time preference migration: carry the user's stored choice over to
+    /// the new key, then remove the legacy key so no rollback flag remains.
+    static func migrateIfNeeded(defaults: UserDefaults = .standard) {
+        if defaults.object(forKey: key) == nil,
+           let legacy = defaults.object(forKey: legacyKey) as? Bool {
+            defaults.set(legacy, forKey: key)
+        }
+        defaults.removeObject(forKey: legacyKey)
+    }
+}
+
 struct SettingsView: View {
     @EnvironmentObject var storeManager: StoreManager
     @ObservedObject private var forensicManager = ForensicManager.shared
@@ -22,12 +46,69 @@ struct SettingsView: View {
     @AppStorage("showInlineImages") private var showInlineImages = true
     @AppStorage("enableAIFeatures") private var enableAIFeatures = true
     @AppStorage("emailListDensity") private var emailListDensity = "comfortable"
+    // Simple (true) = clean ArchiveListView; Advanced (false) = full-filter
+    // toolkit list. Both are bounded + repository-backed (Part S).
+    @AppStorage(ListModePreference.key) private var preferSimpleList = ListModePreference.defaultSimple
     @AppStorage("showEmailPreviews") private var showEmailPreviews = true
+    @AppStorage("showBasicTagPills") private var showBasicTagPills = false
     @AppStorage("autoAdvanceAfterTag") private var autoAdvanceAfterTag = true
     @AppStorage("hasConsentedToCloudAI") private var hasConsentedToCloudAI = false
     @AppStorage("customModelName") private var customModelName = ""
     @State private var savedDataCleared = false
     @State private var showClearConfirmation = false
+    @State private var fidelityHealRunning = false
+    @State private var fidelityHealReport: String?
+
+    /// Full Fidelity Restore: pick original archive files, re-parse, and
+    /// heal matching rows in place (SQLiteEmailStore.healFidelity).
+    private func runFidelityHeal() {
+        #if os(macOS)
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.message = "Choose the ORIGINAL archive files (.mbox/.eml) you imported before"
+        panel.prompt = "Restore"
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        let urls = panel.urls
+        #else
+        // iOS uses the standard import flow (full fidelity already).
+        let urls: [URL] = []
+        guard !urls.isEmpty else { return }
+        #endif
+        fidelityHealRunning = true
+        fidelityHealReport = nil
+        Task { @MainActor in
+            var total = SQLiteEmailStore.FidelityHealResult()
+            var failures: [String] = []
+            for url in urls {
+                do {
+                    let emails = try await Task.detached(priority: .userInitiated) {
+                        try MBOXParser.parse(fileURL: url, senderEmail: "")
+                    }.value
+                    let result = try await SQLiteEmailStore.shared.healFidelity(from: emails)
+                    total.healed += result.healed
+                    total.alreadyFull += result.alreadyFull
+                    total.unmatched += result.unmatched
+                } catch {
+                    failures.append(url.lastPathComponent)
+                }
+            }
+            fidelityHealRunning = false
+            var report = "Restored full detail for \(total.healed) email(s); \(total.alreadyFull) already complete; \(total.unmatched) not in your archive."
+            if !failures.isEmpty { report += " Could not read: \(failures.joined(separator: ", "))." }
+            fidelityHealReport = report
+            if total.healed > 0 {
+                NotificationCenter.default.post(name: .fidelityBackfillCompleted, object: nil)
+                AttachmentTextIndexJob.shared.kickIfNeeded()   // new raw → contents indexable
+            }
+        }
+    }
+    @State private var clearError: String?
+    @AppStorage(DigestScheduler.enabledKey) private var weeklyDigestEnabled = false
+    #if os(macOS)
+    @AppStorage("menuBarSearchEnabled") private var menuBarSearchEnabled = true
+    #endif
     @State private var showClearTempConfirmation = false
     @State private var showResetSettingsConfirmation = false
     @State private var showClearForensicConfirmation = false
@@ -212,6 +293,40 @@ struct SettingsView: View {
                     .font(.headline)
             }
 
+            #if os(macOS)
+            Section {
+                Toggle("Menu Bar Quick Search", isOn: $menuBarSearchEnabled)
+                    .help("Search your whole archive from the menu bar without opening the app")
+                    .accessibilityLabel("Menu bar quick search")
+            } header: {
+                Text("Menu Bar")
+                    .font(.headline)
+            } footer: {
+                Text("Adds a mailin icon to the menu bar — type to search, Return opens the top result.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            #endif
+
+            Section {
+                Toggle("Weekly Digest", isOn: $weeklyDigestEnabled)
+                    .onChange(of: weeklyDigestEnabled) { _, enabled in
+                        if enabled {
+                            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+                            DigestScheduler.shared.checkAndDeliver()
+                        }
+                    }
+                    .help("Once a week, a notification summarizes how many new emails matched each of your saved searches")
+                    .accessibilityLabel("Weekly digest notification")
+            } header: {
+                Text("Weekly Digest")
+                    .font(.headline)
+            } footer: {
+                Text("One local notification per week with new-match counts for your saved searches. Computed entirely on-device; nothing leaves your Mac.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
             #if os(iOS)
             Section {
                 HStack {
@@ -323,6 +438,24 @@ struct SettingsView: View {
     private var displaySettings: some View {
         Form {
             Section {
+                Picker("List Mode", selection: $preferSimpleList) {
+                    Text("Simple").tag(true)
+                    Text("Advanced").tag(false)
+                }
+                .pickerStyle(.segmented)
+                .help("Simple: a fast, clean list (search + date filter). Advanced: the full filter/sort/smart-tag/saved-search toolkit. Both scale to any archive size.")
+
+                Text(preferSimpleList
+                     ? "Simple — fast, clean browsing. Search and date range cover the whole archive."
+                     : "Advanced — sort, smart-tag, sender/domain and saved-search filters over the same paged archive.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } header: {
+                Text("List Mode")
+                    .font(.headline)
+            }
+
+            Section {
                 Picker("Email List Density", selection: $emailListDensity) {
                     Text("Compact").tag("compact")
                     Text("Comfortable").tag("comfortable")
@@ -332,6 +465,9 @@ struct SettingsView: View {
 
                 Toggle("Show email previews", isOn: $showEmailPreviews)
                     .help("Show a snippet of the email body in the list view")
+
+                Toggle("Show fact labels (advanced)", isOn: $showBasicTagPills)
+                    .help("Advanced labels: gray pills for plain facts (Sent, Received, Has Attachment) on every row. They appear only when Pro mode is also on — off keeps the list clean; those facts are already visible elsewhere.")
             } header: {
                 Text("Email List")
                     .font(.headline)
@@ -385,6 +521,20 @@ struct SettingsView: View {
             }
 
             Section {
+                // Full Fidelity Restore — heals archives migrated from v1
+                // (labels/attachments/raw source restored IN PLACE from the
+                // original files; no duplicates, review state untouched).
+                Button(fidelityHealRunning ? "Restoring…" : "Restore Full Fidelity from Original Files…") {
+                    runFidelityHeal()
+                }
+                .disabled(fidelityHealRunning)
+                .help("Re-read your original .mbox files and restore full detail (attachments, raw source) to already-imported emails — nothing is duplicated")
+                if let report = fidelityHealReport {
+                    Text(report)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
                 Button("Clear saved email data") {
                     showClearConfirmation = true
                 }
@@ -392,14 +542,27 @@ struct SettingsView: View {
                 .alert("Clear Saved Data", isPresented: $showClearConfirmation) {
                     Button("Cancel", role: .cancel) {}
                     Button("Clear", role: .destructive) {
-                        EmailPersistence.clear()
-                        savedDataCleared = true
-                        NotificationCenter.default.post(name: .dataClearedByUser, object: nil)
+                        // §11: canonical clear — SQLite + FTS + legacy stores +
+                        // checkpoints + Spotlight + no-resurrection tombstone.
+                        Task { @MainActor in
+                            do {
+                                _ = try await ArchiveLifecycleService.shared.clearArchive()
+                                savedDataCleared = true
+                                NotificationCenter.default.post(name: .dataClearedByUser, object: nil)
+                            } catch {
+                                clearError = error.localizedDescription
+                            }
+                        }
                     }
                 } message: {
                     Text("This will permanently delete all saved email data. This action cannot be undone.")
                 }
 
+                if let clearError {
+                    Text("Clear failed: \(clearError)")
+                        .font(.caption)
+                        .foregroundColor(.red)
+                }
                 if savedDataCleared {
                     Text("Saved data cleared successfully.")
                         .font(.caption)
@@ -464,8 +627,12 @@ struct SettingsView: View {
                 .alert("Delete All Data", isPresented: $showDeleteAllConfirmation) {
                     Button("Cancel", role: .cancel) {}
                     Button("Delete Everything", role: .destructive) {
-                        compliance.deleteAllUserData()
-                        allDataDeleted = true
+                        // §11.2: canonical erase-all (clearArchive + forensic
+                        // history + receipts + prefs/keychain/temp).
+                        Task { @MainActor in
+                            _ = await ArchiveLifecycleService.shared.eraseAllData()
+                            allDataDeleted = true
+                        }
                     }
                 } message: {
                     Text("This will permanently delete ALL data including emails, settings, forensic data, AI keys, and preferences. The app will reset to its initial state. This cannot be undone.")
@@ -598,7 +765,10 @@ struct SettingsView: View {
                 Button("Reset All Tips") {
                     try? Tips.resetDatastore()
                     tipsReset = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { tipsReset = false }
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 2_000_000_000)
+                        tipsReset = false
+                    }
                 }
 
                 if tipsReset {

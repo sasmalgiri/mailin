@@ -4,7 +4,7 @@ import SwiftUI
 class LegalComplianceManager: ObservableObject {
     static let shared = LegalComplianceManager()
 
-    private static let currentTermsVersion = "1.1"
+    static let currentTermsVersion = "1.1"
     private static let currentPrivacyVersion = "1.0"
 
     @AppStorage("hasAcceptedTerms") var hasAcceptedTerms = false

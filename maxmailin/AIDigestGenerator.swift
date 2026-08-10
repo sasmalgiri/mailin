@@ -52,6 +52,27 @@ struct AIDigestGenerator {
 
     // MARK: - Public Entry Point
 
+    /// Corpus-free digest — streams a bounded most-recent working set of the
+    /// selected period from the store instead of receiving the whole
+    /// `[RawEmail]` archive. Custom ranges become date bounds on the query, so
+    /// deep-past ranges resolve in the DB rather than in the recency window.
+    static func generateDigest(
+        period: TimePeriod,
+        customStart: Date? = nil,
+        customEnd: Date? = nil
+    ) async -> [DigestSection] {
+        var query = EmailQuery.all
+        if period == .custom {
+            let calendar = Calendar.current
+            if let s = customStart { query.afterDate = calendar.startOfDay(for: s) }
+            if let e = customEnd {
+                query.beforeDate = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: e))
+            }
+        }
+        let recent = await ArchiveDataService.shared.workingSet(query: query, cap: 1000)
+        return await generateDigest(emails: recent, period: period, customStart: customStart, customEnd: customEnd)
+    }
+
     static func generateDigest(
         emails: [MBOXParser.RawEmail],
         period: TimePeriod,

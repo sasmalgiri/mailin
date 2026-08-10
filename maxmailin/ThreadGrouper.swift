@@ -6,9 +6,11 @@ struct EmailThread: Identifiable {
     let root: MBOXParser.RawEmail
     let replies: [MBOXParser.RawEmail]
 
-    var allEmails: [MBOXParser.RawEmail] { [root] + replies }
-    var count: Int { allEmails.count }
-    var latestTimestamp: String { allEmails.map(\.timestamp).max() ?? root.timestamp }
+    /// Every message in the thread (root first). Named `members` — not
+    /// "allEmails" — because it is a bounded per-thread list, never a corpus.
+    var members: [MBOXParser.RawEmail] { [root] + replies }
+    var count: Int { members.count }
+    var latestTimestamp: String { members.map(\.timestamp).max() ?? root.timestamp }
 }
 
 struct ThreadGrouper {
@@ -51,7 +53,9 @@ struct ThreadGrouper {
         return "single:" + email.id.uuidString
     }
 
-    private static func normalizeSubject(_ subject: String) -> String {
+    /// Shared with ThreadKeyDeriver (Part L) so persisted subject-fallback
+    /// thread keys agree with the legacy visible-page grouping.
+    static func normalizeSubject(_ subject: String) -> String {
         var s = subject.trimmingCharacters(in: .whitespacesAndNewlines)
         let prefixes = ["re:", "fwd:", "fw:", "re[", "fwd["]
         var changed = true

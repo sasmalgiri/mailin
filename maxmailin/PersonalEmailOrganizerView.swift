@@ -1,22 +1,13 @@
 import SwiftUI
 
 struct PersonalEmailOrganizerView: View {
-    /// Legacy in-memory source. When `v2Source` is provided AND has data,
-    /// the view paginates from SwiftData via `v2Source.emails` instead.
-    let emails: [MBOXParser.RawEmail]
     var onSkipToInbox: (() -> Void)? = nil
-    /// v2 paginated source. Optional — only callers that want the
-    /// memory-bounded SwiftData-backed flow pass it.
-    var v2Source: PaginatedEmailViewModel? = nil
 
-    /// Effective email list. Prefers `v2Source.emails` when present and
-    /// populated; falls back to the legacy `emails` array otherwise.
-    private var effectiveEmails: [MBOXParser.RawEmail] {
-        if let v2 = v2Source, !v2.emails.isEmpty {
-            return v2.emails
-        }
-        return emails
-    }
+    // v2: bounded most-recent working set streamed from the store (no injected
+    // corpus). Categorization/cleanup/stats run over this sample; the exact
+    // archive total comes from the store.
+    @State private var workingSet: [MBOXParser.RawEmail] = []
+    @State private var archiveTotal = 0
 
     // MARK: - State
 
@@ -126,6 +117,7 @@ struct PersonalEmailOrganizerView: View {
         .overlay { if AnalysisCoordinator.isEnabled { AnalysisProgressOverlay(coordinator: coordinator) } }
         .featureTutorial(.personal, key: "personal_tutorial_seen", isPresented: $showTutorial)
         .sheet(isPresented: $showCleanupWizard) { cleanupWizardSheet }
+        .task { await loadBoundedWorkingSet() }
         .task { await loadV3Data() }
         .task { await loadV4Data() }
         .task { await loadPersonalFeatures() }
@@ -134,7 +126,7 @@ struct PersonalEmailOrganizerView: View {
     private func loadV4Data() async {
         if digestSections.isEmpty {
             isGeneratingDigest = true
-            let sections = await AIDigestGenerator.generateDigest(emails: emails, period: .lastWeek)
+            let sections = await AIDigestGenerator.generateDigest(period: .lastWeek)
             digestSections = sections
             isGeneratingDigest = false
         }
@@ -143,12 +135,22 @@ struct PersonalEmailOrganizerView: View {
         if #available(macOS 26, iOS 26, *) {
             if aiTriageText.isEmpty {
                 isGeneratingTriage = true
-                let result = try? await FoundationModelEngine.triageStructured(effectiveEmails.prefix(50).map { $0 })
+                let result = try? await FoundationModelEngine.triageStructured(workingSet.prefix(50).map { $0 })
                 aiTriageText = result?.summary ?? ""
                 isGeneratingTriage = false
             }
         }
         #endif
+    }
+
+    /// Load the bounded working set + exact archive total from the store.
+    private func loadBoundedWorkingSet() async {
+        archiveTotal = (try? await ArchiveDataService.shared.count()) ?? 0
+        guard workingSet.isEmpty else { return }
+        var acc: [MBOXParser.RawEmail] = []
+        let stream = ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
+        do { for try await b in stream { acc.append(contentsOf: b); if acc.count >= 2000 { break } } } catch { }
+        workingSet = Array(acc.prefix(2000))
     }
 
     private func loadV4Cleanup() async {
@@ -158,7 +160,7 @@ struct PersonalEmailOrganizerView: View {
             isGeneratingCleanup = true
             let result = await FoundationModelEngine.enhanceWithAI(
                 scope: .all,
-                emails: emails,
+                emails: workingSet,
                 context: "Suggest emails to archive, unsubscribe from, or clean up. Focus on newsletters, duplicates, and old automated emails."
             )
             aiCleanupSuggestions = result ?? "AI cleanup unavailable."
@@ -172,8 +174,10 @@ struct PersonalEmailOrganizerView: View {
         if loaded.nodeCount > 0 { graph = loaded; kgLoaded = true }
 
         guard !hasV3Analysis else { return }
+        var guardCount = 0
+        while workingSet.isEmpty && guardCount < 200 { try? await Task.sleep(nanoseconds: 50_000_000); guardCount += 1 }
         isV3Loading = true
-        let emailsCopy = effectiveEmails
+        let emailsCopy = workingSet
 
         guard AnalysisCoordinator.isEnabled else {
             nlpCategories = EmailNLPEngine.classifyAll(emailsCopy)
@@ -215,7 +219,7 @@ struct PersonalEmailOrganizerView: View {
         while !hasV3Analysis { try? await Task.sleep(nanoseconds: 100_000_000) }
         guard !hasPersonalAnalysis else { return }
         isPersonalAnalysisLoading = true
-        let emailsCopy = effectiveEmails
+        let emailsCopy = workingSet
 
         guard AnalysisCoordinator.isEnabled else {
             actionItems = PersonalAnalysisFeatures.extractActionItems(from: emailsCopy)
@@ -316,7 +320,7 @@ struct PersonalEmailOrganizerView: View {
                 welcomeCard
 
                 HStack(spacing: 12) {
-                    quickStatCard("Total Emails", value: "\(effectiveEmails.count)", icon: "envelope", color: .blue)
+                    quickStatCard("Total Emails", value: "\(workingSet.count)", icon: "envelope", color: .blue)
                     quickStatCard("Contacts", value: "\(uniqueContacts.count)", icon: "person.2", color: .green)
                     quickStatCard("Attachments", value: "\(totalAttachments)", icon: "paperclip", color: .brown)
                     quickStatCard("Date Range", value: dateRangeString, icon: "calendar", color: .purple)
@@ -336,14 +340,14 @@ struct PersonalEmailOrganizerView: View {
                 let categories = categorizeEmails()
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                     ForEach(categories.sorted(by: { $0.value.count > $1.value.count }), id: \.key) { category, emails in
-                        categoryCard(category, count: effectiveEmails.count)
+                        categoryCard(category, count: workingSet.count)
                     }
                 }
 
                 Divider()
 
                 sectionTitle("Recent Emails", icon: "clock", color: .orange)
-                let recent = effectiveEmails.sorted {
+                let recent = workingSet.sorted {
                     (MBOXParser.parseDate($0.headers["Date"] ?? "") ?? .distantPast) >
                     (MBOXParser.parseDate($1.headers["Date"] ?? "") ?? .distantPast)
                 }
@@ -733,7 +737,7 @@ struct PersonalEmailOrganizerView: View {
 
     private func computeContactStats() -> [ContactInfo] {
         var stats: [String: ContactInfo] = [:]
-        for email in effectiveEmails {
+        for email in workingSet {
             let fromFull = email.headers["From"] ?? ""
             let fromEmail = extractEmail(fromFull).lowercased()
             let fromName = fromFull.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? fromEmail
@@ -788,7 +792,7 @@ struct PersonalEmailOrganizerView: View {
                     } label: {
                         VStack(spacing: 4) {
                             Image(systemName: "tray.2").font(.system(size: 16)).foregroundColor(.blue)
-                            Text("\(effectiveEmails.count)").font(.system(size: 14, weight: .bold)).foregroundColor(.blue)
+                            Text("\(workingSet.count)").font(.system(size: 14, weight: .bold)).foregroundColor(.blue)
                             Text("All").font(.system(size: 9)).foregroundColor(.secondary)
                         }
                         .frame(maxWidth: .infinity)
@@ -864,7 +868,7 @@ struct PersonalEmailOrganizerView: View {
     // MARK: - Attachments View
 
     private var attachmentsView: some View {
-        let attachmentEmails = effectiveEmails.filter { !$0.attachments.isEmpty }
+        let attachmentEmails = workingSet.filter { !$0.attachments.isEmpty }
             .sorted {
                 (MBOXParser.parseDate($0.headers["Date"] ?? "") ?? .distantPast) >
                 (MBOXParser.parseDate($1.headers["Date"] ?? "") ?? .distantPast)
@@ -933,7 +937,7 @@ struct PersonalEmailOrganizerView: View {
 
                 let duplicateCount = countDuplicates()
                 let largeEmails = findLargeEmails()
-                let noSubject = effectiveEmails.filter { ($0.headers["Subject"] ?? "").isEmpty }
+                let noSubject = workingSet.filter { ($0.headers["Subject"] ?? "").isEmpty }
 
                 HStack(spacing: 12) {
                     cleanupCard("Potential Duplicates", value: "\(duplicateCount)", icon: "doc.on.doc", color: .indigo,
@@ -970,8 +974,8 @@ struct PersonalEmailOrganizerView: View {
                 Divider()
 
                 sectionTitle("Storage Breakdown", icon: "chart.pie", color: .blue)
-                let totalBodySize = effectiveEmails.reduce(0) { $0 + $1.plainBody.count + $1.htmlBody.count }
-                let totalAttSize = effectiveEmails.flatMap { $0.attachments }.reduce(0) { $0 + $1.size }
+                let totalBodySize = workingSet.reduce(0) { $0 + $1.plainBody.count + $1.htmlBody.count }
+                let totalAttSize = workingSet.flatMap { $0.attachments }.reduce(0) { $0 + $1.size }
                 HStack(spacing: 20) {
                     VStack {
                         Text(formatBytes(totalBodySize)).font(.system(size: 16, weight: .bold)).foregroundColor(.blue)
@@ -1191,7 +1195,7 @@ struct PersonalEmailOrganizerView: View {
 
     private var topSendersThisMonth: some View {
         let thirtyDaysAgo = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
-        let recentEmails = effectiveEmails.filter {
+        let recentEmails = workingSet.filter {
             (MBOXParser.parseDate($0.headers["Date"] ?? "") ?? .distantPast) > thirtyDaysAgo
         }
         var senderCounts: [String: Int] = [:]
@@ -1218,7 +1222,7 @@ struct PersonalEmailOrganizerView: View {
     }
 
     private var newsletterUnsubscribeSuggestions: some View {
-        let newsletters = effectiveEmails.filter { email in
+        let newsletters = workingSet.filter { email in
             let from = (email.headers["From"] ?? "").lowercased()
             return email.headers["List-Unsubscribe"] != nil ||
                    from.contains("noreply") || from.contains("no-reply") ||
@@ -1257,7 +1261,7 @@ struct PersonalEmailOrganizerView: View {
 
     private func computeDayOfWeekCounts() -> [Int] {
         var counts = Array(repeating: 0, count: 7)
-        for email in effectiveEmails {
+        for email in workingSet {
             if let date = MBOXParser.parseDate(email.headers["Date"] ?? "") {
                 let weekday = Calendar.current.component(.weekday, from: date) - 1
                 counts[weekday] += 1
@@ -1268,7 +1272,7 @@ struct PersonalEmailOrganizerView: View {
 
     private func computeHourCounts() -> [Int] {
         var counts = Array(repeating: 0, count: 24)
-        for email in effectiveEmails {
+        for email in workingSet {
             if let date = MBOXParser.parseDate(email.headers["Date"] ?? "") {
                 let hour = Calendar.current.component(.hour, from: date)
                 counts[hour] += 1
@@ -1715,15 +1719,15 @@ struct PersonalEmailOrganizerView: View {
     }
 
     private var uniqueContacts: Set<String> {
-        Set(effectiveEmails.compactMap { extractEmail($0.headers["From"] ?? "").lowercased() }.filter { !$0.isEmpty })
+        Set(workingSet.compactMap { extractEmail($0.headers["From"] ?? "").lowercased() }.filter { !$0.isEmpty })
     }
 
     private var totalAttachments: Int {
-        effectiveEmails.flatMap { $0.attachments }.count
+        workingSet.flatMap { $0.attachments }.count
     }
 
     private var dateRangeString: String {
-        let dates = effectiveEmails.compactMap { MBOXParser.parseDate($0.headers["Date"] ?? "") }
+        let dates = workingSet.compactMap { MBOXParser.parseDate($0.headers["Date"] ?? "") }
         guard let first = dates.min(), let last = dates.max() else { return "N/A" }
         let f = DateFormatter()
         f.dateFormat = "MMM yy"
@@ -1734,7 +1738,7 @@ struct PersonalEmailOrganizerView: View {
         var categories: [EmailCategory: [MBOXParser.RawEmail]] = [:]
         for cat in EmailCategory.allCases { categories[cat] = [] }
 
-        for email in effectiveEmails {
+        for email in workingSet {
             let from = (email.headers["From"] ?? "").lowercased()
             let subject = (email.headers["Subject"] ?? "").lowercased()
             let headers = email.headers
@@ -1789,7 +1793,7 @@ struct PersonalEmailOrganizerView: View {
 
     private func attachmentTypeStats() -> [(String, Int)] {
         var counts: [String: Int] = [:]
-        for att in effectiveEmails.flatMap({ $0.attachments }) {
+        for att in workingSet.flatMap({ $0.attachments }) {
             let ext = (att.filename as NSString).pathExtension.lowercased()
             let type = ext.isEmpty ? att.mimeType.components(separatedBy: "/").last ?? "unknown" : ext
             counts[type, default: 0] += 1
@@ -1800,7 +1804,7 @@ struct PersonalEmailOrganizerView: View {
     private func countDuplicates() -> Int {
         var seen: Set<String> = []
         var dupes = 0
-        for email in effectiveEmails {
+        for email in workingSet {
             let key = "\(email.headers["From"] ?? "")|\(email.headers["Subject"] ?? "")|\(email.headers["Date"] ?? "")"
             if seen.contains(key) { dupes += 1 }
             else { seen.insert(key) }
@@ -1809,7 +1813,7 @@ struct PersonalEmailOrganizerView: View {
     }
 
     private func findLargeEmails() -> [MBOXParser.RawEmail] {
-        effectiveEmails.filter { $0.plainBody.count + $0.htmlBody.count > 100_000 }
+        workingSet.filter { $0.plainBody.count + $0.htmlBody.count > 100_000 }
             .sorted { ($0.plainBody.count + $0.htmlBody.count) > ($1.plainBody.count + $1.htmlBody.count) }
     }
 }

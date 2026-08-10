@@ -1,6 +1,9 @@
 import Foundation
 
 struct EMLXParser {
+    /// Bump when message extraction/ordering changes — invalidates mid-file
+    /// resume checkpoints bound to the previous version (Part B5).
+    static let parserVersion = 1
 
     struct ParseResult {
         let emails: [MBOXParser.RawEmail]

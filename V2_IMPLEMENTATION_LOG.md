@@ -80,3 +80,19 @@ So R1 (migration) and R2 (search→FTS5) now have a **real, executed regression 
 - **"Now live on the App Store"** copy on `docs/index.html` — leave or change depends on actual release state (only the owner knows).
 - **Pricing drift** — landing page vs `AppStoreMetadata.txt` differ; correct numbers are a business call, not an engineering one.
 - **App Store Connect metadata** — the iCloud/PST/verify relabels also need to be applied in App Store Connect itself (the `.txt` is documentation only).
+
+---
+
+## 2026-08-07 — FINAL ZERO-REMAINDER DIRECTIVE RUN (engineering complete)
+
+14 commits (`d73b600`…`97d5efe`): schema versioning v1→v4; full-fidelity
+persistence + normalized tables + source occurrence identity; DedupPolicy;
+direct public-v1 JSON→SQLite migration (preserveAll, ID-coverage gate);
+review state in SQLite with real Trash; forensic state in SQLite with
+streamed HMAC audit chain; ArchiveLifecycleService + no-resurrection
+tombstone; full query parity (compiler, SQL filters/sorts, exact counts,
+verified exclusions); parser hardening (I/O truth, message ceiling, EML
+header fix, explicit rejection, returned reports); keyed-HMAC receipts;
+content-identity activation gate; derived live-cancellation +
+one-new-email invalidation tests; claim audit; qualification (139 tests ×2,
+Release build, 10K/100K production-path stress executed); docs + PR #4.

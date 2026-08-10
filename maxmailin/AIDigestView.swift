@@ -8,7 +8,9 @@
 import SwiftUI
 
 struct AIDigestView: View {
-    let emails: [MBOXParser.RawEmail]
+    // Part G1: zero-array digest. The generator streams a bounded working set
+    // of the selected period from the SQLite store — the view never receives
+    // or holds an archive array.
     var isPresented: Binding<Bool>?
     @State private var selectedPeriod: AIDigestGenerator.TimePeriod = .lastWeek
     @State private var sections: [AIDigestGenerator.DigestSection] = []
@@ -49,13 +51,11 @@ struct AIDigestView: View {
 
                 if selectedPeriod == .custom {
                     HStack(spacing: Spacing.medium) {
-                        DatePicker("From", selection: $customStart, displayedComponents: .date)
-                            .labelsHidden()
+                        ModernDateField(label: "From", date: $customStart)
                         Text("to")
                             .font(Typography.caption1)
                             .foregroundColor(AppColors.secondary)
-                        DatePicker("To", selection: $customEnd, displayedComponents: .date)
-                            .labelsHidden()
+                        ModernDateField(label: "To", date: $customEnd)
                     }
                 }
 
@@ -102,7 +102,7 @@ struct AIDigestView: View {
             }
         }
         #if os(macOS)
-        .frame(minWidth: 480, minHeight: 380)
+        .toolWindowFrame()
         #endif
         .featureTutorial(.aiDigest, key: "ai_digest_tutorial_seen", isPresented: $showTutorial)
     }
@@ -202,11 +202,9 @@ struct AIDigestView: View {
         let period = selectedPeriod
         let start = customStart
         let end = customEnd
-        let emailList = emails
 
         Task.detached {
             let results = await AIDigestGenerator.generateDigest(
-                emails: emailList,
                 period: period,
                 customStart: period == .custom ? start : nil,
                 customEnd: period == .custom ? end : nil

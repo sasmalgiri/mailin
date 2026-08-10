@@ -619,3 +619,29 @@ struct LegalAnalysisFeatures {
         return fallback
     }
 }
+
+// MARK: - Archive-wide streaming (v2 forensic completeness)
+//
+// Privilege classification is per-email, so it streams the ENTIRE archive from
+// the store one bounded page at a time — every document is classified for
+// privilege (no doc missed), while peak memory stays bounded by the page. This
+// is the archive-complete counterpart to `classifyPrivilege(emails:)` which
+// operates only on an in-memory subset.
+
+extension LegalAnalysisFeatures {
+    static func classifyPrivilege(
+        from service: ArchiveDataService,
+        cap: Int = 20_000,
+        batchSize: Int = 500
+    ) async throws -> [PrivilegeClassification] {
+        var out: [PrivilegeClassification] = []
+        let stream = await service.streamFullEmails(query: .all, batchSize: batchSize)
+        for try await batch in stream {
+            for email in batch {
+                out.append(classifySingle(email))
+                if out.count >= cap { return out }
+            }
+        }
+        return out
+    }
+}

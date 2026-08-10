@@ -1001,5 +1001,265 @@ extension FeatureTutorial {
             TutorialTip(icon: "chart.pie", text: "The coding distribution chart helps identify if your relevance criteria are too broad or too narrow.")
         ]
     )
+
+    static let emailTags = FeatureTutorial(
+        title: "Email Labels & AI Tags",
+        icon: "tag.fill",
+        overview: "Every email in the list can carry small colored labels (pills) that tell you what it is at a glance. Some labels are plain facts, some are the AI's best guess, and some are labels you add yourself. You are always in charge — anything the AI gets wrong takes one click to fix.",
+        quickStart: "Click the brain button (AI) above the list to turn smart labels on. Blue AI pills show what the computer thinks each email is. If a label is wrong, click the pill and then click the wrong label to remove it. Use the small tag button on any row to add your own labels.",
+        steps: [
+            TutorialStep(title: "Read the Pills", icon: "tag", color: .blue,
+                what: "Three kinds of labels, three colors.",
+                how: "GRAY (BS = Basic) shows plain facts read straight from the email: Sent, Received, Has Attachment. BLUE (AI) shows what the on-device AI concluded: a category like Newsletter or Personal, a mood, a priority, or a phishing warning. PURPLE (MN = Manual) shows labels you added yourself.",
+                tip: "Your purple manual labels always win — they are never overwritten by the AI."),
+            TutorialStep(title: "Turn AI Labels On", icon: "brain", color: .purple,
+                what: "The brain button switches between facts-only and smart labels.",
+                how: "Click the brain (AI) button above the list. Off = every row shows only plain facts. On = rows show the AI's analysis, and the AI filter chips (High Priority, Phishing…) light up so you can filter by them.",
+                tip: "The analysis runs once on your Mac and is saved — turning AI on later is instant, and nothing is sent to the internet."),
+            TutorialStep(title: "Fix a Wrong AI Label", icon: "hand.tap", color: .orange,
+                what: "One click removes a wrong label.",
+                how: "Click the blue AI pill on the email, then click the label that is wrong — it disappears from that email everywhere (pills, counts, filters). Changed your mind? The same menu has 'Restore removed AI tags'.",
+                tip: "Corrections are remembered — they survive closing and reopening the app."),
+            TutorialStep(title: "Add Your Own Label", icon: "plus.circle", color: .green,
+                what: "Tag emails the way YOU think about them.",
+                how: "Click the small tag button at the end of any row. Pick a category (Personal, Newsletter…), a mood, a priority, or Phishing. A checkmark shows what is applied; click again to remove. Your labels appear as a purple MN pill.",
+                tip: "Manual labels are great for marking emails the AI cannot know about — 'this one matters to my case'."),
+            TutorialStep(title: "Filter by Labels", icon: "line.3.horizontal.decrease.circle", color: .cyan,
+                what: "Labels become one-click filters.",
+                how: "The chip row above the list and the Smart Tags section in the sidebar filter the WHOLE archive by these labels — click 'High Priority' to see only high-priority emails, however many thousands there are.",
+                tip: "Combine chips with search: 'invoice' + the Phishing chip finds suspicious invoice emails.")
+        ],
+        tips: [
+            TutorialTip(icon: "checkmark.shield", text: "All analysis happens on this Mac. Your emails never leave your computer."),
+            TutorialTip(icon: "exclamationmark.triangle", text: "AI labels are good guesses, not facts — the pill menu says so, and correcting a wrong one takes one click."),
+            TutorialTip(icon: "arrow.uturn.backward", text: "Removed a label by mistake? Open the pill menu and click Restore."),
+            TutorialTip(icon: "gearshape", text: "Simple tells you what to do (category, importance, phishing). Turn on Pro for analyst labels — sentiment, medium priority, evidence.")
+        ]
+    )
+
+    static let piiReport = FeatureTutorial(
+        title: "PII Report",
+        icon: "person.text.rectangle",
+        overview: "Finds personally identifiable information hiding in your emails — phone numbers, credit cards, SSNs, IP addresses, passports and more. Everything is detected on this Mac; nothing is uploaded. Useful before sharing or producing emails, and for GDPR/privacy reviews.",
+        quickStart: "Click the PII button under the email list (or Scan for PII in the e-discovery workflow). Findings arrive grouped by type with the source email named for each. Use the chips to jump to one type, AI Clean-up to remove wrong matches, and Export CSV for the full list.",
+        steps: [
+            TutorialStep(title: "Scan the Current Filter", icon: "magnifyingglass", color: .blue,
+                what: "The report covers exactly what the list shows.",
+                how: "Whatever filter is active (a sender, a date range, a search) defines the scan. Up to 2,000 emails are scanned per run — the report says so plainly if your filter is larger.",
+                tip: "Narrow the filter first to scan a specific person or period."),
+            TutorialStep(title: "Read the Findings", icon: "list.bullet", color: .purple,
+                what: "Grouped by type, riskiest first.",
+                how: "Each type (SSN, credit card, phone…) shows its count and risk score; every value names the email it was found in. Click a chip to see only that type.",
+                tip: "Risk 7+ types (SSN, cards, passports) deserve review before any export leaves your hands."),
+            TutorialStep(title: "Clean Up Wrong Matches", icon: "sparkles", color: .orange,
+                what: "Pattern matching makes mistakes — one click fixes them.",
+                how: "AI Clean-up (Apple Intelligence, on-device) re-checks entries and removes ones that aren't really PII, like timestamps or order numbers. Undo restores them all.",
+                tip: "Repeated clicks are safe — checked entries are never re-judged."),
+            TutorialStep(title: "Export the Evidence", icon: "square.and.arrow.up", color: .green,
+                what: "A spreadsheet of every finding.",
+                how: "Export CSV writes type, value, risk, context and source email for the complete list — including entries past the 200-per-type display cap.",
+                tip: "Attach the CSV to a privacy review or redaction pass.")
+        ],
+        tips: [
+            TutorialTip(icon: "checkmark.shield", text: "Detection is 100% on-device. The report exists only while open — nothing is stored unless you export."),
+            TutorialTip(icon: "exclamationmark.triangle", text: "Automated pattern detection — some entries may not be correct; the header says so and the tools above fix it.")
+        ]
+    )
+
+    static let emailHistory = FeatureTutorial(
+        title: "Email History (Document Flow)",
+        icon: "clock.arrow.circlepath",
+        overview: "One timeline showing everything the archive knows about a single email — like SAP's document flow for a document number. When it was sent, when and from which file it entered the archive (with the file's fingerprint), every audit-logged action, annotations, and its current labels, Bates number, custodian and legal hold. Assembled from records the app already keeps.",
+        quickStart: "Open any email and click the clock button in the toolbar. The Timeline section lists dated events oldest-first; Current State lists what applies right now. Copy Report puts the whole history on the clipboard for case notes.",
+        steps: [
+            TutorialStep(title: "Read the Timeline", icon: "clock", color: .blue,
+                what: "Dated events, oldest first.",
+                how: "Sent/Received (the email's own date), Imported (when it entered this archive, from which file, at which position), annotations, and every audit-trail action that references this email.",
+                tip: "The import line names the source file and its SHA-256 — that's your provenance answer in one line."),
+            TutorialStep(title: "Check Current State", icon: "flag", color: .purple,
+                what: "What applies to the email right now.",
+                how: "Content fingerprint, evidence coding, Bates number, custodian and legal hold, review flags (pinned/read/archived/trash), your tags and label corrections.",
+                tip: "The content fingerprint proves the email hasn't changed since import — verify it any time from Forensic tools."),
+            TutorialStep(title: "Copy the Report", icon: "doc.on.doc", color: .green,
+                what: "The whole history as plain text.",
+                how: "Click Copy Report and paste into case notes, an incident ticket, or a court exhibit appendix.",
+                tip: "Investigators: paste it into the daily activity log so the case file carries per-email provenance.")
+        ],
+        tips: [
+            TutorialTip(icon: "checkmark.shield", text: "Nothing new is collected for this view — it reads the audit trail, custody records and review state the app already keeps."),
+            TutorialTip(icon: "building.columns", text: "For legal/forensic work this answers the defensibility question: what happened to this email, and can you prove it?")
+        ]
+    )
+
+    static let phishingTriage = FeatureTutorial(
+        title: "Phishing Triage",
+        icon: "shield.lefthalf.filled",
+        overview: "A daily verdict queue for suspicious emails your users report. Point it at a folder — every .eml or .mbox dropped there auto-imports, gets scored on-device, and waits for your one-click verdict. Confirmed phishing feeds a blocklist export, and every intake and verdict lands in the audit trail, so your incident record writes itself.",
+        quickStart: "Open Phishing Triage and choose the watched folder (the one users forward suspicious emails into). New arrivals appear pre-scored with a suggested verdict. Click Confirmed Phishing / Safe / Needs Info — or press ⌘1 / ⌘2 / ⌘3 for the top email. Export the IOC blocklist when you need to update your mail filter.",
+        steps: [
+            TutorialStep(title: "Set the Watched Folder", icon: "eye", color: .blue,
+                what: "The intake point for reported emails.",
+                how: "Click Choose Folder and pick a shared or synced folder. Anything saved there as .eml or .mbox imports automatically and joins the queue — duplicates are skipped by Message-ID.",
+                tip: "A folder your mail rule or users can drop into works best — intake then needs zero clicks."),
+            TutorialStep(title: "Read the Scores", icon: "gauge.with.needle", color: .orange,
+                what: "Each email arrives pre-analyzed.",
+                how: "The risk chip is the on-device phishing analysis; the IOC chip counts suspicious URLs, IPs, domains and hashes found inside. The lightbulb line explains the suggested verdict in one sentence.",
+                tip: "Suggestions are hints — your verdict is what goes on the record."),
+            TutorialStep(title: "Issue Verdicts", icon: "hand.tap", color: .green,
+                what: "One click per email; keyboard for speed.",
+                how: "Confirmed Phishing, Safe, or Needs Info. ⌘1/⌘2/⌘3 apply to the email at the top of the queue. The email leaves the queue and the verdict is written to the audit trail with your examiner name.",
+                tip: "Needs Info is a real verdict — use it when you're waiting on the reporter, and the email stays findable under its tag."),
+            TutorialStep(title: "Export the Blocklist", icon: "square.and.arrow.up", color: .red,
+                what: "Turn verdicts into protection.",
+                how: "Export IOC Blocklist writes a CSV of every indicator from confirmed-phishing emails — feed it to your mail gateway or firewall. The export is also audit-logged.",
+                tip: "Weekly is a good cadence; the count in the footer tells you when it's worth a fresh export.")
+        ],
+        tips: [
+            TutorialTip(icon: "checkmark.shield", text: "Analysis is on-device; the queue and verdicts never leave this Mac."),
+            TutorialTip(icon: "doc.badge.clock", text: "Compliance asks for your incident log? The audit trail already has every intake and verdict — export it from Audit Trail.")
+        ]
+    )
+
+    static let reviewDashboard = FeatureTutorial(
+        title: "Review Dashboard",
+        icon: "chart.bar.doc.horizontal",
+        overview: "The reviewer's morning answer to three questions: what's assigned to me, how fast am I moving, and is the privilege log complete? Progress comes from your Review Batches; velocity from the audit trail; and the privilege-log check finds the gap opposing counsel looks for — privileged-coded emails with no annotation explaining why.",
+        quickStart: "Open Review Dashboard. The top row shows assigned / reviewed / pending / velocity / estimated finish. The batch list shows each batch's progress. The Privilege log section turns red if any privileged email lacks an annotation — fix those before production. Copy Defensibility Summary puts the numbers on the clipboard.",
+        steps: [
+            TutorialStep(title: "Check the Numbers", icon: "number", color: .blue,
+                what: "Assignment and pace at a glance.",
+                how: "Velocity counts reviewed emails per active day (days with review actions in the audit trail); the estimate divides what's pending by that pace.",
+                tip: "A dropping velocity is the early warning that the production date is at risk."),
+            TutorialStep(title: "Work the Batches", icon: "rectangle.stack", color: .purple,
+                what: "Each batch's completion in one bar.",
+                how: "Batches come from Review Batches (Tools). Reviewed and skipped both count as processed; pending is what's left.",
+                tip: "Finish batches fully rather than sampling across them — partial batches are hard to defend."),
+            TutorialStep(title: "Close the Privilege Log", icon: "lock.shield", color: .red,
+                what: "Every withheld email needs a reason on record.",
+                how: "The dashboard lists privileged-coded emails that have no annotation. Open each and add the annotation stating the privilege basis.",
+                tip: "Do this daily, not at production time — memories of why something was privileged fade fast."),
+            TutorialStep(title: "Copy the Summary", icon: "doc.on.doc", color: .green,
+                what: "The defensibility numbers as text.",
+                how: "Copy Defensibility Summary includes assignment, velocity, per-batch progress and the privilege-log status — paste into the matter file. Copying is itself audit-logged.",
+                tip: "Attach it to the production letter; it answers the process questions before they're asked.")
+        ],
+        tips: [
+            TutorialTip(icon: "person", text: "This records a single reviewer's work on this Mac — it says so on the report, so nobody over-claims team coverage."),
+            TutorialTip(icon: "building.columns", text: "Pairs with eDiscovery: identification and collection there, daily review discipline here.")
+        ]
+    )
+
+    static let storyFile = FeatureTutorial(
+        title: "Story File",
+        icon: "text.book.closed",
+        overview: "For journalists and researchers: every annotation you make while reading becomes a numbered finding in one Markdown document, with its source email cited — sender, date, subject, and Message-ID. It's the answer to the editor's and the lawyer's question: how do you know this?",
+        quickStart: "Annotate emails as you research (the note button in forensic review). Open Story File from the Journalist hub — your findings appear in the order you recorded them, each with its citation. Give the story a working title, then Copy Markdown or Save it beside your draft.",
+        steps: [
+            TutorialStep(title: "Annotate While You Read", icon: "note.text", color: .purple,
+                what: "The annotation IS the finding.",
+                how: "When an email proves something, write the claim as its annotation: 'Confirms the payment was authorized on March 3.' Plain sentences make the best findings.",
+                tip: "One claim per annotation — compound notes are hard to cite."),
+            TutorialStep(title: "Review the File", icon: "text.book.closed", color: .blue,
+                what: "Findings in investigation order.",
+                how: "Findings are ordered by when you recorded them — the shape of the investigation itself. Each carries its source line and Message-ID, so anyone can verify against the original.",
+                tip: "A finding that reads wrong here usually means the annotation needs rewriting — fix it at the email."),
+            TutorialStep(title: "Export", icon: "square.and.arrow.up", color: .green,
+                what: "Markdown for your draft and your fact-checker.",
+                how: "Copy Markdown pastes anywhere; Save writes a .md file. The Source Index at the bottom doubles as the fact-checking worksheet.",
+                tip: "Everything stays on this Mac until you choose to share the file — source protection is the default.")
+        ],
+        tips: [
+            TutorialTip(icon: "checkmark.shield", text: "The archive never leaves your machine; the story file contains only what you wrote plus citation lines."),
+            TutorialTip(icon: "clock.arrow.circlepath", text: "Pair with Email History on any cited email to show its provenance — when and from which dump it arrived.")
+        ]
+    )
+
+    static let auditTrail = FeatureTutorial(
+        title: "Audit Trail",
+        icon: "clock.badge.checkmark",
+        overview: "The case's tamper-evident history. Every meaningful action — imports, evidence tags, triage verdicts, exports, verifications — is recorded with a hash that links to the entry before it, like links in a chain. Change one entry and the chain breaks visibly. The badge at the top shows the live verdict.",
+        quickStart: "Open the Audit Trail (forensic mode). Green 'Chain verified' means the log is exactly as written. Search or click a category chip to narrow the timeline; use Today / 7 Days for recent work. Click any entry to see its chain hashes. Daily Report copies today's log for the case file.",
+        steps: [
+            TutorialStep(title: "Trust the Badge", icon: "checkmark.shield", color: .green,
+                what: "The live integrity verdict.",
+                how: "On open, every entry's hash is recomputed and compared to the chain. Green = intact. Red TAMPERED = the log was altered — treat the case record as compromised and investigate.",
+                tip: "The check reruns every time you generate a Daily Report, so the report always states a fresh verdict."),
+            TutorialStep(title: "Find Anything", icon: "magnifyingglass", color: .blue,
+                what: "Search plus one-click categories.",
+                how: "Type to search actions, details and examiner names. The chips group entries by kind (Imports, Verdicts, Exports…) with counts — click one to see only that kind. Today / 7 Days / All narrows by date.",
+                tip: "Chip + search combine: 'Triage verdict' chip + a sender's name finds every verdict on their emails."),
+            TutorialStep(title: "Read an Entry", icon: "doc.text", color: .purple,
+                what: "Who did what, when — and the proof.",
+                how: "Each row shows the action, its detail, the time, sequence number and examiner. Click a row to reveal its hash and the hash it links to — the fingerprint that makes tampering visible.",
+                tip: "Sequence numbers never repeat or skip within an intact chain — a gap is itself evidence."),
+            TutorialStep(title: "Produce the Record", icon: "square.and.arrow.up", color: .orange,
+                what: "Reports and exports, one click.",
+                how: "Daily Report verifies the chain and copies today's activity log for the case file. Export saves the complete trail.",
+                tip: "Both actions are themselves logged — the record shows its own production.")
+        ],
+        tips: [
+            TutorialTip(icon: "lock.shield", text: "The trail lives only on this Mac. Nothing is sent anywhere."),
+            TutorialTip(icon: "building.columns", text: "In court terms: this is your contemporaneous record. Green badge + export = the defensibility exhibit.")
+        ]
+    )
+
+    static let workCenter = FeatureTutorial(
+        title: "Work Center",
+        icon: "tray.full.fill",
+        overview: "The daily front door, borrowed from how big ERP systems run a workday: your work finds you. Three tabs — MY WORK lists everything waiting on you, most urgent first; INTAKE REGISTER is the archive's movement log (every file that ever entered, with counts and fingerprints); JOBS shows the background workers with a Run Now button.",
+        quickStart: "Open Work Center first thing. Red items are defensibility holes (fix today); blue items are work queues; gray items are background state. Click any item to jump to its tool. Check the Intake Register when anyone asks what entered the archive; check Jobs if analysis seems incomplete.",
+        steps: [
+            TutorialStep(title: "Work the List", icon: "checklist", color: .blue,
+                what: "Prioritized, clickable, honest.",
+                how: "Privilege-log gaps come first (red), then triage verdicts and review batches (blue), then background notes (gray). Each item jumps to its tool. 'All clear' means exactly that.",
+                tip: "Make it the first click of the day — if it's green, you choose your work; if not, it chose for you."),
+            TutorialStep(title: "Read the Intake Register", icon: "square.and.arrow.down.on.square", color: .purple,
+                what: "Every movement into the archive.",
+                how: "One row per source file, newest first: kind, when, how many emails it holds now, how many duplicates were skipped, size, and the file's SHA-256 fingerprint. Migrated v1 rows appear as their own line, honestly marked as pre-register.",
+                tip: "The fingerprint is the provenance answer: anyone holding the original file can verify it matches."),
+            TutorialStep(title: "Mind the Jobs", icon: "gearshape.arrow.triangle.2.circlepath", color: .orange,
+                what: "The invisible workers, visible.",
+                how: "AI analysis (with live progress and Run Now), the watch folder, and the weekly digest — each with its current status and what it powers.",
+                tip: "If AI chips look sparse, this tab tells you why: analysis still running, or AI features disabled.")
+        ],
+        tips: [
+            TutorialTip(icon: "person", text: "This is YOUR work on THIS Mac — single-user by design until review sharing matures."),
+            TutorialTip(icon: "checkmark.shield", text: "Everything here is assembled from records the app already keeps; nothing new is collected and nothing leaves the machine.")
+        ]
+    )
+
+    static let workflows = FeatureTutorial(
+        title: "Workflows & Documents",
+        icon: "flowchart",
+        overview: "The way big systems like SAP run a workday: a job is a numbered record you complete step by step, and every step leaves a document you can quote later. mailin ships a workflow for each persona — Evidence Intake (forensic), Production Run (legal), Phishing Incident (IT), Story Build (journalist), Cleanup (personal) — grounded in the real professional frameworks (NIST 800-86, EDRM, NIST 800-61).",
+        quickStart: "Work Center ▸ Workflows ▸ pick your template ▸ Start. You get a WF-#### record. Confirm each operation as you finish it — mailin records who did it, when, and the document number it produced. Close and reopen any time; the run resumes. Copy or Print the run report for the file. Look any number up in the Documents tab.",
+        steps: [
+            TutorialStep(title: "Start a Run", icon: "play.circle", color: .blue,
+                what: "One job = one numbered record.",
+                how: "Pick a template for your persona and Start. It creates a WF-YYYY-#### instance — the day-to-day work record, separate from the audit trail, that you can reopen and report on.",
+                tip: "Resume open runs from the same tab — nothing is lost when you close the window."),
+            TutorialStep(title: "Confirm Operations", icon: "checkmark.circle", color: .green,
+                what: "Each step, confirmed, with proof.",
+                how: "Confirm records who/when/result. Steps that produce something (an import, a verdict, an export, a report, a story version) post that document automatically — its number shows on the step.",
+                tip: "The posted number is the evidence the step happened — quote it in a ticket, letter, or case file."),
+            TutorialStep(title: "Look Up & Trace", icon: "number.square", color: .purple,
+                what: "Every number resolves to its record.",
+                how: "Documents tab: type any number or word. Tap a document to see who created it, its notes, and any reversal. Master elements carry aliases too (SRC-#### for source files).",
+                tip: "Searching a WF or document number in the Audit Trail shows the exact actions behind it."),
+            TutorialStep(title: "Correct with a Reversal", icon: "arrow.uturn.backward", color: .orange,
+                what: "Records are never edited — they're reversed.",
+                how: "A mistake isn't erased; you post a reversal (storno) that references the original, and add a note explaining why. Both link to each other, so the history stays honest.",
+                tip: "This is what makes the record defensible — nothing can be quietly changed after the fact."),
+            TutorialStep(title: "Report & Print", icon: "printer", color: .cyan,
+                what: "The run as a filed document.",
+                how: "Copy Report or Print renders the whole run — every operation, who confirmed it, and the documents it posted — as a plain report for the case/incident/story file.",
+                tip: "Attach it to the matter; it's the contemporaneous record of exactly what was done.")
+        ],
+        tips: [
+            TutorialTip(icon: "person", text: "Runs record a single examiner on this Mac; set your name in Settings so the who-stamp is meaningful."),
+            TutorialTip(icon: "checkmark.shield", text: "Everything is local — workflows, documents and notes never leave your machine."),
+            TutorialTip(icon: "slider.horizontal.3", text: "Built-in templates are a starting point; the steps mirror how each profession actually works.")
+        ]
+    )
 }
 // swiftlint:enable type_body_length file_length

@@ -4,6 +4,13 @@ struct NearDuplicateDetectionView: View {
     let emails: [MBOXParser.RawEmail]
     var isPresented: Binding<Bool>?
 
+    /// Part M(b): bump when the near-duplicate algorithm changes — persisted
+    /// findings at an older version are recomputed instead of reused.
+    static let algoVersion = 1
+    /// Groups hydrated per page from the persisted findings — bounded resident
+    /// set; no `[RawEmail]` archive list is retained.
+    static let persistedPageSize = 50
+
     @State private var threshold: Double = 0.85
     @State private var groups: [EmailNLPEngine.NearDuplicateGroup] = []
     @State private var isAnalyzing = false
@@ -11,6 +18,8 @@ struct NearDuplicateDetectionView: View {
     @State private var aiInsights: String?
     @State private var isLoadingAI = false
     @State private var showTutorial = false
+    @State private var persistedGroupCount = 0
+    @State private var loadedGroupCount = 0
     @Environment(\.dismiss) private var envDismiss
 
     private var visibleGroups: [EmailNLPEngine.NearDuplicateGroup] {
@@ -100,13 +109,24 @@ struct NearDuplicateDetectionView: View {
                     ForEach(visibleGroups) { group in
                         groupRow(group)
                     }
+                    if loadedGroupCount < persistedGroupCount {
+                        Button {
+                            Task { await loadNextPersistedPage() }
+                        } label: {
+                            Label("Load More Groups (\(persistedGroupCount - loadedGroupCount) remaining)",
+                                  systemImage: "arrow.down.circle")
+                                .font(Typography.caption1)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(AppColors.primary)
+                    }
                 }
             }
         }
-        .onAppear { analyze() }
+        .onAppear { loadPersistedOrAnalyze() }
         .featureTutorial(.nearDuplicates, key: "near_duplicates_tutorial_seen", isPresented: $showTutorial)
         #if os(macOS)
-        .frame(minWidth: 460, minHeight: 360)
+        .toolWindowFrame()
         #endif
         .resizableSheet()
     }
@@ -328,6 +348,59 @@ struct NearDuplicateDetectionView: View {
         if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
     }
 
+    // MARK: - Persisted findings (Part M b)
+
+    /// Reopen path: page the PERSISTED findings (id pairs/groups + similarity,
+    /// stamped with algorithm version + corpus revision) instead of re-running
+    /// the O(n²) similarity scan. Falls back to a fresh analysis when nothing
+    /// valid is persisted. Explicit "Find Near-Duplicates" / "Re-analyze"
+    /// always recomputes (and re-persists).
+    private func loadPersistedOrAnalyze() {
+        Task { @MainActor in
+            let store = SQLiteEmailStore.shared
+            let revision = (try? await ArchiveCorpusRevision.shared.reconciled()) ?? 0
+            let meta = (try? await store.nearDuplicateMeta()) ?? (algoVersion: 0, corpusRevision: 0)
+            let count = (try? await store.nearDuplicateGroupCount()) ?? 0
+            guard count > 0, meta.algoVersion == Self.algoVersion, meta.corpusRevision == revision else {
+                analyze()
+                return
+            }
+            persistedGroupCount = count
+            loadedGroupCount = 0
+            groups = []
+            removedGroupIDs.removeAll()
+            await loadNextPersistedPage()
+        }
+    }
+
+    /// Hydrate ONE bounded page of persisted groups (~50 groups' member
+    /// emails hydrated per page, appended for review).
+    @MainActor
+    private func loadNextPersistedPage() async {
+        let store = SQLiteEmailStore.shared
+        let keys = (try? await store.nearDuplicateGroupKeysPage(limit: Self.persistedPageSize, offset: loadedGroupCount)) ?? []
+        guard !keys.isEmpty else { return }
+        let members = (try? await store.nearDuplicateMembers(groupKeys: keys)) ?? []
+        let byGroup = Dictionary(grouping: members, by: \.groupKey)
+        let hydrated = (try? await ArchiveDataService.shared.fullEmails(ids: members.map(\.emailID))) ?? []
+        let emailByID = Dictionary(uniqueKeysWithValues: hydrated.map { ($0.id, $0) })
+        var page: [EmailNLPEngine.NearDuplicateGroup] = []
+        for key in keys {
+            guard let rows = byGroup[key],
+                  let repRow = rows.first(where: { $0.isRepresentative }),
+                  let representative = emailByID[repRow.emailID] else { continue }
+            let duplicates = rows.filter { !$0.isRepresentative }.compactMap { emailByID[$0.emailID] }
+            guard !duplicates.isEmpty else { continue }
+            page.append(EmailNLPEngine.NearDuplicateGroup(
+                representative: representative,
+                duplicates: duplicates,
+                similarityScore: repRow.similarity
+            ))
+        }
+        groups += page
+        loadedGroupCount += keys.count
+    }
+
     private func analyze() {
         isAnalyzing = true
         removedGroupIDs.removeAll()
@@ -338,7 +411,30 @@ struct NearDuplicateDetectionView: View {
             await MainActor.run {
                 groups = results
                 isAnalyzing = false
+                persistedGroupCount = results.count
+                loadedGroupCount = results.count
             }
+            // Part M(b): persist the findings — compact rows of {group,
+            // member id, representative flag, similarity} + algorithm version
+            // + corpus revision — so the next open pages them instead of
+            // recomputing.
+            let rows = results.flatMap { group -> [SQLiteEmailStore.NearDupMemberRow] in
+                let key = group.representative.id.uuidString
+                let representative = SQLiteEmailStore.NearDupMemberRow(
+                    groupKey: key, emailID: group.representative.id,
+                    isRepresentative: true, similarity: group.similarityScore
+                )
+                let members = group.duplicates.map {
+                    SQLiteEmailStore.NearDupMemberRow(
+                        groupKey: key, emailID: $0.id,
+                        isRepresentative: false, similarity: group.similarityScore
+                    )
+                }
+                return [representative] + members
+            }
+            let store = SQLiteEmailStore.shared
+            let revision = (try? await store.corpusRevision()) ?? 0
+            try? await store.nearDuplicatesReplace(rows, algoVersion: Self.algoVersion, corpusRevision: revision)
         }
     }
 }

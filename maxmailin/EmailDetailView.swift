@@ -12,7 +12,10 @@ import UIKit
 
 struct EmailDetailView: View {
     let email: MBOXParser.RawEmail
-    var allEmails: [MBOXParser.RawEmail] = []
+    /// Part G: prev/next navigation needs only the ORDERED VISIBLE IDS of the
+    /// current filtered list (the list's loaded page state), never the corpus.
+    /// The caller hydrates the neighbor by id when `onNavigate` fires.
+    var orderedIDs: [EmailID] = []
     var onNavigate: ((UUID) -> Void)? = nil
     var onClose: (() -> Void)? = nil
     var searchText: String = ""
@@ -35,6 +38,8 @@ struct EmailDetailView: View {
     @State private var exportError: String?
     @State private var cachedSHA256: String = ""
     @State private var cachedMD5: String = ""
+    @State private var showThreadStory = false
+    @State private var showHistory = false
     #if os(iOS)
     @State private var showShareSheet = false
     @State private var shareItems: [Any] = []
@@ -45,6 +50,7 @@ struct EmailDetailView: View {
     @State private var showReplySheet = false
     @State private var replyText = ""
     @State private var isGeneratingReply = false
+    @State private var replyGenerationTask: Task<Void, Never>?
     @State private var selectedReplyTone: Int = 0
 
     // Compose / Reply / Forward
@@ -55,7 +61,7 @@ struct EmailDetailView: View {
     @State private var showTranslation = false
 
     private var currentIndex: Int? {
-        allEmails.firstIndex(where: { $0.id == email.id })
+        orderedIDs.firstIndex(of: email.id)
     }
     private var hasPrev: Bool {
         guard let idx = currentIndex else { return false }
@@ -63,20 +69,20 @@ struct EmailDetailView: View {
     }
     private var hasNext: Bool {
         guard let idx = currentIndex else { return false }
-        return idx < allEmails.count - 1
+        return idx < orderedIDs.count - 1
     }
 
     private func advanceToNextUnreviewed() {
         guard let idx = currentIndex, let navigate = onNavigate else { return }
-        for i in (idx + 1)..<allEmails.count {
-            let tag = forensicManager.tagForEmail(allEmails[i].id)
+        for i in (idx + 1)..<orderedIDs.count {
+            let tag = forensicManager.tagForEmail(orderedIDs[i])
             if tag == .none {
-                navigate(allEmails[i].id)
+                navigate(orderedIDs[i])
                 return
             }
         }
-        if hasNext, idx + 1 < allEmails.count {
-            navigate(allEmails[idx + 1].id)
+        if hasNext, idx + 1 < orderedIDs.count {
+            navigate(orderedIDs[idx + 1])
         }
     }
 
@@ -130,6 +136,17 @@ struct EmailDetailView: View {
             printEmail()
         }
         .animation(AnimationTiming.normal, value: showCleanView)
+        .sheet(isPresented: $showThreadStory) {
+            ThreadStoryView(email: email) { id in
+                onNavigate?(id)
+            }
+        }
+        #if os(iOS)
+        .sheet(isPresented: $showHistory) {
+            EmailHistoryView(email: email)
+                .presentationDetents([.large])
+        }
+        #endif
         #if os(iOS)
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(items: shareItems)
@@ -147,10 +164,12 @@ struct EmailDetailView: View {
 
                 mailActionGroup(
                     actions: [
-                        ("trash", "Delete", {
+                        ("trash", "Trash",
+                         "Move to Trash — restorable from the Trash view, never a permanent delete", {
                             NotificationCenter.default.post(name: .deleteCurrentEmail, object: email.id)
                         }),
-                        ("archivebox", "Archive", {
+                        ("archivebox", "Archive",
+                         "Archive — hides it from the main list; find it again with the Archived filter", {
                             NotificationCenter.default.post(name: .archiveCurrentEmail, object: email.id)
                         }),
                     ]
@@ -160,14 +179,18 @@ struct EmailDetailView: View {
 
                 mailActionGroup(
                     actions: [
-                        ("envelope.badge.fill", "Mark Read/Unread", {
+                        ("envelope.badge.fill", "Read",
+                         "Toggle read/unread — unread emails show with a highlighted row", {
                             NotificationCenter.default.post(name: .toggleReadCurrentEmail, object: email.id)
                         }),
-                        ("flag.fill", "Flag", {
+                        ("flag.fill", "Pin",
+                         "Pin/flag this email — pinned emails surface with the Pinned filter and stay marked across restarts", {
                             NotificationCenter.default.post(name: .togglePinEmail, object: email.id)
                         }),
                     ]
                 )
+
+                HelpDot(text: "Trash is always restorable. Archive hides an email from the main list. Read/unread and Pin mark emails and stick across restarts — hover any button for details.")
 
                 mailActionDivider
 
@@ -175,20 +198,35 @@ struct EmailDetailView: View {
                     #if canImport(FoundationModels)
                     if #available(macOS 26, iOS 26, *) {
                         if FoundationModelEngine.isAvailable {
-                            mailIconButton(icon: "sparkles", tooltip: "AI Reply", color: .purple) {
+                            mailIconButton(icon: "sparkles", tooltip: "Draft a reply with on-device AI — pick a tone, edit before sending; nothing leaves your Mac", color: .purple) {
                                 showReplySheet = true
                             }
                         }
                     }
                     #endif
-                    mailIconButton(icon: "translate", tooltip: "Translate", color: AppColors.secondary) {
+                    mailIconButton(icon: "text.bubble", tooltip: "Thread Story — the whole conversation as a timeline", color: AppColors.primary) {
+                        showThreadStory = true
+                    }
+                    mailIconButton(icon: "clock.arrow.circlepath", tooltip: "History — everything that happened to this email: when it arrived, from which file, every action taken, and its current labels and holds", color: AppColors.primary) {
+                        #if os(macOS)
+                        let historyEmail = email
+                        ToolWindowPresenter.shared.open(title: "Email History") {
+                            AnyView(EmailHistoryView(
+                                email: historyEmail,
+                                onClose: { ToolWindowPresenter.shared.close(title: "Email History") }))
+                        }
+                        #else
+                        showHistory = true
+                        #endif
+                    }
+                    mailIconButton(icon: "translate", tooltip: "Translate this email using the system translator — fully offline once a language is downloaded", color: AppColors.secondary) {
                         showTranslation = true
                     }
                     .translationPresentation(
                         isPresented: $showTranslation,
                         text: !email.plainBody.isEmpty ? email.plainBody : email.htmlBody.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
                     )
-                    mailIconButton(icon: "printer", tooltip: "Print", color: AppColors.secondary) {
+                    mailIconButton(icon: "printer", tooltip: "Print this email with its headers (⌘P)", color: AppColors.secondary) {
                         printEmail()
                     }
                     .keyboardShortcut("p", modifiers: .command)
@@ -210,6 +248,12 @@ struct EmailDetailView: View {
                         Label("Archive", systemImage: "archivebox")
                     }
                     Divider()
+                    Button { showThreadStory = true } label: {
+                        Label("Thread Story", systemImage: "text.bubble")
+                    }
+                    Button { showHistory = true } label: {
+                        Label("Email History", systemImage: "clock.arrow.circlepath")
+                    }
                     Button { showTranslation = true } label: {
                         Label("Translate", systemImage: "translate")
                     }
@@ -229,7 +273,7 @@ struct EmailDetailView: View {
                     HStack(spacing: 4) {
                         Button {
                             if let idx = currentIndex, idx > 0 {
-                                onNavigate?(allEmails[idx - 1].id)
+                                onNavigate?(orderedIDs[idx - 1])
                             }
                         } label: {
                             Image(systemName: "chevron.left")
@@ -238,18 +282,18 @@ struct EmailDetailView: View {
                         }
                         .buttonStyle(.plain)
                         .disabled(!hasPrev)
-                        .help("Previous email")
+                        .help("Open the previous email in the current filtered list (↑ or K)")
                         .keyboardShortcut(.upArrow, modifiers: [.command])
 
                         if let idx = currentIndex {
-                            Text("\(idx + 1)/\(allEmails.count)")
+                            Text("\(idx + 1)/\(orderedIDs.count)")
                                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                                 .foregroundColor(AppColors.secondary)
                         }
 
                         Button {
-                            if let idx = currentIndex, idx < allEmails.count - 1 {
-                                onNavigate?(allEmails[idx + 1].id)
+                            if let idx = currentIndex, idx < orderedIDs.count - 1 {
+                                onNavigate?(orderedIDs[idx + 1])
                             }
                         } label: {
                             Image(systemName: "chevron.right")
@@ -258,7 +302,7 @@ struct EmailDetailView: View {
                         }
                         .buttonStyle(.plain)
                         .disabled(!hasNext)
-                        .help("Next email")
+                        .help("Open the next email in the current filtered list (↓ or J)")
                         .keyboardShortcut(.downArrow, modifiers: [.command])
                     }
                     .padding(.horizontal, 6)
@@ -268,7 +312,7 @@ struct EmailDetailView: View {
                 }
 
                 #if os(macOS)
-                mailIconButton(icon: "xmark", tooltip: "Close", color: AppColors.secondary) {
+                mailIconButton(icon: "xmark", tooltip: "Close this email and return to the list (Esc)", color: AppColors.secondary) {
                     onClose?()
                 }
                 .padding(.leading, 6)
@@ -287,10 +331,12 @@ struct EmailDetailView: View {
     }
 
     #if os(macOS)
-    private func mailActionGroup(actions: [(String, String, () -> Void)]) -> some View {
+    /// (icon, short visible label, long hover help, action) — the sentence
+    /// belongs in the tooltip, never in the button face.
+    private func mailActionGroup(actions: [(String, String, String, () -> Void)]) -> some View {
         HStack(spacing: 1) {
             ForEach(Array(actions.enumerated()), id: \.offset) { _, action in
-                Button(action: action.2) {
+                Button(action: action.3) {
                     HStack(spacing: 4) {
                         Image(systemName: action.0)
                             .font(.system(size: 11, weight: .medium))
@@ -304,7 +350,9 @@ struct EmailDetailView: View {
                     .cornerRadius(5)
                 }
                 .buttonStyle(.plain)
-                .help(action.1)
+                .help(action.2)
+                .accessibilityLabel(action.1)
+                .accessibilityHint(action.2)
             }
         }
     }
@@ -545,6 +593,7 @@ struct EmailDetailView: View {
                                         .font(Typography.caption1)
                                 }
                                 .buttonStyle(.plain)
+                            .help("Preview this attachment without saving it")
                                 .foregroundColor(AppColors.primary)
                                 .accessibilityLabel("Preview \(att.filename)")
                             }
@@ -557,6 +606,7 @@ struct EmailDetailView: View {
                                     .font(Typography.caption1)
                             }
                             .buttonStyle(SecondaryButtonStyle())
+                            .help("Save this attachment to a folder you choose")
                             .disabled(att.fileURL == nil)
                             .accessibilityLabel("Download \(att.filename.isEmpty ? "attachment" : att.filename)")
                         }
@@ -585,6 +635,26 @@ struct EmailDetailView: View {
                 Button { if storeManager.requirePremium() { exportAsTIFF() } } label: {
                     Label("TIFF Image (.tiff)", systemImage: "photo.artframe")
                 }
+
+                Divider()
+
+                // Parity with the sidebar / list Export menus: the remaining
+                // unified formats over THIS email (the persona buttons above
+                // already provide single-email Word/CSV/PDF/TIFF/plain text).
+                UnifiedExportSections(
+                    scope: { .explicit([email.id]) },
+                    gate: { storeManager.requirePremium() },
+                    omit: [.word, .csv, .pdfFiles, .tiffFiles, .printText],
+                    emailCount: 1,
+                    requiresPremium: true,
+                    share: { url in
+                        #if os(iOS)
+                        iOSShareFile(at: url)
+                        #endif
+                    },
+                    errorMessage: $exportError
+                )
+                .environmentObject(storeManager)
             } label: {
                 Label(storeManager.isPremium ? "Export Email" : "Export Email (Pro)", systemImage: "square.and.arrow.up")
             }
@@ -616,6 +686,10 @@ struct EmailDetailView: View {
         case .pdf:
             Button { if storeManager.requirePremium() { exportAsPDF() } } label: {
                 Label("PDF Document", systemImage: "doc.richtext")
+            }
+        case .word:
+            Button { if storeManager.requirePremium() { exportAsWord() } } label: {
+                Label("Word Document (.doc)", systemImage: "doc.badge.ellipsis")
             }
         case .batesPDF:
             Button { if storeManager.requireProfessional() { exportBatesStampedPDF() } } label: {
@@ -667,6 +741,9 @@ struct EmailDetailView: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .help(tag == .none
+                      ? "Clear the evidence tag from this email"
+                      : "Tag as \(tag.rawValue) for the review — tags persist, feed the evidence filters, and are logged in the audit trail\(autoAdvanceAfterTag ? "; auto-advances to the next unreviewed email" : "")")
                 .accessibilityLabel("Tag as \(tag.rawValue)")
             }
             Spacer()
@@ -1131,22 +1208,20 @@ struct EmailDetailView: View {
                 #if canImport(FoundationModels)
                 if #available(macOS 26, iOS 26, *) {
                     Button {
-                        generateReply()
+                        if isGeneratingReply { stopReplyGeneration() } else { generateReply() }
                     } label: {
                         HStack(spacing: Spacing.xSmall) {
                             if isGeneratingReply {
-                                ProgressView()
-                                    .scaleEffect(0.7)
-                                    .frame(width: 16, height: 16)
+                                Image(systemName: "stop.fill")
                             } else {
                                 Image(systemName: "sparkles")
                             }
-                            Text(isGeneratingReply ? "Generating..." : "Generate Reply")
+                            Text(isGeneratingReply ? "Stop" : "Generate Reply")
                         }
                         .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(PrimaryButtonStyle())
-                    .disabled(isGeneratingReply)
+                    .help(isGeneratingReply ? "Stop generating — keeps the draft so far" : "Draft a reply with on-device AI")
                 }
                 #endif
 
@@ -1200,19 +1275,28 @@ struct EmailDetailView: View {
             replyText = ""
             let tones = FoundationModelEngine.ReplyTone.allCases
             let tone = tones.indices.contains(selectedReplyTone) ? tones[selectedReplyTone] : .professional
-            Task { @MainActor in
+            replyGenerationTask = Task { @MainActor in
                 do {
                     let _ = try await FoundationModelEngine.suggestReply(to: email, tone: tone) { text in
+                        guard !Task.isCancelled else { return }
                         replyText = text
                     }
-                    isGeneratingReply = false
+                    if !Task.isCancelled { isGeneratingReply = false }
                 } catch {
+                    guard !Task.isCancelled else { return }
                     replyText = "Failed to generate reply: \(error.localizedDescription)"
                     isGeneratingReply = false
                 }
             }
         }
         #endif
+    }
+
+    /// Stop keeps the partial draft — interrupting isn't discarding.
+    private func stopReplyGeneration() {
+        replyGenerationTask?.cancel()
+        replyGenerationTask = nil
+        isGeneratingReply = false
     }
 
     private var subjectLine: String {
@@ -1475,6 +1559,65 @@ struct EmailDetailView: View {
                 }
             }
         }
+    }
+
+    /// Word export: an HTML document with the Office XML namespace header —
+    /// the HTML-based .doc interchange format Word has opened natively for
+    /// two decades (no third-party dependency, preserves formatting).
+    private func exportAsWord() {
+        let sanitized = subjectLine
+            .replacingOccurrences(of: " ", with: "_")
+            .filter { !"/\\:*?\"<>|".contains($0) }
+            .prefix(100)
+        let fileName = "\(sanitized.isEmpty ? "email" : String(sanitized)).doc"
+
+        func htmlEscape(_ s: String) -> String {
+            s.replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;")
+        }
+        let bodyHTML = email.htmlBody.isEmpty
+            ? "<p>" + htmlEscape(emailBody).replacingOccurrences(of: "\n", with: "<br>") + "</p>"
+            : email.htmlBody
+        var headerRows = ""
+        for (label, key) in [("Subject", "Subject"), ("From", "From"), ("To", "To"),
+                             ("Cc", "Cc"), ("Date", "Date"), ("Message-ID", "Message-ID")] {
+            let value = header(key)
+            if !value.isEmpty {
+                headerRows += "<tr><td style=\"font-weight:bold;padding:2px 12px 2px 0;white-space:nowrap;vertical-align:top\">\(label)</td><td style=\"padding:2px 0\">\(htmlEscape(value))</td></tr>"
+            }
+        }
+        let doc = """
+        <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word">
+        <head><meta charset="utf-8"><title>\(htmlEscape(subjectLine))</title>
+        <!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View></w:WordDocument></xml><![endif]-->
+        <style>body{font-family:Calibri,Helvetica,sans-serif;font-size:11pt} table.hdr{border-bottom:1px solid #999;margin-bottom:14px;font-size:10pt}</style>
+        </head><body>
+        <table class="hdr">\(headerRows)</table>
+        \(bodyHTML)
+        </body></html>
+        """
+
+        #if os(macOS)
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = fileName
+        panel.canCreateDirectories = true
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                try FileUtils.writeString(doc, to: url)
+            } catch {
+                exportError = "Failed to export as Word: \(error.localizedDescription)"
+            }
+        }
+        #else
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+        do {
+            try FileUtils.writeString(doc, to: url)
+            iOSShareFile(at: url)
+        } catch {
+            exportError = "Failed to export as Word: \(error.localizedDescription)"
+        }
+        #endif
     }
 
     private func exportAsPlainText() {
@@ -2147,8 +2290,8 @@ struct EmailDetailView: View {
             HStack(spacing: Spacing.small) {
                 if sigResult.status != .notSigned {
                     HStack(spacing: 4) {
-                        Image(systemName: sigResult.status == .valid ? "checkmark.seal.fill" : sigResult.status == .unknownSigner ? "questionmark.circle.fill" : "xmark.seal.fill")
-                            .foregroundColor(sigResult.status == .valid ? .green : sigResult.status == .unknownSigner ? .orange : .red)
+                        Image(systemName: Self.smimeBadgeIcon(for: sigResult.status))
+                            .foregroundColor(Self.smimeBadgeColor(for: sigResult.status))
                             .font(.footnote)
                         VStack(alignment: .leading, spacing: 0) {
                             Text("Signature: \(sigResult.status.rawValue)")
@@ -2163,7 +2306,7 @@ struct EmailDetailView: View {
                     }
                     .padding(.horizontal, Spacing.small)
                     .padding(.vertical, Spacing.xxxSmall)
-                    .background(sigResult.status == .valid ? Color.green.opacity(0.1) : Color.orange.opacity(0.1))
+                    .background(Self.smimeBadgeColor(for: sigResult.status).opacity(0.1))
                     .cornerRadius(CornerRadius.small)
                 }
                 if isEncrypted {
@@ -2183,6 +2326,28 @@ struct EmailDetailView: View {
                 Spacer()
             }
         }
+        }
+    }
+
+    /// Part V: four DISTINCT verdict presentations — exhaustive, no ambiguous
+    /// "Valid" and no shared icon/color between semantically different states.
+    private static func smimeBadgeIcon(for status: SMIMEHandler.SignatureStatus) -> String {
+        switch status {
+        case .validTrusted:      return "checkmark.seal.fill"
+        case .validUntrustedCert: return "checkmark.seal"
+        case .invalid:           return "xmark.seal.fill"
+        case .unverifiable:      return "questionmark.circle.fill"
+        case .notSigned:         return "seal"
+        }
+    }
+
+    private static func smimeBadgeColor(for status: SMIMEHandler.SignatureStatus) -> Color {
+        switch status {
+        case .validTrusted:      return .green
+        case .validUntrustedCert: return .orange
+        case .invalid:           return .red
+        case .unverifiable:      return .gray
+        case .notSigned:         return .secondary
         }
     }
 

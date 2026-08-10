@@ -14,13 +14,40 @@ class ForensicManager: ObservableObject {
     @AppStorage("forensicExaminerName") var examinerName = ""
     @AppStorage("forensicOrganization") var organization = ""
 
+    // §21: SQLite (shared canonical DB) is the durable authority for all
+    // forensic state. The @Published values below are BOUNDED caches:
+    //   • sourceFileHashes — one row per imported file (naturally bounded).
+    //   • auditLog — the most recent `auditDisplayLimit` entries only;
+    //     verification/export stream the full log from the DB in order.
+    //   • evidenceTags/tagTimestamps/annotations — hydrated up to
+    //     `tagHydrationCap` rows; exact counts/ID sets come from SQL.
+    //   • perEmailHashes — visible-window/import-batch cache only (never the
+    //     archive); rows are fetched per window/export batch from the DB.
     @Published var sourceFileHashes: [SourceFileHash] = []
     @Published private(set) var auditLog: [AuditEntry] = []
+    @Published private(set) var auditTotalCount: Int = 0
     @Published var evidenceTags: [UUID: EvidenceTag] = [:]
     @Published var tagTimestamps: [UUID: Date] = [:]
     @Published var annotations: [UUID: Annotation] = [:]
     @Published var perEmailHashes: [UUID: EmailHash] = [:]
     @Published var integrityStatus: IntegrityStatus = .unknown
+
+    static let auditDisplayLimit = 500
+    static let tagHydrationCap = 50_000
+    static let hashWindowCap = 5_000
+
+    /// Durable backing store (the shared canonical SQLite DB). Test seam.
+    static var testStoreOverride: SQLiteEmailStore?
+    private var store: SQLiteEmailStore { Self.testStoreOverride ?? .shared }
+
+    /// Chain cursor for O(1) appends without holding the whole log.
+    private var auditSequence = 0
+    private var lastAuditHash = "GENESIS"
+    /// H2: appends are queued until the durable chain cursor is loaded —
+    /// otherwise an early logAction would collide with existing seq numbers
+    /// (PRIMARY KEY violation → false 'tampered') or fork the chain.
+    private var chainReady = false
+    private var pendingActions: [(action: String, detail: String)] = []
 
     private static let hmacKeychainKey = "forensicHMACKey"
 
@@ -209,11 +236,193 @@ class ForensicManager: ObservableObject {
     private let chainRootURL = appSupportDir.appendingPathComponent("forensic_chain_root.txt")
 
     private init() {
-        loadAuditLog()
-        loadHashes()
-        loadTags()
-        loadAnnotations()
-        loadEmailHashes()
+        Task { @MainActor in await bootstrapFromStore() }
+    }
+
+    /// Test-visible bootstrap: migrate legacy JSON once, then hydrate the
+    /// bounded caches from the durable tables.
+    func bootstrapFromStore() async {
+        await migrateLegacyJSONIfNeeded()
+        do {
+            let sources = try await store.forensicSourceHashes()
+            sourceFileHashes = sources.map {
+                SourceFileHash(id: UUID(), filename: $0.filename, fileSize: $0.fileSize,
+                               md5: $0.md5, sha1: $0.sha1, sha256: $0.sha256, importDate: $0.importedAt)
+            }
+            auditTotalCount = try await store.forensicAuditCount()
+            let recent = try await store.forensicAuditRecent(limit: Self.auditDisplayLimit)
+            auditLog = recent.reversed().map {
+                AuditEntry(id: $0.entryID, sequence: $0.seq, timestamp: $0.timestamp,
+                           action: $0.action, detail: $0.detail, examiner: $0.examiner,
+                           previousHash: $0.previousHash, entryHash: $0.entryHash)
+            }
+            if let last = try await store.forensicAuditLast() {
+                auditSequence = last.seq + 1
+                lastAuditHash = last.entryHash
+            } else {
+                auditSequence = 0
+                lastAuditHash = "GENESIS"
+            }
+            chainReady = true
+            drainPendingActions()
+            // Bounded tag/annotation hydration (display cache; SQL is exact).
+            var tagOffset = 0
+            evidenceTags = [:]; tagTimestamps = [:]
+            while tagOffset < Self.tagHydrationCap {
+                let page = try await store.forensicTagsPage(limit: 2_000, offset: tagOffset)
+                if page.isEmpty { break }
+                for row in page {
+                    if let tag = EvidenceTag(rawValue: row.tag) {
+                        evidenceTags[row.id] = tag
+                        tagTimestamps[row.id] = row.taggedAt
+                    }
+                }
+                tagOffset += page.count
+                if page.count < 2_000 { break }
+            }
+            var noteOffset = 0
+            annotations = [:]
+            while noteOffset < Self.tagHydrationCap {
+                let page = try await store.forensicAnnotationsPage(limit: 2_000, offset: noteOffset)
+                if page.isEmpty { break }
+                for row in page {
+                    annotations[row.id] = Annotation(text: row.note, examiner: row.examiner, timestamp: row.createdAt)
+                }
+                noteOffset += page.count
+                if page.count < 2_000 { break }
+            }
+        } catch {
+            forensicLog.error("forensic bootstrap failed: \(error.localizedDescription, privacy: .public)")
+            // Chain cursor unknown — surface, and unblock queued appends
+            // against the (possibly empty) durable log rather than dropping
+            // them; a residual seq collision throws loudly per-append.
+            integrityStatus = .tampered(details: "Audit chain could not be loaded: \(error.localizedDescription)")
+            chainReady = true
+            drainPendingActions()
+        }
+    }
+
+    private func drainPendingActions() {
+        let queued = pendingActions
+        pendingActions = []
+        for entry in queued { logAction(entry.action, detail: entry.detail) }
+    }
+
+    /// §21: hydrate the visible window's forensic state (hashes, tags,
+    /// annotations) in one bounded pass — call when the page changes or a
+    /// streamed export processes a batch.
+    func prefetchForensicWindow(ids: [UUID]) async {
+        guard !ids.isEmpty else { return }
+        do {
+            let hashes = try await store.forensicHashes(ids: ids)
+            for (id, h) in hashes {
+                perEmailHashes[id] = EmailHash(md5: h.md5, sha1: h.sha1, sha256: h.sha256, byteCount: h.byteCount)
+            }
+            trimHashWindow(keeping: ids)
+            let tags = try await store.forensicTags(ids: ids)
+            for (id, t) in tags {
+                if let tag = EvidenceTag(rawValue: t.tag) {
+                    evidenceTags[id] = tag
+                    tagTimestamps[id] = t.taggedAt
+                }
+            }
+            let notes = try await store.forensicAnnotations(ids: ids)
+            for (id, n) in notes {
+                annotations[id] = Annotation(text: n.note, examiner: n.examiner, timestamp: n.createdAt)
+            }
+        } catch {
+            forensicLog.error("forensic window prefetch failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func trimHashWindow(keeping recent: [UUID]) {
+        guard perEmailHashes.count > Self.hashWindowCap else { return }
+        let keep = Set(recent)
+        for key in perEmailHashes.keys where !keep.contains(key) {
+            perEmailHashes.removeValue(forKey: key)
+            if perEmailHashes.count <= Self.hashWindowCap { break }
+        }
+    }
+
+    // MARK: - §21 one-time legacy JSON → SQLite migration
+
+    private static let jsonMigrationKey = "mailin.forensic.jsonMigrated.v1"
+
+    private func migrateLegacyJSONIfNeeded() async {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: Self.jsonMigrationKey) else { return }
+        do {
+            let fm = FileManager.default
+            // Audit log (chain order must be preserved exactly).
+            if fm.fileExists(atPath: auditLogURL.path) {
+                let data = try Data(contentsOf: auditLogURL)
+                let entries = try JSONDecoder().decode([AuditEntry].self, from: data)
+                let existing = try await store.forensicAuditCount()
+                if existing == 0 {
+                    for e in entries.sorted(by: { $0.sequence < $1.sequence }) {
+                        try await store.forensicAuditAppend(SQLiteEmailStore.ForensicAuditRow(
+                            seq: e.sequence, entryID: e.id, timestamp: e.timestamp,
+                            action: e.action, detail: e.detail, examiner: e.examiner,
+                            previousHash: e.previousHash, entryHash: e.entryHash))
+                    }
+                    let migrated = try await store.forensicAuditCount()
+                    guard migrated == entries.count else {
+                        forensicLog.error("audit JSON migration verification failed (\(migrated)/\(entries.count)) — will retry")
+                        return
+                    }
+                }
+            }
+            // Source hashes.
+            if fm.fileExists(atPath: hashesURL.path) {
+                let data = try Data(contentsOf: hashesURL)
+                for h in try JSONDecoder().decode([SourceFileHash].self, from: data) {
+                    try await store.forensicSourceHashUpsert(SQLiteEmailStore.ForensicSourceHashRow(
+                        filename: h.filename, fileSize: h.fileSize,
+                        md5: h.md5, sha1: h.sha1, sha256: h.sha256, importedAt: h.importDate))
+                }
+            }
+            // Evidence tags + timestamps.
+            if fm.fileExists(atPath: tagsURL.path) {
+                let data = try Data(contentsOf: tagsURL)
+                let dict = try JSONDecoder().decode([String: String].self, from: data)
+                var byTag: [String: [UUID]] = [:]
+                for (key, value) in dict {
+                    if let id = UUID(uuidString: key) { byTag[value, default: []].append(id) }
+                }
+                for (tag, ids) in byTag { try await store.forensicTagSet(tag, ids: ids) }
+            }
+            // Annotations.
+            if fm.fileExists(atPath: annotationsURL.path) {
+                let data = try Data(contentsOf: annotationsURL)
+                let dict = try JSONDecoder().decode([String: Annotation].self, from: data)
+                for (key, a) in dict {
+                    if let id = UUID(uuidString: key) {
+                        try await store.forensicAnnotationSet(a.text, examiner: a.examiner, id: id)
+                    }
+                }
+            }
+            // Per-email hashes (archive-sized in the worst case — chunked).
+            if fm.fileExists(atPath: emailHashesURL.path) {
+                let data = try Data(contentsOf: emailHashesURL)
+                let dict = try JSONDecoder().decode([String: EmailHash].self, from: data)
+                var batch: [UUID: SQLiteEmailStore.ForensicEmailHashRow] = [:]
+                for (key, h) in dict {
+                    guard let id = UUID(uuidString: key) else { continue }
+                    batch[id] = SQLiteEmailStore.ForensicEmailHashRow(
+                        md5: h.md5, sha1: h.sha1, sha256: h.sha256, byteCount: h.byteCount)
+                    if batch.count >= 2_000 {
+                        try await store.forensicHashUpsert(batch)
+                        batch = [:]
+                    }
+                }
+                try await store.forensicHashUpsert(batch)
+            }
+            // The JSON files are KEPT on disk as rollback evidence (§20/§21).
+            defaults.set(true, forKey: Self.jsonMigrationKey)
+            forensicLog.info("forensic JSON state migrated to SQLite")
+        } catch {
+            forensicLog.error("forensic JSON migration failed: \(error.localizedDescription, privacy: .public) — will retry next launch")
+        }
     }
 
     // MARK: - HMAC-Chained Audit Log (Tamper-Evident)
@@ -226,8 +435,14 @@ class ForensicManager: ObservableObject {
 
     func logAction(_ action: String, detail: String) {
         guard isEnabled else { return }
-        let sequence = auditLog.count
-        let previousHash = auditLog.last?.entryHash ?? "GENESIS"
+        guard chainReady else {
+            // Queued, not dropped: drained by bootstrapFromStore once the
+            // durable (sequence, lastHash) cursor is known.
+            pendingActions.append((action, detail))
+            return
+        }
+        let sequence = auditSequence
+        let previousHash = lastAuditHash
         let examiner = examinerName.isEmpty ? "Unknown" : examinerName
         let timestamp = Date()
 
@@ -250,77 +465,151 @@ class ForensicManager: ObservableObject {
             previousHash: previousHash,
             entryHash: entryHash
         )
+        // O(1) chain advance — the whole log is never resident.
+        auditSequence += 1
+        lastAuditHash = entryHash
         auditLog.append(entry)
-        saveAuditLog()
-        saveChainRoot()
+        if auditLog.count > Self.auditDisplayLimit { auditLog.removeFirst(auditLog.count - Self.auditDisplayLimit) }
+        auditTotalCount += 1
+        saveChainRoot(entryHash)
+        let row = SQLiteEmailStore.ForensicAuditRow(
+            seq: entry.sequence, entryID: entry.id, timestamp: entry.timestamp,
+            action: entry.action, detail: entry.detail, examiner: entry.examiner,
+            previousHash: entry.previousHash, entryHash: entry.entryHash)
+        Task { @MainActor [store] in
+            do { try await store.forensicAuditAppend(row) }
+            catch {
+                forensicLog.fault("audit append failed (seq \(row.seq)): \(error.localizedDescription, privacy: .public)")
+                self.integrityStatus = .tampered(details: "Audit entry #\(row.seq) could not be persisted: \(error.localizedDescription)")
+            }
+        }
     }
 
+    /// Streamed verification (§21.1): walks the full durable log in bounded
+    /// pages, recomputing the HMAC chain in order — the archive-sized log is
+    /// never resident.
+    func verifyAuditLogIntegrityStreamed() async -> IntegrityStatus {
+        do {
+            let total = try await store.forensicAuditCount()
+            guard total > 0 else {
+                integrityStatus = .noData
+                return .noData
+            }
+            var expectedPrevious = "GENESIS"
+            var expectedSeq = 0
+            var lastHash = ""
+            while true {
+                let page = try await store.forensicAuditPage(fromSeq: expectedSeq, limit: 1_000)
+                if page.isEmpty { break }
+                for entry in page {
+                    if entry.seq != expectedSeq {
+                        integrityStatus = .tampered(details: "Sequence gap at entry \(expectedSeq): found \(entry.seq)")
+                        return integrityStatus
+                    }
+                    if entry.previousHash != expectedPrevious {
+                        integrityStatus = .tampered(details: "Chain break at entry \(entry.seq): expected previous hash \(expectedPrevious.prefix(16))..., found \(entry.previousHash.prefix(16))...")
+                        return integrityStatus
+                    }
+                    let recomputed = computeEntryHash(
+                        sequence: entry.seq, timestamp: entry.timestamp, action: entry.action,
+                        detail: entry.detail, examiner: entry.examiner, previousHash: entry.previousHash)
+                    if recomputed != entry.entryHash {
+                        integrityStatus = .tampered(details: "Hash mismatch at entry \(entry.seq) (\(entry.action)): entry has been modified")
+                        return integrityStatus
+                    }
+                    expectedPrevious = entry.entryHash
+                    lastHash = entry.entryHash
+                    expectedSeq += 1
+                }
+                if page.count < 1_000 { break }
+            }
+            if expectedSeq != total {
+                integrityStatus = .tampered(details: "Log truncated: verified \(expectedSeq) of \(total) entries")
+                return integrityStatus
+            }
+            if let storedRoot = try? String(contentsOf: chainRootURL, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+               storedRoot != lastHash {
+                integrityStatus = .tampered(details: "Chain root mismatch: log was modified outside the application")
+                return integrityStatus
+            }
+            integrityStatus = .verified
+            return .verified
+        } catch {
+            integrityStatus = .tampered(details: "Verification could not read the audit log: \(error.localizedDescription)")
+            return integrityStatus
+        }
+    }
+
+    /// Synchronous verification over the RECENT display window only (UI badge
+    /// convenience). Full-log truth comes from `verifyAuditLogIntegrityStreamed`.
     func verifyAuditLogIntegrity() -> IntegrityStatus {
         guard !auditLog.isEmpty else {
-            integrityStatus = .noData
-            return .noData
+            integrityStatus = auditTotalCount == 0 ? .noData : integrityStatus
+            return integrityStatus
         }
-
-        for (index, entry) in auditLog.enumerated() {
-            let expectedPrevious = index == 0 ? "GENESIS" : auditLog[index - 1].entryHash
+        var expectedPrevious = auditLog.first!.previousHash
+        for entry in auditLog {
             if entry.previousHash != expectedPrevious {
-                let msg = "Chain break at entry \(index): expected previous hash \(expectedPrevious.prefix(16))..., found \(entry.previousHash.prefix(16))..."
-                integrityStatus = .tampered(details: msg)
+                integrityStatus = .tampered(details: "Chain break at entry \(entry.sequence)")
                 return integrityStatus
             }
-
             let recomputed = computeEntryHash(
-                sequence: entry.sequence,
-                timestamp: entry.timestamp,
-                action: entry.action,
-                detail: entry.detail,
-                examiner: entry.examiner,
-                previousHash: entry.previousHash
-            )
+                sequence: entry.sequence, timestamp: entry.timestamp, action: entry.action,
+                detail: entry.detail, examiner: entry.examiner, previousHash: entry.previousHash)
             if recomputed != entry.entryHash {
-                let msg = "Hash mismatch at entry \(index) (\(entry.action)): entry has been modified"
-                integrityStatus = .tampered(details: msg)
+                integrityStatus = .tampered(details: "Hash mismatch at entry \(entry.sequence) (\(entry.action))")
                 return integrityStatus
             }
-
-            if entry.sequence != index {
-                let msg = "Sequence gap at entry \(index): expected \(index), found \(entry.sequence)"
-                integrityStatus = .tampered(details: msg)
-                return integrityStatus
-            }
+            expectedPrevious = entry.entryHash
         }
-
         if let storedRoot = try? String(contentsOf: chainRootURL, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
            let lastHash = auditLog.last?.entryHash,
            storedRoot != lastHash {
             integrityStatus = .tampered(details: "Chain root mismatch: log was modified outside the application")
             return integrityStatus
         }
-
         integrityStatus = .verified
         return .verified
     }
 
-    private func saveChainRoot() {
-        guard let lastHash = auditLog.last?.entryHash else { return }
-        try? lastHash.write(to: chainRootURL, atomically: true, encoding: .utf8)
+    private func saveChainRoot(_ lastHash: String) {
+        do { try lastHash.write(to: chainRootURL, atomically: true, encoding: .utf8) }
+        catch { forensicLog.fault("chain root write failed: \(error.localizedDescription, privacy: .public)") }
     }
 
     // MARK: - Hash Computation (MD5 + SHA-1 + SHA-256)
 
+    /// §9: streams the file through all three digests in ONE pass with a
+    /// bounded 1 MB buffer — a 200 GB source never touches RAM as a whole.
+    /// MD5/SHA-1 are compatibility/forensic identifiers only, never security
+    /// primitives; SHA-256 is the integrity anchor.
     nonisolated static func computeHashes(for url: URL) -> SourceFileHash? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        let md5 = Insecure.MD5.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        let sha1 = Insecure.SHA1.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        let sha256 = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? Int64(data.count)
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        var md5 = Insecure.MD5()
+        var sha1 = Insecure.SHA1()
+        var sha256 = SHA256()
+        var total: Int64 = 0
+        while true {
+            let chunk: Data?
+            do { chunk = try handle.read(upToCount: 1_048_576) }
+            catch { return nil }   // a READ ERROR is a failure, never fake EOF
+            guard let chunk, !chunk.isEmpty else { break }
+            md5.update(data: chunk)
+            sha1.update(data: chunk)
+            sha256.update(data: chunk)
+            total += Int64(chunk.count)
+        }
+        func hex<D: Sequence>(_ digest: D) -> String where D.Element == UInt8 {
+            digest.map { String(format: "%02x", $0) }.joined()
+        }
         return SourceFileHash(
             id: UUID(),
             filename: url.lastPathComponent,
-            fileSize: size,
-            md5: md5,
-            sha1: sha1,
-            sha256: sha256,
+            fileSize: total,
+            md5: hex(md5.finalize()),
+            sha1: hex(sha1.finalize()),
+            sha256: hex(sha256.finalize()),
             importDate: Date()
         )
     }
@@ -340,8 +629,23 @@ class ForensicManager: ObservableObject {
 
     func registerFileHash(_ hash: SourceFileHash) {
         sourceFileHashes.append(hash)
-        saveHashes()
+        persistToStore("source hash") { [store] in
+            try await store.forensicSourceHashUpsert(SQLiteEmailStore.ForensicSourceHashRow(
+                filename: hash.filename, fileSize: hash.fileSize,
+                md5: hash.md5, sha1: hash.sha1, sha256: hash.sha256, importedAt: hash.importDate))
+        }
         logAction("File Imported", detail: "\(hash.filename) (\(hash.fileSize) bytes) — SHA-256: \(hash.sha256)")
+    }
+
+    /// Durable write-through helper — failures are logged AND surfaced.
+    private func persistToStore(_ what: String, _ body: @escaping @Sendable () async throws -> Void) {
+        Task { @MainActor in
+            do { try await body() }
+            catch {
+                forensicLog.fault("forensic \(what, privacy: .public) write failed: \(error.localizedDescription, privacy: .public)")
+                self.integrityStatus = .tampered(details: "Forensic \(what) could not be persisted: \(error.localizedDescription)")
+            }
+        }
     }
 
     func verifySourceFile(at url: URL) -> (passed: Bool, detail: String) {
@@ -361,12 +665,15 @@ class ForensicManager: ObservableObject {
     }
 
     func storeEmailHashes(_ emails: [MBOXParser.RawEmail]) {
+        var batch: [UUID: SQLiteEmailStore.ForensicEmailHashRow] = [:]
         for email in emails {
-            if perEmailHashes[email.id] == nil {
-                perEmailHashes[email.id] = Self.computeEmailHash(rawSource: email.rawSource)
-            }
+            let hash = perEmailHashes[email.id] ?? Self.computeEmailHash(rawSource: email.rawSource)
+            perEmailHashes[email.id] = hash
+            batch[email.id] = SQLiteEmailStore.ForensicEmailHashRow(
+                md5: hash.md5, sha1: hash.sha1, sha256: hash.sha256, byteCount: hash.byteCount)
         }
-        saveEmailHashes()
+        trimHashWindow(keeping: emails.map(\.id))
+        persistToStore("email hashes") { [store] in try await store.forensicHashUpsert(batch) }
     }
 
     func verifyEmailIntegrity(_ email: MBOXParser.RawEmail) -> (passed: Bool, detail: String) {
@@ -398,14 +705,22 @@ class ForensicManager: ObservableObject {
         return (passed, failed, unverified, details)
     }
 
+    static let hashManifestHeader = "EmailID,Subject,From,Date,MD5,SHA1,SHA256,Integrity\n"
+
+    /// One streamed manifest row (Part O: exports build the manifest
+    /// incrementally from a bounded stream, never a whole array).
+    func hashManifestRow(_ email: MBOXParser.RawEmail) -> String {
+        let hash = perEmailHashes[email.id]
+        let verification = verifyEmailIntegrity(email)
+        let subject = (email.headers["Subject"] ?? "").replacingOccurrences(of: ",", with: ";")
+        let from = (email.headers["From"] ?? "").replacingOccurrences(of: ",", with: ";")
+        return "\(email.id),\"\(subject)\",\"\(from)\",\(email.timestamp),\(hash?.md5 ?? "N/A"),\(hash?.sha1 ?? "N/A"),\(hash?.sha256 ?? "N/A"),\(verification.passed ? "PASS" : "FAIL")\n"
+    }
+
     func exportHashManifest(_ emails: [MBOXParser.RawEmail]) -> String {
-        var csv = "EmailID,Subject,From,Date,MD5,SHA1,SHA256,Integrity\n"
+        var csv = Self.hashManifestHeader
         for email in emails {
-            let hash = perEmailHashes[email.id]
-            let verification = verifyEmailIntegrity(email)
-            let subject = (email.headers["Subject"] ?? "").replacingOccurrences(of: ",", with: ";")
-            let from = (email.headers["From"] ?? "").replacingOccurrences(of: ",", with: ";")
-            csv += "\(email.id),\"\(subject)\",\"\(from)\",\(email.timestamp),\(hash?.md5 ?? "N/A"),\(hash?.sha1 ?? "N/A"),\(hash?.sha256 ?? "N/A"),\(verification.passed ? "PASS" : "FAIL")\n"
+            csv += hashManifestRow(email)
         }
         return csv
     }
@@ -420,7 +735,9 @@ class ForensicManager: ObservableObject {
             evidenceTags[emailID] = tag
             tagTimestamps[emailID] = Date()
         }
-        saveTags()
+        persistToStore("evidence tag") { [store] in
+            try await store.forensicTagSet(tag == .none ? nil : tag.rawValue, ids: [emailID])
+        }
         logAction("Evidence Tagged", detail: "Email \(emailID.uuidString.prefix(8)) tagged as \(tag.rawValue)")
         CollaborationManager.shared.autoExportIfEnabled()
     }
@@ -436,9 +753,29 @@ class ForensicManager: ObservableObject {
                 tagTimestamps[id] = now
             }
         }
-        saveTags()
+        let ids = Array(emailIDs)
+        persistToStore("bulk evidence tag") { [store] in
+            try await store.forensicTagSet(tag == .none ? nil : tag.rawValue, ids: ids)
+        }
         logAction("Bulk Evidence Tag", detail: "\(emailIDs.count) emails tagged as \(tag.rawValue)")
         CollaborationManager.shared.autoExportIfEnabled()
+    }
+
+    /// iCloud/collaboration merge write: durable, but no audit-log spam and
+    /// no re-export trigger (the sync layer owns those).
+    func applyMergedTag(_ emailID: UUID, tag: EvidenceTag, timestamp: Date) {
+        evidenceTags[emailID] = tag
+        tagTimestamps[emailID] = timestamp
+        persistToStore("merged tag") { [store] in
+            try await store.forensicTagSet(tag.rawValue, ids: [emailID])
+        }
+    }
+
+    func applyMergedAnnotation(_ emailID: UUID, annotation: Annotation) {
+        annotations[emailID] = annotation
+        persistToStore("merged annotation") { [store] in
+            try await store.forensicAnnotationSet(annotation.text, examiner: annotation.examiner, id: emailID)
+        }
     }
 
     func tagForEmail(_ emailID: UUID) -> EvidenceTag {
@@ -456,12 +793,11 @@ class ForensicManager: ObservableObject {
     // MARK: - Annotations
 
     func annotate(_ emailID: UUID, text: String) {
-        annotations[emailID] = Annotation(
-            text: text,
-            examiner: examinerName.isEmpty ? "Unknown" : examinerName,
-            timestamp: Date()
-        )
-        saveAnnotations()
+        let examiner = examinerName.isEmpty ? "Unknown" : examinerName
+        annotations[emailID] = Annotation(text: text, examiner: examiner, timestamp: Date())
+        persistToStore("annotation") { [store] in
+            try await store.forensicAnnotationSet(text, examiner: examiner, id: emailID)
+        }
         logAction("Annotation", detail: "Email \(emailID.uuidString.prefix(8)): \(text.prefix(80))")
         CollaborationManager.shared.autoExportIfEnabled()
     }
@@ -785,134 +1121,173 @@ class ForensicManager: ObservableObject {
         "\(prefix)\(String(format: "%0\(padding)d", index))"
     }
 
-    func exportAuditLog() -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    /// §21.1: streams the FULL durable audit log to `url` in bounded pages —
+    /// the log is never resident as a whole. Verification runs streamed first
+    /// so the header states the true chain status.
+    func exportAuditLogStreamed(to url: URL) async throws -> Int {
         let displayFormatter = DateFormatter()
         displayFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss Z"
 
-        var report = "FORENSIC AUDIT LOG (TAMPER-EVIDENT)\n"
-        report += String(repeating: "=", count: 76) + "\n"
-        report += "Case Number: \(caseNumber.isEmpty ? "N/A" : caseNumber)\n"
-        report += "Examiner: \(examinerName.isEmpty ? "N/A" : examinerName)\n"
-        report += "Organization: \(organization.isEmpty ? "N/A" : organization)\n"
-        report += "Export Date: \(displayFormatter.string(from: Date()))\n"
-        report += "Total Entries: \(auditLog.count)\n"
+        let total = try await store.forensicAuditCount()
+        let integrity = await verifyAuditLogIntegrityStreamed()
 
-        let integrity = verifyAuditLogIntegrity()
+        var header = "FORENSIC AUDIT LOG (TAMPER-EVIDENT)\n"
+        header += String(repeating: "=", count: 76) + "\n"
+        header += "Case Number: \(caseNumber.isEmpty ? "N/A" : caseNumber)\n"
+        header += "Examiner: \(examinerName.isEmpty ? "N/A" : examinerName)\n"
+        header += "Organization: \(organization.isEmpty ? "N/A" : organization)\n"
+        header += "Export Date: \(displayFormatter.string(from: Date()))\n"
+        header += "Total Entries: \(total)\n"
         switch integrity {
         case .verified:
-            report += "Chain Integrity: VERIFIED (all \(auditLog.count) entries pass HMAC-SHA256 verification)\n"
+            header += "Chain Integrity: VERIFIED (all \(total) entries pass HMAC-SHA256 verification)\n"
         case .tampered(let details):
-            report += "Chain Integrity: FAILED — \(details)\n"
+            header += "Chain Integrity: FAILED — \(details)\n"
         case .noData:
-            report += "Chain Integrity: N/A (empty log)\n"
+            header += "Chain Integrity: N/A (empty log)\n"
         case .unknown:
-            report += "Chain Integrity: NOT CHECKED\n"
+            header += "Chain Integrity: NOT CHECKED\n"
         }
-        report += String(repeating: "=", count: 76) + "\n\n"
+        header += String(repeating: "=", count: 76) + "\n\n"
 
         if !sourceFileHashes.isEmpty {
-            report += "SOURCE FILE INTEGRITY\n"
-            report += String(repeating: "-", count: 76) + "\n"
+            header += "SOURCE FILE INTEGRITY\n"
+            header += String(repeating: "-", count: 76) + "\n"
             for hash in sourceFileHashes {
-                report += "File: \(hash.filename)\n"
-                report += "  Size: \(hash.fileSize) bytes\n"
-                report += "  MD5:    \(hash.md5)\n"
-                report += "  SHA-1:  \(hash.sha1)\n"
-                report += "  SHA-256: \(hash.sha256)\n"
-                report += "  Import Date: \(displayFormatter.string(from: hash.importDate))\n\n"
+                header += "File: \(hash.filename)\n"
+                header += "  Size: \(hash.fileSize) bytes\n"
+                header += "  MD5:    \(hash.md5)\n"
+                header += "  SHA-1:  \(hash.sha1)\n"
+                header += "  SHA-256: \(hash.sha256)\n"
+                header += "  Import Date: \(displayFormatter.string(from: hash.importDate))\n\n"
             }
         }
+        header += "HMAC-CHAINED ACTION LOG\n"
+        header += String(repeating: "-", count: 76) + "\n"
 
-        report += "HMAC-CHAINED ACTION LOG\n"
-        report += String(repeating: "-", count: 76) + "\n"
-        for entry in auditLog {
-            report += "#\(entry.sequence) [\(displayFormatter.string(from: entry.timestamp))] \(entry.action)\n"
-            report += "  Detail: \(entry.detail)\n"
-            report += "  Examiner: \(entry.examiner)\n"
-            report += "  HMAC: \(entry.entryHash)\n"
-            report += "  Prev: \(entry.previousHash.prefix(32))...\n\n"
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        try handle.write(contentsOf: Data(header.utf8))
+
+        var seq = 0
+        var lastHash = "N/A"
+        while true {
+            let page = try await store.forensicAuditPage(fromSeq: seq, limit: 1_000)
+            if page.isEmpty { break }
+            var chunk = ""
+            for entry in page {
+                chunk += "#\(entry.seq) [\(displayFormatter.string(from: entry.timestamp))] \(entry.action)\n"
+                chunk += "  Detail: \(entry.detail)\n"
+                chunk += "  Examiner: \(entry.examiner)\n"
+                chunk += "  HMAC: \(entry.entryHash)\n"
+                chunk += "  Prev: \(entry.previousHash.prefix(32))...\n\n"
+                lastHash = entry.entryHash
+                seq = entry.seq + 1
+            }
+            try handle.write(contentsOf: Data(chunk.utf8))
+            if page.count < 1_000 { break }
         }
 
-        report += String(repeating: "=", count: 76) + "\n"
-        report += "END OF AUDIT LOG\n"
-        report += "Final chain hash: \(auditLog.last?.entryHash ?? "N/A")\n\n"
-        report += String(repeating: "-", count: 76) + "\n"
-        report += "DISCLAIMER: " + LegalComplianceManager.forensicDisclaimer + "\n"
-        return report
+        var footer = String(repeating: "=", count: 76) + "\n"
+        footer += "END OF AUDIT LOG\n"
+        footer += "Final chain hash: \(lastHash)\n\n"
+        footer += String(repeating: "-", count: 76) + "\n"
+        footer += "DISCLAIMER: " + LegalComplianceManager.forensicDisclaimer + "\n"
+        try handle.write(contentsOf: Data(footer.utf8))
+        return total
+    }
+
+    static let forensicCSVHeader = "Bates Number,Message-ID,Date,From,To,CC,Subject,MD5,SHA-1,SHA-256,Byte Count,Has Attachments,Attachment Count,Evidence Tag,Annotation,Thread-ID,Spoof Risk,Risk Score,Risk Level\n"
+
+    private static func forensicCSVEscape(_ s: String) -> String {
+        var v = s
+        if let first = v.first, "=+@-\t\r".contains(first) { v = "'" + v }
+        return "\"" + v.replacingOccurrences(of: "\"", with: "\"\"").replacingOccurrences(of: "\r\n", with: " ").replacingOccurrences(of: "\r", with: " ").replacingOccurrences(of: "\n", with: " ") + "\""
+    }
+
+    /// One streamed forensic-CSV row for a running Bates number (Part O:
+    /// exports stream rows from the store — never a whole-array pass).
+    func forensicCSVRow(_ email: MBOXParser.RawEmail, bates: String) -> String {
+        func csvEscape(_ s: String) -> String { Self.forensicCSVEscape(s) }
+        let hash = perEmailHashes[email.id] ?? Self.computeEmailHash(rawSource: email.rawSource)
+        let tag = tagForEmail(email.id).rawValue
+        let note = annotations[email.id]?.text ?? ""
+        let spoofCount = Self.detectSpoofingIndicators(email).count
+        let cc = email.headers["Cc"] ?? email.headers["CC"] ?? ""
+
+        var csv = ""
+        csv += "\(bates),"
+        csv += "\(csvEscape(email.headers["Message-ID"] ?? email.headers["Message-Id"] ?? "")),"
+        csv += "\(csvEscape(email.headers["Date"] ?? "")),"
+        csv += "\(csvEscape(email.headers["From"] ?? "")),"
+        csv += "\(csvEscape(email.headers["To"] ?? "")),"
+        csv += "\(csvEscape(cc)),"
+        csv += "\(csvEscape(email.headers["Subject"] ?? "")),"
+        csv += "\(hash.md5),"
+        csv += "\(hash.sha1),"
+        csv += "\(hash.sha256),"
+        csv += "\(hash.byteCount),"
+        csv += "\(!email.attachments.isEmpty),"
+        csv += "\(email.attachments.count),"
+        csv += "\(csvEscape(tag)),"
+        csv += "\(csvEscape(note)),"
+        csv += "\(csvEscape(email.threadID ?? "")),"
+        csv += "\(spoofCount),"
+        let risk = Self.assessRisk(for: email)
+        csv += "\(risk.score),"
+        csv += "\(csvEscape(risk.level.rawValue))\n"
+        return csv
     }
 
     func exportBulkForensicCSV(emails: [MBOXParser.RawEmail], batesPrefix: String = "MAIL") -> String {
-        var csv = "Bates Number,Message-ID,Date,From,To,CC,Subject,MD5,SHA-1,SHA-256,Byte Count,Has Attachments,Attachment Count,Evidence Tag,Annotation,Thread-ID,Spoof Risk,Risk Score,Risk Level\n"
-
-        func csvEscape(_ s: String) -> String {
-            var v = s
-            if let first = v.first, "=+@-\t\r".contains(first) { v = "'" + v }
-            return "\"" + v.replacingOccurrences(of: "\"", with: "\"\"").replacingOccurrences(of: "\r\n", with: " ").replacingOccurrences(of: "\r", with: " ").replacingOccurrences(of: "\n", with: " ") + "\""
-        }
-
+        var csv = Self.forensicCSVHeader
         for (i, email) in emails.enumerated() {
-            let bates = Self.batesNumber(prefix: batesPrefix, index: i + 1)
-            let hash = perEmailHashes[email.id] ?? Self.computeEmailHash(rawSource: email.rawSource)
-            let tag = tagForEmail(email.id).rawValue
-            let note = annotations[email.id]?.text ?? ""
-            let spoofCount = Self.detectSpoofingIndicators(email).count
-            let cc = email.headers["Cc"] ?? email.headers["CC"] ?? ""
-
-            csv += "\(bates),"
-            csv += "\(csvEscape(email.headers["Message-ID"] ?? email.headers["Message-Id"] ?? "")),"
-            csv += "\(csvEscape(email.headers["Date"] ?? "")),"
-            csv += "\(csvEscape(email.headers["From"] ?? "")),"
-            csv += "\(csvEscape(email.headers["To"] ?? "")),"
-            csv += "\(csvEscape(cc)),"
-            csv += "\(csvEscape(email.headers["Subject"] ?? "")),"
-            csv += "\(hash.md5),"
-            csv += "\(hash.sha1),"
-            csv += "\(hash.sha256),"
-            csv += "\(hash.byteCount),"
-            csv += "\(!email.attachments.isEmpty),"
-            csv += "\(email.attachments.count),"
-            csv += "\(csvEscape(tag)),"
-            csv += "\(csvEscape(note)),"
-            csv += "\(csvEscape(email.threadID ?? "")),"
-            csv += "\(spoofCount),"
-            let risk = Self.assessRisk(for: email)
-            csv += "\(risk.score),"
-            csv += "\(csvEscape(risk.level.rawValue))\n"
+            csv += forensicCSVRow(email, bates: Self.batesNumber(prefix: batesPrefix, index: i + 1))
         }
         return csv
     }
 
-    func exportConcordanceDAT(emails: [MBOXParser.RawEmail], batesPrefix: String = "MAIL") -> String {
+    static let concordanceDATHeader: String = {
         let sep = "\u{14}"
         let quote = "\u{FE}"
-        var dat = "\(quote)DOCID\(quote)\(sep)\(quote)BEGBATES\(quote)\(sep)\(quote)ENDBATES\(quote)\(sep)\(quote)FROM\(quote)\(sep)\(quote)TO\(quote)\(sep)\(quote)CC\(quote)\(sep)\(quote)BCC\(quote)\(sep)\(quote)SUBJECT\(quote)\(sep)\(quote)DATESENT\(quote)\(sep)\(quote)MSGID\(quote)\(sep)\(quote)HASHSHA256\(quote)\(sep)\(quote)CUSTODIAN\(quote)\(sep)\(quote)TAG\(quote)\n"
+        return "\(quote)DOCID\(quote)\(sep)\(quote)BEGBATES\(quote)\(sep)\(quote)ENDBATES\(quote)\(sep)\(quote)FROM\(quote)\(sep)\(quote)TO\(quote)\(sep)\(quote)CC\(quote)\(sep)\(quote)BCC\(quote)\(sep)\(quote)SUBJECT\(quote)\(sep)\(quote)DATESENT\(quote)\(sep)\(quote)MSGID\(quote)\(sep)\(quote)HASHSHA256\(quote)\(sep)\(quote)CUSTODIAN\(quote)\(sep)\(quote)TAG\(quote)\n"
+    }()
 
+    /// One streamed Concordance .dat row (Part O).
+    func concordanceDATRow(_ email: MBOXParser.RawEmail, bates: String) -> String {
+        let sep = "\u{14}"
+        let quote = "\u{FE}"
+        let hash = perEmailHashes[email.id] ?? Self.computeEmailHash(rawSource: email.rawSource)
+        let tag = tagForEmail(email.id).rawValue
+        let cc = email.headers["Cc"] ?? email.headers["CC"] ?? ""
+        let bcc = email.headers["Bcc"] ?? email.headers["BCC"] ?? ""
+
+        func datEscape(_ s: String) -> String {
+            s.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: "")
+        }
+
+        var dat = ""
+        dat += "\(quote)\(bates)\(quote)\(sep)"
+        dat += "\(quote)\(bates)\(quote)\(sep)"
+        dat += "\(quote)\(bates)\(quote)\(sep)"
+        dat += "\(quote)\(datEscape(email.headers["From"] ?? ""))\(quote)\(sep)"
+        dat += "\(quote)\(datEscape(email.headers["To"] ?? ""))\(quote)\(sep)"
+        dat += "\(quote)\(datEscape(cc))\(quote)\(sep)"
+        dat += "\(quote)\(datEscape(bcc))\(quote)\(sep)"
+        dat += "\(quote)\(datEscape(email.headers["Subject"] ?? ""))\(quote)\(sep)"
+        dat += "\(quote)\(datEscape(email.headers["Date"] ?? ""))\(quote)\(sep)"
+        dat += "\(quote)\(datEscape(email.headers["Message-ID"] ?? ""))\(quote)\(sep)"
+        dat += "\(quote)\(hash.sha256)\(quote)\(sep)"
+        dat += "\(quote)\(datEscape(examinerName))\(quote)\(sep)"
+        dat += "\(quote)\(tag)\(quote)\n"
+        return dat
+    }
+
+    func exportConcordanceDAT(emails: [MBOXParser.RawEmail], batesPrefix: String = "MAIL") -> String {
+        var dat = Self.concordanceDATHeader
         for (i, email) in emails.enumerated() {
-            let bates = Self.batesNumber(prefix: batesPrefix, index: i + 1)
-            let hash = perEmailHashes[email.id] ?? Self.computeEmailHash(rawSource: email.rawSource)
-            let tag = tagForEmail(email.id).rawValue
-            let cc = email.headers["Cc"] ?? email.headers["CC"] ?? ""
-            let bcc = email.headers["Bcc"] ?? email.headers["BCC"] ?? ""
-
-            func datEscape(_ s: String) -> String {
-                s.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: "")
-            }
-
-            dat += "\(quote)\(bates)\(quote)\(sep)"
-            dat += "\(quote)\(bates)\(quote)\(sep)"
-            dat += "\(quote)\(bates)\(quote)\(sep)"
-            dat += "\(quote)\(datEscape(email.headers["From"] ?? ""))\(quote)\(sep)"
-            dat += "\(quote)\(datEscape(email.headers["To"] ?? ""))\(quote)\(sep)"
-            dat += "\(quote)\(datEscape(cc))\(quote)\(sep)"
-            dat += "\(quote)\(datEscape(bcc))\(quote)\(sep)"
-            dat += "\(quote)\(datEscape(email.headers["Subject"] ?? ""))\(quote)\(sep)"
-            dat += "\(quote)\(datEscape(email.headers["Date"] ?? ""))\(quote)\(sep)"
-            dat += "\(quote)\(datEscape(email.headers["Message-ID"] ?? ""))\(quote)\(sep)"
-            dat += "\(quote)\(hash.sha256)\(quote)\(sep)"
-            dat += "\(quote)\(datEscape(examinerName))\(quote)\(sep)"
-            dat += "\(quote)\(tag)\(quote)\n"
+            dat += concordanceDATRow(email, bates: Self.batesNumber(prefix: batesPrefix, index: i + 1))
         }
         return dat
     }
@@ -958,147 +1333,8 @@ class ForensicManager: ObservableObject {
         return log
     }
 
-    // MARK: - Persistence
-
-    private func saveAuditLog() {
-        do {
-            let data = try JSONEncoder().encode(auditLog)
-            try data.write(to: auditLogURL, options: [.atomic, .completeFileProtection])
-        } catch {
-            forensicLog.error("Failed to save audit log: \(error.localizedDescription)")
-        }
-    }
-
-    private func loadAuditLog() {
-        guard FileManager.default.fileExists(atPath: auditLogURL.path) else { return }
-        do {
-            let data = try Data(contentsOf: auditLogURL)
-            auditLog = try JSONDecoder().decode([AuditEntry].self, from: data)
-            if !auditLog.isEmpty {
-                _ = verifyAuditLogIntegrity()
-            }
-        } catch {
-            forensicLog.error("Failed to decode audit log: \(error.localizedDescription)")
-        }
-    }
-
-    private func saveHashes() {
-        do {
-            let data = try JSONEncoder().encode(sourceFileHashes)
-            try data.write(to: hashesURL, options: [.atomic, .completeFileProtection])
-        } catch {
-            forensicLog.error("Failed to save hashes: \(error.localizedDescription)")
-        }
-    }
-
-    private func loadHashes() {
-        guard FileManager.default.fileExists(atPath: hashesURL.path) else { return }
-        do {
-            let data = try Data(contentsOf: hashesURL)
-            sourceFileHashes = try JSONDecoder().decode([SourceFileHash].self, from: data)
-        } catch {
-            forensicLog.error("Failed to decode hashes: \(error.localizedDescription)")
-        }
-    }
-
-    private func saveTags() {
-        do {
-            let dict = evidenceTags.map { (key: $0.key.uuidString, value: $0.value.rawValue) }
-            let data = try JSONEncoder().encode(Dictionary(uniqueKeysWithValues: dict))
-            try data.write(to: tagsURL, options: [.atomic, .completeFileProtection])
-        } catch {
-            forensicLog.error("Failed to save tags: \(error.localizedDescription)")
-        }
-
-        do {
-            let tsDict = tagTimestamps.reduce(into: [String: Double]()) { $0[$1.key.uuidString] = $1.value.timeIntervalSince1970 }
-            let tsData = try JSONEncoder().encode(tsDict)
-            try tsData.write(to: tagsURL.deletingLastPathComponent().appendingPathComponent("forensic_tag_timestamps.json"), options: [.atomic, .completeFileProtection])
-        } catch {
-            forensicLog.error("Failed to save tag timestamps: \(error.localizedDescription)")
-        }
-    }
-
-    private func loadTags() {
-        if FileManager.default.fileExists(atPath: tagsURL.path) {
-            do {
-                let data = try Data(contentsOf: tagsURL)
-                let dict = try JSONDecoder().decode([String: String].self, from: data)
-                for (key, value) in dict {
-                    if let uuid = UUID(uuidString: key), let tag = EvidenceTag(rawValue: value) {
-                        evidenceTags[uuid] = tag
-                    }
-                }
-            } catch {
-                forensicLog.error("Failed to decode tags: \(error.localizedDescription)")
-            }
-        }
-
-        let tsURL = tagsURL.deletingLastPathComponent().appendingPathComponent("forensic_tag_timestamps.json")
-        if FileManager.default.fileExists(atPath: tsURL.path) {
-            do {
-                let tsData = try Data(contentsOf: tsURL)
-                let tsDict = try JSONDecoder().decode([String: Double].self, from: tsData)
-                for (key, ts) in tsDict {
-                    if let uuid = UUID(uuidString: key) {
-                        tagTimestamps[uuid] = Date(timeIntervalSince1970: ts)
-                    }
-                }
-            } catch {
-                forensicLog.error("Failed to decode tag timestamps: \(error.localizedDescription)")
-            }
-        }
-    }
-
-    private func saveAnnotations() {
-        do {
-            let dict = annotations.reduce(into: [String: Annotation]()) { $0[$1.key.uuidString] = $1.value }
-            let data = try JSONEncoder().encode(dict)
-            try data.write(to: annotationsURL, options: [.atomic, .completeFileProtection])
-        } catch {
-            forensicLog.error("Failed to save annotations: \(error.localizedDescription)")
-        }
-    }
-
-    private func loadAnnotations() {
-        guard FileManager.default.fileExists(atPath: annotationsURL.path) else { return }
-        do {
-            let data = try Data(contentsOf: annotationsURL)
-            let dict = try JSONDecoder().decode([String: Annotation].self, from: data)
-            for (key, value) in dict {
-                if let uuid = UUID(uuidString: key) {
-                    annotations[uuid] = value
-                }
-            }
-        } catch {
-            forensicLog.error("Failed to decode annotations: \(error.localizedDescription)")
-        }
-    }
-
-    private func saveEmailHashes() {
-        do {
-            let dict = perEmailHashes.reduce(into: [String: EmailHash]()) { $0[$1.key.uuidString] = $1.value }
-            let data = try JSONEncoder().encode(dict)
-            try data.write(to: emailHashesURL, options: [.atomic, .completeFileProtection])
-        } catch {
-            forensicLog.error("Failed to save email hashes: \(error.localizedDescription)")
-        }
-    }
-
-    private func loadEmailHashes() {
-        guard FileManager.default.fileExists(atPath: emailHashesURL.path) else { return }
-        do {
-            let data = try Data(contentsOf: emailHashesURL)
-            let dict = try JSONDecoder().decode([String: EmailHash].self, from: data)
-            for (key, value) in dict {
-                if let uuid = UUID(uuidString: key) {
-                    perEmailHashes[uuid] = value
-                }
-            }
-        } catch {
-            forensicLog.error("Failed to decode email hashes: \(error.localizedDescription)")
-        }
-    }
+    // MARK: - Persistence (§21: SQLite is the durable authority; the legacy
+    // JSON files are read once by the migration and kept as rollback evidence)
 
     func clearForensicData() {
         let tsURL = tagsURL.deletingLastPathComponent().appendingPathComponent("forensic_tag_timestamps.json")
@@ -1106,12 +1342,18 @@ class ForensicManager: ObservableObject {
             try? FileManager.default.removeItem(at: url)
         }
         auditLog = []
+        auditTotalCount = 0
+        auditSequence = 0
+        lastAuditHash = "GENESIS"
+        chainReady = true          // a cleared chain restarts at GENESIS
+        pendingActions = []
         sourceFileHashes = []
         evidenceTags = [:]
         tagTimestamps = [:]
         annotations = [:]
         perEmailHashes = [:]
         integrityStatus = .unknown
+        persistToStore("clear") { [store] in try await store.forensicClearAll() }
     }
 
     func clearAllForensicData() {

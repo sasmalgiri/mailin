@@ -21,6 +21,10 @@ struct PredictiveCodingView: View {
             if !initialized {
                 engine.buildVectors(from: emails)
                 initialized = true
+                // Part K: show PERSISTED model scores for the visible working
+                // set immediately — no retraining needed on reopen.
+                let visibleIDs = emails.map(\.id)
+                Task { await engine.hydratePersistedScores(for: visibleIDs) }
             }
         }
     }

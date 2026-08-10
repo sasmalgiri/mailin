@@ -7,6 +7,9 @@ import os
 
 @MainActor
 class ContentViewModel: ObservableObject {
+    private static let importLogger = Logger(subsystem: "com.ecosanskriti.mailin",
+                                             category: "Import")
+
     @Published var senderEmail: String = ""
     @Published var selectedFiles: [URL] = []
     @Published var statusMessage = "No file selected."
@@ -22,13 +25,16 @@ class ContentViewModel: ObservableObject {
     @Published var parseErrors: [String] = []
     @Published var memoryUsageMB: Double = 0.0
     @Published var duplicatesRemoved: Int = 0
-    @Published private(set) var removedDuplicates: [MBOXParser.RawEmail] = []
+    @Published private(set) var removedDuplicates: [DuplicateFinding] = []
 
-    @Published private(set) var parsedEmails: [MBOXParser.RawEmail] = []
+    // Part Q/R: the legacy in-RAM corpus preview array is GONE. The SQLite
+    // archive is the only email authority; list surfaces page it through
+    // ArchiveDataService. `totalParsedCount` is the store-backed archive
+    // count (committed truth), never an array count.
     @Published var totalParsedCount: Int = 0
     private(set) var metadata: [String: Any] = [:]
     private var isParsing = false
-    private var memoryTimer: Timer?
+    private var memoryMonitorTask: Task<Void, Never>?
     private var pendingTempDirs: [URL] = []
     private var memoryPressureSource: DispatchSourceMemoryPressure?
 
@@ -38,7 +44,7 @@ class ContentViewModel: ObservableObject {
     }
 
     deinit {
-        memoryTimer?.invalidate()
+        memoryMonitorTask?.cancel()
         memoryPressureSource?.cancel()
     }
 
@@ -87,18 +93,18 @@ class ContentViewModel: ObservableObject {
     }
 
     private func startMemoryMonitoring() {
-        memoryTimer?.invalidate()
-        memoryTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            let usage = ContentViewModel.currentMemoryUsageMB()
-            Task { @MainActor in
-                self?.memoryUsageMB = usage
+        memoryMonitorTask?.cancel()
+        memoryMonitorTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                self?.memoryUsageMB = ContentViewModel.currentMemoryUsageMB()
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
     }
 
     private func stopMemoryMonitoring() {
-        memoryTimer?.invalidate()
-        memoryTimer = nil
+        memoryMonitorTask?.cancel()
+        memoryMonitorTask = nil
     }
 
     // MARK: - System Memory Pressure Monitoring
@@ -114,8 +120,10 @@ class ContentViewModel: ObservableObject {
                 }
             } else if event.contains(.warning) {
                 Task { @MainActor in
-                    // On warning, clear search index caches but keep emails
-                    EmailSearchIndex.shared.clear()
+                    // On warning, release derived caches but keep emails.
+                    // (The legacy in-RAM EmailSearchIndex is no longer built,
+                    // so there is nothing index-related left to drop here.)
+                    self?.subjectList.removeAll()
                 }
             }
         }
@@ -124,47 +132,53 @@ class ContentViewModel: ObservableObject {
     }
 
     private func releaseNonEssentialCaches() {
-        // Clear search index cache and derived data
-        EmailSearchIndex.shared.clear()
-        // Keep parsedEmails in memory but release subject list cache
+        // Release the subject list cache. (No in-RAM corpus exists anymore —
+        // search and browse run through the SQLite/FTS5 substrate.)
         subjectList.removeAll()
-    }
-
-    // MARK: - Background Processing Queue
-
-    private func processInBackground(emails: [MBOXParser.RawEmail]) async {
-        // Build search index in background with utility priority
-        await Task.detached(priority: .utility) {
-            EmailSearchIndex.shared.build(from: emails)
-        }.value
     }
 
     // MARK: - Zip Import Support (sandbox-safe, no Process)
 
+    /// Supported zip members that could not be written to the temp dir —
+    /// accumulated here so the next import surfaces them instead of silently
+    /// dropping evidence (Part B3).
+    private var pendingZipDroppedMembers = 0
+
     /// Synchronous extraction. Records the temp dir for later cleanup.
     func extractMailFilesFromZip(at zipURL: URL) -> [URL] {
-        let (files, tempDir) = Self.extractZipCore(at: zipURL)
+        let (files, tempDir, dropped) = Self.extractZipCore(at: zipURL)
         pendingTempDirs.append(tempDir)
+        pendingZipDroppedMembers += dropped
         return files
     }
 
     /// Off-main extraction — runs the heavy parse/inflate on a background
     /// executor so a large zip doesn't block (beachball) the main thread.
     func extractMailFilesFromZipAsync(at zipURL: URL) async -> [URL] {
-        let (files, tempDir) = await Task.detached { Self.extractZipCore(at: zipURL) }.value
+        let (files, tempDir, dropped) = await Task.detached { Self.extractZipCore(at: zipURL) }.value
         pendingTempDirs.append(tempDir)
+        pendingZipDroppedMembers += dropped
         return files
     }
 
+    /// Drain the dropped-member tally as user-facing error strings.
+    private func drainZipExtractionErrors() -> [String] {
+        defer { pendingZipDroppedMembers = 0 }
+        guard pendingZipDroppedMembers > 0 else { return [] }
+        return ["\(pendingZipDroppedMembers) archive member(s) could not be extracted from the zip and were NOT imported."]
+    }
+
     /// Pure, nonisolated extraction core so it can run off the main actor.
-    /// Returns the extracted files and the temp dir they were written to.
-    nonisolated static func extractZipCore(at zipURL: URL) -> (files: [URL], tempDir: URL) {
+    /// Returns the extracted files, the temp dir they were written to, and
+    /// how many supported members failed extraction (counted, not swallowed).
+    nonisolated static func extractZipCore(at zipURL: URL) -> (files: [URL], tempDir: URL, droppedMembers: Int) {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("mailin_zip_\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
 
-        guard let archive = try? Data(contentsOf: zipURL) else { return ([], tempDir) }
+        guard let archive = try? Data(contentsOf: zipURL) else { return ([], tempDir, 0) }
 
         var mailFiles: [URL] = []
+        var droppedMembers = 0
         var offset = 0
         let bytes = [UInt8](archive)
 
@@ -208,17 +222,28 @@ class ContentViewModel: ObservableObject {
                         .replacingOccurrences(of: "..", with: "_")
                     let destURL = tempDir.appendingPathComponent(safeName)
                     let resolved = destURL.standardizedFileURL.path
-                    if resolved.hasPrefix(tempDir.standardizedFileURL.path + "/"),
-                       let _ = try? data.write(to: destURL) {
-                        mailFiles.append(destURL)
+                    if resolved.hasPrefix(tempDir.standardizedFileURL.path + "/") {
+                        do {
+                            try data.write(to: destURL)
+                            mailFiles.append(destURL)
+                        } catch {
+                            // A supported member failed to land on disk —
+                            // count it so the import surfaces the drop (B3).
+                            droppedMembers += 1
+                        }
+                    } else {
+                        droppedMembers += 1
                     }
+                } else {
+                    // Supported member with undecodable payload — dropped.
+                    droppedMembers += 1
                 }
             }
 
             offset = dataStart + compressedSize
         }
 
-        return (mailFiles, tempDir)
+        return (mailFiles, tempDir, droppedMembers)
     }
 
     nonisolated private static func decompressDeflate(_ data: Data, uncompressedSize: Int) -> Data? {
@@ -249,7 +274,21 @@ class ContentViewModel: ObservableObject {
         return result
     }
 
-// MARK: - MBOX Parsing with fine-grained progress
+// MARK: - Import (delegates to BulkImportCoordinator — the sole production engine)
+
+    /// The single production import engine (P0 cutover). Owned here so every
+    /// entry point that funnels through this view model shares checkpoint,
+    /// receipt, and per-run accounting state.
+    let importCoordinator = BulkImportCoordinator()
+
+    /// Thin delegating wrapper: every production entry point (open panel,
+    /// fileImporter, drag/drop, Thunderbird, Apple Mail, zip members,
+    /// Shortcuts, open-with-app) converges here, and the pipeline itself —
+    /// hashing, checkpointed streaming parse, batched persist + FTS index,
+    /// signed receipt — runs in BulkImportCoordinator. This wrapper keeps
+    /// only UI side effects: progress publishing, forensic bookkeeping,
+    /// widget/notification updates and temp-dir cleanup. No email preview is
+    /// accumulated in RAM — list surfaces page the store after completion.
     func parseSelectedFiles(_ urls: [URL], removeDuplicates: Bool = true, maxEmails: Int? = nil) {
         guard !isParsing else { return }
 
@@ -263,225 +302,210 @@ class ContentViewModel: ObservableObject {
         parseErrors = []
         duplicatesRemoved = 0
         startMemoryMonitoring()
-        let capturedSenderEmail = senderEmail
         let forensicEnabled = UserDefaults.standard.bool(forKey: "forensicModeEnabled")
 
-        Task.detached(priority: .userInitiated) { [weak self] in
+        Task { @MainActor [weak self] in
             guard let self else { return }
-            defer {
-                Task { @MainActor in
-                    if self.isParsing {
-                        self.isParsing = false
-                        self.stopMemoryMonitoring()
-                        if self.loadingProgress < 1.0 {
-                            self.statusMessage = "Parsing interrupted unexpectedly."
-                            self.statusColor = .orange
-                            self.loadingProgress = 0.0
-                            self.loadingText = ""
-                        }
-                    }
-                }
-            }
-            var allEmails: [MBOXParser.RawEmail] = []
-            var errors: [String] = []
+
+            // Chain-of-custody hashes of each source file (legacy parity).
             var fileHashes: [ForensicManager.SourceFileHash] = []
-            let totalFiles = max(1.0, Double(urls.count))
-            for (idx, fileURL) in urls.enumerated() {
-                if forensicEnabled {
-                    if let hash = ForensicManager.computeHashes(for: fileURL) {
-                        fileHashes.append(hash)
-                    }
-                }
-                do {
-                    let emails: [MBOXParser.RawEmail]
-                    let ext = fileURL.pathExtension.lowercased()
-                    let useStreaming = (ext == "mbox" || ext == "eml") && self.shouldUseStreaming(for: fileURL)
+            if forensicEnabled {
+                fileHashes = await Task.detached(priority: .utility) {
+                    urls.compactMap { ForensicManager.computeHashes(for: $0) }
+                }.value
+            }
 
-                    if useStreaming {
-                        let fileSizeBytes = self.fileSize(at: fileURL)
-                        await MainActor.run {
-                            self.loadingText = "Streaming \(fileURL.lastPathComponent) (\(Self.formatByteCount(fileSizeBytes)))..."
-                        }
-                        emails = try MBOXParser.parseStreaming(
-                            fileURL: fileURL,
-                            senderEmail: capturedSenderEmail,
-                            onProgress: { prog in
-                                Task { @MainActor in
-                                    self.loadingProgress = (Double(idx) + prog) / totalFiles
-                                    let processed = Int64(prog * Double(fileSizeBytes))
-                                    self.loadingText = "Streaming \(fileURL.lastPathComponent): \(Self.formatByteCount(processed)) / \(Self.formatByteCount(fileSizeBytes))"
-                                    ImportProgressNotifier.shared.updateProgress(
-                                        filename: fileURL.lastPathComponent,
-                                        current: idx + 1,
-                                        total: urls.count,
-                                        bytesProcessed: processed,
-                                        totalBytes: fileSizeBytes
-                                    )
-                                }
-                            }
-                        )
-                    } else {
-                        let fileSizeBytesNonStream = self.fileSize(at: fileURL)
-                        await MainActor.run {
-                            self.loadingText = "Parsing \(fileURL.lastPathComponent)..."
-                        }
-                        emails = try ParserFactory.parse(
-                            fileURL: fileURL,
-                            senderEmail: capturedSenderEmail,
-                            onProgress: { prog in
-                                Task { @MainActor in
-                                    self.loadingProgress = (Double(idx) + prog) / totalFiles
-                                    self.loadingText = "Parsing \(fileURL.lastPathComponent): \(Int(prog * 100))%"
-                                    ImportProgressNotifier.shared.updateProgress(
-                                        filename: fileURL.lastPathComponent,
-                                        current: idx + 1,
-                                        total: urls.count,
-                                        bytesProcessed: Int64(prog * Double(fileSizeBytesNonStream)),
-                                        totalBytes: fileSizeBytesNonStream
-                                    )
-                                }
-                            }
-                        )
-                    }
-                    let withSource = emails.map { email -> MBOXParser.RawEmail in
-                        var copy = email
-                        copy.headers["sourceFile"] = fileURL.lastPathComponent
-                        return copy
-                    }
-                    allEmails.append(contentsOf: withSource)
-                } catch {
-                    errors.append("\(fileURL.lastPathComponent): \(error.localizedDescription)")
-                }
-                await MainActor.run {
-                    self.loadingText = "Parsed \(idx+1) of \(urls.count) file(s)..."
-                    self.loadingProgress = min(1.0, Double(idx + 1) / totalFiles)
+            var callbacks = BulkImportCoordinator.Callbacks()
+            callbacks.onFileProgress = { [weak self] name, idx, count, prog in
+                guard let self else { return }
+                let totalFiles = Double(max(1, count))
+                self.loadingProgress = (Double(idx) + prog) / totalFiles
+                self.loadingText = "Importing \(name): \(Int(prog * 100))%"
+                let sizeBytes = idx < urls.count ? self.fileSize(at: urls[idx]) : 0
+                ImportProgressNotifier.shared.updateProgress(
+                    filename: name,
+                    current: idx + 1,
+                    total: count,
+                    bytesProcessed: Int64(prog * Double(sizeBytes)),
+                    totalBytes: sizeBytes
+                )
+            }
+            // (C1) Forensic email hashes over every COMMITTED batch, so hash
+            // coverage matches the persisted corpus, not just the preview.
+            if forensicEnabled {
+                callbacks.onCommittedBatch = { batch in
+                    ForensicManager.shared.storeEmailHashes(batch)
                 }
             }
 
-            let finalAllEmails = allEmails
-            let finalErrors = errors
-            let finalFileHashes = fileHashes
-            await MainActor.run {
+            let options = BulkImportCoordinator.Options(
+                batchSize: 500,
+                senderEmail: self.senderEmail,
+                maxEmails: maxEmails,
+                dedupPolicy: removeDuplicates ? .messageID : .preserveAll
+            )
+
+            do {
+                let summary = try await self.importCoordinator.runImport(
+                    urls: urls, options: options, callbacks: callbacks
+                )
+                self.finishImport(urls: urls, summary: summary, fileHashes: fileHashes)
+            } catch is CancellationError {
                 self.isParsing = false
                 self.stopMemoryMonitoring()
-                self.parseErrors = finalErrors
-
-                guard !finalAllEmails.isEmpty else {
-                    let fileNames = urls.map { $0.lastPathComponent }.joined(separator: ", ")
-                    if finalErrors.isEmpty {
-                        let extensions = urls.map { $0.pathExtension.lowercased() }
-                        let supported = Set(["mbox", "eml", "emlx", "msg", "pst", "ost", "nsf", "zip"])
-                        let unsupported = extensions.filter { !supported.contains($0) && !$0.isEmpty }
-                        if !unsupported.isEmpty {
-                            self.statusMessage = "Unsupported format: .\(unsupported.first ?? "unknown"). Supported: .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, .zip"
-                        } else {
-                            self.statusMessage = "No emails found in \(fileNames). The file may be empty or contain no recognizable email messages."
-                        }
-                    } else {
-                        let errorSummary = finalErrors.prefix(3).joined(separator: "; ")
-                        self.statusMessage = "Failed to parse \(fileNames): \(errorSummary)"
-                    }
-                    self.statusColor = .orange
-                    self.isParsed = false
-                    self.loadingProgress = 0.0
-                    self.loadingText = ""
-                    ImportProgressNotifier.shared.cancelProgress()
-                    return
-                }
-
-                for hash in finalFileHashes {
-                    ForensicManager.shared.registerFileHash(hash)
-                }
-
-                var cappedEmails = finalAllEmails
-                if let cap = maxEmails, cappedEmails.count > cap {
-                    cappedEmails = Array(cappedEmails.prefix(cap))
-                }
-                var emailsToKeep: [MBOXParser.RawEmail]
-                if removeDuplicates {
-                    let dedupResult = Self.deduplicate(cappedEmails)
-                    self.duplicatesRemoved = dedupResult.removed.count
-                    var seenDupIDs = Set<String>()
-                    self.removedDuplicates = dedupResult.removed.filter { email in
-                        let key = (email.headers["Message-ID"] ?? email.headers["Message-Id"])
-                            ?? "\(email.headers["From"] ?? "")\(email.headers["Date"] ?? "")\(email.headers["Subject"] ?? "")"
-                        return seenDupIDs.insert(key).inserted
-                    }
-                    emailsToKeep = dedupResult.kept
-                } else {
-                    self.duplicatesRemoved = 0
-                    self.removedDuplicates = []
-                    emailsToKeep = cappedEmails
-                }
-                self.parsedEmails = self.annotate(emailsToKeep)
-                self.totalParsedCount = self.parsedEmails.count
-                self.isParsed = true
-                self.updateMetadataDisplay()
-
-                if forensicEnabled {
-                    ForensicManager.shared.storeEmailHashes(self.parsedEmails)
-                }
-                ForensicManager.shared.logAction("Parse Complete", detail: "Parsed \(self.parsedEmails.count) emails from \(urls.count) file(s). \(self.duplicatesRemoved) duplicates removed.")
-
-                // v2 dual-write: also persist into SwiftData and FTS5 index
-                // so the v2 storage stays in sync alongside the legacy
-                // in-memory model. Fire-and-forget: failures don't block the
-                // existing UI flow which still uses parsedEmails.
-                let v2Emails = self.parsedEmails
-                Task.detached(priority: .utility) {
-                    try? await EmailStore.shared.insertBatch(
-                        v2Emails,
-                        sourceFileHash: nil,
-                        batchSize: 500,
-                        progress: nil
-                    )
-                    try? await FTSSearchIndex.shared.indexBatch(v2Emails)
-                    await MainActor.run {
-                        _ = try? HMACChainAuditLog.shared.append(
-                            action: "v2.dualWrite",
-                            detail: "Mirrored \(v2Emails.count) emails to SwiftData + FTS5"
-                        )
-                    }
-                }
-                let recoveryInfo: String
-                if let report = MBOXParser.lastRecoveryReport, report.hasDamage {
-                    recoveryInfo = " (\(report.failed) unparseable skipped)"
-                } else {
-                    recoveryInfo = ""
-                }
-                let dedupInfo = self.duplicatesRemoved > 0 ? " \(self.duplicatesRemoved) duplicates removed." : ""
-                if finalErrors.isEmpty {
-                    self.statusMessage = "Parsed \(self.parsedEmails.count) emails from \(urls.count) file(s).\(dedupInfo)\(recoveryInfo)"
-                    self.statusColor = recoveryInfo.isEmpty ? .green : .orange
-                } else {
-                    let errorHint = finalErrors.first.map { " (\($0))" } ?? ""
-                    self.statusMessage = "Parsed \(self.parsedEmails.count) emails. \(finalErrors.count) file(s) had errors\(errorHint).\(dedupInfo)\(recoveryInfo)"
-                    self.statusColor = .orange
-                }
-                self.loadingProgress = 1.0
-                self.loadingText = "Done!"
-                self.cleanupTempDirs()
-
-                // Notify import completion via system notification
-                let importFilename = urls.count == 1 ? urls.first?.lastPathComponent ?? "archive" : "\(urls.count) files"
-                ImportProgressNotifier.shared.completeImport(filename: importFilename, count: self.parsedEmails.count)
-
-                // Update widget data for future WidgetKit extension
-                WidgetDataProvider.shared.updateWidgetData(
-                    totalEmails: self.parsedEmails.count,
-                    importFilename: urls.first?.lastPathComponent,
-                    emails: self.parsedEmails
-                )
-
-                NotificationCenter.default.post(name: .parsingFinished, object: nil)
-
-                // Build search index in background after parsing completes
-                let emailsForIndexing = self.parsedEmails
-                Task {
-                    await self.processInBackground(emails: emailsForIndexing)
-                }
+                self.statusMessage = "Import cancelled."
+                self.statusColor = .orange
+                self.loadingProgress = 0.0
+                self.loadingText = ""
+                ImportProgressNotifier.shared.cancelProgress()
+            } catch {
+                self.isParsing = false
+                self.stopMemoryMonitoring()
+                var errors = self.drainZipExtractionErrors()
+                errors.append(error.localizedDescription)
+                self.parseErrors = errors
+                self.statusMessage = "Import failed: \(error.localizedDescription)"
+                self.statusColor = .red
+                self.isParsed = false
+                self.loadingProgress = 0.0
+                self.loadingText = ""
+                ImportProgressNotifier.shared.cancelProgress()
             }
         }
+    }
+
+    /// Completion side effects for a coordinator run: per-run accounting
+    /// (committed truth, Part B4), forensic bookkeeping, widget/notification
+    /// updates, temp-dir cleanup. List surfaces re-page the store on the
+    /// `.parsingFinished` notification — nothing is materialized here.
+    private func finishImport(
+        urls: [URL],
+        summary: BulkImportCoordinator.RunSummary,
+        fileHashes: [ForensicManager.SourceFileHash]
+    ) {
+        isParsing = false
+        stopMemoryMonitoring()
+
+        // Post the import document: the run's number for custody logs and
+        // intake references (IMP-2026-0001).
+        let fileNames = urls.map(\.lastPathComponent).joined(separator: ", ")
+        let persisted = summary.persistAttempted
+        Task { @MainActor in
+            _ = await DocumentRegistry.post(
+                .importRun,
+                summary: "\(persisted) email(s) from \(fileNames)",
+                refs: fileNames)
+        }
+
+        var errors = summary.fileErrors.map { "\($0.filename): \($0.message)" }
+        if summary.persistFailed > 0 {
+            errors.append("\(summary.persistFailed) email(s) could not be saved to the archive and were not imported. Please retry; if this persists, free up disk space and check the log.")
+            Self.importLogger.error("Import completed with \(summary.persistFailed, privacy: .public) unpersisted email(s)")
+        }
+        errors.append(contentsOf: drainZipExtractionErrors())
+        errors.append(contentsOf: summary.warnings)
+        parseErrors = errors
+
+        // Committed truth (Part B4): report what actually reached the store
+        // this run, never parsed counts. When the store count was
+        // unavailable, the persist-attempted count is the honest upper bound
+        // (and the message says so).
+        let committed = summary.inserted ?? summary.persistAttempted
+
+        // Whole-run no-op: nothing parsed AND nothing skipped → nothing found.
+        if summary.parsed == 0 && summary.skippedFiles == 0 {
+            let fileNames = urls.map { $0.lastPathComponent }.joined(separator: ", ")
+            if summary.fileErrors.isEmpty {
+                let extensions = urls.map { $0.pathExtension.lowercased() }
+                let supported = Set(["mbox", "eml", "emlx", "msg", "pst", "ost", "nsf", "zip"])
+                let unsupported = extensions.filter { !supported.contains($0) && !$0.isEmpty }
+                if !unsupported.isEmpty {
+                    statusMessage = "Unsupported format: .\(unsupported.first ?? "unknown"). Supported: .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, .zip"
+                } else {
+                    statusMessage = "No emails found in \(fileNames). The file may be empty or contain no recognizable email messages."
+                }
+            } else {
+                let errorSummary = summary.fileErrors.prefix(3).map { "\($0.filename): \($0.message)" }.joined(separator: "; ")
+                statusMessage = "Failed to parse \(fileNames): \(errorSummary)"
+            }
+            statusColor = .orange
+            isParsed = false
+            loadingProgress = 0.0
+            loadingText = ""
+            ImportProgressNotifier.shared.cancelProgress()
+            return
+        }
+
+        for hash in fileHashes {
+            ForensicManager.shared.registerFileHash(hash)
+        }
+
+        // The SQLite store holds the full, deduped archive (persisted per
+        // batch by the coordinator); the committed count comes from the
+        // coordinator's per-run accounting and is refreshed below from the
+        // store total (the authority).
+        totalParsedCount = committed
+        isParsed = true
+        Task { @MainActor [weak self] in
+            if let total = try? await ArchiveDataService.shared.count(), total > 0 {
+                self?.totalParsedCount = total
+            }
+        }
+        updateMetadataDisplay()
+        // THIS RUN's duplicates (findings delta), not the store-wide total.
+        duplicatesRemoved = summary.duplicates ?? 0
+        removedDuplicates = []
+
+        ForensicManager.shared.logAction("Import Complete", detail: "Imported \(committed) emails from \(urls.count) file(s) into SQLite + FTS5.")
+
+        var notes: [String] = []
+        if summary.damaged > 0 { notes.append("\(summary.damaged) unparseable skipped") }
+        if let dups = summary.duplicates, dups > 0 { notes.append("\(dups) duplicate(s) skipped") }
+        if summary.skippedFiles > 0 { notes.append("\(summary.skippedFiles) file(s) already imported") }
+        if summary.cappedAtLimit { notes.append("free-tier limit reached") }
+        if summary.ftsDegraded { notes.append("search index will finish updating on next launch") }
+        if !summary.receiptPersisted { notes.append("import receipt could not be saved") }
+        let noteText = notes.isEmpty ? "" : " (\(notes.joined(separator: "; ")))"
+
+        if summary.fileErrors.isEmpty && summary.persistFailed == 0 {
+            if summary.inserted == nil {
+                statusMessage = "Imported up to \(committed) emails from \(urls.count) file(s) — final count unavailable.\(noteText)"
+                statusColor = .orange
+            } else {
+                statusMessage = "Imported \(committed) new emails from \(urls.count) file(s).\(noteText)"
+                statusColor = notes.isEmpty ? .green : .orange
+            }
+        } else {
+            let issueCount = summary.fileErrors.count + (summary.persistFailed > 0 ? 1 : 0)
+            let errorHint = summary.fileErrors.first.map { " (\($0.filename): \($0.message))" } ?? ""
+            statusMessage = "Imported \(committed) new emails. \(issueCount) issue(s)\(errorHint).\(noteText)"
+            statusColor = .orange
+        }
+        loadingProgress = 1.0
+        loadingText = "Done!"
+        cleanupTempDirs()
+
+        // Notify import completion via system notification
+        let importFilename = urls.count == 1 ? urls.first?.lastPathComponent ?? "archive" : "\(urls.count) files"
+        ImportProgressNotifier.shared.completeImport(filename: importFilename, count: committed)
+
+        // Update widget data from bounded services (aggregate top
+        // senders + a few recent summaries) — never the whole corpus.
+        let widgetImportName = urls.first?.lastPathComponent
+        Task { @MainActor in
+            let snap = try? await ArchiveAggregateService.shared.snapshot(topLimit: 5)
+            let recent = (try? await ArchiveDataService.shared.page(query: .all, cursor: nil, limit: 5))?.summaries ?? []
+            WidgetDataProvider.shared.updateWidgetData(
+                totalEmails: snap?.total ?? 0,
+                importFilename: widgetImportName,
+                topSenders: snap?.topSenders.map(\.value) ?? [],
+                recentSubjects: recent.map(\.subject)
+            )
+        }
+
+        NotificationCenter.default.post(name: .parsingFinished, object: nil)
+        // (Part F: the legacy in-RAM EmailSearchIndex is no longer built —
+        // the FTS5 index was already updated during persist.)
     }
 
     // MARK: - Thunderbird Auto-Import
@@ -562,24 +586,33 @@ class ContentViewModel: ObservableObject {
     }
 
     // MARK: - Metadata/AI
+    /// Stage 5 W2-B: metadata (top subjects + date range) now comes from bounded
+    /// SQL aggregates over the SQLite store, not a whole-archive `[RawEmail]`
+    /// scan. Signature kept synchronous; the bounded aggregate fetch runs in a
+    /// MainActor Task so callers are unchanged.
     func autoDetectMetadata() {
         guard isParsed else {
             statusMessage = "Parse a file first."
             statusColor = .orange
             return
         }
-        let replyCounts = replyFrequency(for: senderEmail)
-        let sortedSubjects = Dictionary(grouping: parsedEmails, by: { $0.headers["Subject"] ?? "(No Subject)" })
-            .mapValues { $0.count }
-            .sorted { replyCounts[$0.key, default: 0] < replyCounts[$1.key, default: 0] }
-
-        subjectList = sortedSubjects.map { $0.key }
-        let dates = parsedEmails.compactMap { MBOXParser.parseDate($0.headers["Date"]) }
-        detectedDateRange = (dates.min(), dates.max())
-        statusMessage = "Metadata detected: \(subjectList.count) subjects."
-        statusColor = .blue
+        Task { @MainActor in
+            do {
+                let snap = try await ArchiveAggregateService.shared.snapshot(topLimit: 200)
+                self.subjectList = snap.topSubjects.map { $0.value }
+                self.detectedDateRange = (snap.minDate, snap.maxDate)
+                self.statusMessage = "Metadata detected: \(self.subjectList.count) subjects."
+                self.statusColor = .blue
+            } catch {
+                // Non-fatal: keep any prior metadata rather than clearing it.
+            }
+        }
     }
 
+    /// Part G4: answers come from bounded SQL aggregates over the SQLite store
+    /// (COUNT / GROUP BY), never whole-array walks over the resident preview.
+    /// Signature kept synchronous (autoDetectMetadata precedent); the bounded
+    /// aggregate fetch runs in a MainActor Task and publishes `aiResponse`.
     func runAIQuery() {
         guard isParsed else {
             aiResponse = "Please parse a file first."
@@ -587,129 +620,44 @@ class ContentViewModel: ObservableObject {
         }
         let lower = aiPrompt.lowercased()
         if lower.contains("how many") && lower.contains("sent") {
-            let count = parsedEmails.filter { $0.messageType == "sent" }.count
-            aiResponse = "Total sent emails: \(count)"
+            Task { @MainActor in
+                let counts = try? await ArchiveAggregateService.shared.sentReceivedCounts(senderEmail: self.senderEmail)
+                self.aiResponse = "Total sent emails: \(counts?.sent ?? 0)"
+            }
         } else if lower.contains("how many") && lower.contains("received") {
-            let count = parsedEmails.filter { $0.messageType == "received" }.count
-            aiResponse = "Total received emails: \(count)"
+            Task { @MainActor in
+                let counts = try? await ArchiveAggregateService.shared.sentReceivedCounts(senderEmail: self.senderEmail)
+                self.aiResponse = "Total received emails: \(counts?.received ?? 0)"
+            }
         } else if lower.contains("top subject") {
-            let freq = Dictionary(grouping: parsedEmails.map { $0.headers["Subject"] ?? "(No Subject)" }, by: { $0 })
-                .mapValues { $0.count }
-                .sorted { $0.value > $1.value }
-            aiResponse = "Top Subjects:\n" + freq.prefix(5).map { "\($0.key): \($0.value)" }.joined(separator: "\n")
+            Task { @MainActor in
+                let subjects = (try? await ArchiveAggregateService.shared.topSubjects(limit: 5)) ?? []
+                self.aiResponse = "Top Subjects:\n" + subjects.map { "\($0.value): \($0.count)" }.joined(separator: "\n")
+            }
         } else if lower.contains("reply frequency") {
-            let freq = replyFrequency(for: senderEmail)
-            let summary = freq.sorted { $0.value > $1.value }.prefix(5)
-                .map { "\($0.key): \($0.value)" }
-                .joined(separator: "\n")
-            aiResponse = "Top Reply Recipients:\n" + summary
+            Task { @MainActor in
+                let freq = (try? await ArchiveAggregateService.shared.replyRecipientCounts(senderEmail: self.senderEmail)) ?? [:]
+                let summary = freq.sorted { $0.value > $1.value }.prefix(5)
+                    .map { "\($0.key): \($0.value)" }
+                    .joined(separator: "\n")
+                self.aiResponse = "Top Reply Recipients:\n" + summary
+            }
         } else {
             aiResponse = "Sorry, I didn't understand that. Try asking about 'sent emails', 'received emails', 'top subjects', or 'reply frequency'."
         }
     }
 
-    // MARK: - Smart Deduplication (exact + fuzzy)
-    private static func deduplicate(_ emails: [MBOXParser.RawEmail]) -> (kept: [MBOXParser.RawEmail], removed: [MBOXParser.RawEmail]) {
-        var seen = Set<String>()
-        var fuzzyIndex: [String: [Date]] = [:]
-        var result: [MBOXParser.RawEmail] = []
-        var removed: [MBOXParser.RawEmail] = []
-
-        for (_, email) in emails.enumerated() {
-            let messageID = email.headers["Message-ID"] ?? email.headers["Message-Id"] ?? ""
-            if !messageID.isEmpty {
-                guard seen.insert(messageID).inserted else {
-                    removed.append(email)
-                    continue
-                }
-            } else {
-                let fingerprint = "\(email.headers["From"] ?? "")\(email.headers["Date"] ?? "")\(email.headers["Subject"] ?? "")"
-                guard seen.insert(fingerprint).inserted else {
-                    removed.append(email)
-                    continue
-                }
-            }
-
-            let subject = (email.headers["Subject"] ?? "").lowercased()
-                .replacingOccurrences(of: "re:", with: "").replacingOccurrences(of: "fwd:", with: "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let from = (email.headers["From"] ?? "").lowercased()
-            let date = MBOXParser.parseDate(email.headers["Date"]) ?? .distantPast
-
-            let fuzzyKey = "\(subject)|\(from)"
-            let isDuplicate: Bool
-            if date == .distantPast {
-                isDuplicate = false
-            } else if let existingDates = fuzzyIndex[fuzzyKey] {
-                isDuplicate = existingDates.contains { abs($0.timeIntervalSince(date)) < 60 }
-            } else {
-                isDuplicate = false
-            }
-
-            guard !isDuplicate else {
-                removed.append(email)
-                continue
-            }
-            fuzzyIndex[fuzzyKey, default: []].append(date)
-            result.append(email)
-        }
-        return (result, removed)
-    }
-
-    // MARK: - Annotate parsed emails (sent/received/normalize)
-    private func annotate(_ emails: [MBOXParser.RawEmail]) -> [MBOXParser.RawEmail] {
-        var annotated = emails
-        var normalizedSender = senderEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if normalizedSender.isEmpty {
-            let froms = emails.compactMap { $0.headers["From"] }
-            senderEmail = mostCommon(in: froms)
-            normalizedSender = senderEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-
-        guard !normalizedSender.isEmpty else { return annotated }
-
-        for i in 0..<annotated.count {
-            let from = annotated[i].headers["From"]?.lowercased() ?? ""
-            if from == normalizedSender || from.contains(normalizedSender) {
-                annotated[i].messageType = "sent"
-            } else {
-                annotated[i].messageType = "received"
-            }
-        }
-        return annotated
-    }
-
-    private func mostCommon(in array: [String]) -> String {
-        let counts = Dictionary(grouping: array, by: { $0 }).mapValues { $0.count }
-        return counts.max(by: { $0.value < $1.value })?.key ?? ""
-    }
+    // (Part R) The in-RAM smart-dedup and sent/received annotation passes are
+    // gone with the preview array: dedup happens at insert (message-id
+    // uniqueness in the store + coordinator duplicate accounting) and
+    // sent/received is derived at parse time from `senderEmail`.
 
     private func updateMetadataDisplay() {
         autoDetectMetadata()
     }
 
-    // MARK: - Reply Frequency (threading)
-    func replyFrequency(for userEmail: String) -> [String: Int] {
-        guard !userEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [:] }
-        let replies = parsedEmails.filter {
-            $0.headers["From"]?.lowercased().contains(userEmail.lowercased()) == true
-        }
-
-        var counts: [String: Int] = [:]
-        for email in replies {
-            if let toField = email.headers["To"] {
-                let recipients = toField.components(separatedBy: ",")
-                for recipient in recipients {
-                    let trimmed = recipient.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty {
-                        counts[trimmed, default: 0] += 1
-                    }
-                }
-            }
-        }
-        return counts
-    }
+    // Reply frequency moved to ArchiveAggregateService.replyRecipientCounts
+    // (Part G4): a bounded SQL GROUP BY over the store — no preview-array walk.
 
     // MARK: - Clear all parsed state
     private func cleanupTempDirs() {
@@ -721,8 +669,8 @@ class ContentViewModel: ObservableObject {
 
     func clearParsedData() {
         cleanupTempDirs()
-        parsedEmails = []
         removedDuplicates = []
+        totalParsedCount = 0
         isParsed = false
         subjectList = []
         detectedDateRange = (nil, nil)
@@ -734,64 +682,65 @@ class ContentViewModel: ObservableObject {
         statusColor = .gray
     }
 
-    func removeEmails(ids: Set<UUID>) {
-        let removed = parsedEmails.filter { ids.contains($0.id) }
-        parsedEmails.removeAll { ids.contains($0.id) }
-        totalParsedCount = parsedEmails.count
-        duplicatesRemoved += removed.count
-        removedDuplicates.append(contentsOf: removed)
-        // Durably delete from the v2 store AND the FTS index so removed emails
-        // don't linger as searchable ghost rows (store↔FTS drift).
-        let idList = ids
-        Task {
-            try? await EmailStore.shared.delete(ids: idList)
-            for id in idList {
-                try? await FTSSearchIndex.shared.delete(id: id)
+    /// Guarded deletion path (Part M): durable delete from the FTS index then
+    /// the SQLite authority. Returns whether the delete durably succeeded, so
+    /// callers holding resident page windows mutate only after the authority
+    /// confirms. The removed emails are recorded as duplicate findings (they
+    /// are fetched from the store BEFORE deletion, bounded by the user's
+    /// selection) so the "removed duplicates" review sheet keeps working.
+    @discardableResult
+    func removeEmailsAwaitingResult(ids: Set<UUID>) async -> Bool {
+        guard !ids.isEmpty else { return true }
+        let removed = (try? await ArchiveDataService.shared.fullEmails(ids: Array(ids))) ?? []
+        // Durably delete from the FTS index then the SQLite authority so
+        // removed emails don't linger as searchable ghost rows (store↔FTS
+        // drift). FTS-first (matches the repository's delete ordering): a
+        // mid-delete failure leaves a canonical row that reconcile can
+        // restore, never a ghost FTS row. Failures are surfaced (Part B3 —
+        // never `try?`-swallow a correctness error).
+        do {
+            for id in ids {
+                try await FTSSearchIndex.shared.delete(id: id)
             }
+            try await SQLiteEmailStore.shared.delete(ids: ids)
+            // Content-affecting mutation: bump the corpus revision so derived
+            // state (Parts I–M) can detect staleness. Best-effort — the delete
+            // itself already succeeded.
+            _ = try? await ArchiveCorpusRevision.shared.bump()
+            duplicatesRemoved += removed.count
+            removedDuplicates.append(contentsOf: removed.map { DuplicateFinding(from: $0, reason: "removed") })
+            totalParsedCount = (try? await ArchiveDataService.shared.count()) ?? max(0, totalParsedCount - ids.count)
+            return true
+        } catch {
+            Self.importLogger.error("Delete failed: \(error.localizedDescription, privacy: .public)")
+            statusMessage = "Delete failed: \(error.localizedDescription). The emails were not removed."
+            statusColor = .red
+            return false
         }
     }
 
-    // MARK: - Restore persisted emails
-    func restoreEmails(_ emails: [MBOXParser.RawEmail]) {
-        self.parsedEmails = emails
-        self.isParsed = !emails.isEmpty
-        if isParsed {
+    // MARK: - Direct email ingestion (sample data / cloud fetch)
+
+    /// Persist already-parsed emails (bundled sample data, cloud/IMAP fetches)
+    /// into the SQLite authority + FTS index — the same substrate file imports
+    /// land in. Nothing is retained in RAM; callers refresh their paged
+    /// surfaces via `.parsingFinished`.
+    func ingestEmails(_ emails: [MBOXParser.RawEmail], sourceLabel: String) async {
+        guard !emails.isEmpty else { return }
+        do {
+            try await SQLiteEmailStore.shared.insertBatch(emails)
+            try await FTSSearchIndex.shared.indexBatch(emails)
+            _ = try? await ArchiveCorpusRevision.shared.bump()
+            totalParsedCount = (try? await ArchiveDataService.shared.count()) ?? totalParsedCount
+            isParsed = totalParsedCount > 0
             updateMetadataDisplay()
-            statusMessage = "Restored \(emails.count) emails from previous session."
+            statusMessage = "Added \(emails.count) email\(emails.count == 1 ? "" : "s") from \(sourceLabel)."
             statusColor = .green
+            NotificationCenter.default.post(name: .parsingFinished, object: nil)
+        } catch {
+            statusMessage = "Failed to save emails from \(sourceLabel): \(error.localizedDescription)"
+            statusColor = .red
         }
-    }
-
-    // MARK: - Append Emails (from IMAP/Cloud fetch)
-    func appendEmails(_ newEmails: [MBOXParser.RawEmail]) {
-        guard !newEmails.isEmpty else { return }
-        let existingIDs = Set(parsedEmails.map { $0.id })
-        let unique = newEmails.filter { !existingIDs.contains($0.id) }
-        guard !unique.isEmpty else {
-            statusMessage = "No new emails to add (all duplicates)."
-            return
-        }
-        parsedEmails.append(contentsOf: annotate(unique))
-        totalParsedCount = parsedEmails.count
-        isParsed = true
-        updateMetadataDisplay()
-        statusMessage = "Added \(unique.count) email\(unique.count == 1 ? "" : "s") from server. Total: \(parsedEmails.count)"
-        statusColor = .green
-    }
-
-    // MARK: - Body Rehydration (for compacted emails)
-    func rehydrateBody(for emailID: UUID) -> MBOXParser.RawEmail? {
-        guard let index = parsedEmails.firstIndex(where: { $0.id == emailID }),
-              parsedEmails[index].isBodyCompacted else {
-            return parsedEmails.first(where: { $0.id == emailID })
-        }
-        if let body = EmailPersistence.loadBody(for: emailID) {
-            parsedEmails[index].plainBody = body.plainBody
-            parsedEmails[index].htmlBody = body.htmlBody
-            parsedEmails[index].rawSource = body.rawSource
-            parsedEmails[index].isBodyCompacted = false
-        }
-        return parsedEmails[index]
     }
 
     nonisolated static func formatByteCount(_ bytes: Int64) -> String {

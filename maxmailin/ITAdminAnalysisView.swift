@@ -1,12 +1,23 @@
 import SwiftUI
 
 struct ITAdminAnalysisView: View {
-    let emails: [MBOXParser.RawEmail]
-    var v2Source: PaginatedEmailViewModel? = nil
+    // v2: no injected corpus. The browsable inspector list is a growable paged
+    // window from the store (reaches every email); the security engines run over
+    // a bounded working set. `workingSet` also backs stats/export until the
+    // SecurityAnalysisFeatures engines are converted to full streaming.
+    @State private var pagedEmails: [MBOXParser.RawEmail] = []
+    @State private var pageCursor: EmailPageCursor?
+    @State private var canLoadMore = true
+    @State private var isLoadingPage = false
+    @State private var workingSet: [MBOXParser.RawEmail] = []
+    @State private var archiveTotal = 0
+    @State private var selectedFullEmail: MBOXParser.RawEmail?
+    @State private var searchHits: [MBOXParser.RawEmail] = []
 
-    private var effectiveEmails: [MBOXParser.RawEmail] {
-        if let v2 = v2Source, !v2.emails.isEmpty { return v2.emails }
-        return emails
+    /// Emails currently shown in the inspector list: FTS hits when searching,
+    /// else the paged browse window.
+    private var browseEmails: [MBOXParser.RawEmail] {
+        filterSearchText.isEmpty ? pagedEmails : searchHits
     }
 
     // MARK: - State
@@ -69,18 +80,14 @@ struct ITAdminAnalysisView: View {
     }
 
     private var selectedEmail: MBOXParser.RawEmail? {
-        guard let id = selectedEmailID else { return nil }
-        return effectiveEmails.first { $0.id == id }
+        // Hydrated by id from the store (works for any email, in-window or not).
+        if let sel = selectedFullEmail, sel.id == selectedEmailID { return sel }
+        return browseEmails.first { $0.id == selectedEmailID }
     }
 
-    private var filteredEmails: [MBOXParser.RawEmail] {
-        guard !filterSearchText.isEmpty else { return emails }
-        let q = filterSearchText.lowercased()
-        return effectiveEmails.filter {
-            ($0.headers["From"] ?? "").lowercased().contains(q) ||
-            ($0.headers["Subject"] ?? "").lowercased().contains(q) ||
-            ($0.headers["To"] ?? "").lowercased().contains(q)
-        }
+    private var visibleEmails: [MBOXParser.RawEmail] {
+        // Search already applied via FTS (searchHits); browse window otherwise.
+        browseEmails
     }
 
     var body: some View {
@@ -114,8 +121,49 @@ struct ITAdminAnalysisView: View {
         .overlay { if AnalysisCoordinator.isEnabled { AnalysisProgressOverlay(coordinator: coordinator) } }
         .featureTutorial(.itAdmin, key: "it_admin_tutorial_seen", isPresented: $showTutorial)
         .sheet(isPresented: $showExportSheet) { exportReportSheet }
-        .onAppear { if !hasComputedThreats { computeAllThreatScores() } }
+        .task { await loadInitial() }
         .task { await loadV3Data() }
+        .onChange(of: filterSearchText) { _, _ in Task { await runSearch() } }
+        .onChange(of: selectedEmailID) { _, id in Task { await hydrateSelected(id) } }
+    }
+
+    // MARK: - v2 bounded loaders
+
+    private func loadInitial() async {
+        archiveTotal = (try? await ArchiveDataService.shared.count()) ?? 0
+        if pagedEmails.isEmpty { await loadNextPage() }
+        if workingSet.isEmpty {
+            var acc: [MBOXParser.RawEmail] = []
+            let stream = ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
+            do { for try await b in stream { acc.append(contentsOf: b); if acc.count >= 2000 { break } } } catch { }
+            workingSet = Array(acc.prefix(2000))
+            if !hasComputedThreats { computeAllThreatScores() }
+        }
+    }
+
+    /// Append the next page of full emails to the browse window (reaches every
+    /// email as you scroll; memory bounded per page).
+    private func loadNextPage() async {
+        guard canLoadMore, !isLoadingPage else { return }
+        isLoadingPage = true
+        defer { isLoadingPage = false }
+        guard let page = try? await ArchiveDataService.shared.page(query: .all, cursor: pageCursor, limit: 100) else { return }
+        let full = (try? await ArchiveDataService.shared.fullEmails(ids: page.summaries.map(\.id))) ?? []
+        pagedEmails.append(contentsOf: full)
+        pageCursor = page.nextCursor
+        canLoadMore = page.nextCursor != nil
+    }
+
+    private func runSearch() async {
+        let q = filterSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { searchHits = []; return }
+        searchHits = ((try? await ArchiveRetrievalService.shared.retrieve(q, limit: 200)) ?? []).map(\.email)
+    }
+
+    private func hydrateSelected(_ id: UUID?) async {
+        guard let id else { selectedFullEmail = nil; return }
+        if let inWindow = browseEmails.first(where: { $0.id == id }) { selectedFullEmail = inWindow; return }
+        selectedFullEmail = try? await ArchiveDataService.shared.fullEmail(id: id)
     }
 
     private func loadV3Data() async {
@@ -123,8 +171,11 @@ struct ITAdminAnalysisView: View {
         if loaded.nodeCount > 0 { graph = loaded; kgLoaded = true }
 
         guard !hasV3Analysis else { return }
+        // Wait for the bounded working set to load, then analyze over it.
+        var guardCount = 0
+        while workingSet.isEmpty && guardCount < 200 { try? await Task.sleep(nanoseconds: 50_000_000); guardCount += 1 }
         isV3Loading = true
-        let emailsCopy = effectiveEmails
+        let emailsCopy = workingSet
 
         guard AnalysisCoordinator.isEnabled else {
             let flags = EmailNLPEngine.detectPhishing(in: emailsCopy)
@@ -191,7 +242,7 @@ struct ITAdminAnalysisView: View {
             return result
         }()
 
-        for email in effectiveEmails {
+        for email in workingSet {
             var score = threatScores[email.id] ?? computeThreatScore(email)
             if let flag = phishingByID[email.id] {
                 switch flag.riskLevel {
@@ -274,14 +325,21 @@ struct ITAdminAnalysisView: View {
             HStack {
                 Text("EMAILS").font(.system(size: 9, weight: .semibold)).foregroundColor(.secondary)
                 Spacer()
-                Text("\(filteredEmails.count)").font(.system(size: 9, weight: .bold, design: .monospaced)).foregroundColor(.teal)
+                Text("\(visibleEmails.count)").font(.system(size: 9, weight: .bold, design: .monospaced)).foregroundColor(.teal)
             }
             .padding(.horizontal, 8).padding(.vertical, 4)
             .background(AppColors.backgroundSecondary.opacity(0.6))
 
-            List(filteredEmails, id: \.id, selection: $selectedEmailID) { email in
+            List(visibleEmails, id: \.id, selection: $selectedEmailID) { email in
                 emailListRow(email)
                     .tag(email.id)
+                    .onAppear {
+                        // Infinite scroll: load the next page when the last
+                        // browse-window row appears (not while searching).
+                        if filterSearchText.isEmpty, email.id == pagedEmails.last?.id {
+                            Task { await loadNextPage() }
+                        }
+                    }
             }
             .listStyle(.plain)
             .environment(\.defaultMinListRowHeight, 36)
@@ -880,7 +938,7 @@ struct ITAdminAnalysisView: View {
             guard aiSecurityBrief.isEmpty else { return }
             isGeneratingBrief = true
             Task {
-                let result = try? await FoundationModelEngine.securityBrief(emails) { text in
+                let result = try? await FoundationModelEngine.securityBrief { text in
                     aiSecurityBrief = text
                 }
                 aiSecurityBrief = result ?? "Security brief unavailable."
@@ -1063,7 +1121,7 @@ struct ITAdminAnalysisView: View {
     private var batchAnalysisView: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                sectionTitle("Batch Email Analysis (\(effectiveEmails.count) emails)", icon: "chart.bar", color: .teal)
+                sectionTitle("Batch Email Analysis (\(workingSet.count) emails)", icon: "chart.bar", color: .teal)
 
                 let authStats = computeAuthStats()
                 let domainStats = computeDomainStats()
@@ -1071,10 +1129,10 @@ struct ITAdminAnalysisView: View {
                 let tlsCount = computeTLSCount()
 
                 HStack(spacing: 12) {
-                    batchStatCard("SPF Pass", value: "\(authStats.spfPass)", total: effectiveEmails.count, color: .green)
-                    batchStatCard("DKIM Pass", value: "\(authStats.dkimPass)", total: effectiveEmails.count, color: .green)
-                    batchStatCard("DMARC Pass", value: "\(authStats.dmarcPass)", total: effectiveEmails.count, color: .green)
-                    batchStatCard("TLS Encrypted", value: "\(tlsCount)", total: effectiveEmails.count, color: .blue)
+                    batchStatCard("SPF Pass", value: "\(authStats.spfPass)", total: workingSet.count, color: .green)
+                    batchStatCard("DKIM Pass", value: "\(authStats.dkimPass)", total: workingSet.count, color: .green)
+                    batchStatCard("DMARC Pass", value: "\(authStats.dmarcPass)", total: workingSet.count, color: .green)
+                    batchStatCard("TLS Encrypted", value: "\(tlsCount)", total: workingSet.count, color: .blue)
                 }
 
                 Divider()
@@ -1084,7 +1142,7 @@ struct ITAdminAnalysisView: View {
                     HStack {
                         Text(domain).font(.system(size: 11, design: .monospaced))
                         Spacer()
-                        ProgressView(value: Double(count), total: Double(effectiveEmails.count))
+                        ProgressView(value: Double(count), total: Double(workingSet.count))
                             .frame(width: 100)
                             .tint(.teal)
                         Text("\(count)").font(.system(size: 11, weight: .bold, design: .monospaced)).frame(width: 40, alignment: .trailing)
@@ -1104,8 +1162,8 @@ struct ITAdminAnalysisView: View {
 
                 Divider()
 
-                let attachmentEmails = effectiveEmails.filter { !$0.attachments.isEmpty }
-                let totalAttachments = effectiveEmails.flatMap { $0.attachments }.count
+                let attachmentEmails = workingSet.filter { !$0.attachments.isEmpty }
+                let totalAttachments = workingSet.flatMap { $0.attachments }.count
                 sectionTitle("Attachment Summary", icon: "paperclip", color: .brown)
                 HStack(spacing: 20) {
                     VStack {
@@ -1177,16 +1235,16 @@ struct ITAdminAnalysisView: View {
             sectionTitle("Threat Assessment", icon: "shield.checkered", color: .red)
 
             HStack(spacing: 12) {
-                batchStatCard("High Risk", value: "\(high)", total: effectiveEmails.count, color: .red)
-                batchStatCard("Medium Risk", value: "\(medium)", total: effectiveEmails.count, color: .orange)
-                batchStatCard("Low Risk", value: "\(low)", total: effectiveEmails.count, color: .yellow)
-                batchStatCard("Clean", value: "\(clean)", total: effectiveEmails.count, color: .green)
+                batchStatCard("High Risk", value: "\(high)", total: workingSet.count, color: .red)
+                batchStatCard("Medium Risk", value: "\(medium)", total: workingSet.count, color: .orange)
+                batchStatCard("Low Risk", value: "\(low)", total: workingSet.count, color: .yellow)
+                batchStatCard("Clean", value: "\(clean)", total: workingSet.count, color: .green)
             }
 
             if high > 0 {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("High-Risk Emails").font(.system(size: 11, weight: .semibold)).foregroundColor(.red)
-                    let highRiskEmails = effectiveEmails.filter { (threatScores[$0.id] ?? 0) >= 7 }
+                    let highRiskEmails = workingSet.filter { (threatScores[$0.id] ?? 0) >= 7 }
                     ForEach(highRiskEmails.prefix(10), id: \.id) { email in
                         HStack(spacing: 6) {
                             Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 9)).foregroundColor(.red)
@@ -1718,7 +1776,7 @@ struct ITAdminAnalysisView: View {
 
     private func computeAuthStats() -> BatchAuthStats {
         var stats = BatchAuthStats()
-        for email in effectiveEmails {
+        for email in workingSet {
             let auth = parseAuthStatus(email)
             if auth.spf == "pass" { stats.spfPass += 1 }
             if auth.dkim == "pass" { stats.dkimPass += 1 }
@@ -1729,7 +1787,7 @@ struct ITAdminAnalysisView: View {
 
     private func computeDomainStats() -> [(String, Int)] {
         var counts: [String: Int] = [:]
-        for email in effectiveEmails {
+        for email in workingSet {
             let domain = extractDomain(from: email.headers["From"] ?? "")
             if !domain.isEmpty { counts[domain, default: 0] += 1 }
         }
@@ -1738,7 +1796,7 @@ struct ITAdminAnalysisView: View {
 
     private func computeClientStats() -> [(String, Int)] {
         var counts: [String: Int] = [:]
-        for email in effectiveEmails {
+        for email in workingSet {
             if let client = email.headers["X-Mailer"] ?? email.headers["User-Agent"] {
                 counts[client, default: 0] += 1
             }
@@ -1747,7 +1805,7 @@ struct ITAdminAnalysisView: View {
     }
 
     private func computeTLSCount() -> Int {
-        effectiveEmails.filter { email in
+        workingSet.filter { email in
             email.headers.contains { k, v in
                 k.lowercased().hasPrefix("received") &&
                 (v.lowercased().contains("tls") || v.lowercased().contains("esmtps"))
@@ -1759,7 +1817,7 @@ struct ITAdminAnalysisView: View {
 
     private func computeAllThreatScores() {
         var scores: [UUID: Int] = [:]
-        for email in effectiveEmails {
+        for email in workingSet {
             scores[email.id] = computeThreatScore(email)
         }
         threatScores = scores
@@ -1813,11 +1871,11 @@ struct ITAdminAnalysisView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("Summary").font(.headline)
-                Text("Total emails: \(effectiveEmails.count)")
-                Text("SPF pass rate: \(effectiveEmails.count > 0 ? Int(Double(authStats.spfPass) / Double(effectiveEmails.count) * 100) : 0)%")
-                Text("DKIM pass rate: \(effectiveEmails.count > 0 ? Int(Double(authStats.dkimPass) / Double(effectiveEmails.count) * 100) : 0)%")
-                Text("DMARC pass rate: \(effectiveEmails.count > 0 ? Int(Double(authStats.dmarcPass) / Double(effectiveEmails.count) * 100) : 0)%")
-                Text("TLS encrypted: \(tlsCount)/\(effectiveEmails.count)")
+                Text("Total emails: \(workingSet.count)")
+                Text("SPF pass rate: \(workingSet.count > 0 ? Int(Double(authStats.spfPass) / Double(workingSet.count) * 100) : 0)%")
+                Text("DKIM pass rate: \(workingSet.count > 0 ? Int(Double(authStats.dkimPass) / Double(workingSet.count) * 100) : 0)%")
+                Text("DMARC pass rate: \(workingSet.count > 0 ? Int(Double(authStats.dmarcPass) / Double(workingSet.count) * 100) : 0)%")
+                Text("TLS encrypted: \(tlsCount)/\(workingSet.count)")
                 Text("High-risk emails: \(highRisk)").foregroundColor(highRisk > 0 ? .red : .green)
             }
             .font(.system(size: 12))
@@ -1831,7 +1889,7 @@ struct ITAdminAnalysisView: View {
 
     private func exportCSV() {
         var csv = "From,Subject,Date,SPF,DKIM,DMARC,TLS,Threat Score,From Domain,Return-Path Domain\n"
-        for email in effectiveEmails {
+        for email in workingSet {
             let auth = parseAuthStatus(email)
             let from = (email.headers["From"] ?? "").replacingOccurrences(of: ",", with: ";")
             let subject = (email.headers["Subject"] ?? "").replacingOccurrences(of: ",", with: ";")

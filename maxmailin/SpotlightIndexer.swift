@@ -14,6 +14,21 @@ class SpotlightIndexer: NSObject, CSSearchableIndexDelegate {
         searchableIndex.indexDelegate = self
     }
 
+    /// Stage 5 W2-B: index the whole archive WITHOUT holding it — stream full
+    /// emails from the repository in bounded pages and index each page. Spotlight
+    /// indexing never receives a corpus array.
+    func indexAllFromArchive(batchSize: Int = 200) {
+        Task { @MainActor in
+            do {
+                for try await batch in ArchiveDataService.shared.streamFullEmails(batchSize: batchSize) {
+                    self.indexEmails(batch)
+                }
+            } catch {
+                // Best-effort: Spotlight indexing failures are non-fatal.
+            }
+        }
+    }
+
     /// Index emails into CoreSpotlight in batches of 100.
     /// Uses CSPerson for authors, full textContent for AI summarization,
     /// and updateListenerOptions for Apple Intelligence summaries + priority.

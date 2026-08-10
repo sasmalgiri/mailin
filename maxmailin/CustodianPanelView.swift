@@ -4,7 +4,9 @@ import AppKit
 #endif
 
 struct CustodianPanelView: View {
-    let emails: [MBOXParser.RawEmail]
+    // v2: bounded most-recent working set from the store (no injected corpus).
+    @State private var workingSet: [MBOXParser.RawEmail] = []
+    @State private var archiveTotal = 0
     @ObservedObject var manager: CustodianManager
     var isPresented: Binding<Bool>?
     @Environment(\.dismiss) private var envDismiss
@@ -48,6 +50,14 @@ struct CustodianPanelView: View {
             #endif
         }
         .featureTutorial(.custodianPanel, key: "custodian_panel_tutorial_seen", isPresented: $showTutorial)
+        .task {
+            archiveTotal = (try? await ArchiveDataService.shared.count()) ?? 0
+            guard workingSet.isEmpty else { return }
+            var acc: [MBOXParser.RawEmail] = []
+            let stream = ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
+            do { for try await b in stream { acc.append(contentsOf: b); if acc.count >= 2000 { break } } } catch { }
+            workingSet = Array(acc.prefix(2000))
+        }
     }
 
     private var header: some View {
@@ -115,15 +125,15 @@ struct CustodianPanelView: View {
                             .accessibilityHidden(true)
                         Text("All Emails")
                         Spacer()
-                        Text("\(emails.count)")
+                        Text("\(archiveTotal)")
                             .font(Typography.caption2)
                             .foregroundColor(AppColors.secondary)
                     }
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("All Emails, \(emails.count)")
+                .accessibilityLabel("All Emails, \(archiveTotal)")
 
-                let unassigned = emails.filter { manager.custodian(for: $0.id) == nil }
+                let unassigned = workingSet.filter { manager.custodian(for: $0.id) == nil }
                 Button {
                     selectedCustodian = "__unassigned__"
                     showDetailOnIOS = true
@@ -180,22 +190,22 @@ struct CustodianPanelView: View {
 
     private var detailPanel: some View {
         VStack(alignment: .leading, spacing: Spacing.small) {
-            let filteredEmails: [MBOXParser.RawEmail] = {
-                guard let sel = selectedCustodian else { return emails }
+            let scopedEmails: [MBOXParser.RawEmail] = {
+                guard let sel = selectedCustodian else { return workingSet }
                 if sel == "__unassigned__" {
-                    return emails.filter { manager.custodian(for: $0.id) == nil }
+                    return workingSet.filter { manager.custodian(for: $0.id) == nil }
                 }
                 let ids = Set(manager.emailIDs(for: sel))
-                return emails.filter { ids.contains($0.id) }
+                return workingSet.filter { ids.contains($0.id) }
             }()
 
             HStack {
-                Text("\(filteredEmails.count) emails")
+                Text("\(scopedEmails.count) emails")
                     .font(Typography.headline)
                 Spacer()
                 if let sel = selectedCustodian, sel != "__unassigned__" {
                     Button("Place All on Legal Hold") {
-                        manager.placeLegalHold(on: filteredEmails)
+                        manager.placeLegalHold(on: scopedEmails)
                     }
                     .buttonStyle(CompactSecondaryButtonStyle())
                 }
@@ -204,7 +214,7 @@ struct CustodianPanelView: View {
             .padding(.top, Spacing.small)
 
             List {
-                ForEach(filteredEmails, id: \.id) { email in
+                ForEach(scopedEmails, id: \.id) { email in
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(email.headers["Subject"] ?? "(No Subject)")
@@ -263,15 +273,15 @@ struct CustodianPanelView: View {
         }
         .alert("Assign Custodian", isPresented: $showAssignSheet) {
             Button("Assign to All Visible") {
-                let filteredEmails: [MBOXParser.RawEmail] = {
-                    guard let sel = selectedCustodian else { return emails }
+                let scopedEmails: [MBOXParser.RawEmail] = {
+                    guard let sel = selectedCustodian else { return workingSet }
                     if sel == "__unassigned__" {
-                        return emails.filter { manager.custodian(for: $0.id) == nil }
+                        return workingSet.filter { manager.custodian(for: $0.id) == nil }
                     }
                     let ids = Set(manager.emailIDs(for: sel))
-                    return emails.filter { ids.contains($0.id) }
+                    return workingSet.filter { ids.contains($0.id) }
                 }()
-                manager.assignCustodian(newCustodianName.trimmingCharacters(in: .whitespaces), to: filteredEmails.map(\.id))
+                manager.assignCustodian(newCustodianName.trimmingCharacters(in: .whitespaces), to: scopedEmails.map(\.id))
                 newCustodianName = ""
             }
             Button("Cancel", role: .cancel) {}
@@ -286,7 +296,7 @@ struct CustodianPanelView: View {
     }
 
     private func exportCustodianReport() {
-        let report = manager.custodianReport(emails: emails)
+        let report = manager.custodianReport(emails: workingSet)
         #if os(macOS)
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "custodian_report.txt"

@@ -46,6 +46,9 @@ struct mailinApp: App {
     @ObservedObject private var biometricLock = BiometricLockManager.shared
     @AppStorage("enableAIFeatures") private var enableAIFeatures = true
     @AppStorage("hasSeenLaunchAnimation") private var hasSeenLaunchAnimation = false
+    #if os(macOS)
+    @AppStorage("menuBarSearchEnabled") private var menuBarSearchEnabled = true
+    #endif
     @State private var showLaunchAnimation = false
     @Environment(\.openWindow) private var openWindow
     @Environment(\.scenePhase) private var scenePhase
@@ -148,24 +151,59 @@ struct mailinApp: App {
                                 }
                             }
                         }
-                        // CRITICAL pressure only: drop the in-RAM
-                        // EmailSearchIndex. At a 100K-message archive this
-                        // dictionary set is typically 200–400 MB resident
-                        // — the single biggest reclaimable allocation.
-                        // The disk-persisted index files are untouched;
-                        // the next search rebuilds RAM state from them.
-                        MemoryPressureHandler.shared.register { level in
-                            guard level != .warning else { return }
-                            EmailSearchIndex.shared.dropInMemoryIndices()
-                        }
+                        // (Part F: the legacy in-RAM EmailSearchIndex is no
+                        // longer built in production, so its dedicated
+                        // memory-pressure drop hook was removed with it.)
                         await AppSelfAttestation.shared.compute()
 
-                        // maxmailin v2 SwiftData layer: migrate any legacy JSON
-                        // archive from earlier mailin installs into the new
-                        // SwiftData store. Idempotent — only runs once per
-                        // archive version, immediately returns on subsequent
-                        // launches.
+                        // §10.1: migrate any legacy JSON archive from public
+                        // mailin v1 DIRECTLY into the canonical SQLite store
+                        // (full fidelity, preserveAll, exact-ID-coverage gate).
+                        // Idempotent — only runs once per archive version,
+                        // immediately returns on subsequent launches.
                         await MigrationService.shared.migrateIfNeeded()
+
+                        // Stage 5A: establish SQLite as the production storage
+                        // authority BEFORE any archive read/write. On an
+                        // existing SwiftData install this migrates it (non-
+                        // destructively) into SQLite and only marks `.active`
+                        // after the count + reopen integrity gate passes. Import
+                        // and the read cutover gate on `isActive`. Idempotent —
+                        // a fast no-op once active.
+                        let storageState = await StorageActivationCoordinator.shared.activate()
+                        _ = try? HMACChainAuditLog.shared.append(
+                            action: "v2.storage.activation",
+                            detail: "SQLite activation state: \(storageState.rawValue)"
+                        )
+
+                        // Repair archives imported by pre-full-fidelity builds:
+                        // re-extract message type / attachments / labels /
+                        // domains from the stored raw MIME (bounded pages;
+                        // O(1) no-op once nothing is pending). Fixes empty
+                        // folder buckets + type/attachment filters on old
+                        // archives without a re-import.
+                        // UI-test harness: "--uitest" launches into a clean,
+                        // deterministic state — onboarding suppressed, demo
+                        // archive imported — so XCUITests can click through
+                        // every surface against real data.
+                        if storageState == .active,
+                           ProcessInfo.processInfo.arguments.contains("--uitest") {
+                            UITestSupport.prepareForUITests()
+                        }
+                        if storageState == .active {
+                            let sender = UserDefaults.standard.string(forKey: "defaultSenderEmail") ?? ""
+                            FidelityBackfillJob.shared.kickIfNeeded(senderEmail: sender)
+                            // Attachment-content index (in:attachments searches
+                            // file CONTENTS): bounded background extraction;
+                            // O(1) no-op once everything is indexed.
+                            AttachmentTextIndexJob.shared.kickIfNeeded()
+                            // Weekly saved-search digest (opt-in; ≤1/week).
+                            DigestScheduler.shared.checkAndDeliver()
+                            // Ship-ready workflows: the 5 built-in recipes are
+                            // seeded on launch so they're usable immediately —
+                            // no create/configure step. Idempotent upsert.
+                            Task { await WorkflowService.seedBuiltins() }
+                        }
 
                         // Repair any store↔FTS drift (a crash between the
                         // store commit and the FTS commit can leave a row in
@@ -173,13 +211,25 @@ struct mailinApp: App {
                         // detected; bounded so it can't load an unbounded
                         // archive into memory.
                         Task.detached(priority: .utility) {
-                            let storeCount = (try? await EmailStore.shared.totalCount()) ?? 0
+                            // Reconcile against the ACTIVE authority. Once SQLite
+                            // is active (Stage 5A), it is the canonical store the
+                            // FTS index must match; before activation, fall back
+                            // to the SwiftData store.
+                            let active = await StorageActivationCoordinator.shared.isActive
+                            let store: any EmailArchiveStore = active ? SQLiteEmailStore.shared : EmailStore.shared
+                            let storeCount = (try? await store.totalCount()) ?? 0
                             let ftsCount = (try? await FTSSearchIndex.shared.rowCount()) ?? 0
                             if storeCount > ftsCount {
                                 // Bounded, paged, restartable — no archive-wide
-                                // Set<UUID>, no 100k ceiling.
-                                await FTSReconciler.reconcile()
+                                // Set<UUID>, no 100k ceiling. Best-effort at
+                                // launch; a failure just retries next launch.
+                                _ = try? await FTSReconciler.reconcile(store: store, fts: .shared)
                             }
+                            // Collapse any duplicate FTS rows left by a pre-
+                            // idempotent build (registry-masked, so the reconcile
+                            // above can't see them). Bounded per year-shard; a
+                            // no-op once clean.
+                            _ = try? await FTSSearchIndex.shared.dedupeShards()
                         }
 
                         // Self-test exercises the v2 storage + search +
@@ -274,6 +324,14 @@ struct mailinApp: App {
         }
         .windowResizability(.contentSize)
         .defaultSize(width: 400, height: 500)
+
+        // Menu-bar quick search: search the whole archive without switching
+        // apps (minimum-touch). Removable via Settings ▸ Display.
+        MenuBarExtra("Search mailin", systemImage: "envelope.badge.person.crop",
+                     isInserted: $menuBarSearchEnabled) {
+            MenuBarSearchView()
+        }
+        .menuBarExtraStyle(.window)
         #endif
     }
     

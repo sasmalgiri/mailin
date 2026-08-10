@@ -1,10 +1,31 @@
 import SwiftUI
 
 struct ArchiveComparisonView: View {
+    /// §37: this view compares two EXPLICITLY BOUNDED working sets — the call
+    /// sites feed it hub working sets (≤ `maxComparableEmails` each), never
+    /// whole archives. The init enforces the bound so an unbounded array can
+    /// never silently reach the O(A×fuzzy) comparison. A streamed key-walk
+    /// comparison over full archives is a v2.1 backlog item (V2_1_BACKLOG.md);
+    /// the UI states the working-set scope.
+    static let maxComparableEmails = 2_000
+
     let archiveA: [MBOXParser.RawEmail]
     let archiveB: [MBOXParser.RawEmail]
     let nameA: String
     let nameB: String
+    /// True when either side was truncated to the bound — surfaced in the UI.
+    let isTruncated: Bool
+
+    init(archiveA: [MBOXParser.RawEmail], archiveB: [MBOXParser.RawEmail],
+         nameA: String, nameB: String, isPresented: Binding<Bool>? = nil) {
+        self.isTruncated = archiveA.count > Self.maxComparableEmails
+            || archiveB.count > Self.maxComparableEmails
+        self.archiveA = Array(archiveA.prefix(Self.maxComparableEmails))
+        self.archiveB = Array(archiveB.prefix(Self.maxComparableEmails))
+        self.nameA = nameA
+        self.nameB = nameB
+        self.isPresented = isPresented
+    }
     @State private var filter: ComparisonFilter = .all
     @State private var comparisonResult: ComparisonResult?
     @State private var isComputing = false
@@ -41,6 +62,15 @@ struct ArchiveComparisonView: View {
             header
             Divider()
 
+            if isTruncated {
+                Label("Comparing the \(Self.maxComparableEmails) most recent emails per side — full-archive comparison is not included in this version.",
+                      systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(6)
+                    .accessibilityIdentifier("comparison.truncationNotice")
+            }
+
             if isComputing {
                 VStack(spacing: Spacing.medium) {
                     ProgressView()
@@ -71,7 +101,7 @@ struct ArchiveComparisonView: View {
         }
         .featureTutorial(.archiveComparison, key: "archive_comparison_tutorial_seen", isPresented: $showTutorial)
         #if os(macOS)
-        .frame(minWidth: 480, idealWidth: 850, minHeight: 360, idealHeight: 650)
+        .toolWindowFrame()
         #endif
         .onAppear {
             computeComparison()
@@ -263,7 +293,7 @@ struct ArchiveComparisonView: View {
     // MARK: - Email List
     private func emailList(result: ComparisonResult) -> some View {
         VStack(alignment: .leading, spacing: Spacing.xSmall) {
-            let emails = filteredEmails(result: result)
+            let emails = comparisonEmails(result: result)
             Text("\(emails.count) email\(emails.count == 1 ? "" : "s")")
                 .font(Typography.caption1)
                 .foregroundColor(AppColors.secondary)
@@ -302,7 +332,7 @@ struct ArchiveComparisonView: View {
         }
     }
 
-    private func filteredEmails(result: ComparisonResult) -> [ComparisonEmailItem] {
+    private func comparisonEmails(result: ComparisonResult) -> [ComparisonEmailItem] {
         var items: [ComparisonEmailItem] = []
 
         switch filter {

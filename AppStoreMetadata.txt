@@ -79,8 +79,8 @@ EXPORT ANYWHERE
 FORENSIC & LEGAL TOOLS
 - Tamper-evident HMAC-chained audit logging and chain-of-custody artifacts
 - Evidence tagging and examiner annotations
-- SPF, DKIM, and DMARC authentication analysis
-- S/MIME signature verification and encryption detection
+- Server-reported SPF, DKIM and DMARC authentication status, with header analysis
+- S/MIME verification for opaque signatures; detached signatures and encryption detected and reported honestly
 - Spoofing and phishing detection
 - MIME tree inspection and received chain analysis
 - Bates numbering and Concordance load file export
@@ -101,7 +101,7 @@ ADDITIONAL FEATURES
 - Email comparison — side-by-side diff view of two emails
 - Keyword monitoring — set up alerts for specific terms
 - Automation rules — auto-tag and organize by custom rules
-- Encrypted storage — AES-256 encryption for sensitive archives
+- Encrypted archive exports — AES-256-GCM for sensitive archive bundles (database files rely on platform file protection)
 - Biometric lock — Touch ID / Face ID to protect your archives
 - Spotlight search integration — find emails from macOS Spotlight
 - iCloud sync — sync settings across your Apple devices
@@ -123,7 +123,7 @@ FLEXIBLE PLANS
 WHO IT'S FOR
 - Lawyers & eDiscovery teams: Bates numbering, Concordance/Relativity export, predictive coding, privilege detection
 - Journalists & OSINT: Knowledge graph, timeline analysis, source-protected offline operation
-- Forensic investigators: SPF/DKIM/DMARC analysis, S/MIME verification, HMAC-chained custody
+- Forensic investigators: server-reported SPF/DKIM/DMARC status, S/MIME opaque-signature verification, HMAC-chained custody
 - IT & compliance: GDPR reports, PII scanner, custodian holds, archive comparison
 - Personal archivists: Open decades of Gmail Takeout on your iPhone while traveling
 

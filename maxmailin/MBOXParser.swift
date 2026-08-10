@@ -2,6 +2,10 @@ import Foundation
 import CryptoKit
 
 struct MBOXParser {
+    /// Bump when message splitting/ordering changes — invalidates mid-file
+    /// resume checkpoints bound to the previous version (Part B5).
+    static let parserVersion = 1
+
     struct RawEmail: Identifiable, Codable, Sendable {
         let id: UUID
         var headers: [String: String]
@@ -172,13 +176,27 @@ struct MBOXParser {
         }
     }
 
-    static var lastRecoveryReport: ParseRecoveryReport?
+    /// §7.2: one malformed/synthetic message may not consume unbounded RAM.
+    /// A single RFC-822 message above this ceiling is counted as damaged
+    /// (category "oversized_message") and skipped with a clean report —
+    /// never silently truncated, never an OOM.
+    static let maxMessageBytes = 100 * 1024 * 1024
 
     static func parse(
         fileURL: URL,
         senderEmail: String,
         onProgress: ((Double) -> Void)? = nil
     ) throws -> [RawEmail] {
+        try parseWithReport(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress).emails
+    }
+
+    /// §7.7: the recovery report is RETURNED, source-scoped — there is no
+    /// global mutable report, so concurrent imports cannot race.
+    static func parseWithReport(
+        fileURL: URL,
+        senderEmail: String,
+        onProgress: ((Double) -> Void)? = nil
+    ) throws -> (emails: [RawEmail], report: ParseRecoveryReport) {
         // Ceiling on the non-streaming path: this reads the whole file into a
         // String. Files above the cap must use the streaming parser, not be
         // materialised whole (OOM). 500 MB is well above any single .eml or a
@@ -190,7 +208,7 @@ struct MBOXParser {
         }
         let content = try FileUtils.readTextFile(url: fileURL)
         let rawMessages = splitMBOX(content: content)
-        var parsedEmails: [RawEmail] = []
+        var messages: [RawEmail] = []
         let total = Double(rawMessages.count)
 
         var recoveryErrors = 0
@@ -198,7 +216,7 @@ struct MBOXParser {
         for (idx, raw) in rawMessages.enumerated() {
             do {
                 let email = try processRawMessage(raw, senderEmail: senderEmail)
-                parsedEmails.append(email)
+                messages.append(email)
             } catch {
                 recoveryErrors += 1
                 let category = categorizeParseError(error, rawSnippet: String(raw.prefix(200)))
@@ -211,16 +229,16 @@ struct MBOXParser {
             }
         }
 
-        lastRecoveryReport = ParseRecoveryReport(
+        let report = ParseRecoveryReport(
             totalMessages: rawMessages.count,
-            successfullyParsed: parsedEmails.count,
+            successfullyParsed: messages.count,
             failed: recoveryErrors,
             errorCategories: errorCategories
         )
 
-        let summary = summarize(emails: parsedEmails)
-        try saveSessionJSON(exportable: ExportableParsedMBOXFile(emails: parsedEmails.map { $0.asExportable() }, summary: summary))
-        return parsedEmails
+        let summary = summarize(emails: messages)
+        try saveSessionJSON(exportable: ExportableParsedMBOXFile(emails: messages.map { $0.asExportable() }, summary: summary))
+        return (messages, report)
     }
 
     private static func categorizeParseError(_ error: Error, rawSnippet: String) -> String {
@@ -233,106 +251,6 @@ struct MBOXParser {
         return "unknown"
     }
 
-    // MARK: - Streaming Parser for Large Files
-    private static let compactionBatchSize = 5000
-
-    static func parseStreaming(
-        fileURL: URL,
-        senderEmail: String,
-        onProgress: ((Double) -> Void)? = nil
-    ) throws -> [RawEmail] {
-        let attrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)
-        let fileSize = (attrs[.size] as? Int64) ?? 0
-        let handle = try FileHandle(forReadingFrom: fileURL)
-        defer { try? handle.close() }
-
-        let chunkSize = 65536
-        var buffer = Data()
-        var eof = false
-        var currentLines: [String] = []
-        var failedCount = 0
-        var inMessage = false
-        var parsedEmails: [RawEmail] = []
-        var lastCompactionIndex = 0
-
-        func nextLine() -> String? {
-            while true {
-                if let nlRange = buffer.range(of: Data([0x0A])) {
-                    let lineData = buffer[buffer.startIndex..<nlRange.lowerBound]
-                    buffer.removeSubrange(buffer.startIndex...nlRange.lowerBound)
-                    return String(data: lineData, encoding: .utf8)
-                        ?? String(data: lineData, encoding: .isoLatin1)
-                }
-                if eof {
-                    if buffer.isEmpty { return nil }
-                    let rest = String(data: buffer, encoding: .utf8)
-                        ?? String(data: buffer, encoding: .isoLatin1)
-                    buffer.removeAll()
-                    return rest
-                }
-                let chunk = try? handle.read(upToCount: chunkSize)
-                if let chunk, !chunk.isEmpty {
-                    buffer.append(chunk)
-                } else {
-                    eof = true
-                }
-            }
-        }
-
-        func compactIfNeeded() {
-            let newCount = parsedEmails.count
-            guard newCount - lastCompactionIndex >= compactionBatchSize else { return }
-            let (_, pressure) = ContentViewModel.checkMemoryPressure()
-            guard pressure != .normal else { return }
-
-            let rangeToCompact = lastCompactionIndex..<newCount
-            let batch = Array(parsedEmails[rangeToCompact])
-            EmailPersistence.persistBodies(batch)
-            for i in rangeToCompact {
-                parsedEmails[i].compact()
-            }
-            lastCompactionIndex = newCount
-        }
-
-        func flushCurrentMessage() {
-            guard !currentLines.isEmpty else { return }
-            let raw = currentLines.joined(separator: "\n")
-            do {
-                let email = try processRawMessage(raw, senderEmail: senderEmail)
-                parsedEmails.append(email)
-            } catch {
-                failedCount += 1
-            }
-
-            if fileSize > 0, let onProgress = onProgress {
-                let offset = Double((try? handle.offset()) ?? 0)
-                let progress = min(offset / Double(fileSize), 1.0)
-                onProgress(progress)
-            }
-
-            compactIfNeeded()
-        }
-
-        while let line = nextLine() {
-            let isFromLine = line.hasPrefix("From ") && line.count > 5
-                && line.range(of: #"\d{4}"#, options: .regularExpression) != nil
-            if isFromLine {
-                if inMessage {
-                    flushCurrentMessage()
-                    currentLines = []
-                }
-                inMessage = true
-            } else if inMessage {
-                currentLines.append(line)
-            }
-        }
-        flushCurrentMessage()
-
-        let summary = summarize(emails: parsedEmails)
-        try saveSessionJSON(exportable: ExportableParsedMBOXFile(emails: parsedEmails.map { $0.asExportable() }, summary: summary))
-        return parsedEmails
-    }
-
     // MARK: - Streaming Pipeline (callback per batch — no array accumulation)
 
     /// Drain-as-you-go variant of `parseStreaming`. Instead of returning
@@ -342,13 +260,15 @@ struct MBOXParser {
     /// would otherwise exceed available RAM (Gmail Takeout 200 GB+ mbox).
     ///
     /// Returns the total number of messages successfully parsed.
+    /// Returns the source-scoped recovery report (§7.7 — no global state).
+    @discardableResult
     static func parseStreamingCallback(
         fileURL: URL,
         senderEmail: String,
         batchSize: Int = 200,
         onProgress: ((Double) -> Void)? = nil,
         onBatch: ([RawEmail]) async throws -> Void
-    ) async throws -> Int {
+    ) async throws -> ParseRecoveryReport {
         let attrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)
         let fileSize = (attrs[.size] as? Int64) ?? 0
         let handle = try FileHandle(forReadingFrom: fileURL)
@@ -358,13 +278,16 @@ struct MBOXParser {
         var buffer = Data()
         var eof = false
         var currentLines: [String] = []
+        var currentBytes = 0
+        var oversized = false
         var inMessage = false
         var totalParsed = 0
         var skippedCount = 0
+        var errorCategories: [String: Int] = [:]
         var batch: [RawEmail] = []
         batch.reserveCapacity(batchSize)
 
-        func nextLine() -> String? {
+        func nextLine() throws -> String? {
             while true {
                 if let nlRange = buffer.range(of: Data([0x0A])) {
                     let lineData = buffer[buffer.startIndex..<nlRange.lowerBound]
@@ -379,7 +302,14 @@ struct MBOXParser {
                     buffer.removeAll()
                     return rest
                 }
-                let chunk = try? handle.read(upToCount: chunkSize)
+                // §7.1: a READ ERROR must throw — treating it as EOF would
+                // silently truncate the archive ("fake EOF" data loss).
+                let chunk: Data?
+                do { chunk = try handle.read(upToCount: chunkSize) }
+                catch {
+                    throw ExtractionError.invalidEmail(
+                        reason: "I/O error reading \(fileURL.lastPathComponent) at offset \((try? handle.offset()) ?? 0): \(error.localizedDescription)")
+                }
                 if let chunk, !chunk.isEmpty {
                     buffer.append(chunk)
                 } else {
@@ -396,15 +326,22 @@ struct MBOXParser {
         }
 
         func flushCurrentMessage() {
+            defer { currentBytes = 0; oversized = false }
+            if oversized {
+                skippedCount += 1
+                errorCategories["oversized_message", default: 0] += 1
+                return
+            }
             guard !currentLines.isEmpty else { return }
             let raw = currentLines.joined(separator: "\n")
             do {
                 let email = try processRawMessage(raw, senderEmail: senderEmail)
                 batch.append(email)
             } catch {
-                // Count the drop so it's surfaced (lastRecoveryReport), not
+                // Count the drop so it's surfaced in the returned report, not
                 // silently vanished — critical for a forensic tool.
                 skippedCount += 1
+                errorCategories["streaming parse error", default: 0] += 1
             }
             if fileSize > 0, let onProgress {
                 let offset = Double((try? handle.offset()) ?? 0)
@@ -412,7 +349,7 @@ struct MBOXParser {
             }
         }
 
-        while let line = nextLine() {
+        while let line = try nextLine() {
             try Task.checkCancellation()
             let isFromLine = line.hasPrefix("From ") && line.count > 5
                 && line.range(of: #"\d{4}"#, options: .regularExpression) != nil
@@ -424,7 +361,17 @@ struct MBOXParser {
                 }
                 inMessage = true
             } else if inMessage {
-                currentLines.append(line)
+                // §7.2 per-message ceiling: stop buffering an oversized
+                // message; it is flushed as one damaged record.
+                if !oversized {
+                    currentBytes += line.utf8.count + 1
+                    if currentBytes > Self.maxMessageBytes {
+                        oversized = true
+                        currentLines = []
+                    } else {
+                        currentLines.append(line)
+                    }
+                }
             }
         }
         flushCurrentMessage()
@@ -434,20 +381,22 @@ struct MBOXParser {
             totalParsed += batch.count
             batch.removeAll(keepingCapacity: true)
         }
-        // Surface skipped/damaged counts on the streaming path too (was
-        // silently dropped) via the same channel the array path uses.
-        MBOXParser.lastRecoveryReport = ParseRecoveryReport(
+        return ParseRecoveryReport(
             totalMessages: totalParsed + skippedCount,
             successfullyParsed: totalParsed,
             failed: skippedCount,
-            errorCategories: skippedCount > 0 ? ["streaming parse error": skippedCount] : [:]
+            errorCategories: errorCategories
         )
-        return totalParsed
     }
 
     // MARK: - Per-Email Processing
     static func processRawMessage(_ raw: String, senderEmail: String) throws -> RawEmail {
-        let fullRaw = raw.hasPrefix("From ") ? raw : "From " + raw
+        // §7.3: a bare RFC-822 message (e.g. a .eml whose first line is a
+        // "From:" HEADER) gets a synthetic envelope on its OWN line — gluing
+        // "From " onto the first header line used to swallow that header.
+        let fullRaw = raw.hasPrefix("From ")
+            ? raw
+            : "From MAILER-DAEMON Thu Jan  1 00:00:00 1970\n" + raw
         let (headers, mimeParts) = MIMEParser.parseEmail(rawEmail: fullRaw)
         let rootPart = mimeParts.first
         let extraction: (plainBody: String, htmlBody: String, attachments: [AttachmentMetadata])

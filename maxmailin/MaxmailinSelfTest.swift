@@ -139,7 +139,9 @@ final class MaxmailinSelfTest {
         // sample emails contain it, fall back to a token guaranteed to exist
         // (the first email's subject's first word).
         let probeQuery = pickProbeQuery(from: parsed)
-        logger.info("Step 5: probe query = \"\(probeQuery, privacy: .public)\"")
+        // W2: never log user-derived content. The probe word comes from a real
+        // email subject, so only its length is loggable.
+        logger.info("Step 5: probe query selected (\(probeQuery.count) chars)")
         let queryStart = Date()
         let ids: [UUID]
         do {
@@ -166,7 +168,9 @@ final class MaxmailinSelfTest {
             return .failed("EmailStore.fullEmail returned nil for hit UUID")
         }
         let subject = fetched.headers["Subject"] ?? "(none)"
-        logger.info("Step 6: round-tripped email subject = \(subject, privacy: .public)")
+        // W2: log a redacted signal only — the subject is user content and
+        // must never reach the unified log in cleartext.
+        logger.info("Step 6: round-tripped email OK (subject \(subject.count) chars)")
 
         // Step 7 — HMAC chain integrity test
         do {

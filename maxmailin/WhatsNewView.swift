@@ -127,6 +127,16 @@ private struct ReleaseItem {
 // MARK: - Release Notes Content
 
 private let releaseNotes: [ReleaseNote] = [
+    ReleaseNote(version: "2.0", date: "August 2026", items: [
+        ReleaseItem(icon: "infinity", title: "Million-Email Architecture", description: "Storage rebuilt on SQLite + full-text shards: browsing, search and analysis stay fast and memory stays flat whether your archive holds 1 email or 1,000,000 — measured, not estimated.", color: .blue),
+        ReleaseItem(icon: "magnifyingglass.circle", title: "Complete Search Results", description: "Search now pages through every match with exact counts — no more result ceilings. Select All, bulk actions and exports cover every matching email.", color: .green),
+        ReleaseItem(icon: "trash.circle", title: "Real Trash", description: "Delete now moves emails to a restorable Trash. Permanently Delete is a separate, explicit action — evidence is never destroyed by accident.", color: .red),
+        ReleaseItem(icon: "person.crop.circle.badge.checkmark", title: "Automatic Setup", description: "Your email address is detected from the archive automatically — Sent/Received folders, reply statistics and sent-mail analytics work with zero configuration.", color: .indigo),
+        ReleaseItem(icon: "checkmark.seal", title: "Signed Import Receipts", description: "Every import produces a cryptographically signed (HMAC) receipt. Any later modification is detectable — a forged receipt fails verification.", color: .orange),
+        ReleaseItem(icon: "doc.badge.ellipsis", title: "Word Export", description: "Export any email as a Word document (.doc), alongside PDF, CSV, plain text, redacted, Bates-stamped and forensic formats.", color: .purple),
+        ReleaseItem(icon: "arrow.triangle.2.circlepath", title: "Seamless Upgrade", description: "Archives from mailin 1.0 migrate automatically with exact verification — every email, tag and note accounted for, duplicates preserved.", color: .teal),
+        ReleaseItem(icon: "bolt.shield", title: "Hardened Imports", description: "Streaming parsers with per-message safety ceilings, honest error reporting, and resumable checkpointed imports that survive interruption.", color: .gray),
+    ]),
     ReleaseNote(version: "1.0", date: "May 2026", items: [
         ReleaseItem(icon: "envelope.arrow.triangle.branch", title: "Multi-Format Import", description: "Import MBOX, EML, EMLX, MSG, PST, OST, and NSF email archives. Drag-and-drop or use File > Open.", color: .blue),
         ReleaseItem(icon: "brain", title: "AI-Powered Analysis", description: "On-device sentiment analysis, topic classification, phishing detection, and priority scoring using Apple NLP.", color: .purple),

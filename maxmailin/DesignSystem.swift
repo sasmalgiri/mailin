@@ -282,79 +282,79 @@ extension View {
 
 // MARK: - Custom Button Styles
 
-struct PrimaryButtonStyle: ButtonStyle {
+// The four app-wide button styles delegate to SYSTEM styles so every button
+// automatically wears each OS's current design — Liquid Glass on macOS 26 /
+// iOS 26, bordered styles on older systems — instead of a hand-drawn look
+// frozen in time. PrimitiveButtonStyle lets the 90+ existing
+// `.buttonStyle(PrimaryButtonStyle())` call sites stay unchanged.
+
+struct PrimaryButtonStyle: PrimitiveButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(Typography.headline)
-            .foregroundColor(.white)
-            .padding(.horizontal, Spacing.large)
-            .padding(.vertical, Spacing.small)
-            .background(
-                RoundedRectangle(cornerRadius: CornerRadius.medium)
-                    .fill(AppColors.primary)
-            )
-            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
-            .animation(AnimationTiming.fast, value: configuration.isPressed)
+        if #available(macOS 26, iOS 26, *) {
+            Button(configuration)
+                .buttonStyle(.glassProminent)
+                .tint(AppColors.primary)
+                .font(Typography.headline)
+                .controlSize(.large)
+        } else {
+            Button(configuration)
+                .buttonStyle(.borderedProminent)
+                .tint(AppColors.primary)
+                .font(Typography.headline)
+                .controlSize(.large)
+        }
     }
 }
 
-struct SecondaryButtonStyle: ButtonStyle {
+struct SecondaryButtonStyle: PrimitiveButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(Typography.headline)
-            .foregroundColor(AppColors.primary)
-            .padding(.horizontal, Spacing.large)
-            .padding(.vertical, Spacing.small)
-            .background(
-                RoundedRectangle(cornerRadius: CornerRadius.medium)
-                    .fill(AppColors.backgroundSecondary)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: CornerRadius.medium)
-                            .stroke(AppColors.primary.opacity(0.3), lineWidth: 1)
-                    )
-            )
-            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
-            .animation(AnimationTiming.fast, value: configuration.isPressed)
+        if #available(macOS 26, iOS 26, *) {
+            Button(configuration)
+                .buttonStyle(.glass)
+                .font(Typography.headline)
+                .controlSize(.large)
+        } else {
+            Button(configuration)
+                .buttonStyle(.bordered)
+                .font(Typography.headline)
+                .controlSize(.large)
+        }
     }
 }
 
 // MARK: - Compact Button Styles (for sidebar/toolbar use)
 
-struct CompactPrimaryButtonStyle: ButtonStyle {
+struct CompactPrimaryButtonStyle: PrimitiveButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(Typography.callout)
-            .fontWeight(.semibold)
-            .foregroundColor(.white)
-            .padding(.horizontal, Spacing.small)
-            .padding(.vertical, Spacing.xSmall)
-            .background(
-                RoundedRectangle(cornerRadius: CornerRadius.medium)
-                    .fill(AppColors.primary)
-            )
-            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
-            .animation(AnimationTiming.fast, value: configuration.isPressed)
+        if #available(macOS 26, iOS 26, *) {
+            Button(configuration)
+                .buttonStyle(.glassProminent)
+                .tint(AppColors.primary)
+                .font(Typography.callout.weight(.semibold))
+                .controlSize(.regular)
+        } else {
+            Button(configuration)
+                .buttonStyle(.borderedProminent)
+                .tint(AppColors.primary)
+                .font(Typography.callout.weight(.semibold))
+                .controlSize(.regular)
+        }
     }
 }
 
-struct CompactSecondaryButtonStyle: ButtonStyle {
+struct CompactSecondaryButtonStyle: PrimitiveButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(Typography.callout)
-            .fontWeight(.medium)
-            .foregroundColor(AppColors.primary)
-            .padding(.horizontal, Spacing.small)
-            .padding(.vertical, Spacing.xSmall)
-            .background(
-                RoundedRectangle(cornerRadius: CornerRadius.medium)
-                    .fill(AppColors.backgroundSecondary)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: CornerRadius.medium)
-                            .stroke(AppColors.primary.opacity(0.3), lineWidth: 1)
-                    )
-            )
-            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
-            .animation(AnimationTiming.fast, value: configuration.isPressed)
+        if #available(macOS 26, iOS 26, *) {
+            Button(configuration)
+                .buttonStyle(.glass)
+                .font(Typography.callout.weight(.medium))
+                .controlSize(.regular)
+        } else {
+            Button(configuration)
+                .buttonStyle(.bordered)
+                .font(Typography.callout.weight(.medium))
+                .controlSize(.regular)
+        }
     }
 }
 
@@ -666,11 +666,13 @@ struct LaunchAnimationView: View {
             withAnimation(.easeOut(duration: 0.3).delay(1.2)) {
                 ringOpacity = 0
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1600000000)
                 withAnimation(.easeInOut(duration: 0.4)) {
                     dismissOpacity = 0
                 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 400000000)
                     onComplete()
                 }
             }
@@ -991,6 +993,58 @@ struct GlassInfoBanner: View {
     }
 }
 
+// MARK: - Tool Window Frame
+
+extension View {
+    /// Standard sizing for full-tool windows and sheets on macOS: OPEN LARGE
+    /// (sheets open at their ideal size — without an ideal they open at the
+    /// minimum, which made every tool feel cramped), stay resizable down to
+    /// a working minimum and up without a cap. No-op on iOS (sheets are
+    /// governed by presentation detents there).
+    func toolWindowFrame() -> some View {
+        #if os(macOS)
+        return frame(minWidth: 680, idealWidth: 1020, maxWidth: .infinity,
+                     minHeight: 520, idealHeight: 800, maxHeight: .infinity)
+        #else
+        return self
+        #endif
+    }
+}
+
+// MARK: - Help Dot
+
+/// A small "?" that explains the control next to it two ways:
+/// HOVER shows the text as a tooltip (macOS), CLICK shows the same text
+/// in a popover — so the help also works for people who never hover,
+/// and on touch devices where hover doesn't exist.
+struct HelpDot: View {
+    let text: String
+    @State private var isShown = false
+
+    var body: some View {
+        Button {
+            isShown.toggle()
+        } label: {
+            Image(systemName: "questionmark.circle")
+                .font(.caption)
+                .foregroundColor(AppColors.secondary)
+        }
+        .buttonStyle(.plain)
+        #if os(macOS)
+        .help(text)
+        #endif
+        .popover(isPresented: $isShown, arrowEdge: .bottom) {
+            Text(text)
+                .font(Typography.caption1)
+                .padding(Spacing.small)
+                .frame(maxWidth: 280)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityLabel("Help")
+        .accessibilityHint(text)
+    }
+}
+
 // MARK: - Glass Progress Indicator
 
 struct GlassProgressView: View {
@@ -1101,4 +1155,165 @@ extension View {
     func pageTransition(isActive: Bool) -> some View {
         modifier(PageTransitionModifier(isActive: isActive))
     }
+}
+
+// MARK: - Modern Date Field
+
+/// Modern date picker: a compact chip (calendar glyph + formatted date) that
+/// opens the graphical month-grid calendar in a popover on macOS — replacing
+/// the legacy stepper-field picker and its cramped drop-down. One click to
+/// open, one click to pick (minimum-touch). On iOS the system compact picker
+/// already presents the modern calendar, so it is used as-is.
+struct ModernDateField: View {
+    let label: String
+    @Binding var date: Date
+
+    #if os(macOS)
+    @State private var showPicker = false
+    #endif
+
+    var body: some View {
+        #if os(macOS)
+        Button {
+            showPicker = true
+        } label: {
+            HStack(spacing: Spacing.xxSmall) {
+                Image(systemName: "calendar")
+                    .foregroundColor(AppColors.primary)
+                Text(date.formatted(date: .abbreviated, time: .omitted))
+                    .foregroundColor(.primary)
+            }
+            .font(Typography.caption1)
+            .padding(.horizontal, Spacing.xSmall)
+            .padding(.vertical, Spacing.xxSmall)
+            .background(AppColors.secondary.opacity(0.08))
+            .cornerRadius(CornerRadius.small)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(label)
+        .accessibilityLabel(label)
+        .popover(isPresented: $showPicker, arrowEdge: .bottom) {
+            VStack(spacing: Spacing.xSmall) {
+                // Direct month + year jump — archives span decades; nobody
+                // should click through 130 months to reach an old email.
+                HStack(spacing: Spacing.xSmall) {
+                    Picker("Month", selection: monthBinding) {
+                        ForEach(1...12, id: \.self) { month in
+                            Text(Self.monthSymbols[month - 1]).tag(month)
+                        }
+                    }
+                    .labelsHidden()
+                    .help("Jump straight to a month")
+                    Picker("Year", selection: yearBinding) {
+                        ForEach(Self.yearRange, id: \.self) { year in
+                            Text(verbatim: String(year)).tag(year)
+                        }
+                    }
+                    .labelsHidden()
+                    .help("Jump straight to a year — no clicking through months")
+                }
+                DatePicker(label, selection: $date, displayedComponents: .date)
+                    .datePickerStyle(.graphical)
+                    .labelsHidden()
+                HStack {
+                    Button("Today") { date = Calendar.current.startOfDay(for: Date()) }
+                        .font(Typography.caption1)
+                        .help("Jump to today")
+                    Spacer()
+                    Button("Done") { showPicker = false }
+                        .font(Typography.caption1)
+                        .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(Spacing.small)
+            .frame(width: 280)
+        }
+        #else
+        DatePicker(label, selection: $date, displayedComponents: .date)
+            .labelsHidden()
+            .accessibilityLabel(label)
+        #endif
+    }
+
+    #if os(macOS)
+    private static let monthSymbols: [String] = {
+        let formatter = DateFormatter()
+        return formatter.standaloneMonthSymbols ?? formatter.monthSymbols
+    }()
+
+    /// Emails go back decades; a year ahead covers "until next year" filters.
+    private static let yearRange: [Int] = {
+        let current = Calendar.current.component(.year, from: Date())
+        return Array((1970...(current + 1)).reversed())
+    }()
+
+    /// Move to the picked month/year keeping the day (clamped to the target
+    /// month's length, so Jan 31 → Feb picks Feb 28/29, never an invalid date).
+    private func jump(toYear year: Int? = nil, month: Int? = nil) {
+        let calendar = Calendar.current
+        var comps = calendar.dateComponents([.year, .month, .day], from: date)
+        comps.year = year ?? comps.year
+        comps.month = month ?? comps.month
+        let day = comps.day ?? 1
+        comps.day = 1
+        guard let firstOfMonth = calendar.date(from: comps),
+              let daysInMonth = calendar.range(of: .day, in: .month, for: firstOfMonth)?.count
+        else { return }
+        comps.day = min(day, daysInMonth)
+        if let jumped = calendar.date(from: comps) { date = jumped }
+    }
+
+    private var monthBinding: Binding<Int> {
+        Binding(get: { Calendar.current.component(.month, from: date) },
+                set: { jump(month: $0) })
+    }
+
+    private var yearBinding: Binding<Int> {
+        Binding(get: { Calendar.current.component(.year, from: date) },
+                set: { jump(toYear: $0) })
+    }
+    #endif
+}
+
+#Preview("Date Popover") {
+    struct PopoverDemo: View {
+        @State private var date = Date(timeIntervalSince1970: 1_431_648_000)  // May 2015
+        var body: some View {
+            VStack(spacing: Spacing.xSmall) {
+                ModernDateField(label: "Demo", date: $date)
+            }
+            .padding(40)
+            .onAppear { }
+        }
+    }
+    return PopoverDemo()
+}
+
+#Preview("Modern Date Field") {
+    struct Demo: View {
+        @State private var start = Date(timeIntervalSince1970: 1_693_600_000)
+        @State private var end = Date(timeIntervalSince1970: 1_762_200_000)
+        var body: some View {
+            HStack(spacing: Spacing.xSmall) {
+                ModernDateField(label: "Start date filter", date: $start)
+                Text("–").font(Typography.caption1).foregroundColor(AppColors.secondary)
+                ModernDateField(label: "End date filter", date: $end)
+            }
+            .padding()
+        }
+    }
+    return Demo()
+}
+
+#Preview("Button Styles") {
+    VStack(spacing: Spacing.medium) {
+        Button("Apply") {}.buttonStyle(PrimaryButtonStyle())
+        Button("Clear") {}.buttonStyle(SecondaryButtonStyle())
+        HStack {
+            Button("New Import") {}.buttonStyle(CompactPrimaryButtonStyle())
+            Button("Add Files") {}.buttonStyle(CompactSecondaryButtonStyle())
+        }
+    }
+    .padding()
 }

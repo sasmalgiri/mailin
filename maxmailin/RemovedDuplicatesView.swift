@@ -1,18 +1,39 @@
 import SwiftUI
 
+/// Stage 5 W2-D: a lightweight duplicate-finding record. Duplicate review holds
+/// these projections (subject/from/date/preview) rather than full `[RawEmail]`,
+/// so the removed set never retains bodies/raw source.
+struct DuplicateFinding: Identifiable, Sendable, Equatable {
+    let id: UUID
+    let subject: String
+    let from: String
+    let dateString: String
+    let messageID: String?
+    let preview: String
+    let reason: String
+
+    init(from email: MBOXParser.RawEmail, reason: String = "duplicate") {
+        self.id = email.id
+        self.subject = email.headers["Subject"] ?? "(No Subject)"
+        self.from = email.headers["From"] ?? "Unknown"
+        self.dateString = email.headers["Date"] ?? ""
+        self.messageID = email.headers["Message-ID"] ?? email.headers["Message-Id"]
+        self.preview = String(email.plainBody.prefix(120)).replacingOccurrences(of: "\n", with: " ")
+        self.reason = reason
+    }
+}
+
 struct RemovedDuplicatesView: View {
-    let emails: [MBOXParser.RawEmail]
+    let findings: [DuplicateFinding]
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
     @State private var selectedEmailID: UUID?
 
-    private var filteredEmails: [MBOXParser.RawEmail] {
-        guard !searchText.isEmpty else { return emails }
+    private var filteredFindings: [DuplicateFinding] {
+        guard !searchText.isEmpty else { return findings }
         let query = searchText.lowercased()
-        return emails.filter {
-            ($0.headers["Subject"] ?? "").lowercased().contains(query) ||
-            ($0.headers["From"] ?? "").lowercased().contains(query) ||
-            ($0.headers["To"] ?? "").lowercased().contains(query)
+        return findings.filter {
+            $0.subject.lowercased().contains(query) || $0.from.lowercased().contains(query)
         }
     }
 
@@ -20,7 +41,7 @@ struct RemovedDuplicatesView: View {
         VStack(spacing: 0) {
             header
             Divider()
-            if emails.isEmpty {
+            if findings.isEmpty {
                 emptyView
             } else {
                 searchBar
@@ -39,7 +60,7 @@ struct RemovedDuplicatesView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Removed Duplicates")
                     .font(Typography.headline)
-                Text("\(emails.count) emails were removed during deduplication")
+                Text("\(findings.count) emails were removed during deduplication")
                     .font(Typography.caption1)
                     .foregroundColor(AppColors.secondary)
             }
@@ -78,7 +99,7 @@ struct RemovedDuplicatesView: View {
                 }
                 .buttonStyle(.plain)
             }
-            Text("\(filteredEmails.count) of \(emails.count)")
+            Text("\(filteredFindings.count) of \(findings.count)")
                 .font(Typography.caption1)
                 .foregroundColor(AppColors.secondary)
         }
@@ -88,40 +109,40 @@ struct RemovedDuplicatesView: View {
     }
 
     private var emailList: some View {
-        List(filteredEmails, selection: $selectedEmailID) { email in
-            emailRow(email)
+        List(filteredFindings, selection: $selectedEmailID) { finding in
+            emailRow(finding)
         }
         .listStyle(.plain)
     }
 
-    private func emailRow(_ email: MBOXParser.RawEmail) -> some View {
+    private func emailRow(_ finding: DuplicateFinding) -> some View {
         VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
             HStack {
-                Text(email.headers["Subject"] ?? "(No Subject)")
+                Text(finding.subject)
                     .font(Typography.subheadline)
                     .fontWeight(.medium)
                     .lineLimit(1)
                 Spacer()
-                if let date = email.headers["Date"] {
-                    Text(formatDate(date))
+                if !finding.dateString.isEmpty {
+                    Text(formatDate(finding.dateString))
                         .font(Typography.caption2)
                         .foregroundColor(AppColors.secondary)
                 }
             }
             HStack(spacing: Spacing.small) {
-                Text(email.headers["From"] ?? "Unknown")
+                Text(finding.from)
                     .font(Typography.caption1)
                     .foregroundColor(AppColors.secondary)
                     .lineLimit(1)
-                if let msgID = email.headers["Message-ID"] ?? email.headers["Message-Id"] {
+                if let msgID = finding.messageID {
                     Text(msgID)
                         .font(Typography.caption2)
                         .foregroundColor(AppColors.secondary.opacity(0.7))
                         .lineLimit(1)
                 }
             }
-            if !email.plainBody.isEmpty {
-                Text(String(email.plainBody.prefix(120)).replacingOccurrences(of: "\n", with: " "))
+            if !finding.preview.isEmpty {
+                Text(finding.preview)
                     .font(Typography.caption1)
                     .foregroundColor(AppColors.secondary.opacity(0.7))
                     .lineLimit(2)

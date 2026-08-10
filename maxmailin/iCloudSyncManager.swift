@@ -24,7 +24,7 @@ class iCloudSyncManager: ObservableObject {
     @Published var statusMessage = ""
     @Published var lastSyncErrors: [String] = []
 
-    private var syncTimer: Timer?
+    private var syncTask: Task<Void, Never>?
     private let baseSyncInterval: TimeInterval = 60
     private let maxStaleFileAge: TimeInterval = 30 * 24 * 3600 // 30 days
     private var consecutiveFailures = 0
@@ -143,23 +143,23 @@ class iCloudSyncManager: ObservableObject {
     }
 
     private func scheduleNextSync() {
-        syncTimer?.invalidate()
+        syncTask?.cancel()
 
         let backoff = min(baseSyncInterval * pow(2.0, Double(consecutiveFailures)), maxBackoffInterval)
         let jitter = Double.random(in: -10...10)
         let interval = max(baseSyncInterval, backoff + jitter)
 
-        syncTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                await self?.performSync()
-                self?.scheduleNextSync()
-            }
+        syncTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            await self?.performSync()
+            self?.scheduleNextSync()
         }
     }
 
     func stopSync() {
-        syncTimer?.invalidate()
-        syncTimer = nil
+        syncTask?.cancel()
+        syncTask = nil
         syncStatus = .idle
         statusMessage = ""
         consecutiveFailures = 0
@@ -326,8 +326,7 @@ class iCloudSyncManager: ObservableObject {
 
                 if localTag == nil || remoteTimestamp > localTimestamp {
                     let oldValue = localTag?.rawValue ?? "none"
-                    forensic.evidenceTags[uuid] = tag
-                    forensic.tagTimestamps[uuid] = remoteTimestamp
+                    forensic.applyMergedTag(uuid, tag: tag, timestamp: remoteTimestamp)
                     mergedTagCount += 1
 
                     if forensic.isEnabled {
@@ -341,11 +340,11 @@ class iCloudSyncManager: ObservableObject {
 
                 if let existing = forensic.annotations[uuid] {
                     if dto.timestamp > existing.timestamp {
-                        forensic.annotations[uuid] = ForensicManager.Annotation(
+                        forensic.applyMergedAnnotation(uuid, annotation: ForensicManager.Annotation(
                             text: dto.text,
                             examiner: dto.examiner,
                             timestamp: dto.timestamp
-                        )
+                        ))
                         mergedAnnotationCount += 1
 
                         if forensic.isEnabled {
@@ -353,11 +352,11 @@ class iCloudSyncManager: ObservableObject {
                         }
                     }
                 } else {
-                    forensic.annotations[uuid] = ForensicManager.Annotation(
+                    forensic.applyMergedAnnotation(uuid, annotation: ForensicManager.Annotation(
                         text: dto.text,
                         examiner: dto.examiner,
                         timestamp: dto.timestamp
-                    )
+                    ))
                     mergedAnnotationCount += 1
 
                     if forensic.isEnabled {

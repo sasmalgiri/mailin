@@ -74,37 +74,92 @@ enum FTSReconciler {
     private static let cursorDateKey = "fts.reconcile.cursor.date"
     private static let cursorIDKey = "fts.reconcile.cursor.id"
 
+    struct ReconcileResult: Sendable {
+        var pagesProcessed = 0
+        var rowsChecked = 0
+        var rowsIndexed = 0
+        var completed = false
+        var cursor: EmailPageCursor?
+    }
+
+    /// Cursor progress means: everything before the cursor has been successfully
+    /// examined and repaired — nothing weaker. Any failure (registry lookup,
+    /// store fetch, FTS index) throws WITHOUT advancing the cursor, so a retry
+    /// reprocesses that page. Never treats a lookup failure as "all indexed".
+    ///
+    /// Production entry point: reconciles the shared store/index and persists
+    /// its cursor in UserDefaults so it survives process restarts.
     @discardableResult
-    static func reconcile(pageSize: Int = 5_000, maxPages: Int? = nil) async -> Int {
-        var beforeDate = loadCursorDate()
-        var beforeID = loadCursorID()
-        var indexed = 0
-        var pages = 0
+    static func reconcile(pageSize: Int = 5_000, maxPages: Int? = nil) async throws -> ReconcileResult {
+        try await reconcileCore(
+            store: EmailStore.shared, fts: .shared, pageSize: pageSize, maxPages: maxPages,
+            initialDate: loadCursorDate(), initialID: loadCursorID(),
+            onAdvance: { saveCursor(date: $0, id: $1) },
+            onComplete: { clearCursor() }
+        )
+    }
+
+    /// Isolated entry point for harnesses/tests: reconciles explicit store +
+    /// index instances (e.g. a `MailinStorageEnvironment.disposable`) with an
+    /// in-run cursor only — never touches the global UserDefaults cursor, so
+    /// concurrent disposable environments stay independent. Same semantics
+    /// otherwise: a failure throws without losing progress within the run.
+    @discardableResult
+    static func reconcile(
+        store: any EmailArchiveStore,
+        fts: FTSSearchIndex,
+        pageSize: Int = 5_000,
+        maxPages: Int? = nil
+    ) async throws -> ReconcileResult {
+        try await reconcileCore(
+            store: store, fts: fts, pageSize: pageSize, maxPages: maxPages,
+            initialDate: nil, initialID: nil,
+            onAdvance: { _, _ in }, onComplete: { }
+        )
+    }
+
+    /// Shared reconcile loop. Cursor persistence is injected via `onAdvance` /
+    /// `onComplete` so the production path can use UserDefaults while the
+    /// harness path uses nothing — the page-walk logic is identical for both.
+    private static func reconcileCore(
+        store: any EmailArchiveStore,
+        fts: FTSSearchIndex,
+        pageSize: Int,
+        maxPages: Int?,
+        initialDate: Date?,
+        initialID: UUID?,
+        onAdvance: @Sendable (Date, UUID) -> Void,
+        onComplete: @Sendable () -> Void
+    ) async throws -> ReconcileResult {
+        var beforeDate = initialDate
+        var beforeID = initialID
+        var result = ReconcileResult()
         while true {
             if Task.isCancelled { break }
-            if let maxPages, pages >= maxPages { break }
-            let page: [(id: UUID, date: Date)]
-            do {
-                page = try await EmailStore.shared.reconcilePage(beforeDate: beforeDate, beforeID: beforeID, limit: pageSize)
-            } catch { break }
-            if page.isEmpty { clearCursor(); break }               // exhausted
+            if let maxPages, result.pagesProcessed >= maxPages { break }
+            let page = try await store.reconcilePage(beforeDate: beforeDate, beforeID: beforeID, limit: pageSize)
+            if page.isEmpty { onComplete(); result.completed = true; break }
             let ids = page.map(\.id)
-            let already = (try? await FTSSearchIndex.shared.indexedSubset(of: ids)) ?? Set(ids)
+            result.rowsChecked += ids.count
+            // Propagate registry-lookup failures — do NOT assume "all indexed".
+            let already = try await fts.indexedSubset(of: ids)
             let missing = ids.filter { !already.contains($0) }
-            if !missing.isEmpty,
-               let emails = try? await EmailStore.shared.emails(withIDs: missing),
-               (try? await FTSSearchIndex.shared.indexBatch(emails)) != nil {
-                indexed += emails.count
+            if !missing.isEmpty {
+                let emails = try await store.emails(withIDs: missing)
+                try await fts.indexBatch(emails)
+                result.rowsIndexed += emails.count
             }
+            // Only advance the cursor after ALL page work succeeded.
             if let last = page.last {
                 beforeDate = last.date
                 beforeID = last.id
-                saveCursor(date: last.date, id: last.id)           // restartable
+                onAdvance(last.date, last.id)
+                result.cursor = EmailPageCursor(beforeDate: last.date, beforeID: last.id)
             }
-            pages += 1
-            if page.count < pageSize { clearCursor(); break }      // exhausted
+            result.pagesProcessed += 1
+            if page.count < pageSize { onComplete(); result.completed = true; break }
         }
-        return indexed
+        return result
     }
 
     static func resetCursorForTesting() { clearCursor() }
@@ -156,7 +211,19 @@ actor FTSSearchIndex {
     }
     #endif
 
-    private init() {}
+    /// When non-nil, this instance stores its shards under an explicit
+    /// directory instead of the shared Application Support location. Set only
+    /// via `init(shardsDirectory:)` for isolated harness/test environments.
+    /// Release-safe (not gated behind DEBUG).
+    private let shardsDirectoryOverrideInstance: URL?
+
+    private init() { self.shardsDirectoryOverrideInstance = nil }
+
+    /// Isolated instance storing shards under `shardsDirectory` — never the
+    /// shared production index. Used by `MailinStorageEnvironment.disposable`.
+    init(shardsDirectory: URL) {
+        self.shardsDirectoryOverrideInstance = shardsDirectory
+    }
 
     /// Close every shard handle except the `keep` most-recently-accessed.
     /// Used by the memory-pressure handler to release SQLite page caches
@@ -179,8 +246,18 @@ actor FTSSearchIndex {
     // MARK: - Public API (stable shape — preserves pre-sharded surface)
 
     func index(_ email: MBOXParser.RawEmail) throws {
-        let year = Self.year(for: email)
-        try insert(email, into: year)
+        try migrateLegacyIfNeeded()
+        let db = try ensureShard(year: Self.year(for: email))
+        // Wrap the FTS row + registry upsert in ONE transaction (same guarantee
+        // as indexBatch) so the two can never drift on a mid-write failure.
+        try exec(db, "BEGIN TRANSACTION;")
+        do {
+            try insertWithHandle(email, db: db)
+            try exec(db, "COMMIT;")
+        } catch {
+            try? exec(db, "ROLLBACK;")
+            throw error
+        }
     }
 
     /// Batched index. Groups emails by year so each shard runs a single
@@ -273,6 +350,267 @@ actor FTSSearchIndex {
             .map(\.id)
     }
 
+    // MARK: - Part P1/P2 — pruned, resumable ranked search
+
+    /// One bm25-ranked hit. `rank` is the FTS5 bm25 rank (lower = more
+    /// relevant); exposed so a caller can keep a stable continuation boundary.
+    struct RankedHit: Sendable, Equatable {
+        let id: UUID
+        let rank: Double
+    }
+
+    /// Continuation state for `searchRanked`. Carries the query fingerprint
+    /// (any query/prune change invalidates it), per-shard row offsets into the
+    /// deterministic `(rank, email_id)` order, and the last emitted
+    /// score + tie-break boundary (a defensive no-duplicate guard if the index
+    /// mutates between pages). Value type — bounded, no open resources.
+    struct RankedCursor: Sendable, Equatable {
+        let fingerprint: UInt64
+        var shardOffsets: [Int: Int]
+        var lastRank: Double?
+        var lastIDString: String?
+    }
+
+    /// The shard years that can possibly hold an email whose parsed Date falls
+    /// in `[after, before)`, or nil when there are no bounds (all shards).
+    /// Always includes shard 0 (unknown/unparseable/out-of-range dates) and one
+    /// extra year on each side, so second-rounding and calendar/timezone edges
+    /// can never drop a boundary email — pruning must return results EQUAL to
+    /// the unpruned reference, it only bounds the work.
+    nonisolated static func shardYears(after: Date?, before: Date?) -> Set<Int>? {
+        guard after != nil || before != nil else { return nil }
+        let cal = Calendar(identifier: .gregorian)
+        let loYear = after.map { cal.component(.year, from: $0) - 1 } ?? 1901
+        let hiYear = before.map { cal.component(.year, from: $0) + 1 } ?? 2199
+        let lo = max(1901, loYear)
+        let hi = min(2199, hiYear)
+        var years: Set<Int> = [0]   // the unknown-date shard is always searched
+        if lo <= hi { for y in lo...hi { years.insert(y) } }
+        return years
+    }
+
+    /// Deterministic (process-independent) FNV-1a fingerprint binding a cursor
+    /// to its exact query + shard-prune set.
+    nonisolated static func rankedFingerprint(query: String, years: Set<Int>?) -> UInt64 {
+        var hash: UInt64 = 0xcbf29ce484222325
+        func mix(_ s: String) {
+            for byte in s.utf8 {
+                hash ^= UInt64(byte)
+                hash = hash &* 0x100000001b3
+            }
+        }
+        mix(query)
+        mix("|")
+        mix(years.map { $0.sorted().map(String.init).joined(separator: ",") } ?? "*")
+        return hash
+    }
+
+    /// Ranked (bm25) search with bounded continuation. Pass `years` (from
+    /// `shardYears(after:before:)`) to prune the shards visited for a
+    /// date-bounded query; exact date filtering happens on the hydrated rows
+    /// upstream (the FTS document carries no date).
+    ///
+    /// Paging contract: per shard the row order `(rank ASC, email_id ASC)` is
+    /// deterministic, the cursor stores how many rows of each shard were
+    /// consumed, and pages are produced by a k-way merge of the next rows of
+    /// every shard — so iterating to exhaustion yields every match exactly
+    /// once, in a stable global order, with memory bounded by
+    /// `limit × shardCount`. A cursor built for a different query/prune set
+    /// throws `FTSError.staleCursor`.
+    func searchRanked(
+        _ ftsQuery: String,
+        years: Set<Int>? = nil,
+        limit: Int,
+        cursor: RankedCursor? = nil
+    ) throws -> (hits: [RankedHit], next: RankedCursor?) {
+        #if DEBUG
+        debugSearchCallCount += 1
+        #endif
+        try migrateLegacyIfNeeded()
+        let trimmed = ftsQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, limit > 0 else { return ([], nil) }
+        let fingerprint = Self.rankedFingerprint(query: trimmed, years: years)
+        if let cursor, cursor.fingerprint != fingerprint {
+            throw FTSError.staleCursor
+        }
+
+        var shardYears = try discoverAllShardYears()
+        if let years { shardYears = shardYears.filter { years.contains($0) } }
+
+        // Fetch the next `limit` rows of every (pruned) shard from its offset.
+        struct Row { let id: UUID?; let idString: String; let rank: Double }
+        var buffers: [Int: [Row]] = [:]
+        var fetchedFull: Set<Int> = []
+        for year in shardYears {
+            let offset = cursor?.shardOffsets[year] ?? 0
+            let db = try ensureShard(year: year)
+            let stmt = try prepare(db, """
+                SELECT email_id, rank
+                FROM email_search
+                WHERE email_search MATCH ?
+                ORDER BY rank, email_id
+                LIMIT ? OFFSET ?;
+            """)
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, trimmed)
+            sqlite3_bind_int(stmt, 2, Int32(limit))
+            sqlite3_bind_int(stmt, 3, Int32(offset))
+            var rows: [Row] = []
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let idString = sqlite3_column_text(stmt, 0).map { String(cString: $0) } ?? ""
+                // Malformed ids stay in the buffer (they occupy an offset slot)
+                // but are never emitted.
+                rows.append(Row(id: UUID(uuidString: idString), idString: idString,
+                                rank: sqlite3_column_double(stmt, 1)))
+            }
+            if rows.count == limit { fetchedFull.insert(year) }
+            buffers[year] = rows
+        }
+
+        // K-way merge by (rank, email_id): globally emit the next `limit` hits.
+        var heads: [Int: Int] = [:]              // shard year → next index in buffer
+        var consumed: [Int: Int] = [:]           // shard year → rows consumed this page
+        var hits: [RankedHit] = []
+        hits.reserveCapacity(limit)
+        var lastRank = cursor?.lastRank
+        var lastID = cursor?.lastIDString
+        while hits.count < limit {
+            var bestYear: Int? = nil
+            var bestRow: Row? = nil
+            for (year, rows) in buffers {
+                let i = heads[year] ?? 0
+                guard i < rows.count else { continue }
+                let row = rows[i]
+                if let current = bestRow {
+                    if row.rank < current.rank ||
+                        (row.rank == current.rank && row.idString < current.idString) {
+                        bestYear = year; bestRow = row
+                    }
+                } else {
+                    bestYear = year; bestRow = row
+                }
+            }
+            guard let year = bestYear, let row = bestRow else { break }
+            heads[year] = (heads[year] ?? 0) + 1
+            consumed[year] = (consumed[year] ?? 0) + 1
+            // Defensive boundary: never re-emit at or before the last emitted
+            // (rank, id) — protects against duplicates if the index shifted.
+            if let lr = lastRank, let li = lastID {
+                if row.rank < lr || (row.rank == lr && row.idString <= li) { continue }
+            }
+            guard let id = row.id else { continue }
+            hits.append(RankedHit(id: id, rank: row.rank))
+            lastRank = row.rank
+            lastID = row.idString
+        }
+
+        // A shard may have more rows if its buffer wasn't fully consumed, or if
+        // it was fetched full (the database may hold rows beyond the buffer).
+        let hasMore = shardYears.contains { year in
+            let total = buffers[year]?.count ?? 0
+            let used = consumed[year] ?? 0
+            return used < total || fetchedFull.contains(year)
+        }
+        guard hasMore else { return (hits, nil) }
+        var offsets = cursor?.shardOffsets ?? [:]
+        for year in shardYears {
+            offsets[year] = (offsets[year] ?? 0) + (consumed[year] ?? 0)
+        }
+        let next = RankedCursor(fingerprint: fingerprint, shardOffsets: offsets,
+                                lastRank: lastRank, lastIDString: lastID)
+        return (hits, next)
+    }
+
+    /// Of the given ids, which match `ftsQuery` — the preview-bounded search
+    /// primitive (Part P): the legacy Simple list filters a bounded resident
+    /// preview, so it asks which PREVIEW rows match instead of materializing an
+    /// archive-wide result list. Work and memory are bounded by `ids.count`
+    /// (chunked `MATCH … AND email_id IN (…)` per shard).
+    func matchingSubset(of ids: [UUID], ftsQuery: String) throws -> Set<UUID> {
+        #if DEBUG
+        debugSearchCallCount += 1
+        #endif
+        try migrateLegacyIfNeeded()
+        let trimmed = ftsQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !ids.isEmpty else { return [] }
+        var found = Set<UUID>()
+        let idStrings = ids.map { $0.uuidString }
+        for year in try discoverAllShardYears() {
+            let db = try ensureShard(year: year)
+            var start = 0
+            while start < idStrings.count {
+                let end = min(start + 500, idStrings.count)
+                let chunk = Array(idStrings[start..<end])
+                start = end
+                let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+                let stmt = try prepare(db, """
+                    SELECT email_id FROM email_search
+                    WHERE email_search MATCH ? AND email_id IN (\(placeholders));
+                """)
+                defer { sqlite3_finalize(stmt) }
+                bindText(stmt, 1, trimmed)
+                for (i, s) in chunk.enumerated() { bindText(stmt, Int32(i + 2), s) }
+                while sqlite3_step(stmt) == SQLITE_ROW {
+                    if let c = sqlite3_column_text(stmt, 0), let u = UUID(uuidString: String(cString: c)) {
+                        found.insert(u)
+                    }
+                }
+            }
+        }
+        return found
+    }
+
+    /// Count matches for an already-valid FTS5 query via O(1)-memory
+    /// `COUNT(*)` per shard — never materializes result UUIDs.
+    func countRaw(_ ftsQuery: String) throws -> Int {
+        try migrateLegacyIfNeeded()
+        let trimmed = ftsQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return 0 }
+        var total = 0
+        for year in try discoverAllShardYears() {
+            let db = try ensureShard(year: year)
+            let stmt = try prepare(db, "SELECT COUNT(*) FROM email_search WHERE email_search MATCH ?;")
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, trimmed)
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                total += Int(sqlite3_column_int64(stmt, 0))
+            }
+        }
+        return total
+    }
+
+    /// §15: which of `ids` match `ftsQuery` — one bounded query per shard per
+    /// chunk (MATCH + email_id IN). Used to verify Select-All exclusions
+    /// against the query, never to materialize result sets.
+    func matchingIDs(among ids: [UUID], ftsQuery: String) throws -> Set<UUID> {
+        try migrateLegacyIfNeeded()
+        let trimmed = ftsQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !ids.isEmpty else { return [] }
+        var out = Set<UUID>()
+        let chunks = stride(from: 0, to: ids.count, by: 500).map {
+            Array(ids[$0..<Swift.min($0 + 500, ids.count)])
+        }
+        for year in try discoverAllShardYears() {
+            let db = try ensureShard(year: year)
+            for chunk in chunks {
+                let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+                let stmt = try prepare(db, """
+                    SELECT email_id FROM email_search
+                    WHERE email_search MATCH ? AND email_id IN (\(placeholders));
+                """)
+                defer { sqlite3_finalize(stmt) }
+                bindText(stmt, 1, trimmed)
+                for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 2), id.uuidString) }
+                while sqlite3_step(stmt) == SQLITE_ROW {
+                    if let c = sqlite3_column_text(stmt, 0), let id = UUID(uuidString: String(cString: c)) {
+                        out.insert(id)
+                    }
+                }
+            }
+        }
+        return out
+    }
+
     /// Remove every row from every shard. Files are kept (lighter than a
     /// full unlink, and the next insert re-uses the open handles).
     func clear() throws {
@@ -326,6 +664,42 @@ actor FTSSearchIndex {
         }
     }
 
+    /// One-time repair for archives indexed by a pre-idempotent build, which
+    /// could append more than one FTS row per email (the registry masked it,
+    /// so the reconciler never repaired it, and search returned doubles). Per
+    /// shard, if the content table has more rows than distinct ids, collapse
+    /// each id to its lowest-rowid row. Bounded: the `GROUP BY` runs INSIDE
+    /// SQLite over a single year-shard — no archive-wide `Set` is built in
+    /// Swift. Idempotent — a no-op once every shard is clean. Returns the
+    /// number of duplicate rows removed.
+    @discardableResult
+    func dedupeShards() throws -> Int {
+        try migrateLegacyIfNeeded()
+        var removed = 0
+        for year in try discoverAllShardYears() {
+            let db = try ensureShard(year: year)
+            // Cheap gate: only rewrite shards that actually carry duplicates.
+            let check = try prepare(db, "SELECT count(*) - count(DISTINCT email_id) FROM email_search;")
+            var dupes = 0
+            if sqlite3_step(check) == SQLITE_ROW { dupes = Int(sqlite3_column_int(check, 0)) }
+            sqlite3_finalize(check)
+            guard dupes > 0 else { continue }
+            try exec(db, "BEGIN TRANSACTION;")
+            do {
+                try exec(db, """
+                    DELETE FROM email_search
+                    WHERE rowid NOT IN (SELECT min(rowid) FROM email_search GROUP BY email_id);
+                """)
+                try exec(db, "COMMIT;")
+                removed += dupes
+            } catch {
+                try? exec(db, "ROLLBACK;")
+                throw error
+            }
+        }
+        return removed
+    }
+
     /// Total rows summed across every shard.
     func rowCount() throws -> Int {
         try migrateLegacyIfNeeded()
@@ -341,7 +715,9 @@ actor FTSSearchIndex {
         return total
     }
 
-    /// All email UUIDs currently in the index (across every shard).
+    /// LEGACY / test-only — materializes every indexed UUID (unbounded memory).
+    /// Production reconciliation must use `indexedSubset(of:)` + `FTSReconciler`
+    /// instead. Do not reintroduce this on a production path.
     func allIndexedIDs() throws -> Set<UUID> {
         try migrateLegacyIfNeeded()
         var ids = Set<UUID>()
@@ -436,6 +812,10 @@ actor FTSSearchIndex {
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
+        // W3: FTS shards are read/written by the launch reconciler and
+        // background indexing after device lock → background-readable class
+        // on iOS (children inherit); owner-only 700 directory on macOS.
+        ArtifactProtection.applyBackgroundReadable(to: url.deletingLastPathComponent())
 
         var db: OpaquePointer?
         let rc = sqlite3_open_v2(
@@ -447,6 +827,9 @@ actor FTSSearchIndex {
         guard rc == SQLITE_OK, let db else {
             throw FTSError.openFailed("sqlite3_open_v2 rc=\(rc) for shard \(year)")
         }
+        // Owner-only shard file; SQLite propagates these permissions to the
+        // shard's -wal/-shm companions on first write.
+        ArtifactProtection.applyBackgroundReadable(to: url)
         try exec(db, "PRAGMA journal_mode = WAL;")
         try exec(db, "PRAGMA synchronous = NORMAL;")
         try exec(db, """
@@ -510,18 +893,31 @@ actor FTSSearchIndex {
     }
 
     private func insertWithHandle(_ email: MBOXParser.RawEmail, db: OpaquePointer) throws {
+        let idString = email.id.uuidString
+
+        // Idempotent index: clear any prior FTS row for this id in THIS shard
+        // before inserting. Without this, re-indexing the same email (a re-run
+        // import, or a reconcile after a partial index) appends a SECOND row —
+        // the registry (INSERT OR REPLACE below) still reads as "indexed once",
+        // masking the duplicate so the reconciler never repairs it, and search
+        // would return the email twice.
+        let del = try prepare(db, "DELETE FROM email_search WHERE email_id = ?;")
+        bindText(del, 1, idString)
+        let delOK = sqlite3_step(del) == SQLITE_DONE
+        sqlite3_finalize(del)
+        guard delOK else { throw FTSError.execFailed(lastError(db)) }
+
         let stmt = try prepare(db, """
             INSERT INTO email_search (email_id, subject, sender, recipients, body)
             VALUES (?, ?, ?, ?, ?);
         """)
         defer { sqlite3_finalize(stmt) }
 
-        let idString = email.id.uuidString
         let subject = email.headers["Subject"] ?? ""
         let sender = email.headers["From"] ?? ""
         let recipients = (email.headers["To"] ?? "") + " " + (email.headers["Cc"] ?? "")
         let body = email.plainBody.isEmpty
-            ? stripHTML(email.htmlBody)
+            ? Self.stripHTMLText(email.htmlBody)
             : email.plainBody
 
         bindText(stmt, 1, idString)
@@ -595,6 +991,11 @@ actor FTSSearchIndex {
     // MARK: - URLs
 
     private func shardsDirectory() throws -> URL {
+        // Isolated instance (harness/test environment) — Release-safe.
+        if let override = shardsDirectoryOverrideInstance {
+            try? FileManager.default.createDirectory(at: override, withIntermediateDirectories: true)
+            return override
+        }
         #if DEBUG
         if let override = FTSSearchIndex.testShardsDirectoryOverride {
             try? FileManager.default.createDirectory(at: override, withIntermediateDirectories: true)
@@ -654,11 +1055,10 @@ actor FTSSearchIndex {
         return String(cString: cstr)
     }
 
-    /// Quote individual terms so punctuation can't break FTS5, while letting
-    /// the boolean operators AND / OR / NOT survive as operators rather than
-    /// being swallowed into a single quoted phrase. (Proximity `NEAR(...)` is
-    /// built upstream by the query builder, not here.)
-    private func stripHTML(_ html: String) -> String {
+    /// Lightweight HTML → text used for the FTS body column. Shared (static)
+    /// so BoundedRegexSearch verifies regexes against EXACTLY the text that
+    /// was indexed.
+    nonisolated static func stripHTMLText(_ html: String) -> String {
         guard !html.isEmpty else { return "" }
         let pattern = "<[^>]+>"
         let regex = try? NSRegularExpression(pattern: pattern, options: [])
@@ -676,12 +1076,349 @@ actor FTSSearchIndex {
     enum FTSError: LocalizedError {
         case openFailed(String)
         case execFailed(String)
+        /// A `RankedCursor` was presented for a different query / prune set —
+        /// the query changed, so the continuation is invalid.
+        case staleCursor
 
         var errorDescription: String? {
             switch self {
             case .openFailed(let d): return "FTS5 open failed: \(d)"
             case .execFailed(let d): return "FTS5 query failed: \(d)"
+            case .staleCursor: return "Search cursor is stale: the query changed."
             }
         }
+    }
+}
+
+// MARK: - Part P3 — bounded regex search
+
+/// Result of a bounded regex search. `truncated` means the bounded scan hit
+/// its cap BEFORE covering the full scope — callers MUST surface this to the
+/// user (silent truncation is not acceptable).
+struct RegexSearchOutcome: Sendable {
+    var matchedIDs: Set<UUID> = []
+    var truncated: Bool = false
+    var scanned: Int = 0
+    var usedLiteralPath: Bool = false
+}
+
+/// Conservative extraction of MANDATORY literal tokens from a regex pattern —
+/// substrings that must appear in ANY string the pattern matches. Used to turn
+/// a regex search into FTS candidate retrieval + exact verification.
+///
+/// Conservative by construction: anything uncertain (top-level alternation,
+/// groups, classes, unbalanced syntax) contributes nothing or aborts with []
+/// — a missing literal only costs speed (capped-scan fallback), never
+/// correctness.
+enum RegexLiteralExtractor {
+
+    /// Alphanumeric tokens (length ≥ 3) drawn from the pattern's mandatory
+    /// literal runs. Empty when no literal can be derived with certainty.
+    /// NOTE: candidate retrieval is token/prefix-granular (FTS5); a literal
+    /// that only ever occurs mid-token in a document is a caveat covered by
+    /// the exact-verify step operating on FTS-retrieved candidates.
+    static func mandatoryLiteralTokens(from pattern: String) -> [String] {
+        guard let runs = mandatoryLiteralRuns(from: pattern) else { return [] }
+        var tokens: [String] = []
+        for run in runs {
+            for piece in run.split(whereSeparator: { !$0.isLetter && !$0.isNumber }) {
+                let token = String(piece)
+                if token.count >= 3 && !tokens.contains(token) { tokens.append(token) }
+            }
+        }
+        return Array(tokens.prefix(4))   // keep the FTS query small
+    }
+
+    /// The contiguous literal runs that must appear in every match, or nil if
+    /// extraction is uncertain.
+    private static func mandatoryLiteralRuns(from pattern: String) -> [String]? {
+        var runs: [String] = []
+        var current = ""
+        func flush(droppingLast: Bool = false) {
+            if droppingLast, !current.isEmpty { current.removeLast() }
+            if !current.isEmpty { runs.append(current) }
+            current = ""
+        }
+        let chars = Array(pattern)
+        var i = 0
+        while i < chars.count {
+            let ch = chars[i]
+            switch ch {
+            case "|":
+                // Top-level alternation: either branch may match — nothing in
+                // the whole pattern is mandatory. (Groups are skipped wholesale
+                // below, so any "|" seen here is top-level.)
+                return nil
+            case "(":
+                // Skip the entire group: its contents may be optional or
+                // alternated. The group breaks literal contiguity.
+                guard let close = skipGroup(chars, from: i) else { return nil }
+                flush()
+                i = close
+                // A quantifier after the group applies to the group; skip it.
+                i = skipQuantifier(chars, from: i + 1) ?? (i + 1)
+                continue
+            case ")":
+                return nil   // unbalanced — uncertain
+            case "[":
+                guard let close = skipCharacterClass(chars, from: i) else { return nil }
+                flush()
+                i = close
+                i = skipQuantifier(chars, from: i + 1) ?? (i + 1)
+                continue
+            case "\\":
+                guard i + 1 < chars.count else { return nil }
+                let next = chars[i + 1]
+                if next.isLetter || next.isNumber {
+                    // \d \w \b \1 \u… — a class/anchor/reference, not a literal.
+                    flush()
+                    i += 2
+                    i = skipQuantifier(chars, from: i) ?? i
+                    continue
+                }
+                // Escaped punctuation is a literal char — but a following
+                // quantifier may make it optional.
+                if let after = quantifierKind(chars, at: i + 2) {
+                    if after.minZero { /* optional char: not appended */ } else { current.append(next) }
+                    flush()
+                    i = after.endIndex
+                    continue
+                }
+                current.append(next)
+                i += 2
+                continue
+            case ".", "^", "$":
+                flush()
+            case "?", "*", "+", "{":
+                // Quantifier applying to the previous literal char.
+                guard let q = quantifierKind(chars, at: i) else { return nil }
+                if q.minZero {
+                    flush(droppingLast: true)     // char may be absent
+                } else {
+                    flush()                       // char appears ≥ once, run ends
+                }
+                i = q.endIndex
+                continue
+            default:
+                // A literal char — unless the NEXT char is a min-zero
+                // quantifier, in which case it is optional (handled above on
+                // the quantifier itself).
+                current.append(ch)
+            }
+            i += 1
+        }
+        flush()
+        return runs
+    }
+
+    private struct Quantifier { let minZero: Bool; let endIndex: Int }
+
+    /// Parse a quantifier at `chars[at]` (`?`, `*`, `+`, `{m,n}`), if present.
+    /// Returns nil for `?`/`*`/`+`… absent, and treats any `{…}` as min-zero
+    /// (conservative — `{0,n}` and `{2}` are handled identically: drop the
+    /// preceding char from the mandatory run).
+    private static func quantifierKind(_ chars: [Character], at index: Int) -> Quantifier? {
+        guard index < chars.count else { return nil }
+        switch chars[index] {
+        case "?", "*":
+            return Quantifier(minZero: true, endIndex: skipLazyMarker(chars, after: index))
+        case "+":
+            return Quantifier(minZero: false, endIndex: skipLazyMarker(chars, after: index))
+        case "{":
+            var j = index + 1
+            while j < chars.count, chars[j] != "}" { j += 1 }
+            guard j < chars.count else { return nil }
+            return Quantifier(minZero: true, endIndex: skipLazyMarker(chars, after: j))
+        default:
+            return nil
+        }
+    }
+
+    /// `?`/`+` after a quantifier are lazy/possessive markers, not quantifiers.
+    private static func skipLazyMarker(_ chars: [Character], after index: Int) -> Int {
+        let next = index + 1
+        if next < chars.count, chars[next] == "?" || chars[next] == "+" { return next + 1 }
+        return next
+    }
+
+    /// Index of the quantifier position when `chars[from]` is a quantifier —
+    /// convenience for "skip a quantifier if one follows".
+    private static func skipQuantifier(_ chars: [Character], from index: Int) -> Int? {
+        guard let q = quantifierKind(chars, at: index) else { return nil }
+        return q.endIndex
+    }
+
+    /// Index of the ")" closing the group opened at `chars[from]` (nesting,
+    /// escapes, and character classes honored), or nil when unbalanced.
+    private static func skipGroup(_ chars: [Character], from index: Int) -> Int? {
+        var depth = 0
+        var i = index
+        while i < chars.count {
+            switch chars[i] {
+            case "\\": i += 1
+            case "(": depth += 1
+            case ")":
+                depth -= 1
+                if depth == 0 { return i }
+            case "[":
+                guard let close = skipCharacterClass(chars, from: i) else { return nil }
+                i = close
+            default: break
+            }
+            i += 1
+        }
+        return nil
+    }
+
+    /// Index of the "]" closing the class opened at `chars[from]`, or nil.
+    private static func skipCharacterClass(_ chars: [Character], from index: Int) -> Int? {
+        var i = index + 1
+        if i < chars.count, chars[i] == "^" { i += 1 }
+        if i < chars.count, chars[i] == "]" { i += 1 }   // leading "]" is a member
+        while i < chars.count {
+            if chars[i] == "\\" { i += 2; continue }
+            if chars[i] == "]" { return i }
+            i += 1
+        }
+        return nil
+    }
+}
+
+/// Part P3: bounded regex search over the archive.
+///
+/// Pipeline: derive mandatory literal tokens from the pattern → FTS candidate
+/// retrieval on those literals (shard-pruned, cursor-paged) → bounded
+/// hydration (batches of `hydrationBatch`) → exact regex verification on each
+/// candidate. When NO narrowing literal is derivable, the scan is a bounded
+/// keyset walk of the (optionally date-bounded) scope, hard-capped at
+/// `scanCap` — the outcome reports `truncated = true` whenever the cap cut the
+/// scope short, and callers must surface that.
+///
+/// The verified text is the SAME document FTS indexes (subject / from /
+/// to+cc / body prefix), so the literal-derived path and a full scan of that
+/// scope agree exactly.
+enum BoundedRegexSearch {
+
+    static let defaultNoLiteralScanCap = 5_000
+    static let literalCandidateCap = 20_000
+    static let hydrationBatch = 300
+    static let maxPatternLength = 1_000
+
+    /// `/pattern/` → pattern; otherwise the legacy glob convenience (`*` →
+    /// `.*`) — matches the pre-P3 in-place scan's normalization.
+    static func normalizedPattern(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("/") && trimmed.hasSuffix("/") && trimmed.count > 2 {
+            return String(trimmed.dropFirst().dropLast())
+        }
+        return trimmed.replacingOccurrences(of: "*", with: ".*")
+    }
+
+    /// The exact text a regex is verified against — mirrors the FTS document
+    /// (subject, sender, recipients, body prefix) so candidate retrieval and
+    /// verification cover the same content.
+    static func searchableText(_ email: MBOXParser.RawEmail) -> String {
+        let subject = email.headers["Subject"] ?? ""
+        let sender = email.headers["From"] ?? ""
+        let recipients = (email.headers["To"] ?? "") + " " + (email.headers["Cc"] ?? "")
+        let body = email.plainBody.isEmpty
+            ? FTSSearchIndex.stripHTMLText(email.htmlBody)
+            : email.plainBody
+        return subject + "\n" + sender + "\n" + recipients + "\n" + String(body.prefix(50_000))
+    }
+
+    static func matches(_ regex: NSRegularExpression, _ email: MBOXParser.RawEmail) -> Bool {
+        let text = searchableText(email)
+        let range = NSRange(location: 0, length: (text as NSString).length)
+        return regex.firstMatch(in: text, options: [.withoutAnchoringBounds], range: range) != nil
+    }
+
+    /// Run a bounded regex search. `after`/`before` bound the scanned scope
+    /// (exact date filtering applied on hydrated rows; shard pruning bounds
+    /// the FTS candidate work).
+    static func run(
+        pattern rawPattern: String,
+        store: any EmailArchiveStore,
+        fts: FTSSearchIndex,
+        after: Date? = nil,
+        before: Date? = nil,
+        scanCap: Int = defaultNoLiteralScanCap
+    ) async throws -> RegexSearchOutcome {
+        let pattern = normalizedPattern(rawPattern)
+        guard pattern.count <= maxPatternLength, !pattern.isEmpty,
+              let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return RegexSearchOutcome()   // invalid/oversized pattern → no matches (legacy parity)
+        }
+        var outcome = RegexSearchOutcome()
+        let lo = after ?? .distantPast
+        let hi = before ?? .distantFuture
+        let hasDateBounds = after != nil || before != nil
+        let iso = ISO8601DateFormatter()
+        func inDateScope(_ email: MBOXParser.RawEmail) -> Bool {
+            guard hasDateBounds else { return true }
+            guard let d = iso.date(from: email.timestamp) else { return false }
+            return d >= lo && d < hi
+        }
+
+        let literals = RegexLiteralExtractor.mandatoryLiteralTokens(from: pattern)
+        if !literals.isEmpty {
+            // Literal path: FTS candidates (every match must contain all the
+            // literals) → bounded hydration → exact verify.
+            outcome.usedLiteralPath = true
+            let ftsQuery = literals.map { FTSQueryBuilder.escapeTerm($0) + "*" }
+                .joined(separator: " AND ")
+            let years = FTSSearchIndex.shardYears(after: after, before: before)
+            var cursor: FTSSearchIndex.RankedCursor? = nil
+            while true {
+                if Task.isCancelled { break }
+                let (hits, next) = try await fts.searchRanked(
+                    ftsQuery, years: years, limit: hydrationBatch, cursor: cursor
+                )
+                if !hits.isEmpty {
+                    let emails = try await store.emails(withIDs: hits.map(\.id))
+                    for email in emails where inDateScope(email) {
+                        outcome.scanned += 1
+                        if matches(regex, email) { outcome.matchedIDs.insert(email.id) }
+                    }
+                }
+                guard let n = next else { break }
+                if outcome.scanned >= literalCandidateCap {
+                    outcome.truncated = true   // candidates beyond the cap remain
+                    break
+                }
+                cursor = n
+            }
+            return outcome
+        }
+
+        // No narrowing literal: bounded keyset scan of the scope, capped.
+        var cursorDate: Date? = nil
+        var cursorID: UUID? = nil
+        while outcome.scanned < scanCap {
+            if Task.isCancelled { break }
+            let batch = min(hydrationBatch, scanCap - outcome.scanned)
+            let page = try await store.summaryPage(
+                after: after, before: before,
+                cursorDate: cursorDate, cursorID: cursorID, limit: batch
+            )
+            if page.isEmpty { break }
+            let emails = try await store.emails(withIDs: page.map(\.id))
+            for email in emails {
+                outcome.scanned += 1
+                if matches(regex, email) { outcome.matchedIDs.insert(email.id) }
+            }
+            cursorDate = page.last?.date
+            cursorID = page.last?.id
+            if page.count < batch { return outcome }   // whole scope covered
+        }
+        // Cap reached — truncated only if scope actually continues past it.
+        if outcome.scanned >= scanCap {
+            let probe = try await store.summaryPage(
+                after: after, before: before,
+                cursorDate: cursorDate, cursorID: cursorID, limit: 1
+            )
+            outcome.truncated = !probe.isEmpty
+        }
+        return outcome
     }
 }

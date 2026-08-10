@@ -8,7 +8,8 @@
 import SwiftUI
 
 struct SmartAutoTaggerView: View {
-    let emails: [MBOXParser.RawEmail]
+    // v2: bounded most-recent working set from the store (no injected corpus).
+    @State private var workingSet: [MBOXParser.RawEmail] = []
     var isPresented: Binding<Bool>?
     @StateObject private var tagger = SmartAutoTagger()
     @State private var selectedTag: String?
@@ -26,14 +27,14 @@ struct SmartAutoTaggerView: View {
             .sorted { $0.count > $1.count }
     }
 
-    private var filteredEmails: [MBOXParser.RawEmail] {
-        guard let selectedTag = selectedTag else { return emails }
+    private var visibleEmails: [MBOXParser.RawEmail] {
+        guard let selectedTag = selectedTag else { return workingSet }
         let matchingIDs = Set(
             tagger.suggestedTags
                 .filter { (_, suggestions) in suggestions.contains { $0.tag == selectedTag } }
                 .map(\.key)
         )
-        return emails.filter { matchingIDs.contains($0.id) }
+        return workingSet.filter { matchingIDs.contains($0.id) }
     }
 
     var body: some View {
@@ -89,7 +90,7 @@ struct SmartAutoTaggerView: View {
 
                     // Email list with tags
                     List {
-                        ForEach(filteredEmails) { email in
+                        ForEach(visibleEmails) { email in
                             emailTagRow(email)
                         }
                     }
@@ -98,7 +99,7 @@ struct SmartAutoTaggerView: View {
         }
         .onAppear { startTagging() }
         #if os(macOS)
-        .frame(minWidth: 480, minHeight: 380)
+        .toolWindowFrame()
         #endif
     }
 
@@ -244,7 +245,13 @@ struct SmartAutoTaggerView: View {
     private func startTagging() {
         guard !tagger.isProcessing && tagger.suggestedTags.isEmpty else { return }
         Task {
-            await tagger.generateTags(for: emails)
+            if workingSet.isEmpty {
+                var acc: [MBOXParser.RawEmail] = []
+                let stream = ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
+                do { for try await b in stream { acc.append(contentsOf: b); if acc.count >= 2000 { break } } } catch { }
+                workingSet = Array(acc.prefix(2000))
+            }
+            await tagger.generateTags(for: workingSet)
         }
     }
 }

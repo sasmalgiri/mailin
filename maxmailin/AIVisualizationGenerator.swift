@@ -679,7 +679,7 @@ struct AIVisualizationDashboardView: View {
         }
         .onAppear { loadData() }
         #if os(macOS)
-        .frame(minWidth: 480, minHeight: 360)
+        .toolWindowFrame()
         #endif
     }
 

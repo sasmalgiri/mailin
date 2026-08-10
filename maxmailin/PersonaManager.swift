@@ -204,6 +204,7 @@ class PersonaManager: ObservableObject {
         case plainText = "Plain Text"
         case csv = "CSV"
         case pdf = "PDF"
+        case word = "Word"
         case batesPDF = "Bates-Stamped PDF"
         case forensicReport = "Forensic Report"
         case redacted = "Redacted"
@@ -227,7 +228,7 @@ class PersonaManager: ObservableObject {
                 showTechnicalHeaders: true,
                 showQuickFilters: [.sent, .received, .attachments, .flagged, .unreviewed, .highPriority, .hasLinks, .aiImportant, .aiSuspicious, .aiNegative],
                 sidebarSections: [.summary, .dateRange, .evidenceTags, .senders, .recipients, .domains],
-                exportOrder: [.batesPDF, .forensicReport, .redacted, .csv, .plainText, .pdf],
+                exportOrder: [.batesPDF, .forensicReport, .redacted, .csv, .plainText, .pdf, .word],
                 sampleAIQueries: [
                     "Identify suspicious emails with spoofing indicators",
                     "Find all emails containing PII (SSN, credit cards, addresses)",
@@ -251,7 +252,7 @@ class PersonaManager: ObservableObject {
                 showTechnicalHeaders: false,
                 showQuickFilters: [.attachments, .flagged, .privileged, .unreviewed, .cleanup, .aiImportant, .aiSuspicious, .aiNewsletter],
                 sidebarSections: [.summary, .dateRange, .senders, .recipients, .labels, .evidenceTags],
-                exportOrder: [.batesPDF, .csv, .redacted, .forensicReport, .pdf, .plainText],
+                exportOrder: [.batesPDF, .csv, .redacted, .forensicReport, .pdf, .word, .plainText],
                 sampleAIQueries: [
                     "Find all attorney-client privileged communications",
                     "Identify emails discussing contract terms or negotiations",
@@ -275,7 +276,7 @@ class PersonaManager: ObservableObject {
                 showTechnicalHeaders: true,
                 showQuickFilters: [.sent, .received, .attachments, .largeEmails, .hasLinks, .highPriority, .aiImportant, .aiSuspicious, .aiNewsletter],
                 sidebarSections: [.summary, .dateRange, .senders, .recipients, .domains, .labels],
-                exportOrder: [.csv, .plainText, .pdf, .batesPDF, .forensicReport, .redacted],
+                exportOrder: [.csv, .plainText, .pdf, .word, .batesPDF, .forensicReport, .redacted],
                 sampleAIQueries: [
                     "Show email routing paths and relay servers",
                     "Find emails with authentication failures (SPF/DKIM/DMARC)",
@@ -299,7 +300,7 @@ class PersonaManager: ObservableObject {
                 showTechnicalHeaders: false,
                 showQuickFilters: [.sent, .received, .attachments, .largeEmails, .aiImportant, .aiNegative, .aiNewsletter],
                 sidebarSections: [.summary, .dateRange, .senders, .recipients, .labels, .replyFrequency],
-                exportOrder: [.plainText, .csv, .pdf, .redacted, .batesPDF, .forensicReport],
+                exportOrder: [.plainText, .csv, .pdf, .word, .redacted, .batesPDF, .forensicReport],
                 sampleAIQueries: [
                     "What are the main topics discussed in these emails?",
                     "Identify key decision makers and their communication patterns",
@@ -323,7 +324,7 @@ class PersonaManager: ObservableObject {
                 showTechnicalHeaders: false,
                 showQuickFilters: [.sent, .received, .attachments, .aiImportant, .aiNewsletter],
                 sidebarSections: [.summary, .dateRange, .senders, .labels, .replyFrequency],
-                exportOrder: [.pdf, .plainText, .csv, .redacted, .batesPDF, .forensicReport],
+                exportOrder: [.pdf, .word, .plainText, .csv, .redacted, .batesPDF, .forensicReport],
                 sampleAIQueries: [
                     "Summarize my emails from the last month",
                     "Find emails from a specific person",
@@ -346,7 +347,7 @@ class PersonaManager: ObservableObject {
                 showTechnicalHeaders: false,
                 showQuickFilters: [.sent, .received, .attachments, .flagged, .cleanup, .aiImportant, .aiSuspicious, .aiNegative, .aiNewsletter],
                 sidebarSections: [.summary, .dateRange, .senders, .recipients, .labels, .replyFrequency],
-                exportOrder: [.pdf, .csv, .plainText, .batesPDF, .forensicReport, .redacted],
+                exportOrder: [.pdf, .word, .csv, .plainText, .batesPDF, .forensicReport, .redacted],
                 sampleAIQueries: [
                     "Summarize the most important emails",
                     "What are the main topics discussed?",

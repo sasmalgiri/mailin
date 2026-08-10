@@ -6,6 +6,7 @@ enum HubDestination: String, Hashable {
     case emailInbox
     case eDiscovery, predictiveCoding, gdprCompliance
     case anomalyDetection, iocExtractor, smartAlerts, keywordMonitor, nearDuplicates, chainOfCustody
+    case phishingTriage, reviewDashboard, storyFile, workCenter
     case emailAnalytics, topicClusters, timeline, communicationPatterns, relationshipGraph
     case duplicateManager, threadSummarizer, attachmentGallery, executiveDashboard
     case reportBuilder, batchOperations, archiveComparison, forensicReview
@@ -30,7 +31,8 @@ enum HubDestination: String, Hashable {
         // Professional — legal, forensic, compliance, IOC
         case .eDiscovery, .predictiveCoding, .gdprCompliance, .chainOfCustody,
              .forensicReview, .investigationReport, .batesNumbering,
-             .reviewBatches, .custodianPanel, .legalWorkspace, .iocExtractor:
+             .reviewBatches, .custodianPanel, .legalWorkspace, .iocExtractor,
+             .phishingTriage, .reviewDashboard:
             return .professional
         // Personal — premium analytics, AI, automation
         default:
@@ -155,6 +157,11 @@ struct MainNavigationHubView: View {
     }
 
     private var personaCoreFeatureTiles: [(HubDestination, String, String, String, Color)] {
+        // The Work Center leads every persona's grid — your work finds you.
+        [(.workCenter, "Work Center", "What's waiting on you", "tray.full.fill", .blue)] + personaSpecificTiles
+    }
+
+    private var personaSpecificTiles: [(HubDestination, String, String, String, Color)] {
         switch persona {
         case .forensic:
             return [
@@ -256,6 +263,7 @@ struct MainNavigationHubView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
+        .help(label)
     }
 
     // MARK: - Email Inbox Hero
@@ -303,6 +311,7 @@ struct MainNavigationHubView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Open Email Inbox, \(emailCount) emails")
+        .help("Browse, search and filter all \(emailCount) emails in your archive")
     }
 
     // MARK: - Persona Workflow (Featured Row)
@@ -344,6 +353,7 @@ struct MainNavigationHubView: View {
             workflowRow(
                 title: "Security Operations", icon: "shield", color: .red,
                 tiles: [
+                    (.phishingTriage, "Phishing Triage", "Verdict queue", "shield.lefthalf.filled", .red),
                     (.iocExtractor, "IOC Extractor", "Threat indicators", "exclamationmark.shield", .red),
                     (.anomalyDetection, "Anomaly Detection", "Outlier analysis", "waveform.path.ecg", .red),
                     (.smartAlerts, "Smart Alerts", "Pattern monitoring", "bell.badge", .orange),
@@ -357,6 +367,7 @@ struct MainNavigationHubView: View {
             workflowRow(
                 title: "Research Tools", icon: "magnifyingglass", color: .purple,
                 tiles: [
+                    (.storyFile, "Story File", "Cited findings", "text.book.closed", .purple),
                     (.timeline, "Timeline", "Event chronology", "calendar.day.timeline.left", .purple),
                     (.relationshipGraph, "Relationship Graph", "Contact network", "point.3.connected.trianglepath.dotted", .mint),
                     (.communicationPatterns, "Comm Patterns", "Who talks to whom", "person.2", .cyan),
@@ -434,6 +445,7 @@ struct MainNavigationHubView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Open \(title)")
+        .help("\(title) — \(subtitle)")
     }
 
     private func workflowRow(title: String, icon: String, color: Color,
@@ -509,6 +521,7 @@ struct MainNavigationHubView: View {
         case .forensic:
             return [
                 (.anomalyDetection, "Anomaly Detection", "Statistical outliers", "waveform.path.ecg", .red),
+                (.phishingTriage, "Phishing Triage", "Verdict queue", "shield.lefthalf.filled", .red),
                 (.iocExtractor, "IOC Extractor", "Threat indicators", "exclamationmark.shield", .red),
                 (.smartAlerts, "Smart Alerts", "Pattern monitoring", "bell.badge", .orange),
                 (.keywordMonitor, "Keyword Monitor", "Term tracking", "text.magnifyingglass", .teal),
@@ -520,6 +533,7 @@ struct MainNavigationHubView: View {
                 (.gdprCompliance, "GDPR Compliance", "Data protection", "hand.raised", .green),
                 (.redaction, "Redaction", "PII removal", "eye.slash", .gray),
                 (.reviewBatches, "Review Batches", "Batch workflow", "list.bullet.rectangle", .mint),
+                (.reviewDashboard, "Review Dashboard", "Progress & privilege log", "chart.bar.doc.horizontal", .indigo),
                 (.custodianPanel, "Custodian Panel", "Data custodians", "person.badge.key", .cyan),
                 (.predictiveCoding, "Predictive Coding", "TAR Classifier", "brain", .pink),
                 (.keywordMonitor, "Keyword Monitor", "Term tracking", "text.magnifyingglass", .teal),
@@ -782,5 +796,6 @@ struct MainNavigationHubView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(title), \(subtitle)")
+        .help("\(title) — \(subtitle)")
     }
 }

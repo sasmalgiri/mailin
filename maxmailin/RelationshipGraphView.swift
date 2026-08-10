@@ -361,7 +361,7 @@ struct RelationshipGraphView: View {
         }
         .featureTutorial(.relationshipGraph, key: "relationship_graph_tutorial_seen", isPresented: $showTutorial)
         #if os(macOS)
-        .frame(minWidth: 480, minHeight: 380)
+        .toolWindowFrame()
         #endif
     }
 

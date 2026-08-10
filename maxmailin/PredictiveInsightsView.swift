@@ -1,11 +1,13 @@
 import SwiftUI
 
 struct PredictiveInsightsView: View {
-    let emails: [MBOXParser.RawEmail]
-
+    /// v2: predictions are computed from a bounded, most-recent working set
+    /// streamed from the activated SQLite store — no in-RAM corpus is injected.
     @State private var summary: PredictiveEngine.PredictionSummary?
     @State private var isAnalyzing = false
     @State private var selectedTab: PredTab = .urgency
+    /// Bounded archive size loaded from the store for display/enablement only.
+    @State private var totalCount = 0
 
     enum PredTab: String, CaseIterable {
         case urgency = "Urgency"
@@ -26,6 +28,9 @@ struct PredictiveInsightsView: View {
             }
         }
         .background(AppColors.backgroundPrimary)
+        .task {
+            totalCount = (try? await ArchiveDataService.shared.count()) ?? 0
+        }
     }
 
     // MARK: - Header
@@ -59,7 +64,7 @@ struct PredictiveInsightsView: View {
         VStack(spacing: Spacing.medium) {
             Spacer()
             ProgressView().controlSize(.large)
-            Text("Analyzing \(emails.count) emails for predictions...")
+            Text("Analyzing recent emails for predictions...")
                 .font(.subheadline).foregroundColor(.secondary)
             Spacer()
         }
@@ -73,7 +78,7 @@ struct PredictiveInsightsView: View {
                 .foregroundStyle(.linearGradient(colors: [.orange.opacity(0.5), .red.opacity(0.5)], startPoint: .top, endPoint: .bottom))
             Text("Predictive Analysis")
                 .font(.system(.title2, design: .rounded)).fontWeight(.bold)
-            Text("Predict response urgency, thread outcomes, and security risks across \(emails.count) emails.")
+            Text("Predict response urgency, thread outcomes, and security risks across your \(totalCount) emails.")
                 .font(.subheadline).foregroundColor(.secondary)
                 .multilineTextAlignment(.center).frame(maxWidth: 400)
             Button { runAnalysis() } label: {
@@ -83,7 +88,7 @@ struct PredictiveInsightsView: View {
                     .padding(.vertical, Spacing.small)
             }
             .buttonStyle(.borderedProminent).tint(.orange)
-            .disabled(emails.isEmpty)
+            .disabled(totalCount == 0)
             Spacer()
         }
         .padding(Spacing.large)
@@ -378,9 +383,15 @@ struct PredictiveInsightsView: View {
 
     private func runAnalysis() {
         isAnalyzing = true
-        let emailsCopy = emails
-        Task.detached(priority: .userInitiated) {
-            let result = PredictiveEngine.analyze(emails: emailsCopy)
+        Task {
+            let result = (try? await PredictiveEngine.analyze(from: .shared))
+                ?? PredictiveEngine.PredictionSummary(
+                    urgentEmails: [],
+                    threadPredictions: [],
+                    securityForecast: PredictiveEngine.SecurityForecast(
+                        riskLevel: "Minimal", phishingTrend: "", piiExposureTrend: "", recommendations: []
+                    )
+                )
             await MainActor.run {
                 summary = result
                 isAnalyzing = false

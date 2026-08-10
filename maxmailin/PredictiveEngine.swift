@@ -182,7 +182,7 @@ struct PredictiveEngine {
         var predictions: [ThreadPrediction] = []
 
         for thread in threads.prefix(20) {
-            let trend = EmailNLPEngine.threadSentimentTrend(thread.allEmails)
+            let trend = EmailNLPEngine.threadSentimentTrend(thread.members)
             let points = trend.points
             guard points.count >= 2 else { continue }
 
@@ -193,7 +193,7 @@ struct PredictiveEngine {
             let sentimentDelta = recentAvg - olderAvg
 
             // Response frequency — are people still engaged?
-            let dates = thread.allEmails.compactMap { MBOXParser.parseDate($0.headers["Date"]) }.sorted()
+            let dates = thread.members.compactMap { MBOXParser.parseDate($0.headers["Date"]) }.sorted()
             let lastMessageAge: Int
             if let last = dates.last {
                 lastMessageAge = Calendar.current.dateComponents([.day], from: last, to: Date()).day ?? 999
@@ -202,8 +202,8 @@ struct PredictiveEngine {
             }
 
             // Participant engagement — are all participants still responding?
-            let allParticipants = Set(thread.allEmails.compactMap { $0.headers["From"]?.lowercased() })
-            let recentParticipants = Set(thread.allEmails.suffix(max(1, thread.count / 2)).compactMap { $0.headers["From"]?.lowercased() })
+            let allParticipants = Set(thread.members.compactMap { $0.headers["From"]?.lowercased() })
+            let recentParticipants = Set(thread.members.suffix(max(1, thread.count / 2)).compactMap { $0.headers["From"]?.lowercased() })
             let engagementRatio = allParticipants.isEmpty ? 0 : Double(recentParticipants.count) / Double(allParticipants.count)
 
             // Outcome prediction
@@ -393,5 +393,81 @@ struct PredictiveEngine {
         }
 
         return items.sorted { $0.priority > $1.priority }
+    }
+}
+
+// MARK: - Bounded, store-driven analysis (v2 engine cutover)
+//
+// The static functions above operate on an in-memory `[RawEmail]` corpus — the
+// v1 pattern where resident memory scaled with archive size. These entry points
+// instead stream the most-recent working set from the activated SQLite store in
+// bounded keyset pages, so predictive analysis of a 10M-email archive never
+// holds more than `cap` emails resident.
+//
+// This is sound *because* every prediction here is recency-weighted: urgency
+// boosts recent mail, thread outcomes look at the latest activity, and the
+// security forecast reflects the current posture. The most-recent window is
+// therefore both the correct analytical basis and a hard memory bound.
+
+extension PredictiveEngine {
+
+    /// Default resident cap for the recency-weighted working set.
+    static let defaultWorkingSetCap = 5000
+
+    /// Full predictive analysis over a bounded, most-recent working set streamed
+    /// from the store. Memory is bounded by `cap` regardless of archive size.
+    static func analyze(
+        from service: ArchiveDataService,
+        query: EmailQuery = .all,
+        cap: Int = defaultWorkingSetCap,
+        batchSize: Int = 200
+    ) async throws -> PredictionSummary {
+        let working = try await recentWorkingSet(from: service, query: query, cap: cap, batchSize: batchSize)
+        // This function is nonisolated async, so the CPU-heavy `analyze` runs on
+        // a background executor rather than the MainActor.
+        return analyze(emails: working)
+    }
+
+    /// Text summary for AI integration, over the bounded working set.
+    static func summaryForAI(
+        from service: ArchiveDataService,
+        query: EmailQuery = .all,
+        cap: Int = defaultWorkingSetCap
+    ) async throws -> String {
+        let working = try await recentWorkingSet(from: service, query: query, cap: cap)
+        return summaryForAI(emails: working)
+    }
+
+    /// Digest items over the bounded working set.
+    static func digestItems(
+        from service: ArchiveDataService,
+        query: EmailQuery = .all,
+        cap: Int = defaultWorkingSetCap
+    ) async throws -> [(title: String, detail: String, priority: Int)] {
+        let working = try await recentWorkingSet(from: service, query: query, cap: cap)
+        return digestItems(emails: working)
+    }
+
+    /// Collect up to `cap` most-recent full emails via bounded keyset streaming.
+    /// Beyond the accumulator, only one `batchSize` page is transiently resident,
+    /// and iteration stops as soon as `cap` is reached — the rest of the archive
+    /// is never read.
+    static func recentWorkingSet(
+        from service: ArchiveDataService,
+        query: EmailQuery = .all,
+        cap: Int = defaultWorkingSetCap,
+        batchSize: Int = 200
+    ) async throws -> [MBOXParser.RawEmail] {
+        guard cap > 0 else { return [] }
+        var working: [MBOXParser.RawEmail] = []
+        working.reserveCapacity(min(cap, 1024))
+        let stream = await service.streamFullEmails(query: query, batchSize: min(batchSize, cap))
+        for try await batch in stream {
+            working.append(contentsOf: batch)
+            if working.count >= cap {
+                return Array(working.prefix(cap))
+            }
+        }
+        return working
     }
 }

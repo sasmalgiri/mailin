@@ -302,7 +302,7 @@ struct ChainOfCustodyView: View {
             RecordEventSheet()
         }
         #if os(macOS)
-        .frame(minWidth: 460, minHeight: 360)
+        .toolWindowFrame()
         #else
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(items: shareItems)

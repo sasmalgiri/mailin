@@ -379,6 +379,7 @@ struct EDiscoveryWorkflowView: View {
     @State private var showResetConfirmation = false
     @State private var showingReleaseConfirmation = false
     @State private var showTutorial = false
+    @State private var showPIIReport = false
     @State private var actionMessage: String?
     @State private var aiProcessingInsights: String?
     @State private var isLoadingAI = false
@@ -403,10 +404,7 @@ struct EDiscoveryWorkflowView: View {
             phaseDetailView
         }
         .background(AppColors.backgroundPrimary)
-        #if os(macOS)
-        .frame(minWidth: 480, idealWidth: 780, maxWidth: 960,
-               minHeight: 420, idealHeight: 720, maxHeight: 900)
-        #endif
+        .toolWindowFrame()
         .adaptiveDestructiveConfirmation(
             "Reset Workflow",
             isPresented: $showResetConfirmation,
@@ -428,6 +426,10 @@ struct EDiscoveryWorkflowView: View {
         }
         .sheet(isPresented: $showTutorial) {
             ediscoveryTutorialSheet
+        }
+        .sheet(isPresented: $showPIIReport) {
+            PIIReportView(presetEmails: emails,
+                          onClose: { showPIIReport = false })
         }
         .onAppear {
             if !UserDefaults.standard.bool(forKey: "ediscovery_tutorial_seen") {
@@ -1031,6 +1033,15 @@ struct EDiscoveryWorkflowView: View {
             .buttonStyle(PrimaryButtonStyle())
             .accessibilityLabel("Run NLP analysis on all emails")
 
+            Button {
+                showPIIReport = true
+            } label: {
+                Label("Scan for PII", systemImage: "person.text.rectangle")
+            }
+            .buttonStyle(SecondaryButtonStyle())
+            .help("Detect SSNs, credit cards, phone numbers and other personal data in this collection — with a CSV report for privilege review")
+            .accessibilityLabel("Scan collection for personally identifiable information")
+
             Divider()
 
             HStack {
@@ -1614,7 +1625,8 @@ struct EDiscoveryWorkflowView: View {
         withAnimation(AnimationTiming.fast) {
             actionMessage = message
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+        Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 3000000000)
             withAnimation(AnimationTiming.fast) {
                 actionMessage = nil
             }

@@ -748,7 +748,7 @@ struct ThreadSummarizerView: View {
 
         DispatchQueue.global(qos: .userInitiated).async {
             let result = ThreadSummarizer.summarizeThread(emails: threadEmails)
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 withAnimation(AnimationTiming.normal) {
                     summary = result
                     isComputing = false

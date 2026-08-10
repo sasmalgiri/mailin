@@ -11,6 +11,16 @@ import UIKit
 final class EmailSearchIndex {
     static let shared = EmailSearchIndex()
 
+    /// Hard structural ceiling on how many emails this legacy in-RAM index will
+    /// ever hold, regardless of what a caller passes to `build`/`buildAsync`.
+    /// Both shipping list modes browse/search the whole archive through the
+    /// bounded SQLite + FTS5 layer (Part S); this in-RAM index has NO
+    /// production builders left. Capping here makes "resident memory does not
+    /// scale with archive size" a STRUCTURAL guarantee for this class — not a
+    /// property of every call site — so no future caller can reintroduce a
+    /// whole-corpus in-RAM index by accident.
+    static let maxInMemoryDocuments = 5_000
+
     private var invertedIndex: [String: Set<UUID>] = [:]
     private var emailMap: [UUID: MBOXParser.RawEmail] = [:]
     private var emailVectors: [UUID: [Double]] = [:]
@@ -74,7 +84,9 @@ final class EmailSearchIndex {
             termDocFreqs.removeAll()
             docLengths.removeAll()
 
-            for email in emails {
+            // Structural bound: never hold more than `maxInMemoryDocuments`.
+            let bounded = emails.prefix(Self.maxInMemoryDocuments)
+            for email in bounded {
                 emailMap[email.id] = email
 
                 let from = (email.headers["From"] ?? "").lowercased()
@@ -103,7 +115,7 @@ final class EmailSearchIndex {
             let totalLen = docLengths.values.reduce(0, +)
             avgDocLength = docLengths.isEmpty ? 1.0 : Double(totalLen) / Double(docLengths.count)
 
-            buildVectors(for: emails)
+            buildVectors(for: Array(bounded))
             isBuilt = true
         }
         saveToDisk()
@@ -119,7 +131,9 @@ final class EmailSearchIndex {
             self.termDocFreqs.removeAll()
             self.docLengths.removeAll()
 
-            for email in emails {
+            // Structural bound: never hold more than `maxInMemoryDocuments`.
+            let bounded = emails.prefix(Self.maxInMemoryDocuments)
+            for email in bounded {
                 self.emailMap[email.id] = email
 
                 let from = (email.headers["From"] ?? "").lowercased()
@@ -148,7 +162,7 @@ final class EmailSearchIndex {
             let totalLen = self.docLengths.values.reduce(0, +)
             self.avgDocLength = self.docLengths.isEmpty ? 1.0 : Double(totalLen) / Double(self.docLengths.count)
 
-            self.buildVectors(for: emails)
+            self.buildVectors(for: Array(bounded))
             self.isBuilt = true
             self.saveToDisk()
 
@@ -227,7 +241,9 @@ final class EmailSearchIndex {
             emailMap.removeAll()
             termDocFreqs.removeAll()
             docLengths.removeAll()
-            for email in emails {
+            // Structural bound: never hold more than `maxInMemoryDocuments`.
+            let bounded = emails.prefix(Self.maxInMemoryDocuments)
+            for email in bounded {
                 emailMap[email.id] = email
                 let from = (email.headers["From"] ?? "").lowercased()
                 let to = (email.headers["To"] ?? "").lowercased()
@@ -250,7 +266,7 @@ final class EmailSearchIndex {
                 }
             }
 
-            buildVectors(for: emails)
+            buildVectors(for: Array(bounded))
             isBuilt = true
             return true
         }
@@ -844,27 +860,10 @@ final class EmailSearchIndex {
 
     // MARK: - Attachment Content Search
 
-    func searchAttachmentContent(terms: [String], limit: Int = 15) -> [EmailNLPEngine.SearchResult] {
-        guard queue.sync(execute: { isBuilt }), !terms.isEmpty else { return [] }
-        let lowerTerms = terms.map { $0.lowercased() }
-
-        return queue.sync {
-            var results: [EmailNLPEngine.SearchResult] = []
-            for (_, email) in emailMap {
-                guard let text = attachmentTextCache[email.id], !text.isEmpty else { continue }
-                let lower = text.lowercased()
-                var score = 0.0
-                for term in lowerTerms {
-                    if lower.contains(term) { score += 1.0 }
-                }
-                if score > 0 {
-                    results.append(EmailNLPEngine.SearchResult(email: email, score: score, matchContext: "Found in attachment"))
-                }
-                if results.count >= limit { break }
-            }
-            return results.sorted { $0.score > $1.score }
-        }
-    }
+    // §18: the in-memory attachment-content search was REMOVED (dead code —
+    // no production caller). The advanced list honestly reports that
+    // attachment contents aren't indexed; a persisted attachment-text FTS is
+    // an explicit v2.1 backlog item (V2_1_BACKLOG.md).
 
     // v4.1.1: Public accessor for attachment text cache
     func getAttachmentText(for emailID: UUID) -> String? {

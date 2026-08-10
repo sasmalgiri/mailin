@@ -7,10 +7,39 @@ import UIKit
 import NaturalLanguage
 import UniformTypeIdentifiers
 
+/// Scope semantics for the AI assistant — replaces the legacy corpus arrays
+/// (whole-corpus or filtered-list arrays). Callers pass the CURRENT
+/// archive filter as an `EmailQuery` plus the explicitly selected ids; the
+/// view resolves them against the bounded store (counts via the repository,
+/// analysis over a capped hydrated working set, search via FTS5) — never a
+/// whole-archive array.
+struct AIAssistantScope {
+    /// The caller's current filter state mapped to an archive query
+    /// (`.all` when nothing is filtered).
+    var filteredQuery: EmailQuery = .all
+    /// Explicit user selection (bounded by what a human can select by hand).
+    var selectedIDs: [EmailID] = []
+
+    static let all = AIAssistantScope()
+}
+
+/// Kept out of AIAssistantView's body chain — that expression is at the
+/// type-checker's complexity limit; a modifier adds one cheap call.
+private struct ReportExportErrorAlert: ViewModifier {
+    @Binding var error: String?
+    func body(content: Content) -> some View {
+        content.alert("Report export failed", isPresented: Binding(
+            get: { error != nil }, set: { if !$0 { error = nil } }
+        )) {
+            Button("OK", role: .cancel) { error = nil }
+        } message: {
+            Text(error ?? "")
+        }
+    }
+}
+
 struct AIAssistantView: View {
-    let allEmails: [MBOXParser.RawEmail]
-    let filteredEmails: [MBOXParser.RawEmail]
-    let selectedEmails: [MBOXParser.RawEmail]
+    let archiveScope: AIAssistantScope
     var searchContext: String = ""
     var onSelectEmail: ((UUID) -> Void)?
     var onFilterByIDs: (([UUID]) -> Void)?
@@ -42,6 +71,7 @@ struct AIAssistantView: View {
     @State private var showShareSheet = false
     @State private var shareItems: [Any] = []
     #endif
+    @State private var reportExportError: String?
 
     @Environment(\.dismiss) private var dismiss
 
@@ -62,11 +92,82 @@ struct AIAssistantView: View {
         case selected = "Selected"
     }
 
-    private var emails: [MBOXParser.RawEmail] {
-        switch emailScope {
-        case .all: return allEmails
-        case .filtered: return filteredEmails.isEmpty ? allEmails : filteredEmails
-        case .selected: return selectedEmails.isEmpty ? filteredEmails : selectedEmails
+    // MARK: - Bounded working set (Part D)
+    //
+    // The view NEVER receives or holds the archive. `workingSet` is a capped
+    // hydration of the active scope streamed from the bounded store (the same
+    // precedent GeneralAnalysisView/ForensicReviewView use); true scope-wide
+    // counts come from the repository; per-id lookups hydrate on demand.
+
+    static let workingSetCap = 2_000
+
+    @State private var workingSet: [MBOXParser.RawEmail] = []
+    @State private var hydratedScope: EmailScope?
+    @State private var scopeCounts: [EmailScope: Int] = [:]
+    @State private var hydratedByID: [UUID: MBOXParser.RawEmail] = [:]
+
+    /// Bounded working set for the active scope (may still be hydrating).
+    private var emails: [MBOXParser.RawEmail] { workingSet }
+
+    private func resolvedSelection(for scope: EmailScope) -> ArchiveSelectionScope {
+        switch scope {
+        case .all:
+            return .query(.all, exclusions: [])
+        case .filtered:
+            return .query(archiveScope.filteredQuery, exclusions: [])
+        case .selected:
+            if archiveScope.selectedIDs.isEmpty {
+                return .query(archiveScope.filteredQuery, exclusions: [])
+            }
+            return .explicit(Set(archiveScope.selectedIDs))
+        }
+    }
+
+    private func hydrateWorkingSet(for scope: EmailScope) async {
+        let selection = resolvedSelection(for: scope)
+        var acc: [MBOXParser.RawEmail] = []
+        let stream = ArchiveDataService.shared.streamSelected(scope: selection, batchSize: 200)
+        do {
+            for try await batch in stream {
+                acc.append(contentsOf: batch)
+                if acc.count >= Self.workingSetCap { break }
+            }
+        } catch { }
+        workingSet = Array(acc.prefix(Self.workingSetCap))
+        hydratedScope = scope
+    }
+
+    /// The bounded working set for the CURRENT scope, hydrating first if needed.
+    private func currentWorkingSet() async -> [MBOXParser.RawEmail] {
+        if hydratedScope != emailScope || (workingSet.isEmpty && emailCount(for: emailScope) > 0) {
+            await hydrateWorkingSet(for: emailScope)
+        }
+        return workingSet
+    }
+
+    /// True scope-wide counts from the repository (O(1) memory) — the picker
+    /// shows real archive numbers even though analysis is capped.
+    private func refreshScopeCounts() async {
+        scopeCounts[.all] = (try? await ArchiveDataService.shared.count(query: .all)) ?? 0
+        scopeCounts[.filtered] = (try? await ArchiveDataService.shared.count(query: archiveScope.filteredQuery)) ?? scopeCounts[.all] ?? 0
+        scopeCounts[.selected] = archiveScope.selectedIDs.count
+    }
+
+    /// Per-id lookup against the bounded caches (related-email cards).
+    private func cachedEmail(id: UUID) -> MBOXParser.RawEmail? {
+        hydratedByID[id] ?? workingSet.first { $0.id == id }
+    }
+
+    /// Hydrate a bounded batch of related-email ids for card rendering.
+    private func hydrateRelated(ids: [UUID]) async {
+        let missing = ids.filter { cachedEmail(id: $0) == nil }
+        guard !missing.isEmpty else { return }
+        let fetched = (try? await ArchiveDataService.shared.fullEmails(ids: Array(missing.prefix(60)))) ?? []
+        for email in fetched { hydratedByID[email.id] = email }
+        // Keep the cache bounded.
+        if hydratedByID.count > 300 {
+            let overflow = hydratedByID.count - 300
+            for key in hydratedByID.keys.prefix(overflow) { hydratedByID.removeValue(forKey: key) }
         }
     }
 
@@ -148,15 +249,28 @@ struct AIAssistantView: View {
             inputArea
         }
         #if os(macOS)
-        .frame(minWidth: 460, idealWidth: 700, minHeight: 380, idealHeight: 650)
+        .toolWindowFrame()
         #endif
         .background(AppColors.backgroundTertiary)
         .onAppear {
             selectedEngine = .auto
-            if !selectedEmails.isEmpty {
+            if !archiveScope.selectedIDs.isEmpty {
                 emailScope = .selected
             }
             loadConversation()
+        }
+        .task {
+            await refreshScopeCounts()
+            await hydrateWorkingSet(for: emailScope)
+            let savedIDs = conversationHistory.flatMap(\.relatedEmailIDs)
+            if !savedIDs.isEmpty { await hydrateRelated(ids: Array(savedIDs.suffix(60))) }
+        }
+        .onChange(of: emailScope) { _, newScope in
+            Task { await hydrateWorkingSet(for: newScope) }
+        }
+        .onChange(of: conversationHistory.count) { _, _ in
+            guard let last = conversationHistory.last, !last.relatedEmailIDs.isEmpty else { return }
+            Task { await hydrateRelated(ids: last.relatedEmailIDs) }
         }
         .onDisappear {
             currentTask?.cancel()
@@ -181,6 +295,7 @@ struct AIAssistantView: View {
         } message: {
             Text("The AI wants to: \(pendingActionDescription)\n\nThis action will modify your data. Proceed?")
         }
+        .modifier(ReportExportErrorAlert(error: $reportExportError))
         #if os(iOS)
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(items: shareItems)
@@ -378,7 +493,7 @@ struct AIAssistantView: View {
                         HStack(spacing: 4) {
                             Image(systemName: "envelope")
                                 .font(.caption)
-                            Text("\(emails.count) emails")
+                            Text("\(emailCount(for: emailScope)) emails")
                                 .font(.subheadline)
                             Image(systemName: "chevron.down")
                                 .font(.caption2)
@@ -528,7 +643,7 @@ struct AIAssistantView: View {
 
                 Spacer()
 
-                Label("\(emails.count) emails", systemImage: "envelope")
+                Label("\(emailCount(for: emailScope)) emails", systemImage: "envelope")
                     .font(Typography.caption1)
                     .foregroundColor(AppColors.secondary)
             }
@@ -570,11 +685,7 @@ struct AIAssistantView: View {
     }
 
     private func emailCount(for scope: EmailScope) -> Int {
-        switch scope {
-        case .all: return allEmails.count
-        case .filtered: return filteredEmails.isEmpty ? allEmails.count : filteredEmails.count
-        case .selected: return selectedEmails.count
-        }
+        scopeCounts[scope] ?? 0
     }
 
     // MARK: - Chat Area
@@ -771,7 +882,8 @@ struct AIAssistantView: View {
                                 UIPasteboard.general.string = answer
                                 #endif
                                 showActionToast = "Copied!"
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1500000000)
                                     if showActionToast == "Copied!" { showActionToast = nil }
                                 }
                             } label: {
@@ -800,7 +912,8 @@ struct AIAssistantView: View {
                                     }
                                 }
                                 showActionToast = "Thanks for the feedback!"
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1500000000)
                                     if showActionToast == "Thanks for the feedback!" { showActionToast = nil }
                                 }
                             } label: {
@@ -822,7 +935,8 @@ struct AIAssistantView: View {
                                     }
                                 }
                                 showActionToast = "We'll improve!"
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1500000000)
                                     if showActionToast == "We'll improve!" { showActionToast = nil }
                                 }
                             } label: {
@@ -871,7 +985,8 @@ struct AIAssistantView: View {
                                 UIPasteboard.general.string = answer
                                 #endif
                                 showActionToast = "Copied!"
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 1500000000)
                                     if showActionToast == "Copied!" { showActionToast = nil }
                                 }
                             } label: {
@@ -912,7 +1027,7 @@ struct AIAssistantView: View {
     @ObservedObject private var provenanceStore = AIProvenanceStore.shared
 
     private func renderedMarkdown(_ text: String, isStreaming: Bool, relatedEmailIDs: [UUID] = []) -> some View {
-        let relatedEmails = relatedEmailIDs.compactMap { id in allEmails.first { $0.id == id } }
+        let relatedEmails = relatedEmailIDs.compactMap { cachedEmail(id: $0) }
         let lines = text.components(separatedBy: "\n")
         let lineEmailMap = buildLineEmailMap(lines: lines, emails: relatedEmails)
         let numberedRefs = detectNumberedEmailRefs(text: text, emails: relatedEmails)
@@ -1081,7 +1196,7 @@ struct AIAssistantView: View {
     }
 
     private func relatedEmailCards(ids: [UUID], bubbleIndex: Int = 0, answerText: String = "") -> some View {
-        let allMatched = ids.compactMap { id in allEmails.first { $0.id == id } }
+        let allMatched = ids.compactMap { cachedEmail(id: $0) }
         let answerLower = answerText.lowercased()
         let referenced = allMatched.filter { email in
             let subj = (email.headers["Subject"] ?? email.headers["subject"] ?? "").lowercased()
@@ -1257,7 +1372,8 @@ struct AIAssistantView: View {
 
     private func showToast(_ message: String) {
         withAnimation(AnimationTiming.fast) { showActionToast = message }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+        Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 2000000000)
             withAnimation(AnimationTiming.fast) { showActionToast = nil }
         }
     }
@@ -1282,8 +1398,12 @@ struct AIAssistantView: View {
         }
         #if os(macOS)
         if let url = PlatformFileSaver.savePanel(suggestedName: "ai_search_results.csv", allowedTypes: [.commaSeparatedText]) {
-            try? csv.write(to: url, atomically: true, encoding: .utf8)
-            showToast("Exported \(emails.count) emails as CSV")
+            do {
+                try csv.write(to: url, atomically: true, encoding: .utf8)
+                showToast("Exported \(emails.count) emails as CSV")
+            } catch {
+                showToast("CSV export failed: \(error.localizedDescription)")
+            }
         }
         #else
         PlatformClipboard.copyString(csv)
@@ -1300,11 +1420,18 @@ struct AIAssistantView: View {
              "body": email.plainBody]
         }
         guard let data = try? JSONSerialization.data(withJSONObject: items, options: [.prettyPrinted, .sortedKeys]),
-              let json = String(data: data, encoding: .utf8) else { return }
+              let json = String(data: data, encoding: .utf8) else {
+            showToast("JSON export failed: the results could not be serialized.")
+            return
+        }
         #if os(macOS)
         if let url = PlatformFileSaver.savePanel(suggestedName: "ai_search_results.json", allowedTypes: [.json]) {
-            try? json.write(to: url, atomically: true, encoding: .utf8)
-            showToast("Exported \(emails.count) emails as JSON")
+            do {
+                try json.write(to: url, atomically: true, encoding: .utf8)
+                showToast("Exported \(emails.count) emails as JSON")
+            } catch {
+                showToast("JSON export failed: \(error.localizedDescription)")
+            }
         }
         #else
         PlatformClipboard.copyString(json)
@@ -1321,15 +1448,17 @@ struct AIAssistantView: View {
         panel.prompt = "Export Here"
         guard panel.runModal() == .OK, let folder = panel.url else { return }
         var count = 0
+        var failed = 0
         for email in emails {
             let subj = (email.headers["Subject"] ?? email.headers["subject"] ?? "email")
                 .replacingOccurrences(of: "/", with: "_").prefix(50)
             let filename = "\(subj)_\(count).eml"
             let url = folder.appendingPathComponent(String(filename))
-            try? email.rawSource.write(to: url, atomically: true, encoding: .utf8)
-            count += 1
+            do { try email.rawSource.write(to: url, atomically: true, encoding: .utf8); count += 1 }
+            catch { failed += 1 }
         }
-        showToast("Exported \(count) EML files")
+        showToast(failed == 0 ? "Exported \(count) EML files"
+                              : "Exported \(count) EML files — \(failed) FAILED to write")
         #else
         PlatformClipboard.copyString(emails.map(\.rawSource).joined(separator: "\n\n"))
         showToast("EML content copied to clipboard")
@@ -1421,7 +1550,7 @@ struct AIAssistantView: View {
     // MARK: - AI Engine Label
 
     private var aiEngineLabel: String {
-        let count = emails.count
+        let count = emailCount(for: emailScope)
         let suffix = count == 1 ? "" : "s"
         switch selectedEngine {
         case .auto:
@@ -1587,7 +1716,7 @@ struct AIAssistantView: View {
     typealias SmartQueryResult = (query: String, answer: String, timestamp: Date, relatedEmailIDs: [UUID])
     typealias SmartHandler = @Sendable ([MBOXParser.RawEmail]) async -> SmartQueryResult
 
-    nonisolated private static func handleSmartQuery(query: String, emails: [MBOXParser.RawEmail]) -> SmartHandler? {
+    nonisolated private static func handleSmartQuery(query: String) -> SmartHandler? {
         let lower = query.lowercased()
 
         // Duplicate detection
@@ -1806,16 +1935,20 @@ struct AIAssistantView: View {
 
         switch Self.classifyConversational(query) {
         case .greeting:
-            let sent = emails.filter { $0.messageType == "sent" }.count
-            let received = emails.filter { $0.messageType == "received" }.count
             prompt = ""
-            withAnimation(AnimationTiming.normal) {
-                conversationHistory.append((
-                    query: query,
-                    answer: "Hello! I'm your email assistant. You have **\(emails.count) emails** loaded (\(sent) sent, \(received) received).\n\nI can help you with:\n- **Search**: \"Find emails about budget\" or \"emails from Sarah\"\n- **Analytics**: \"Who emails me most?\" or \"What topics come up?\"\n- **Sentiment**: \"What's the tone of my emails?\"\n- **Security**: \"Scan for phishing\" or \"Check for sensitive data\"\n- **Summary**: \"Give me a full overview\"\n\nWhat would you like to know?",
-                    timestamp: Date(),
-                    relatedEmailIDs: []
-                ))
+            let totalCount = emailCount(for: emailScope)
+            currentTask = Task {
+                let ws = await currentWorkingSet()
+                let sent = ws.filter { $0.messageType == "sent" }.count
+                let received = ws.filter { $0.messageType == "received" }.count
+                withAnimation(AnimationTiming.normal) {
+                    conversationHistory.append((
+                        query: query,
+                        answer: "Hello! I'm your email assistant. You have **\(max(totalCount, ws.count)) emails** loaded (\(sent) sent, \(received) received in the working set).\n\nI can help you with:\n- **Search**: \"Find emails about budget\" or \"emails from Sarah\"\n- **Analytics**: \"Who emails me most?\" or \"What topics come up?\"\n- **Sentiment**: \"What's the tone of my emails?\"\n- **Security**: \"Scan for phishing\" or \"Check for sensitive data\"\n- **Summary**: \"Give me a full overview\"\n\nWhat would you like to know?",
+                        timestamp: Date(),
+                        relatedEmailIDs: []
+                    ))
+                }
             }
             return
         case .acknowledgment:
@@ -1833,12 +1966,12 @@ struct AIAssistantView: View {
             break
         }
 
-        if let smartResult = Self.handleSmartQuery(query: query, emails: emails) {
+        if let smartResult = Self.handleSmartQuery(query: query) {
             prompt = ""
             isProcessing = true
-            let emailsCopy = emails
             currentTask = Task {
                 defer { isProcessing = false }
+                let emailsCopy = await currentWorkingSet()
                 let result = await smartResult(emailsCopy)
                 await MainActor.run {
                     withAnimation(AnimationTiming.normal) {
@@ -1860,10 +1993,9 @@ struct AIAssistantView: View {
         prompt = ""
 
         let context = searchContext
-        let emailsCopy = emails
         let rawEngine = selectedEngine
         let engine: AIEngine = rawEngine == .auto
-            ? resolveAutoEngine(query: currentQuery, emailCount: emailsCopy.count)
+            ? resolveAutoEngine(query: currentQuery, emailCount: emailCount(for: emailScope))
             : rawEngine
 
         switch engine {
@@ -1880,7 +2012,8 @@ struct AIAssistantView: View {
 
                 streamingQuery = currentQuery
                 streamingAnswer = ""
-                let retrieved = Self.retrieveRelevantEmails(query: currentQuery, emails: emailsCopy, priorContext: "", predictions: [:])
+                let emailsCopy = await currentWorkingSet()
+                let retrieved = await Self.retrieveRelevantEmails(query: currentQuery, emails: emailsCopy, priorContext: "", predictions: [:])
                 let retrievedIDs = Array(retrieved.prefix(5).map(\.id))
                 var answer = await askFoundationModelStreaming(currentQuery)
                 guard !Task.isCancelled else { return }
@@ -1908,7 +2041,8 @@ struct AIAssistantView: View {
 
                 streamingQuery = currentQuery
                 streamingAnswer = ""
-                let retrieved = Self.retrieveRelevantEmails(query: currentQuery, emails: emailsCopy, priorContext: "", predictions: [:])
+                let emailsCopy = await currentWorkingSet()
+                let retrieved = await Self.retrieveRelevantEmails(query: currentQuery, emails: emailsCopy, priorContext: "", predictions: [:])
                 let retrievedIDs = Array(retrieved.prefix(5).map(\.id))
                 var answer = await askFoundationModelDirect(currentQuery)
                 guard !Task.isCancelled else { return }
@@ -1937,15 +2071,14 @@ struct AIAssistantView: View {
                     streamingAnswer = ""
                 }
 
-                // Layer 1: NLP foundation (deterministic, instant — always runs as safety net)
-                let enhanced = await Task.detached(priority: .userInitiated) {
-                    Self.enhancedNLPPipeline(
-                        query: currentQuery,
-                        emails: emailsCopy,
-                        priorContext: priorContext,
-                        predictions: currentPredictions
-                    )
-                }.value
+                // Layer 1: NLP foundation (deterministic — always runs as safety net)
+                let emailsCopy = await currentWorkingSet()
+                let enhanced = await Self.enhancedNLPPipeline(
+                    query: currentQuery,
+                    emails: emailsCopy,
+                    priorContext: priorContext,
+                    predictions: currentPredictions
+                )
                 guard !Task.isCancelled else { return }
 
                 var answer = enhanced.answer
@@ -1955,9 +2088,7 @@ struct AIAssistantView: View {
                 if canUseAppleAI {
                     // Layer 2: Agentic RAG retrieval (parallel with NLP — evidence gathering)
                     let priorIDs = priorRetrievedEmailIDs
-                    let ragResult = await Task.detached(priority: .userInitiated) {
-                        Self.agenticRetrieve(query: currentQuery, emails: emailsCopy, priorContext: priorContext, predictions: currentPredictions, priorRetrievedIDs: priorIDs)
-                    }.value
+                    let ragResult = await Self.agenticRetrieve(query: currentQuery, emails: emailsCopy, priorContext: priorContext, predictions: currentPredictions, priorRetrievedIDs: priorIDs)
 
                     priorRetrievedEmailIDs.formUnion(ragResult.retrievedEmails.map(\.id))
                     let ragIDs = Array(ragResult.retrievedEmails.prefix(5).map(\.id))
@@ -2012,7 +2143,7 @@ struct AIAssistantView: View {
                             if !validationResult.confident, let gap = validationResult.gap, !gap.isEmpty {
                                 let gapTerms = EmailNLPEngine.extractSearchTerms(from: gap)
                                 if !gapTerms.isEmpty {
-                                    let supplementEmails = Self.retrieveRelevantEmails(
+                                    let supplementEmails = await Self.retrieveRelevantEmails(
                                         query: gap, emails: emailsCopy, priorContext: priorContext, predictions: currentPredictions
                                     )
                                     if !supplementEmails.isEmpty {
@@ -2040,6 +2171,11 @@ struct AIAssistantView: View {
                     streamingAnswer = ""
                 }
 
+                // Part E: mandatory grounding — validate citations against the
+                // evidence that was actually retrieved for this turn.
+                let gateEvidence = (try? await ArchiveEvidenceService.shared.evidence(ids: retrievedIDs)) ?? []
+                answer = AIGroundingGate.ground(answer: answer, evidence: gateEvidence, abstainWhenNoEvidence: false).answer
+
                 if !context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     answer = "Scoped to search: \"\(context)\" (\(emailsCopy.count) matches)\n\n" + answer
                 }
@@ -2061,19 +2197,18 @@ struct AIAssistantView: View {
                     streamingAnswer = ""
                 }
 
-                // Layer 1: NLP baseline (runs instantly, provides deterministic foundation)
-                let nlpResult = await Task.detached(priority: .userInitiated) {
-                    Self.enhancedNLPPipeline(
-                        query: currentQuery,
-                        emails: emailsCopy,
-                        priorContext: priorCtxCloud,
-                        predictions: cloudPredictions
-                    )
-                }.value
+                // Layer 1: NLP baseline (deterministic foundation)
+                let emailsCopy = await currentWorkingSet()
+                let nlpResult = await Self.enhancedNLPPipeline(
+                    query: currentQuery,
+                    emails: emailsCopy,
+                    priorContext: priorCtxCloud,
+                    predictions: cloudPredictions
+                )
                 guard !Task.isCancelled else { return }
 
                 // Layer 2: RAG retrieval for focused email context
-                let retrieved = Self.retrieveRelevantEmails(
+                let retrieved = await Self.retrieveRelevantEmails(
                     query: currentQuery, emails: emailsCopy, priorContext: priorCtxCloud, predictions: cloudPredictions
                 )
                 let retrievedIDs = Array(retrieved.prefix(10).map(\.id))
@@ -2105,6 +2240,10 @@ struct AIAssistantView: View {
                 streamingQuery = ""
                 streamingAnswer = ""
 
+                // Part E: mandatory grounding for the cloud-synthesized answer.
+                let gateEvidence = (try? await ArchiveEvidenceService.shared.evidence(ids: retrievedIDs)) ?? []
+                answer = AIGroundingGate.ground(answer: answer, evidence: gateEvidence, abstainWhenNoEvidence: false).answer
+
                 if !context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     answer = "Scoped to search: \"\(context)\" (\(emailsCopy.count) matches)\n\n" + answer
                 }
@@ -2131,18 +2270,22 @@ struct AIAssistantView: View {
                     streamingAnswer = ""
                 }
 
-                let enhanced = await Task.detached(priority: .userInitiated) {
-                    Self.enhancedNLPPipeline(
-                        query: currentQuery,
-                        emails: emailsCopy,
-                        priorContext: priorContext,
-                        predictions: currentPredictions
-                    )
-                }.value
+                let emailsCopy = await currentWorkingSet()
+                let enhanced = await Self.enhancedNLPPipeline(
+                    query: currentQuery,
+                    emails: emailsCopy,
+                    priorContext: priorContext,
+                    predictions: currentPredictions
+                )
                 guard !Task.isCancelled else { return }
 
                 var answer = enhanced.answer
                 let retrievedIDs = enhanced.retrievedIDs
+
+                // Part E: even the deterministic NLP path carries verifiable
+                // evidence references, gated by the verifier.
+                let gateEvidence = (try? await ArchiveEvidenceService.shared.evidence(ids: retrievedIDs)) ?? []
+                answer = AIGroundingGate.ground(answer: answer, evidence: gateEvidence, abstainWhenNoEvidence: false).answer
 
                 if !context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     answer = "Scoped to search: \"\(context)\" (\(emailsCopy.count) matches)\n\n" + answer
@@ -2170,8 +2313,9 @@ struct AIAssistantView: View {
         return .general
     }
 
-    private func enhancedNLPFallback(_ query: String) -> String {
-        Self.enhancedNLPPipeline(query: query, emails: emails, priorContext: "", predictions: PredictiveCodingEngine.shared.predictions).answer
+    private func enhancedNLPFallback(_ query: String) async -> String {
+        let ws = await currentWorkingSet()
+        return await Self.enhancedNLPPipeline(query: query, emails: ws, priorContext: "", predictions: PredictiveCodingEngine.shared.predictions).answer
     }
 
     private func askFoundationModelStreaming(_ query: String) async -> String {
@@ -2183,23 +2327,25 @@ struct AIAssistantView: View {
                     group.addTask {
                         switch specialAction {
                         case .triage:
-                            return try await FoundationModelEngine.triageEmails(self.emails) { partial in
+                            // Bounded: engine retrieves its own working set from SQLite.
+                            return try await FoundationModelEngine.triageEmails { partial in
                                 self.streamingAnswer = partial
                             }
                         case .insights:
-                            return try await FoundationModelEngine.generateInsights(self.emails) { partial in
+                            return try await FoundationModelEngine.generateInsights { partial in
                                 self.streamingAnswer = partial
                             }
                         case .securityBrief:
-                            return try await FoundationModelEngine.securityBrief(self.emails) { partial in
+                            return try await FoundationModelEngine.securityBrief { partial in
                                 self.streamingAnswer = partial
                             }
                         case .threadStory:
-                            return try await FoundationModelEngine.synthesizeThread(self.emails) { partial in
+                            return try await FoundationModelEngine.synthesizeThread { partial in
                                 self.streamingAnswer = partial
                             }
                         case .general:
-                            return try await FoundationModelEngine.respondSmart(to: query, emails: self.emails) { partial in
+                            // Bounded: orchestrator gets query-relevant retrieval from SQLite.
+                            return try await FoundationModelEngine.respondSmart(to: query) { partial in
                                 self.streamingAnswer = partial
                             } onConfirmAction: { description in
                                 await withCheckedContinuation { continuation in
@@ -2216,7 +2362,7 @@ struct AIAssistantView: View {
                     }
                     guard let result = try await group.next() else {
                         group.cancelAll()
-                        return enhancedNLPFallback(query)
+                        return await enhancedNLPFallback(query)
                     }
                     group.cancelAll()
                     return result
@@ -2228,13 +2374,13 @@ struct AIAssistantView: View {
                 if !partial.isEmpty {
                     return partial + "\n\n(Response timed out — partial result shown)"
                 }
-                return enhancedNLPFallback(query)
+                return await enhancedNLPFallback(query)
             } catch {
-                return enhancedNLPFallback(query)
+                return await enhancedNLPFallback(query)
             }
         }
         #endif
-        return enhancedNLPFallback(query)
+        return await enhancedNLPFallback(query)
     }
 
     private func askFoundationModelDirect(_ query: String) async -> String {
@@ -2243,7 +2389,8 @@ struct AIAssistantView: View {
             do {
                 return try await withThrowingTaskGroup(of: String.self) { group in
                     group.addTask {
-                        try await FoundationModelEngine.respondStreaming(to: query, emails: self.emails) { partial in
+                        // Bounded: retrieves its own RAG context from SQLite.
+                        try await FoundationModelEngine.respondStreaming(to: query) { partial in
                             self.streamingAnswer = partial
                         }
                     }
@@ -2253,7 +2400,7 @@ struct AIAssistantView: View {
                     }
                     guard let result = try await group.next() else {
                         group.cancelAll()
-                        return enhancedNLPFallback(query)
+                        return await enhancedNLPFallback(query)
                     }
                     group.cancelAll()
                     return result
@@ -2265,13 +2412,13 @@ struct AIAssistantView: View {
                 if !partial.isEmpty {
                     return partial + "\n\n(Response timed out — partial result shown)"
                 }
-                return enhancedNLPFallback(query)
+                return await enhancedNLPFallback(query)
             } catch {
-                return enhancedNLPFallback(query)
+                return await enhancedNLPFallback(query)
             }
         }
         #endif
-        return enhancedNLPFallback(query)
+        return await enhancedNLPFallback(query)
     }
 
     nonisolated static func processNLPQuery(_ query: String, emails: [MBOXParser.RawEmail], priorContext: String = "", predictions: [UUID: Double] = [:]) -> String {
@@ -2339,16 +2486,9 @@ struct AIAssistantView: View {
         let scopedEmails: [MBOXParser.RawEmail]
         var scopeLabel = ""
         if !specificTerms.isEmpty || dateRange != nil {
-            // Try search index first (instant), fall back to linear scan
-            let indexResults = !specificTerms.isEmpty
-                ? EmailSearchIndex.shared.hybridSearch(query: lower, terms: specificTerms, limit: 200)
-                : []
-            let results: [EmailNLPEngine.SearchResult]
-            if indexResults.count >= 3 {
-                results = indexResults
-            } else {
-                results = EmailNLPEngine.searchWithDateFilter(terms: specificTerms, in: emails, dateRange: dateRange, limit: 200)
-            }
+            // Pure scan over the BOUNDED working set this function receives
+            // (the caller already did FTS retrieval against the archive).
+            let results = EmailNLPEngine.searchWithDateFilter(terms: specificTerms, in: emails, dateRange: dateRange, limit: 200)
 
             if results.count >= 3 {
                 var matched = results.map(\.email)
@@ -2798,7 +2938,7 @@ struct AIAssistantView: View {
             dateFmt.dateStyle = .short
             dateFmt.timeStyle = .short
             for (i, thread) in multiMessage.prefix(5).enumerated() {
-                let trend = EmailNLPEngine.threadSentimentTrend(thread.allEmails)
+                let trend = EmailNLPEngine.threadSentimentTrend(thread.members)
                 result += "\(i + 1). \(trend.subject)\n"
                 result += "   Participants: \(trend.participants.joined(separator: ", "))\n"
                 result += "   Overall trend: \(trend.overallTrend)\n"
@@ -2817,8 +2957,8 @@ struct AIAssistantView: View {
             if multiMessage.isEmpty { return scopeLabel + "No conversation threads with multiple messages found." }
             var result = scopeLabel + "Thread Summaries\n\n"
             for (i, thread) in multiMessage.prefix(5).enumerated() {
-                let summary = EmailNLPEngine.summarizeThread(thread.allEmails)
-                let trend = EmailNLPEngine.threadSentimentTrend(thread.allEmails)
+                let summary = EmailNLPEngine.summarizeThread(thread.members)
+                let trend = EmailNLPEngine.threadSentimentTrend(thread.members)
                 result += "\(i + 1). \(summary)"
                 result += "   Sentiment trend: \(trend.overallTrend)\n"
                 result += String(repeating: "-", count: 40) + "\n\n"
@@ -2922,13 +3062,13 @@ struct AIAssistantView: View {
             var result = scopeLabel
             result += "**Most active thread: \"\(winner.subject)\"** — \(winner.count) messages\n\n"
 
-            let participants = Set(winner.allEmails.compactMap {
+            let participants = Set(winner.members.compactMap {
                 $0.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces)
             })
             result += "Participants: \(participants.joined(separator: ", "))\n"
 
-            if let first = winner.allEmails.first?.headers["Date"].flatMap({ MBOXParser.parseDate($0) }),
-               let last = winner.allEmails.last?.headers["Date"].flatMap({ MBOXParser.parseDate($0) }) {
+            if let first = winner.members.first?.headers["Date"].flatMap({ MBOXParser.parseDate($0) }),
+               let last = winner.members.last?.headers["Date"].flatMap({ MBOXParser.parseDate($0) }) {
                 let days = Calendar.current.dateComponents([.day], from: first, to: last).day ?? 0
                 result += "Span: \(days) day\(days == 1 ? "" : "s")\n"
             }
@@ -2936,7 +3076,7 @@ struct AIAssistantView: View {
             if top.count > 1 {
                 result += "\n**Top threads by reply count:**\n\n"
                 for (i, thread) in top.enumerated() {
-                    let partCount = Set(thread.allEmails.compactMap {
+                    let partCount = Set(thread.members.compactMap {
                         $0.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces)
                     }).count
                     let maxCount = max(1, top[0].count)
@@ -3921,8 +4061,8 @@ struct AIAssistantView: View {
             if multiMessage.isEmpty { return scopeLabel + "I didn't find any conversation threads with back-and-forth replies. The emails may all be standalone messages." }
             var result = scopeLabel + "I found **\(multiMessage.count) active conversation\(multiMessage.count == 1 ? "" : "s")** (threads with replies) out of \(threads.count) total threads. Here are the most active:\n\n"
             for (i, thread) in multiMessage.prefix(8).enumerated() {
-                let sentiment = EmailNLPEngine.averageSentiment(of: thread.allEmails)
-                let trend = EmailNLPEngine.threadSentimentTrend(thread.allEmails)
+                let sentiment = EmailNLPEngine.averageSentiment(of: thread.members)
+                let trend = EmailNLPEngine.threadSentimentTrend(thread.members)
                 let participants = trend.participants.prefix(3).map { "**\($0)**" }.joined(separator: ", ")
                 let toneWord = sentiment.average > 0.1 ? "positive" : sentiment.average < -0.1 ? "tense" : "neutral"
                 result += "\(i + 1). **\(thread.subject)** — \(thread.count) messages, \(toneWord) tone (\(trend.overallTrend))\n"
@@ -4532,7 +4672,7 @@ struct AIAssistantView: View {
         let searchTerms = EmailNLPEngine.extractSearchTerms(from: query.lowercased())
         guard !searchTerms.isEmpty else { return (answer, []) }
 
-        let chunkResults = EmailSearchIndex.shared.chunkSearch(terms: searchTerms, in: emails, maxChunksPerEmail: 1, limit: 5)
+        let chunkResults = ArchiveEvidenceService.chunkExcerpts(terms: searchTerms, in: emails, maxChunksPerEmail: 1, limit: 5)
         guard !chunkResults.isEmpty else { return (answer, []) }
 
         let displayName: (String?) -> String = { raw in
@@ -4615,12 +4755,6 @@ struct AIAssistantView: View {
             return trimmed.range(of: #"^\d+\.\s"#, options: .regularExpression) != nil
         }
         return numberedLines.count >= 8
-    }
-
-    nonisolated private static func expandSearchSemantically(query: String, originalTerms: [String]) -> [MBOXParser.RawEmail] {
-        let semanticResults = EmailSearchIndex.shared.semanticSearch(query: query, limit: 15)
-        guard !semanticResults.isEmpty else { return [] }
-        return semanticResults.map(\.email)
     }
 
     nonisolated private static func synthesizeFromRetrievedEmails(query: String, emails: [MBOXParser.RawEmail]) -> String {
@@ -4833,7 +4967,7 @@ struct AIAssistantView: View {
         emails: [MBOXParser.RawEmail],
         priorContext: String,
         predictions: [UUID: Double]
-    ) -> (answer: String, retrievedIDs: [UUID]) {
+    ) async -> (answer: String, retrievedIDs: [UUID]) {
         // Check cache first
         if let cached = checkNLPCache(query: query, emailCount: emails.count) {
             return (cached.answer, cached.emailIDs)
@@ -4845,7 +4979,7 @@ struct AIAssistantView: View {
         if isStructuredQuery(query) {
             // Structured queries: NLP handler first (deterministic, exact)
             answer = processNLPQuery(query, emails: emails, priorContext: priorContext, predictions: predictions)
-            let quickRetrieve = retrieveRelevantEmails(query: query, emails: emails, priorContext: priorContext, predictions: predictions)
+            let quickRetrieve = await retrieveRelevantEmails(query: query, emails: emails, priorContext: priorContext, predictions: predictions)
             retrievedIDs = Array(quickRetrieve.prefix(5).map(\.id))
 
             // Condense overly long numbered lists into grouped summaries
@@ -4860,18 +4994,13 @@ struct AIAssistantView: View {
                 retrievedIDs.append(eid)
             }
         } else {
-            // Open-ended queries: Semantic retrieval FIRST, then synthesize
-            // Step 1: Hybrid retrieval (semantic + keyword combined)
-            let hybridResults = EmailSearchIndex.shared.hybridSearch(query: query, terms: EmailNLPEngine.extractSearchTerms(from: query.lowercased()), limit: 20)
-            var retrieved = hybridResults.map(\.email)
+            // Open-ended queries: retrieval FIRST (bounded FTS5 over the whole
+            // archive — was the in-RAM EmailSearchIndex), then synthesize.
+            let ftsResults = (try? await ArchiveRetrievalService.shared.retrieve(query, limit: 20)) ?? []
+            var retrieved = ftsResults.map(\.email)
 
-            // Step 2: If hybrid found nothing, try pure semantic
-            if retrieved.isEmpty {
-                retrieved = expandSearchSemantically(query: query, originalTerms: [])
-            }
-
-            // Step 3: Also try the NLP keyword retrieval path
-            let nlpRetrieve = retrieveRelevantEmails(query: query, emails: emails, priorContext: priorContext, predictions: predictions)
+            // Also try the NLP keyword retrieval path over the working set
+            let nlpRetrieve = await retrieveRelevantEmails(query: query, emails: emails, priorContext: priorContext, predictions: predictions)
 
             // Merge: hybrid results first, then NLP results (deduplicated)
             var seenIDs = Set(retrieved.map(\.id))
@@ -4921,7 +5050,7 @@ struct AIAssistantView: View {
 
     // MARK: - Hybrid NLP + Apple AI
 
-    nonisolated private static func retrieveRelevantEmails(query: String, emails: [MBOXParser.RawEmail], priorContext: String, predictions: [UUID: Double]) -> [MBOXParser.RawEmail] {
+    nonisolated private static func retrieveRelevantEmails(query: String, emails: [MBOXParser.RawEmail], priorContext: String, predictions: [UUID: Double]) async -> [MBOXParser.RawEmail] {
         let resolved = resolveConversationContext(query: query.lowercased(), priorContext: priorContext)
         let lower = resolved.query
         var searchTerms = EmailNLPEngine.extractSearchTerms(from: lower)
@@ -4937,9 +5066,9 @@ struct AIAssistantView: View {
             if contacts.count >= 2 { return Array(contacts.prefix(20)) }
         }
 
-        // Search with BM25 + semantic
+        // Bounded FTS5 retrieval over the whole archive (was in-RAM hybridSearch)
         if !searchTerms.isEmpty {
-            let indexResults = EmailSearchIndex.shared.hybridSearch(query: lower, terms: searchTerms, limit: 20)
+            let indexResults = (try? await ArchiveRetrievalService.shared.retrieve(lower, limit: 20)) ?? []
             if indexResults.count >= 3 {
                 var results = indexResults
                 if !predictions.isEmpty {
@@ -5018,7 +5147,7 @@ struct AIAssistantView: View {
         priorContext: String,
         predictions: [UUID: Double],
         priorRetrievedIDs: Set<UUID> = []
-    ) -> AgenticRAGResult {
+    ) async -> AgenticRAGResult {
         var steps: [String] = []
         let resolved = resolveConversationContext(query: query.lowercased(), priorContext: priorContext)
         let lower = resolved.query
@@ -5041,14 +5170,14 @@ struct AIAssistantView: View {
         }
 
         if initialEmails.isEmpty && !searchTerms.isEmpty {
-            let indexResults = EmailSearchIndex.shared.hybridSearch(query: lower, terms: searchTerms, limit: 25)
+            let indexResults = (try? await ArchiveRetrievalService.shared.retrieve(lower, limit: 25)) ?? []
             if indexResults.count >= 3 {
                 var results = indexResults
                 if !predictions.isEmpty {
                     results = boostWithPredictions(results, predictions: predictions)
                 }
                 initialEmails = results.map(\.email)
-                steps.append("BM25+semantic search: \(initialEmails.count) emails for [\(searchTerms.joined(separator: ", "))]")
+                steps.append("FTS5 bm25 retrieval: \(initialEmails.count) emails for [\(searchTerms.joined(separator: ", "))]")
             } else {
                 let fallback = EmailNLPEngine.searchWithDateFilter(terms: searchTerms, in: emails, dateRange: dateRange, limit: 25)
                 initialEmails = fallback.map(\.email)
@@ -5071,9 +5200,9 @@ struct AIAssistantView: View {
             steps.append("Using top 30 emails by position")
         }
 
-        // === Step 2: Thread expansion ===
+        // === Step 2: Thread expansion (bounded FTS/SQL lookup, capped) ===
         let beforeExpansion = initialEmails.count
-        let expanded = EmailSearchIndex.shared.expandByThread(initialEmails, allEmails: emails)
+        let expanded = await ArchiveRetrievalService.shared.expandThread(initialEmails, cap: 50)
         if expanded.count > beforeExpansion {
             steps.append("Thread expansion: \(beforeExpansion) → \(expanded.count) emails (+\(expanded.count - beforeExpansion) from same threads)")
         }
@@ -5102,8 +5231,8 @@ struct AIAssistantView: View {
             steps.append("Reranked \(finalEmails.count) emails by query relevance")
         }
 
-        // === Step 3: Chunk-level extraction ===
-        let chunkResults = EmailSearchIndex.shared.chunkSearch(terms: searchTerms, in: finalEmails, maxChunksPerEmail: 2, limit: 10)
+        // === Step 3: Chunk-level extraction (pure, over the bounded set) ===
+        let chunkResults = ArchiveEvidenceService.chunkExcerpts(terms: searchTerms, in: finalEmails, maxChunksPerEmail: 2, limit: 10)
         let keyChunks: [(subject: String, from: String, chunk: String)] = chunkResults.map { result in
             let from = result.email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "Unknown"
             return (
@@ -5128,7 +5257,7 @@ struct AIAssistantView: View {
             timeline += "CONVERSATION THREADS:\n"
             for thread in multiMessage.prefix(5) {
                 timeline += "\n\"\(thread.subject)\" (\(thread.count) emails):\n"
-                let sorted = thread.allEmails.sorted {
+                let sorted = thread.members.sorted {
                     (MBOXParser.parseDate($0.headers["Date"]) ?? .distantPast) <
                     (MBOXParser.parseDate($1.headers["Date"]) ?? .distantPast)
                 }
@@ -5139,7 +5268,7 @@ struct AIAssistantView: View {
                     let tone = sentimentResults.first?.label ?? "Neutral"
                     timeline += "  → \(date) | \(from) | \(tone)\n"
                 }
-                let trend = EmailNLPEngine.threadSentimentTrend(thread.allEmails)
+                let trend = EmailNLPEngine.threadSentimentTrend(thread.members)
                 timeline += "  Trend: \(trend.overallTrend)\n"
             }
             steps.append("Thread timeline: \(multiMessage.count) conversation\(multiMessage.count == 1 ? "" : "s")")
@@ -5600,7 +5729,7 @@ struct AIAssistantView: View {
 
         var markdown = "# mailin — AI Email Analysis Report\n\n"
         markdown += "**Generated:** \(dateFmt.string(from: Date()))\n"
-        markdown += "**Emails analyzed:** \(emails.count)\n"
+        markdown += "**Emails analyzed:** \(emailCount(for: emailScope))\n"
         markdown += "**Engine:** \(selectedEngine.rawValue)\n\n---\n\n"
 
         let timeFmt = DateFormatter()
@@ -5621,17 +5750,25 @@ struct AIAssistantView: View {
         panel.canCreateDirectories = true
 
         if panel.runModal() == .OK, let url = panel.url {
-            try? markdown.write(to: url, atomically: true, encoding: .utf8)
+            do { try markdown.write(to: url, atomically: true, encoding: .utf8) }
+            catch {
+                reportExportError = error.localizedDescription
+            }
         }
         #else
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-report.md")
-        try? markdown.write(to: url, atomically: true, encoding: .utf8)
-        shareItems = [url]
-        showShareSheet = true
+        do {
+            try markdown.write(to: url, atomically: true, encoding: .utf8)
+            shareItems = [url]
+            showShareSheet = true
+        } catch {
+            // Surfaced instead of silently sharing a missing file.
+            print("Report export failed: \(error.localizedDescription)")
+        }
         #endif
     }
 }
 
 #Preview {
-    AIAssistantView(allEmails: [], filteredEmails: [], selectedEmails: [], onSelectEmail: nil, onFilterByIDs: nil)
+    AIAssistantView(archiveScope: .all, onSelectEmail: nil, onFilterByIDs: nil)
 }

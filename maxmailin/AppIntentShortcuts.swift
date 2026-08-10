@@ -1,6 +1,42 @@
 import AppIntents
 import Foundation
 
+// MARK: - Archive Intent Support (SQLite v2 authority)
+
+/// Shared archive access for the read-only intents below. Since the v2 cutover
+/// the SQLite store is the ONLY archive authority — the legacy
+/// `EmailPersistence` JSON is a bounded (≤5000-email) preview and must never be
+/// read for archive truth. App Intents can run before the app has launched, so
+/// every read first drives the idempotent activation gate (a fast no-op once
+/// active) and fails gracefully with a clear message — never falling back to
+/// the v1 store — when SQLite is not the confirmed authority.
+private enum ArchiveIntentSupport {
+    static let notReadyMessage = "mailin's email archive isn't ready yet. Open mailin once to finish preparing it, then try again."
+    static let emptyMessage = "No emails imported yet. Open mailin and import an email archive first."
+
+    /// Exact total archive count from a SQL aggregate, or nil when the SQLite
+    /// authority could not be activated (caller returns `notReadyMessage`).
+    static func activatedTotal() async -> Int? {
+        guard await StorageActivationCoordinator.shared.activate() == .active else { return nil }
+        return try? await ArchiveAggregateService.shared.total()
+    }
+
+    /// The `limit` most recent full emails via bounded keyset pages. `limit`
+    /// is a hard cap (callers pass ≤500) — the corpus is never materialized.
+    static func recentEmails(limit: Int) async -> [MBOXParser.RawEmail] {
+        guard limit > 0 else { return [] }
+        var acc: [MBOXParser.RawEmail] = []
+        let stream = await ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: min(limit, 200))
+        do {
+            for try await batch in stream {
+                acc.append(contentsOf: batch)
+                if acc.count >= limit { break }
+            }
+        } catch { }
+        return Array(acc.prefix(limit))
+    }
+}
+
 // MARK: - 1. Open mailin Intent
 
 struct OpenMailinIntent: AppIntent {
@@ -40,10 +76,8 @@ struct SearchEmailsIntent: AppIntent {
     var query: String
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
-        let searchTerms = query.components(separatedBy: .whitespaces)
-            .map { $0.trimmingCharacters(in: .punctuationCharacters).lowercased() }
-            .filter { $0.count >= 2 }
-        let results = EmailSearchIndex.shared.search(terms: searchTerms, limit: 10)
+        // Bounded FTS5-backed retrieval (was the in-RAM EmailSearchIndex).
+        let results = (try? await ArchiveRetrievalService.shared.retrieve(query, limit: 10)) ?? []
         let count = results.count
         return .result(value: "Found \(count) emails matching '\(query)'")
     }
@@ -58,25 +92,37 @@ struct GetEmailStatsIntent: AppIntent {
     static var description: IntentDescription = "Returns statistics about the current email archive"
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
-        let (emails, senderEmail) = EmailPersistence.load()
-        guard !emails.isEmpty else {
-            return .result(value: "No emails imported yet. Open mailin and import an email archive first.")
+        // Exact total + date range come from SQL aggregates over the SQLite v2
+        // authority — never from the truncated v1 JSON preview.
+        guard let total = await ArchiveIntentSupport.activatedTotal() else {
+            return .result(value: ArchiveIntentSupport.notReadyMessage)
         }
-        let total = emails.count
-        let sent = emails.filter { $0.messageType == "sent" }.count
-        let received = emails.filter { $0.messageType == "received" }.count
-        let uniqueSubjects = Set(emails.compactMap { $0.headers["Subject"] }).count
-        let dates = emails.compactMap { MBOXParser.parseDate($0.headers["Date"]) }.sorted()
+        guard total > 0 else {
+            return .result(value: ArchiveIntentSupport.emptyMessage)
+        }
+        let snapshot = try? await ArchiveAggregateService.shared.snapshot()
         let dateRange: String
-        if let first = dates.first, let last = dates.last {
+        if let first = snapshot?.minDate, let last = snapshot?.maxDate {
             let formatter = DateFormatter()
             formatter.dateStyle = .medium
             dateRange = "\(formatter.string(from: first)) to \(formatter.string(from: last))"
         } else {
             dateRange = "unknown"
         }
+        // Sent/received + unique subjects over a bounded recent sample (cap:
+        // 500). The v2 store does not persist the parse-time messageType, so
+        // we re-apply the parser's rule (From contains the configured sender —
+        // see MBOXParser) on the sample instead of loading the whole corpus.
+        let senderEmail = UserDefaults.standard.string(forKey: "defaultSenderEmail") ?? ""
+        let sample = await ArchiveIntentSupport.recentEmails(limit: 500)
+        let normalizedSender = senderEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let sent = normalizedSender.isEmpty
+            ? 0
+            : sample.filter { ($0.headers["From"] ?? "").lowercased().contains(normalizedSender) }.count
+        let received = sample.count - sent
+        let uniqueSubjects = Set(sample.compactMap { $0.headers["Subject"] }).count
         let senderInfo = senderEmail.isEmpty ? "" : " (sender: \(senderEmail))"
-        return .result(value: "\(total) emails\(senderInfo): \(sent) sent, \(received) received, \(uniqueSubjects) unique subjects. Date range: \(dateRange).")
+        return .result(value: "\(total) emails\(senderInfo): \(sent) sent, \(received) received, \(uniqueSubjects) unique subjects in the \(sample.count) most recent. Date range: \(dateRange).")
     }
 }
 
@@ -87,12 +133,14 @@ struct AnalyzeSentimentIntent: AppIntent {
     static var description: IntentDescription = "Analyzes the emotional tone of imported emails"
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
-        let (emails, _) = EmailPersistence.load()
-        guard !emails.isEmpty else {
-            return .result(value: "No emails imported yet. Open mailin and import an email archive first.")
+        guard let total = await ArchiveIntentSupport.activatedTotal() else {
+            return .result(value: ArchiveIntentSupport.notReadyMessage)
         }
-        // Analyze a sample to keep Siri response fast
-        let sample = Array(emails.prefix(200))
+        guard total > 0 else {
+            return .result(value: ArchiveIntentSupport.emptyMessage)
+        }
+        // Analyze a bounded recent sample (cap: 200) to keep Siri response fast
+        let sample = await ArchiveIntentSupport.recentEmails(limit: 200)
         let (average, label, positive, negative, neutral) = EmailNLPEngine.averageSentiment(of: sample)
         let analyzed = sample.count
         let scoreFormatted = String(format: "%.2f", average)
@@ -112,9 +160,11 @@ struct AskAIAboutEmailsIntent: AppIntent {
     var question: String
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
-        let (emails, _) = EmailPersistence.load()
-        guard !emails.isEmpty else {
-            return .result(value: "No emails imported yet. Open mailin and import an email archive first.")
+        guard let total = await ArchiveIntentSupport.activatedTotal() else {
+            return .result(value: ArchiveIntentSupport.notReadyMessage)
+        }
+        guard total > 0 else {
+            return .result(value: ArchiveIntentSupport.emptyMessage)
         }
 
         #if canImport(FoundationModels)
@@ -122,11 +172,17 @@ struct AskAIAboutEmailsIntent: AppIntent {
             guard FoundationModelEngine.isAvailable else {
                 return .result(value: "Apple Intelligence is not available on this device.")
             }
+            // Bounded evidence (cap: 20): FTS5-ranked retrieval for the
+            // question; falls back to the 20 most recent when nothing matches.
+            var evidence = ((try? await ArchiveRetrievalService.shared.retrieve(question, limit: 20)) ?? []).map(\.email)
+            if evidence.isEmpty {
+                evidence = await ArchiveIntentSupport.recentEmails(limit: 20)
+            }
             let result = try await FoundationModelEngine.synthesizeFromNLPResults(
                 query: question,
-                retrievedEmails: Array(emails.prefix(20)),
+                retrievedEmails: evidence,
                 nlpAnalysis: "",
-                allEmailCount: emails.count,
+                allEmailCount: total,
                 onUpdate: { _ in }
             )
             let trimmed = String(result.prefix(500))
@@ -146,12 +202,15 @@ struct GetSecurityReportIntent: AppIntent {
     static var description: IntentDescription = "Run a security scan on your email archive and get a summary"
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
-        let (emails, _) = EmailPersistence.load()
-        guard !emails.isEmpty else {
-            return .result(value: "No emails imported yet. Open mailin and import an email archive first.")
+        guard let total = await ArchiveIntentSupport.activatedTotal() else {
+            return .result(value: ArchiveIntentSupport.notReadyMessage)
+        }
+        guard total > 0 else {
+            return .result(value: ArchiveIntentSupport.emptyMessage)
         }
 
-        let sample = Array(emails.prefix(500))
+        // Bounded scan of the most recent emails (cap: 500, same as before).
+        let sample = await ArchiveIntentSupport.recentEmails(limit: 500)
         let phishingFlags = EmailNLPEngine.detectPhishing(in: sample)
         let highRisk = phishingFlags.filter { $0.riskLevel == .high }.count
         let medRisk = phishingFlags.filter { $0.riskLevel == .medium }.count
@@ -188,22 +247,24 @@ struct GetDigestIntent: AppIntent {
     static var description: IntentDescription = "Generate an AI-powered digest summary of your email archive"
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
-        let (emails, _) = EmailPersistence.load()
-        guard !emails.isEmpty else {
-            return .result(value: "No emails imported yet. Open mailin and import an email archive first.")
+        guard let total = await ArchiveIntentSupport.activatedTotal() else {
+            return .result(value: ArchiveIntentSupport.notReadyMessage)
+        }
+        guard total > 0 else {
+            return .result(value: ArchiveIntentSupport.emptyMessage)
         }
 
-        let sample = Array(emails.prefix(300))
+        // Topics/mood from a bounded recent sample (cap: 300, same as before);
+        // top senders from an exact whole-archive SQL aggregate.
+        let sample = await ArchiveIntentSupport.recentEmails(limit: 300)
         let topics = EmailNLPEngine.extractTopics(from: sample, limit: 5)
         let sentiment = EmailNLPEngine.averageSentiment(of: sample)
-        let topSenders = Dictionary(grouping: sample, by: { $0.headers["From"] ?? "Unknown" })
-            .sorted { $0.value.count > $1.value.count }
-            .prefix(5)
+        let topSenders = (try? await ArchiveAggregateService.shared.topSenders(limit: 5)) ?? []
 
-        var digest = "Digest for \(emails.count) emails:\n\n"
+        var digest = "Digest for \(total) emails:\n\n"
         digest += "Top topics: \(topics.map(\.word).joined(separator: ", "))\n"
         digest += "Overall mood: \(sentiment.label) (score: \(String(format: "%.2f", sentiment.average)))\n"
-        digest += "Top senders: \(topSenders.map { "\($0.key.prefix(30)) (\($0.value.count))" }.joined(separator: ", "))\n"
+        digest += "Top senders: \(topSenders.map { "\($0.value.prefix(30)) (\($0.count))" }.joined(separator: ", "))\n"
         digest += "Positive: \(sentiment.positive), Negative: \(sentiment.negative), Neutral: \(sentiment.neutral)"
 
         return .result(value: String(digest.prefix(500)))

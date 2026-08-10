@@ -301,10 +301,152 @@ struct CommunicationPatternAnalyzer {
     }
 }
 
+// MARK: - Bounded, store-driven communication patterns (v2 engine cutover 4)
+//
+// Streams the scope from SQLite in two bounded passes (pass 1 builds the
+// Message-ID→date map for reply matching; pass 2 folds contacts/hours/weekdays)
+// while holding only O(contacts) running aggregates — the per-contact
+// date/sentiment/response-time ARRAYS of the array path become min/max/sum/count,
+// which yields identical firstContact/lastContact/averages regardless of order.
+// Only the Message-ID→date map scales with N (ids+dates, no bodies) — far below
+// the corpus, and inherent to cross-message reply matching.
+
+extension CommunicationPatternAnalyzer {
+
+    struct StreamResult {
+        var contacts: [ContactStats]
+        var hourly: [HourlyPattern]
+        var weekday: [WeekdayPattern]
+        var avgResponseHours: Double?
+    }
+
+    static func analyze(from service: ArchiveDataService,
+                        senderEmail: String,
+                        query: EmailQuery = .all,
+                        batchSize: Int = 500) async throws -> StreamResult {
+        let svc = service
+        let normalizedSender = senderEmail.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return try await Task.detached(priority: .userInitiated) {
+            // Pass 1 — Message-ID → date.
+            var msgDate: [String: Date] = [:]
+            let s1 = await svc.streamFullEmails(query: query, batchSize: batchSize)
+            for try await batch in s1 {
+                for e in batch {
+                    if let mid = e.headers["Message-ID"] ?? e.headers["Message-Id"],
+                       let d = MBOXParser.parseDate(e.headers["Date"]) { msgDate[mid] = d }
+                }
+            }
+
+            // Pass 2 — fold.
+            struct Agg {
+                var address: String; var displayName: String
+                var sent = 0; var received = 0
+                var minDate: Date?; var maxDate: Date?
+                var sentimentSum = 0.0; var sentimentCount = 0
+                var rtSum = 0.0; var rtCount = 0
+            }
+            var map: [String: Agg] = [:]
+            var hourCounts = [Int](repeating: 0, count: 24)
+            var dayCounts = [Int](repeating: 0, count: 7)
+            var overallRTSum = 0.0; var overallRTCount = 0
+            let tagger = NLTagger(tagSchemes: [.sentimentScore])
+            let calendar = Calendar.current
+
+            func note(_ addr: String, _ name: String, sent: Bool, date: Date, sentiment: Double, rt: Double?) {
+                if map[addr] == nil { map[addr] = Agg(address: addr, displayName: name) }
+                if sent { map[addr]?.sent += 1 } else { map[addr]?.received += 1 }
+                if let mn = map[addr]?.minDate { if date < mn { map[addr]?.minDate = date } } else { map[addr]?.minDate = date }
+                if let mx = map[addr]?.maxDate { if date > mx { map[addr]?.maxDate = date } } else { map[addr]?.maxDate = date }
+                map[addr]?.sentimentSum += sentiment; map[addr]?.sentimentCount += 1
+                if let rt { map[addr]?.rtSum += rt; map[addr]?.rtCount += 1 }
+            }
+
+            let s2 = await svc.streamFullEmails(query: query, batchSize: batchSize)
+            for try await batch in s2 {
+                for email in batch {
+                    // Hourly / weekday count every dated email.
+                    if let d = MBOXParser.parseDate(email.headers["Date"]) {
+                        hourCounts[calendar.component(.hour, from: d)] += 1
+                        dayCounts[calendar.component(.weekday, from: d) - 1] += 1
+                    }
+
+                    guard let date = MBOXParser.parseDate(email.headers["Date"]) else { continue }
+                    let fromRaw = email.headers["From"] ?? ""
+                    let fromAddress = Self.extractAddress(from: fromRaw).lowercased()
+                    let fromName = Self.extractDisplayName(from: fromRaw)
+                    let isSent = fromAddress == normalizedSender || email.messageType.lowercased() == "sent"
+
+                    let body = Self.bodyText(for: email)
+                    var sentiment = 0.0
+                    if !body.isEmpty {
+                        tagger.string = body
+                        let (tag, _) = tagger.tag(at: body.startIndex, unit: .paragraph, scheme: .sentimentScore)
+                        sentiment = Double(tag?.rawValue ?? "0") ?? 0.0
+                    }
+
+                    var responseTimeHours: Double?
+                    if let inReplyTo = email.inReplyTo, let originalDate = msgDate[inReplyTo] {
+                        let interval = date.timeIntervalSince(originalDate)
+                        if interval > 0 && interval < 30 * 24 * 3600 { responseTimeHours = interval / 3600 }
+                    }
+
+                    if isSent {
+                        for recipient in (email.headers["To"] ?? "").components(separatedBy: ",") {
+                            let addr = Self.extractAddress(from: recipient).lowercased()
+                            guard !addr.isEmpty, addr != normalizedSender else { continue }
+                            note(addr, Self.extractDisplayName(from: recipient), sent: true, date: date, sentiment: sentiment, rt: responseTimeHours)
+                        }
+                        // Overall response time counts sent replies only.
+                        let subject = (email.headers["Subject"] ?? "").lowercased()
+                        if subject.hasPrefix("re:") || email.inReplyTo != nil, let rt = responseTimeHours {
+                            overallRTSum += rt; overallRTCount += 1
+                        }
+                    } else {
+                        guard !fromAddress.isEmpty else { continue }
+                        note(fromAddress, fromName, sent: false, date: date, sentiment: sentiment, rt: responseTimeHours)
+                    }
+                }
+            }
+
+            let now = Date()
+            let maxRecencyDays: Double = 365
+            let contacts: [ContactStats] = map.values.map { data in
+                let total = data.sent + data.received
+                let avgSentiment = data.sentimentCount == 0 ? 0 : data.sentimentSum / Double(data.sentimentCount)
+                let avgResponseTime = data.rtCount == 0 ? nil : data.rtSum / Double(data.rtCount)
+                let frequencyScore = min(Double(total) / 50.0, 1.0)
+                let recencyScore: Double
+                if let last = data.maxDate {
+                    recencyScore = max(0, 1.0 - (now.timeIntervalSince(last) / 86400) / maxRecencyDays)
+                } else { recencyScore = 0 }
+                return ContactStats(
+                    address: data.address,
+                    displayName: data.displayName.isEmpty ? data.address : data.displayName,
+                    totalEmails: total, sent: data.sent, received: data.received,
+                    avgResponseTimeHours: avgResponseTime,
+                    firstContact: data.minDate, lastContact: data.maxDate,
+                    sentimentAverage: avgSentiment,
+                    activityScore: frequencyScore * 0.6 + recencyScore * 0.4
+                )
+            }.sorted { $0.activityScore > $1.activityScore }
+
+            return StreamResult(
+                contacts: contacts,
+                hourly: (0..<24).map { HourlyPattern(hour: $0, count: hourCounts[$0]) },
+                weekday: (0..<7).map { WeekdayPattern(weekday: $0 + 1, count: dayCounts[$0]) },
+                avgResponseHours: overallRTCount == 0 ? nil : overallRTSum / Double(overallRTCount)
+            )
+        }.value
+    }
+}
+
 // MARK: - Communication Patterns View
 
 struct CommunicationPatternsView: View {
-    let emails: [MBOXParser.RawEmail]
+    /// nil → analyze the whole archive by streaming from SQLite (bounded);
+    /// non-nil → a legacy filtered selection analyzed via the array path.
+    var emails: [MBOXParser.RawEmail]? = nil
     var senderEmail: String = ""
     var isPresented: Binding<Bool>?
     @Environment(\.dismiss) private var envDismiss
@@ -319,6 +461,12 @@ struct CommunicationPatternsView: View {
     @State private var showTutorial = false
 
     private let weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+
+    /// Count shown in the header: the injected selection size, else the dated
+    /// email count observed by the streamed analysis (hourly buckets sum).
+    private var analyzedCount: Int {
+        emails?.count ?? hourlyPatterns.reduce(0) { $0 + $1.count }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -357,7 +505,7 @@ struct CommunicationPatternsView: View {
             }
         }
         #if os(macOS)
-        .frame(minWidth: 480, minHeight: 380)
+        .toolWindowFrame()
         #endif
         .background(AppColors.backgroundTertiary)
         .featureTutorial(.communicationPatterns, key: "communication_patterns_tutorial_seen", isPresented: $showTutorial)
@@ -375,7 +523,7 @@ struct CommunicationPatternsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Communication Patterns")
                         .font(Typography.headline)
-                    Text("\(emails.count) emails analyzed")
+                    Text("\(analyzedCount) emails analyzed")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
                 }
@@ -469,17 +617,33 @@ struct CommunicationPatternsView: View {
         isLoadingAI = true
         let topNames = contacts.prefix(5).map { "\($0.displayName) (\($0.totalEmails))" }.joined(separator: ", ")
         let context = """
-        Communication patterns across \(emails.count) emails with \(contacts.count) contacts. \
+        Communication patterns across \(analyzedCount) emails with \(contacts.count) contacts. \
         Top contacts: \(topNames). \
         Avg response time: \(avgResponseTime.map { String(format: "%.1f hours", $0) } ?? "N/A").
         """
-        let emailsCopy = emails
+        let injected = emails
         Task {
+            // Bounded AI context: the filtered selection when injected, else a
+            // bounded most-recent working set from the store — never the corpus.
+            let emailsForAI: [MBOXParser.RawEmail]
+            if let injected {
+                emailsForAI = injected
+            } else {
+                var recent: [MBOXParser.RawEmail] = []
+                let stream = ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
+                do {
+                    for try await batch in stream {
+                        recent.append(contentsOf: batch)
+                        if recent.count >= 500 { recent = Array(recent.prefix(500)); break }
+                    }
+                } catch { }
+                emailsForAI = recent
+            }
             #if canImport(FoundationModels)
             if #available(macOS 26, iOS 26, *) {
                 let result = await FoundationModelEngine.enhanceWithAI(
                     scope: .entity,
-                    emails: emailsCopy,
+                    emails: emailsForAI,
                     context: context
                 )
                 aiInsights = result ?? "AI analysis unavailable."
@@ -758,30 +922,34 @@ struct CommunicationPatternsView: View {
     }
 
     private func analyzePatterns() async {
-        guard !emails.isEmpty else { return }
         isAnalyzing = true
-
-        let emailsCopy = emails
         let sender = senderEmail
 
-        let result = await Task.detached { () -> (
-            [CommunicationPatternAnalyzer.ContactStats],
-            [CommunicationPatternAnalyzer.HourlyPattern],
-            [CommunicationPatternAnalyzer.WeekdayPattern],
-            Double?
-        ) in
-            let contacts = CommunicationPatternAnalyzer.analyzeContacts(emails: emailsCopy, senderEmail: sender)
-            let hourly = CommunicationPatternAnalyzer.analyzeHourlyPatterns(emails: emailsCopy)
-            let weekday = CommunicationPatternAnalyzer.analyzeWeekdayPatterns(emails: emailsCopy)
-            let avgRT = CommunicationPatternAnalyzer.averageResponseTime(emails: emailsCopy, senderEmail: sender)
-            return (contacts, hourly, weekday, avgRT)
-        }.value
+        let result: CommunicationPatternAnalyzer.StreamResult
+        if let emails {
+            // Legacy filtered selection → array path (bounded by the selection).
+            result = await Task.detached { () -> CommunicationPatternAnalyzer.StreamResult in
+                CommunicationPatternAnalyzer.StreamResult(
+                    contacts: CommunicationPatternAnalyzer.analyzeContacts(emails: emails, senderEmail: sender),
+                    hourly: CommunicationPatternAnalyzer.analyzeHourlyPatterns(emails: emails),
+                    weekday: CommunicationPatternAnalyzer.analyzeWeekdayPatterns(emails: emails),
+                    avgResponseHours: CommunicationPatternAnalyzer.averageResponseTime(emails: emails, senderEmail: sender)
+                )
+            }.value
+        } else {
+            // Whole archive → bounded streaming from the activated store.
+            guard let streamed = try? await CommunicationPatternAnalyzer.analyze(from: .shared, senderEmail: sender) else {
+                await MainActor.run { isAnalyzing = false }
+                return
+            }
+            result = streamed
+        }
 
         await MainActor.run {
-            contacts = result.0
-            hourlyPatterns = result.1
-            weekdayPatterns = result.2
-            avgResponseTime = result.3
+            contacts = result.contacts
+            hourlyPatterns = result.hourly
+            weekdayPatterns = result.weekday
+            avgResponseTime = result.avgResponseHours
             isAnalyzing = false
         }
     }

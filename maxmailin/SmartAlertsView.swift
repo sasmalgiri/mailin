@@ -82,7 +82,7 @@ struct SmartAlertsView: View {
         .onAppear { analyze() }
         .featureTutorial(.smartAlerts, key: "smart_alerts_tutorial_seen", isPresented: $showTutorial)
         #if os(macOS)
-        .frame(minWidth: 460, minHeight: 350)
+        .toolWindowFrame()
         #endif
     }
 

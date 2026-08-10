@@ -16,9 +16,26 @@ struct ParsedEmailListView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     #endif
  
+
+    /// The raw-source display text. Migrated archives may have NO stored raw
+    /// MIME — never show a silent blank panel: reconstruct a readable RFC-822
+    /// view from the saved headers + body and say so (`reconstructed`).
+    private func rawSourceDisplay(for email: MBOXParser.RawEmail) -> (text: String, reconstructed: Bool) {
+        let rawData = email.rawSource.data(using: .utf8) ?? Data()
+        let kit = SwiftEmailMessage(rawSource: rawData)
+        let kitString = kit.asRFC822String()
+        if !kitString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return (kitString, false)
+        }
+        if !email.rawSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return (email.rawSource, false)
+        }
+        return (RFC822Reconstruction.build(headers: email.headers, body: email.plainBody), true)
+    }
+
     private enum ActiveSheet: Identifiable {
         case stats
-        case rawSource(String)
+        case rawSource(String, reconstructed: Bool)
 
         var id: String {
             switch self {
@@ -34,6 +51,7 @@ struct ParsedEmailListView: View {
     @State private var activeSheet: ActiveSheet?
     @State private var hoveringEmailID: UUID? = nil
     @State private var showAnalyticsSheet = false
+    @State private var showPIIReport = false
     @State private var quickFilterSent = false
     @State private var quickFilterReceived = false
     @State private var quickFilterAttachments = false
@@ -46,6 +64,10 @@ struct ParsedEmailListView: View {
     @State private var showSaveSearchAlert = false
     @State private var saveSearchName = ""
     @State private var showCleanupMode = false
+    // Part G9: cleanup stats are store aggregates (SUM / GROUP BY), loaded by
+    // cleanupModeView's .task — never derived from the resident preview.
+    @State private var cleanupTotalSizeBytes = 0
+    @State private var cleanupSenderRollups: [SQLiteEmailStore.SenderRollup] = []
     @State private var quickFilterAIImportant = false
     @State private var quickFilterAISuspicious = false
     @State private var quickFilterAINegative = false
@@ -63,11 +85,24 @@ struct ParsedEmailListView: View {
     @State private var quickFilterTagMediumPriority = false
     @State private var activeFilterTags: Set<String> = []
     @State private var manualOverrideTags: [UUID: Set<EmailQuickTag>] = [:]
+    /// AI tags the user marked WRONG for a given email — hidden from display
+    /// and filters. Persisted (with manual tags) so corrections survive
+    /// relaunch; loaded once in loadTagCorrections().
+    @State private var suppressedAITags: [UUID: Set<EmailQuickTag>] = [:]
+    @State private var tagCorrectionsLoaded = false
     @State private var tagPopoverEmailID: UUID? = nil
     @State private var showPresetSaveAlert = false
     @State private var presetName = ""
     @AppStorage("savedFilterPresets") private var savedPresetsData: Data = Data()
     @AppStorage("aiTagsApplied") private var aiTagsApplied = false
+    /// Advanced option (Settings → Display → Email List): show the gray
+    /// "basic facts" pills (Sent / Received / Has Attachment). OFF by
+    /// default — those facts are already visible on the row, so the default
+    /// list shows pills only when they say something new (AI, evidence,
+    /// manual labels).
+    @AppStorage("showBasicTagPills") private var showBasicTagPills = false
+    @State private var showTagsGuide = false
+    @State private var showAdvancedOptions = false
     @AppStorage("showAdvancedFeatures") private var showAdvancedFeatures = false
     @AppStorage("personaFiltersInitialized") private var personaFiltersInitialized = false
     @State private var showAIPaywall = false
@@ -80,10 +115,11 @@ struct ParsedEmailListView: View {
     #endif
 
     private var quickFilteredEmails: [MBOXParser.RawEmail] {
-        model.filteredEmails.filter { email in
-            if quickFilterSent && email.messageType != "sent" { return false }
-            if quickFilterReceived && email.messageType != "received" { return false }
-            if quickFilterAttachments && email.attachments.isEmpty { return false }
+        model.visibleEmails.filter { email in
+            // Sent/Received/Attachments chips compile to SQL (see
+            // syncQuickFiltersToQuery) — visibleEmails is already
+            // restricted, and the SQL flag knows about header-recovered
+            // rows whose attachment METADATA is unrecoverable.
             if quickFilterFlagged {
                 let tag = ForensicManager.shared.evidenceTags[email.id] ?? .none
                 if tag != .flagged && tag != .suspicious { return false }
@@ -100,30 +136,15 @@ struct ParsedEmailListView: View {
                 let tag = ForensicManager.shared.evidenceTags[email.id] ?? .none
                 if tag != .privileged { return false }
             }
-            if quickFilterHighPriority {
-                let score = model.priorityScores[email.id] ?? 0
-                if score < 4 { return false }
-            }
+            // High Priority / AI Important / Suspicious / Negative /
+            // Newsletter compile to SQL over persisted derived records (see
+            // syncQuickFiltersToQuery) — no in-window re-check, which would
+            // disagree with the persisted scores and drop SQL matches.
             if quickFilterHasLinks {
                 let body = email.plainBody.lowercased()
                 if !body.contains("http://") && !body.contains("https://") && !body.contains("www.") { return false }
             }
-            // AI Smart Filters
-            if quickFilterAIImportant {
-                let score = model.priorityScores[email.id] ?? 0
-                if score < 3 { return false }
-            }
-            if quickFilterAISuspicious {
-                if !model.phishingEmailIDs.contains(email.id) { return false }
-            }
-            if quickFilterAINegative {
-                let sentiment = model.sentimentScores[email.id] ?? 0
-                if sentiment >= -0.4 { return false }
-            }
-            if quickFilterAINewsletter {
-                let cat = model.emailClassifications[email.id] ?? .unknown
-                if cat != .newsletter && cat != .promotional { return false }
-            }
+
             let active = activeTags(for: email)
             let activeSet = Set(active)
             if quickFilterTagPersonal && !activeSet.contains(.personal) { return false }
@@ -157,6 +178,43 @@ struct ParsedEmailListView: View {
         }
     }
 
+    #if os(macOS)
+    /// One inspector serves stats / raw source / analytics — whichever was
+    /// requested last; closing it clears every request.
+    private var detailInspectorPresented: Binding<Bool> {
+        Binding(
+            get: { activeSheet != nil || showAnalyticsSheet || showPIIReport },
+            set: { shown in
+                if !shown {
+                    activeSheet = nil
+                    showAnalyticsSheet = false
+                    showPIIReport = false
+                }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var detailInspectorContent: some View {
+        if let sheet = activeSheet {
+            switch sheet {
+            case .stats:
+                ReplyStatsView(onClose: { activeSheet = nil },
+                               senderEmail: model.viewModel.senderEmail)
+            case .rawSource(let rfc822, let reconstructed):
+                RawSourceView(rawText: rfc822, reconstructed: reconstructed,
+                              onClose: { activeSheet = nil })
+            }
+        } else if showAnalyticsSheet {
+            EmailAnalyticsView(onClose: { showAnalyticsSheet = false },
+                               query: model.currentArchiveQuery)
+        } else if showPIIReport {
+            PIIReportView(query: model.currentArchiveQuery,
+                          onClose: { showPIIReport = false })
+        }
+    }
+    #endif
+
     // MARK: - UI
     var body: some View {
         #if os(iOS)
@@ -183,13 +241,13 @@ struct ParsedEmailListView: View {
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
             case .stats:
-                ReplyStatsView(replyData: model.replyFrequency(for: model.viewModel.senderEmail))
-            case .rawSource(let rfc822):
-                RawSourceView(rawText: rfc822)
+                ReplyStatsView(senderEmail: model.viewModel.senderEmail)
+            case .rawSource(let rfc822, let reconstructed):
+                RawSourceView(rawText: rfc822, reconstructed: reconstructed)
             }
         }
         .sheet(isPresented: $showAnalyticsSheet) {
-            EmailAnalyticsView(emails: model.filteredEmails)
+            EmailAnalyticsView(query: model.currentArchiveQuery)
         }
         #if !DEBUG
         .sheet(isPresented: $showAIPaywall) {
@@ -208,6 +266,7 @@ struct ParsedEmailListView: View {
     }
 
     private var iOSSearchBar: some View {
+        VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
@@ -278,19 +337,33 @@ struct ParsedEmailListView: View {
                         Label("Export Attachments (\(totalAttachments))", systemImage: "arrow.down.circle")
                     }
                 }
-                if !model.filteredEmails.isEmpty {
-                    Button { exportFilteredJSON() } label: {
-                        Label("Export as JSON", systemImage: "square.and.arrow.up")
+                if !model.visibleEmails.isEmpty {
+                    Menu {
+                        unifiedExportSections
+                    } label: {
+                        Label("Export…", systemImage: "square.and.arrow.up")
                     }
                 }
                 Button { showAnalyticsSheet = true } label: {
                     Label("Analytics", systemImage: "chart.bar.xaxis")
+                }
+                Button { showPIIReport = true } label: {
+                    Label("PII Report", systemImage: "person.text.rectangle")
                 }
             } label: {
                 Image(systemName: "ellipsis.circle")
                     .font(.title3)
                     .foregroundColor(.secondary)
             }
+        }
+
+        // Part P: user-visible search caveats — never silently truncated.
+        if let notice = model.searchNotice {
+            Label(notice, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundColor(.orange)
+                .accessibilityLabel("Search notice: \(notice)")
+        }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -304,7 +377,7 @@ struct ParsedEmailListView: View {
             Divider()
             contentView
 
-            if totalAttachments > 0 || !model.filteredEmails.isEmpty {
+            if totalAttachments > 0 || !model.visibleEmails.isEmpty {
                 Divider()
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: Spacing.xxSmall) {
@@ -319,15 +392,17 @@ struct ParsedEmailListView: View {
                             .controlSize(.small)
                         }
 
-                        if !model.filteredEmails.isEmpty {
-                            Button {
-                                exportFilteredJSON()
+                        if !model.visibleEmails.isEmpty {
+                            Menu {
+                                unifiedExportSections
                             } label: {
-                                Label("JSON", systemImage: "square.and.arrow.up")
+                                Label("Export", systemImage: "square.and.arrow.up")
                                     .font(Typography.caption1)
                             }
-                            .buttonStyle(CompactSecondaryButtonStyle())
                             .controlSize(.small)
+                            .fixedSize()
+                            .help("Export the filtered email list — documents, per-email files, contacts, events")
+                            .accessibilityLabel("Export filtered emails")
                         }
 
                         Button {
@@ -352,6 +427,16 @@ struct ParsedEmailListView: View {
                         .buttonStyle(.plain)
                         .accessibilityLabel("Email analytics")
 
+                        Button {
+                            showPIIReport = true
+                        } label: {
+                            Label("PII", systemImage: "person.text.rectangle")
+                                .font(Typography.caption1)
+                        }
+                        .controlSize(.small)
+                        .help("Scan the current filter for personally identifiable information — emails, phones, cards, SSNs, IPs — with a CSV export")
+                        .accessibilityLabel("PII report")
+
                         if enableAIFeatures {
                             AIWindowButton(model: model)
                                 .environmentObject(storeManager)
@@ -366,31 +451,34 @@ struct ParsedEmailListView: View {
         .padding(.horizontal, Spacing.xSmall)
         .padding(.vertical, Spacing.xxSmall)
         .background(AppColors.backgroundPrimary)
+        // macOS: stats / raw source / analytics live in a native resizable
+        // inspector panel (the modern macOS detail affordance) instead of
+        // modal sheets; iOS keeps sheets, its native pattern.
+        #if os(macOS)
+        .inspector(isPresented: detailInspectorPresented) {
+            detailInspectorContent
+                .inspectorColumnWidth(min: 380, ideal: 480, max: 720)
+        }
+        #else
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
             case .stats:
-                ReplyStatsView(replyData: model.replyFrequency(for: model.viewModel.senderEmail))
-                    #if os(macOS)
-                    .frame(minWidth: 500, minHeight: 400)
-                    #else
+                ReplyStatsView(senderEmail: model.viewModel.senderEmail)
                     .presentationDetents([.large])
-                    #endif
-            case .rawSource(let rfc822):
-                RawSourceView(rawText: rfc822)
-                    #if os(macOS)
-                    .frame(minWidth: 480, minHeight: 380)
-                    #else
+            case .rawSource(let rfc822, let reconstructed):
+                RawSourceView(rawText: rfc822, reconstructed: reconstructed)
                     .presentationDetents([.large])
-                    #endif
             }
         }
-
         .sheet(isPresented: $showAnalyticsSheet) {
-            EmailAnalyticsView(emails: model.filteredEmails)
-                #if os(iOS)
+            EmailAnalyticsView(query: model.currentArchiveQuery)
                 .presentationDetents([.large])
-                #endif
         }
+        .sheet(isPresented: $showPIIReport) {
+            PIIReportView(query: model.currentArchiveQuery)
+                .presentationDetents([.large])
+        }
+        #endif
         #if !DEBUG
         .sheet(isPresented: $showAIPaywall) {
             PaywallView()
@@ -437,8 +525,10 @@ struct ParsedEmailListView: View {
                     .font(.system(.headline, design: .rounded))
                     .fontWeight(.bold)
 
-                if !model.filteredEmails.isEmpty {
-                    Text("\(model.filteredEmails.count)")
+                if !model.visibleEmails.isEmpty {
+                    // Part G3: unfiltered → store-backed archive total; filtered
+                    // → the visible (preview-backed) list count.
+                    Text("\(model.displayedEmailCount)")
                         .font(.system(.caption, design: .rounded))
                         .fontWeight(.semibold)
                         .foregroundColor(.white)
@@ -464,7 +554,7 @@ struct ParsedEmailListView: View {
                 }
                 .toggleStyle(.button)
                 #if os(macOS)
-                .help("Group emails into conversation threads")
+                .help("Group replies with their original message so each conversation is one row — click a thread to expand it")
                 #endif
                 .accessibilityLabel("Group by thread")
                 .accessibilityHint("Toggle conversation threading")
@@ -493,7 +583,7 @@ struct ParsedEmailListView: View {
                     }
                 }
                 #if os(macOS)
-                .help("Change the order emails are displayed")
+                .help("Sort the whole archive — newest/oldest, subject A→Z, largest first, or AI priority")
                 #endif
                 .accessibilityLabel("Sort order: \(model.sortBy.label)")
             }
@@ -519,6 +609,9 @@ struct ParsedEmailListView: View {
                     .textFieldStyle(.plain)
                     .font(.footnote)
                     .focused($isSearchFieldFocused)
+                    .help(model.isNaturalLanguageMode
+                          ? "Ask in plain words — e.g. “invoices from Priya last March” — mailin turns it into a search"
+                          : "Searches subjects, senders and full text across the whole archive. Power operators: from: to: subject: tag: type:sent has:attachment in:attachments before:2024-01-01 — quotes for exact phrases")
                     .accessibilityLabel(model.isNaturalLanguageMode ? "Natural language search" : "Search emails")
                     .accessibilityHint(model.isNaturalLanguageMode ? "Type a natural language query to filter emails" : "Supports operators: from:, to:, subject:, has:attachment, before:, after:")
                     .onChange(of: model.searchText) { _, newValue in
@@ -568,7 +661,7 @@ struct ParsedEmailListView: View {
                     }
                     .buttonStyle(.plain)
                     #if os(macOS)
-                    .help("Save this search")
+                    .help("Save this query for one-click reuse — saved searches also feed the weekly digest")
                     #endif
                     .accessibilityLabel("Save current search")
 
@@ -608,13 +701,57 @@ struct ParsedEmailListView: View {
                     }
                     .buttonStyle(.plain)
                     #if os(macOS)
-                    .help("Saved searches")
+                    .help("Run one of your saved searches — the query fills in and the list updates instantly")
                     #endif
                 }
             }
             .padding(.horizontal, Spacing.small)
             .padding(.vertical, Spacing.xxSmall)
             .adaptiveGlass(in: RoundedRectangle(cornerRadius: CornerRadius.medium))
+
+            // NL mode: echo what the AI understood so the user can verify
+            // the interpretation (and see that filtering is in progress).
+            if model.isNaturalLanguageMode && !model.searchText.isEmpty {
+                HStack(spacing: Spacing.xxSmall) {
+                    if model.isInterpretingNL {
+                        ProgressView()
+                            .controlSize(.mini)
+                        Text(NLQueryInterpreter.isModelBacked
+                             ? "Apple Intelligence is reading your request…"
+                             : "Interpreting your request…")
+                            .font(Typography.caption2)
+                            .foregroundColor(AppColors.secondary)
+                    } else if let intent = model.nlIntent {
+                        Image(systemName: NLQueryInterpreter.isModelBacked ? "sparkles" : "text.magnifyingglass")
+                            .font(.caption2)
+                            .foregroundColor(AppColors.primary)
+                        Text("Searching: \(intent.summary)")
+                            .font(Typography.caption2)
+                            .foregroundColor(AppColors.secondary)
+                            .lineLimit(1)
+                            .help("How your request was understood — refine the wording if this isn't what you meant")
+                    } else {
+                        Image(systemName: "questionmark.circle")
+                            .font(.caption2)
+                            .foregroundColor(.orange)
+                        Text("Couldn't find filters in that — try naming a person, topic, or time period")
+                            .font(Typography.caption2)
+                            .foregroundColor(AppColors.secondary)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, Spacing.small)
+            }
+
+            // Part P: user-visible search caveats (regex cap truncation /
+            // attachment filename-only matching) — never silently truncated.
+            if let notice = model.searchNotice {
+                Label(notice, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .padding(.horizontal, Spacing.small)
+                    .accessibilityLabel("Search notice: \(notice)")
+            }
         }
     }
 
@@ -627,6 +764,21 @@ struct ParsedEmailListView: View {
 
     private var hasAnyQuickFilterActive: Bool {
         quickFilterSent || quickFilterReceived || quickFilterAttachments || quickFilterFlagged || quickFilterUnreviewed || quickFilterLargeEmails || quickFilterPrivileged || quickFilterHighPriority || quickFilterHasLinks || quickFilterAIImportant || quickFilterAISuspicious || quickFilterAINegative || quickFilterAINewsletter || quickFilterTagPersonal || quickFilterTagTransactional || quickFilterTagPromotional || quickFilterTagAutomated || quickFilterTagRelevant || quickFilterTagPositive || quickFilterTagPhishing || quickFilterTagNeutral || quickFilterTagIrrelevant || quickFilterTagSuspicious || quickFilterTagMediumPriority
+    }
+
+    /// Push the SQL-capable chips into the compiled archive query (the
+    /// other chips stay window refinements — they filter derived/AI state).
+    private func syncQuickFiltersToQuery() {
+        model.quickTypeFilter = quickFilterSent && !quickFilterReceived ? "sent"
+            : (quickFilterReceived && !quickFilterSent ? "received" : nil)
+        model.hasAttachmentFilter = quickFilterAttachments
+        // AI chips: archive-wide via persisted derived records. High
+        // Priority (>=4) wins over AI Important (>=3) when both are on.
+        model.quickMinPriority = quickFilterHighPriority ? 4 : (quickFilterAIImportant ? 3 : nil)
+        model.quickPhishingOnly = quickFilterAISuspicious
+        model.quickNegativeOnly = quickFilterAINegative
+        model.quickNewsletterOnly = quickFilterAINewsletter
+        model.applyFilters()
     }
 
     private func clearAllQuickFilters() {
@@ -654,6 +806,7 @@ struct ParsedEmailListView: View {
         quickFilterTagIrrelevant = false
         quickFilterTagSuspicious = false
         quickFilterTagMediumPriority = false
+        syncQuickFiltersToQuery()
         activeFilterTags.removeAll()
     }
 
@@ -696,6 +849,54 @@ struct ParsedEmailListView: View {
 
             HStack(spacing: 4) {
                 Button {
+                    showTagsGuide = true
+                } label: {
+                    Image(systemName: "questionmark.circle")
+                        .font(.system(size: 11))
+                        .foregroundColor(AppColors.secondary)
+                }
+                .buttonStyle(.plain)
+                #if os(macOS)
+                .help("What do the AI / labels mean? Opens the plain-language guide to email labels")
+                #endif
+                .accessibilityLabel("Explain email labels")
+
+                Button {
+                    showAdvancedOptions = true
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 10))
+                        .foregroundColor(showBasicTagPills ? AppColors.primary : AppColors.secondary)
+                }
+                .buttonStyle(.plain)
+                #if os(macOS)
+                .help("Advanced options — choose which label pills the list shows")
+                #endif
+                .accessibilityLabel("Advanced label options")
+                .popover(isPresented: $showAdvancedOptions, arrowEdge: .bottom) {
+                    VStack(alignment: .leading, spacing: Spacing.small) {
+                        Text("Advanced Options")
+                            .font(Typography.headline)
+                        HStack(spacing: Spacing.xxSmall) {
+                            Toggle("Show fact labels (advanced)", isOn: $showBasicTagPills)
+                                .disabled(!showAdvancedFeatures)
+                            HelpDot(text: showAdvancedFeatures
+                                ? "Also show gray pills for plain facts (Sent, Received, Has Attachment) on every row. Off keeps the list clean — those facts are already visible elsewhere."
+                                : "Fact labels are an advanced feature — turn on Pro (the gear button) first, then this switch shows gray pills for plain facts (Sent, Received, Has Attachment).")
+                        }
+                        Divider()
+                        Button {
+                            showAdvancedOptions = false
+                            showTagsGuide = true
+                        } label: {
+                            Label("What do these labels mean?", systemImage: "questionmark.circle")
+                        }
+                    }
+                    .padding(Spacing.medium)
+                    .frame(width: 300)
+                }
+
+                Button {
                     aiTagsApplied.toggle()
                     Task { await AIToggleTip.filtersUsed.donate() }
                 } label: {
@@ -713,8 +914,19 @@ struct ParsedEmailListView: View {
                 }
                 .buttonStyle(.plain)
                 .popoverTip(AIToggleTip(), arrowEdge: .bottom)
+                .popoverTip(EmailTagsTip(), arrowEdge: .bottom)
+                .contextMenu {
+                    Toggle("Show basic fact pills (Sent / Received / Attachment)", isOn: $showBasicTagPills)
+                    Button {
+                        showTagsGuide = true
+                    } label: {
+                        Label("What do these labels mean?", systemImage: "questionmark.circle")
+                    }
+                }
                 #if os(macOS)
-                .help(aiTagsApplied ? "AI tags active — click to show basic tags only" : "Apply AI classification, sentiment & priority tags")
+                .help(aiTagsApplied
+                      ? "AI labels are ON — every email shows what the AI thinks it is (category, mood, priority, phishing). Click to show plain facts only."
+                      : "Turn ON AI labels — the on-device AI marks each email's category, mood, priority and phishing risk. Analysis is saved on this Mac; nothing goes online.")
                 #endif
 
                 Button {
@@ -753,13 +965,20 @@ struct ParsedEmailListView: View {
                     }
                     .buttonStyle(.plain)
                     #if os(macOS)
-                    .help("Clear all filters")
+                    .help("Turn off every active filter chip and show the full list again")
                     #endif
                 }
             }
             .padding(.trailing, Spacing.xSmall)
         }
-        .onAppear { initializePersonaFilters() }
+        .onAppear {
+            initializePersonaFilters()
+            loadTagCorrections()
+            Task { await EmailTagsTip.listSeen.donate() }
+        }
+        .sheet(isPresented: $showTagsGuide) {
+            FeatureTutorialSheet(tutorial: .emailTags, isPresented: $showTagsGuide)
+        }
         .onChange(of: personaFiltersInitialized) { _, newValue in
             if !newValue { initializePersonaFilters() }
         }
@@ -866,20 +1085,36 @@ struct ParsedEmailListView: View {
 
     private func filterBinding(for key: String) -> Binding<Bool> {
         switch key {
-        case "sent": return Binding(get: { quickFilterSent }, set: { quickFilterSent = $0; if $0 { quickFilterReceived = false } })
-        case "received": return Binding(get: { quickFilterReceived }, set: { quickFilterReceived = $0; if $0 { quickFilterSent = false } })
-        case "attachments": return $quickFilterAttachments
+        case "sent": return Binding(
+            get: { quickFilterSent },
+            set: { quickFilterSent = $0; if $0 { quickFilterReceived = false }; syncQuickFiltersToQuery() })
+        case "received": return Binding(
+            get: { quickFilterReceived },
+            set: { quickFilterReceived = $0; if $0 { quickFilterSent = false }; syncQuickFiltersToQuery() })
+        case "attachments": return Binding(
+            get: { quickFilterAttachments },
+            set: { quickFilterAttachments = $0; syncQuickFiltersToQuery() })
         case "flagged": return $quickFilterFlagged
         case "unreviewed": return $quickFilterUnreviewed
         case "largeEmails": return $quickFilterLargeEmails
         case "privileged": return $quickFilterPrivileged
-        case "highPriority": return $quickFilterHighPriority
+        case "highPriority": return Binding(
+            get: { quickFilterHighPriority },
+            set: { quickFilterHighPriority = $0; syncQuickFiltersToQuery() })
         case "hasLinks": return $quickFilterHasLinks
         case "cleanup": return $showCleanupMode
-        case "important": return $quickFilterAIImportant
-        case "aiSuspicious": return $quickFilterAISuspicious
-        case "negative": return $quickFilterAINegative
-        case "newsletter": return $quickFilterAINewsletter
+        case "important": return Binding(
+            get: { quickFilterAIImportant },
+            set: { quickFilterAIImportant = $0; syncQuickFiltersToQuery() })
+        case "aiSuspicious": return Binding(
+            get: { quickFilterAISuspicious },
+            set: { quickFilterAISuspicious = $0; syncQuickFiltersToQuery() })
+        case "negative": return Binding(
+            get: { quickFilterAINegative },
+            set: { quickFilterAINegative = $0; syncQuickFiltersToQuery() })
+        case "newsletter": return Binding(
+            get: { quickFilterAINewsletter },
+            set: { quickFilterAINewsletter = $0; syncQuickFiltersToQuery() })
         case "personal": return $quickFilterTagPersonal
         case "transactional": return $quickFilterTagTransactional
         case "promotional": return $quickFilterTagPromotional
@@ -900,8 +1135,34 @@ struct ParsedEmailListView: View {
         activeFilterTags.remove(key)
     }
 
+    /// Persona-recommended chips (PersonaManager.config.showQuickFilters),
+    /// mapped to chip keys. Shown as a promoted section — every other filter
+    /// stays reachable in its category below, so tailoring never hides
+    /// capability.
+    private var personaRecommendedChips: [FilterChipInfo] {
+        let mapping: [PersonaManager.QuickFilter: String] = [
+            .sent: "sent", .received: "received", .attachments: "attachments",
+            .cleanup: "cleanup", .flagged: "flagged", .privileged: "privileged",
+            .unreviewed: "unreviewed", .highPriority: "highPriority",
+            .hasLinks: "hasLinks", .largeEmails: "largeEmails",
+            .aiImportant: "important", .aiSuspicious: "aiSuspicious",
+            .aiNegative: "negative", .aiNewsletter: "newsletter"
+        ]
+        let keys = PersonaManager.shared.config.showQuickFilters.compactMap { mapping[$0] }
+        return keys.compactMap { key in Self.allFilterChips.first { $0.key == key } }
+    }
+
     private var addFilterMenu: some View {
         Menu {
+            let recommended = personaRecommendedChips
+            if !recommended.isEmpty {
+                Section("For \(PersonaManager.shared.selectedPersona.displayName)") {
+                    ForEach(recommended) { chip in
+                        filterChipButton(chip)
+                    }
+                }
+            }
+
             let sections = Dictionary(grouping: Self.allFilterChips, by: \.section)
             let basicSections = ["Type"]
             let aiSections = ["Category", "Sentiment", "Priority", "Security"]
@@ -959,7 +1220,7 @@ struct ParsedEmailListView: View {
         }
         .buttonStyle(.plain)
         #if os(macOS)
-        .help("Add filter")
+        .help("Add a quick filter chip — email type, attachments, links, size, evidence tags, or AI tags")
         #endif
         .accessibilityLabel("Add a filter")
     }
@@ -1038,7 +1299,7 @@ struct ParsedEmailListView: View {
         }
         .buttonStyle(.plain)
         #if os(macOS)
-        .help("Filter presets")
+        .help("Save the current chip combination as a preset, or load one you saved before")
         #endif
         .accessibilityLabel("Filter presets")
     }
@@ -1103,7 +1364,7 @@ struct ParsedEmailListView: View {
                         icon: "line.3.horizontal.decrease.circle",
                         title: "No matching emails",
                         message: hasAnyQuickFilterActive
-                            ? "Active filter chips are hiding all emails. Clear them to see your \(model.filteredEmails.count) emails."
+                            ? "Active filter chips are hiding all emails. Clear them to see your \(model.visibleEmails.count) emails."
                             : "No emails match your current filters. Try widening the date range, selecting more senders, or reducing the minimum reply count."
                     )
                     if hasAnyQuickFilterActive {
@@ -1120,25 +1381,74 @@ struct ParsedEmailListView: View {
                 threadedListView
             } else {
                 #if os(iOS)
-                List(emails, id: \.id) { email in
-                    NavigationLink(value: email.id) {
-                        emailRow(for: email)
+                List {
+                    pageWindowHeader
+                    ForEach(emails, id: \.id) { email in
+                        NavigationLink(value: email.id) {
+                            emailRow(for: email)
+                        }
+                        .padding(.vertical, Spacing.xxxSmall)
+                        .onAppear { model.loadMoreIfNeeded(currentID: email.id) }
                     }
-                    .padding(.vertical, Spacing.xxxSmall)
+                    pageWindowFooter
                 }
                 .listStyle(.plain)
                 #else
                 if forensicManager.isEnabled {
-                    ForensicReviewView(emails: emails, selectedEmailIDs: $selectedEmailIDs)
+                    ForensicReviewView(selectedEmailIDs: $selectedEmailIDs)
                 } else {
-                    List(emails, id: \.id, selection: $selectedEmailIDs) { email in
-                        emailRow(for: email)
-                            .padding(.vertical, Spacing.xxxSmall)
-                            .tag(email.id)
+                    List(selection: $selectedEmailIDs) {
+                        pageWindowHeader
+                        ForEach(emails, id: \.id) { email in
+                            emailRow(for: email)
+                                .padding(.vertical, Spacing.xxxSmall)
+                                .tag(email.id)
+                                .onAppear { model.loadMoreIfNeeded(currentID: email.id) }
+                        }
+                        pageWindowFooter
                     }
                 }
                 #endif
             }
+        }
+    }
+
+    // MARK: - Page window affordances (Part S — bounded window paging)
+
+    /// Deep-scrolled windows drop their earliest pages; this re-fetches them.
+    @ViewBuilder
+    private var pageWindowHeader: some View {
+        if model.hasEarlierPages {
+            Button {
+                model.loadEarlierPage()
+            } label: {
+                Label("Load earlier emails", systemImage: "chevron.up")
+                    .font(Typography.caption1)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Load earlier emails")
+        }
+    }
+
+    @ViewBuilder
+    private var pageWindowFooter: some View {
+        if model.isLoadingPage {
+            HStack {
+                Spacer()
+                ProgressView().controlSize(.small)
+                Spacer()
+            }
+        } else if model.hasMorePages {
+            Button {
+                model.loadNextPage()
+            } label: {
+                Label("Load more emails", systemImage: "chevron.down")
+                    .font(Typography.caption1)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Load more emails")
         }
     }
 
@@ -1266,6 +1576,7 @@ struct ParsedEmailListView: View {
                         for id in selectedEmailIDs {
                             forensicManager.tag(id, as: tag)
                         }
+                        model.applyFilters()
                     } label: {
                         Image(systemName: tag.icon)
                             .font(.system(size: 10))
@@ -1319,10 +1630,14 @@ struct ParsedEmailListView: View {
                 .foregroundColor(.secondary)
             }
             .buttonStyle(.plain)
-            .help("Random 10% quality check sample")
+            .help("Select a random 10% of the current list for quality-control re-review — standard e-discovery practice")
 
             Button {
                 forensicManager.runPrivilegeScan(on: emails)
+                // Surface the results immediately: the Privileged quick
+                // filter shows exactly the rows the scan flagged.
+                quickFilterPrivileged = true
+                model.applyFilters()
             } label: {
                 HStack(spacing: 2) {
                     Image(systemName: "lock.shield")
@@ -1333,7 +1648,7 @@ struct ParsedEmailListView: View {
                 .foregroundColor(forensicManager.privilegeFlags.isEmpty ? .secondary : .orange)
             }
             .buttonStyle(.plain)
-            .help("Auto-detect potentially privileged emails")
+            .help("Scan the list for attorney-client and legal-privilege signals — flagged emails then show under the Privileged chip")
 
             Button {
                 showReviewerStats.toggle()
@@ -1343,7 +1658,7 @@ struct ParsedEmailListView: View {
                     .foregroundColor(.secondary)
             }
             .buttonStyle(.plain)
-            .help("Reviewer statistics")
+            .help("How many emails each reviewer has tagged, by category — useful for tracking review progress")
             .popover(isPresented: $showReviewerStats) {
                 reviewerStatsPopover
                     .frame(width: 280)
@@ -1359,6 +1674,7 @@ struct ParsedEmailListView: View {
                     .font(.system(size: 10))
                     .foregroundColor(.blue)
                 TextField("From contains...", text: $crossPartyFrom)
+                    .help("Narrow the review table to senders whose address or name contains this text")
                     .font(.system(size: 10))
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 140)
@@ -1366,6 +1682,7 @@ struct ParsedEmailListView: View {
                     .font(.system(size: 9))
                     .foregroundColor(.secondary)
                 TextField("To contains...", text: $crossPartyTo)
+                    .help("Narrow the review table to recipients whose address or name contains this text")
                     .font(.system(size: 10))
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 140)
@@ -1572,11 +1889,8 @@ struct ParsedEmailListView: View {
         }
         .contextMenu {
             Button {
-                let rawData = email.rawSource.data(using: .utf8) ?? Data()
-                let kit = SwiftEmailMessage(rawSource: rawData)
-                let kitString = kit.asRFC822String()
-                let rawRFC822 = !kitString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? kitString : email.rawSource
-                activeSheet = .rawSource(rawRFC822)
+                let display = rawSourceDisplay(for: email)
+                activeSheet = .rawSource(display.text, reconstructed: display.reconstructed)
             } label: {
                 Label("View Raw Source", systemImage: "doc.plaintext")
             }
@@ -1587,6 +1901,7 @@ struct ParsedEmailListView: View {
                 ForEach(ForensicManager.EvidenceTag.allCases, id: \.self) { tagOption in
                     Button {
                         forensicManager.tag(email.id, as: tagOption)
+                        model.applyFilters()
                     } label: {
                         HStack {
                             Label(tagOption.rawValue, systemImage: tagOption.icon)
@@ -1787,13 +2102,16 @@ struct ParsedEmailListView: View {
     #endif
 
     // MARK: - Cleanup Mode
+    // Part G9: archive-wide storage total (SUM aggregate) and per-sender
+    // rollups (bounded GROUP BY) come from the store — the resident preview is
+    // never presented as archive stats.
     private var cleanupModeView: some View {
         VStack(alignment: .leading, spacing: Spacing.small) {
             HStack {
                 Label("Email Cleanup", systemImage: "trash.circle")
                     .font(Typography.headline)
                 Spacer()
-                Text(String(format: "%.1f MB total", model.totalStorageMB))
+                Text(String(format: "%.1f MB total", Double(cleanupTotalSizeBytes) / (1024.0 * 1024.0)))
                     .font(Typography.caption1)
                     .foregroundColor(AppColors.secondary)
                     .padding(.horizontal, Spacing.xSmall)
@@ -1804,7 +2122,7 @@ struct ParsedEmailListView: View {
             .padding(.horizontal, Spacing.small)
 
             List {
-                ForEach(model.senderGroups) { group in
+                ForEach(cleanupSenderRollups, id: \.sender) { group in
                     HStack {
                         VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
                             Text(group.sender)
@@ -1815,7 +2133,7 @@ struct ParsedEmailListView: View {
                                 Text("\(group.count) emails")
                                     .font(Typography.caption1)
                                     .foregroundColor(AppColors.secondary)
-                                Text("\(group.totalSizeKB) KB")
+                                Text("\(group.totalSizeBytes / 1024) KB")
                                     .font(Typography.caption1)
                                     .foregroundColor(AppColors.secondary)
                                 if let date = group.latestDate {
@@ -1839,6 +2157,10 @@ struct ParsedEmailListView: View {
                     .padding(.vertical, Spacing.xxxSmall)
                 }
             }
+        }
+        .task {
+            cleanupTotalSizeBytes = (try? await ArchiveAggregateService.shared.totalSizeBytes()) ?? 0
+            cleanupSenderRollups = (try? await ArchiveAggregateService.shared.senderRollups(limit: 200)) ?? []
         }
     }
 
@@ -1965,11 +2287,8 @@ struct ParsedEmailListView: View {
             .contentShape(Rectangle())
             .contextMenu {
                 Button {
-                    let rawData = email.rawSource.data(using: .utf8) ?? Data()
-                    let kit = SwiftEmailMessage(rawSource: rawData)
-                    let kitString = kit.asRFC822String()
-                    let rawRFC822 = !kitString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? kitString : email.rawSource
-                    activeSheet = .rawSource(rawRFC822)
+                        let display = rawSourceDisplay(for: email)
+                    activeSheet = .rawSource(display.text, reconstructed: display.reconstructed)
                 } label: {
                     Label("View Raw Source", systemImage: "doc.plaintext")
                 }
@@ -2008,6 +2327,7 @@ struct ParsedEmailListView: View {
                         ForEach(ForensicManager.EvidenceTag.allCases, id: \.self) { tag in
                             Button {
                                 forensicManager.tag(email.id, as: tag)
+                                model.applyFilters()
                             } label: {
                                 HStack {
                                     Label(tag.rawValue, systemImage: tag.icon)
@@ -2037,7 +2357,6 @@ struct ParsedEmailListView: View {
                         .padding(.vertical, 1)
                         .background(tag.color.opacity(0.12))
                         .cornerRadius(3)
-                        .help(Text(verbatim: "Evidence: \(tag.rawValue)"))
                 } else {
                     Image(systemName: "tag")
                         .font(.system(size: 9))
@@ -2104,12 +2423,8 @@ struct ParsedEmailListView: View {
             emailTagPills(for: email)
 
             Button {
-                let rawData = email.rawSource.data(using: .utf8) ?? Data()
-                let kit = SwiftEmailMessage(rawSource: rawData)
-                let kitString = kit.asRFC822String()
-                let fallback = email.rawSource
-                let rawRFC822 = !kitString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? kitString : fallback
-                activeSheet = .rawSource(rawRFC822)
+                let display = rawSourceDisplay(for: email)
+                activeSheet = .rawSource(display.text, reconstructed: display.reconstructed)
             } label: {
                 Image(systemName: "doc.plaintext")
                     .foregroundColor(AppColors.secondary)
@@ -2138,8 +2453,7 @@ struct ParsedEmailListView: View {
         .contextMenu {
             #if os(macOS)
             Button {
-                model.rehydrateIfNeeded(email.id)
-                let rehydrated = model.filteredEmails.first(where: { $0.id == email.id }) ?? email
+                let rehydrated = model.visibleEmails.first(where: { $0.id == email.id }) ?? email
                 EmailDetailView(email: rehydrated)
                     .openInWindow(title: decodeMIMEHeader(rehydrated.headers["Subject"] ?? "Email"), storeManager: storeManager)
             } label: {
@@ -2148,11 +2462,8 @@ struct ParsedEmailListView: View {
             #endif
 
             Button {
-                let rawData = email.rawSource.data(using: .utf8) ?? Data()
-                let kit = SwiftEmailMessage(rawSource: rawData)
-                let kitString = kit.asRFC822String()
-                let rawRFC822 = !kitString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? kitString : email.rawSource
-                activeSheet = .rawSource(rawRFC822)
+                let display = rawSourceDisplay(for: email)
+                activeSheet = .rawSource(display.text, reconstructed: display.reconstructed)
             } label: {
                 Label("View Raw Source", systemImage: "doc.plaintext")
             }
@@ -2195,6 +2506,7 @@ struct ParsedEmailListView: View {
                     ForEach(ForensicManager.EvidenceTag.allCases, id: \.self) { tag in
                         Button {
                             forensicManager.tag(email.id, as: tag)
+                            model.applyFilters()
                         } label: {
                             HStack {
                                 Label(tag.rawValue, systemImage: tag.icon)
@@ -2304,6 +2616,40 @@ struct ParsedEmailListView: View {
         }
     }
 
+    // MARK: - Tag Corrections (persistence + mutation)
+
+    private func loadTagCorrections() {
+        guard !tagCorrectionsLoaded else { return }
+        tagCorrectionsLoaded = true
+        manualOverrideTags = TagOverridePersistence.load(key: TagOverridePersistence.manualKey)
+            .mapValues { Set($0.compactMap(EmailQuickTag.init(rawValue:))) }
+        suppressedAITags = TagOverridePersistence.load(key: TagOverridePersistence.suppressedKey)
+            .mapValues { Set($0.compactMap(EmailQuickTag.init(rawValue:))) }
+    }
+
+    private func setManualTags(_ tags: Set<EmailQuickTag>?, for id: UUID) {
+        manualOverrideTags[id] = (tags?.isEmpty ?? true) ? nil : tags
+        TagOverridePersistence.save(
+            manualOverrideTags.mapValues { Set($0.map(\.rawValue)) },
+            key: TagOverridePersistence.manualKey)
+    }
+
+    private func suppressAITag(_ tag: EmailQuickTag, for id: UUID) {
+        var hidden = suppressedAITags[id] ?? []
+        hidden.insert(tag)
+        suppressedAITags[id] = hidden
+        TagOverridePersistence.save(
+            suppressedAITags.mapValues { Set($0.map(\.rawValue)) },
+            key: TagOverridePersistence.suppressedKey)
+    }
+
+    private func restoreAITags(for id: UUID) {
+        suppressedAITags[id] = nil
+        TagOverridePersistence.save(
+            suppressedAITags.mapValues { Set($0.map(\.rawValue)) },
+            key: TagOverridePersistence.suppressedKey)
+    }
+
     // MARK: - Tag Resolution
 
     private func aiTags(for email: MBOXParser.RawEmail) -> [EmailQuickTag] {
@@ -2360,6 +2706,18 @@ struct ParsedEmailListView: View {
         return tags
     }
 
+    /// Simple mode shows labels you ACT on (category, High Priority,
+    /// Phishing); Pro adds analyst labels (sentiment, Medium Priority);
+    /// fact pills obey the "Show basic fact pills" advanced option.
+    /// Display-only — nothing is removed from storage or filters.
+    private func factsVisible(_ tags: [EmailQuickTag]) -> [EmailQuickTag] {
+        let visible = Set(TagDisplayPolicy.visible(
+            tags.map(\.rawValue),
+            advancedMode: showAdvancedFeatures,
+            showFacts: showBasicTagPills))
+        return tags.filter { visible.contains($0.rawValue) }
+    }
+
     private func basicTags(for email: MBOXParser.RawEmail) -> [EmailQuickTag] {
         var tags: [EmailQuickTag] = []
         if email.messageType == "sent" { tags.append(.sent) }
@@ -2381,11 +2739,12 @@ struct ParsedEmailListView: View {
     }
 
     private func activeTags(for email: MBOXParser.RawEmail) -> [EmailQuickTag] {
+        let hidden = suppressedAITags[email.id] ?? []
         var all: [EmailQuickTag] = []
         if enableAIFeatures && aiTagsApplied {
-            all.append(contentsOf: aiTags(for: email))
+            all.append(contentsOf: factsVisible(aiTags(for: email)).filter { !hidden.contains($0) })
         } else {
-            all.append(contentsOf: basicTags(for: email))
+            all.append(contentsOf: factsVisible(basicTags(for: email)))
         }
         if let manual = manualOverrideTags[email.id], !manual.isEmpty {
             all.append(contentsOf: manual.sorted { $0.rawValue < $1.rawValue })
@@ -2394,10 +2753,10 @@ struct ParsedEmailListView: View {
     }
 
     private func autoTagsOnly(for email: MBOXParser.RawEmail) -> [EmailQuickTag] {
-        let auto = aiTagsApplied ? aiTags(for: email) : basicTags(for: email)
+        let auto = factsVisible(aiTagsApplied ? aiTags(for: email) : basicTags(for: email))
         let manual = manualOverrideTags[email.id] ?? []
-        guard !manual.isEmpty else { return auto }
-        return auto.filter { !manual.contains($0) }
+        let hidden = suppressedAITags[email.id] ?? []
+        return auto.filter { !manual.contains($0) && !hidden.contains($0) }
     }
 
     private func manualTagsOnly(for email: MBOXParser.RawEmail) -> [EmailQuickTag] {
@@ -2461,14 +2820,26 @@ struct ParsedEmailListView: View {
         HStack(spacing: 3) {
             if enableAIFeatures && aiTagsApplied && !autoTags.isEmpty {
                 Menu {
-                    Section("AI Tags") {
+                    Section("AI Tags — click one to remove it") {
                         ForEach(autoTags, id: \.self) { tag in
-                            Label(tag.rawValue, systemImage: tag.icon)
+                            Button {
+                                suppressAITag(tag, for: email.id)
+                            } label: {
+                                Label(tag.rawValue, systemImage: tag.icon)
+                            }
+                        }
+                    }
+                    if let hidden = suppressedAITags[email.id], !hidden.isEmpty {
+                        Button {
+                            restoreAITags(for: email.id)
+                        } label: {
+                            Label("Restore \(hidden.count) removed AI tag\(hidden.count == 1 ? "" : "s")",
+                                  systemImage: "arrow.uturn.backward")
                         }
                     }
                     Divider()
                     Section {
-                        Label("AI can make mistakes. Verify important tags.", systemImage: "exclamationmark.triangle")
+                        Label("AI can make mistakes — click a wrong tag above to remove it; use the tag button to add the right one.", systemImage: "exclamationmark.triangle")
                             .font(.caption2)
                     }
                 } label: {
@@ -2476,10 +2847,13 @@ struct ParsedEmailListView: View {
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
+                #if os(macOS)
+                .help("The AI's best guess about this email. Click to see every AI label — click a wrong one to remove it.")
+                #endif
                 .accessibilityLabel("AI tags: \(autoTags.map(\.rawValue).joined(separator: ", "))")
             } else if !aiTagsApplied && !autoTags.isEmpty {
                 Menu {
-                    Section("Basic Tags") {
+                    Section("Advanced Labels — plain facts") {
                         ForEach(autoTags, id: \.self) { tag in
                             Label(tag.rawValue, systemImage: tag.icon)
                         }
@@ -2499,11 +2873,14 @@ struct ParsedEmailListView: View {
                             .font(.caption2)
                     }
                 } label: {
-                    tagPillLabel(badge: "BS", badgeColor: .gray, tags: autoTags)
+                    tagPillLabel(badge: "ADV", badgeColor: .gray, tags: autoTags)
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
-                .accessibilityLabel("Basic tags: \(autoTags.map(\.rawValue).joined(separator: ", "))")
+                #if os(macOS)
+                .help("Advanced labels — plain facts read from the email (Sent, Received, attachment). Shown only with Pro on and the fact-pill option enabled.")
+                #endif
+                .accessibilityLabel("Advanced labels: \(autoTags.map(\.rawValue).joined(separator: ", "))")
             }
 
             if !manualTags.isEmpty {
@@ -2515,7 +2892,7 @@ struct ParsedEmailListView: View {
                     }
                     Divider()
                     Button {
-                        manualOverrideTags[email.id] = nil
+                        setManualTags(nil, for: email.id)
                     } label: {
                         Label("Clear Manual Tags", systemImage: "xmark.circle")
                     }
@@ -2524,6 +2901,9 @@ struct ParsedEmailListView: View {
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
+                #if os(macOS)
+                .help("Your own labels for this email — they always win over the AI's. Click to review or clear them.")
+                #endif
                 .accessibilityLabel("Manual tags: \(manualTags.map(\.rawValue).joined(separator: ", "))")
             }
 
@@ -2541,10 +2921,12 @@ struct ParsedEmailListView: View {
                 manualTagToggle(.promotional, current: currentManual, email: email)
                 manualTagToggle(.automated, current: currentManual, email: email)
             }
-            Section("Sentiment") {
-                manualTagToggle(.positive, current: currentManual, email: email)
-                manualTagToggle(.negative, current: currentManual, email: email)
-                manualTagToggle(.neutral, current: currentManual, email: email)
+            if showAdvancedFeatures {
+                Section("Sentiment") {
+                    manualTagToggle(.positive, current: currentManual, email: email)
+                    manualTagToggle(.negative, current: currentManual, email: email)
+                    manualTagToggle(.neutral, current: currentManual, email: email)
+                }
             }
             if showAdvancedFeatures {
                 Section("Evidence") {
@@ -2557,13 +2939,25 @@ struct ParsedEmailListView: View {
             }
             Section("Other") {
                 manualTagToggle(.highPriority, current: currentManual, email: email)
-                manualTagToggle(.mediumPriority, current: currentManual, email: email)
+                if showAdvancedFeatures {
+                    manualTagToggle(.mediumPriority, current: currentManual, email: email)
+                }
                 manualTagToggle(.phishing, current: currentManual, email: email)
+            }
+            if let hidden = suppressedAITags[email.id], !hidden.isEmpty {
+                Section {
+                    Button {
+                        restoreAITags(for: email.id)
+                    } label: {
+                        Label("Restore \(hidden.count) removed AI tag\(hidden.count == 1 ? "" : "s")",
+                              systemImage: "arrow.uturn.backward")
+                    }
+                }
             }
             if !currentManual.isEmpty {
                 Divider()
                 Button {
-                    manualOverrideTags[email.id] = nil
+                    setManualTags(nil, for: email.id)
                 } label: {
                     Label("Clear All Manual Tags", systemImage: "xmark.circle")
                 }
@@ -2576,7 +2970,7 @@ struct ParsedEmailListView: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         #if os(macOS)
-        .help("Set manual tags")
+        .help("Add your own label to this email — category, mood, priority or phishing. Checkmarks show what's applied; click again to remove.")
         #endif
         .accessibilityLabel("Set manual tags")
     }
@@ -2590,7 +2984,7 @@ struct ParsedEmailListView: View {
             } else {
                 tags.insert(tag)
             }
-            manualOverrideTags[email.id] = tags.isEmpty ? nil : tags
+            setManualTags(tags, for: email.id)
         } label: {
             HStack {
                 Label(tag.rawValue, systemImage: tag.icon)
@@ -2640,7 +3034,7 @@ struct ParsedEmailListView: View {
 
     // MARK: - Download All Attachments
     private var totalAttachments: Int {
-        model.filteredEmails.map { $0.attachments.count }.reduce(0, +)
+        model.visibleEmails.map { $0.attachments.count }.reduce(0, +)
     }
     private static let freeAttachmentLimit = 10
     @AppStorage("freeAttachmentDownloadCount") private var freeAttachmentDownloadCount: Int = 0
@@ -2659,49 +3053,33 @@ struct ParsedEmailListView: View {
             try? FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
             #endif
 
-            var usedNames = Set<String>()
-            var savedCount = 0
-            let remaining = storeManager.isPremium ? Int.max : max(0, Self.freeAttachmentLimit - freeAttachmentDownloadCount)
-            for email in model.filteredEmails {
-                for att in email.attachments {
-                    if savedCount >= remaining {
+            // Part O: streams the current query from the store (bounded
+            // batches) and copies attachment files as it goes — the preview
+            // array is never the source; premium is unlimited via streaming,
+            // not via an Int.max whole-array walk.
+            let scope: ArchiveSelectionScope = .query(model.currentArchiveQuery, exclusions: [])
+            let cap: Int? = storeManager.isPremium ? nil : max(0, Self.freeAttachmentLimit - freeAttachmentDownloadCount)
+            ExportRunCenter.shared.run(title: "Saving attachments") {
+                do {
+                    let outcome = try await ArchiveExportService.shared.exportAttachments(
+                        scope: scope, to: folderURL, maxAttachments: cap,
+                        onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
+                    if !storeManager.isPremium {
+                        freeAttachmentDownloadCount += outcome.saved
+                    }
+                    if outcome.capped {
                         storeManager.showPaywall = true
-                        listExportError = "Free limit: saved \(savedCount) of \(totalAttachments) attachments. Upgrade to Pro for unlimited."
-                        #if os(iOS)
-                        if savedCount > 0 { iOSShareFile(at: folderURL) }
-                        #endif
-                        return
+                        listExportError = "Free limit: saved \(outcome.saved) attachments. Upgrade to Pro for unlimited."
                     }
-                    guard let sourceURL = att.fileURL else { continue }
-                    var filename = att.filename
-                        .replacingOccurrences(of: "/", with: "_")
-                        .replacingOccurrences(of: "\\", with: "_")
-                        .replacingOccurrences(of: "..", with: "_")
-                    var counter = 1
-                    while usedNames.contains(filename) {
-                        let name = (att.filename as NSString).deletingPathExtension
-                        let ext = (att.filename as NSString).pathExtension
-                        filename = ext.isEmpty ? "\(name)_\(counter)" : "\(name)_\(counter).\(ext)"
-                        counter += 1
-                    }
-                    usedNames.insert(filename)
-                    let destinationURL = folderURL.appendingPathComponent(filename)
-                    do {
-                        try FileUtils.copyFile(from: sourceURL, to: destinationURL)
-                        savedCount += 1
-                    } catch {
-                        Task { @MainActor in
-                            listExportError = "Failed to copy \(att.filename): \(error.localizedDescription)"
-                        }
-                    }
+                    #if os(iOS)
+                    if outcome.saved > 0 { iOSShareFile(at: folderURL) }
+                    #endif
+                } catch is CancellationError {
+                    listExportError = "Attachment download cancelled."
+                } catch {
+                    listExportError = "Failed to save attachments: \(error.localizedDescription)"
                 }
             }
-            if !storeManager.isPremium {
-                freeAttachmentDownloadCount += savedCount
-            }
-            #if os(iOS)
-            if savedCount > 0 { iOSShareFile(at: folderURL) }
-            #endif
         }
 
     private var personaListTitle: String {
@@ -2713,50 +3091,24 @@ struct ParsedEmailListView: View {
         }
     }
 
-    // MARK: - Export Filtered Emails as JSON
-    private static let freeExportLimit = 10
-
-    private func exportFilteredJSON() {
-            let emailsToExport: [MBOXParser.RawEmail]
-            if storeManager.isPremium {
-                emailsToExport = model.filteredEmails
-            } else {
-                emailsToExport = Array(model.filteredEmails.prefix(Self.freeExportLimit))
-            }
-            let exportable = MBOXParser.ExportableParsedMBOXFile(
-                emails: emailsToExport.map { $0.asExportable() },
-                summary: MBOXParser.summarize(emails: emailsToExport)
-            )
-
-            do {
-                let data = try JSONEncoder().encode(exportable)
-                let formatter = DateFormatter()
-                formatter.dateFormat = "yyyyMMdd_HHmmss"
-                let suggestedName = "filtered_emails_\(formatter.string(from: Date())).json"
-
-                #if os(macOS)
-                let panel = NSSavePanel()
-                panel.nameFieldStringValue = suggestedName
-                panel.canCreateDirectories = true
-                panel.allowedContentTypes = [.json]
-
-                guard panel.runModal() == .OK, let url = panel.url else { return }
-                #else
-                let url = FileManager.default.temporaryDirectory.appendingPathComponent(suggestedName)
-                #endif
-
-                try FileUtils.writeData(data, to: url.path)
-                if !storeManager.isPremium && model.filteredEmails.count > Self.freeExportLimit {
-                    storeManager.showPaywall = true
-                    listExportError = "Exported \(Self.freeExportLimit) of \(model.filteredEmails.count) emails. Upgrade to Pro for unlimited export."
-                }
+    // MARK: - Export Filtered Emails — THE unified format list
+    /// Same formats as the sidebar and the open-email menu, over the CURRENT
+    /// filtered query, streamed from the store.
+    private var unifiedExportSections: some View {
+        UnifiedExportSections(
+            scope: { .query(model.currentArchiveQuery, exclusions: []) },
+            emlRender: { model.viewModel.exportEmailAsEML($0) },
+            emailCount: model.queryTotalCount,
+            share: { url in
                 #if os(iOS)
                 iOSShareFile(at: url)
                 #endif
-            } catch {
-                listExportError = "Failed to export JSON: \(error.localizedDescription)"
-            }
-        }
+            },
+            errorMessage: $listExportError
+        )
+        .environmentObject(storeManager)
+    }
+
 }
 
 // MARK: - Email Row
@@ -2884,7 +3236,6 @@ struct EmailRowView: View {
                         .padding(.vertical, 1)
                         .background((riskScore >= 75 ? Color.red : riskScore >= 55 ? Color.orange : Color.yellow).opacity(0.1))
                         .cornerRadius(3)
-                        .help(Text(verbatim: "Risk score: \(riskScore)/100"))
                     }
                     Spacer()
                     Text(parseDate(email.headers["Date"]))
@@ -2983,6 +3334,9 @@ struct DismissableFilterChip: View {
                 .padding(.vertical, 5)
             }
             .buttonStyle(.plain)
+            .help(isActive
+                  ? "“\(label)” filter is ON — click to turn it off"
+                  : "Filter the list to \(label) emails — combines with the other active chips")
 
             if let onRemove {
                 Button {
@@ -3090,8 +3444,8 @@ struct AttachmentsPopoverButton: View {
     #if os(iOS)
     @State private var shareURL: URL?
     @State private var showShare = false
-    @State private var saveError: String?
     #endif
+    @State private var saveError: String?
     let attachments: [AttachmentMetadata]
     @State private var showPopover = false
 
@@ -3156,14 +3510,13 @@ struct AttachmentsPopoverButton: View {
             .padding(Spacing.small)
             .frame(width: 280)
         }
-        #if os(macOS)
-        .help(Text(verbatim: "\(attachments.count) attachment(s)"))
-        #else
+        #if !os(macOS)
         .sheet(isPresented: $showShare) {
             if let url = shareURL {
                 ShareSheet(items: [url])
             }
         }
+        #endif
         .alert("Save Failed", isPresented: Binding(
             get: { saveError != nil },
             set: { if !$0 { saveError = nil } }
@@ -3172,7 +3525,6 @@ struct AttachmentsPopoverButton: View {
         } message: {
             Text(saveError ?? "")
         }
-        #endif
         .accessibilityLabel("\(attachments.count) attachments")
     }
 
@@ -3208,11 +3560,7 @@ struct AttachmentsPopoverButton: View {
             do {
                 try FileUtils.copyFile(from: sourceURL, to: dest)
             } catch {
-                let alert = NSAlert()
-                alert.messageText = "Save Failed"
-                alert.informativeText = "Failed to save \(att.filename): \(error.localizedDescription)"
-                alert.alertStyle = .warning
-                alert.runModal()
+                saveError = "Failed to save \(att.filename): \(error.localizedDescription)"
             }
         }
         #else
@@ -3223,12 +3571,14 @@ struct AttachmentsPopoverButton: View {
             // Dismiss the popover first; on iPhone it presents as a sheet and
             // would conflict with the share sheet otherwise.
             showPopover = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 300000000)
                 showShare = true
             }
         } catch {
             showPopover = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 300000000)
                 saveError = "Failed to save \(att.filename): \(error.localizedDescription)"
             }
         }
@@ -3239,6 +3589,8 @@ struct AttachmentsPopoverButton: View {
 // MARK: - Raw Source View
 struct RawSourceView: View {
     let rawText: String
+    var reconstructed: Bool = false
+    var onClose: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var highlightedSource: AttributedString?
 
@@ -3248,7 +3600,9 @@ struct RawSourceView: View {
                 VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
                     Label("Raw RFC 822 Source", systemImage: "doc.plaintext")
                         .font(Typography.title2)
-                    Text("The original email source including all headers and MIME encoding")
+                    Text(reconstructed
+                         ? "Reconstructed from saved headers and body"
+                         : "The original email source including all headers and MIME encoding")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
                 }
@@ -3267,7 +3621,7 @@ struct RawSourceView: View {
                 #endif
                 .accessibilityLabel("Copy raw source")
 
-                Button(action: { dismiss() }) {
+                Button(action: { if let onClose { onClose() } else { dismiss() } }) {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(AppColors.secondary)
                         .imageScale(.large)
@@ -3281,6 +3635,15 @@ struct RawSourceView: View {
             .padding(Spacing.medium)
 
             Divider()
+            if reconstructed {
+                Label("The original raw source wasn't stored when this email was imported by an older version — this is a reconstruction from the saved headers and body. Restore the original via Settings ▸ Restore Full Fidelity from Original Files.",
+                      systemImage: "info.circle")
+                    .font(Typography.caption1)
+                    .foregroundColor(.orange)
+                    .padding(Spacing.small)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.orange.opacity(0.08))
+            }
             ScrollView([.vertical, .horizontal]) {
                 if let highlighted = highlightedSource {
                     Text(highlighted)
@@ -3385,7 +3748,19 @@ struct RawSourceView: View {
 
 // MARK: - Reply Stats View
 struct ReplyStatsView: View {
-    let replyData: [String: Int]
+    /// Inspector hosting: dismiss() would close the WINDOW — hosts pass a
+    /// closure clearing their own presentation state instead.
+    var onClose: (() -> Void)? = nil
+    /// Part G4: reply frequency comes from a bounded SQL GROUP BY over the
+    /// store (ArchiveAggregateService.replyRecipientCounts), not a preview-
+    /// array walk. The view loads its own data for the given sender.
+    let senderEmail: String
+    @State private var replyData: [String: Int] = [:]
+    @State private var isLoading = true
+    /// v1 parity: when no sender address is set, the archive owner is
+    /// auto-detected (v1's annotate() did the same with most-common-From),
+    /// so the stats populate without any manual setup.
+    @State private var resolvedSender: String = ""
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -3395,7 +3770,7 @@ struct ReplyStatsView: View {
                     .font(Typography.title2)
                     .accessibilityAddTraits(.isHeader)
                 Spacer()
-                Button { dismiss() } label: {
+                Button { if let onClose { onClose() } else { dismiss() } } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(AppColors.secondary)
                         .imageScale(.large)
@@ -3412,11 +3787,26 @@ struct ReplyStatsView: View {
                 .foregroundColor(AppColors.secondary)
 
             Divider()
-            if replyData.isEmpty {
+            if isLoading {
+                VStack {
+                    Spacer()
+                    ProgressView("Computing reply statistics…")
+                        .font(Typography.callout)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity)
+            } else if replyData.isEmpty {
+                // Say WHY it's empty: reply stats count recipients of emails
+                // sent FROM the user's address — different from the sidebar's
+                // per-sender counts, and impossible without a sender address.
                 EmptyStateView(
                     icon: "chart.bar",
-                    title: "No reply data yet",
-                    message: "Reply frequency data will appear once mailin finds sent emails in your archive. Make sure your email address is set correctly in the sidebar."
+                    title: resolvedSender.isEmpty
+                        ? "Couldn't detect your email address"
+                        : "No sent emails found",
+                    message: resolvedSender.isEmpty
+                        ? "Reply statistics count the emails YOU sent to each recipient. mailin couldn't detect your address in this archive \u{2014} enter it in the sidebar's sender field (or Settings \u{25B8} Default Sender)."
+                        : "No emails sent from \(resolvedSender) exist in this archive, so there are no reply statistics. (The sidebar's Reply Frequency list is different \u{2014} it counts emails per sender across the whole archive.)"
                 )
             } else {
                 let sorted = replyData.sorted { $0.value > $1.value }
@@ -3456,5 +3846,17 @@ struct ReplyStatsView: View {
             }
         }
         .padding(Spacing.medium)
+        .task {
+            var sender = senderEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+            if sender.isEmpty {
+                sender = (try? await SQLiteEmailStore.shared.detectOwnerAddress()) ?? ""
+                if !sender.isEmpty {
+                    UserDefaults.standard.set(sender, forKey: "defaultSenderEmail")
+                }
+            }
+            resolvedSender = sender
+            replyData = (try? await ArchiveAggregateService.shared.replyRecipientCounts(senderEmail: sender)) ?? [:]
+            isLoading = false
+        }
     }
 }

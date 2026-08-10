@@ -374,4 +374,257 @@ struct AnomalyDetectionEngine {
         }
         return count > 0 ? total / Double(count) : 0
     }
+
+    /// Per-email sentiment (nil if no body) — the streaming counterpart of
+    /// `averageSentiment`, computed one email at a time so bodies are not retained.
+    fileprivate static func sentiment(of email: MBOXParser.RawEmail, tagger: NLTagger) -> Double? {
+        let body = bodyText(for: email)
+        guard !body.isEmpty else { return nil }
+        let text = String(body.prefix(2000))
+        tagger.string = text
+        let (tag, _) = tagger.tag(at: text.startIndex, unit: .paragraph, scheme: .sentimentScore)
+        return Double(tag?.rawValue ?? "0") ?? 0
+    }
+
+    fileprivate static func recipientAddresses(in email: MBOXParser.RawEmail) -> [String] {
+        ((email.headers["To"] ?? "") + "," + (email.headers["Cc"] ?? ""))
+            .components(separatedBy: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.contains("@") }
+    }
+}
+
+// MARK: - Bounded, store-driven detection (v2 engine cutover)
+//
+// The array `detectAnomalies(in:)` above holds the whole corpus in RAM. This
+// streaming variant scans the ENTIRE archive (anomalies can be anywhere, so a
+// most-recent window would silently miss them) while keeping only compact
+// O(days/domains/senders) accumulators resident — one page of emails at a time.
+//
+// Detection is archive-wide and exact: which anomalies fire, and their
+// severity/title/detail, match the array oracle. The only bound is the list of
+// affected-email ids attached to each anomaly (capped at
+// `maxAffectedIDsPerAnomaly`), since no UI renders more than that.
+//
+// Positions used by the "recent vs historical" (new-domain) and "first vs
+// second half" (tone-shift) detectors are derived from the stream index: the
+// store yields emails newest-first (date DESC, id DESC), and the total is known
+// up front from an O(1) COUNT aggregate.
+
+extension AnomalyDetectionEngine {
+
+    static let maxAffectedIDsPerAnomaly = 1000
+
+    static func detectAnomalies(
+        from service: ArchiveDataService,
+        query: EmailQuery = .all,
+        batchSize: Int = 500
+    ) async throws -> [Anomaly] {
+        let total = try await service.count(query: query)
+        guard total > 0 else { return [] }
+
+        // Position thresholds over the newest-first stream.
+        let recentSize = max(total / 10, 1)          // newest `recentSize` = "recent"
+        let midpoint = total / 2                     // array first-half size (oldest)
+        let secondHalfSize = total - midpoint        // newest `secondHalfSize` = second half
+
+        let dayFormatter = DateFormatter()
+        dayFormatter.dateFormat = "yyyy-MM-dd"
+        dayFormatter.locale = Locale(identifier: "en_US_POSIX")
+        let tagger = NLTagger(tagSchemes: [.sentimentScore])
+
+        // 1. Frequency spike — per-day count/date + capped ids.
+        var dailyData: [String: (count: Int, ids: [UUID], date: Date)] = [:]
+        // 2. Unusual hour.
+        var lateNightIDs: [UUID] = []
+        var lateNightCount = 0
+        var lateNightLatest: Date?
+        // 3. New domain — recent candidates buffered, historical domain set.
+        var recentCandidates: [(domain: String, id: UUID, date: Date?)] = []
+        var historicalDomains = Set<String>()
+        // 4. Tone shift — per-sender running sentiment sums per half.
+        struct SenderTone { var firstSum = 0.0; var firstN = 0; var secondSum = 0.0; var secondN = 0
+                            var firstIDs: [UUID] = []; var secondIDs: [UUID] = []
+                            var displayFrom = ""; var secondNewestDate: Date? }
+        var toneBySender: [String: SenderTone] = [:]
+        // 5. Large attachment — running mean + rare candidates (count >= 4).
+        var attachSum = 0, attachNonZeroN = 0
+        var attachCandidates: [(id: UUID, subject: String, date: Date?, count: Int)] = []
+        // 6. Recipient anomaly — emitted inline.
+        var recipientAnomalies: [Anomaly] = []
+
+        func capAppend(_ list: inout [UUID], _ id: UUID) {
+            if list.count < maxAffectedIDsPerAnomaly { list.append(id) }
+        }
+
+        var idx = 0
+        let stream = await service.streamFullEmails(query: query, batchSize: batchSize)
+        for try await batch in stream {
+            for email in batch {
+                let date = MBOXParser.parseDate(email.headers["Date"])
+
+                // 1. Frequency spike
+                if let date {
+                    let dayKey = dayFormatter.string(from: date)
+                    var entry = dailyData[dayKey] ?? (count: 0, ids: [], date: date)
+                    entry.count += 1
+                    if entry.ids.count < maxAffectedIDsPerAnomaly { entry.ids.append(email.id) }
+                    dailyData[dayKey] = entry
+                    // 2. Unusual hour
+                    let hour = Calendar.current.component(.hour, from: date)
+                    if hour >= 0 && hour < 5 {
+                        lateNightCount += 1
+                        capAppend(&lateNightIDs, email.id)
+                        if lateNightLatest.map({ date > $0 }) ?? true { lateNightLatest = date }
+                    }
+                }
+
+                // 3. New domain — recent (idx < recentSize) buffered; else historical.
+                if total >= 10, let domain = extractDomain(from: email.headers["From"] ?? "") {
+                    if idx < recentSize {
+                        recentCandidates.append((domain: domain, id: email.id, date: date))
+                    } else {
+                        historicalDomains.insert(domain)
+                    }
+                }
+
+                // 4. Tone shift — classify by half; fold sentiment.
+                if total >= 10 {
+                    let sender = (email.headers["From"] ?? "Unknown").lowercased()
+                    let isSecondHalf = idx < secondHalfSize     // newest-first ⇒ second (newer) half
+                    let s = sentiment(of: email, tagger: tagger)
+                    var t = toneBySender[sender] ?? SenderTone()
+                    if isSecondHalf {
+                        if let s { t.secondSum += s; t.secondN += 1 }
+                        if t.secondIDs.count < maxAffectedIDsPerAnomaly { t.secondIDs.append(email.id) }
+                        // newest second-half email seen first in the stream
+                        if t.secondNewestDate == nil { t.secondNewestDate = date }
+                    } else {
+                        if let s { t.firstSum += s; t.firstN += 1 }
+                        if t.firstIDs.count < maxAffectedIDsPerAnomaly { t.firstIDs.append(email.id) }
+                        t.displayFrom = email.headers["From"] ?? sender   // last-seen = oldest = array .first
+                    }
+                    toneBySender[sender] = t
+                }
+
+                // 5. Large attachment
+                let ac = email.attachments.count
+                if ac > 0 { attachSum += ac; attachNonZeroN += 1 }
+                if ac >= 4 {
+                    attachCandidates.append((id: email.id, subject: email.headers["Subject"] ?? "(No Subject)", date: date, count: ac))
+                }
+
+                // 6. Recipient anomaly (inline)
+                let addresses = recipientAddresses(in: email)
+                if addresses.count > 10 {
+                    let severity = min(1.0, Double(addresses.count) / 50.0 + 0.4)
+                    recipientAnomalies.append(Anomaly(
+                        type: .recipientAnomaly, severity: severity,
+                        title: "Large recipient list (\(addresses.count) recipients)",
+                        detail: "Email \"\(email.headers["Subject"] ?? "(No Subject)")\" was sent to \(addresses.count) recipients.",
+                        affectedEmails: [email.id],
+                        timestamp: date
+                    ))
+                }
+
+                idx += 1
+            }
+        }
+
+        var anomalies: [Anomaly] = []
+
+        // Finalize 1 — frequency spikes.
+        if dailyData.count >= 8 {
+            let sortedDays = dailyData.keys.sorted()
+            for i in 7..<sortedDays.count {
+                let windowDays = sortedDays[(i - 7)..<i]
+                let windowAvg = Double(windowDays.compactMap { dailyData[$0]?.count }.reduce(0, +)) / Double(windowDays.count)
+                guard windowAvg > 0, let dayData = dailyData[sortedDays[i]] else { continue }
+                let ratio = Double(dayData.count) / windowAvg
+                if ratio > 2.0 {
+                    anomalies.append(Anomaly(
+                        type: .frequencySpike,
+                        severity: min(1.0, (ratio - 2.0) / 4.0 + 0.3),
+                        title: "Volume spike on \(sortedDays[i])",
+                        detail: "\(dayData.count) emails received — \(String(format: "%.1f", ratio))x the 7-day rolling average of \(String(format: "%.1f", windowAvg)).",
+                        affectedEmails: dayData.ids,
+                        timestamp: dayData.date
+                    ))
+                }
+            }
+        }
+
+        // Finalize 2 — unusual hours.
+        if lateNightCount > 5 {
+            anomalies.append(Anomaly(
+                type: .unusualHour,
+                severity: min(1.0, Double(lateNightCount) / 30.0 + 0.3),
+                title: "\(lateNightCount) late-night emails detected",
+                detail: "Found \(lateNightCount) emails sent between midnight and 5 AM, which may indicate automated activity or unusual behavior.",
+                affectedEmails: lateNightIDs,
+                timestamp: lateNightLatest
+            ))
+        }
+
+        // Finalize 3 — new domains.
+        if total >= 10 {
+            var byDomain: [String: (ids: [UUID], latest: Date?)] = [:]
+            for cand in recentCandidates where !historicalDomains.contains(cand.domain) {
+                var e = byDomain[cand.domain] ?? (ids: [], latest: nil)
+                if e.ids.count < maxAffectedIDsPerAnomaly { e.ids.append(cand.id) }
+                if let d = cand.date, e.latest.map({ d > $0 }) ?? true { e.latest = d }
+                byDomain[cand.domain] = e
+            }
+            for (domain, e) in byDomain where e.ids.count >= 3 {
+                anomalies.append(Anomaly(
+                    type: .newDomain,
+                    severity: min(1.0, Double(e.ids.count) / 15.0 + 0.3),
+                    title: "New domain: \(domain)",
+                    detail: "\(e.ids.count) emails from \(domain) — a domain not seen in earlier messages.",
+                    affectedEmails: e.ids,
+                    timestamp: e.latest
+                ))
+            }
+        }
+
+        // Finalize 4 — tone shifts.
+        if total >= 10 {
+            for (_, t) in toneBySender where t.firstN >= 3 && t.secondN >= 3 {
+                let firstAvg = t.firstSum / Double(t.firstN)
+                let secondAvg = t.secondSum / Double(t.secondN)
+                let drop = firstAvg - secondAvg
+                if drop > 0.4 {
+                    anomalies.append(Anomaly(
+                        type: .toneShift,
+                        severity: min(1.0, drop / 0.8),
+                        title: "Tone shift from \(t.displayFrom)",
+                        detail: "Sentiment dropped from \(String(format: "%.2f", firstAvg)) to \(String(format: "%.2f", secondAvg)) between first and second half of the archive.",
+                        affectedEmails: t.firstIDs + t.secondIDs,
+                        timestamp: t.secondNewestDate
+                    ))
+                }
+            }
+        }
+
+        // Finalize 5 — large attachments.
+        if attachNonZeroN > 0 {
+            let meanCount = Double(attachSum) / Double(attachNonZeroN)
+            let threshold = max(meanCount * 3.0, 3.0)
+            for c in attachCandidates where Double(c.count) > threshold {
+                anomalies.append(Anomaly(
+                    type: .largeAttachment,
+                    severity: min(1.0, Double(c.count) / (threshold * 3.0) + 0.3),
+                    title: "\(c.count) attachments on one email",
+                    detail: "Email \"\(c.subject)\" has \(c.count) attachments — \(String(format: "%.1f", Double(c.count) / max(meanCount, 0.1)))x the archive average.",
+                    affectedEmails: [c.id],
+                    timestamp: c.date
+                ))
+            }
+        }
+
+        // Finalize 6 — recipient anomalies.
+        anomalies.append(contentsOf: recipientAnomalies)
+
+        return anomalies.sorted { $0.severity > $1.severity }
+    }
 }

@@ -63,7 +63,21 @@ actor EmailStore {
 
     private var container: ModelContainer?
 
-    private init() {}
+    /// When non-nil, this instance persists to an explicit on-disk location
+    /// instead of the shared production store. Set only via
+    /// `init(storeDirectory:)` for isolated harness/test environments — the
+    /// production `.shared` instance always uses the default location.
+    private let storeURL: URL?
+
+    private init() { self.storeURL = nil }
+
+    /// Isolated instance persisting under `storeDirectory` — never the shared
+    /// production store. Used by `MailinStorageEnvironment.disposable(at:)` so
+    /// stress harnesses cannot touch real user data. Release-safe (not gated
+    /// behind DEBUG).
+    init(storeDirectory: URL) {
+        self.storeURL = storeDirectory.appendingPathComponent("mailin.store")
+    }
 
     #if DEBUG
     /// Test-only: build an in-memory store so unit tests don't touch the real
@@ -80,17 +94,31 @@ actor EmailStore {
         if let container { return container }
 
         let schema = Schema(versionedSchema: MailinSchemaV1.self)
-        #if DEBUG
-        let inMemory = EmailStore.testInMemory
-        #else
-        let inMemory = false
-        #endif
-        let config = ModelConfiguration(
-            schema: schema,
-            isStoredInMemoryOnly: inMemory,
-            allowsSave: true,
-            cloudKitDatabase: .none      // strictly offline, no iCloud sync
-        )
+        let config: ModelConfiguration
+        if let storeURL {
+            // Isolated environment: persist to the explicit disposable location.
+            try? FileManager.default.createDirectory(
+                at: storeURL.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            config = ModelConfiguration(
+                schema: schema,
+                url: storeURL,
+                allowsSave: true,
+                cloudKitDatabase: .none
+            )
+        } else {
+            #if DEBUG
+            let inMemory = EmailStore.testInMemory
+            #else
+            let inMemory = false
+            #endif
+            config = ModelConfiguration(
+                schema: schema,
+                isStoredInMemoryOnly: inMemory,
+                allowsSave: true,
+                cloudKitDatabase: .none      // strictly offline, no iCloud sync
+            )
+        }
         do {
             let c = try ModelContainer(
                 for: schema,
@@ -427,6 +455,85 @@ actor EmailStore {
         descriptor.fetchLimit = limit
         let stored = try context.fetch(descriptor)
         return stored.map { (id: $0.id, date: $0.date) }
+    }
+
+    // MARK: - Bounded summaries (EmailRepository support)
+
+    /// Build a lightweight summary from a stored row WITHOUT touching the
+    /// externalStorage bodies (plainBody/htmlBody/rawSource stay on disk).
+    nonisolated static func summary(from s: StoredEmail) -> EmailSummary {
+        EmailSummary(
+            id: s.id,
+            messageID: s.messageID,
+            subject: s.subject,
+            from: s.fromAddress,
+            date: s.date,
+            bodyPreview: s.bodyPreview ?? "",
+            hasAttachments: s.hasAttachments,
+            sizeBytes: s.sizeBytes
+        )
+    }
+
+    /// Keyset page of lightweight summaries, most-recent first, with optional
+    /// user date bounds (`after ≤ date < before`) applied at the DB predicate
+    /// level and combined with the keyset cursor. No bodies.
+    func summaryPage(after: Date?, before: Date?, cursorDate: Date?, cursorID: UUID?, limit: Int) throws -> [EmailSummary] {
+        let container = try ensureContainer()
+        let context = ModelContext(container)
+        let lo = after ?? Date.distantPast
+        let hi = before ?? Date.distantFuture
+        var descriptor: FetchDescriptor<StoredEmail>
+        if let cursorDate, let cursorID {
+            descriptor = FetchDescriptor<StoredEmail>(
+                predicate: #Predicate {
+                    $0.date >= lo && $0.date < hi &&
+                    ($0.date < cursorDate || ($0.date == cursorDate && $0.id < cursorID))
+                },
+                sortBy: [SortDescriptor(\.date, order: .reverse), SortDescriptor(\.id, order: .reverse)]
+            )
+        } else {
+            descriptor = FetchDescriptor<StoredEmail>(
+                predicate: #Predicate { $0.date >= lo && $0.date < hi },
+                sortBy: [SortDescriptor(\.date, order: .reverse), SortDescriptor(\.id, order: .reverse)]
+            )
+        }
+        descriptor.fetchLimit = limit
+        return try context.fetch(descriptor).map { Self.summary(from: $0) }
+    }
+
+    /// Count of stored rows within optional date bounds — O(1)-memory aggregate.
+    func count(after: Date?, before: Date?) throws -> Int {
+        let container = try ensureContainer()
+        let context = ModelContext(container)
+        if after == nil && before == nil {
+            return try context.fetchCount(FetchDescriptor<StoredEmail>())
+        }
+        let lo = after ?? Date.distantPast
+        let hi = before ?? Date.distantFuture
+        return try context.fetchCount(
+            FetchDescriptor<StoredEmail>(predicate: #Predicate { $0.date >= lo && $0.date < hi })
+        )
+    }
+
+    /// Lightweight summaries for specific ids. No bodies.
+    func summaries(ids: [UUID]) throws -> [EmailSummary] {
+        guard !ids.isEmpty else { return [] }
+        let container = try ensureContainer()
+        let context = ModelContext(container)
+        let idArray = ids
+        let descriptor = FetchDescriptor<StoredEmail>(predicate: #Predicate { idArray.contains($0.id) })
+        return try context.fetch(descriptor).map { Self.summary(from: $0) }
+    }
+
+    /// Which of the given ids exist in the store.
+    func existingIDs(among ids: [UUID]) throws -> Set<UUID> {
+        guard !ids.isEmpty else { return [] }
+        let container = try ensureContainer()
+        let context = ModelContext(container)
+        let idArray = ids
+        var d = FetchDescriptor<StoredEmail>(predicate: #Predicate { idArray.contains($0.id) })
+        d.propertiesToFetch = [\.id]
+        return Set(try context.fetch(d).map { $0.id })
     }
 
     /// Full emails (with bodies) for the given ids — for reconcile reindex.

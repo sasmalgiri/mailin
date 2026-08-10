@@ -12,12 +12,17 @@ import AppKit
 #endif
 
 struct EmailTimelineView: View {
-    let emails: [MBOXParser.RawEmail]
+    /// nil → whole archive (streamed day buckets from SQLite, bounded);
+    /// non-nil → a legacy filtered selection analyzed via the array path.
+    var emails: [MBOXParser.RawEmail]? = nil
     var isPresented: Binding<Bool>?
     @State private var granularity: Granularity = .week
     @State private var selectedBucket: DateBucket?
     @State private var selectedTimezone: TimeZone = .current
-    @State private var cachedParsedDates: [(date: Date, email: MBOXParser.RawEmail)] = []
+    /// Bounded day buckets + hour histogram streamed from the store (O(days)).
+    @State private var timelineData: TimelineData?
+    /// Bounded drill-down emails for the selected bucket (date-range query, capped).
+    @State private var drillEmails: [MBOXParser.RawEmail] = []
     @Environment(\.dismiss) private var envDismiss
     @State private var showTutorial = false
 
@@ -31,7 +36,6 @@ struct EmailTimelineView: View {
 
     struct DateBucket: Identifiable, Equatable {
         let id: Date
-        let emailIDs: [UUID]
         var sentCount: Int
         var receivedCount: Int
         var label: String
@@ -54,14 +58,13 @@ struct EmailTimelineView: View {
 
     // MARK: - Computed Data
 
-    private var parsedDates: [(date: Date, email: MBOXParser.RawEmail)] { cachedParsedDates }
-
-    private func rebuildParsedDates() {
-        cachedParsedDates = emails.compactMap { email in
-            guard let date = MBOXParser.parseDate(email.headers["Date"]) else { return nil }
-            return (date, email)
+    private func loadTimeline() async {
+        let tz = selectedTimezone
+        if let emails {
+            timelineData = await ArchiveTimelineService.shared.load(days: emails, timezone: tz)
+        } else {
+            timelineData = try? await ArchiveTimelineService.shared.load(scope: .all, timezone: tz)
         }
-        .sorted { $0.date < $1.date }
     }
 
     private var normalizedCalendar: Calendar {
@@ -76,28 +79,24 @@ struct EmailTimelineView: View {
         dateFormatter.locale = Locale.current
         dateFormatter.timeZone = selectedTimezone
 
-        var grouped: [Date: (sent: Int, received: Int, ids: [UUID])] = [:]
+        var grouped: [Date: (sent: Int, received: Int)] = [:]
 
-        for (date, email) in parsedDates {
+        for day in timelineData?.days ?? [] {
             let bucketDate: Date
             switch granularity {
             case .day:
-                bucketDate = calendar.startOfDay(for: date)
+                bucketDate = day.day   // already startOfDay in this timezone
             case .week:
-                let components = calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: date)
-                bucketDate = calendar.date(from: components) ?? calendar.startOfDay(for: date)
+                let components = calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: day.day)
+                bucketDate = calendar.date(from: components) ?? day.day
             case .month:
-                let components = calendar.dateComponents([.year, .month], from: date)
-                bucketDate = calendar.date(from: components) ?? calendar.startOfDay(for: date)
+                let components = calendar.dateComponents([.year, .month], from: day.day)
+                bucketDate = calendar.date(from: components) ?? day.day
             }
 
-            var entry = grouped[bucketDate] ?? (sent: 0, received: 0, ids: [])
-            if email.messageType == "sent" {
-                entry.sent += 1
-            } else {
-                entry.received += 1
-            }
-            entry.ids.append(email.id)
+            var entry = grouped[bucketDate] ?? (sent: 0, received: 0)
+            entry.sent += day.sent
+            entry.received += day.received
             grouped[bucketDate] = entry
         }
 
@@ -115,20 +114,13 @@ struct EmailTimelineView: View {
                 dateFormatter.dateFormat = "MMM yyyy"
                 label = dateFormatter.string(from: key)
             }
-            return DateBucket(id: key, emailIDs: value.ids, sentCount: value.sent, receivedCount: value.received, label: label)
+            return DateBucket(id: key, sentCount: value.sent, receivedCount: value.received, label: label)
         }
         .sorted { $0.id < $1.id }
     }
 
     private var hourDistribution: [HourActivity] {
-        let calendar = normalizedCalendar
-        var hourCounts = [Int](repeating: 0, count: 24)
-
-        for (date, _) in parsedDates {
-            let hour = calendar.component(.hour, from: date)
-            hourCounts[hour] += 1
-        }
-
+        let hourCounts = timelineData?.hourCounts ?? [Int](repeating: 0, count: 24)
         let maxCount = hourCounts.max() ?? 1
         return (0..<24).map { hour in
             HourActivity(id: hour, count: hourCounts[hour], maxCount: maxCount)
@@ -137,8 +129,10 @@ struct EmailTimelineView: View {
 
     private var stats: TimelineStats {
         let calendar = normalizedCalendar
-        let dates = parsedDates.map { $0.date }
-        guard !dates.isEmpty else {
+        // Derived from the bounded day buckets (each already a startOfDay in tz).
+        let days = timelineData?.days ?? []
+        let totalEmails = timelineData?.totalEmails ?? 0
+        guard !days.isEmpty else {
             return TimelineStats(
                 busiestDay: "N/A",
                 busiestDayCount: 0,
@@ -150,26 +144,21 @@ struct EmailTimelineView: View {
         }
 
         // Busiest day
-        var dayCounts: [Date: Int] = [:]
-        for date in dates {
-            let day = calendar.startOfDay(for: date)
-            dayCounts[day, default: 0] += 1
-        }
-        let busiest = dayCounts.max { $0.value < $1.value }
+        let busiest = days.max { $0.total < $1.total }
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "MMM d, yyyy"
-        let busiestDayStr = busiest.map { dateFormatter.string(from: $0.key) } ?? "N/A"
+        let busiestDayStr = busiest.map { dateFormatter.string(from: $0.day) } ?? "N/A"
 
-        // Average emails per day
-        let firstDate = dates.first ?? Date()
-        let lastDate = dates.last ?? Date()
+        // Average emails per day (span of observed days)
+        let firstDate = days.first?.day ?? Date()
+        let lastDate = days.last?.day ?? Date()
         let daySpan = max(1, calendar.dateComponents([.day], from: firstDate, to: lastDate).day ?? 1)
-        let avgPerDay = Double(dates.count) / Double(daySpan)
+        let avgPerDay = Double(totalEmails) / Double(daySpan)
 
-        // Longest gap
-        let sortedDays = dayCounts.keys.sorted()
+        // Longest gap between consecutive present days
+        let sortedDays = days.map(\.day)
         var longestGapDays = 0
-        for i in 1..<sortedDays.count {
+        for i in 1..<max(1, sortedDays.count) {
             let gap = calendar.dateComponents([.day], from: sortedDays[i - 1], to: sortedDays[i]).day ?? 0
             longestGapDays = max(longestGapDays, gap)
         }
@@ -186,11 +175,11 @@ struct EmailTimelineView: View {
 
         return TimelineStats(
             busiestDay: busiestDayStr,
-            busiestDayCount: busiest?.value ?? 0,
+            busiestDayCount: busiest?.total ?? 0,
             avgEmailsPerDay: avgPerDay,
             longestGap: gapStr,
             totalDays: daySpan,
-            totalEmails: dates.count
+            totalEmails: totalEmails
         )
     }
 
@@ -210,7 +199,7 @@ struct EmailTimelineView: View {
             headerBar
             Divider()
 
-            if emails.isEmpty {
+            if (timelineData?.totalEmails ?? 0) == 0 {
                 emptyState
             } else {
                 ScrollView {
@@ -228,10 +217,12 @@ struct EmailTimelineView: View {
             }
         }
         .onChange(of: selectedDate) { _, _ in syncSelection() }
-        .onAppear { rebuildParsedDates() }
+        .task { await loadTimeline() }
+        .onChange(of: selectedTimezone) { _, _ in Task { await loadTimeline() } }
+        .onChange(of: selectedBucket) { _, bucket in Task { await loadDrill(for: bucket) } }
         .featureTutorial(.emailTimeline, key: "email_timeline_tutorial_seen", isPresented: $showTutorial)
         #if os(macOS)
-        .frame(minWidth: 480, minHeight: 380)
+        .toolWindowFrame()
         #endif
     }
 
@@ -242,7 +233,7 @@ struct EmailTimelineView: View {
             VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
                 Text("Email Timeline")
                     .font(Typography.title3)
-                Text("\(emails.count) emails analyzed")
+                Text("\(timelineData?.totalEmails ?? 0) emails analyzed")
                     .font(Typography.caption1)
                     .foregroundColor(AppColors.secondary)
             }
@@ -482,7 +473,7 @@ struct EmailTimelineView: View {
     // MARK: - Selected Bucket Detail
 
     private func selectedBucketSection(bucket: DateBucket) -> some View {
-        let bucketEmails = emails.filter { bucket.emailIDs.contains($0.id) }
+        let bucketEmails = drillEmails
 
         return VStack(alignment: .leading, spacing: Spacing.small) {
             HStack {
@@ -549,6 +540,40 @@ struct EmailTimelineView: View {
         selectedBucket = buckets.min(by: {
             abs($0.id.timeIntervalSince(selectedDate)) < abs($1.id.timeIntervalSince(selectedDate))
         })
+    }
+
+    /// Bounded drill-down: fetch (up to 50) full emails in the selected bucket's
+    /// date range instead of holding the corpus. For a legacy injected selection
+    /// the range filter is applied in-memory over that (already bounded) array.
+    private func loadDrill(for bucket: DateBucket?) async {
+        guard let bucket else { drillEmails = []; return }
+        let cal = normalizedCalendar
+        let end: Date
+        switch granularity {
+        case .day:   end = cal.date(byAdding: .day, value: 1, to: bucket.id) ?? bucket.id
+        case .week:  end = cal.date(byAdding: .day, value: 7, to: bucket.id) ?? bucket.id
+        case .month: end = cal.date(byAdding: .month, value: 1, to: bucket.id) ?? bucket.id
+        }
+        let start = bucket.id
+        if let emails {
+            drillEmails = Array(emails.filter {
+                guard let d = MBOXParser.parseDate($0.headers["Date"]) else { return false }
+                return d >= start && d < end
+            }.prefix(50))
+        } else {
+            var q = EmailQuery.all
+            q.afterDate = start.addingTimeInterval(-1)
+            q.beforeDate = end
+            var collected: [MBOXParser.RawEmail] = []
+            let stream = ArchiveDataService.shared.streamFullEmails(query: q, batchSize: 50)
+            do {
+                for try await batch in stream {
+                    collected.append(contentsOf: batch)
+                    if collected.count >= 50 { break }
+                }
+            } catch { }
+            drillEmails = Array(collected.prefix(50))
+        }
     }
 }
 

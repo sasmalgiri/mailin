@@ -255,7 +255,7 @@ struct IOCExtractorView: View {
         .task { await extract() }
         .featureTutorial(.iocExtractor, key: "ioc_extractor_tutorial_seen", isPresented: $showTutorial)
         #if os(macOS)
-        .frame(minWidth: 460, minHeight: 340)
+        .toolWindowFrame()
         #else
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(items: shareItems)

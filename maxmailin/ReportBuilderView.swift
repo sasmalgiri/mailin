@@ -55,14 +55,14 @@ struct ReportGenerator {
         }
 
         // Filter emails by date range
-        let filteredEmails: [MBOXParser.RawEmail]
+        let scopedEmails: [MBOXParser.RawEmail]
         if let range = dateRange {
-            filteredEmails = emails.filter { email in
+            scopedEmails = emails.filter { email in
                 guard let date = MBOXParser.parseDate(email.headers["Date"]) else { return false }
                 return range.contains(date)
             }
         } else {
-            filteredEmails = emails
+            scopedEmails = emails
         }
 
         // Title Page
@@ -93,7 +93,7 @@ struct ReportGenerator {
                  font: NSFont.systemFont(ofSize: 10, weight: .light), color: .gray, alignment: .center)
         y -= 20
 
-        drawText(context: context, text: "\(filteredEmails.count) emails analyzed", x: margin, y: y, width: contentWidth,
+        drawText(context: context, text: "\(scopedEmails.count) emails analyzed", x: margin, y: y, width: contentWidth,
                  font: NSFont.systemFont(ofSize: 11, weight: .medium), color: .gray, alignment: .center)
         y -= 50
 
@@ -127,7 +127,7 @@ struct ReportGenerator {
             context.strokePath()
             y -= 20
 
-            let content = sectionContent(section.name, emails: filteredEmails)
+            let content = sectionContent(section.name, emails: scopedEmails)
             let lines = content.components(separatedBy: "\n")
             for line in lines {
                 if y < margin + 30 {
@@ -427,7 +427,9 @@ struct ReportGenerator {
 // MARK: - Report Builder View
 
 struct ReportBuilderView: View {
-    let emails: [MBOXParser.RawEmail]
+    // v2: bounded working set from the store (no injected corpus).
+    @State private var workingSet: [MBOXParser.RawEmail] = []
+    @State private var archiveTotal = 0
     var isPresented: Binding<Bool>?
     @Environment(\.dismiss) private var envDismiss
 
@@ -500,9 +502,10 @@ struct ReportBuilderView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Report Builder")
                         .font(Typography.headline)
-                    Text("\(emails.count) emails available")
+                    Text("\(archiveTotal) emails available")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
+                        .task { archiveTotal = (try? await ArchiveDataService.shared.count()) ?? 0 }
                 }
             }
             Spacer()
@@ -558,13 +561,11 @@ struct ReportBuilderView: View {
 
                     if useDateRange {
                         HStack {
-                            DatePicker("From", selection: $dateFrom, displayedComponents: .date)
-                                .labelsHidden()
+                            ModernDateField(label: "From", date: $dateFrom)
                             Text("to")
                                 .font(Typography.caption1)
                                 .foregroundColor(AppColors.secondary)
-                            DatePicker("To", selection: $dateTo, displayedComponents: .date)
-                                .labelsHidden()
+                            ModernDateField(label: "To", date: $dateTo)
                         }
                     }
                 }
@@ -712,10 +713,14 @@ struct ReportBuilderView: View {
         let title = reportTitle
         let author = authorName
         let sectionsCopy = sections
-        let emailsCopy = emails
         let range: ClosedRange<Date>? = useDateRange ? dateFrom...dateTo : nil
 
         Task.detached {
+            // Bounded working set from the store (report covers up to 5000 recent).
+            var emailsCopy: [MBOXParser.RawEmail] = []
+            let stream = await ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
+            do { for try await b in stream { emailsCopy.append(contentsOf: b); if emailsCopy.count >= 5000 { break } } } catch { }
+            emailsCopy = Array(emailsCopy.prefix(5000))
             let pdf = ReportGenerator.generatePDF(
                 title: title,
                 author: author,

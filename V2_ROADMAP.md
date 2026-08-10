@@ -1,4 +1,11 @@
-# mailin v2 — Completion Roadmap (bounded-memory + evidence-grounded AI)
+# mailin v2 — Completion Roadmap
+
+> **COMPLETED 2026-08-07.** Every v2.0-scope item on this roadmap shipped
+> (see V2_IMPLEMENTATION_COMPLETE.md). The 🔴 gaps listed below were all
+> closed — e.g. `parsedEmails`/`allEmails` corpus arrays deleted, AI tools
+> scope-based and grounded, proximity/regex bounded, reconcile cursor-paged.
+> Remaining 2.1 items moved to V2_1_BACKLOG.md. Retained for history.
+
 
 **Premise (verified against `v2-honesty-pass`):** the v2 *engine* is right (SwiftData `EmailStore` + sharded FTS5 + streaming ingest + keyset pagination), but the **UI and AI layers still carry the v1 whole-array pattern** — the next layer of the same "built but not wired" problem PR #3 attacked. This roadmap finishes the foundation rewrite so *archive size does not determine resident memory*, and turns the AI assistant into an **evidence-grounded, bounded** feature.
 

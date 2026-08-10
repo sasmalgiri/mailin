@@ -907,6 +907,83 @@ struct EmailNLPEngine {
         }
     }
 
+    /// Phone-number plausibility: the regex alone matches any 10+ digit run,
+    /// which floods reports with Unix timestamps, order refs and tracking
+    /// numbers. A real phone number in email text carries formatting.
+    static func isPlausiblePhoneNumber(_ raw: String) -> Bool {
+        let digits = raw.filter(\.isNumber)
+        guard digits.count >= 7, digits.count <= 15 else { return false }   // E.164
+        let hasPlus = raw.contains("+")
+        let separators = raw.filter { "-. ()".contains($0) }
+        // Bare digit runs are refs/timestamps/IDs, not phones.
+        guard hasPlus || !separators.isEmpty else { return false }
+        // A country code never starts with 0.
+        if hasPlus, digits.first == "0" { return false }
+        // Year-prefixed artifacts ("2023 1771216…").
+        let groups = raw.components(separatedBy: CharacterSet(charactersIn: "-.() +"))
+            .filter { !$0.isEmpty }
+        if !hasPlus, let first = groups.first, first.count == 4,
+           let year = Int(first), (1900...2099).contains(year) { return false }
+        // Epoch-second lookalikes: bare-ish 10-digit starting 1 (no NANP
+        // area code starts with 1; 16xxxxxxxx/17xxxxxxxx are timestamps).
+        if !hasPlus, digits.count == 10, digits.first == "1" { return false }
+        // Dot-only formatting must be phone grouping (817.594.4444), not a
+        // decimal fraction or IP fragment (104.15350994113).
+        if !hasPlus, !separators.isEmpty, separators.allSatisfy({ $0 == "." }) {
+            let dotGroups = raw.split(separator: ".")
+            guard dotGroups.count >= 3,
+                  dotGroups.allSatisfy({ (2...4).contains($0.count) }) else { return false }
+        }
+        return true
+    }
+
+    /// Card-number plausibility. Luhn alone is not enough: all-zero runs
+    /// pass Luhn trivially, and paired reference numbers ("67698703
+    /// 67698713") sum to valid checksums by chance. A real card is Luhn-
+    /// valid AND grouped like a card AND starts with a known issuer prefix.
+    static func isPlausibleCardNumber(_ raw: String) -> Bool {
+        let digits = raw.filter(\.isNumber)
+        guard digits.count >= 13, digits.count <= 19, luhnCheck(digits) else { return false }
+        // Degenerate values: all zeros / a single repeated digit.
+        guard Set(digits).count > 1 else { return false }
+        // Grouping: contiguous digits, 4-4-4-4(-…) blocks, or Amex 4-6-5.
+        let groups = raw.split(whereSeparator: { $0 == "-" || $0 == " " }).map(\.count)
+        let groupedLikeCard = groups.count == 1
+            || groups.dropLast().allSatisfy { $0 == 4 } && (1...4).contains(groups.last ?? 0)
+            || groups == [4, 6, 5]
+        guard groupedLikeCard else { return false }
+        // Known issuer prefixes (IIN ranges).
+        guard let two = Int(digits.prefix(2)), let four = Int(digits.prefix(4)) else { return false }
+        let first = digits.first
+        return first == "4"                                   // Visa
+            || (51...55).contains(two)                        // Mastercard
+            || (2221...2720).contains(four)                   // Mastercard 2-series
+            || two == 34 || two == 37                         // Amex
+            || four == 6011 || two == 65 || (644...649).contains(Int(digits.prefix(3)) ?? 0)  // Discover
+            || two == 35                                      // JCB
+            || two == 62                                      // UnionPay
+            || two == 50 || (56...69).contains(two)           // Maestro/RuPay
+    }
+
+    /// Per-type validation applied to every regex hit — used by the section
+    /// scan AND the header fallback (which previously skipped it).
+    private static func passesPIIValidation(_ type: PIIType, _ value: String) -> Bool {
+        switch type {
+        case .phoneNumber:
+            return isPlausiblePhoneNumber(value)
+        case .creditCard:
+            return isPlausibleCardNumber(value)
+        case .ipAddress:
+            let octets = value.split(separator: ".").compactMap { Int($0) }
+            guard octets.count == 4, !octets.allSatisfy({ $0 == 0 }) else { return false }
+            if octets[0] == 127 || octets[0] == 10 || (octets[0] == 192 && octets[1] == 168) { return false }
+            if octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31 { return false }
+            return true
+        default:
+            return true
+        }
+    }
+
     static func detectPII(in emails: [MBOXParser.RawEmail]) -> [PIIFinding] {
         var findings: [PIIFinding] = []
         let patterns: [(PIIType, String)] = [
@@ -940,16 +1017,7 @@ struct EmailNLPEngine {
                     var seen = Set<String>()
                     for match in matches.prefix(5) {
                         let value = nsText.substring(with: match.range)
-                        if type == .creditCard {
-                            let digits = value.filter(\.isNumber)
-                            guard digits.count >= 13 && digits.count <= 19 && luhnCheck(digits) else { continue }
-                        }
-                        if type == .ipAddress {
-                            let octets = value.split(separator: ".").compactMap { Int($0) }
-                            guard octets.count == 4 && !octets.allSatisfy({ $0 == 0 }) else { continue }
-                            if octets[0] == 127 || octets[0] == 10 || (octets[0] == 192 && octets[1] == 168) { continue }
-                            if octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31 { continue }
-                        }
+                        guard passesPIIValidation(type, value) else { continue }
                         if seen.insert(value).inserted {
                             var finding = PIIFinding(type: type, value: value, emailID: email.id, emailSubject: subject)
                             finding.riskContext = context
@@ -966,6 +1034,7 @@ struct EmailNLPEngine {
                 let matches = regex.matches(in: headerText, range: NSRange(location: 0, length: nsHeader.length))
                 for match in matches.prefix(3) {
                     let value = nsHeader.substring(with: match.range)
+                    guard passesPIIValidation(type, value) else { continue }
                     if !findings.contains(where: { $0.value == value && $0.emailID == email.id }) {
                         var finding = PIIFinding(type: type, value: value, emailID: email.id, emailSubject: subject)
                         finding.riskContext = .header
