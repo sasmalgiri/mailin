@@ -199,6 +199,10 @@ struct mailinApp: App {
                             AttachmentTextIndexJob.shared.kickIfNeeded()
                             // Weekly saved-search digest (opt-in; ≤1/week).
                             DigestScheduler.shared.checkAndDeliver()
+                            // Ship-ready workflows: the 5 built-in recipes are
+                            // seeded on launch so they're usable immediately —
+                            // no create/configure step. Idempotent upsert.
+                            Task { await WorkflowService.seedBuiltins() }
                         }
 
                         // Repair any store↔FTS drift (a crash between the
