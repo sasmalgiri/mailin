@@ -121,7 +121,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// store fully at the previous version — never half-migrated, and a user
     /// DB is NEVER silently recreated. A store newer than this build refuses
     /// to open instead of guessing.
-    static let currentSchemaVersion = 7
+    static let currentSchemaVersion = 8
 
     private func migrateSchema(_ handle: OpaquePointer) throws {
         var v = try scalarInt(handle, "PRAGMA user_version;")
@@ -228,6 +228,77 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 try exec(handle, "PRAGMA user_version = 7;")
             }
             v = 7
+        }
+        if v == 7 {
+            try inExclusiveTransaction(handle) {
+                // v8: the workflow engine (SAP process-order model) plus the
+                // document lifecycle. Definitions are the master recipe;
+                // instances are one run each (WF-YYYY-####), confirmed per
+                // operation with who/when/result. Documents gain who-stamps,
+                // reversal links, and append-only notes — records are never
+                // edited in place; a correction posts a reversal.
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS workflow_definitions(
+                        def_id     TEXT PRIMARY KEY,
+                        name       TEXT NOT NULL,
+                        persona    TEXT NOT NULL,
+                        builtin    INTEGER NOT NULL DEFAULT 0,
+                        created_at INTEGER NOT NULL,
+                        created_by TEXT NOT NULL DEFAULT ''
+                    );
+                """)
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS workflow_operations(
+                        def_id         TEXT NOT NULL,
+                        seq            INTEGER NOT NULL,
+                        op_key         TEXT NOT NULL,
+                        title          TEXT NOT NULL,
+                        hint           TEXT NOT NULL DEFAULT '',
+                        posts_doc_type TEXT,
+                        PRIMARY KEY(def_id, seq)
+                    );
+                """)
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS workflow_instances(
+                        wf_number  TEXT PRIMARY KEY,
+                        def_id     TEXT NOT NULL,
+                        title      TEXT NOT NULL,
+                        status     TEXT NOT NULL,
+                        created_at INTEGER NOT NULL,
+                        created_by TEXT NOT NULL DEFAULT '',
+                        updated_at INTEGER NOT NULL,
+                        reverses   TEXT
+                    );
+                """)
+                try exec(handle, "CREATE INDEX IF NOT EXISTS idx_wf_instances_status ON workflow_instances(status, updated_at DESC);")
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS workflow_confirmations(
+                        wf_number    TEXT NOT NULL,
+                        seq          INTEGER NOT NULL,
+                        confirmed_at INTEGER NOT NULL,
+                        confirmed_by TEXT NOT NULL DEFAULT '',
+                        result       TEXT NOT NULL DEFAULT '',
+                        note         TEXT NOT NULL DEFAULT '',
+                        doc_number   TEXT,
+                        PRIMARY KEY(wf_number, seq)
+                    );
+                """)
+                // Document lifecycle additions (task #41).
+                try exec(handle, "ALTER TABLE documents ADD COLUMN created_by TEXT NOT NULL DEFAULT '';")
+                try exec(handle, "ALTER TABLE documents ADD COLUMN reverses TEXT;")
+                try exec(handle, "ALTER TABLE documents ADD COLUMN reversed_by TEXT;")
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS doc_notes(
+                        doc_number TEXT NOT NULL,
+                        created_at INTEGER NOT NULL,
+                        created_by TEXT NOT NULL DEFAULT '',
+                        note       TEXT NOT NULL
+                    );
+                """)
+                try exec(handle, "CREATE INDEX IF NOT EXISTS idx_doc_notes ON doc_notes(doc_number, created_at);")
+                try exec(handle, "PRAGMA user_version = 8;")
+            }
+            v = 8
         }
     }
 
@@ -1347,6 +1418,186 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     /// §4/§4.1: the nullable dedup key. NULL never collides (SQLite partial
     /// unique index), so `.preserveAll` stores everything.
+    // MARK: - Workflow engine (v8)
+
+    struct StoredDefinition: Sendable, Identifiable {
+        var id: String { defID }
+        let defID: String
+        let name: String
+        let persona: String
+        let builtin: Bool
+        let operations: [StoredOperation]
+    }
+    struct StoredOperation: Sendable {
+        let seq: Int
+        let key: String
+        let title: String
+        let hint: String
+        let postsDocType: String?
+    }
+    struct StoredInstance: Sendable, Identifiable {
+        var id: String { wfNumber }
+        let wfNumber: String
+        let defID: String
+        let title: String
+        let status: String
+        let createdAt: Date
+        let createdBy: String
+        let updatedAt: Date
+        let reverses: String?
+    }
+    struct StoredConfirmation: Sendable {
+        let seq: Int
+        let confirmedAt: Date
+        let confirmedBy: String
+        let result: String
+        let note: String
+        let docNumber: String?
+    }
+
+    /// Persist a definition (built-in seed or user clone). Idempotent on defID.
+    func upsertDefinition(defID: String, name: String, persona: String, builtin: Bool,
+                          operations: [StoredOperation], createdBy: String = "", now: Date = Date()) throws {
+        let db = try ensureDB()
+        try exec(db, "BEGIN IMMEDIATE TRANSACTION;")
+        do {
+            let up = try prepare(db, """
+                INSERT INTO workflow_definitions(def_id, name, persona, builtin, created_at, created_by)
+                VALUES (?,?,?,?,?,?)
+                ON CONFLICT(def_id) DO UPDATE SET name=excluded.name, persona=excluded.persona;
+            """)
+            defer { sqlite3_finalize(up) }
+            bindText(up, 1, defID); bindText(up, 2, name); bindText(up, 3, persona)
+            sqlite3_bind_int(up, 4, builtin ? 1 : 0)
+            sqlite3_bind_int64(up, 5, Int64(now.timeIntervalSince1970))
+            bindText(up, 6, createdBy)
+            guard sqlite3_step(up) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            try exec(db, "DELETE FROM workflow_operations WHERE def_id = '\(defID)';")
+            for op in operations {
+                let oi = try prepare(db, """
+                    INSERT INTO workflow_operations(def_id, seq, op_key, title, hint, posts_doc_type)
+                    VALUES (?,?,?,?,?,?);
+                """)
+                defer { sqlite3_finalize(oi) }
+                bindText(oi, 1, defID); sqlite3_bind_int64(oi, 2, Int64(op.seq))
+                bindText(oi, 3, op.key); bindText(oi, 4, op.title); bindText(oi, 5, op.hint)
+                bindTextOrNull(oi, 6, op.postsDocType)
+                guard sqlite3_step(oi) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    func definitions(persona: String? = nil) throws -> [StoredDefinition] {
+        let db = try ensureDB()
+        let clause = persona.map { "WHERE persona = '\($0)'" } ?? ""
+        let stmt = try prepare(db, "SELECT def_id, name, persona, builtin FROM workflow_definitions \(clause) ORDER BY builtin DESC, name;")
+        defer { sqlite3_finalize(stmt) }
+        var defs: [(String, String, String, Bool)] = []
+        while try stepRow(stmt, db) {
+            defs.append((columnText(stmt, 0), columnText(stmt, 1), columnText(stmt, 2), sqlite3_column_int(stmt, 3) == 1))
+        }
+        return try defs.map { d in
+            StoredDefinition(defID: d.0, name: d.1, persona: d.2, builtin: d.3, operations: try operations(defID: d.0))
+        }
+    }
+
+    func operations(defID: String) throws -> [StoredOperation] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT seq, op_key, title, hint, posts_doc_type FROM workflow_operations WHERE def_id = ? ORDER BY seq;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, defID)
+        var out: [StoredOperation] = []
+        while try stepRow(stmt, db) {
+            out.append(StoredOperation(
+                seq: Int(sqlite3_column_int64(stmt, 0)), key: columnText(stmt, 1),
+                title: columnText(stmt, 2), hint: columnText(stmt, 3),
+                postsDocType: sqlite3_column_type(stmt, 4) == SQLITE_NULL ? nil : columnText(stmt, 4)))
+        }
+        return out
+    }
+
+    /// Start one run of a definition — issues its WF number.
+    func createInstance(defID: String, title: String, createdBy: String = "", now: Date = Date()) throws -> String {
+        let wf = try issueDocument(type: "WF", summary: "Workflow: \(title)", refs: defID, createdBy: createdBy, now: now)
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            INSERT INTO workflow_instances(wf_number, def_id, title, status, created_at, created_by, updated_at, reverses)
+            VALUES (?,?,?,?,?,?,?,NULL);
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, wf); bindText(stmt, 2, defID); bindText(stmt, 3, title)
+        bindText(stmt, 4, "open")
+        sqlite3_bind_int64(stmt, 5, Int64(now.timeIntervalSince1970))
+        bindText(stmt, 6, createdBy)
+        sqlite3_bind_int64(stmt, 7, Int64(now.timeIntervalSince1970))
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        return wf
+    }
+
+    /// Confirm one operation (CO11). Idempotent per (wf, seq) — a re-confirm
+    /// overwrites. When it confirms the last operation the instance is marked
+    /// confirmed.
+    func confirmOperation(wf: String, seq: Int, totalOps: Int, result: String, note: String,
+                          docNumber: String?, confirmedBy: String = "", now: Date = Date()) throws {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            INSERT INTO workflow_confirmations(wf_number, seq, confirmed_at, confirmed_by, result, note, doc_number)
+            VALUES (?,?,?,?,?,?,?)
+            ON CONFLICT(wf_number, seq) DO UPDATE SET
+                confirmed_at=excluded.confirmed_at, confirmed_by=excluded.confirmed_by,
+                result=excluded.result, note=excluded.note, doc_number=excluded.doc_number;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, wf); sqlite3_bind_int64(stmt, 2, Int64(seq))
+        sqlite3_bind_int64(stmt, 3, Int64(now.timeIntervalSince1970))
+        bindText(stmt, 4, confirmedBy); bindText(stmt, 5, result); bindText(stmt, 6, note)
+        bindTextOrNull(stmt, 7, docNumber)
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        let done = try scalarInt(db, "SELECT COUNT(*) FROM workflow_confirmations WHERE wf_number = '\(wf)';")
+        let newStatus = done >= totalOps ? "confirmed" : "released"
+        try exec(db, "UPDATE workflow_instances SET status = '\(newStatus)', updated_at = \(Int64(now.timeIntervalSince1970)) WHERE wf_number = '\(wf)';")
+    }
+
+    func instances(status: String? = nil, limit: Int = 200) throws -> [StoredInstance] {
+        let db = try ensureDB()
+        let clause = status.map { "WHERE status = '\($0)'" } ?? ""
+        let stmt = try prepare(db, "SELECT wf_number, def_id, title, status, created_at, created_by, updated_at, reverses FROM workflow_instances \(clause) ORDER BY updated_at DESC LIMIT \(limit);")
+        defer { sqlite3_finalize(stmt) }
+        var out: [StoredInstance] = []
+        while try stepRow(stmt, db) {
+            out.append(StoredInstance(
+                wfNumber: columnText(stmt, 0), defID: columnText(stmt, 1), title: columnText(stmt, 2),
+                status: columnText(stmt, 3),
+                createdAt: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 4))),
+                createdBy: columnText(stmt, 5),
+                updatedAt: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 6))),
+                reverses: sqlite3_column_type(stmt, 7) == SQLITE_NULL ? nil : columnText(stmt, 7)))
+        }
+        return out
+    }
+
+    func instance(wf: String) throws -> StoredInstance? {
+        try instances(status: nil, limit: 10000).first { $0.wfNumber == wf }
+    }
+
+    func confirmations(wf: String) throws -> [StoredConfirmation] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT seq, confirmed_at, confirmed_by, result, note, doc_number FROM workflow_confirmations WHERE wf_number = ? ORDER BY seq;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, wf)
+        var out: [StoredConfirmation] = []
+        while try stepRow(stmt, db) {
+            out.append(StoredConfirmation(
+                seq: Int(sqlite3_column_int64(stmt, 0)),
+                confirmedAt: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 1))),
+                confirmedBy: columnText(stmt, 2), result: columnText(stmt, 3),
+                note: columnText(stmt, 4),
+                docNumber: sqlite3_column_type(stmt, 5) == SQLITE_NULL ? nil : columnText(stmt, 5)))
+        }
+        return out
+    }
+
     // MARK: - Document registry (v7)
 
     struct IssuedDocument: Sendable, Identifiable {
@@ -1356,11 +1607,23 @@ actor SQLiteEmailStore: EmailArchiveStore {
         let createdAt: Date
         let summary: String
         let refs: String
+        var createdBy: String = ""
+        var reverses: String? = nil
+        var reversedBy: String? = nil
+    }
+
+    struct DocNote: Sendable, Identifiable {
+        var id: String { "\(docNumber)-\(createdAt.timeIntervalSince1970)" }
+        let docNumber: String
+        let createdAt: Date
+        let createdBy: String
+        let note: String
     }
 
     /// Issue the next number in the type's yearly range and record the
     /// document — one transaction, so numbers never repeat or skip.
     func issueDocument(type: String, summary: String, refs: String = "",
+                       createdBy: String = "", reverses: String? = nil,
                        now: Date = Date()) throws -> String {
         let db = try ensureDB()
         let year = Calendar.current.component(.year, from: now)
@@ -1371,8 +1634,8 @@ actor SQLiteEmailStore: EmailArchiveStore {
             let seq = try scalarInt(db, "SELECT next_seq FROM doc_counters WHERE doc_type = '\(type)' AND year = \(year);")
             number = DocumentNumberFormat.format(type: type, year: year, sequence: seq)
             let insert = try prepare(db, """
-                INSERT INTO documents(doc_number, doc_type, created_at, summary, refs)
-                VALUES (?,?,?,?,?);
+                INSERT INTO documents(doc_number, doc_type, created_at, summary, refs, created_by, reverses)
+                VALUES (?,?,?,?,?,?,?);
             """)
             defer { sqlite3_finalize(insert) }
             bindText(insert, 1, number)
@@ -1380,6 +1643,11 @@ actor SQLiteEmailStore: EmailArchiveStore {
             sqlite3_bind_int64(insert, 3, Int64(now.timeIntervalSince1970))
             bindText(insert, 4, summary)
             bindText(insert, 5, refs)
+            bindText(insert, 6, createdBy)
+            bindTextOrNull(insert, 7, reverses)
+            if let reverses {
+                try exec(db, "UPDATE documents SET reversed_by = '\(number)' WHERE doc_number = '\(reverses)';")
+            }
             guard sqlite3_step(insert) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
             try exec(db, "UPDATE doc_counters SET next_seq = next_seq + 1 WHERE doc_type = '\(type)' AND year = \(year);")
             try exec(db, "COMMIT;")
@@ -1405,7 +1673,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     private func documentQuery(where clause: String, bind: String?, limit: Int) throws -> [IssuedDocument] {
         let db = try ensureDB()
         let stmt = try prepare(db, """
-            SELECT doc_number, doc_type, created_at, summary, refs
+            SELECT doc_number, doc_type, created_at, summary, refs, created_by, reverses, reversed_by
             FROM documents WHERE \(clause)
             ORDER BY created_at DESC, doc_number DESC LIMIT \(limit);
         """)
@@ -1421,7 +1689,45 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 type: columnText(stmt, 1),
                 createdAt: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 2))),
                 summary: columnText(stmt, 3),
-                refs: columnText(stmt, 4)))
+                refs: columnText(stmt, 4),
+                createdBy: columnText(stmt, 5),
+                reverses: sqlite3_column_type(stmt, 6) == SQLITE_NULL ? nil : columnText(stmt, 6),
+                reversedBy: sqlite3_column_type(stmt, 7) == SQLITE_NULL ? nil : columnText(stmt, 7)))
+        }
+        return out
+    }
+
+    /// Post a reversal (storno) referencing the original — the correction
+    /// model; documents are never edited in place.
+    func reverseDocument(_ original: String, type: String, reason: String,
+                         createdBy: String = "", now: Date = Date()) throws -> String {
+        try issueDocument(type: type, summary: "Reversal of \(original): \(reason)",
+                          refs: original, createdBy: createdBy, reverses: original, now: now)
+    }
+
+    func addDocumentNote(_ docNumber: String, note: String, createdBy: String = "", now: Date = Date()) throws {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "INSERT INTO doc_notes(doc_number, created_at, created_by, note) VALUES (?,?,?,?);")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, docNumber)
+        sqlite3_bind_int64(stmt, 2, Int64(now.timeIntervalSince1970))
+        bindText(stmt, 3, createdBy)
+        bindText(stmt, 4, note)
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+    }
+
+    func documentNotes(_ docNumber: String) throws -> [DocNote] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT created_at, created_by, note FROM doc_notes WHERE doc_number = ? ORDER BY created_at;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, docNumber)
+        var out: [DocNote] = []
+        while try stepRow(stmt, db) {
+            out.append(DocNote(
+                docNumber: docNumber,
+                createdAt: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 0))),
+                createdBy: columnText(stmt, 1),
+                note: columnText(stmt, 2)))
         }
         return out
     }

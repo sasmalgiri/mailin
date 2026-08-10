@@ -70,3 +70,44 @@ enum DocumentRegistry {
         return number
     }
 }
+
+// MARK: - Workflow facade (v8)
+
+@MainActor
+enum WorkflowService {
+    /// Seed the built-in recipes once per launch (idempotent upsert by defID).
+    static func seedBuiltins() async {
+        for def in WorkflowCatalog.all {
+            let ops = def.operations.map {
+                SQLiteEmailStore.StoredOperation(
+                    seq: $0.seq, key: $0.key, title: $0.title, hint: $0.hint,
+                    postsDocType: $0.postsDocType?.rawValue)
+            }
+            try? await SQLiteEmailStore.shared.upsertDefinition(
+                defID: def.defID, name: def.name, persona: def.persona,
+                builtin: true, operations: ops,
+                createdBy: ForensicManager.shared.examinerName)
+        }
+    }
+
+    /// Start a run; audit-logs the WF number.
+    static func start(_ def: WorkflowDefinition, title: String) async -> String? {
+        let wf = try? await SQLiteEmailStore.shared.createInstance(
+            defID: def.defID, title: title,
+            createdBy: ForensicManager.shared.examinerName)
+        if let wf {
+            ForensicManager.shared.logAction("Workflow started: \(wf)", detail: title)
+        }
+        return wf
+    }
+
+    static func confirm(wf: String, seq: Int, totalOps: Int, result: String,
+                        note: String, docNumber: String?) async {
+        try? await SQLiteEmailStore.shared.confirmOperation(
+            wf: wf, seq: seq, totalOps: totalOps, result: result, note: note,
+            docNumber: docNumber, confirmedBy: ForensicManager.shared.examinerName)
+        ForensicManager.shared.logAction(
+            "Workflow \(wf) op \(seq) confirmed",
+            detail: "\(result)\(docNumber.map { " → \($0)" } ?? "")")
+    }
+}

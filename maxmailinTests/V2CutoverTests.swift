@@ -1128,6 +1128,100 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(all.count, 4)
     }
 
+    /// Workflow engine: define → run → confirm operations in order → the
+    /// instance becomes 'confirmed' only when every operation is done;
+    /// confirmations persist with who/result/doc; the report renders them.
+    func testWorkflowEngine_instanceLifecycle() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-wf-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root)
+
+        // Built-in catalog is well-formed: 5 personas, sequential ops.
+        XCTAssertEqual(WorkflowCatalog.all.count, 5)
+        for def in WorkflowCatalog.all {
+            XCTAssertEqual(def.operations.map(\.seq), Array(1...def.operations.count),
+                           "\(def.defID) operations must be 1..n in order")
+        }
+        let legal = WorkflowCatalog.templates(for: "legal").first!
+
+        // Seed + run.
+        let ops = legal.operations.map {
+            SQLiteEmailStore.StoredOperation(seq: $0.seq, key: $0.key, title: $0.title,
+                                             hint: $0.hint, postsDocType: $0.postsDocType?.rawValue)
+        }
+        try await store.upsertDefinition(defID: legal.defID, name: legal.name,
+                                         persona: legal.persona, builtin: true, operations: ops)
+        let wf = try await store.createInstance(defID: legal.defID, title: "Acme v. Roe production",
+                                                createdBy: "Reviewer B")
+        XCTAssertTrue(wf.hasPrefix("WF-"))
+        let total = legal.operations.count
+        let st0 = try await store.instance(wf: wf)?.status
+        XCTAssertEqual(st0, "open")
+
+        // Confirm all but the last → released, not confirmed.
+        for opn in legal.operations.dropLast() {
+            try await store.confirmOperation(wf: wf, seq: opn.seq, totalOps: total,
+                                             result: "done", note: "", docNumber: nil, confirmedBy: "Reviewer B")
+        }
+        let st1 = try await store.instance(wf: wf)?.status
+        XCTAssertEqual(st1, "released")
+
+        // Confirm the last, with a posted document → confirmed.
+        let last = legal.operations.last!
+        try await store.confirmOperation(wf: wf, seq: last.seq, totalOps: total,
+                                         result: "produced", note: "23 docs", docNumber: "EXP-2026-0009",
+                                         confirmedBy: "Reviewer B")
+        let st2 = try await store.instance(wf: wf)?.status
+        XCTAssertEqual(st2, "confirmed")
+
+        let confs = try await store.confirmations(wf: wf)
+        XCTAssertEqual(confs.count, total)
+        XCTAssertEqual(confs.last?.docNumber, "EXP-2026-0009")
+        XCTAssertEqual(confs.last?.confirmedBy, "Reviewer B")
+
+        // Report renders progress, who, and the posted document.
+        let report = WorkflowInstanceReport(
+            wfNumber: wf, title: "Acme v. Roe production", status: "confirmed",
+            createdBy: "Reviewer B", createdAt: Date(), operations: legal.operations,
+            confirmations: Dictionary(uniqueKeysWithValues: confs.map {
+                ($0.seq, ($0.confirmedAt, $0.confirmedBy, $0.result, $0.note, $0.docNumber)) })
+        ).rendered()
+        XCTAssertTrue(report.contains(wf))
+        XCTAssertTrue(report.contains("5/5 operations"))
+        XCTAssertTrue(report.contains("EXP-2026-0009"))
+        XCTAssertTrue(report.contains("Reviewer B"))
+    }
+
+    /// Document lifecycle: who-stamp survives, notes append in order, and a
+    /// reversal links both ways (original.reversedBy ↔ storno.reverses).
+    func testDocumentLifecycle_whoNotesReversal() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-doclife-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root)
+
+        let original = try await store.issueDocument(type: "VRD", summary: "Confirmed Phishing: invoice",
+                                                     createdBy: "Admin A")
+        var recent = try await store.recentDocuments()
+        XCTAssertEqual(recent.first?.createdBy, "Admin A", "who is stamped and read back")
+
+        try await store.addDocumentNote(original, note: "Reporter confirmed it was a drill", createdBy: "Admin A")
+        try await store.addDocumentNote(original, note: "Escalated to mail-gateway team", createdBy: "Admin A")
+        let notes = try await store.documentNotes(original)
+        XCTAssertEqual(notes.count, 2)
+        XCTAssertEqual(notes.first?.note, "Reporter confirmed it was a drill", "append order preserved")
+
+        // Reversal (storno) links both ways — never a destructive edit.
+        let storno = try await store.reverseDocument(original, type: "VRD",
+                                                     reason: "misclassified — actually safe", createdBy: "Admin A")
+        recent = try await store.recentDocuments()
+        let orig = recent.first { $0.number == original }
+        let rev = recent.first { $0.number == storno }
+        XCTAssertEqual(orig?.reversedBy, storno)
+        XCTAssertEqual(rev?.reverses, original)
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default
