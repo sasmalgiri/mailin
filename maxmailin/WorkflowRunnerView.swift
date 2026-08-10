@@ -27,6 +27,9 @@ struct WorkflowRunnerView: View {
     @State private var activeOp: WorkflowOperation? = nil
     @State private var resultText = ""
     @State private var noteText = ""
+    @State private var fieldValues: [String: String] = [:]
+    @State private var savedValues: [Int: [String: String]] = [:]
+    @State private var validationError: String? = nil
     @State private var isLoading = true
 
     var body: some View {
@@ -120,6 +123,8 @@ struct WorkflowRunnerView: View {
             Button(conf != nil ? "Reconfirm" : "Confirm") {
                 resultText = conf?.result ?? ""
                 noteText = conf?.note ?? ""
+                fieldValues = savedValues[op.seq] ?? [:]
+                validationError = nil
                 activeOp = op
             }
             .controlSize(.small)
@@ -132,26 +137,91 @@ struct WorkflowRunnerView: View {
     }
 
     private func confirmSheet(_ op: WorkflowOperation) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.medium) {
-            Text("Confirm: \(op.title)").font(Typography.title3)
-            Text(op.hint).font(Typography.callout).foregroundColor(AppColors.secondary)
-            if let doc = op.postsDocType {
-                Label("Posts a \(doc.displayName) document on confirm", systemImage: doc.icon)
-                    .font(Typography.caption1).foregroundColor(AppColors.primary)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Confirm: \(op.title)").font(Typography.title3)
+                    Text(op.hint).font(Typography.caption1).foregroundColor(AppColors.secondary)
+                }
+                Spacer()
+                if let doc = op.postsDocType {
+                    Label(doc.displayName, systemImage: doc.icon)
+                        .font(Typography.caption2).foregroundColor(AppColors.primary)
+                        .help("Confirming posts a \(doc.displayName) document — a number you can quote later")
+                }
             }
-            TextField("Result (e.g. done, produced, 23 docs)", text: $resultText)
-                .textFieldStyle(.roundedBorder)
-            TextField("Note (optional)", text: $noteText, axis: .vertical)
-                .textFieldStyle(.roundedBorder).lineLimit(2...4)
+            .padding(Spacing.medium)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: Spacing.medium) {
+                    ForEach(op.fields) { field in
+                        fieldEditor(field)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Note (optional)").font(Typography.caption1).fontWeight(.semibold)
+                        TextField("Anything else worth recording", text: $noteText, axis: .vertical)
+                            .textFieldStyle(.roundedBorder).lineLimit(2...4)
+                    }
+                    if let err = validationError {
+                        Label(err, systemImage: "exclamationmark.triangle.fill")
+                            .font(Typography.caption1).foregroundColor(.red)
+                    }
+                }
+                .padding(Spacing.medium)
+            }
+            Divider()
             HStack {
                 Spacer()
                 Button("Cancel") { activeOp = nil }
-                Button("Confirm") { Task { await confirm(op) } }
+                Button("Confirm & Save") { Task { await confirm(op) } }
                     .buttonStyle(.borderedProminent)
             }
+            .padding(Spacing.medium)
         }
-        .padding(Spacing.large)
-        .frame(minWidth: 420)
+        .frame(minWidth: 460, minHeight: 380)
+    }
+
+    @ViewBuilder
+    private func fieldEditor(_ field: WorkflowField) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 4) {
+                Text(field.label).font(Typography.caption1).fontWeight(.semibold)
+                if field.required {
+                    Text("required").font(Typography.caption2).foregroundColor(.orange)
+                }
+            }
+            switch field.kind {
+            case .text, .number, .date:
+                TextField(field.placeholder, text: binding(field.key))
+                    .textFieldStyle(.roundedBorder)
+                    #if os(iOS)
+                    .keyboardType(field.kind == .number ? .numbersAndPunctuation : .default)
+                    #endif
+            case .longText:
+                TextField(field.placeholder.isEmpty ? "…" : field.placeholder,
+                          text: binding(field.key), axis: .vertical)
+                    .textFieldStyle(.roundedBorder).lineLimit(2...5)
+            case .bool:
+                Toggle(isOn: boolBinding(field.key)) { Text(field.help).font(Typography.caption2) }
+            case .choice:
+                Picker("", selection: binding(field.key)) {
+                    Text("—").tag("")
+                    ForEach(field.options, id: \.self) { Text($0).tag($0) }
+                }
+                .pickerStyle(.menu).labelsHidden()
+            }
+            if field.kind != .bool {
+                Text(field.help).font(Typography.caption2).foregroundColor(AppColors.secondary)
+            }
+        }
+    }
+
+    private func binding(_ key: String) -> Binding<String> {
+        Binding(get: { fieldValues[key] ?? "" }, set: { fieldValues[key] = $0 })
+    }
+    private func boolBinding(_ key: String) -> Binding<Bool> {
+        Binding(get: { fieldValues[key] == "Yes" },
+                set: { fieldValues[key] = $0 ? "Yes" : "" })
     }
 
     // MARK: logic
@@ -175,22 +245,33 @@ struct WorkflowRunnerView: View {
         guard !wfNumber.isEmpty else { return }
         let confs = (try? await SQLiteEmailStore.shared.confirmations(wf: wfNumber)) ?? []
         confirmations = Dictionary(uniqueKeysWithValues: confs.map { ($0.seq, $0) })
+        savedValues = (try? await SQLiteEmailStore.shared.fieldValues(wf: wfNumber)) ?? [:]
         if let inst = try? await SQLiteEmailStore.shared.instance(wf: wfNumber) { status = inst.status }
     }
 
     @MainActor
     private func confirm(_ op: WorkflowOperation) async {
+        // Required fields must be filled — a defensible record can't have holes.
+        let missing = WorkflowFieldValidation.missingRequired(op.fields, values: fieldValues)
+        guard missing.isEmpty else {
+            validationError = "Please fill: \(missing.joined(separator: ", "))"
+            return
+        }
+        // Persist the data the user entered (reusable in the completion doc).
+        try? await SQLiteEmailStore.shared.saveFieldValues(wf: wfNumber, seq: op.seq, values: fieldValues)
         // The step posts its document type (if any) as evidence it happened.
         var docNumber: String? = nil
         if let docType = op.postsDocType {
             docNumber = await DocumentRegistry.post(
                 docType, summary: "\(definition.name): \(op.title)", refs: wfNumber)
         }
+        // A concise result line from the first meaningful field, else "done".
+        let auto = op.fields.compactMap { fieldValues[$0.key]?.isEmpty == false ? fieldValues[$0.key] : nil }.first
         await WorkflowService.confirm(
             wf: wfNumber, seq: op.seq, totalOps: definition.operations.count,
-            result: resultText.isEmpty ? "done" : resultText, note: noteText, docNumber: docNumber)
+            result: auto ?? "done", note: noteText, docNumber: docNumber)
         activeOp = nil
-        resultText = ""; noteText = ""
+        resultText = ""; noteText = ""; fieldValues = [:]; validationError = nil
         await refreshConfirmations()
     }
 
@@ -200,7 +281,8 @@ struct WorkflowRunnerView: View {
             createdBy: ForensicManager.shared.examinerName, createdAt: Date(),
             operations: definition.operations,
             confirmations: Dictionary(uniqueKeysWithValues: confirmations.map {
-                ($0.key, ($0.value.confirmedAt, $0.value.confirmedBy, $0.value.result, $0.value.note, $0.value.docNumber)) })
+                ($0.key, ($0.value.confirmedAt, $0.value.confirmedBy, $0.value.result, $0.value.note, $0.value.docNumber)) }),
+            fieldValues: savedValues
         ).rendered()
     }
 

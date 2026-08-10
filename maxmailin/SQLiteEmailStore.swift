@@ -121,7 +121,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// store fully at the previous version — never half-migrated, and a user
     /// DB is NEVER silently recreated. A store newer than this build refuses
     /// to open instead of guessing.
-    static let currentSchemaVersion = 8
+    static let currentSchemaVersion = 9
 
     private func migrateSchema(_ handle: OpaquePointer) throws {
         var v = try scalarInt(handle, "PRAGMA user_version;")
@@ -299,6 +299,24 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 try exec(handle, "PRAGMA user_version = 8;")
             }
             v = 8
+        }
+        if v == 8 {
+            try inExclusiveTransaction(handle) {
+                // v9: captured field values per workflow operation — the data
+                // the user enters at each step, saved into the completion
+                // document so the whole run is reusable and reportable later.
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS workflow_field_values(
+                        wf_number TEXT NOT NULL,
+                        seq       INTEGER NOT NULL,
+                        field_key TEXT NOT NULL,
+                        value     TEXT NOT NULL DEFAULT '',
+                        PRIMARY KEY(wf_number, seq, field_key)
+                    );
+                """)
+                try exec(handle, "PRAGMA user_version = 9;")
+            }
+            v = 9
         }
     }
 
@@ -1579,6 +1597,40 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     func instance(wf: String) throws -> StoredInstance? {
         try instances(status: nil, limit: 10000).first { $0.wfNumber == wf }
+    }
+
+    /// Persist the values entered at one operation (upsert per field).
+    func saveFieldValues(wf: String, seq: Int, values: [String: String]) throws {
+        let db = try ensureDB()
+        try exec(db, "BEGIN IMMEDIATE TRANSACTION;")
+        do {
+            for (key, value) in values {
+                let stmt = try prepare(db, """
+                    INSERT INTO workflow_field_values(wf_number, seq, field_key, value)
+                    VALUES (?,?,?,?)
+                    ON CONFLICT(wf_number, seq, field_key) DO UPDATE SET value=excluded.value;
+                """)
+                defer { sqlite3_finalize(stmt) }
+                bindText(stmt, 1, wf); sqlite3_bind_int64(stmt, 2, Int64(seq))
+                bindText(stmt, 3, key); bindText(stmt, 4, value)
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    /// All captured values for a run, keyed by operation seq then field key.
+    func fieldValues(wf: String) throws -> [Int: [String: String]] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT seq, field_key, value FROM workflow_field_values WHERE wf_number = ? ORDER BY seq;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, wf)
+        var out: [Int: [String: String]] = [:]
+        while try stepRow(stmt, db) {
+            let seq = Int(sqlite3_column_int64(stmt, 0))
+            out[seq, default: [:]][columnText(stmt, 1)] = columnText(stmt, 2)
+        }
+        return out
     }
 
     func confirmations(wf: String) throws -> [StoredConfirmation] {

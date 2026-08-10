@@ -1222,6 +1222,74 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(rev?.reverses, original)
     }
 
+    /// Workflow master data: every built-in operation carries grounded
+    /// input fields; required flags exist where the profession demands them;
+    /// choice fields carry options; validation catches empty required fields.
+    func testWorkflowFields_masterDataAndValidation() {
+        for def in WorkflowCatalog.all {
+            for op in def.operations {
+                XCTAssertFalse(op.fields.isEmpty, "\(def.defID)/\(op.key) should capture data")
+                for field in op.fields {
+                    XCTAssertFalse(field.label.isEmpty)
+                    XCTAssertFalse(field.help.isEmpty, "\(field.key) needs guidance text")
+                    if field.kind == .choice { XCTAssertFalse(field.options.isEmpty, "\(field.key) choice needs options") }
+                }
+            }
+        }
+        // Grounded specifics: forensic step 1 requires case + custodian.
+        let receive = WorkflowCatalog.forensic.operations.first!
+        let reqLabels = receive.fields.filter(\.required).map(\.key)
+        XCTAssertTrue(reqLabels.contains("caseNumber"))
+        XCTAssertTrue(reqLabels.contains("custodian"))
+
+        // Validation: missing required → reported by label; filled → clean.
+        let missing = WorkflowFieldValidation.missingRequired(receive.fields, values: ["custodian": "jdoe"])
+        XCTAssertTrue(missing.contains("Case / Matter number"))
+        XCTAssertFalse(missing.contains("Custodian / owner"))
+        let ok = WorkflowFieldValidation.missingRequired(receive.fields,
+                                                         values: ["caseNumber": "C1", "custodian": "jdoe"])
+        XCTAssertTrue(ok.isEmpty)
+    }
+
+    /// Captured field values persist per operation and the completion report
+    /// embeds them — the run is reusable later, exactly as asked.
+    func testWorkflowFieldValues_persistAndReport() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-wff-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root)
+        let it = WorkflowCatalog.itAdmin
+        let ops = it.operations.map {
+            SQLiteEmailStore.StoredOperation(seq: $0.seq, key: $0.key, title: $0.title,
+                                             hint: $0.hint, postsDocType: $0.postsDocType?.rawValue)
+        }
+        try await store.upsertDefinition(defID: it.defID, name: it.name, persona: it.persona,
+                                         builtin: true, operations: ops)
+        let wf = try await store.createInstance(defID: it.defID, title: "INC — invoice scam", createdBy: "Admin A")
+
+        try await store.saveFieldValues(wf: wf, seq: 1, values: [
+            "reporter": "alice@corp.com", "sender": "billing@acme-invoices.ru", "subject": "Overdue invoice"])
+        try await store.saveFieldValues(wf: wf, seq: 3, values: [
+            "disposition": "Confirmed phishing", "severity": "P2 — High", "confidence": "High"])
+        // Re-save one field → upsert, not duplicate.
+        try await store.saveFieldValues(wf: wf, seq: 1, values: ["subject": "Overdue invoice (edited)"])
+
+        let vals = try await store.fieldValues(wf: wf)
+        XCTAssertEqual(vals[1]?["reporter"], "alice@corp.com")
+        XCTAssertEqual(vals[1]?["subject"], "Overdue invoice (edited)", "upsert overwrote")
+        XCTAssertEqual(vals[3]?["disposition"], "Confirmed phishing")
+
+        // The completion report embeds the entered data under each step.
+        let report = WorkflowInstanceReport(
+            wfNumber: wf, title: "INC — invoice scam", status: "released",
+            createdBy: "Admin A", createdAt: Date(), operations: it.operations,
+            confirmations: [1: (Date(), "Admin A", "alice@corp.com", "", "IMP-2026-0001")],
+            fieldValues: vals
+        ).rendered()
+        XCTAssertTrue(report.contains("Reporter: alice@corp.com"))
+        XCTAssertTrue(report.contains("Disposition: Confirmed phishing"))
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default
