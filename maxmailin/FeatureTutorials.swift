@@ -1227,5 +1227,39 @@ extension FeatureTutorial {
             TutorialTip(icon: "checkmark.shield", text: "Everything here is assembled from records the app already keeps; nothing new is collected and nothing leaves the machine.")
         ]
     )
+
+    static let workflows = FeatureTutorial(
+        title: "Workflows & Documents",
+        icon: "flowchart",
+        overview: "The way big systems like SAP run a workday: a job is a numbered record you complete step by step, and every step leaves a document you can quote later. mailin ships a workflow for each persona — Evidence Intake (forensic), Production Run (legal), Phishing Incident (IT), Story Build (journalist), Cleanup (personal) — grounded in the real professional frameworks (NIST 800-86, EDRM, NIST 800-61).",
+        quickStart: "Work Center ▸ Workflows ▸ pick your template ▸ Start. You get a WF-#### record. Confirm each operation as you finish it — mailin records who did it, when, and the document number it produced. Close and reopen any time; the run resumes. Copy or Print the run report for the file. Look any number up in the Documents tab.",
+        steps: [
+            TutorialStep(title: "Start a Run", icon: "play.circle", color: .blue,
+                what: "One job = one numbered record.",
+                how: "Pick a template for your persona and Start. It creates a WF-YYYY-#### instance — the day-to-day work record, separate from the audit trail, that you can reopen and report on.",
+                tip: "Resume open runs from the same tab — nothing is lost when you close the window."),
+            TutorialStep(title: "Confirm Operations", icon: "checkmark.circle", color: .green,
+                what: "Each step, confirmed, with proof.",
+                how: "Confirm records who/when/result. Steps that produce something (an import, a verdict, an export, a report, a story version) post that document automatically — its number shows on the step.",
+                tip: "The posted number is the evidence the step happened — quote it in a ticket, letter, or case file."),
+            TutorialStep(title: "Look Up & Trace", icon: "number.square", color: .purple,
+                what: "Every number resolves to its record.",
+                how: "Documents tab: type any number or word. Tap a document to see who created it, its notes, and any reversal. Master elements carry aliases too (SRC-#### for source files).",
+                tip: "Searching a WF or document number in the Audit Trail shows the exact actions behind it."),
+            TutorialStep(title: "Correct with a Reversal", icon: "arrow.uturn.backward", color: .orange,
+                what: "Records are never edited — they're reversed.",
+                how: "A mistake isn't erased; you post a reversal (storno) that references the original, and add a note explaining why. Both link to each other, so the history stays honest.",
+                tip: "This is what makes the record defensible — nothing can be quietly changed after the fact."),
+            TutorialStep(title: "Report & Print", icon: "printer", color: .cyan,
+                what: "The run as a filed document.",
+                how: "Copy Report or Print renders the whole run — every operation, who confirmed it, and the documents it posted — as a plain report for the case/incident/story file.",
+                tip: "Attach it to the matter; it's the contemporaneous record of exactly what was done.")
+        ],
+        tips: [
+            TutorialTip(icon: "person", text: "Runs record a single examiner on this Mac; set your name in Settings so the who-stamp is meaningful."),
+            TutorialTip(icon: "checkmark.shield", text: "Everything is local — workflows, documents and notes never leave your machine."),
+            TutorialTip(icon: "slider.horizontal.3", text: "Built-in templates are a starting point; the steps mirror how each profession actually works.")
+        ]
+    )
 }
 // swiftlint:enable type_body_length file_length
