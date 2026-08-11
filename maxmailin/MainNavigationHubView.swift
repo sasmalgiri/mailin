@@ -73,16 +73,42 @@ struct MainNavigationHubView: View {
         Array(repeating: GridItem(.flexible(), spacing: Spacing.small), count: min(gridColumns, 3))
     }
 
+    // MARK: - Tile / section model (de-duplicated, data-driven)
+
+    /// One tool tile. A destination appears in AT MOST one rendered section —
+    /// de-duplication is enforced at render time so there's clear ownership.
+    struct HubTile: Identifiable {
+        let dest: HubDestination
+        let title: String
+        let subtitle: String
+        let icon: String
+        let color: Color
+        var id: HubDestination { dest }
+    }
+
+    struct ToolSection: Identifiable {
+        let title: String
+        let icon: String
+        let color: Color
+        let tiles: [HubTile]
+        var id: String { title }
+    }
+
+    private func t(_ dest: HubDestination, _ title: String, _ subtitle: String,
+                   _ icon: String, _ color: Color) -> HubTile {
+        HubTile(dest: dest, title: title, subtitle: subtitle, icon: icon, color: color)
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: Spacing.large) {
                 headerSection
                 emailInboxHero
                 guidedWorkflowsSection
-                personaWorkflowSection
-                personaCoreFeaturesSection
-                forYouSection
-                personaOrderedSections
+                personaHeroSection
+                ForEach(deDupedToolSections) { section in
+                    toolSectionView(section)
+                }
                 formatsBar
                 privacyTagline
             }
@@ -102,65 +128,228 @@ struct MainNavigationHubView: View {
         }
     }
 
-    @ViewBuilder
-    private var personaOrderedSections: some View {
-        switch persona {
-        case .forensic:
-            // (The "For You" band above already surfaces Security & Detection
-            // for this persona — don't repeat the same tiles here.)
-            legalForensicSection
-            analysisSection
-            exportSection
-            aiSection
-        case .legal:
-            legalForensicSection
-            exportSection
-            analysisSection
-            aiSection
-        case .itAdmin:
-            securitySection
-            analysisSection
-            exportSection
-            aiSection
-        case .journalist:
-            analysisSection
-            aiSection
-            exportSection
-        case .personal:
-            aiSection
-            analysisSection
-            exportSection
-        case .general:
-            analysisSection
-            aiSection
-            exportSection
-        }
+    // MARK: - Guided Workflows (pick the job you came to do)
+
+    private var guidedWorkflows: [WorkflowDefinition] {
+        let list = WorkflowCatalog.templates(for: persona.rawValue)
+        return list.isEmpty ? WorkflowCatalog.all : list
     }
 
-    // MARK: - Persona Core Features
+    @ViewBuilder
+    private var guidedWorkflowsSection: some View {
+        if !guidedWorkflows.isEmpty {
+            VStack(alignment: .leading, spacing: Spacing.small) {
+                HStack(spacing: Spacing.xSmall) {
+                    sectionHeader(title: "Start a job", icon: "flowchart", color: persona.accentColor)
+                    Spacer()
+                    Text("GUIDED")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Capsule().fill(persona.accentColor))
+                }
+                Text("Pick what you came to do — mailin runs each step and keeps the numbered record for you.")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
 
-    private var personaCoreFeaturesSection: some View {
-        VStack(alignment: .leading, spacing: Spacing.small) {
-            HStack(spacing: Spacing.xSmall) {
-                sectionHeader(title: personaCoreFeaturesTitle, icon: persona.icon, color: persona.accentColor)
-                Spacer()
-                Text("CORE")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(persona.accentColor))
-            }
-
-            LazyVGrid(columns: workflowColumns, spacing: Spacing.small) {
-                ForEach(personaCoreFeatureTiles, id: \.0) { tile in
-                    hubTile(dest: tile.0, title: tile.1, subtitle: tile.2, icon: tile.3, color: tile.4)
+                LazyVGrid(columns: workflowColumns, spacing: Spacing.small) {
+                    ForEach(guidedWorkflows) { def in
+                        workflowCard(def)
+                    }
                 }
             }
         }
     }
 
-    private var personaCoreFeaturesTitle: String {
+    private func workflowCard(_ def: WorkflowDefinition) -> some View {
+        Button { workflowToRun = def } label: {
+            VStack(alignment: .leading, spacing: Spacing.xSmall) {
+                HStack(spacing: Spacing.xSmall) {
+                    Image(systemName: workflowIcon(def.defID))
+                        .font(.system(size: 20))
+                        .foregroundColor(persona.accentColor)
+                        .frame(width: 26, height: 26)
+                    Text(def.name)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.primary)
+                        .lineLimit(2)
+                    Spacer()
+                }
+                Text(WorkflowCatalog.purpose(for: def.defID))
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text(def.operations.map(\.title).joined(separator: " → "))
+                    .font(.system(size: 9))
+                    .foregroundColor(.secondary.opacity(0.7))
+                    .lineLimit(1)
+                HStack(spacing: 3) {
+                    Text("Start")
+                        .font(.system(size: 11, weight: .semibold))
+                    Image(systemName: "arrow.right.circle.fill")
+                        .font(.system(size: 12))
+                }
+                .foregroundColor(persona.accentColor)
+            }
+            .frame(maxWidth: .infinity, minHeight: 132, alignment: .topLeading)
+            .padding(Spacing.small)
+            .background(
+                RoundedRectangle(cornerRadius: CornerRadius.medium)
+                    .fill(persona.accentColor.opacity(0.07))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: CornerRadius.medium)
+                    .strokeBorder(persona.accentColor.opacity(0.18), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Start workflow: \(def.name)")
+        .help(WorkflowCatalog.purpose(for: def.defID))
+    }
+
+    private func workflowIcon(_ defID: String) -> String {
+        switch defID {
+        case "builtin.forensic.intake": return "shield.checkered"
+        case "builtin.forensic.timeline": return "calendar.day.timeline.left"
+        case "builtin.legal.production": return "building.columns"
+        case "builtin.legal.hold": return "hand.raised"
+        case "builtin.legal.eca": return "chart.bar.doc.horizontal"
+        case "builtin.legal.dsar": return "person.text.rectangle"
+        case "builtin.it.phishing": return "shield.lefthalf.filled"
+        case "builtin.it.threathunt": return "binoculars"
+        case "builtin.it.campaign": return "square.grid.3x3.fill"
+        case "builtin.journalist.story": return "text.book.closed"
+        case "builtin.journalist.network": return "point.3.connected.trianglepath.dotted"
+        case "builtin.personal.cleanup": return "sparkles"
+        default: return "flowchart"
+        }
+    }
+
+    // MARK: - Persona hero (the one featured workspace banner)
+
+    private var personaHeroSection: some View {
+        personaHero(
+            title: heroTitle, subtitle: heroSubtitle,
+            icon: heroIcon, color: heroColor, destination: heroDestination
+        )
+    }
+
+    private var heroDestination: HubDestination {
+        switch persona {
+        case .forensic: return .forensicReview
+        case .legal: return .legalWorkspace
+        case .itAdmin: return .itAdminDashboard
+        case .journalist: return .journalistWorkbench
+        case .personal: return .personalOrganizer
+        case .general: return .generalExplorer
+        }
+    }
+    private var heroTitle: String {
+        switch persona {
+        case .forensic: return "Forensic Review"
+        case .legal: return "Legal Review Workspace"
+        case .itAdmin: return "IT Admin Analysis"
+        case .journalist: return "Investigation Workbench"
+        case .personal: return "Personal Organizer"
+        case .general: return "Feature Explorer"
+        }
+    }
+    private var heroSubtitle: String {
+        switch persona {
+        case .forensic: return "Evidence coding, eDiscovery, chain of custody"
+        case .legal: return "Privilege coding, responsiveness, production sets"
+        case .itAdmin: return "Headers, authentication, routing, MIME structure"
+        case .journalist: return "Sources, timeline, leads, key quotes"
+        case .personal: return "Contacts, categories, attachments, cleanup"
+        case .general: return "Discover all features, tips, and guided tour"
+        }
+    }
+    private var heroIcon: String {
+        switch persona {
+        case .forensic: return "shield.checkered"
+        case .legal: return "building.columns"
+        case .itAdmin: return "server.rack"
+        case .journalist: return "newspaper"
+        case .personal: return "tray.full"
+        case .general: return "sparkles"
+        }
+    }
+    private var heroColor: Color {
+        switch persona {
+        case .forensic: return .orange
+        case .legal: return .indigo
+        case .itAdmin: return .teal
+        case .journalist: return .purple
+        case .personal: return .blue
+        case .general: return .mint
+        }
+    }
+
+    // MARK: - Tool sections (each tool appears exactly once)
+
+    /// The ordered raw sections for this persona — core first (persona's key
+    /// tools + Work Center), then category sections. Rendering de-duplicates
+    /// so a tool shown in an earlier section never repeats in a later one.
+    private var rawSections: [ToolSection] {
+        var out = [coreSection]
+        switch persona {
+        case .forensic:
+            out += [securitySection, legalForensicSection, analysisSection, exportSection, aiSection]
+        case .legal:
+            out += [legalForensicSection, exportSection, analysisSection, aiSection]
+        case .itAdmin:
+            out += [securitySection, analysisSection, exportSection, aiSection]
+        case .journalist:
+            out += [analysisSection, aiSection, exportSection]
+        case .personal:
+            out += [aiSection, analysisSection, exportSection]
+        case .general:
+            out += [analysisSection, aiSection, exportSection]
+        }
+        return out
+    }
+
+    /// De-duplicate across sections in order. Email Inbox (hero above) and the
+    /// persona workspace banner already own their destinations, so they're
+    /// seeded as "seen" and won't reappear as tiles.
+    private var deDupedToolSections: [ToolSection] {
+        var seen: Set<HubDestination> = [.emailInbox, heroDestination]
+        var out: [ToolSection] = []
+        for raw in rawSections {
+            let tiles = raw.tiles.filter { seen.insert($0.dest).inserted }
+            if !tiles.isEmpty {
+                out.append(ToolSection(title: raw.title, icon: raw.icon, color: raw.color, tiles: tiles))
+            }
+        }
+        return out
+    }
+
+    private func toolSectionView(_ section: ToolSection) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.small) {
+            HStack(spacing: Spacing.xSmall) {
+                sectionHeader(title: section.title, icon: section.icon, color: section.color)
+                if section.title == coreTitle {
+                    Spacer()
+                    Text("CORE")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Capsule().fill(persona.accentColor))
+                }
+            }
+            LazyVGrid(columns: featureColumns, spacing: Spacing.small) {
+                ForEach(section.tiles) { tile in
+                    hubTile(tile)
+                }
+            }
+        }
+    }
+
+    // MARK: Core section (persona's headline tools)
+
+    private var coreTitle: String {
         switch persona {
         case .forensic: return "Forensic Tools"
         case .legal: return "Legal Tools"
@@ -171,62 +360,129 @@ struct MainNavigationHubView: View {
         }
     }
 
-    private var personaCoreFeatureTiles: [(HubDestination, String, String, String, Color)] {
-        // The Work Center leads every persona's grid — your work finds you.
-        [(.workCenter, "Work Center", "What's waiting on you", "tray.full.fill", .blue)] + personaSpecificTiles
+    private var coreSection: ToolSection {
+        ToolSection(title: coreTitle, icon: persona.icon, color: persona.accentColor,
+                    tiles: [t(.workCenter, "Work Center", "What's waiting on you", "tray.full.fill", .blue)] + personaCoreTiles)
     }
 
-    private var personaSpecificTiles: [(HubDestination, String, String, String, Color)] {
+    private var personaCoreTiles: [HubTile] {
         switch persona {
         case .forensic:
             return [
-                (.forensicReview, "Evidence Coding", "Code & tag evidence", "shield.checkered", .orange),
-                (.chainOfCustody, "Chain of Custody", "Track evidence handling", "link", .orange),
-                (.iocExtractor, "IOC Detection", "Threat indicators", "exclamationmark.shield", .red),
-                (.anomalyDetection, "Anomaly Detection", "Statistical outliers", "waveform.path.ecg", .red),
-                (.investigationReport, "Investigation Reports", "Court-ready documents", "doc.text.magnifyingglass", .red),
+                t(.forensicReview, "Evidence Coding", "Code & tag evidence", "shield.checkered", .orange),
+                t(.chainOfCustody, "Chain of Custody", "Track evidence handling", "link", .orange),
+                t(.iocExtractor, "IOC Detection", "Threat indicators", "exclamationmark.shield", .red),
+                t(.anomalyDetection, "Anomaly Detection", "Statistical outliers", "waveform.path.ecg", .red),
+                t(.investigationReport, "Investigation Reports", "Court-ready documents", "doc.text.magnifyingglass", .red),
             ]
         case .legal:
             return [
-                (.legalWorkspace, "Privilege Review", "Code privilege & responsiveness", "building.columns", .indigo),
-                (.eDiscovery, "eDiscovery Workflow", "EDRM process", "checklist", .blue),
-                (.batesNumbering, "Bates Numbering", "Production stamping", "number", .purple),
-                (.gdprCompliance, "GDPR Compliance", "Data protection reports", "hand.raised", .green),
-                (.predictiveCoding, "Predictive Coding", "TAR classification", "brain", .pink),
+                t(.legalWorkspace, "Privilege Review", "Code privilege & responsiveness", "building.columns", .indigo),
+                t(.eDiscovery, "eDiscovery Workflow", "EDRM process", "checklist", .blue),
+                t(.batesNumbering, "Bates Numbering", "Production stamping", "number", .purple),
+                t(.gdprCompliance, "GDPR Compliance", "Data protection reports", "hand.raised", .green),
+                t(.predictiveCoding, "Predictive Coding", "TAR classification", "brain", .pink),
             ]
         case .itAdmin:
             return [
-                (.itAdminDashboard, "Header Analysis", "Headers, MIME, routing", "server.rack", .teal),
-                (.smartAlerts, "Auth Verification", "SPF / DKIM / DMARC", "checkmark.shield", .green),
-                (.anomalyDetection, "Anomaly Detection", "Unusual patterns", "waveform.path.ecg", .red),
-                (.iocExtractor, "IOC Extraction", "Threat indicators", "exclamationmark.shield", .red),
-                (.keywordMonitor, "Keyword Monitor", "Term tracking", "text.magnifyingglass", .teal),
+                t(.itAdminDashboard, "Header Analysis", "Headers, MIME, routing", "server.rack", .teal),
+                t(.smartAlerts, "Auth Verification", "SPF / DKIM / DMARC", "checkmark.shield", .green),
+                t(.anomalyDetection, "Anomaly Detection", "Unusual patterns", "waveform.path.ecg", .red),
+                t(.iocExtractor, "IOC Extraction", "Threat indicators", "exclamationmark.shield", .red),
+                t(.keywordMonitor, "Keyword Monitor", "Term tracking", "text.magnifyingglass", .teal),
             ]
         case .journalist:
             return [
-                (.journalistWorkbench, "Source Tracking", "Sources & credibility", "newspaper", .purple),
-                (.timeline, "Timeline Builder", "Event chronology", "calendar.day.timeline.left", .purple),
-                (.communicationPatterns, "Network Mapping", "Contact connections", "person.2", .cyan),
-                (.topicClusters, "Topic Discovery", "NLP clustering", "circle.grid.3x3", .teal),
-                (.relationshipGraph, "Relationship Graph", "Who connects to whom", "point.3.connected.trianglepath.dotted", .mint),
+                t(.journalistWorkbench, "Source Tracking", "Sources & credibility", "newspaper", .purple),
+                t(.timeline, "Timeline Builder", "Event chronology", "calendar.day.timeline.left", .purple),
+                t(.communicationPatterns, "Network Mapping", "Contact connections", "person.2", .cyan),
+                t(.topicClusters, "Topic Discovery", "NLP clustering", "circle.grid.3x3", .teal),
+                t(.relationshipGraph, "Relationship Graph", "Who connects to whom", "point.3.connected.trianglepath.dotted", .mint),
             ]
         case .personal:
             return [
-                (.personalOrganizer, "Smart Categories", "Auto-classify emails", "tray.full", .blue),
-                (.emailAnalytics, "Contact Insights", "Stats & sentiment", "person.crop.circle", .cyan),
-                (.attachmentGallery, "Attachments", "Photos & files", "paperclip", .brown),
-                (.duplicateManager, "Cleanup", "Remove duplicates", "doc.on.doc", .indigo),
-                (.threadSummarizer, "Summarizer", "Thread TL;DR", "text.bubble", .green),
+                t(.personalOrganizer, "Smart Categories", "Auto-classify emails", "tray.full", .blue),
+                t(.emailAnalytics, "Contact Insights", "Stats & sentiment", "person.crop.circle", .cyan),
+                t(.attachmentGallery, "Attachments", "Photos & files", "paperclip", .brown),
+                t(.duplicateManager, "Cleanup", "Remove duplicates", "doc.on.doc", .indigo),
+                t(.threadSummarizer, "Summarizer", "Thread TL;DR", "text.bubble", .green),
             ]
         case .general:
             return [
-                (.aiAssistant, "AI Assistant", "Ask anything", "sparkles", .purple),
-                (.emailAnalytics, "Full Analytics", "Stats & charts", "chart.bar", .blue),
-                (.knowledgeGraphExplorer, "Knowledge Graph", "Entity relationships", "point.3.connected.trianglepath.dotted", .purple),
-                (.predictiveInsights, "Predictions", "Urgency & outcomes", "chart.line.uptrend.xyaxis", .red),
-                (.pluginManager, "Plugins", "Extensions & add-ons", "puzzlepiece.extension", .indigo),
+                t(.aiAssistant, "AI Assistant", "Ask anything", "sparkles", .purple),
+                t(.emailAnalytics, "Full Analytics", "Stats & charts", "chart.bar", .blue),
+                t(.knowledgeGraphExplorer, "Knowledge Graph", "Entity relationships", "point.3.connected.trianglepath.dotted", .purple),
+                t(.predictiveInsights, "Predictions", "Urgency & outcomes", "chart.line.uptrend.xyaxis", .red),
+                t(.pluginManager, "Plugins", "Extensions & add-ons", "puzzlepiece.extension", .indigo),
             ]
         }
+    }
+
+    // MARK: Category sections (shared tool catalog — de-dup trims overlaps)
+
+    private var analysisSection: ToolSection {
+        ToolSection(title: "Analysis & Insights", icon: "chart.bar", color: .blue, tiles: [
+            t(.emailAnalytics, "Email Analytics", "Comprehensive stats", "chart.bar", .blue),
+            t(.topicClusters, "Topic Clusters", "NLP grouping", "circle.grid.3x3", .teal),
+            t(.timeline, "Timeline", "Chronological view", "calendar.day.timeline.left", .purple),
+            t(.communicationPatterns, "Comm Patterns", "Contact analysis", "person.2", .cyan),
+            t(.relationshipGraph, "Relationship Graph", "Network map", "point.3.connected.trianglepath.dotted", .mint),
+            t(.duplicateManager, "Duplicate Manager", "Find & remove", "doc.on.doc", .indigo),
+            t(.threadSummarizer, "Thread Summarizer", "Conversation TL;DR", "text.bubble", .green),
+            t(.attachmentGallery, "Attachments", "File gallery", "paperclip", .brown),
+            t(.executiveDashboard, "Executive Dashboard", "KPI overview", "gauge.with.dots.needle.33percent", .blue),
+        ])
+    }
+
+    private var securitySection: ToolSection {
+        ToolSection(title: "Security & Detection", icon: "shield.checkered", color: .red, tiles: [
+            t(.anomalyDetection, "Anomaly Detection", "Statistical outliers", "waveform.path.ecg", .red),
+            t(.phishingTriage, "Phishing Triage", "Verdict queue", "shield.lefthalf.filled", .red),
+            t(.iocExtractor, "IOC Extractor", "Threat indicators", "exclamationmark.shield", .red),
+            t(.smartAlerts, "Smart Alerts", "Pattern monitoring", "bell.badge", .orange),
+            t(.keywordMonitor, "Keyword Monitor", "Term tracking", "text.magnifyingglass", .teal),
+            t(.nearDuplicates, "Near Duplicates", "Similarity detection", "square.on.square.dashed", .indigo),
+            t(.chainOfCustody, "Chain of Custody", "Evidence tracking", "link", .orange),
+        ])
+    }
+
+    private var legalForensicSection: ToolSection {
+        ToolSection(title: "Legal & Forensic", icon: "building.columns", color: .indigo, tiles: [
+            t(.eDiscovery, "eDiscovery", "EDRM Workflow", "checklist", .blue),
+            t(.predictiveCoding, "Predictive Coding", "TAR Classifier", "brain", .pink),
+            t(.forensicReview, "Document Review", "Evidence coding", "shield.checkered", .orange),
+            t(.gdprCompliance, "GDPR Compliance", "Data Protection", "hand.raised", .green),
+            t(.investigationReport, "Investigation Report", "Court-ready docs", "doc.text.magnifyingglass", .red),
+            t(.batesNumbering, "Bates Numbers", "Document stamping", "number", .purple),
+            t(.reviewBatches, "Review Batches", "Batch workflow", "list.bullet.rectangle", .mint),
+            t(.reviewDashboard, "Review Dashboard", "Progress & privilege log", "chart.bar.doc.horizontal", .indigo),
+            t(.custodianPanel, "Custodian Panel", "Data custodians", "person.badge.key", .cyan),
+        ])
+    }
+
+    private var exportSection: ToolSection {
+        ToolSection(title: "Export & Reports", icon: "doc.text", color: .orange, tiles: [
+            t(.reportBuilder, "Report Builder", "PDF generation", "doc.richtext", .blue),
+            t(.batchOperations, "Batch Operations", "Bulk actions", "square.stack.3d.up", .orange),
+            t(.archiveComparison, "Archive Compare", "Diff archives", "rectangle.on.rectangle.angled", .cyan),
+            t(.redaction, "Redaction", "PII removal", "eye.slash", .gray),
+            t(.automationRules, "Automation Rules", "Custom workflows", "gearshape.2", .indigo),
+        ])
+    }
+
+    private var aiSection: ToolSection {
+        ToolSection(title: "AI Intelligence", icon: "sparkles", color: .purple, tiles: [
+            t(.aiAssistant, "AI Assistant", "Ask anything", "sparkles", .purple),
+            t(.aiDigest, "AI Digest", "Smart summary", "newspaper", .blue),
+            t(.smartAutoTagger, "Auto-Tagger", "NLP classification", "tag", .teal),
+            t(.customExperts, "Custom Experts", "Expert config", "person.crop.rectangle.stack", .mint),
+            t(.knowledgeGraphExplorer, "Knowledge Graph", "Entity relationships", "point.3.connected.trianglepath.dotted", .purple),
+            t(.aiVisualizations, "AI Visualizations", "Charts & heatmaps", "chart.bar.xaxis.ascending", .blue),
+            t(.backgroundFindings, "Background Scan", "Proactive detection", "shield.lefthalf.filled.badge.checkmark", .orange),
+            t(.predictiveInsights, "Predictions", "Urgency & outcomes", "chart.line.uptrend.xyaxis", .red),
+            t(.pluginManager, "Plugins", "Extensions & add-ons", "puzzlepiece.extension", .indigo),
+            t(.workspaceManager, "Workspaces", "Multi-archive", "square.grid.2x2", .gray),
+        ])
     }
 
     // MARK: - Header
@@ -329,193 +585,6 @@ struct MainNavigationHubView: View {
         .help("Browse, search and filter all \(emailCount) emails in your archive")
     }
 
-    // MARK: - Guided Workflows (pick the job you came to do)
-
-    private var guidedWorkflows: [WorkflowDefinition] {
-        let list = WorkflowCatalog.templates(for: persona.rawValue)
-        return list.isEmpty ? WorkflowCatalog.all : list
-    }
-
-    @ViewBuilder
-    private var guidedWorkflowsSection: some View {
-        if !guidedWorkflows.isEmpty {
-            VStack(alignment: .leading, spacing: Spacing.small) {
-                HStack(spacing: Spacing.xSmall) {
-                    sectionHeader(title: "Start a job", icon: "flowchart", color: persona.accentColor)
-                    Spacer()
-                    Text("GUIDED")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Capsule().fill(persona.accentColor))
-                }
-                Text("Pick what you came to do — mailin runs each step and keeps the numbered record for you.")
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-
-                LazyVGrid(columns: workflowColumns, spacing: Spacing.small) {
-                    ForEach(guidedWorkflows) { def in
-                        workflowCard(def)
-                    }
-                }
-            }
-        }
-    }
-
-    private func workflowCard(_ def: WorkflowDefinition) -> some View {
-        Button { workflowToRun = def } label: {
-            VStack(alignment: .leading, spacing: Spacing.xSmall) {
-                HStack(spacing: Spacing.xSmall) {
-                    Image(systemName: workflowIcon(def.defID))
-                        .font(.system(size: 20))
-                        .foregroundColor(persona.accentColor)
-                        .frame(width: 26, height: 26)
-                    Text(def.name)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(.primary)
-                        .lineLimit(2)
-                    Spacer()
-                }
-                Text(WorkflowCatalog.purpose(for: def.defID))
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-                    .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Text(def.operations.map(\.title).joined(separator: " → "))
-                    .font(.system(size: 9))
-                    .foregroundColor(.secondary.opacity(0.7))
-                    .lineLimit(1)
-                HStack(spacing: 3) {
-                    Text("Start")
-                        .font(.system(size: 11, weight: .semibold))
-                    Image(systemName: "arrow.right.circle.fill")
-                        .font(.system(size: 12))
-                }
-                .foregroundColor(persona.accentColor)
-            }
-            .frame(maxWidth: .infinity, minHeight: 132, alignment: .topLeading)
-            .padding(Spacing.small)
-            .background(
-                RoundedRectangle(cornerRadius: CornerRadius.medium)
-                    .fill(persona.accentColor.opacity(0.07))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: CornerRadius.medium)
-                    .strokeBorder(persona.accentColor.opacity(0.18), lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Start workflow: \(def.name)")
-        .help(WorkflowCatalog.purpose(for: def.defID))
-    }
-
-    private func workflowIcon(_ defID: String) -> String {
-        switch defID {
-        case "builtin.forensic.intake": return "shield.checkered"
-        case "builtin.forensic.timeline": return "calendar.day.timeline.left"
-        case "builtin.legal.production": return "building.columns"
-        case "builtin.legal.hold": return "hand.raised"
-        case "builtin.legal.eca": return "chart.bar.doc.horizontal"
-        case "builtin.legal.dsar": return "person.text.rectangle"
-        case "builtin.it.phishing": return "shield.lefthalf.filled"
-        case "builtin.it.threathunt": return "binoculars"
-        case "builtin.it.campaign": return "square.grid.3x3.fill"
-        case "builtin.journalist.story": return "text.book.closed"
-        case "builtin.journalist.network": return "point.3.connected.trianglepath.dotted"
-        case "builtin.personal.cleanup": return "sparkles"
-        default: return "flowchart"
-        }
-    }
-
-    // MARK: - Persona Workflow (Featured Row)
-
-    @ViewBuilder
-    private var personaWorkflowSection: some View {
-        switch persona {
-        case .forensic:
-            personaHero(
-                title: "Forensic Review", subtitle: "Evidence coding, eDiscovery, chain of custody",
-                icon: "shield.checkered", color: .orange, destination: .forensicReview
-            )
-            workflowRow(
-                title: "eDiscovery Workflow", icon: "checklist", color: .blue,
-                tiles: [
-                    (.eDiscovery, "eDiscovery", "EDRM Workflow", "checklist", .blue),
-                    (.predictiveCoding, "Predictive Coding", "TAR Classifier", "brain", .pink),
-                    (.gdprCompliance, "GDPR Compliance", "Data Protection", "hand.raised", .green),
-                ]
-            )
-        case .legal:
-            personaHero(
-                title: "Legal Review Workspace", subtitle: "Privilege coding, responsiveness, production sets",
-                icon: "building.columns", color: .indigo, destination: .legalWorkspace
-            )
-            workflowRow(
-                title: "Legal Workflow", icon: "building.columns", color: .indigo,
-                tiles: [
-                    (.eDiscovery, "eDiscovery", "EDRM Workflow", "checklist", .blue),
-                    (.batesNumbering, "Bates Numbering", "Production stamping", "number", .purple),
-                    (.gdprCompliance, "GDPR Compliance", "Data Protection", "hand.raised", .green),
-                ]
-            )
-        case .itAdmin:
-            personaHero(
-                title: "IT Admin Analysis", subtitle: "Headers, authentication, routing, MIME structure",
-                icon: "server.rack", color: .teal, destination: .itAdminDashboard
-            )
-            workflowRow(
-                title: "Security Operations", icon: "shield", color: .red,
-                tiles: [
-                    (.phishingTriage, "Phishing Triage", "Verdict queue", "shield.lefthalf.filled", .red),
-                    (.iocExtractor, "IOC Extractor", "Threat indicators", "exclamationmark.shield", .red),
-                    (.anomalyDetection, "Anomaly Detection", "Outlier analysis", "waveform.path.ecg", .red),
-                    (.smartAlerts, "Smart Alerts", "Pattern monitoring", "bell.badge", .orange),
-                ]
-            )
-        case .journalist:
-            personaHero(
-                title: "Investigation Workbench", subtitle: "Sources, timeline, leads, key quotes",
-                icon: "newspaper", color: .purple, destination: .journalistWorkbench
-            )
-            workflowRow(
-                title: "Research Tools", icon: "magnifyingglass", color: .purple,
-                tiles: [
-                    (.storyFile, "Story File", "Cited findings", "text.book.closed", .purple),
-                    (.timeline, "Timeline", "Event chronology", "calendar.day.timeline.left", .purple),
-                    (.relationshipGraph, "Relationship Graph", "Contact network", "point.3.connected.trianglepath.dotted", .mint),
-                    (.communicationPatterns, "Comm Patterns", "Who talks to whom", "person.2", .cyan),
-                ]
-            )
-        case .personal:
-            personaHero(
-                title: "Personal Organizer", subtitle: "Contacts, categories, attachments, cleanup",
-                icon: "tray.full", color: .blue, destination: .personalOrganizer
-            )
-            workflowRow(
-                title: "Quick Actions", icon: "star", color: .blue,
-                tiles: [
-                    (.attachmentGallery, "Attachments", "Photos & files", "paperclip", .brown),
-                    (.duplicateManager, "Cleanup", "Remove duplicates", "doc.on.doc", .indigo),
-                    (.threadSummarizer, "Summarize", "Thread TL;DR", "text.bubble", .green),
-                ]
-            )
-        case .general:
-            personaHero(
-                title: "Feature Explorer", subtitle: "Discover all features, tips, and guided tour",
-                icon: "sparkles", color: .mint, destination: .generalExplorer
-            )
-            workflowRow(
-                title: "Get Started", icon: "sparkles", color: .mint,
-                tiles: [
-                    (.aiAssistant, "AI Assistant", "Ask anything", "sparkles", .purple),
-                    (.emailAnalytics, "Analytics", "Stats & charts", "chart.bar", .blue),
-                    (.executiveDashboard, "Dashboard", "KPI overview", "gauge.with.dots.needle.33percent", .blue),
-                ]
-            )
-        }
-    }
-
     private func personaHero(title: String, subtitle: String, icon: String, color: Color, destination: HubDestination) -> some View {
         Button { onNavigate(destination) } label: {
             HStack(spacing: Spacing.medium) {
@@ -560,264 +629,6 @@ struct MainNavigationHubView: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Open \(title)")
         .help("\(title) — \(subtitle)")
-    }
-
-    private func workflowRow(title: String, icon: String, color: Color,
-                             tiles: [(HubDestination, String, String, String, Color)]) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.small) {
-            sectionHeader(title: title, icon: icon, color: color)
-            LazyVGrid(columns: workflowColumns, spacing: Spacing.small) {
-                ForEach(tiles, id: \.0) { tile in
-                    hubTile(dest: tile.0, title: tile.1, subtitle: tile.2, icon: tile.3, color: tile.4)
-                }
-            }
-        }
-    }
-
-    // MARK: - For You (Persona-Recommended)
-
-    private var forYouSection: some View {
-        VStack(alignment: .leading, spacing: Spacing.small) {
-            HStack(spacing: Spacing.xSmall) {
-                sectionHeader(title: forYouTitle, icon: forYouIcon, color: forYouColor)
-                Spacer()
-                Text("FOR YOU")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(persona.accentColor))
-            }
-
-            LazyVGrid(columns: featureColumns, spacing: Spacing.small) {
-                ForEach(forYouTiles, id: \.0) { tile in
-                    hubTile(dest: tile.0, title: tile.1, subtitle: tile.2, icon: tile.3, color: tile.4)
-                }
-            }
-        }
-    }
-
-    private var forYouTitle: String {
-        switch persona {
-        case .forensic: return "Security & Detection"
-        case .legal: return "Privilege & Compliance"
-        case .itAdmin: return "Technical Analysis"
-        case .journalist: return "Discovery & Research"
-        case .personal: return "Organize & Find"
-        case .general: return "Popular Features"
-        }
-    }
-
-    private var forYouIcon: String {
-        switch persona {
-        case .forensic: return "shield.checkered"
-        case .legal: return "lock.shield"
-        case .itAdmin: return "network"
-        case .journalist: return "magnifyingglass"
-        case .personal: return "tray.full"
-        case .general: return "star"
-        }
-    }
-
-    private var forYouColor: Color {
-        switch persona {
-        case .forensic: return .red
-        case .legal: return .indigo
-        case .itAdmin: return .teal
-        case .journalist: return .purple
-        case .personal: return .blue
-        case .general: return .orange
-        }
-    }
-
-    private var forYouTiles: [(HubDestination, String, String, String, Color)] {
-        switch persona {
-        case .forensic:
-            return [
-                (.anomalyDetection, "Anomaly Detection", "Statistical outliers", "waveform.path.ecg", .red),
-                (.phishingTriage, "Phishing Triage", "Verdict queue", "shield.lefthalf.filled", .red),
-                (.iocExtractor, "IOC Extractor", "Threat indicators", "exclamationmark.shield", .red),
-                (.smartAlerts, "Smart Alerts", "Pattern monitoring", "bell.badge", .orange),
-                (.keywordMonitor, "Keyword Monitor", "Term tracking", "text.magnifyingglass", .teal),
-                (.nearDuplicates, "Near Duplicates", "Similarity detection", "square.on.square.dashed", .indigo),
-                (.chainOfCustody, "Chain of Custody", "Evidence tracking", "link", .orange),
-            ]
-        case .legal:
-            return [
-                (.gdprCompliance, "GDPR Compliance", "Data protection", "hand.raised", .green),
-                (.redaction, "Redaction", "PII removal", "eye.slash", .gray),
-                (.reviewBatches, "Review Batches", "Batch workflow", "list.bullet.rectangle", .mint),
-                (.reviewDashboard, "Review Dashboard", "Progress & privilege log", "chart.bar.doc.horizontal", .indigo),
-                (.custodianPanel, "Custodian Panel", "Data custodians", "person.badge.key", .cyan),
-                (.predictiveCoding, "Predictive Coding", "TAR Classifier", "brain", .pink),
-                (.keywordMonitor, "Keyword Monitor", "Term tracking", "text.magnifyingglass", .teal),
-            ]
-        case .itAdmin:
-            return [
-                (.keywordMonitor, "Keyword Monitor", "Term tracking", "text.magnifyingglass", .teal),
-                (.nearDuplicates, "Near Duplicates", "Similarity detection", "square.on.square.dashed", .indigo),
-                (.duplicateManager, "Duplicate Manager", "Find & remove", "doc.on.doc", .indigo),
-                (.communicationPatterns, "Comm Patterns", "Traffic analysis", "person.2", .cyan),
-                (.attachmentGallery, "Attachments", "File gallery", "paperclip", .brown),
-                (.archiveComparison, "Archive Compare", "Diff archives", "rectangle.on.rectangle.angled", .cyan),
-            ]
-        case .journalist:
-            return [
-                (.topicClusters, "Topic Clusters", "NLP grouping", "circle.grid.3x3", .teal),
-                (.threadSummarizer, "Thread Summarizer", "Conversation TL;DR", "text.bubble", .green),
-                (.emailAnalytics, "Email Analytics", "Comprehensive stats", "chart.bar", .blue),
-                (.executiveDashboard, "Executive Dashboard", "KPI overview", "gauge.with.dots.needle.33percent", .blue),
-                (.anomalyDetection, "Anomaly Detection", "Outlier patterns", "waveform.path.ecg", .red),
-                (.redaction, "Redaction", "Source protection", "eye.slash", .gray),
-            ]
-        case .personal:
-            return [
-                (.topicClusters, "Topic Clusters", "Organize by topic", "circle.grid.3x3", .teal),
-                (.emailAnalytics, "Email Analytics", "Your email stats", "chart.bar", .blue),
-                (.timeline, "Timeline", "Chronological view", "calendar.day.timeline.left", .purple),
-                (.nearDuplicates, "Near Duplicates", "Find similar", "square.on.square.dashed", .indigo),
-            ]
-        case .general:
-            return [
-                (.topicClusters, "Topic Clusters", "NLP grouping", "circle.grid.3x3", .teal),
-                (.timeline, "Timeline", "Chronological view", "calendar.day.timeline.left", .purple),
-                (.communicationPatterns, "Comm Patterns", "Contact analysis", "person.2", .cyan),
-                (.relationshipGraph, "Relationship Graph", "Network map", "point.3.connected.trianglepath.dotted", .mint),
-                (.duplicateManager, "Duplicate Manager", "Find & remove", "doc.on.doc", .indigo),
-                (.attachmentGallery, "Attachments", "File gallery", "paperclip", .brown),
-            ]
-        }
-    }
-
-    // MARK: - Analysis & Insights
-
-    private var analysisSection: some View {
-        VStack(alignment: .leading, spacing: Spacing.small) {
-            sectionHeader(title: "Analysis & Insights", icon: "chart.bar", color: .blue)
-
-            LazyVGrid(columns: featureColumns, spacing: Spacing.small) {
-                hubTile(dest: .emailAnalytics, title: "Email Analytics", subtitle: "Comprehensive stats",
-                        icon: "chart.bar", color: .blue)
-                hubTile(dest: .topicClusters, title: "Topic Clusters", subtitle: "NLP grouping",
-                        icon: "circle.grid.3x3", color: .teal)
-                hubTile(dest: .timeline, title: "Timeline", subtitle: "Chronological view",
-                        icon: "calendar.day.timeline.left", color: .purple)
-                hubTile(dest: .communicationPatterns, title: "Comm Patterns", subtitle: "Contact analysis",
-                        icon: "person.2", color: .cyan)
-                hubTile(dest: .relationshipGraph, title: "Relationship Graph", subtitle: "Network map",
-                        icon: "point.3.connected.trianglepath.dotted", color: .mint)
-                hubTile(dest: .duplicateManager, title: "Duplicate Manager", subtitle: "Find & remove",
-                        icon: "doc.on.doc", color: .indigo)
-                hubTile(dest: .threadSummarizer, title: "Thread Summarizer", subtitle: "Conversation TL;DR",
-                        icon: "text.bubble", color: .green)
-                hubTile(dest: .attachmentGallery, title: "Attachments", subtitle: "File gallery",
-                        icon: "paperclip", color: .brown)
-                hubTile(dest: .executiveDashboard, title: "Executive Dashboard", subtitle: "KPI overview",
-                        icon: "gauge.with.dots.needle.33percent", color: .blue)
-            }
-        }
-    }
-
-    // MARK: - Security & Detection
-
-    private var securitySection: some View {
-        VStack(alignment: .leading, spacing: Spacing.small) {
-            sectionHeader(title: "Security & Detection", icon: "shield.checkered", color: .red)
-
-            LazyVGrid(columns: featureColumns, spacing: Spacing.small) {
-                hubTile(dest: .anomalyDetection, title: "Anomaly Detection", subtitle: "Statistical outliers",
-                        icon: "waveform.path.ecg", color: .red)
-                hubTile(dest: .iocExtractor, title: "IOC Extractor", subtitle: "Threat indicators",
-                        icon: "exclamationmark.shield", color: .red)
-                hubTile(dest: .smartAlerts, title: "Smart Alerts", subtitle: "Pattern monitoring",
-                        icon: "bell.badge", color: .orange)
-                hubTile(dest: .keywordMonitor, title: "Keyword Monitor", subtitle: "Term tracking",
-                        icon: "text.magnifyingglass", color: .teal)
-                hubTile(dest: .nearDuplicates, title: "Near Duplicates", subtitle: "Similarity detection",
-                        icon: "square.on.square.dashed", color: .indigo)
-                hubTile(dest: .chainOfCustody, title: "Chain of Custody", subtitle: "Evidence tracking",
-                        icon: "link", color: .orange)
-            }
-        }
-    }
-
-    // MARK: - Legal & Forensic
-
-    private var legalForensicSection: some View {
-        VStack(alignment: .leading, spacing: Spacing.small) {
-            sectionHeader(title: "Legal & Forensic", icon: "building.columns", color: .indigo)
-
-            LazyVGrid(columns: featureColumns, spacing: Spacing.small) {
-                hubTile(dest: .eDiscovery, title: "eDiscovery", subtitle: "EDRM Workflow",
-                        icon: "checklist", color: .blue)
-                hubTile(dest: .predictiveCoding, title: "Predictive Coding", subtitle: "TAR Classifier",
-                        icon: "brain", color: .pink)
-                hubTile(dest: .forensicReview, title: "Document Review", subtitle: "Evidence coding",
-                        icon: "shield.checkered", color: .orange)
-                hubTile(dest: .gdprCompliance, title: "GDPR Compliance", subtitle: "Data Protection",
-                        icon: "hand.raised", color: .green)
-                hubTile(dest: .investigationReport, title: "Investigation Report", subtitle: "Court-ready docs",
-                        icon: "doc.text.magnifyingglass", color: .red)
-                hubTile(dest: .batesNumbering, title: "Bates Numbers", subtitle: "Document stamping",
-                        icon: "number", color: .purple)
-                hubTile(dest: .reviewBatches, title: "Review Batches", subtitle: "Batch workflow",
-                        icon: "list.bullet.rectangle", color: .mint)
-                hubTile(dest: .custodianPanel, title: "Custodian Panel", subtitle: "Data custodians",
-                        icon: "person.badge.key", color: .cyan)
-            }
-        }
-    }
-
-    // MARK: - Export & Reports
-
-    private var exportSection: some View {
-        VStack(alignment: .leading, spacing: Spacing.small) {
-            sectionHeader(title: "Export & Reports", icon: "doc.text", color: .orange)
-
-            LazyVGrid(columns: featureColumns, spacing: Spacing.small) {
-                hubTile(dest: .reportBuilder, title: "Report Builder", subtitle: "PDF generation",
-                        icon: "doc.richtext", color: .blue)
-                hubTile(dest: .batchOperations, title: "Batch Operations", subtitle: "Bulk actions",
-                        icon: "square.stack.3d.up", color: .orange)
-                hubTile(dest: .archiveComparison, title: "Archive Compare", subtitle: "Diff archives",
-                        icon: "rectangle.on.rectangle.angled", color: .cyan)
-                hubTile(dest: .redaction, title: "Redaction", subtitle: "PII removal",
-                        icon: "eye.slash", color: .gray)
-                hubTile(dest: .automationRules, title: "Automation Rules", subtitle: "Custom workflows",
-                        icon: "gearshape.2", color: .indigo)
-            }
-        }
-    }
-
-    // MARK: - AI Intelligence
-
-    private var aiSection: some View {
-        VStack(alignment: .leading, spacing: Spacing.small) {
-            sectionHeader(title: "AI Intelligence", icon: "sparkles", color: .purple)
-
-            LazyVGrid(columns: featureColumns, spacing: Spacing.small) {
-                hubTile(dest: .aiAssistant, title: "AI Assistant", subtitle: "Ask anything",
-                        icon: "sparkles", color: .purple)
-                hubTile(dest: .aiDigest, title: "AI Digest", subtitle: "Smart summary",
-                        icon: "newspaper", color: .blue)
-                hubTile(dest: .smartAutoTagger, title: "Auto-Tagger", subtitle: "NLP classification",
-                        icon: "tag", color: .teal)
-                hubTile(dest: .customExperts, title: "Custom Experts", subtitle: "Expert config",
-                        icon: "person.crop.rectangle.stack", color: .mint)
-                hubTile(dest: .knowledgeGraphExplorer, title: "Knowledge Graph", subtitle: "Entity relationships",
-                        icon: "point.3.connected.trianglepath.dotted", color: .purple)
-                hubTile(dest: .aiVisualizations, title: "AI Visualizations", subtitle: "Charts & heatmaps",
-                        icon: "chart.bar.xaxis.ascending", color: .blue)
-                hubTile(dest: .backgroundFindings, title: "Background Scan", subtitle: "Proactive detection",
-                        icon: "shield.lefthalf.filled.badge.checkmark", color: .orange)
-                hubTile(dest: .predictiveInsights, title: "Predictions", subtitle: "Urgency & outcomes",
-                        icon: "chart.line.uptrend.xyaxis", color: .red)
-                hubTile(dest: .pluginManager, title: "Plugins", subtitle: "Extensions & add-ons",
-                        icon: "puzzlepiece.extension", color: .indigo)
-                hubTile(dest: .workspaceManager, title: "Workspaces", subtitle: "Multi-archive",
-                        icon: "square.grid.2x2", color: .gray)
-            }
-        }
     }
 
     // MARK: - Bottom Bar
@@ -878,21 +689,20 @@ struct MainNavigationHubView: View {
         }
     }
 
-    private func hubTile(dest: HubDestination, title: String, subtitle: String,
-                         icon: String, color: Color) -> some View {
-        Button { onNavigate(dest) } label: {
+    private func hubTile(_ tile: HubTile) -> some View {
+        Button { onNavigate(tile.dest) } label: {
             VStack(alignment: .leading, spacing: Spacing.xSmall) {
-                Image(systemName: icon)
+                Image(systemName: tile.icon)
                     .font(.system(size: 22))
-                    .foregroundColor(color)
+                    .foregroundColor(tile.color)
                     .frame(height: 26)
 
-                Text(title)
+                Text(tile.title)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(.primary)
                     .lineLimit(1)
 
-                Text(subtitle)
+                Text(tile.subtitle)
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
                     .lineLimit(1)
@@ -901,16 +711,16 @@ struct MainNavigationHubView: View {
             .padding(Spacing.small)
             .background(
                 RoundedRectangle(cornerRadius: CornerRadius.medium)
-                    .fill(color.opacity(0.06))
+                    .fill(tile.color.opacity(0.06))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: CornerRadius.medium)
-                    .strokeBorder(color.opacity(0.1), lineWidth: 0.5)
+                    .strokeBorder(tile.color.opacity(0.1), lineWidth: 0.5)
             )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(title), \(subtitle)")
-        .help("\(title) — \(subtitle)")
+        .accessibilityLabel("\(tile.title), \(tile.subtitle)")
+        .help("\(tile.title) — \(tile.subtitle)")
     }
 }
 
