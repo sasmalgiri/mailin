@@ -100,6 +100,9 @@ struct WorkflowRunnerView: View {
             VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
                 Label(definition.name, systemImage: "flowchart")
                     .font(Typography.title2)
+                Text(WorkflowCatalog.purpose(for: definition.defID))
+                    .font(Typography.caption1).foregroundColor(AppColors.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: Spacing.xSmall) {
                     if !wfNumber.isEmpty {
                         Text(wfNumber)

@@ -1611,6 +1611,86 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertEqual(gate.rule, .fieldEquals(seq: 3, key: "thirdPartyRedacted", value: "Yes"))
     }
 
+    /// Every new secondary-job workflow runs start → confirm-all → confirmed,
+    /// just like the originals — proving they're real, drivable recipes, not
+    /// just catalog entries.
+    func testNewWorkflows_lifecycleEndToEnd() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-newwf-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root)
+
+        let newDefs = [
+            WorkflowCatalog.forensicTimeline, WorkflowCatalog.legalHold,
+            WorkflowCatalog.legalECA, WorkflowCatalog.legalDSAR,
+            WorkflowCatalog.itThreatHunt, WorkflowCatalog.itCampaign,
+            WorkflowCatalog.journalistNetwork,
+        ]
+        for def in newDefs {
+            let ops = def.operations.map {
+                SQLiteEmailStore.StoredOperation(seq: $0.seq, key: $0.key, title: $0.title,
+                                                 hint: $0.hint, postsDocType: $0.postsDocType?.rawValue)
+            }
+            try await store.upsertDefinition(defID: def.defID, name: def.name,
+                                             persona: def.persona, builtin: true, operations: ops)
+            let wf = try await store.createInstance(defID: def.defID, title: def.name, createdBy: "Tester")
+            XCTAssertTrue(wf.hasPrefix("WF-"), "\(def.defID) should get a WF number")
+            let total = def.operations.count
+            for opn in def.operations {
+                try await store.confirmOperation(wf: wf, seq: opn.seq, totalOps: total,
+                                                 result: "done", note: "", docNumber: nil, confirmedBy: "Tester")
+            }
+            let status = try await store.instance(wf: wf)?.status
+            XCTAssertEqual(status, "confirmed", "\(def.defID) should end confirmed")
+            let confs = try await store.confirmations(wf: wf)
+            XCTAssertEqual(confs.count, total, "\(def.defID) records one confirmation per op")
+        }
+    }
+
+    /// The load-bearing gates on the new workflows actually block the unsafe
+    /// transition — the whole point of the SAP status network.
+    func testNewWorkflows_loadBearingGates() {
+        func op(_ def: WorkflowDefinition, _ key: String) -> WorkflowOperation {
+            def.operations.first { $0.key == key }!
+        }
+        // DSAR: cannot Produce until third-party PII is redacted.
+        let dsarProduce = op(WorkflowCatalog.legalDSAR, "produce")
+        let blocked = GatePolicy.lockedReasons(dsarProduce, state: .init(
+            confirmed: [1, 2, 3, 4], fieldValues: [3: ["thirdPartyRedacted": ""]]))
+        XCTAssertFalse(blocked.isEmpty, "produce must be locked until third-party PII is redacted")
+        let open = GatePolicy.lockedReasons(dsarProduce, state: .init(
+            confirmed: [1, 2, 3, 4], fieldValues: [3: ["thirdPartyRedacted": "Yes"]]))
+        XCTAssertTrue(open.isEmpty, "produce opens once redaction is confirmed")
+
+        // Bulk campaign: no bulk containment until a verdict is set.
+        let contain = op(WorkflowCatalog.itCampaign, "contain")
+        XCTAssertFalse(GatePolicy.lockedReasons(contain, state: .init(
+            confirmed: [1, 2, 3], fieldValues: [3: ["disposition": ""]])).isEmpty)
+        XCTAssertTrue(GatePolicy.lockedReasons(contain, state: .init(
+            confirmed: [1, 2, 3], fieldValues: [3: ["disposition": "Confirmed phishing"]])).isEmpty)
+
+        // Timeline: can't export the exhibit before the timeline is built.
+        let exhibit = op(WorkflowCatalog.forensicTimeline, "exhibit")
+        XCTAssertFalse(GatePolicy.lockedReasons(exhibit, state: .init(confirmed: [1], fieldValues: [:])).isEmpty)
+        XCTAssertTrue(GatePolicy.lockedReasons(exhibit, state: .init(confirmed: [1, 2], fieldValues: [:])).isEmpty)
+
+        // Legal hold: can't issue the notice before custodians are identified.
+        let issue = op(WorkflowCatalog.legalHold, "issue")
+        XCTAssertFalse(GatePolicy.lockedReasons(issue, state: .init(confirmed: [1], fieldValues: [1: ["custodians": ""]])).isEmpty)
+        XCTAssertTrue(GatePolicy.lockedReasons(issue, state: .init(confirmed: [1], fieldValues: [1: ["custodians": "jdoe\nasmith"]])).isEmpty)
+    }
+
+    /// Every recipe carries a real plain-language purpose (no recipe falls
+    /// through to the generic default) — the discoverability line users see.
+    func testWorkflowPurpose_presentAndSpecific() {
+        let generic = WorkflowCatalog.purpose(for: "does.not.exist")
+        for def in WorkflowCatalog.all {
+            let p = WorkflowCatalog.purpose(for: def.defID)
+            XCTAssertFalse(p.isEmpty)
+            XCTAssertNotEqual(p, generic, "\(def.defID) should have its own purpose line, not the fallback")
+        }
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default

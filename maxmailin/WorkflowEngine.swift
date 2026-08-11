@@ -477,6 +477,41 @@ enum WorkflowCatalog {
     static func templates(for persona: String) -> [WorkflowDefinition] {
         all.filter { $0.persona == persona }
     }
+
+    /// One plain-language line explaining what a recipe is for and when to
+    /// reach for it — shown in the Work Center list and the runner header so
+    /// a first-time user (the Datashare "missed 20% of features" problem)
+    /// knows why the workflow exists without reading a manual.
+    static func purpose(for defID: String) -> String {
+        switch defID {
+        case "builtin.forensic.intake":
+            return "Take in a mailbox as evidence and work it end to end — receive, hash, examine, analyze, report — with the chain of custody written for you."
+        case "builtin.forensic.timeline":
+            return "Reconstruct what happened and when, then export a defensible timeline exhibit for the case file."
+        case "builtin.legal.production":
+            return "Run a document production the defensible way — review, privilege-log, Bates, produce — with the privilege gate enforced before you release."
+        case "builtin.legal.hold":
+            return "Put a legal hold in place and prove it: identify custodians, issue the notice, track acknowledgements, preserve the data."
+        case "builtin.legal.eca":
+            return "Assess a matter before the expensive review — cull, sample, estimate scope — and decide how to proceed on evidence, not a guess."
+        case "builtin.legal.dsar":
+            return "Answer a data-subject/GDPR request on the clock — locate the data, redact everyone else's, and produce a clean response pack."
+        case "builtin.it.phishing":
+            return "Work a single reported email start to finish — analyze, verdict, contain, close — and post the verdict number your ticket cites."
+        case "builtin.it.threathunt":
+            return "Hunt the archive proactively on a hypothesis, extract indicators, and report what you found — before anyone reports it to you."
+        case "builtin.it.campaign":
+            return "Handle one phishing campaign that generated many reports as a single incident: cluster, verdict once, contain in bulk."
+        case "builtin.journalist.story":
+            return "Build a story from a leak the honest way — verify provenance, annotate cited findings, compile and fact-check a sourced draft."
+        case "builtin.journalist.network":
+            return "Map who knew whom — extract the entities, chart the connections, and turn the network into the spine of your story."
+        case "builtin.personal.cleanup":
+            return "Tidy a personal archive — import, dedupe, categorize, and export a clean backup."
+        default:
+            return "A guided recipe that does the job step by step and keeps a numbered record for you."
+        }
+    }
 }
 
 /// SAP "determination": values the app can compute from live data, so the
