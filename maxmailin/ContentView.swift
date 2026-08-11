@@ -623,6 +623,11 @@ struct ContentView: View {
                     sidebarRow(.communicationPatterns, "Comm Patterns", "person.2")
                     sidebarRow(.relationshipGraph, "Relationship Graph", "point.3.connected.trianglepath.dotted")
                     sidebarRow(.executiveDashboard, "Executive Dashboard", "gauge.with.dots.needle.33percent")
+                    // Journalists get source-protective redaction here (they
+                    // don't show the Legal & Forensic group that hosts it).
+                    if personaManager.selectedPersona == .journalist {
+                        sidebarRow(.redaction, "Redaction", "eye.slash")
+                    }
                 } header: {
                     Text("Analysis")
                 }
@@ -650,6 +655,7 @@ struct ContentView: View {
                     sidebarRow(.gdprCompliance, "GDPR Compliance", "hand.raised")
                     sidebarRow(.reviewBatches, "Review Batches", "list.bullet.rectangle")
                     sidebarRow(.custodianPanel, "Custodian Panel", "person.badge.key")
+                    sidebarRow(.redaction, "Redaction", "eye.slash")
                 } header: {
                     Text("Legal & Forensic")
                 }
@@ -661,7 +667,6 @@ struct ContentView: View {
                     sidebarRow(.batchOperations, "Batch Operations", "square.stack.3d.up")
                     sidebarRow(.archiveComparison, "Archive Compare", "rectangle.on.rectangle.angled")
                     sidebarRow(.investigationReport, "Investigation Report", "doc.text.magnifyingglass")
-                    sidebarRow(.redaction, "Redaction", "eye.slash")
                     sidebarRow(.automationRules, "Automation Rules", "gearshape.2")
                 } header: {
                     Text("Export & Reports")

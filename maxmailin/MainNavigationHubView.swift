@@ -308,8 +308,8 @@ struct MainNavigationHubView: View {
         case .personal:
             out += [analysisSection]
         case .general:
-            // Explorer keeps the broad catalog.
-            out += [analysisSection, aiSection, exportSection]
+            // Explorer keeps the full catalog.
+            out += [securitySection, legalForensicSection, analysisSection, exportSection, aiSection]
         }
         return out
     }
@@ -401,6 +401,7 @@ struct MainNavigationHubView: View {
                 t(.communicationPatterns, "Network Mapping", "Contact connections", "person.2", .cyan),
                 t(.topicClusters, "Topic Discovery", "NLP clustering", "circle.grid.3x3", .teal),
                 t(.relationshipGraph, "Relationship Graph", "Who connects to whom", "point.3.connected.trianglepath.dotted", .mint),
+                t(.redaction, "Redaction", "Protect your sources", "eye.slash", .gray),
             ]
         case .personal:
             return [
@@ -460,6 +461,7 @@ struct MainNavigationHubView: View {
             t(.reviewBatches, "Review Batches", "Batch workflow", "list.bullet.rectangle", .mint),
             t(.reviewDashboard, "Review Dashboard", "Progress & privilege log", "chart.bar.doc.horizontal", .indigo),
             t(.custodianPanel, "Custodian Panel", "Data custodians", "person.badge.key", .cyan),
+            t(.redaction, "Redaction", "PII / source protection", "eye.slash", .gray),
         ])
     }
 
@@ -468,7 +470,6 @@ struct MainNavigationHubView: View {
             t(.reportBuilder, "Report Builder", "PDF generation", "doc.richtext", .blue),
             t(.batchOperations, "Batch Operations", "Bulk actions", "square.stack.3d.up", .orange),
             t(.archiveComparison, "Archive Compare", "Diff archives", "rectangle.on.rectangle.angled", .cyan),
-            t(.redaction, "Redaction", "PII removal", "eye.slash", .gray),
             t(.automationRules, "Automation Rules", "Custom workflows", "gearshape.2", .indigo),
         ])
     }
