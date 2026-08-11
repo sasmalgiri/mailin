@@ -341,8 +341,11 @@ struct WorkCenterView: View {
                             Image(systemName: "flowchart").foregroundColor(AppColors.primary)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(def.name).font(Typography.callout).fontWeight(.semibold)
+                                Text(WorkflowCatalog.purpose(for: def.defID))
+                                    .font(Typography.caption1).foregroundColor(AppColors.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
                                 Text(def.operations.map(\.title).joined(separator: " → "))
-                                    .font(Typography.caption2).foregroundColor(AppColors.secondary)
+                                    .font(Typography.caption2).foregroundColor(AppColors.secondary.opacity(0.7))
                                     .lineLimit(1)
                             }
                             Spacer()

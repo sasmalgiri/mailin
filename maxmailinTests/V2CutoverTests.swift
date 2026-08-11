@@ -1137,8 +1137,8 @@ final class V2CutoverTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         let store = SQLiteEmailStore(directory: root)
 
-        // Built-in catalog is well-formed: 5 personas, sequential ops.
-        XCTAssertEqual(WorkflowCatalog.all.count, 5)
+        // Built-in catalog is well-formed: 12 recipes, sequential ops.
+        XCTAssertEqual(WorkflowCatalog.all.count, 12)
         for def in WorkflowCatalog.all {
             XCTAssertEqual(def.operations.map(\.seq), Array(1...def.operations.count),
                            "\(def.defID) operations must be 1..n in order")
@@ -1558,6 +1558,137 @@ final class V2CutoverTests: XCTestCase {
         // No noise when there's nothing persona-specific left to surface.
         XCTAssertNil(top("it_admin") { $0.watchFolderOff = false })
         XCTAssertNil(top("personal") { $0.duplicateCount = 0 })
+    }
+
+    /// Expanded coverage: the secondary daily jobs each persona actually does
+    /// now ship as guided workflows too, and the whole catalog stays sound —
+    /// unique IDs, defined doc types, and gates that point at real operations.
+    func testCatalog_expandedPersonaCoverage() {
+        // Per-persona workflow counts after adding the secondary jobs.
+        XCTAssertEqual(WorkflowCatalog.templates(for: "forensic").count, 2)
+        XCTAssertEqual(WorkflowCatalog.templates(for: "legal").count, 4)   // production, hold, ECA, DSAR
+        XCTAssertEqual(WorkflowCatalog.templates(for: "it_admin").count, 3)   // phishing, threat hunt, bulk campaign
+        XCTAssertEqual(WorkflowCatalog.templates(for: "journalist").count, 2)
+        XCTAssertEqual(WorkflowCatalog.templates(for: "personal").count, 1)
+
+        // The new jobs are present by name.
+        let names = Set(WorkflowCatalog.all.map(\.name))
+        for expected in ["Timeline Reconstruction", "Legal Hold & Preservation",
+                         "Early Case Assessment", "Data Subject Request (DSAR)",
+                         "Threat Hunt", "Entity & Network Map", "Phishing Campaign (Bulk)"] {
+            XCTAssertTrue(names.contains(expected), "missing workflow: \(expected)")
+        }
+
+        // Catalog soundness across ALL recipes.
+        var ids = Set<String>()
+        for def in WorkflowCatalog.all {
+            XCTAssertTrue(ids.insert(def.defID).inserted, "duplicate defID \(def.defID)")
+            XCTAssertGreaterThanOrEqual(def.operations.count, 4)
+            let seqs = Set(def.operations.map(\.seq))
+            for op in def.operations {
+                // Every posted type is a real DocumentType.
+                if let t = op.postsDocType { XCTAssertFalse(t.displayName.isEmpty) }
+                // Every gate references an operation that exists in this recipe.
+                for gate in op.gates {
+                    let referenced: Int
+                    switch gate.rule {
+                    case .operationConfirmed(let s): referenced = s
+                    case .fieldPresent(let s, _): referenced = s
+                    case .fieldEquals(let s, _, _): referenced = s
+                    }
+                    XCTAssertTrue(seqs.contains(referenced),
+                                  "\(def.defID)/\(op.key) gate points at missing seq \(referenced)")
+                    XCTAssertFalse(gate.reason.isEmpty, "\(def.defID)/\(op.key) gate needs a reason")
+                }
+            }
+        }
+
+        // The DSAR privacy gate is the load-bearing one: no produce until
+        // third-party PII is redacted.
+        let dsar = WorkflowCatalog.legalDSAR
+        let produce = dsar.operations.first { $0.key == "produce" }!
+        let gate = produce.gates.first!
+        XCTAssertEqual(gate.rule, .fieldEquals(seq: 3, key: "thirdPartyRedacted", value: "Yes"))
+    }
+
+    /// Every new secondary-job workflow runs start → confirm-all → confirmed,
+    /// just like the originals — proving they're real, drivable recipes, not
+    /// just catalog entries.
+    func testNewWorkflows_lifecycleEndToEnd() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-newwf-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root)
+
+        let newDefs = [
+            WorkflowCatalog.forensicTimeline, WorkflowCatalog.legalHold,
+            WorkflowCatalog.legalECA, WorkflowCatalog.legalDSAR,
+            WorkflowCatalog.itThreatHunt, WorkflowCatalog.itCampaign,
+            WorkflowCatalog.journalistNetwork,
+        ]
+        for def in newDefs {
+            let ops = def.operations.map {
+                SQLiteEmailStore.StoredOperation(seq: $0.seq, key: $0.key, title: $0.title,
+                                                 hint: $0.hint, postsDocType: $0.postsDocType?.rawValue)
+            }
+            try await store.upsertDefinition(defID: def.defID, name: def.name,
+                                             persona: def.persona, builtin: true, operations: ops)
+            let wf = try await store.createInstance(defID: def.defID, title: def.name, createdBy: "Tester")
+            XCTAssertTrue(wf.hasPrefix("WF-"), "\(def.defID) should get a WF number")
+            let total = def.operations.count
+            for opn in def.operations {
+                try await store.confirmOperation(wf: wf, seq: opn.seq, totalOps: total,
+                                                 result: "done", note: "", docNumber: nil, confirmedBy: "Tester")
+            }
+            let status = try await store.instance(wf: wf)?.status
+            XCTAssertEqual(status, "confirmed", "\(def.defID) should end confirmed")
+            let confs = try await store.confirmations(wf: wf)
+            XCTAssertEqual(confs.count, total, "\(def.defID) records one confirmation per op")
+        }
+    }
+
+    /// The load-bearing gates on the new workflows actually block the unsafe
+    /// transition — the whole point of the SAP status network.
+    func testNewWorkflows_loadBearingGates() {
+        func op(_ def: WorkflowDefinition, _ key: String) -> WorkflowOperation {
+            def.operations.first { $0.key == key }!
+        }
+        // DSAR: cannot Produce until third-party PII is redacted.
+        let dsarProduce = op(WorkflowCatalog.legalDSAR, "produce")
+        let blocked = GatePolicy.lockedReasons(dsarProduce, state: .init(
+            confirmed: [1, 2, 3, 4], fieldValues: [3: ["thirdPartyRedacted": ""]]))
+        XCTAssertFalse(blocked.isEmpty, "produce must be locked until third-party PII is redacted")
+        let open = GatePolicy.lockedReasons(dsarProduce, state: .init(
+            confirmed: [1, 2, 3, 4], fieldValues: [3: ["thirdPartyRedacted": "Yes"]]))
+        XCTAssertTrue(open.isEmpty, "produce opens once redaction is confirmed")
+
+        // Bulk campaign: no bulk containment until a verdict is set.
+        let contain = op(WorkflowCatalog.itCampaign, "contain")
+        XCTAssertFalse(GatePolicy.lockedReasons(contain, state: .init(
+            confirmed: [1, 2, 3], fieldValues: [3: ["disposition": ""]])).isEmpty)
+        XCTAssertTrue(GatePolicy.lockedReasons(contain, state: .init(
+            confirmed: [1, 2, 3], fieldValues: [3: ["disposition": "Confirmed phishing"]])).isEmpty)
+
+        // Timeline: can't export the exhibit before the timeline is built.
+        let exhibit = op(WorkflowCatalog.forensicTimeline, "exhibit")
+        XCTAssertFalse(GatePolicy.lockedReasons(exhibit, state: .init(confirmed: [1], fieldValues: [:])).isEmpty)
+        XCTAssertTrue(GatePolicy.lockedReasons(exhibit, state: .init(confirmed: [1, 2], fieldValues: [:])).isEmpty)
+
+        // Legal hold: can't issue the notice before custodians are identified.
+        let issue = op(WorkflowCatalog.legalHold, "issue")
+        XCTAssertFalse(GatePolicy.lockedReasons(issue, state: .init(confirmed: [1], fieldValues: [1: ["custodians": ""]])).isEmpty)
+        XCTAssertTrue(GatePolicy.lockedReasons(issue, state: .init(confirmed: [1], fieldValues: [1: ["custodians": "jdoe\nasmith"]])).isEmpty)
+    }
+
+    /// Every recipe carries a real plain-language purpose (no recipe falls
+    /// through to the generic default) — the discoverability line users see.
+    func testWorkflowPurpose_presentAndSpecific() {
+        let generic = WorkflowCatalog.purpose(for: "does.not.exist")
+        for def in WorkflowCatalog.all {
+            let p = WorkflowCatalog.purpose(for: def.defID)
+            XCTAssertFalse(p.isEmpty)
+            XCTAssertNotEqual(p, generic, "\(def.defID) should have its own purpose line, not the fallback")
+        }
     }
 
     /// No production source references the retired flag name.
