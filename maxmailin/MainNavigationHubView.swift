@@ -53,6 +53,9 @@ struct MainNavigationHubView: View {
     let onSettings: () -> Void
 
     @Environment(\.windowSizeClass) private var sizeClass
+    /// The guided workflow to run, presented as a sheet (same pattern as
+    /// Work Center) — set by tapping a "Start a job" card.
+    @State private var workflowToRun: WorkflowDefinition?
 
     private var gridColumns: Int {
         switch sizeClass {
@@ -75,6 +78,7 @@ struct MainNavigationHubView: View {
             VStack(spacing: Spacing.large) {
                 headerSection
                 emailInboxHero
+                guidedWorkflowsSection
                 personaWorkflowSection
                 personaCoreFeaturesSection
                 forYouSection
@@ -86,13 +90,24 @@ struct MainNavigationHubView: View {
             .padding(.vertical, Spacing.medium)
         }
         .background(AppColors.backgroundPrimary)
+        .sheet(item: $workflowToRun) { def in
+            WorkflowRunnerView(
+                definition: def,
+                onOpenDestination: { dest in
+                    workflowToRun = nil
+                    onNavigate(dest)
+                },
+                onClose: { workflowToRun = nil }
+            )
+        }
     }
 
     @ViewBuilder
     private var personaOrderedSections: some View {
         switch persona {
         case .forensic:
-            securitySection
+            // (The "For You" band above already surfaces Security & Detection
+            // for this persona — don't repeat the same tiles here.)
             legalForensicSection
             analysisSection
             exportSection
@@ -312,6 +327,105 @@ struct MainNavigationHubView: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Open Email Inbox, \(emailCount) emails")
         .help("Browse, search and filter all \(emailCount) emails in your archive")
+    }
+
+    // MARK: - Guided Workflows (pick the job you came to do)
+
+    private var guidedWorkflows: [WorkflowDefinition] {
+        let list = WorkflowCatalog.templates(for: persona.rawValue)
+        return list.isEmpty ? WorkflowCatalog.all : list
+    }
+
+    @ViewBuilder
+    private var guidedWorkflowsSection: some View {
+        if !guidedWorkflows.isEmpty {
+            VStack(alignment: .leading, spacing: Spacing.small) {
+                HStack(spacing: Spacing.xSmall) {
+                    sectionHeader(title: "Start a job", icon: "flowchart", color: persona.accentColor)
+                    Spacer()
+                    Text("GUIDED")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Capsule().fill(persona.accentColor))
+                }
+                Text("Pick what you came to do — mailin runs each step and keeps the numbered record for you.")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+
+                LazyVGrid(columns: workflowColumns, spacing: Spacing.small) {
+                    ForEach(guidedWorkflows) { def in
+                        workflowCard(def)
+                    }
+                }
+            }
+        }
+    }
+
+    private func workflowCard(_ def: WorkflowDefinition) -> some View {
+        Button { workflowToRun = def } label: {
+            VStack(alignment: .leading, spacing: Spacing.xSmall) {
+                HStack(spacing: Spacing.xSmall) {
+                    Image(systemName: workflowIcon(def.defID))
+                        .font(.system(size: 20))
+                        .foregroundColor(persona.accentColor)
+                        .frame(width: 26, height: 26)
+                    Text(def.name)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.primary)
+                        .lineLimit(2)
+                    Spacer()
+                }
+                Text(WorkflowCatalog.purpose(for: def.defID))
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text(def.operations.map(\.title).joined(separator: " → "))
+                    .font(.system(size: 9))
+                    .foregroundColor(.secondary.opacity(0.7))
+                    .lineLimit(1)
+                HStack(spacing: 3) {
+                    Text("Start")
+                        .font(.system(size: 11, weight: .semibold))
+                    Image(systemName: "arrow.right.circle.fill")
+                        .font(.system(size: 12))
+                }
+                .foregroundColor(persona.accentColor)
+            }
+            .frame(maxWidth: .infinity, minHeight: 132, alignment: .topLeading)
+            .padding(Spacing.small)
+            .background(
+                RoundedRectangle(cornerRadius: CornerRadius.medium)
+                    .fill(persona.accentColor.opacity(0.07))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: CornerRadius.medium)
+                    .strokeBorder(persona.accentColor.opacity(0.18), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Start workflow: \(def.name)")
+        .help(WorkflowCatalog.purpose(for: def.defID))
+    }
+
+    private func workflowIcon(_ defID: String) -> String {
+        switch defID {
+        case "builtin.forensic.intake": return "shield.checkered"
+        case "builtin.forensic.timeline": return "calendar.day.timeline.left"
+        case "builtin.legal.production": return "building.columns"
+        case "builtin.legal.hold": return "hand.raised"
+        case "builtin.legal.eca": return "chart.bar.doc.horizontal"
+        case "builtin.legal.dsar": return "person.text.rectangle"
+        case "builtin.it.phishing": return "shield.lefthalf.filled"
+        case "builtin.it.threathunt": return "binoculars"
+        case "builtin.it.campaign": return "square.grid.3x3.fill"
+        case "builtin.journalist.story": return "text.book.closed"
+        case "builtin.journalist.network": return "point.3.connected.trianglepath.dotted"
+        case "builtin.personal.cleanup": return "sparkles"
+        default: return "flowchart"
+        }
     }
 
     // MARK: - Persona Workflow (Featured Row)
@@ -799,3 +913,14 @@ struct MainNavigationHubView: View {
         .help("\(title) — \(subtitle)")
     }
 }
+
+#if DEBUG
+#Preview("Forensic Hub — workflow cards") {
+    MainNavigationHubView(
+        emailCount: 1026, filteredCount: 1026, persona: .forensic,
+        onNavigate: { _ in }, onOpenArchive: {}, onNewImport: {},
+        onSettings: {}
+    )
+    .frame(width: 900, height: 1300)
+}
+#endif
