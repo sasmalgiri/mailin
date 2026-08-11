@@ -1691,6 +1691,98 @@ final class V2CutoverTests: XCTestCase {
         }
     }
 
+    /// GOLDEN PATH — the whole app goal in one run: an examiner imports an
+    /// archive, does their persona's real job through a guided workflow, and
+    /// the numbered, defensible record falls out as a byproduct — all local.
+    func testGoldenPath_appFulfillsItsGoal() async throws {
+        let env = try makeEnv()
+
+        // 1. Import an archive (the universal first step).
+        _ = try await seed(env, count: 40)
+        let imported = try await env.archive.count()
+        XCTAssertEqual(imported, 40, "the imported archive is queryable")
+
+        // 2. Number ranges are gapless and per-type (the SAP element numbers).
+        let imp1 = try await env.store.issueDocument(type: "IMP", summary: "Import 1", createdBy: "Reviewer B")
+        let imp2 = try await env.store.issueDocument(type: "IMP", summary: "Import 2", createdBy: "Reviewer B")
+        XCTAssertTrue(imp1.hasPrefix("IMP-") && imp2.hasPrefix("IMP-"))
+        let n1 = Int(imp1.split(separator: "-").last!)!
+        let n2 = Int(imp2.split(separator: "-").last!)!
+        XCTAssertEqual(n2, n1 + 1, "sequential, no gap, no repeat")
+
+        // 3. A persona does their job through a guided workflow.
+        let legal = WorkflowCatalog.legal
+        let ops = legal.operations.map {
+            SQLiteEmailStore.StoredOperation(seq: $0.seq, key: $0.key, title: $0.title,
+                                             hint: $0.hint, postsDocType: $0.postsDocType?.rawValue)
+        }
+        try await env.store.upsertDefinition(defID: legal.defID, name: legal.name,
+                                             persona: legal.persona, builtin: true, operations: ops)
+        let wf = try await env.store.createInstance(defID: legal.defID,
+                                                    title: "Acme v. Roe", createdBy: "Reviewer B")
+
+        // Defensibility gate holds BEFORE the run finishes: cannot produce
+        // until the privilege log is complete.
+        let produce = legal.operations.first { $0.key == "produce" }!
+        XCTAssertFalse(GatePolicy.lockedReasons(produce, state: .init(
+            confirmed: [1, 2, 3, 4], fieldValues: [3: ["logComplete": ""]])).isEmpty,
+            "producing before the privilege log is complete must be blocked")
+
+        // Work each step: record real field data, post the document it owes.
+        let fieldsBySeq: [Int: [String: String]] = [
+            1: ["matter": "Acme v. Roe", "reviewer": "Reviewer B", "batchSize": "40"],
+            2: ["responsive": "12", "nonResponsive": "28"],
+            3: ["privCount": "3", "privBasis": "Work Product", "logComplete": "Yes"],
+            4: ["batesPrefix": "ACME", "batesStart": "ACME-000001"],
+            5: ["productionName": "PROD001", "format": "PDF (Bates-stamped)"],
+        ]
+        let total = legal.operations.count
+        for op in legal.operations {
+            if let vals = fieldsBySeq[op.seq] {
+                try await env.store.saveFieldValues(wf: wf, seq: op.seq, values: vals)
+            }
+            var doc: String? = nil
+            if let t = op.postsDocType {
+                doc = try await env.store.issueDocument(type: t.rawValue,
+                    summary: "\(legal.name): \(op.title)", refs: wf, createdBy: "Reviewer B")
+            }
+            try await env.store.confirmOperation(wf: wf, seq: op.seq, totalOps: total,
+                result: firstResult(fieldsBySeq, op.seq), note: "", docNumber: doc, confirmedBy: "Reviewer B")
+        }
+
+        // 4. The record is produced automatically and is fully defensible.
+        let status = try await env.store.instance(wf: wf)?.status
+        XCTAssertEqual(status, "confirmed", "the job completed")
+        let confs = try await env.store.confirmations(wf: wf)
+        XCTAssertEqual(confs.count, total)
+        XCTAssertNotNil(confs.first { $0.seq == 5 }?.docNumber, "production posted an Export document")
+
+        // 5. The record is findable later by client / inner data (the ask).
+        try await env.store.updateDocumentSearchText(wf,
+            summary: "Workflow: Production Run · Client: Acme v. Roe · Privilege basis: Work Product",
+            refs: "Acme v. Roe")
+        let byClient = try await env.store.lookupDocuments(matching: "Acme v. Roe")
+        XCTAssertTrue(byClient.contains { $0.number == wf }, "the run is findable by client/matter")
+        let exports = try await env.store.lookupDocuments(matching: "EXP-")
+        XCTAssertFalse(exports.isEmpty, "the produced Export document is on record")
+
+        // 6. A non-technical reader can be handed a clean summary.
+        let summary = StakeholderSummary(
+            wfNumber: wf, title: "Acme v. Roe", persona: "legal", status: "confirmed",
+            preparedBy: "Reviewer B", preparedAt: Date(), operations: legal.operations,
+            confirmations: Dictionary(uniqueKeysWithValues: confs.map {
+                ($0.seq, ($0.confirmedAt, $0.confirmedBy, $0.result, $0.note, $0.docNumber)) }),
+            fieldValues: fieldsBySeq
+        ).rendered()
+        XCTAssertTrue(summary.contains("# Acme v. Roe"))
+        XCTAssertTrue(summary.contains("Complete — all 5 steps done"))
+    }
+
+    /// Small helper: the confirmation's result line = first field value, else "done".
+    private func firstResult(_ map: [Int: [String: String]], _ seq: Int) -> String {
+        map[seq]?.values.sorted().first ?? "done"
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default
