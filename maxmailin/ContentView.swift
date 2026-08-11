@@ -647,17 +647,24 @@ struct ContentView: View {
 
             if visibleGroups.contains(.legalForensic) {
                 Section(isExpanded: $legalForensicExpanded) {
-                    sidebarRow(.eDiscovery, "eDiscovery", "checklist")
-                    sidebarRow(.predictiveCoding, "Predictive Coding", "brain")
+                    // Legal-only tools are hidden for the forensic persona so
+                    // it isn't cluttered with eDiscovery/TAR/Bates/GDPR.
+                    let forensicOnly = personaManager.selectedPersona == .forensic
+                    if !forensicOnly {
+                        sidebarRow(.eDiscovery, "eDiscovery", "checklist")
+                        sidebarRow(.predictiveCoding, "Predictive Coding", "brain")
+                    }
                     sidebarRow(.forensicReview, "Document Review", "doc.text.magnifyingglass")
                     sidebarRow(.chainOfCustody, "Chain of Custody", "link")
-                    sidebarRow(.batesNumbering, "Bates Numbering", "number")
-                    sidebarRow(.gdprCompliance, "GDPR Compliance", "hand.raised")
-                    sidebarRow(.reviewBatches, "Review Batches", "list.bullet.rectangle")
+                    if !forensicOnly {
+                        sidebarRow(.batesNumbering, "Bates Numbering", "number")
+                        sidebarRow(.gdprCompliance, "GDPR Compliance", "hand.raised")
+                        sidebarRow(.reviewBatches, "Review Batches", "list.bullet.rectangle")
+                    }
                     sidebarRow(.custodianPanel, "Custodian Panel", "person.badge.key")
                     sidebarRow(.redaction, "Redaction", "eye.slash")
                 } header: {
-                    Text("Legal & Forensic")
+                    Text(personaManager.selectedPersona == .forensic ? "Forensic" : "Legal & Forensic")
                 }
             }
 

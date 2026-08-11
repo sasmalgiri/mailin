@@ -298,7 +298,10 @@ struct MainNavigationHubView: View {
         // that fit its job. Switching persona reveals the others.
         switch persona {
         case .forensic:
-            out += [securitySection, legalForensicSection, analysisSection]
+            // No Legal & Forensic bucket — it carries legal-only tools
+            // (eDiscovery, Bates, TAR, Review Dashboard). Forensic's own
+            // legal-adjacent tools (Custodian Panel, Redaction) live in Core.
+            out += [securitySection, analysisSection]
         case .legal:
             out += [legalForensicSection, exportSection]
         case .itAdmin:
@@ -377,6 +380,8 @@ struct MainNavigationHubView: View {
                 t(.iocExtractor, "IOC Detection", "Threat indicators", "exclamationmark.shield", .red),
                 t(.anomalyDetection, "Anomaly Detection", "Statistical outliers", "waveform.path.ecg", .red),
                 t(.investigationReport, "Investigation Reports", "Court-ready documents", "doc.text.magnifyingglass", .red),
+                t(.custodianPanel, "Custodian Panel", "Track data custodians", "person.badge.key", .cyan),
+                t(.redaction, "Redaction", "Protect PII in exhibits", "eye.slash", .gray),
             ]
         case .legal:
             return [
