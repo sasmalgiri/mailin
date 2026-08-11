@@ -113,6 +113,8 @@ struct DuplicateManagerView: View {
             VStack(alignment: .leading, spacing: Spacing.medium) {
                 archiveWideDedupCard
 
+                bulkSelectBar
+
                 if !duplicateGroups.isEmpty {
                     Text("Exact Duplicates (\(duplicateGroups.count) groups)")
                         .font(Typography.headline)
@@ -162,6 +164,58 @@ struct DuplicateManagerView: View {
             }
             .padding(Spacing.medium)
         }
+    }
+
+    /// The count of redundant copies across every currently-shown group
+    /// (all copies except the one kept per group).
+    private var redundantCount: Int {
+        var n = duplicateGroups.reduce(0) { $0 + max(0, $1.count - 1) }
+        if showNearDuplicates {
+            n += nearDuplicateGroups.reduce(0) { $0 + max(0, $1.count - 1) }
+        }
+        return n
+    }
+
+    /// One click to select every redundant copy across ALL groups — so a
+    /// user facing hundreds of groups doesn't click each one.
+    private func selectAllButFirstEverywhere() {
+        for group in duplicateGroups {
+            for email in group.dropFirst() { selectedForRemoval.insert(email.id) }
+        }
+        if showNearDuplicates {
+            for group in nearDuplicateGroups {
+                for email in group.dropFirst() { selectedForRemoval.insert(email.id) }
+            }
+        }
+    }
+
+    private var bulkSelectBar: some View {
+        HStack(spacing: Spacing.small) {
+            Button {
+                selectAllButFirstEverywhere()
+            } label: {
+                Label("Select all but first (all groups)", systemImage: "checklist")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(redundantCount == 0)
+            .help("Selects every redundant copy across all \(duplicateGroups.count + (showNearDuplicates ? nearDuplicateGroups.count : 0)) groups, keeping one of each — then press Remove Selected")
+
+            if !selectedForRemoval.isEmpty {
+                Button {
+                    selectedForRemoval.removeAll()
+                } label: {
+                    Label("Clear", systemImage: "xmark.circle")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            Spacer()
+            Text("\(redundantCount) removable")
+                .font(Typography.caption1)
+                .foregroundColor(AppColors.secondary)
+        }
+        .padding(.horizontal, Spacing.medium)
     }
 
     private func duplicateGroupView(_ group: [MBOXParser.RawEmail], isExact: Bool) -> some View {
