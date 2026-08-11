@@ -5600,7 +5600,7 @@ struct InvestigationReportConfigSheet: View {
                         HStack(spacing: 8) {
                             Image(systemName: "checkmark.circle.fill")
                                 .foregroundColor(.green)
-                            Text("Report saved successfully.")
+                            Text("Report saved. You can save it again, or generate another below.")
                                 .font(Typography.caption1)
                                 .foregroundColor(.green)
                         }
@@ -5608,47 +5608,61 @@ struct InvestigationReportConfigSheet: View {
                         HStack(spacing: 8) {
                             Image(systemName: "checkmark.circle.fill")
                                 .foregroundColor(.green)
-                            Text("Report generated. Click Save PDF to save.")
+                            Text("Report generated. Save it, or generate another.")
                                 .font(Typography.caption1)
                                 .foregroundColor(.green)
                         }
                     }
 
-                    HStack {
+                    HStack(spacing: Spacing.small) {
                         Spacer()
                         if savedSuccessfully {
+                            // Post-save: let the user reuse the window.
+                            Button("Generate Another") { resetForNewReport() }
+                                .buttonStyle(SecondaryButtonStyle())
+                            Button {
+                                showFileExporter = true
+                            } label: {
+                                HStack(spacing: Spacing.xSmall) {
+                                    Image(systemName: "square.and.arrow.down")
+                                    Text("Save Again")
+                                }
+                            }
+                            .buttonStyle(SecondaryButtonStyle())
+                            .disabled(generatedPDFData == nil)
                             Button("Done") { closeSheet() }
                                 .buttonStyle(PrimaryButtonStyle())
+                        } else if generatedPDFData != nil {
+                            // Generated, not yet saved.
+                            Button("Generate Another") { resetForNewReport() }
+                                .buttonStyle(SecondaryButtonStyle())
+                            Button {
+                                showFileExporter = true
+                            } label: {
+                                HStack(spacing: Spacing.xSmall) {
+                                    Image(systemName: "square.and.arrow.down")
+                                    Text("Save PDF")
+                                }
+                            }
+                            .buttonStyle(PrimaryButtonStyle())
                         } else {
+                            // Config state.
                             Button("Cancel") { closeSheet() }
                                 .buttonStyle(SecondaryButtonStyle())
-
-                            if generatedPDFData != nil {
-                                Button {
-                                    showFileExporter = true
-                                } label: {
-                                    HStack(spacing: Spacing.xSmall) {
-                                        Image(systemName: "square.and.arrow.down")
-                                        Text("Save PDF")
+                            Button {
+                                generateReport()
+                            } label: {
+                                HStack(spacing: Spacing.xSmall) {
+                                    if isGenerating {
+                                        ProgressView()
+                                            .scaleEffect(0.7)
+                                            .frame(width: 16, height: 16)
                                     }
+                                    Text(isGenerating ? "Generating..." : "Generate PDF Report")
                                 }
-                                .buttonStyle(PrimaryButtonStyle())
-                            } else {
-                                Button {
-                                    generateReport()
-                                } label: {
-                                    HStack(spacing: Spacing.xSmall) {
-                                        if isGenerating {
-                                            ProgressView()
-                                                .scaleEffect(0.7)
-                                                .frame(width: 16, height: 16)
-                                        }
-                                        Text(isGenerating ? "Generating..." : "Generate PDF Report")
-                                    }
-                                }
-                                .buttonStyle(PrimaryButtonStyle())
-                                .disabled(isGenerating || selectedEmailIDs.isEmpty)
                             }
+                            .buttonStyle(PrimaryButtonStyle())
+                            .disabled(isGenerating || selectedEmailIDs.isEmpty)
                         }
                     }
                 }
@@ -5664,7 +5678,8 @@ struct InvestigationReportConfigSheet: View {
             switch result {
             case .success:
                 forensicManager.logAction("Investigation Report", detail: "Generated PDF report for \(selectedEmailIDs.count) emails")
-                generatedPDFData = nil
+                // Keep the generated data so the user can Save Again to
+                // another location without regenerating.
                 savedSuccessfully = true
             case .failure(let error):
                 generationError = "Failed to save: \(error.localizedDescription)"
@@ -5681,6 +5696,14 @@ struct InvestigationReportConfigSheet: View {
 
     private func closeSheet() {
         if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
+    }
+
+    /// Return the window to the configuration state so another report can be
+    /// generated without closing and reopening.
+    private func resetForNewReport() {
+        savedSuccessfully = false
+        generatedPDFData = nil
+        generationError = nil
     }
 
     private var pdfFileName: String {
