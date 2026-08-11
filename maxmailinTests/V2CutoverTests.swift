@@ -1790,6 +1790,39 @@ final class V2CutoverTests: XCTestCase {
         map[seq]?.values.sorted().first ?? "done"
     }
 
+    /// Universal capture: any job posts a numbered document AND stores the
+    /// full-work payload, which reads back verbatim when the document is
+    /// opened later (the SAP "open it, see everything" promise).
+    func testDocumentPayload_captureAndReadBack() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-payload-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root)
+
+        // Fresh store is at the latest schema (v12) with the payload table.
+        let ver = try await store.schemaVersion()
+        XCTAssertEqual(ver, SQLiteEmailStore.currentSchemaVersion)
+
+        let number = try await store.issueDocument(type: "RPT", summary: "Ad-hoc report",
+                                                   createdBy: "Reviewer B")
+        let work = "INVESTIGATION REPORT\nTitle: Acme\nEmails: 40\nFindings: …"
+        try await store.attachDocumentPayload(number, body: work)
+
+        let read = try await store.documentPayload(number)
+        XCTAssertEqual(read?.body, work, "the full saved work reads back verbatim")
+        XCTAssertEqual(read?.contentType, "text/markdown")
+
+        // Re-attaching replaces (upsert), never duplicates.
+        try await store.attachDocumentPayload(number, body: "revised")
+        let reread = try await store.documentPayload(number)
+        XCTAssertEqual(reread?.body, "revised")
+
+        // A document with no payload returns nil (not an error).
+        let bare = try await store.issueDocument(type: "EXP", summary: "no payload", createdBy: "X")
+        let barePayload = try await store.documentPayload(bare)
+        XCTAssertNil(barePayload)
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default

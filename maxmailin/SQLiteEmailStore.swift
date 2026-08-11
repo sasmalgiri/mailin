@@ -121,7 +121,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// store fully at the previous version — never half-migrated, and a user
     /// DB is NEVER silently recreated. A store newer than this build refuses
     /// to open instead of guessing.
-    static let currentSchemaVersion = 11
+    static let currentSchemaVersion = 12
 
     private func migrateSchema(_ handle: OpaquePointer) throws {
         var v = try scalarInt(handle, "PRAGMA user_version;")
@@ -355,6 +355,23 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 try exec(handle, "PRAGMA user_version = 11;")
             }
             v = 11
+        }
+        if v == 11 {
+            try inExclusiveTransaction(handle) {
+                // v12: full-work payload for a document — so opening any
+                // document number reproduces the complete work behind it
+                // (the SAP "open the document, see everything" promise).
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS doc_payload(
+                        doc_number   TEXT PRIMARY KEY,
+                        content_type TEXT NOT NULL DEFAULT 'text/markdown',
+                        body         TEXT NOT NULL DEFAULT '',
+                        created_at   INTEGER NOT NULL DEFAULT 0
+                    );
+                """)
+                try exec(handle, "PRAGMA user_version = 12;")
+            }
+            v = 12
         }
     }
 
@@ -1889,6 +1906,32 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 note: columnText(stmt, 2)))
         }
         return out
+    }
+
+    /// Store (or replace) the full-work payload behind a document number, so
+    /// opening the document later reproduces exactly what was done.
+    func attachDocumentPayload(_ docNumber: String, contentType: String = "text/markdown",
+                               body: String, now: Date = Date()) throws {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            INSERT INTO doc_payload(doc_number, content_type, body, created_at) VALUES (?,?,?,?)
+            ON CONFLICT(doc_number) DO UPDATE SET content_type = excluded.content_type,
+                body = excluded.body, created_at = excluded.created_at;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, docNumber); bindText(stmt, 2, contentType); bindText(stmt, 3, body)
+        sqlite3_bind_int64(stmt, 4, Int64(now.timeIntervalSince1970))
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+    }
+
+    /// The saved work behind a document (content-type, body), or nil if none.
+    func documentPayload(_ docNumber: String) throws -> (contentType: String, body: String)? {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT content_type, body FROM doc_payload WHERE doc_number = ?;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, docNumber)
+        guard try stepRow(stmt, db) else { return nil }
+        return (columnText(stmt, 0), columnText(stmt, 1))
     }
 
     /// One row per source that ever entered this archive — the MB51-style

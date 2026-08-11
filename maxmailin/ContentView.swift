@@ -5693,6 +5693,21 @@ struct InvestigationReportConfigSheet: View {
                 // Keep the generated data so the user can Save Again to
                 // another location without regenerating.
                 savedSuccessfully = true
+                // Capture a numbered, referable document of this job.
+                let count = selectedEmailIDs.count
+                let title = reportTitle
+                let examiner = examinerName
+                let body = """
+                INVESTIGATION REPORT
+                Title: \(title)
+                Examiner: \(examiner.isEmpty ? "—" : examiner)
+                Emails analyzed: \(count)
+                Saved: \(Date().formatted(date: .abbreviated, time: .shortened))
+                Sections: title page · executive summary · email timeline · top contacts · category breakdown · evidence tags · flagged emails.
+                """
+                Task { await DocumentRegistry.capture(.report,
+                    summary: "Investigation Report: \(title) — \(count) emails",
+                    body: body, refs: examiner) }
             case .failure(let error):
                 generationError = "Failed to save: \(error.localizedDescription)"
             }

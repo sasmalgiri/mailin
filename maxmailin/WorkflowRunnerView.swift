@@ -503,6 +503,9 @@ struct WorkflowRunnerView: View {
         let summary = parts.joined(separator: " · ")
         try? await SQLiteEmailStore.shared.updateDocumentSearchText(
             wfNumber, summary: summary, refs: client.isEmpty ? definition.defID : client)
+        // Attach the full run so opening WF-… reproduces the entire job —
+        // every step, field value, who/when, and the documents it posted.
+        try? await SQLiteEmailStore.shared.attachDocumentPayload(wfNumber, body: renderReport())
     }
 
     @MainActor

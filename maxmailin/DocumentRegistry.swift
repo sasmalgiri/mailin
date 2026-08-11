@@ -84,6 +84,26 @@ enum DocumentRegistry {
         }
         return number
     }
+
+    /// Universal capture — the SAP promise: any job, small or big, becomes a
+    /// numbered document that reproduces the FULL work when opened. Posts the
+    /// document, stamps who, attaches the complete `body` payload, folds a
+    /// client/matter tag into search text, and echoes to the audit chain.
+    /// Returns the document number. Always call this for tool completions so
+    /// nothing the user does is lost.
+    @MainActor
+    @discardableResult
+    static func capture(_ type: DocumentType, summary: String, body: String,
+                        refs: String = "") async -> String? {
+        let store = SQLiteEmailStore.shared
+        let who = ForensicManager.shared.examinerName
+        let number = try? await store.issueDocument(
+            type: type.rawValue, summary: summary, refs: refs, createdBy: who)
+        guard let number else { return nil }
+        try? await store.attachDocumentPayload(number, body: body)
+        ForensicManager.shared.logAction("Document posted: \(number)", detail: summary)
+        return number
+    }
 }
 
 // MARK: - Workflow facade (v8)

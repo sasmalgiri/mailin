@@ -32,6 +32,8 @@ struct WorkCenterView: View {
     @State private var variantsByDef: [String: [SQLiteEmailStore.StoredVariant]] = [:]
     @State private var expandedDoc: String? = nil
     @State private var docNotes: [SQLiteEmailStore.DocNote] = []
+    @State private var docPayload: String? = nil
+    @State private var showFullWork = false
     @State private var newNote = ""
     @AppStorage("selectedPersona") private var personaRaw = "general"
     @State private var isLoading = true
@@ -511,6 +513,16 @@ struct WorkCenterView: View {
                     }
                 }
             }
+            if let payload = docPayload, !payload.isEmpty {
+                Button {
+                    showFullWork = true
+                } label: {
+                    Label("Open — view the full saved work", systemImage: "doc.text.magnifyingglass")
+                        .font(Typography.caption1)
+                }
+                .controlSize(.small)
+                .help("Opens the complete record of what was done — every field, step, and result.")
+            }
             HStack(spacing: Spacing.xSmall) {
                 TextField("Add a note…", text: $newNote)
                     .textFieldStyle(.roundedBorder)
@@ -526,6 +538,38 @@ struct WorkCenterView: View {
         }
         .padding(.leading, 26)
         .padding(.vertical, 2)
+        .sheet(isPresented: $showFullWork) {
+            fullWorkSheet(doc)
+        }
+    }
+
+    private func fullWorkSheet(_ doc: SQLiteEmailStore.IssuedDocument) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(doc.number).font(Typography.monoBody).fontWeight(.bold)
+                    Text(doc.summary).font(Typography.caption1).foregroundColor(AppColors.secondary).lineLimit(2)
+                }
+                Spacer()
+                if let payload = docPayload {
+                    Button { PlatformClipboard.copyString(payload) } label: { Image(systemName: "doc.on.doc") }
+                        .buttonStyle(.plain).help("Copy the full saved work")
+                }
+            }
+            .padding(Spacing.medium)
+            Divider()
+            ScrollView {
+                Text(docPayload ?? "No saved work recorded for this document.")
+                    .font(Typography.body)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(Spacing.medium)
+            }
+            Divider()
+            HStack { Spacer(); Button("Done") { showFullWork = false } }
+                .padding(Spacing.medium)
+        }
+        .frame(minWidth: 520, minHeight: 460)
     }
 
     @MainActor
@@ -533,6 +577,7 @@ struct WorkCenterView: View {
         if expandedDoc == number { expandedDoc = nil; return }
         expandedDoc = number
         docNotes = (try? await SQLiteEmailStore.shared.documentNotes(number)) ?? []
+        docPayload = (try? await SQLiteEmailStore.shared.documentPayload(number))?.body
         newNote = ""
     }
 
