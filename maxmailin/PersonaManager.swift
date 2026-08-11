@@ -183,18 +183,20 @@ class PersonaManager: ObservableObject {
     /// Returns which sidebar groups a persona exposes. Manage, Persona, and
     /// Home are always visible — those are defined in the UI directly.
     static func sidebarGroups(for persona: Persona) -> Set<SidebarGroup> {
+        // Strict persona isolation — Browse (inbox/attachments/dedupe) is
+        // universal; each persona then owns only the families that fit its
+        // job. Mirrors the hub's per-persona section ownership.
         switch persona {
         case .personal:
-            // Minimal: just essential email browsing.
-            return [.browse]
+            return [.browse, .analysis]
         case .forensic:
-            return [.browse, .analysis, .security, .legalForensic, .exportReports, .aiIntelligence]
+            return [.browse, .security, .legalForensic, .analysis]
         case .legal:
-            return [.browse, .analysis, .legalForensic, .exportReports, .aiIntelligence]
+            return [.browse, .legalForensic, .exportReports]
         case .itAdmin:
-            return [.browse, .analysis, .security, .exportReports, .aiIntelligence]
+            return [.browse, .security, .analysis]
         case .journalist:
-            return [.browse, .analysis, .security, .exportReports, .aiIntelligence]
+            return [.browse, .analysis, .aiIntelligence]
         case .general:
             return Set(SidebarGroup.allCases)
         }

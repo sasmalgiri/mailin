@@ -294,18 +294,21 @@ struct MainNavigationHubView: View {
     /// so a tool shown in an earlier section never repeats in a later one.
     private var rawSections: [ToolSection] {
         var out = [coreSection]
+        // Strict persona isolation — each persona owns only the tool families
+        // that fit its job. Switching persona reveals the others.
         switch persona {
         case .forensic:
-            out += [securitySection, legalForensicSection, analysisSection, exportSection, aiSection]
+            out += [securitySection, legalForensicSection, analysisSection]
         case .legal:
-            out += [legalForensicSection, exportSection, analysisSection, aiSection]
+            out += [legalForensicSection, exportSection]
         case .itAdmin:
-            out += [securitySection, analysisSection, exportSection, aiSection]
+            out += [securitySection, analysisSection]
         case .journalist:
-            out += [analysisSection, aiSection, exportSection]
+            out += [analysisSection, aiSection]
         case .personal:
-            out += [aiSection, analysisSection, exportSection]
+            out += [analysisSection]
         case .general:
+            // Explorer keeps the broad catalog.
             out += [analysisSection, aiSection, exportSection]
         }
         return out
