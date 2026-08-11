@@ -471,13 +471,18 @@ struct ContentView: View {
                 }
         } else {
         NavigationSplitView {
-            if modelVM.showParsedList {
-                hubSidebar
-            } else {
-                Text("Import an archive to begin")
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Group {
+                if modelVM.showParsedList {
+                    hubSidebar
+                } else {
+                    Text("Import an archive to begin")
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
+            // Wide enough that full labels ("Relationship Graph",
+            // "Investigation Report") never truncate to "Relat…".
+            .navigationSplitViewColumnWidth(min: 236, ideal: 264, max: 380)
         } detail: {
             Group {
                 if !modelVM.showParsedList {
