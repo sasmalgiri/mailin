@@ -436,9 +436,42 @@ enum WorkflowCatalog {
             ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 2), reason: "Map the connections before annotating.")]),
         ])
 
+    /// IT / SOC — Phishing Campaign (Bulk). The many-reports reality: one
+    /// campaign generates dozens of user reports; triage them as a single
+    /// incident with one verdict and one bulk containment, not one-by-one.
+    static let itCampaign = WorkflowDefinition(
+        defID: "builtin.it.campaign", name: "Phishing Campaign (Bulk)",
+        persona: "it_admin", builtin: true, operations: [
+            op(1, "cluster", "Cluster Reports", "Group the many reported emails into one campaign.", nil, launches: .nearDuplicates, [
+                f("campaignName", "Campaign name", .text, "A label for this campaign — you'll cite it in the incident.", placeholder: "Invoice-lure Aug 2026", required: true),
+                f("reportsCount", "User reports", .number, "How many separate user reports this campaign generated."),
+                f("clusterKey", "Clustered by", .choice, "What ties the reports together into one campaign.", options: ["Sender domain", "Subject pattern", "URL / landing page", "Attachment hash"]),
+            ]),
+            op(2, "scope", "Scope Impact", "Determine reach — who received it and who clicked.", nil, launches: .emailInbox, [
+                f("recipients", "Total recipients", .number, "How many mailboxes received a message in this campaign."),
+                f("delivered", "Delivered (not blocked)", .number, "How many actually landed in inboxes."),
+                f("clicked", "Known clicks", .number, "Recipients known to have clicked or replied."),
+            ]),
+            op(3, "verdict", "Campaign Verdict", "One disposition for the whole campaign. Posts the Verdict document.", .triageVerdict, launches: .phishingTriage, [
+                f("disposition", "Disposition", .choice, "The single verdict that covers every clustered report.", required: true, options: ["Confirmed phishing", "Safe", "Suspicious — needs info"]),
+                f("severity", "Severity", .choice, "Business impact of the campaign as a whole.", options: ["P1 — Critical", "P2 — High", "P3 — Medium", "P4 — Low"]),
+            ]),
+            op(4, "contain", "Bulk Contain", "Block the indicators and purge across all affected mailboxes at once. Posts Export.", .export, launches: .iocExtractor, [
+                f("iocCount", "IOCs blocked", .number, "Indicators pushed to the gateway/firewall."),
+                f("mailboxesPurged", "Mailboxes purged", .number, "How many mailboxes had the message removed."),
+                f("blocksAdded", "Blocks added", .number, "Sender/domain/URL blocks put in place."),
+            ], gates: [WorkflowGate(rule: .fieldPresent(seq: 3, key: "disposition"),
+                                    reason: "Set the campaign verdict before bulk containment — don't purge on a hunch.")]),
+            op(5, "notify", "Notify & Close", "Notify affected users and record the campaign's metrics.", nil, [
+                f("usersNotified", "Users notified", .number, "How many recipients were warned or briefed."),
+                f("rootCause", "Root cause / lessons", .longText, "How it got through and what to harden."),
+            ]),
+        ])
+
     static let all: [WorkflowDefinition] = [
         forensic, legal, itAdmin, journalist, personal,
         forensicTimeline, legalHold, legalECA, legalDSAR, itThreatHunt, journalistNetwork,
+        itCampaign,
     ]
 
     static func templates(for persona: String) -> [WorkflowDefinition] {

@@ -1137,8 +1137,8 @@ final class V2CutoverTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         let store = SQLiteEmailStore(directory: root)
 
-        // Built-in catalog is well-formed: 11 recipes, sequential ops.
-        XCTAssertEqual(WorkflowCatalog.all.count, 11)
+        // Built-in catalog is well-formed: 12 recipes, sequential ops.
+        XCTAssertEqual(WorkflowCatalog.all.count, 12)
         for def in WorkflowCatalog.all {
             XCTAssertEqual(def.operations.map(\.seq), Array(1...def.operations.count),
                            "\(def.defID) operations must be 1..n in order")
@@ -1567,7 +1567,7 @@ final class V2CutoverTests: XCTestCase {
         // Per-persona workflow counts after adding the secondary jobs.
         XCTAssertEqual(WorkflowCatalog.templates(for: "forensic").count, 2)
         XCTAssertEqual(WorkflowCatalog.templates(for: "legal").count, 4)   // production, hold, ECA, DSAR
-        XCTAssertEqual(WorkflowCatalog.templates(for: "it_admin").count, 2)
+        XCTAssertEqual(WorkflowCatalog.templates(for: "it_admin").count, 3)   // phishing, threat hunt, bulk campaign
         XCTAssertEqual(WorkflowCatalog.templates(for: "journalist").count, 2)
         XCTAssertEqual(WorkflowCatalog.templates(for: "personal").count, 1)
 
@@ -1575,7 +1575,7 @@ final class V2CutoverTests: XCTestCase {
         let names = Set(WorkflowCatalog.all.map(\.name))
         for expected in ["Timeline Reconstruction", "Legal Hold & Preservation",
                          "Early Case Assessment", "Data Subject Request (DSAR)",
-                         "Threat Hunt", "Entity & Network Map"] {
+                         "Threat Hunt", "Entity & Network Map", "Phishing Campaign (Bulk)"] {
             XCTAssertTrue(names.contains(expected), "missing workflow: \(expected)")
         }
 
