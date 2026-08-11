@@ -317,6 +317,11 @@ struct IOCExtractorView: View {
 
     private func exportCSV() {
         let csv = IOCExtractor.exportAsCSV(filteredEntries)
+        // Record a numbered document of this export — the IOC list is the
+        // saved work, retrievable later from Work Center ▸ Documents.
+        let iocCount = filteredEntries.count
+        Task { await DocumentRegistry.capture(.export,
+            summary: "IOC export — \(iocCount) indicator\(iocCount == 1 ? "" : "s")", body: csv) }
         #if os(macOS)
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.commaSeparatedText]

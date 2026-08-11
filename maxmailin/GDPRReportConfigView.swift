@@ -189,6 +189,11 @@ struct GDPRReportConfigView: View {
                 }
 
                 generatedPDFData = pdfData
+                // Record a numbered document of this compliance report.
+                let bytes = pdfData.count
+                let body = "GDPR / COMPLIANCE REPORT\nGenerated: \(Date().formatted(date: .abbreviated, time: .shortened))\nPDF size: \(bytes) bytes"
+                Task { await DocumentRegistry.capture(.report,
+                    summary: "GDPR compliance report", body: body) }
             }
         }
     }

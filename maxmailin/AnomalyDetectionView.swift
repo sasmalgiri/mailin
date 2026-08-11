@@ -350,6 +350,14 @@ struct AnomalyDetectionView: View {
             AnomalyFindingsCache.save(results, corpusRevision: revision)
             anomalies = results
             isAnalyzing = false
+            // Only a deliberate run (not the on-appear refresh) posts a
+            // numbered document, so opening the view doesn't spam the registry.
+            if force {
+                let n = results.count
+                let body = "ANOMALY DETECTION\nRun: \(Date().formatted(date: .abbreviated, time: .shortened))\nAnomalies found: \(n)"
+                Task { await DocumentRegistry.capture(.report,
+                    summary: "Anomaly detection — \(n) anomal\(n == 1 ? "y" : "ies")", body: body) }
+            }
         }
     }
 }

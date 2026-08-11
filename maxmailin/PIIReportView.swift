@@ -314,6 +314,10 @@ struct PIIReportView: View {
                     finding.riskContext.rawValue, finding.emailSubject,
                     finding.emailID.uuidString].map(esc).joined(separator: ",") + "\n"
         }
+        // Record a numbered document of this PII report.
+        let piiCount = findings.count
+        Task { await DocumentRegistry.capture(.report,
+            summary: "PII report — \(piiCount) finding\(piiCount == 1 ? "" : "s")", body: csv) }
         #if os(macOS)
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "mailin_pii_report.csv"

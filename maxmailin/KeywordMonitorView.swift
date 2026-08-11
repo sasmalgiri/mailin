@@ -559,6 +559,13 @@ struct KeywordMonitorView: View {
             await MainActor.run {
                 matches = results
                 isScanning = false
+                // Record this keyword sweep as a numbered document.
+                let kwCount = keywordsCopy.count
+                let hitCount = results.count
+                let body = "KEYWORD SWEEP\nKeywords: \(kwCount)\nMatches: \(hitCount)\nDate: \(Date().formatted(date: .abbreviated, time: .shortened))"
+                Task { await DocumentRegistry.capture(.report,
+                    summary: "Keyword sweep — \(kwCount) term\(kwCount == 1 ? "" : "s"), \(hitCount) match\(hitCount == 1 ? "" : "es")",
+                    body: body) }
             }
         }
     }

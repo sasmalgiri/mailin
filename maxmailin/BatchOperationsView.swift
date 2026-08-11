@@ -580,6 +580,12 @@ struct BatchOperationsView: View {
                 "Bulk Export",
                 detail: "Exported \(toExport.count) email(s) as \(format)"
             )
+            // Record a numbered document of this bulk export.
+            let exportCount = toExport.count
+            let exportFormat = "\(format)"
+            Task { await DocumentRegistry.capture(.export,
+                summary: "Bulk export — \(exportCount) email\(exportCount == 1 ? "" : "s") as \(exportFormat)",
+                body: "BULK EXPORT\nEmails: \(exportCount)\nFormat: \(exportFormat)\nDate: \(Date().formatted(date: .abbreviated, time: .shortened))") }
 
             withAnimation(AnimationTiming.fast) {
                 resultMessage = "Exported \(toExport.count) email\(toExport.count == 1 ? "" : "s") as \(format)"

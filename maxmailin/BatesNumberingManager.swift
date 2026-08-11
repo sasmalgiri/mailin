@@ -302,6 +302,11 @@ struct BatesConfigView: View {
                 Button {
                     manager.assignNumbers(to: emails)
                     assignmentComplete = true
+                    // Record a numbered document of this Bates run.
+                    let n = emails.count
+                    let body = "BATES NUMBERING\nAssigned sequential Bates numbers to \(n) email\(n == 1 ? "" : "s")\nDate: \(Date().formatted(date: .abbreviated, time: .shortened))"
+                    Task { await DocumentRegistry.capture(.report,
+                        summary: "Bates numbering — \(n) email\(n == 1 ? "" : "s")", body: body) }
                 } label: {
                     Label("Assign Bates Numbers", systemImage: "number.square.fill")
                 }
