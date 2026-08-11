@@ -264,7 +264,182 @@ enum WorkflowCatalog {
             ]),
         ])
 
-    static let all: [WorkflowDefinition] = [forensic, legal, itAdmin, journalist, personal]
+    // MARK: - Secondary daily jobs (grounded in the same frameworks)
+
+    /// Forensic — Timeline Reconstruction (NIST 800-86 Analysis phase). The
+    /// central DFIR deliverable: put the events in provable order.
+    static let forensicTimeline = WorkflowDefinition(
+        defID: "builtin.forensic.timeline", name: "Timeline Reconstruction",
+        persona: "forensic", builtin: true, operations: [
+            op(1, "scope", "Set Scope", "Fix the window and custodians the timeline will cover.", nil, launches: .emailInbox, [
+                f("caseNumber", "Case / Matter number", .text, "Ties this timeline to the investigation.", placeholder: "CASE-2026-0001", required: true),
+                f("window", "Time window", .text, "The date range the timeline spans.", placeholder: "2025-01-01 → 2025-06-30"),
+                f("custodians", "Custodians in scope", .longText, "Whose mail is included — one per line."),
+            ]),
+            op(2, "build", "Build Timeline", "Assemble the chronological event list from the set.", nil, launches: .timeline, [
+                f("eventCount", "Events placed", .number, "How many dated events you put on the timeline."),
+                f("sources", "Timestamp sources", .longText, "Where the times come from — header Date, Received hops, server logs."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: "Set the scope first.")]),
+            op(3, "keyEvents", "Mark Key Events", "Flag the pivotal moments and any unexplained gaps.", nil, launches: .timeline, [
+                f("pivotal", "Pivotal events", .longText, "The moments that matter to the case, in order.", required: true),
+                f("gaps", "Unexplained gaps", .longText, "Silences or missing intervals worth noting."),
+            ]),
+            op(4, "corroborate", "Corroborate", "Cross-check the sequence against independent evidence.", nil, launches: .forensicReview, [
+                f("method", "Corroboration method", .choice, "How you confirmed the ordering is sound.", options: ["Received-header hops", "Server logs", "Third-party records", "Message metadata"]),
+                f("corroboration", "Corroboration notes", .longText, "What independently supports the timeline."),
+            ]),
+            op(5, "exhibit", "Export Exhibit", "Produce the timeline exhibit for the file. Posts a Timeline document.", .timeline, launches: .investigationReport, [
+                f("title", "Exhibit title", .text, "Label for this timeline exhibit.", required: true),
+                f("scopeNote", "Scope statement", .longText, "One line on what the timeline does and does not cover."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 2), reason: "Build the timeline before exporting an exhibit.")]),
+        ])
+
+    /// Legal — Legal Hold & Preservation (EDRM Information Governance /
+    /// Preservation). The first duty in any matter; missing it is spoliation.
+    static let legalHold = WorkflowDefinition(
+        defID: "builtin.legal.hold", name: "Legal Hold & Preservation",
+        persona: "legal", builtin: true, operations: [
+            op(1, "identify", "Identify Custodians", "List everyone who must preserve, and the sources in scope.", nil, launches: .custodianPanel, [
+                f("matter", "Matter name", .text, "The litigation or investigation this hold serves.", placeholder: "Acme v. Roe", required: true),
+                f("custodians", "Custodians", .longText, "Everyone under a duty to preserve — one per line.", required: true),
+                f("scope", "Data sources in scope", .longText, "Mailboxes, drives, devices covered by the hold."),
+            ]),
+            op(2, "issue", "Issue Hold Notice", "Record the preservation notice sent to custodians. Posts a Legal Hold document.", .legalHold, launches: .custodianPanel, [
+                f("holdDate", "Hold date", .date, "When the hold took effect."),
+                f("instructions", "Preservation instructions", .longText, "Exactly what recipients must preserve and not delete."),
+                f("legalBasis", "Legal basis", .text, "The trigger — litigation, subpoena, investigation."),
+            ], gates: [WorkflowGate(rule: .fieldPresent(seq: 1, key: "custodians"),
+                                    reason: "Identify the custodians before issuing the hold.")]),
+            op(3, "acknowledge", "Track Acknowledgements", "Record who has confirmed the hold.", nil, launches: .custodianPanel, [
+                f("acknowledged", "Acknowledged", .number, "How many custodians confirmed receipt."),
+                f("outstanding", "Outstanding", .number, "How many have not yet confirmed."),
+                f("reminderSent", "Reminder sent", .bool, "Turn on once you've chased the outstanding custodians."),
+            ]),
+            op(4, "preserve", "Preserve Sources", "Snapshot or place a hold on the in-scope data.", nil, launches: .emailInbox, [
+                f("method", "Preservation method", .choice, "How the data is being held.", options: ["In-place hold", "Collected copy", "Export snapshot"]),
+                f("preservedSources", "Sources preserved", .number, "How many mailboxes/sources are now under preservation."),
+            ]),
+            op(5, "monitor", "Monitor / Release", "Keep the hold active, or lift it with a reason on record.", nil, launches: .custodianPanel, [
+                f("status", "Hold status", .choice, "Active while the duty persists; Released only when it ends.", options: ["Active", "Released"]),
+                f("releaseReason", "Release reason", .longText, "Why the hold was lifted — required if releasing."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Track acknowledgements before changing hold status.")]),
+        ])
+
+    /// Legal — Early Case Assessment (EDRM Processing/Analysis). Cull before
+    /// the expensive review; decide scope on evidence, not guesswork.
+    static let legalECA = WorkflowDefinition(
+        defID: "builtin.legal.eca", name: "Early Case Assessment",
+        persona: "legal", builtin: true, operations: [
+            op(1, "terms", "Define Search Terms", "Draft the term list that scopes the case.", nil, launches: .keywordMonitor, [
+                f("matter", "Matter name", .text, "The matter under assessment.", placeholder: "Acme v. Roe", required: true),
+                f("terms", "Search terms", .longText, "Keywords and queries — one per line.", required: true),
+                f("dateRange", "Date range", .text, "The relevant period.", placeholder: "2024-01 → 2025-12"),
+            ]),
+            op(2, "cull", "Cull & Dedupe", "Reduce the set — dedupe and date-filter before review.", nil, launches: .duplicateManager, [
+                f("startCount", "Starting count", .number, "Documents before culling."),
+                f("afterDedupe", "After dedupe", .number, "Documents left after removing duplicates."),
+                f("afterDateFilter", "After date filter", .number, "Documents left after the date range is applied."),
+            ]),
+            op(3, "sample", "Sample & Assess", "QC a random sample to gauge how rich the set is.", nil, launches: .predictiveCoding, [
+                f("sampleSize", "Sample size", .number, "How many documents you reviewed in the sample."),
+                f("richnessPct", "Richness (% responsive)", .number, "Share of the sample that was responsive."),
+                f("notes", "Assessment notes", .longText, "What the sample suggests about the whole set."),
+            ]),
+            op(4, "estimate", "Estimate Scope & Cost", "Project the review volume and effort.", nil, launches: .reviewDashboard, [
+                f("projectedReviewSet", "Projected review set", .number, "Estimated documents needing human review."),
+                f("estimatedHours", "Estimated review hours", .number, "Rough effort at your review rate."),
+            ]),
+            op(5, "decide", "Decide Scope", "Proceed, narrow, or negotiate — with the rationale on record. Posts a Report.", .report, launches: .reviewDashboard, [
+                f("decision", "Decision", .choice, "The scoping call this assessment supports.", required: true, options: ["Proceed to review", "Narrow terms", "Negotiate scope"]),
+                f("rationale", "Rationale", .longText, "Why — the defensible basis for the scope decision.", required: true),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Assess a sample before deciding scope.")]),
+        ])
+
+    /// Legal / Compliance — Data Subject Request (GDPR Art. 15 & related).
+    /// A statutory-deadline job; releasing others' PII is itself a breach.
+    static let legalDSAR = WorkflowDefinition(
+        defID: "builtin.legal.dsar", name: "Data Subject Request (DSAR)",
+        persona: "legal", builtin: true, operations: [
+            op(1, "log", "Log Request", "Capture the request and its statutory clock.", nil, launches: .gdprCompliance, [
+                f("requestId", "Request ID", .text, "Your internal reference for this request.", placeholder: "DSAR-2026-001", required: true),
+                f("subject", "Data subject", .text, "Whose personal data is requested.", placeholder: "name / email", required: true),
+                f("type", "Request type", .choice, "The right being exercised.", options: ["Access", "Erasure", "Rectification", "Portability"]),
+                f("deadline", "Statutory deadline", .date, "The date the response is legally due."),
+            ]),
+            op(2, "search", "Locate Subject Data", "Find every email that mentions or belongs to the subject.", nil, launches: .emailInbox, [
+                f("matches", "Matches found", .number, "How many emails matched the subject."),
+                f("searchTerms", "Search terms used", .longText, "Names, addresses, identifiers you searched on."),
+            ]),
+            op(3, "redact", "Redact Third-Party PII", "Remove other people's personal data from the set.", nil, launches: .redaction, [
+                f("redactedItems", "Items redacted", .number, "How many documents needed redaction."),
+                f("thirdPartyRedacted", "Third-party PII removed", .bool, "Turn on only when no other individual's personal data remains."),
+            ]),
+            op(4, "review", "Legal Review", "Apply exemptions and privilege before release.", nil, launches: .reviewDashboard, [
+                f("exemptionsApplied", "Exemptions applied", .longText, "Any legal exemptions withholding material."),
+                f("withheld", "Documents withheld", .number, "How many were withheld under exemption/privilege."),
+            ]),
+            op(5, "produce", "Produce Response", "Deliver the response pack to the subject. Posts a Subject Response document.", .subjectResponse, launches: .eDiscovery, [
+                f("format", "Response format", .choice, "How the pack is delivered.", options: ["PDF pack", "Native + index"]),
+                f("deliveredDate", "Delivered date", .date, "When the response was sent to the subject."),
+            ], gates: [WorkflowGate(rule: .fieldEquals(seq: 3, key: "thirdPartyRedacted", value: "Yes"),
+                                    reason: "Redact third-party personal data before producing — releasing others' PII is itself a breach.")]),
+        ])
+
+    /// IT / SOC — Threat Hunt (NIST 800-61 proactive). The other half of the
+    /// job: hunt the archive instead of waiting for a report.
+    static let itThreatHunt = WorkflowDefinition(
+        defID: "builtin.it.threathunt", name: "Threat Hunt",
+        persona: "it_admin", builtin: true, operations: [
+            op(1, "hypothesis", "Form Hypothesis", "State what you're hunting and where.", nil, launches: .keywordMonitor, [
+                f("hypothesis", "Hunt hypothesis", .longText, "The threat you suspect — e.g. lookalike-domain BEC targeting finance.", required: true),
+                f("scope", "Scope", .text, "Mailboxes and date range to hunt across."),
+            ]),
+            op(2, "hunt", "Hunt", "Run the searches and indicators against the archive.", nil, launches: .keywordMonitor, [
+                f("queriesRun", "Queries run", .number, "How many searches/indicators you executed."),
+                f("leads", "Leads found", .number, "Hits worth a closer look."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: "Form the hypothesis first.")]),
+            op(3, "analyze", "Analyze Anomalies", "Check authentication, routing, and attachment anomalies.", nil, launches: .anomalyDetection, [
+                f("authFindings", "Authentication findings", .choice, "The strongest signal found.", options: ["None", "SPF/DKIM/DMARC fails", "Spoofed display name", "Suspicious routing"]),
+                f("anomalies", "Anomaly notes", .longText, "What stood out and why it's suspicious."),
+            ]),
+            op(4, "extract", "Extract IOCs", "Pull indicators for blocking and sharing.", nil, launches: .iocExtractor, [
+                f("iocCount", "IOCs extracted", .number, "How many indicators you collected."),
+                f("iocList", "Indicators", .longText, "The domains, IPs, and hashes themselves."),
+            ]),
+            op(5, "report", "Report Findings", "Write up the verdict and recommendations. Posts a Threat Hunt document.", .threatHunt, launches: .investigationReport, [
+                f("verdict", "Verdict", .choice, "The hunt's conclusion.", required: true, options: ["Threat found", "No threat found", "Inconclusive"]),
+                f("recommendations", "Recommendations", .longText, "What to block, harden, or hunt next.", required: true),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 2), reason: "Run the hunt before reporting.")]),
+        ])
+
+    /// Journalist — Entity & Network Map (ICIJ cross-reference). The story
+    /// spine: who is connected to whom, and how.
+    static let journalistNetwork = WorkflowDefinition(
+        defID: "builtin.journalist.network", name: "Entity & Network Map",
+        persona: "journalist", builtin: true, operations: [
+            op(1, "extract", "Extract Entities", "Pull out the people, organizations, and addresses.", nil, launches: .knowledgeGraphExplorer, [
+                f("dataset", "Dataset", .text, "The set you're mapping.", placeholder: "Acme leak 2026", required: true),
+                f("entityCount", "Entities found", .number, "How many distinct entities surfaced."),
+                f("entityTypes", "Entity types", .longText, "What kinds — people, orgs, domains, accounts."),
+            ]),
+            op(2, "map", "Map Connections", "Chart who communicates with whom.", nil, launches: .relationshipGraph, [
+                f("keyPlayers", "Key players", .longText, "The central figures in the network.", required: true),
+                f("strongestTies", "Strongest ties", .longText, "The most active or telling relationships."),
+            ]),
+            op(3, "patterns", "Find Patterns", "Look for timing, frequency, and hidden links.", nil, launches: .communicationPatterns, [
+                f("patterns", "Patterns observed", .longText, "Bursts, silences, back-channels, unusual routing."),
+                f("suspiciousTiming", "Suspicious timing present", .bool, "Turn on if the timing itself is part of the story."),
+            ]),
+            op(4, "annotate", "Annotate the Map", "Label the story-relevant nodes and write the narrative. Posts an Entity Map document.", .entityMap, launches: .storyFile, [
+                f("annotatedNodes", "Nodes annotated", .number, "How many entities you tagged as story-relevant."),
+                f("narrative", "Network narrative", .longText, "How the network supports the story — in plain prose.", required: true),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 2), reason: "Map the connections before annotating.")]),
+        ])
+
+    static let all: [WorkflowDefinition] = [
+        forensic, legal, itAdmin, journalist, personal,
+        forensicTimeline, legalHold, legalECA, legalDSAR, itThreatHunt, journalistNetwork,
+    ]
 
     static func templates(for persona: String) -> [WorkflowDefinition] {
         all.filter { $0.persona == persona }

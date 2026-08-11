@@ -31,6 +31,11 @@ enum DocumentType: String {
     case report = "RPT"           // daily activity / defensibility reports
     case storyVersion = "STY"     // a saved story-file version
     case cleanup = "CLN"          // archive-wide duplicate removal
+    case legalHold = "HLD"        // a legal-hold / preservation notice
+    case timeline = "TML"         // a reconstructed timeline exhibit
+    case subjectResponse = "DSR"  // a data-subject (DSAR) response
+    case threatHunt = "HNT"       // a proactive threat-hunt report
+    case entityMap = "MAP"        // an entity / network map
 
     var displayName: String {
         switch self {
@@ -40,6 +45,11 @@ enum DocumentType: String {
         case .report: return "Report"
         case .storyVersion: return "Story Version"
         case .cleanup: return "Cleanup"
+        case .legalHold: return "Legal Hold"
+        case .timeline: return "Timeline"
+        case .subjectResponse: return "Subject Response"
+        case .threatHunt: return "Threat Hunt"
+        case .entityMap: return "Entity Map"
         }
     }
 
@@ -51,6 +61,11 @@ enum DocumentType: String {
         case .report: return "doc.badge.clock"
         case .storyVersion: return "text.book.closed"
         case .cleanup: return "trash"
+        case .legalHold: return "hand.raised"
+        case .timeline: return "calendar.day.timeline.left"
+        case .subjectResponse: return "person.text.rectangle"
+        case .threatHunt: return "binoculars"
+        case .entityMap: return "point.3.connected.trianglepath.dotted"
         }
     }
 }

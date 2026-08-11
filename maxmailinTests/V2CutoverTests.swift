@@ -1137,8 +1137,8 @@ final class V2CutoverTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         let store = SQLiteEmailStore(directory: root)
 
-        // Built-in catalog is well-formed: 5 personas, sequential ops.
-        XCTAssertEqual(WorkflowCatalog.all.count, 5)
+        // Built-in catalog is well-formed: 11 recipes, sequential ops.
+        XCTAssertEqual(WorkflowCatalog.all.count, 11)
         for def in WorkflowCatalog.all {
             XCTAssertEqual(def.operations.map(\.seq), Array(1...def.operations.count),
                            "\(def.defID) operations must be 1..n in order")
@@ -1558,6 +1558,57 @@ final class V2CutoverTests: XCTestCase {
         // No noise when there's nothing persona-specific left to surface.
         XCTAssertNil(top("it_admin") { $0.watchFolderOff = false })
         XCTAssertNil(top("personal") { $0.duplicateCount = 0 })
+    }
+
+    /// Expanded coverage: the secondary daily jobs each persona actually does
+    /// now ship as guided workflows too, and the whole catalog stays sound —
+    /// unique IDs, defined doc types, and gates that point at real operations.
+    func testCatalog_expandedPersonaCoverage() {
+        // Per-persona workflow counts after adding the secondary jobs.
+        XCTAssertEqual(WorkflowCatalog.templates(for: "forensic").count, 2)
+        XCTAssertEqual(WorkflowCatalog.templates(for: "legal").count, 4)   // production, hold, ECA, DSAR
+        XCTAssertEqual(WorkflowCatalog.templates(for: "it_admin").count, 2)
+        XCTAssertEqual(WorkflowCatalog.templates(for: "journalist").count, 2)
+        XCTAssertEqual(WorkflowCatalog.templates(for: "personal").count, 1)
+
+        // The new jobs are present by name.
+        let names = Set(WorkflowCatalog.all.map(\.name))
+        for expected in ["Timeline Reconstruction", "Legal Hold & Preservation",
+                         "Early Case Assessment", "Data Subject Request (DSAR)",
+                         "Threat Hunt", "Entity & Network Map"] {
+            XCTAssertTrue(names.contains(expected), "missing workflow: \(expected)")
+        }
+
+        // Catalog soundness across ALL recipes.
+        var ids = Set<String>()
+        for def in WorkflowCatalog.all {
+            XCTAssertTrue(ids.insert(def.defID).inserted, "duplicate defID \(def.defID)")
+            XCTAssertGreaterThanOrEqual(def.operations.count, 4)
+            let seqs = Set(def.operations.map(\.seq))
+            for op in def.operations {
+                // Every posted type is a real DocumentType.
+                if let t = op.postsDocType { XCTAssertFalse(t.displayName.isEmpty) }
+                // Every gate references an operation that exists in this recipe.
+                for gate in op.gates {
+                    let referenced: Int
+                    switch gate.rule {
+                    case .operationConfirmed(let s): referenced = s
+                    case .fieldPresent(let s, _): referenced = s
+                    case .fieldEquals(let s, _, _): referenced = s
+                    }
+                    XCTAssertTrue(seqs.contains(referenced),
+                                  "\(def.defID)/\(op.key) gate points at missing seq \(referenced)")
+                    XCTAssertFalse(gate.reason.isEmpty, "\(def.defID)/\(op.key) gate needs a reason")
+                }
+            }
+        }
+
+        // The DSAR privacy gate is the load-bearing one: no produce until
+        // third-party PII is redacted.
+        let dsar = WorkflowCatalog.legalDSAR
+        let produce = dsar.operations.first { $0.key == "produce" }!
+        let gate = produce.gates.first!
+        XCTAssertEqual(gate.rule, .fieldEquals(seq: 3, key: "thirdPartyRedacted", value: "Yes"))
     }
 
     /// No production source references the retired flag name.
