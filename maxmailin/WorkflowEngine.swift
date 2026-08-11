@@ -266,6 +266,53 @@ enum WorkflowCatalog {
 
     // MARK: - Secondary daily jobs (grounded in the same frameworks)
 
+    /// Forensic — Keyword / Term Sweep (NIST 800-86 Examination). Run a
+    /// search-term list across the evidence and turn the hits into findings.
+    static let forensicKeywordSweep = WorkflowDefinition(
+        defID: "builtin.forensic.keywordsweep", name: "Keyword / Term Sweep",
+        persona: "forensic", builtin: true, operations: [
+            op(1, "terms", "Define Terms", "Draft the search-term list that scopes the examination.", nil, launches: .keywordMonitor, [
+                f("caseNumber", "Case / Matter number", .text, "Ties this sweep to the investigation.", placeholder: "CASE-2026-0001", required: true),
+                f("terms", "Search terms", .longText, "Keywords and phrases — one per line.", required: true),
+                f("rationale", "Why these terms", .text, "The theory the terms are testing."),
+            ]),
+            op(2, "sweep", "Run Sweep", "Execute the term list across the evidence set.", nil, launches: .keywordMonitor, [
+                f("hits", "Matches found", .number, "How many emails matched any term."),
+                f("coverage", "Coverage", .text, "Date range and custodians searched."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: "Define the terms first.")]),
+            op(3, "review", "Review Hits", "Triage each match for relevance.", nil, launches: .forensicReview, [
+                f("relevant", "Relevant hits", .number, "Matches that actually matter."),
+                f("falsePositives", "False positives", .number, "Matches discarded as noise."),
+                f("notes", "Examination notes", .longText, "What the hits show — the examiner's contemporaneous notes."),
+            ]),
+            op(4, "report", "Report Findings", "Write up what the sweep established. Posts a Report.", .report, launches: .investigationReport, [
+                f("summary", "Findings summary", .longText, "The conclusions this sweep supports — for the case file.", required: true),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 2), reason: "Run the sweep before reporting.")]),
+        ])
+
+    /// Forensic — Custody Verification (chain-of-custody integrity). Re-hash
+    /// the set, prove nothing changed since intake, and seal a report.
+    static let forensicCustodyVerify = WorkflowDefinition(
+        defID: "builtin.forensic.custodyverify", name: "Custody Verification",
+        persona: "forensic", builtin: true, operations: [
+            op(1, "scope", "Select Evidence", "Choose the items to re-verify.", nil, launches: .chainOfCustody, [
+                f("caseNumber", "Case / Matter number", .text, "Ties this verification to the investigation.", placeholder: "CASE-2026-0001", required: true),
+                f("itemCount", "Items under verification", .number, "How many evidence items you're checking."),
+            ]),
+            op(2, "rehash", "Recompute Hashes", "Re-hash every item and compare to the intake fingerprints.", nil, launches: .chainOfCustody, [
+                f("algorithm", "Hash algorithm", .choice, "The integrity fingerprint algorithm.", required: true, options: ["SHA-256", "SHA-1", "MD5"]),
+                f("verified", "Items matching", .number, "How many items still match their intake hash."),
+                f("mismatches", "Items changed", .number, "How many items no longer match — must be zero for intact custody."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: "Select the evidence first.")]),
+            op(3, "resolve", "Resolve Mismatches", "Investigate and explain any item that changed.", nil, launches: .forensicReview, [
+                f("explanation", "Mismatch explanation", .longText, "Explain or escalate every changed item — a hole here breaks admissibility."),
+            ], gates: [WorkflowGate(rule: .fieldPresent(seq: 2, key: "algorithm"), reason: "Recompute the hashes first.")]),
+            op(4, "seal", "Seal & Report", "Record the verdict and seal the custody report. Posts a Report.", .report, launches: .investigationReport, [
+                f("conclusion", "Integrity conclusion", .choice, "The verdict this verification supports.", required: true, options: ["Integrity intact", "Integrity broken — flagged"]),
+                f("verifier", "Verified by", .text, "Who performed the verification."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 2), reason: "Recompute the hashes before sealing.")]),
+        ])
+
     /// Forensic — Timeline Reconstruction (NIST 800-86 Analysis phase). The
     /// central DFIR deliverable: put the events in provable order.
     static let forensicTimeline = WorkflowDefinition(
@@ -471,7 +518,7 @@ enum WorkflowCatalog {
     static let all: [WorkflowDefinition] = [
         forensic, legal, itAdmin, journalist, personal,
         forensicTimeline, legalHold, legalECA, legalDSAR, itThreatHunt, journalistNetwork,
-        itCampaign,
+        itCampaign, forensicKeywordSweep, forensicCustodyVerify,
     ]
 
     static func templates(for persona: String) -> [WorkflowDefinition] {
@@ -488,6 +535,10 @@ enum WorkflowCatalog {
             return "Take in a mailbox as evidence and work it end to end — receive, hash, examine, analyze, report — with the chain of custody written for you."
         case "builtin.forensic.timeline":
             return "Reconstruct what happened and when, then export a defensible timeline exhibit for the case file."
+        case "builtin.forensic.keywordsweep":
+            return "Run a search-term list across the evidence, triage the hits, and turn them into cited findings."
+        case "builtin.forensic.custodyverify":
+            return "Re-hash the evidence and prove nothing changed since intake — then seal a chain-of-custody report."
         case "builtin.legal.production":
             return "Run a document production the defensible way — review, privilege-log, Bates, produce — with the privilege gate enforced before you release."
         case "builtin.legal.hold":

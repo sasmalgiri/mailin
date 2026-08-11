@@ -1137,8 +1137,8 @@ final class V2CutoverTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         let store = SQLiteEmailStore(directory: root)
 
-        // Built-in catalog is well-formed: 12 recipes, sequential ops.
-        XCTAssertEqual(WorkflowCatalog.all.count, 12)
+        // Built-in catalog is well-formed: 14 recipes, sequential ops.
+        XCTAssertEqual(WorkflowCatalog.all.count, 14)
         for def in WorkflowCatalog.all {
             XCTAssertEqual(def.operations.map(\.seq), Array(1...def.operations.count),
                            "\(def.defID) operations must be 1..n in order")
@@ -1565,7 +1565,7 @@ final class V2CutoverTests: XCTestCase {
     /// unique IDs, defined doc types, and gates that point at real operations.
     func testCatalog_expandedPersonaCoverage() {
         // Per-persona workflow counts after adding the secondary jobs.
-        XCTAssertEqual(WorkflowCatalog.templates(for: "forensic").count, 2)
+        XCTAssertEqual(WorkflowCatalog.templates(for: "forensic").count, 4)   // intake, timeline, sweep, custody
         XCTAssertEqual(WorkflowCatalog.templates(for: "legal").count, 4)   // production, hold, ECA, DSAR
         XCTAssertEqual(WorkflowCatalog.templates(for: "it_admin").count, 3)   // phishing, threat hunt, bulk campaign
         XCTAssertEqual(WorkflowCatalog.templates(for: "journalist").count, 2)
@@ -1575,7 +1575,8 @@ final class V2CutoverTests: XCTestCase {
         let names = Set(WorkflowCatalog.all.map(\.name))
         for expected in ["Timeline Reconstruction", "Legal Hold & Preservation",
                          "Early Case Assessment", "Data Subject Request (DSAR)",
-                         "Threat Hunt", "Entity & Network Map", "Phishing Campaign (Bulk)"] {
+                         "Threat Hunt", "Entity & Network Map", "Phishing Campaign (Bulk)",
+                         "Keyword / Term Sweep", "Custody Verification"] {
             XCTAssertTrue(names.contains(expected), "missing workflow: \(expected)")
         }
 
@@ -1625,6 +1626,7 @@ final class V2CutoverTests: XCTestCase {
             WorkflowCatalog.legalECA, WorkflowCatalog.legalDSAR,
             WorkflowCatalog.itThreatHunt, WorkflowCatalog.itCampaign,
             WorkflowCatalog.journalistNetwork,
+            WorkflowCatalog.forensicKeywordSweep, WorkflowCatalog.forensicCustodyVerify,
         ]
         for def in newDefs {
             let ops = def.operations.map {

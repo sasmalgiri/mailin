@@ -213,6 +213,8 @@ struct MainNavigationHubView: View {
         switch defID {
         case "builtin.forensic.intake": return "shield.checkered"
         case "builtin.forensic.timeline": return "calendar.day.timeline.left"
+        case "builtin.forensic.keywordsweep": return "text.magnifyingglass"
+        case "builtin.forensic.custodyverify": return "checkmark.seal"
         case "builtin.legal.production": return "building.columns"
         case "builtin.legal.hold": return "hand.raised"
         case "builtin.legal.eca": return "chart.bar.doc.horizontal"
