@@ -515,10 +515,127 @@ enum WorkflowCatalog {
             ]),
         ])
 
+    /// IT / SOC — Account Compromise (BEC) Investigation (NIST 800-61). Work
+    /// a suspected mailbox takeover end to end.
+    static let itBEC = WorkflowDefinition(
+        defID: "builtin.it.bec", name: "Account Compromise (BEC)",
+        persona: "it_admin", builtin: true, operations: [
+            op(1, "detect", "Detect & Scope", "Identify the account and why it's suspected.", nil, launches: .itAdminDashboard, [
+                f("account", "Compromised mailbox", .text, "The account under investigation.", placeholder: "user@corp.com", required: true),
+                f("indicators", "Suspicion indicators", .longText, "What flagged it — new inbox rules, forwarding, impossible-travel logins."),
+            ]),
+            op(2, "analyze", "Analyze Activity", "Inspect inbox rules, sent items, and indicators.", nil, launches: .iocExtractor, [
+                f("rulesFound", "Malicious inbox rules", .number, "Auto-forward/delete rules the attacker set."),
+                f("authFindings", "Auth / login findings", .choice, "The strongest access signal.", options: ["None", "Impossible travel", "MFA fatigue", "Token theft", "Unknown"]),
+                f("iocCount", "IOCs found", .number, "Indicators extracted from the account's mail."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: "Scope the account first.")]),
+            op(3, "verdict", "Verdict", "Confirm or clear the compromise. Posts the Verdict.", .triageVerdict, launches: .phishingTriage, [
+                f("disposition", "Disposition", .choice, "The call this investigation supports.", required: true, options: ["Confirmed compromise", "False alarm", "Needs info"]),
+                f("severity", "Severity", .choice, "Business impact.", options: ["P1 — Critical", "P2 — High", "P3 — Medium", "P4 — Low"]),
+            ]),
+            op(4, "contain", "Contain & Recover", "Reset credentials, revoke sessions, remove attacker rules.", nil, launches: .iocExtractor, [
+                f("actions", "Actions taken", .longText, "Password reset, sessions revoked, rules removed, MFA re-enrolled."),
+                f("affected", "Downstream recipients", .number, "People who got mail from the account while compromised."),
+            ], gates: [WorkflowGate(rule: .fieldPresent(seq: 3, key: "disposition"),
+                                    reason: "Set a verdict before containment — don't lock a user out on a hunch.")]),
+            op(5, "report", "Report", "Incident write-up and lessons. Posts a Report.", .report, launches: .investigationReport, [
+                f("rootCause", "Root cause", .longText, "How the account was taken over.", required: true),
+                f("lessons", "Lessons / hardening", .longText, "What to change so it doesn't recur."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Reach a verdict before reporting.")]),
+        ])
+
+    /// Journalist — Fact-Check & Verify (ICIJ verification). Stand up every
+    /// claim before publication.
+    static let journalistFactCheck = WorkflowDefinition(
+        defID: "builtin.journalist.factcheck", name: "Fact-Check & Verify",
+        persona: "journalist", builtin: true, operations: [
+            op(1, "claims", "List Claims", "Enumerate every factual claim to be checked.", nil, launches: .storyFile, [
+                f("story", "Story", .text, "Which story these claims belong to.", required: true),
+                f("claimCount", "Claims to check", .number, "How many discrete factual claims."),
+            ]),
+            op(2, "corroborate", "Corroborate", "Find independent support for each claim.", nil, launches: .emailInbox, [
+                f("corroborated", "Corroborated claims", .number, "Claims with at least one independent source."),
+                f("uncorroborated", "Still uncorroborated", .number, "Claims that don't yet stand up."),
+            ]),
+            op(3, "rightOfReply", "Right of Reply", "Give every named subject a chance to respond.", nil, launches: .emailInbox, [
+                f("subjectsContacted", "Subjects contacted", .number, "Named people/orgs you reached out to."),
+                f("rightOfReplyDone", "Right of reply complete", .bool, "Turn on only when every subject has had a chance to respond."),
+            ]),
+            op(4, "signoff", "Verification Sign-off", "Record the go/hold decision. Posts a Report.", .report, launches: .storyFile, [
+                f("decision", "Decision", .choice, "Where verification leaves the story.", required: true, options: ["Ready to publish", "Hold — unresolved claims"]),
+                f("notes", "Verification notes", .longText, "What still needs work, or why it's ready."),
+            ], gates: [WorkflowGate(rule: .fieldEquals(seq: 3, key: "rightOfReplyDone", value: "Yes"),
+                                    reason: "Give every named subject a right of reply before sign-off.")]),
+        ])
+
+    /// Journalist — Source Protection & Publish. Strip anything that could
+    /// identify a source before the set leaves your device.
+    static let journalistPublish = WorkflowDefinition(
+        defID: "builtin.journalist.publish", name: "Source Protection & Publish",
+        persona: "journalist", builtin: true, operations: [
+            op(1, "identify", "Identify Sensitive Data", "List what must be protected.", nil, launches: .redaction, [
+                f("dataset", "Set to publish", .text, "What you're preparing for publication.", required: true),
+                f("sensitive", "Sensitive items", .longText, "Names, locations, identifiers, metadata that could expose a source."),
+            ]),
+            op(2, "redact", "Redact", "Remove or obscure the identifying material.", nil, launches: .redaction, [
+                f("redactedItems", "Items redacted", .number, "How many documents you redacted."),
+                f("method", "Method", .choice, "How you protected the source.", options: ["Black-box redaction", "Remove attachment", "Paraphrase quote", "Strip metadata"]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: "Identify the sensitive data first.")]),
+            op(3, "verify", "Verify No Leaks", "Double-check nothing identifying remains.", nil, launches: .emailInbox, [
+                f("leakCheckPassed", "No source-identifying data remains", .bool, "Turn on only after you've confirmed the set is safe to release."),
+            ]),
+            op(4, "publish", "Prepare Publish Set", "Export the source-safe set. Posts Export.", .export, launches: .emailInbox, [
+                f("outputName", "Output name", .text, "Label for the published set.", required: true),
+            ], gates: [WorkflowGate(rule: .fieldEquals(seq: 3, key: "leakCheckPassed", value: "Yes"),
+                                    reason: "Confirm no source-identifying data remains before exporting.")]),
+        ])
+
+    /// Personal — Find & Export. The everyday "find that email and save it" job.
+    static let personalFindExport = WorkflowDefinition(
+        defID: "builtin.personal.findexport", name: "Find & Export",
+        persona: "personal", builtin: true, operations: [
+            op(1, "search", "Find Emails", "Search for what you need.", nil, launches: .emailInbox, [
+                f("query", "What are you looking for", .text, "Sender, subject, keyword, or date.", required: true),
+                f("found", "Matches found", .number, "How many emails matched."),
+            ]),
+            op(2, "select", "Select & Review", "Pick the ones worth keeping.", nil, launches: .emailInbox, [
+                f("selected", "Selected", .number, "How many you're keeping."),
+                f("notes", "Notes", .longText, "Anything worth remembering about this set."),
+            ]),
+            op(3, "export", "Export", "Save them out. Posts Export.", .export, launches: .emailInbox, [
+                f("format", "Format", .choice, "How to save them.", options: ["PDF", "EML files", "MBOX"]),
+                f("destination", "Saved to", .text, "Where you put the export."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: "Find the emails first.")]),
+            op(4, "confirm", "Confirm", "Open the export and sanity-check it.", nil, launches: .emailInbox, [
+                f("verified", "Export looks right", .bool, "Turn on once you've opened it and confirmed it's complete."),
+            ]),
+        ])
+
+    /// Personal — Unsubscribe & Declutter. Inbox hygiene.
+    static let personalDeclutter = WorkflowDefinition(
+        defID: "builtin.personal.declutter", name: "Unsubscribe & Declutter",
+        persona: "personal", builtin: true, operations: [
+            op(1, "scan", "Scan Clutter", "Find newsletters, promotions, and automated mail.", nil, launches: .topicClusters, [
+                f("newsletters", "Newsletters", .number, "How many newsletter senders."),
+                f("promotional", "Promotional", .number, "How many promotional/automated senders."),
+            ]),
+            op(2, "unsubscribe", "Unsubscribe", "Decide who to drop and who to keep.", nil, launches: .emailInbox, [
+                f("unsubscribed", "Unsubscribed", .number, "Senders you unsubscribed from."),
+                f("keep", "Keep these", .longText, "Senders worth keeping."),
+            ]),
+            op(3, "purge", "Purge Old Clutter", "Clear out the old low-value mail. Posts Cleanup.", .cleanup, launches: .duplicateManager, [
+                f("removed", "Emails cleared", .number, "How many you removed."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: "Scan first so you know what's clutter.")]),
+            op(4, "summary", "Summary", "Record what changed.", nil, launches: .emailInbox, [
+                f("notes", "What changed", .longText, "A quick note on the cleanup for next time."),
+            ]),
+        ])
+
     static let all: [WorkflowDefinition] = [
         forensic, legal, itAdmin, journalist, personal,
         forensicTimeline, legalHold, legalECA, legalDSAR, itThreatHunt, journalistNetwork,
         itCampaign, forensicKeywordSweep, forensicCustodyVerify,
+        itBEC, journalistFactCheck, journalistPublish, personalFindExport, personalDeclutter,
     ]
 
     static func templates(for persona: String) -> [WorkflowDefinition] {
@@ -557,6 +674,16 @@ enum WorkflowCatalog {
             return "Build a story from a leak the honest way — verify provenance, annotate cited findings, compile and fact-check a sourced draft."
         case "builtin.journalist.network":
             return "Map who knew whom — extract the entities, chart the connections, and turn the network into the spine of your story."
+        case "builtin.journalist.factcheck":
+            return "Stand up every claim before publication — corroborate independently, give subjects a right of reply, then sign off."
+        case "builtin.journalist.publish":
+            return "Strip anything that could identify a source, verify the set is clean, and prepare a publish-safe export."
+        case "builtin.it.bec":
+            return "Work a suspected mailbox takeover end to end — scope, analyze rules/logins, verdict, contain and recover, report."
+        case "builtin.personal.findexport":
+            return "Find the emails you need and save them out — search, select, export, and confirm."
+        case "builtin.personal.declutter":
+            return "Tame the inbox — find newsletters and promos, unsubscribe, and clear out the old clutter."
         case "builtin.personal.cleanup":
             return "Tidy a personal archive — import, dedupe, categorize, and export a clean backup."
         default:

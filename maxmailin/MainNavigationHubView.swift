@@ -222,9 +222,14 @@ struct MainNavigationHubView: View {
         case "builtin.it.phishing": return "shield.lefthalf.filled"
         case "builtin.it.threathunt": return "binoculars"
         case "builtin.it.campaign": return "square.grid.3x3.fill"
+        case "builtin.it.bec": return "person.badge.shield.checkmark"
         case "builtin.journalist.story": return "text.book.closed"
         case "builtin.journalist.network": return "point.3.connected.trianglepath.dotted"
+        case "builtin.journalist.factcheck": return "checkmark.bubble"
+        case "builtin.journalist.publish": return "eye.slash"
         case "builtin.personal.cleanup": return "sparkles"
+        case "builtin.personal.findexport": return "magnifyingglass"
+        case "builtin.personal.declutter": return "trash"
         default: return "flowchart"
         }
     }

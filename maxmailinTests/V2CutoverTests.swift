@@ -1137,8 +1137,8 @@ final class V2CutoverTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         let store = SQLiteEmailStore(directory: root)
 
-        // Built-in catalog is well-formed: 14 recipes, sequential ops.
-        XCTAssertEqual(WorkflowCatalog.all.count, 14)
+        // Built-in catalog is well-formed: 19 recipes, sequential ops.
+        XCTAssertEqual(WorkflowCatalog.all.count, 19)
         for def in WorkflowCatalog.all {
             XCTAssertEqual(def.operations.map(\.seq), Array(1...def.operations.count),
                            "\(def.defID) operations must be 1..n in order")
@@ -1567,16 +1567,18 @@ final class V2CutoverTests: XCTestCase {
         // Per-persona workflow counts after adding the secondary jobs.
         XCTAssertEqual(WorkflowCatalog.templates(for: "forensic").count, 4)   // intake, timeline, sweep, custody
         XCTAssertEqual(WorkflowCatalog.templates(for: "legal").count, 4)   // production, hold, ECA, DSAR
-        XCTAssertEqual(WorkflowCatalog.templates(for: "it_admin").count, 3)   // phishing, threat hunt, bulk campaign
-        XCTAssertEqual(WorkflowCatalog.templates(for: "journalist").count, 2)
-        XCTAssertEqual(WorkflowCatalog.templates(for: "personal").count, 1)
+        XCTAssertEqual(WorkflowCatalog.templates(for: "it_admin").count, 4)   // phishing, hunt, campaign, BEC
+        XCTAssertEqual(WorkflowCatalog.templates(for: "journalist").count, 4)   // story, network, fact-check, publish
+        XCTAssertEqual(WorkflowCatalog.templates(for: "personal").count, 3)   // cleanup, find/export, declutter
 
         // The new jobs are present by name.
         let names = Set(WorkflowCatalog.all.map(\.name))
         for expected in ["Timeline Reconstruction", "Legal Hold & Preservation",
                          "Early Case Assessment", "Data Subject Request (DSAR)",
                          "Threat Hunt", "Entity & Network Map", "Phishing Campaign (Bulk)",
-                         "Keyword / Term Sweep", "Custody Verification"] {
+                         "Keyword / Term Sweep", "Custody Verification",
+                         "Account Compromise (BEC)", "Fact-Check & Verify",
+                         "Source Protection & Publish", "Find & Export", "Unsubscribe & Declutter"] {
             XCTAssertTrue(names.contains(expected), "missing workflow: \(expected)")
         }
 
@@ -1627,6 +1629,9 @@ final class V2CutoverTests: XCTestCase {
             WorkflowCatalog.itThreatHunt, WorkflowCatalog.itCampaign,
             WorkflowCatalog.journalistNetwork,
             WorkflowCatalog.forensicKeywordSweep, WorkflowCatalog.forensicCustodyVerify,
+            WorkflowCatalog.itBEC, WorkflowCatalog.journalistFactCheck,
+            WorkflowCatalog.journalistPublish, WorkflowCatalog.personalFindExport,
+            WorkflowCatalog.personalDeclutter,
         ]
         for def in newDefs {
             let ops = def.operations.map {
