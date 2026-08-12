@@ -105,6 +105,7 @@ struct PIIReportView: View {
                     }
                     .help("Save every finding (type, value, risk, source email) as a spreadsheet")
                 }
+                HelpDot(text: "This report scans your current filter on-device for personally identifiable information — email addresses, phone numbers, SSN/credit-card patterns, IP, passport, DOB, driver's license, IBAN — and groups every hit by type with a risk score and the source email. It scans a bounded working set (up to \(PIIReportView.scanCap)). Pattern detection isn't perfect: use AI Clean-up to drop false positives, then Export CSV to review and hand off.")
                 Button { if let onClose { onClose() } else { dismiss() } } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(AppColors.secondary)

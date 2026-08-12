@@ -44,6 +44,11 @@ struct WorkflowRunnerView: View {
     @State private var showSummary = false
     @State private var draftSaved = false
     @State private var isLoading = true
+    // First-run guidance — shown once per workflow, and once per step's Open.
+    @AppStorage("wfIntroSeen") private var introSeenBlob = ""
+    @AppStorage("wfStepOpenSeen") private var stepOpenSeenBlob = ""
+    @State private var showIntro = false
+    @State private var openPromptOp: WorkflowOperation? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -52,6 +57,9 @@ struct WorkflowRunnerView: View {
             if isLoading {
                 Spacer(); HStack { Spacer(); ProgressView(); Spacer() }; Spacer()
             } else {
+                if showIntro { introCard }
+                roadmap
+                Divider()
                 List {
                     Section {
                         ForEach(definition.operations) { op in
@@ -80,6 +88,15 @@ struct WorkflowRunnerView: View {
             Button("Save") { Task { await saveVariant() } }
         } message: {
             Text("Reuse this run's field entries next time by starting from this variant.")
+        }
+        .alert("Opening a tool for this step",
+               isPresented: Binding(get: { openPromptOp != nil },
+                                    set: { if !$0 { openPromptOp = nil } }),
+               presenting: openPromptOp) { op in
+            Button("Open now") { performOpen(op) }
+            Button("Cancel", role: .cancel) { openPromptOp = nil }
+        } message: { op in
+            Text("\(op.hint)\n\nA separate window opens for this. Do that there, then come back here and press Confirm to record it — mailin logs who did it, when, and any document it produces.")
         }
     }
 
@@ -125,7 +142,12 @@ struct WorkflowRunnerView: View {
                 }
             }
             Spacer()
-            HelpDot(text: "This is one run of the \(definition.name) recipe. Work top to bottom: Confirm each step when done — mailin records who did it, when, and the document number it produced. You can close and reopen; progress is saved. Copy or Print the report for the file.")
+            Button { showIntro = true } label: {
+                Image(systemName: "questionmark.circle").imageScale(.large)
+            }
+            .buttonStyle(.plain)
+            .help("How this job works — show the step-by-step guide again")
+            .accessibilityLabel("How this job works")
             Button {
                 variantName = ""
                 showSaveVariant = true
@@ -172,6 +194,208 @@ struct WorkflowRunnerView: View {
       .padding(Spacing.medium)
     }
 
+    // MARK: - Where-am-I roadmap + first-run guidance
+
+    private enum StepState { case done, current, upcoming, locked }
+
+    private func stepState(_ op: WorkflowOperation) -> StepState {
+        if confirmations[op.seq] != nil { return .done }
+        if !lockedReasons(op).isEmpty { return .locked }
+        if op.seq == currentOp?.seq { return .current }
+        return .upcoming
+    }
+
+    /// The step the user should be on now: first unconfirmed, unlocked step.
+    private var currentOp: WorkflowOperation? {
+        definition.operations.first { confirmations[$0.seq] == nil && lockedReasons($0).isEmpty }
+    }
+
+    private func nextUpcoming(after op: WorkflowOperation) -> WorkflowOperation? {
+        guard let i = definition.operations.firstIndex(where: { $0.seq == op.seq }),
+              i + 1 < definition.operations.count else { return nil }
+        return definition.operations[i + 1]
+    }
+    private func prevStep(_ op: WorkflowOperation) -> WorkflowOperation? {
+        guard let i = definition.operations.firstIndex(where: { $0.seq == op.seq }), i > 0 else { return nil }
+        return definition.operations[i - 1]
+    }
+    private func nextStep(_ op: WorkflowOperation) -> WorkflowOperation? { nextUpcoming(after: op) }
+
+    /// A short descriptive phrase (≈5 words) drawn from the step's hint, so the
+    /// roadmap rail says "Draft Report — write the findings & opinion", not just
+    /// the bare title.
+    private func shortHint(_ op: WorkflowOperation) -> String {
+        let words = op.hint.split(whereSeparator: { $0 == " " || $0 == "\n" })
+        let clipped = words.prefix(6).joined(separator: " ")
+        let trimmed = clipped.trimmingCharacters(in: CharacterSet(charactersIn: " .,;:"))
+        return words.count > 6 ? trimmed + "…" : trimmed
+    }
+
+    /// Plain-language "what to do here" for a step's confirm sheet.
+    private func stepGuidance(_ op: WorkflowOperation) -> String {
+        var s = op.hint
+        if op.launches != nil {
+            s += " Press “Open tool” below to do this in the app, come back, fill any fields, then Confirm & Save."
+        } else {
+            s += " Fill the fields below, then Confirm & Save."
+        }
+        if let doc = op.postsDocType {
+            s += " This posts a \(doc.displayName) you can quote or export later."
+        }
+        return s
+    }
+
+    private func chipHelp(_ op: WorkflowOperation, state: StepState) -> String {
+        switch state {
+        case .done: return "Done — click to review or edit this step"
+        case .current: return "You are here — \(op.hint)"
+        case .locked: return "Locked — \(lockedReasons(op).first ?? "finish the earlier step first")"
+        case .upcoming: return "Coming up — \(op.hint)"
+        }
+    }
+
+    // First-run tracking (comma-separated keys in @AppStorage).
+    private func introSeen() -> Bool {
+        introSeenBlob.split(separator: ",").map(String.init).contains(definition.defID)
+    }
+    private func markIntroSeen() {
+        if !introSeen() {
+            introSeenBlob += (introSeenBlob.isEmpty ? "" : ",") + definition.defID
+        }
+        showIntro = false
+    }
+    private func stepOpenSeen(_ op: WorkflowOperation) -> Bool {
+        stepOpenSeenBlob.split(separator: ",").map(String.init).contains("\(definition.defID)#\(op.seq)")
+    }
+    private func markStepOpenSeen(_ op: WorkflowOperation) {
+        let key = "\(definition.defID)#\(op.seq)"
+        if !stepOpenSeen(op) {
+            stepOpenSeenBlob += (stepOpenSeenBlob.isEmpty ? "" : ",") + key
+        }
+    }
+
+    /// Open the step's tool. First time for this step, explain what to do in the
+    /// window that opens; after that, open straight away.
+    private func requestOpen(_ op: WorkflowOperation) {
+        if stepOpenSeen(op) { performOpen(op) } else { openPromptOp = op }
+    }
+    private func performOpen(_ op: WorkflowOperation) {
+        markStepOpenSeen(op)
+        openPromptOp = nil
+        if let dest = op.launches { onOpenDestination?(dest) }
+    }
+
+    private var roadmap: some View {
+        VStack(alignment: .leading, spacing: Spacing.xxSmall) {
+            if status == "confirmed" {
+                Label("All steps confirmed — this run is complete.", systemImage: "checkmark.seal.fill")
+                    .font(Typography.caption1).foregroundColor(.green)
+            } else if let cur = currentOp {
+                let idx = (definition.operations.firstIndex { $0.seq == cur.seq } ?? 0) + 1
+                (Text("Step \(idx) of \(definition.operations.count)  ").fontWeight(.semibold)
+                 + Text("Now: \(cur.title)")
+                 + Text(nextUpcoming(after: cur).map { "  →  Next: \($0.title)" } ?? "  →  Finish")
+                    .foregroundColor(AppColors.secondary))
+                    .font(Typography.caption1)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Spacing.xSmall) {
+                    ForEach(Array(definition.operations.enumerated()), id: \.element.id) { i, op in
+                        roadmapChip(op)
+                        if i < definition.operations.count - 1 {
+                            Image(systemName: "chevron.right")
+                                .font(.caption2).foregroundColor(AppColors.secondary.opacity(0.5))
+                        }
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
+        .padding(.horizontal, Spacing.medium)
+        .padding(.vertical, Spacing.xSmall)
+    }
+
+    private func roadmapChip(_ op: WorkflowOperation) -> some View {
+        let st = stepState(op)
+        let icon: String
+        let color: Color
+        switch st {
+        case .done:     icon = "checkmark.circle.fill"; color = .green
+        case .current:  icon = "arrow.right.circle.fill"; color = AppColors.primary
+        case .locked:   icon = "lock.fill"; color = .orange
+        case .upcoming: icon = "\(op.seq).circle"; color = AppColors.secondary
+        }
+        return Button {
+            let locks = confirmations[op.seq] == nil ? lockedReasons(op) : []
+            if locks.isEmpty { openStep(op) }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: icon).foregroundColor(color)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(op.title)
+                        .font(Typography.caption2)
+                        .fontWeight(st == .current ? .bold : .semibold)
+                        .lineLimit(1)
+                    Text(shortHint(op))
+                        .font(Typography.caption2)
+                        .foregroundColor(AppColors.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            .background(st == .current ? AppColors.primary.opacity(0.12) : AppColors.secondary.opacity(0.08))
+            .overlay(
+                RoundedRectangle(cornerRadius: CornerRadius.small)
+                    .stroke(st == .current ? AppColors.primary.opacity(0.5) : Color.clear, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
+        }
+        .buttonStyle(.plain)
+        .help(chipHelp(op, state: st))
+    }
+
+    private var introCard: some View {
+        VStack(alignment: .leading, spacing: Spacing.xSmall) {
+            HStack {
+                Label("How this job works", systemImage: "lightbulb.fill")
+                    .font(Typography.callout).fontWeight(.semibold)
+                Spacer()
+                Button { markIntroSeen() } label: { Image(systemName: "xmark").imageScale(.small) }
+                    .buttonStyle(.plain).help("Hide — reopen any time with the ? button")
+            }
+            Text(WorkflowCatalog.purpose(for: definition.defID))
+                .font(Typography.caption1).foregroundColor(AppColors.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            guideLine("1", "Name the job in Client / matter so you can find it later.")
+            guideLine("2", "Work top to bottom. For each step: press Open to do it in the tool, then Confirm to record it.")
+            guideLine("3", "A locked step unlocks once the step before it is confirmed. Use the rail or Previous / Next to move around.")
+            guideLine("4", "Everything auto-saves — close any time and reopen to resume exactly where you left off.")
+            Text("The \(definition.operations.count) steps:  "
+                 + definition.operations.map { "\($0.seq). \($0.title)" }.joined(separator: "  →  "))
+                .font(Typography.caption2).foregroundColor(AppColors.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Got it") { markIntroSeen() }
+                .buttonStyle(.borderedProminent).controlSize(.small)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(Spacing.small)
+        .background(AppColors.primary.opacity(0.06))
+        .cornerRadius(CornerRadius.small)
+        .padding(.horizontal, Spacing.medium)
+        .padding(.top, Spacing.xSmall)
+    }
+
+    private func guideLine(_ n: String, _ text: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text(n)
+                .font(Typography.caption2).fontWeight(.bold).foregroundColor(AppColors.primary)
+                .frame(width: 14, height: 14)
+                .background(AppColors.primary.opacity(0.15)).clipShape(Circle())
+            Text(text).font(Typography.caption1).foregroundColor(AppColors.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private func lockedReasons(_ op: WorkflowOperation) -> [String] {
         let state = GatePolicy.RunState(
             confirmed: Set(confirmations.keys),
@@ -208,9 +432,9 @@ struct WorkflowRunnerView: View {
                 }
             }
             Spacer()
-            if let dest = op.launches {
+            if op.launches != nil {
                 Button {
-                    onOpenDestination?(dest)
+                    requestOpen(op)
                 } label: { Label("Open", systemImage: "arrow.up.forward.app") }
                 .controlSize(.small)
                 .disabled(!locks.isEmpty)
@@ -268,11 +492,14 @@ struct WorkflowRunnerView: View {
     }
 
     private func confirmSheet(_ op: WorkflowOperation) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let stepIndex = (definition.operations.firstIndex { $0.seq == op.seq } ?? 0) + 1
+        let locks = confirmations[op.seq] == nil ? lockedReasons(op) : []
+        return VStack(alignment: .leading, spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
+                    Text("Step \(stepIndex) of \(definition.operations.count)")
+                        .font(Typography.caption2).foregroundColor(AppColors.secondary)
                     Text("Confirm: \(op.title)").font(Typography.title3)
-                    Text(op.hint).font(Typography.caption1).foregroundColor(AppColors.secondary)
                 }
                 Spacer()
                 if let doc = op.postsDocType {
@@ -285,6 +512,25 @@ struct WorkflowRunnerView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.medium) {
+                    // First thing the user reads: what this step is for and how
+                    // to do it — the same plain-language help, on every step.
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("What to do here", systemImage: "info.circle.fill")
+                            .font(Typography.caption1).fontWeight(.semibold)
+                            .foregroundColor(AppColors.primary)
+                        Text(stepGuidance(op))
+                            .font(Typography.caption1).foregroundColor(AppColors.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(Spacing.small)
+                    .background(AppColors.primary.opacity(0.06))
+                    .cornerRadius(CornerRadius.small)
+                    if let lock = locks.first {
+                        Label("Locked — \(lock). Confirm the earlier step first; you can still read this step and fill it in.",
+                              systemImage: "lock.fill")
+                            .font(Typography.caption1).foregroundColor(.orange)
+                    }
                     ForEach(op.fields) { field in
                         fieldEditor(field)
                     }
@@ -306,10 +552,20 @@ struct WorkflowRunnerView: View {
                 .padding(Spacing.medium)
             }
             Divider()
-            HStack {
-                if let dest = op.launches {
+            HStack(spacing: Spacing.xSmall) {
+                Button { if let p = prevStep(op) { openStep(p) } } label: {
+                    Label("Previous", systemImage: "chevron.left")
+                }
+                .disabled(prevStep(op) == nil)
+                .help("Go back to the previous step — nothing is lost")
+                Button { if let n = nextStep(op) { openStep(n) } } label: {
+                    Label("Next", systemImage: "chevron.right")
+                }
+                .disabled(nextStep(op) == nil)
+                .help("Jump to the next step — you can move freely; drafts are saved")
+                if op.launches != nil {
                     Button {
-                        onOpenDestination?(dest)
+                        requestOpen(op)
                     } label: { Label("Open tool", systemImage: "arrow.up.forward.app") }
                     .help("Open the tool to do this step now")
                 }
@@ -322,6 +578,8 @@ struct WorkflowRunnerView: View {
                 Button("Cancel") { activeOp = nil }
                 Button("Confirm & Save") { Task { await confirm(op) } }
                     .buttonStyle(.borderedProminent)
+                    .disabled(!locks.isEmpty)
+                    .help(locks.isEmpty ? "Record this step" : "Locked — \(locks.first ?? "")")
             }
             .padding(Spacing.medium)
         }
@@ -395,6 +653,7 @@ struct WorkflowRunnerView: View {
             }
         }
         await refreshConfirmations()
+        showIntro = !introSeen()
         isLoading = false
     }
 

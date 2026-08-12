@@ -66,6 +66,7 @@ struct ThreadStoryView: View {
             Label("Thread Story", systemImage: "text.bubble")
                 .font(Typography.headline)
             Spacer()
+            HelpDot(text: "One click reconstructs this whole conversation as a chronological timeline — each entry is the evidence itself (subject, sender, date, snippet), and clicking one jumps to that email. The optional AI narrative is 100% on-device and only ever reads the messages in this thread, never your wider archive. Very large threads show the first \(Self.maxThreadEmails) messages and say so.")
             Button { dismiss() } label: {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundColor(AppColors.secondary)
