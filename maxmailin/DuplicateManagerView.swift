@@ -12,6 +12,7 @@ struct DuplicateManagerView: View {
     @State private var similarityThreshold: Double = 0.85
     @State private var legalHoldWarning: String?
     @State private var showTutorial = false
+    @State private var isRemoving = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -280,20 +281,19 @@ struct DuplicateManagerView: View {
             Spacer()
             Button("Cancel") { closeSheet() }
                 .buttonStyle(.bordered)
-            Button("Remove Selected") {
-                let (allowed, blocked) = CustodianManager.shared.filterProtected(selectedForRemoval)
-                if !allowed.isEmpty {
-                    model.removeDuplicateEmails(ids: allowed)
+                .disabled(isRemoving)
+            Button {
+                removeSelected()
+            } label: {
+                if isRemoving {
+                    HStack(spacing: Spacing.xxSmall) { ProgressView().controlSize(.small); Text("Removing…") }
+                } else {
+                    Text("Remove Selected")
                 }
-                if !blocked.isEmpty {
-                    legalHoldWarning = "\(blocked.count) email(s) skipped — under legal hold with evidence seal."
-                    return
-                }
-                closeSheet()
             }
             .buttonStyle(.borderedProminent)
             .tint(AppColors.error)
-            .disabled(selectedForRemoval.isEmpty)
+            .disabled(selectedForRemoval.isEmpty || isRemoving)
             .accessibilityLabel("Remove \(selectedForRemoval.count) selected emails")
             .accessibilityHint("Permanently removes selected duplicate emails")
         }
@@ -302,6 +302,44 @@ struct DuplicateManagerView: View {
 
     private func closeSheet() {
         if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
+    }
+
+    /// Remove the ticked copies. Awaits the delete fully, updates the in-memory
+    /// groups, and only THEN dismisses — never dismiss while the async delete's
+    /// refresh is still landing (that races window teardown and quit the app).
+    private func removeSelected() {
+        let (allowed, blocked) = CustodianManager.shared.filterProtected(selectedForRemoval)
+        guard !allowed.isEmpty else {
+            if !blocked.isEmpty {
+                legalHoldWarning = "\(blocked.count) email(s) skipped — under legal hold with evidence seal."
+            }
+            return
+        }
+        isRemoving = true
+        Task { @MainActor in
+            let ok = await model.removeDuplicateEmailsAwaiting(ids: allowed)
+            if ok { stripRemoved(allowed) }
+            isRemoving = false
+            if !blocked.isEmpty {
+                // Keep the window open so the user sees why some were kept.
+                legalHoldWarning = "\(blocked.count) email(s) skipped — under legal hold with evidence seal."
+                return
+            }
+            if ok { closeSheet() }
+        }
+    }
+
+    /// Drop the removed ids from the shown groups and the selection so the view
+    /// stays consistent whether or not it closes. Groups that fall to a single
+    /// copy are no longer duplicates and disappear.
+    private func stripRemoved(_ ids: Set<UUID>) {
+        duplicateGroups = duplicateGroups
+            .map { $0.filter { !ids.contains($0.id) } }
+            .filter { $0.count > 1 }
+        nearDuplicateGroups = nearDuplicateGroups
+            .map { $0.filter { !ids.contains($0.id) } }
+            .filter { $0.count > 1 }
+        selectedForRemoval.subtract(ids)
     }
 
     @State private var archiveDupIDs: [UUID] = []
@@ -345,11 +383,14 @@ struct DuplicateManagerView: View {
                 ) {
                     let ids = Set(archiveDupIDs)
                     archiveDupIDs = []
+                    isRemoving = true
                     Task { @MainActor in
                         _ = await DocumentRegistry.post(
                             .cleanup, summary: "Removed \(ids.count) exact duplicate(s) archive-wide")
+                        _ = await model.removeDuplicateEmailsAwaiting(ids: ids)
+                        stripRemoved(ids)
+                        isRemoving = false
                     }
-                    model.removeDuplicateEmails(ids: ids)
                 }
             }
         }

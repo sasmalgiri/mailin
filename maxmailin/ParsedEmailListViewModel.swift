@@ -737,6 +737,21 @@ class ParsedEmailListViewModel: ObservableObject {
         }
     }
 
+    /// Awaitable duplicate removal. Deletes via the guarded store path, then
+    /// refreshes the paged window BEFORE returning, so view code can update its
+    /// own state and dismiss only AFTER the mutation has landed — never
+    /// mid-flight, which races window teardown on macOS (observed as the app
+    /// quitting when the Duplicate Manager was closed on removal).
+    @MainActor
+    func removeDuplicateEmailsAwaiting(ids: Set<UUID>) async -> Bool {
+        guard !ids.isEmpty else { return true }
+        let ok = await viewModel.removeEmailsAwaitingResult(ids: ids)
+        guard ok else { return false }
+        invalidateSearchCache()
+        await refreshFromStoreNow()
+        return true
+    }
+
     // MARK: - Reset Filters
     func resetFilters() {
         isResettingFilters = true
