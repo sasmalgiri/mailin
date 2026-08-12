@@ -61,7 +61,7 @@ struct KnowledgeGraphExplorerView: View {
                 .buttonStyle(.bordered)
             }
             SaveToDocumentsButton(title: "Knowledge Graph") {
-                "KNOWLEDGE GRAPH\nEmails: \(emails.count)"
+                [.init(key: "Emails", value: "\(emails.count)")]
             }
             TutorialHelpButton(showTutorial: $showTutorial)
         }

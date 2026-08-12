@@ -240,7 +240,7 @@ struct EmailTimelineView: View {
             Spacer()
             TutorialHelpButton(showTutorial: $showTutorial)
             SaveToDocumentsButton(title: "Timeline") {
-                "TIMELINE\nEmails analyzed: \(timelineData?.totalEmails ?? 0)"
+                [.init(key: "Emails analyzed", value: "\(timelineData?.totalEmails ?? 0)")]
             }
             if isPresented != nil {
                 Button("Done") { closeSheet() }

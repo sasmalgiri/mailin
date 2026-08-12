@@ -118,7 +118,7 @@ struct ArchiveComparisonView: View {
             Spacer()
             TutorialHelpButton(showTutorial: $showTutorial)
             SaveToDocumentsButton(title: "Archive Compare") {
-                "ARCHIVE COMPARE\nArchive A: \(archiveA.count) · Archive B: \(archiveB.count)"
+                [.init(key: "Archive A", value: "\(archiveA.count)"), .init(key: "Archive B", value: "\(archiveB.count)")]
             }
             if isPresented != nil {
                 Button { closeSheet() } label: {

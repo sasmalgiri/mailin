@@ -243,7 +243,7 @@ struct TopicClustersView: View {
             TutorialHelpButton(showTutorial: $showTutorial)
 
             SaveToDocumentsButton(title: "Topic Clusters") {
-                "TOPIC CLUSTERS\nClusters: \(clusters.count) · Emails: \(emails.count)"
+                [.init(key: "Clusters", value: "\(clusters.count)"), .init(key: "Emails", value: "\(emails.count)")]
             }
 
             Button {

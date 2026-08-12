@@ -79,7 +79,7 @@ struct CustodianPanelView: View {
             .accessibilityLabel("Export custodian report")
             TutorialHelpButton(showTutorial: $showTutorial)
             SaveToDocumentsButton(title: "Custodian Panel") {
-                "CUSTODIAN PANEL\nWorking set: \(workingSet.count)"
+                [.init(key: "Working set", value: "\(workingSet.count)")]
             }
             if isPresented != nil {
                 Button { closeSheet() } label: {

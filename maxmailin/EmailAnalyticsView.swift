@@ -120,7 +120,7 @@ struct EmailAnalyticsView: View {
             TutorialHelpButton(showTutorial: $showTutorial)
 
             SaveToDocumentsButton(title: "Email Analytics") {
-                "EMAIL ANALYTICS\nEmails analyzed: \(analyticsData?.totalCount ?? 0)"
+                [.init(key: "Emails analyzed", value: "\(analyticsData?.totalCount ?? 0)")]
             }
 
             Button("Close") { if let onClose { onClose() } else { dismiss() } }

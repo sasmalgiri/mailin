@@ -4,38 +4,50 @@
 //
 //  A universal "Save to Documents" control. Drop it into any tool's header
 //  so the user can, at any moment, mint a numbered document that records the
-//  job they just did — the SAP promise made available on every page, not
-//  just the guided workflows. Manual by design: the user decides when a
-//  result is worth keeping, so merely opening a view never spams the register.
+//  job they just did — as STRUCTURED key/value fields, so it opens as a
+//  spreadsheet-like table, exports to CSV, and feeds custom reports. Manual by
+//  design: the user decides when a result is worth keeping, so merely opening
+//  a view never spams the register.
 //
 
 import SwiftUI
 
 struct SaveToDocumentsButton: View {
-    /// The document type to post (RPT for analyses, EXP for exports, etc.).
     let type: DocumentType
-    /// A short human title for the document summary.
     let title: String
-    /// Produces the full saved work at the moment of tapping — evaluated
-    /// lazily so it captures the current on-screen result.
-    let snapshot: () -> String
+    /// Builds the structured document at the moment of tapping (captures the
+    /// current on-screen result).
+    private let make: () -> CapturedDocument
 
     @State private var savedNumber: String?
     @State private var saving = false
 
-    init(type: DocumentType = .report, title: String, snapshot: @escaping () -> String) {
+    /// Simple form: one section (named `title`) of key/value fields.
+    init(type: DocumentType = .report, title: String,
+         fields: @escaping () -> [CapturedDocument.Field]) {
         self.type = type
         self.title = title
-        self.snapshot = snapshot
+        self.make = {
+            CapturedDocument(title: title,
+                             sections: [CapturedDocument.Section(name: title, fields: fields())])
+        }
+    }
+
+    /// Full form: build the whole multi-section document.
+    init(type: DocumentType = .report, title: String,
+         document: @escaping () -> CapturedDocument) {
+        self.type = type
+        self.title = title
+        self.make = document
     }
 
     var body: some View {
         Button {
             guard !saving, savedNumber == nil else { return }
             saving = true
-            let work = snapshot()
+            let doc = make()
             Task {
-                let number = await DocumentRegistry.capture(type, summary: title, body: work)
+                let number = await DocumentRegistry.captureStructured(type, summary: title, document: doc)
                 await MainActor.run {
                     savedNumber = number
                     saving = false

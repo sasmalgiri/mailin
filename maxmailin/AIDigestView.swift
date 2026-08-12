@@ -31,7 +31,7 @@ struct AIDigestView: View {
                 Spacer()
                 TutorialHelpButton(showTutorial: $showTutorial)
                 SaveToDocumentsButton(title: "AI Digest") {
-                    "AI Digest\nRecorded: on-device analysis snapshot."
+                    [.init(key: "Note", value: "On-device analysis snapshot")]
                 }
                 if isPresented != nil {
                     Button("Done") { closeSheet() }

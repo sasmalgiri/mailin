@@ -387,7 +387,7 @@ struct ThreadSummarizerView: View {
             TutorialHelpButton(showTutorial: $showTutorial)
 
             SaveToDocumentsButton(title: "Thread Summarizer") {
-                "THREAD SUMMARIZER\nMessages in thread: \(threadEmails.count)"
+                [.init(key: "Messages in thread", value: "\(threadEmails.count)")]
             }
 
             if isPresented != nil {

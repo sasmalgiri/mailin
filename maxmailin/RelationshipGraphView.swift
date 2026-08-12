@@ -382,7 +382,7 @@ struct RelationshipGraphView: View {
                 .accessibilityLabel("Rebuild the relationship graph")
             TutorialHelpButton(showTutorial: $showTutorial)
             SaveToDocumentsButton(title: "Relationship Graph") {
-                "RELATIONSHIP GRAPH\nEmails: \(emails.count)"
+                [.init(key: "Emails", value: "\(emails.count)")]
             }
             if isPresented != nil {
                 Button("Done") { closeSheet() }
