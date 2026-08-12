@@ -53,6 +53,8 @@ struct SettingsView: View {
     @AppStorage("showBasicTagPills") private var showBasicTagPills = false
     @AppStorage("autoAdvanceAfterTag") private var autoAdvanceAfterTag = true
     @AppStorage(DocumentCapturePrefs.autoKey) private var autoCaptureDocs = true
+    @AppStorage("wfAutoSave") private var wfAutoSave = true
+    @AppStorage("wfAutoComplete") private var wfAutoComplete = true
     @AppStorage("hasConsentedToCloudAI") private var hasConsentedToCloudAI = false
     @AppStorage("customModelName") private var customModelName = ""
     @State private var savedDataCleared = false
@@ -303,6 +305,22 @@ struct SettingsView: View {
                     .font(.headline)
             } footer: {
                 Text("Every job you do is kept under a document number you can reopen, export to CSV, and pull into reports. Turn this off to save manually with a button instead.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Section {
+                Toggle("Auto-save workflow steps as I go", isOn: $wfAutoSave)
+                    .help("When on, your entries in a workflow save automatically as you type. Off = press Save on each step.")
+                    .accessibilityLabel("Auto-save workflow steps")
+                Toggle("Auto-complete a step when it's filled", isOn: $wfAutoComplete)
+                    .help("When on, a workflow step marks itself done once its required fields are filled. Off = press Mark done / Sign off yourself.")
+                    .accessibilityLabel("Auto-complete workflow steps")
+            } header: {
+                Text("Workflows")
+                    .font(.headline)
+            } footer: {
+                Text("Controls the guided workflow runner. With both off, you save and finalize every step by hand — Forensic and Legal users who want an explicit sign-off on each step may prefer that. You can also flip these from the sliders menu in any workflow window.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }

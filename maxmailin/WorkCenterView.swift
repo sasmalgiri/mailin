@@ -342,6 +342,16 @@ struct WorkCenterView: View {
 
     // MARK: Workflows
 
+    /// macOS: open the run in its own window (reads the resumeWF / startVariant
+    /// just set by the caller). iOS: fall back to the sheet via runnerDef.
+    private func launchRunner(_ def: WorkflowDefinition) {
+        let opened = WorkflowWindow.open(
+            definition: def, resumeWF: resumeWF, startVariant: startVariant,
+            onOpenDestination: { onOpenDestination?($0) },
+            onClose: { Task { await reload() } })
+        if !opened { runnerDef = def }
+    }
+
     private var workflowsTab: some View {
         List {
             Section {
@@ -353,7 +363,7 @@ struct WorkCenterView: View {
                     Button {
                         resumeWF = nil
                         startVariant = nil
-                        runnerDef = def
+                        launchRunner(def)
                     } label: {
                         HStack {
                             Image(systemName: "flowchart").foregroundColor(AppColors.primary)
@@ -378,7 +388,7 @@ struct WorkCenterView: View {
                         Button {
                             resumeWF = nil
                             startVariant = variant
-                            runnerDef = def
+                            launchRunner(def)
                         } label: {
                             Label("Variant: \(variant.name)", systemImage: "square.stack.3d.up")
                                 .font(Typography.caption1)
@@ -405,7 +415,7 @@ struct WorkCenterView: View {
                         if let def = WorkflowCatalog.all.first(where: { $0.defID == inst.defID }) {
                             resumeWF = inst.wfNumber
                             startVariant = nil
-                            runnerDef = def
+                            launchRunner(def)
                         }
                     } label: {
                         HStack {

@@ -2,10 +2,15 @@
 //  WorkflowRunnerView.swift
 //  maxmailin
 //
-//  Runs one workflow instance: the operation checklist for a WF-####. Each
-//  step shows its hint, a Confirm control that records who/when/result and
-//  the document it posted, and stays reopenable until every operation is
-//  confirmed. A finished (or in-progress) run renders to a printable report.
+//  Runs one workflow instance: a WF-#### whose steps expand INLINE. Each step
+//  shows its guidance and its fields right in the checklist; entries auto-save
+//  as you type and a step marks itself done automatically once its required
+//  fields are filled (and, for a step that launches a tool, once you've opened
+//  that tool). Confirm is demoted to an optional one-tap "Sign off" — surfaced
+//  for Forensic/Legal, where a who/when attestation matters. Both behaviours
+//  are user options (auto-save / auto-complete) that can be turned off, in
+//  which case the user saves and marks each step done by hand. Heavy tools open
+//  as sibling windows bound to the run; the run renders to a printable report.
 //
 
 import SwiftUI
@@ -29,26 +34,36 @@ struct WorkflowRunnerView: View {
     @State private var title: String = ""
     @State private var status: String = "open"
     @State private var confirmations: [Int: SQLiteEmailStore.StoredConfirmation] = [:]
-    @State private var activeOp: WorkflowOperation? = nil
-    @State private var resultText = ""
-    @State private var noteText = ""
-    @State private var fieldValues: [String: String] = [:]
     @State private var savedValues: [Int: [String: String]] = [:]
-    @State private var validationError: String? = nil
+    @State private var notes: [Int: String] = [:]
     @State private var derivation = DerivationContext()
-    @State private var derivedKeys: Set<String> = []
+    @State private var derivedKeysBySeq: [Int: Set<String>] = [:]
+    @State private var validationBySeq: [Int: String] = [:]
     @State private var showSaveVariant = false
     @State private var variantName = ""
     @State private var completedNumber: String? = nil
     @State private var clientName = ""
     @State private var showSummary = false
-    @State private var draftSaved = false
     @State private var isLoading = true
+    // Inline-step interaction state.
+    @State private var expanded: Set<Int> = []
+    @State private var openedSteps: Set<Int> = []
+    @State private var dirtySeqs: Set<Int> = []
+    @State private var savedFlashSeq: Int? = nil
+    @State private var saveTasks: [Int: Task<Void, Never>] = [:]
+    @State private var scrollTarget: Int? = nil
     // First-run guidance — shown once per workflow, and once per step's Open.
     @AppStorage("wfIntroSeen") private var introSeenBlob = ""
     @AppStorage("wfStepOpenSeen") private var stepOpenSeenBlob = ""
+    // User options — both default ON (see Settings ▸ Documents & History and
+    // the automation menu in this window's header).
+    @AppStorage("wfAutoSave") private var autoSave = true
+    @AppStorage("wfAutoComplete") private var autoComplete = true
     @State private var showIntro = false
     @State private var openPromptOp: WorkflowOperation? = nil
+
+    private var needsSignoff: Bool { definition.persona == "forensic" || definition.persona == "legal" }
+    private var doneLabel: String { needsSignoff ? "Sign off" : "Mark done" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -60,28 +75,27 @@ struct WorkflowRunnerView: View {
                 if showIntro { introCard }
                 roadmap
                 Divider()
-                List {
-                    Section {
-                        ForEach(definition.operations) { op in
-                            operationRow(op)
+                ScrollViewReader { proxy in
+                    List {
+                        Section {
+                            ForEach(definition.operations) { op in
+                                operationRow(op).id(op.seq)
+                            }
+                        } header: {
+                            Text("\(confirmations.count) of \(definition.operations.count) steps done")
+                        } footer: {
+                            Text(footerText).font(Typography.caption2)
                         }
-                    } header: {
-                        Text("\(confirmations.count)/\(definition.operations.count) operations confirmed")
-                    } footer: {
-                        Text("Each confirmation records who, when, and the document it posted. Reopen any time — the run resumes where you left off.")
-                            .font(Typography.caption2)
+                    }
+                    .onChange(of: scrollTarget) { _, t in
+                        if let t { withAnimation { proxy.scrollTo(t, anchor: .top) } }
                     }
                 }
             }
         }
         .toolWindowFrame()
         .task { await bootstrap() }
-        .sheet(item: $activeOp) { op in
-            confirmSheet(op)
-        }
-        .sheet(isPresented: $showSummary) {
-            summarySheet
-        }
+        .sheet(isPresented: $showSummary) { summarySheet }
         .alert("Save as Variant", isPresented: $showSaveVariant) {
             TextField("Variant name", text: $variantName)
             Button("Cancel", role: .cancel) {}
@@ -96,7 +110,19 @@ struct WorkflowRunnerView: View {
             Button("Open now") { performOpen(op) }
             Button("Cancel", role: .cancel) { openPromptOp = nil }
         } message: { op in
-            Text("\(op.hint)\n\nA separate window opens for this. Do that there, then come back here and press Confirm to record it — mailin logs who did it, when, and any document it produces.")
+            Text("\(op.hint)\n\nA separate window opens for this. Do the work there, then come back and fill this step's fields — it saves automatically\(autoComplete ? " and marks itself done" : "; then press \(doneLabel)").")
+        }
+    }
+
+    private var footerText: String {
+        if autoSave && autoComplete {
+            return "Your work saves as you go, and each step marks itself done once its required fields are filled.\(needsSignoff ? " Use \(doneLabel) to add your who/when attestation." : "")"
+        } else if autoSave {
+            return "Your work saves as you go. Press \(doneLabel) on each step when you're ready to finalize it."
+        } else if autoComplete {
+            return "Steps mark themselves done once filled. Auto-save is off — press Save to store your entries."
+        } else {
+            return "Auto-save and auto-complete are off — press Save to store entries, and \(doneLabel) to finalize each step."
         }
     }
 
@@ -142,6 +168,7 @@ struct WorkflowRunnerView: View {
                 }
             }
             Spacer()
+            automationMenu
             Button { showIntro = true } label: {
                 Image(systemName: "questionmark.circle").imageScale(.large)
             }
@@ -194,6 +221,21 @@ struct WorkflowRunnerView: View {
       .padding(Spacing.medium)
     }
 
+    /// Quick per-run automation switches (mirror the Settings toggles).
+    private var automationMenu: some View {
+        Menu {
+            Toggle(isOn: $autoSave) { Label("Auto-save as I go", systemImage: "square.and.arrow.down") }
+            Toggle(isOn: $autoComplete) { Label("Auto-complete steps when filled", systemImage: "checkmark.circle") }
+            Divider()
+            Text("Off = save and \(doneLabel.lowercased()) each step yourself.")
+        } label: {
+            Image(systemName: "slider.horizontal.3").imageScale(.large)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Automation — turn auto-save and auto-complete on or off (also in Settings)")
+    }
+
     // MARK: - Where-am-I roadmap + first-run guidance
 
     private enum StepState { case done, current, upcoming, locked }
@@ -205,7 +247,7 @@ struct WorkflowRunnerView: View {
         return .upcoming
     }
 
-    /// The step the user should be on now: first unconfirmed, unlocked step.
+    /// The step the user should be on now: first not-done, unlocked step.
     private var currentOp: WorkflowOperation? {
         definition.operations.first { confirmations[$0.seq] == nil && lockedReasons($0).isEmpty }
     }
@@ -231,16 +273,19 @@ struct WorkflowRunnerView: View {
         return words.count > 6 ? trimmed + "…" : trimmed
     }
 
-    /// Plain-language "what to do here" for a step's confirm sheet.
+    /// Plain-language "what to do here" for a step.
     private func stepGuidance(_ op: WorkflowOperation) -> String {
         var s = op.hint
         if op.launches != nil {
-            s += " Press “Open tool” below to do this in the app, come back, fill any fields, then Confirm & Save."
+            s += " Press “Open tool” to do this in the app, then come back and fill the fields below."
         } else {
-            s += " Fill the fields below, then Confirm & Save."
+            s += " Fill the fields below."
         }
+        if autoSave { s += " Entries save as you type" } else { s += " Press Save to store entries" }
+        if autoComplete { s += "; the step marks itself done once its required fields are filled." }
+        else { s += "; press \(doneLabel) to finalize it." }
         if let doc = op.postsDocType {
-            s += " This posts a \(doc.displayName) you can quote or export later."
+            s += " Finalizing posts a \(doc.displayName) you can quote or export later."
         }
         return s
     }
@@ -281,6 +326,7 @@ struct WorkflowRunnerView: View {
     }
     private func performOpen(_ op: WorkflowOperation) {
         markStepOpenSeen(op)
+        openedSteps.insert(op.seq)
         openPromptOp = nil
         if let dest = op.launches { onOpenDestination?(dest) }
     }
@@ -288,7 +334,7 @@ struct WorkflowRunnerView: View {
     private var roadmap: some View {
         VStack(alignment: .leading, spacing: Spacing.xxSmall) {
             if status == "confirmed" {
-                Label("All steps confirmed — this run is complete.", systemImage: "checkmark.seal.fill")
+                Label("All steps done — this run is complete.", systemImage: "checkmark.seal.fill")
                     .font(Typography.caption1).foregroundColor(.green)
             } else if let cur = currentOp {
                 let idx = (definition.operations.firstIndex { $0.seq == cur.seq } ?? 0) + 1
@@ -328,7 +374,7 @@ struct WorkflowRunnerView: View {
         }
         return Button {
             let locks = confirmations[op.seq] == nil ? lockedReasons(op) : []
-            if locks.isEmpty { openStep(op) }
+            if locks.isEmpty { expandStep(op) }
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: icon).foregroundColor(color)
@@ -367,10 +413,14 @@ struct WorkflowRunnerView: View {
                 .font(Typography.caption1).foregroundColor(AppColors.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             guideLine("1", "Name the job in Client / matter so you can find it later.")
-            guideLine("2", "Work top to bottom. For each step: press Open to do it in the tool, then Confirm to record it.")
-            guideLine("3", "A locked step unlocks once the step before it is confirmed. Use the rail or Previous / Next to move around.")
-            guideLine("4", "Everything auto-saves — close any time and reopen to resume exactly where you left off.")
-            Text("The \(definition.operations.count) steps:  "
+            guideLine("2", "Work top to bottom. Tap a step to open it; fill its fields right here. For a step that needs a tool, press Open first.")
+            guideLine("3", autoComplete
+                      ? "Each step marks itself done once its required fields are filled — no separate confirm."
+                      : "Press \(doneLabel) on each step to finalize it (auto-complete is off).")
+            guideLine("4", autoSave
+                      ? "Everything auto-saves — close any time and reopen to resume exactly where you left off."
+                      : "Auto-save is off — press Save on a step to store your entries.")
+            Text("Tune this in the \(Image(systemName: "slider.horizontal.3")) menu (top-right) or Settings. The \(definition.operations.count) steps:  "
                  + definition.operations.map { "\($0.seq). \($0.title)" }.joined(separator: "  →  "))
                 .font(Typography.caption2).foregroundColor(AppColors.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -403,55 +453,202 @@ struct WorkflowRunnerView: View {
         return GatePolicy.lockedReasons(op, state: state)
     }
 
+    // MARK: - Inline step row
+
+    @ViewBuilder
     private func operationRow(_ op: WorkflowOperation) -> some View {
         let conf = confirmations[op.seq]
-        let locks = conf == nil ? lockedReasons(op) : []   // confirmed steps show no lock
-        return HStack(alignment: .top, spacing: Spacing.small) {
-            Image(systemName: conf != nil ? "checkmark.circle.fill" : "circle")
-                .foregroundColor(conf != nil ? .green : AppColors.secondary)
-                .frame(width: 22)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("\(op.seq). \(op.title)")
-                    .font(Typography.callout).fontWeight(.semibold)
-                Text(op.hint)
-                    .font(Typography.caption1).foregroundColor(AppColors.secondary)
-                if let conf {
-                    HStack(spacing: Spacing.xxSmall) {
-                        Text(conf.confirmedAt.formatted(date: .abbreviated, time: .shortened))
-                        if !conf.confirmedBy.isEmpty { Text("· \(conf.confirmedBy)") }
-                        if !conf.result.isEmpty { Text("· \(conf.result)") }
-                        if let doc = conf.docNumber {
-                            Text(doc).font(Typography.monoSmall).foregroundColor(AppColors.primary)
+        let locks = conf == nil ? lockedReasons(op) : []
+        let isOpen = expanded.contains(op.seq)
+        VStack(alignment: .leading, spacing: Spacing.xSmall) {
+            // Header line — tap to expand/collapse.
+            Button {
+                if isOpen { expanded.remove(op.seq) }
+                else { prefillDerived(op); expanded.insert(op.seq) }
+            } label: {
+                HStack(alignment: .top, spacing: Spacing.small) {
+                    Image(systemName: conf != nil ? "checkmark.circle.fill" : (locks.isEmpty ? "circle" : "lock.circle"))
+                        .foregroundColor(conf != nil ? .green : (locks.isEmpty ? AppColors.secondary : .orange))
+                        .frame(width: 22)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(op.seq). \(op.title)")
+                            .font(Typography.callout).fontWeight(.semibold)
+                            .foregroundColor(.primary)
+                        Text(op.hint)
+                            .font(Typography.caption1).foregroundColor(AppColors.secondary)
+                            .lineLimit(isOpen ? nil : 1)
+                        if let conf {
+                            HStack(spacing: Spacing.xxSmall) {
+                                Text(conf.confirmedAt.formatted(date: .abbreviated, time: .shortened))
+                                if !conf.confirmedBy.isEmpty { Text("· \(conf.confirmedBy)") }
+                                if let doc = conf.docNumber {
+                                    Text(doc).font(Typography.monoSmall).foregroundColor(AppColors.primary)
+                                }
+                            }
+                            .font(Typography.caption2).foregroundColor(AppColors.secondary)
+                        } else if let lock = locks.first {
+                            Label(lock, systemImage: "lock.fill")
+                                .font(Typography.caption2).foregroundColor(.orange)
                         }
                     }
-                    .font(Typography.caption2).foregroundColor(AppColors.secondary)
+                    Spacer()
+                    if savedFlashSeq == op.seq {
+                        Label("Saved", systemImage: "checkmark.circle")
+                            .font(Typography.caption2).foregroundColor(.green).transition(.opacity)
+                    }
+                    Image(systemName: isOpen ? "chevron.down" : "chevron.right")
+                        .font(.caption).foregroundColor(AppColors.secondary)
                 }
-                if let lock = locks.first {
-                    Label(lock, systemImage: "lock.fill")
-                        .font(Typography.caption2).foregroundColor(.orange)
-                }
+                .contentShape(Rectangle())
             }
-            Spacer()
-            if op.launches != nil {
-                Button {
-                    requestOpen(op)
-                } label: { Label("Open", systemImage: "arrow.up.forward.app") }
-                .controlSize(.small)
-                .disabled(!locks.isEmpty)
-                .help(locks.isEmpty ? "Open the tool this step is done in — do the work, then come back and Confirm"
-                                    : "Locked — \(locks.first ?? "")")
-            }
-            Button(conf != nil ? "Reconfirm" : "Confirm") {
-                openStep(op)
-            }
-            .disabled(!locks.isEmpty)
-            .controlSize(.small)
-            .disabled(wfNumber.isEmpty)
-            .help(op.postsDocType != nil
-                  ? "Confirm this step — it posts a \(op.postsDocType!.displayName) document you can quote later"
-                  : "Confirm this step — records who did it and when")
+            .buttonStyle(.plain)
+
+            if isOpen { stepDetail(op, conf: conf, locks: locks) }
         }
         .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private func stepDetail(_ op: WorkflowOperation, conf: SQLiteEmailStore.StoredConfirmation?, locks: [String]) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.small) {
+            // What to do here.
+            VStack(alignment: .leading, spacing: 4) {
+                Label("What to do here", systemImage: "info.circle.fill")
+                    .font(Typography.caption1).fontWeight(.semibold).foregroundColor(AppColors.primary)
+                Text(stepGuidance(op))
+                    .font(Typography.caption1).foregroundColor(AppColors.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(Spacing.small)
+            .background(AppColors.primary.opacity(0.06))
+            .cornerRadius(CornerRadius.small)
+
+            if let lock = locks.first {
+                Label("Locked — \(lock). You can read and fill this now; it finalizes once the earlier step is done.",
+                      systemImage: "lock.fill")
+                    .font(Typography.caption1).foregroundColor(.orange)
+            }
+
+            ForEach(op.fields) { field in
+                fieldEditor(op.seq, field)
+            }
+            if let filled = derivedKeysBySeq[op.seq], !filled.isEmpty {
+                Label("Some fields were filled in from your archive — check and adjust.", systemImage: "wand.and.stars")
+                    .font(Typography.caption2).foregroundColor(AppColors.primary)
+            }
+
+            // Optional note.
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Note (optional)").font(Typography.caption2).fontWeight(.semibold)
+                TextField("Anything else worth recording", text: noteBinding(op.seq), axis: .vertical)
+                    .textFieldStyle(.roundedBorder).lineLimit(1...3)
+            }
+
+            if let err = validationBySeq[op.seq] {
+                Label(err, systemImage: "exclamationmark.triangle.fill")
+                    .font(Typography.caption1).foregroundColor(.red)
+            }
+
+            // Action row.
+            HStack(spacing: Spacing.xSmall) {
+                Button { if let p = prevStep(op) { expandStep(p) } } label: {
+                    Label("Previous", systemImage: "chevron.left")
+                }
+                .controlSize(.small).disabled(prevStep(op) == nil)
+                .help("Go back a step — nothing is lost")
+                Button { if let n = nextStep(op) { expandStep(n) } } label: {
+                    Label("Next", systemImage: "chevron.right")
+                }
+                .controlSize(.small).disabled(nextStep(op) == nil)
+                .help("Jump to the next step")
+
+                if op.launches != nil {
+                    Button { requestOpen(op) } label: { Label("Open tool", systemImage: "arrow.up.forward.app") }
+                        .controlSize(.small)
+                        .help("Open the tool to do this step now (opens beside this window)")
+                }
+                if !autoSave {
+                    Button { Task { await saveNow(op) } } label: { Label("Save", systemImage: "square.and.arrow.down") }
+                        .controlSize(.small)
+                        .disabled(!dirtySeqs.contains(op.seq))
+                        .help("Store your entries for this step")
+                }
+                Spacer()
+                if conf == nil {
+                    Button(doneLabel) { manualDone(op) }
+                        .buttonStyle(.borderedProminent).controlSize(.small)
+                        .disabled(!locks.isEmpty || wfNumber.isEmpty)
+                        .help(needsSignoff
+                              ? "Finalize this step and record who did it and when — the forensic attestation"
+                              : "Finalize this step now")
+                } else {
+                    Label("Done", systemImage: "checkmark.seal.fill")
+                        .font(Typography.caption2).foregroundColor(.green)
+                }
+            }
+        }
+        .padding(.leading, 30)
+        .padding(.trailing, 2)
+    }
+
+    @ViewBuilder
+    private func fieldEditor(_ seq: Int, _ field: WorkflowField) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 4) {
+                Text(field.label).font(Typography.caption1).fontWeight(.semibold)
+                if field.required {
+                    Text("required").font(Typography.caption2).foregroundColor(.orange)
+                }
+            }
+            switch field.kind {
+            case .text, .number, .date:
+                TextField(field.placeholder, text: binding(seq, field.key))
+                    .textFieldStyle(.roundedBorder)
+                    #if os(iOS)
+                    .keyboardType(field.kind == .number ? .numbersAndPunctuation : .default)
+                    #endif
+            case .longText:
+                TextField(field.placeholder.isEmpty ? "…" : field.placeholder,
+                          text: binding(seq, field.key), axis: .vertical)
+                    .textFieldStyle(.roundedBorder).lineLimit(2...5)
+            case .bool:
+                Toggle(isOn: boolBinding(seq, field.key)) { Text(field.help).font(Typography.caption2) }
+            case .choice:
+                Picker("", selection: binding(seq, field.key)) {
+                    Text("—").tag("")
+                    ForEach(field.options, id: \.self) { Text($0).tag($0) }
+                }
+                .pickerStyle(.menu).labelsHidden()
+            }
+            if field.kind != .bool {
+                Text(field.help).font(Typography.caption2).foregroundColor(AppColors.secondary)
+            }
+        }
+    }
+
+    private func binding(_ seq: Int, _ key: String) -> Binding<String> {
+        Binding(
+            get: { savedValues[seq]?[key] ?? "" },
+            set: { newVal in
+                var d = savedValues[seq] ?? [:]
+                d[key] = newVal
+                savedValues[seq] = d
+                onFieldEdited(seq)
+            })
+    }
+    private func boolBinding(_ seq: Int, _ key: String) -> Binding<Bool> {
+        Binding(
+            get: { savedValues[seq]?[key] == "Yes" },
+            set: { on in
+                var d = savedValues[seq] ?? [:]
+                d[key] = on ? "Yes" : ""
+                savedValues[seq] = d
+                onFieldEdited(seq)
+            })
+    }
+    private func noteBinding(_ seq: Int) -> Binding<String> {
+        Binding(get: { notes[seq] ?? "" }, set: { notes[seq] = $0; onFieldEdited(seq) })
     }
 
     private var summarySheet: some View {
@@ -491,148 +688,7 @@ struct WorkflowRunnerView: View {
         .frame(minWidth: 520, minHeight: 480)
     }
 
-    private func confirmSheet(_ op: WorkflowOperation) -> some View {
-        let stepIndex = (definition.operations.firstIndex { $0.seq == op.seq } ?? 0) + 1
-        let locks = confirmations[op.seq] == nil ? lockedReasons(op) : []
-        return VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Step \(stepIndex) of \(definition.operations.count)")
-                        .font(Typography.caption2).foregroundColor(AppColors.secondary)
-                    Text("Confirm: \(op.title)").font(Typography.title3)
-                }
-                Spacer()
-                if let doc = op.postsDocType {
-                    Label(doc.displayName, systemImage: doc.icon)
-                        .font(Typography.caption2).foregroundColor(AppColors.primary)
-                        .help("Confirming posts a \(doc.displayName) document — a number you can quote later")
-                }
-            }
-            .padding(Spacing.medium)
-            Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: Spacing.medium) {
-                    // First thing the user reads: what this step is for and how
-                    // to do it — the same plain-language help, on every step.
-                    VStack(alignment: .leading, spacing: 4) {
-                        Label("What to do here", systemImage: "info.circle.fill")
-                            .font(Typography.caption1).fontWeight(.semibold)
-                            .foregroundColor(AppColors.primary)
-                        Text(stepGuidance(op))
-                            .font(Typography.caption1).foregroundColor(AppColors.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(Spacing.small)
-                    .background(AppColors.primary.opacity(0.06))
-                    .cornerRadius(CornerRadius.small)
-                    if let lock = locks.first {
-                        Label("Locked — \(lock). Confirm the earlier step first; you can still read this step and fill it in.",
-                              systemImage: "lock.fill")
-                            .font(Typography.caption1).foregroundColor(.orange)
-                    }
-                    ForEach(op.fields) { field in
-                        fieldEditor(field)
-                    }
-                    if !derivedKeys.isEmpty {
-                        Label("Some fields were filled in from your archive — check and adjust before confirming.",
-                              systemImage: "wand.and.stars")
-                            .font(Typography.caption2).foregroundColor(AppColors.primary)
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Note (optional)").font(Typography.caption1).fontWeight(.semibold)
-                        TextField("Anything else worth recording", text: $noteText, axis: .vertical)
-                            .textFieldStyle(.roundedBorder).lineLimit(2...4)
-                    }
-                    if let err = validationError {
-                        Label(err, systemImage: "exclamationmark.triangle.fill")
-                            .font(Typography.caption1).foregroundColor(.red)
-                    }
-                }
-                .padding(Spacing.medium)
-            }
-            Divider()
-            HStack(spacing: Spacing.xSmall) {
-                Button { if let p = prevStep(op) { openStep(p) } } label: {
-                    Label("Previous", systemImage: "chevron.left")
-                }
-                .disabled(prevStep(op) == nil)
-                .help("Go back to the previous step — nothing is lost")
-                Button { if let n = nextStep(op) { openStep(n) } } label: {
-                    Label("Next", systemImage: "chevron.right")
-                }
-                .disabled(nextStep(op) == nil)
-                .help("Jump to the next step — you can move freely; drafts are saved")
-                if op.launches != nil {
-                    Button {
-                        requestOpen(op)
-                    } label: { Label("Open tool", systemImage: "arrow.up.forward.app") }
-                    .help("Open the tool to do this step now")
-                }
-                if draftSaved {
-                    Label("Draft saved", systemImage: "checkmark.circle")
-                        .font(Typography.caption2).foregroundColor(.green)
-                        .transition(.opacity)
-                }
-                Spacer()
-                Button("Cancel") { activeOp = nil }
-                Button("Confirm & Save") { Task { await confirm(op) } }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!locks.isEmpty)
-                    .help(locks.isEmpty ? "Record this step" : "Locked — \(locks.first ?? "")")
-            }
-            .padding(Spacing.medium)
-        }
-        .frame(minWidth: 460, minHeight: 380)
-        .onChange(of: fieldValues) {
-            Task { await autosaveDraft(op) }
-        }
-    }
-
-    @ViewBuilder
-    private func fieldEditor(_ field: WorkflowField) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 4) {
-                Text(field.label).font(Typography.caption1).fontWeight(.semibold)
-                if field.required {
-                    Text("required").font(Typography.caption2).foregroundColor(.orange)
-                }
-            }
-            switch field.kind {
-            case .text, .number, .date:
-                TextField(field.placeholder, text: binding(field.key))
-                    .textFieldStyle(.roundedBorder)
-                    #if os(iOS)
-                    .keyboardType(field.kind == .number ? .numbersAndPunctuation : .default)
-                    #endif
-            case .longText:
-                TextField(field.placeholder.isEmpty ? "…" : field.placeholder,
-                          text: binding(field.key), axis: .vertical)
-                    .textFieldStyle(.roundedBorder).lineLimit(2...5)
-            case .bool:
-                Toggle(isOn: boolBinding(field.key)) { Text(field.help).font(Typography.caption2) }
-            case .choice:
-                Picker("", selection: binding(field.key)) {
-                    Text("—").tag("")
-                    ForEach(field.options, id: \.self) { Text($0).tag($0) }
-                }
-                .pickerStyle(.menu).labelsHidden()
-            }
-            if field.kind != .bool {
-                Text(field.help).font(Typography.caption2).foregroundColor(AppColors.secondary)
-            }
-        }
-    }
-
-    private func binding(_ key: String) -> Binding<String> {
-        Binding(get: { fieldValues[key] ?? "" }, set: { fieldValues[key] = $0 })
-    }
-    private func boolBinding(_ key: String) -> Binding<Bool> {
-        Binding(get: { fieldValues[key] == "Yes" },
-                set: { fieldValues[key] = $0 ? "Yes" : "" })
-    }
-
-    // MARK: logic
+    // MARK: - Logic
 
     @MainActor
     private func bootstrap() async {
@@ -646,14 +702,20 @@ struct WorkflowRunnerView: View {
             wfNumber = await WorkflowService.start(definition, title: title) ?? ""
             status = "open"
             if let v = startVariant {
-                let expanded = VariantCodec.expand(v.values)
-                for (seq, fields) in expanded {
+                let expandedVals = VariantCodec.expand(v.values)
+                for (seq, fields) in expandedVals {
                     try? await SQLiteEmailStore.shared.saveFieldValues(wf: wfNumber, seq: seq, values: fields)
                 }
             }
         }
         await refreshConfirmations()
         showIntro = !introSeen()
+        // Open the step the user should be on now.
+        if let cur = currentOp {
+            prefillDerived(cur)
+            expanded = [cur.seq]
+            scrollTarget = cur.seq
+        }
         isLoading = false
     }
 
@@ -662,40 +724,75 @@ struct WorkflowRunnerView: View {
         guard !wfNumber.isEmpty else { return }
         let confs = (try? await SQLiteEmailStore.shared.confirmations(wf: wfNumber)) ?? []
         confirmations = Dictionary(uniqueKeysWithValues: confs.map { ($0.seq, $0) })
+        for c in confs where !(c.note).isEmpty { notes[c.seq] = c.note }
         savedValues = (try? await SQLiteEmailStore.shared.fieldValues(wf: wfNumber)) ?? [:]
         if let inst = try? await SQLiteEmailStore.shared.instance(wf: wfNumber) { status = inst.status }
         await gatherDerivation()
     }
 
-    private func openStep(_ op: WorkflowOperation) {
-        var values = savedValues[op.seq] ?? [:]
-        let derived = FieldDerivation.derive(defID: definition.defID, opKey: op.key, ctx: derivation)
-        var filled: Set<String> = []
-        for (k, v) in derived where (values[k] ?? "").isEmpty {
-            values[k] = v; filled.insert(k)
+    /// A field/note changed — persist (if auto-save) or mark dirty, and, after a
+    /// short dwell, auto-complete the step if it's eligible and the option is on.
+    private func onFieldEdited(_ seq: Int) {
+        validationBySeq[seq] = nil
+        guard let op = definition.operations.first(where: { $0.seq == seq }) else { return }
+        if autoSave {
+            saveTasks[seq]?.cancel()
+            saveTasks[seq] = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                if Task.isCancelled { return }
+                await saveNow(op)
+                guard autoComplete else { return }
+                try? await Task.sleep(nanoseconds: 900_000_000)
+                if Task.isCancelled { return }
+                if canAutoComplete(op) { await complete(op, signedOff: false) }
+            }
+        } else {
+            dirtySeqs.insert(seq)
         }
-        fieldValues = values
-        derivedKeys = filled
-        resultText = confirmations[op.seq]?.result ?? ""
-        noteText = confirmations[op.seq]?.note ?? ""
-        validationError = nil
-        draftSaved = false
-        activeOp = op
     }
 
     @MainActor
-    private func confirm(_ op: WorkflowOperation) async {
-        // Required fields must be filled — a defensible record can't have holes.
-        let missing = WorkflowFieldValidation.missingRequired(op.fields, values: fieldValues)
-        guard missing.isEmpty else {
-            validationError = "Please fill: \(missing.joined(separator: ", "))"
+    private func saveNow(_ op: WorkflowOperation) async {
+        guard !wfNumber.isEmpty else { return }
+        try? await SQLiteEmailStore.shared.saveFieldValues(wf: wfNumber, seq: op.seq, values: savedValues[op.seq] ?? [:])
+        dirtySeqs.remove(op.seq)
+        await refreshSearchText()
+        savedFlashSeq = op.seq
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            if savedFlashSeq == op.seq { savedFlashSeq = nil }
+        }
+    }
+
+    /// Eligible for hands-off completion: not done, unlocked, every required
+    /// field filled, and — for a tool step — the tool has been opened.
+    private func canAutoComplete(_ op: WorkflowOperation) -> Bool {
+        guard confirmations[op.seq] == nil, lockedReasons(op).isEmpty else { return false }
+        guard op.fields.contains(where: { $0.required }) else { return false }
+        guard WorkflowFieldValidation.missingRequired(op.fields, values: savedValues[op.seq] ?? [:]).isEmpty else { return false }
+        if op.launches != nil { return openedSteps.contains(op.seq) }
+        return true
+    }
+
+    /// User pressed the explicit finalize button.
+    private func manualDone(_ op: WorkflowOperation) {
+        let missing = WorkflowFieldValidation.missingRequired(op.fields, values: savedValues[op.seq] ?? [:])
+        if !missing.isEmpty {
+            validationBySeq[op.seq] = "Please fill: \(missing.joined(separator: ", "))"
+            expanded.insert(op.seq); scrollTarget = op.seq
             return
         }
-        // Persist the data the user entered (reusable in the completion doc).
-        try? await SQLiteEmailStore.shared.saveFieldValues(wf: wfNumber, seq: op.seq, values: fieldValues)
-        // The step posts its document type (if any) as evidence it happened —
-        // captured STRUCTURED so opening the child document shows this step's
-        // own fields (its name's meaning), linked back to the parent WF.
+        Task { await complete(op, signedOff: needsSignoff) }
+    }
+
+    /// Finalize a step: persist entries, post its document, record the
+    /// confirmation (who/when), advance to the next step.
+    @MainActor
+    private func complete(_ op: WorkflowOperation, signedOff: Bool) async {
+        guard !wfNumber.isEmpty, confirmations[op.seq] == nil, lockedReasons(op).isEmpty else { return }
+        let vals = savedValues[op.seq] ?? [:]
+        try? await SQLiteEmailStore.shared.saveFieldValues(wf: wfNumber, seq: op.seq, values: vals)
+        let note = (notes[op.seq] ?? "").trimmingCharacters(in: .whitespaces)
         var docNumber: String? = nil
         if let docType = op.postsDocType {
             var fields: [CapturedDocument.Field] = [
@@ -703,48 +800,55 @@ struct WorkflowRunnerView: View {
                 .init(key: "Step", value: op.title),
                 .init(key: "Run", value: wfNumber),
             ]
-            for f in op.fields where !(fieldValues[f.key] ?? "").isEmpty {
-                fields.append(.init(key: f.label, value: fieldValues[f.key] ?? ""))
+            for f in op.fields where !(vals[f.key] ?? "").isEmpty {
+                fields.append(.init(key: f.label, value: vals[f.key] ?? ""))
             }
-            if !noteText.trimmingCharacters(in: .whitespaces).isEmpty {
-                fields.append(.init(key: "Note", value: noteText))
-            }
+            if !note.isEmpty { fields.append(.init(key: "Note", value: note)) }
             docNumber = await DocumentRegistry.captureStructured(
                 docType, summary: "\(definition.name): \(op.title)",
                 document: CapturedDocument(title: "\(definition.name) — \(op.title)",
                                            sections: [.init(name: op.title, fields: fields)]),
                 refs: wfNumber)
         }
-        // A concise result line from the first meaningful field, else "done".
-        let auto = op.fields.compactMap { fieldValues[$0.key]?.isEmpty == false ? fieldValues[$0.key] : nil }.first
+        let auto = op.fields.compactMap { vals[$0.key]?.isEmpty == false ? vals[$0.key] : nil }.first
         await WorkflowService.confirm(
             wf: wfNumber, seq: op.seq, totalOps: definition.operations.count,
-            result: auto ?? "done", note: noteText, docNumber: docNumber)
-        activeOp = nil
-        resultText = ""; noteText = ""; fieldValues = [:]; validationError = nil; derivedKeys = []
+            result: auto ?? (signedOff ? "signed off" : "done"), note: note, docNumber: docNumber)
+        dirtySeqs.remove(op.seq)
+        validationBySeq[op.seq] = nil
         await refreshConfirmations()
         await refreshSearchText()
         if status == "confirmed" { completedNumber = wfNumber }
-        // Auto-advance: jump straight to the next step that's now unlocked and
-        // not yet confirmed — no hunting for "what's next".
+        // Auto-advance to the next available step.
         if let next = definition.operations.first(where: {
             confirmations[$0.seq] == nil && lockedReasons($0).isEmpty
         }) {
-            openStep(next)
+            expandStep(next)
+        } else {
+            expanded.remove(op.seq)
         }
     }
 
-    /// Persist in-progress entries the moment they change — so closing the
-    /// window, or an interruption, never loses what was typed (the Relativity
-    /// "times out and loses your place in the queue" complaint). Reopening the
-    /// step restores the draft; refreshSearchText keeps it findable meanwhile.
-    @MainActor
-    private func autosaveDraft(_ op: WorkflowOperation) async {
-        guard !wfNumber.isEmpty, activeOp?.seq == op.seq else { return }
-        try? await SQLiteEmailStore.shared.saveFieldValues(wf: wfNumber, seq: op.seq, values: fieldValues)
-        savedValues[op.seq] = fieldValues
-        await refreshSearchText()
-        draftSaved = true
+    /// Expand exactly one step, prefill it, and scroll it into view.
+    private func expandStep(_ op: WorkflowOperation) {
+        prefillDerived(op)
+        expanded = [op.seq]
+        scrollTarget = op.seq
+    }
+
+    /// Fill any archive-derived fields that are still empty (one-time per step).
+    private func prefillDerived(_ op: WorkflowOperation) {
+        guard confirmations[op.seq] == nil else { return }
+        let derived = FieldDerivation.derive(defID: definition.defID, opKey: op.key, ctx: derivation)
+        guard !derived.isEmpty else { return }
+        var d = savedValues[op.seq] ?? [:]
+        var filled: Set<String> = []
+        for (k, v) in derived where (d[k] ?? "").isEmpty { d[k] = v; filled.insert(k) }
+        if !filled.isEmpty {
+            savedValues[op.seq] = d
+            derivedKeysBySeq[op.seq] = filled
+            if autoSave { onFieldEdited(op.seq) } else { dirtySeqs.insert(op.seq) }
+        }
     }
 
     @MainActor
@@ -752,7 +856,6 @@ struct WorkflowRunnerView: View {
         guard !wfNumber.isEmpty else { return }
         let t = clientName.trimmingCharacters(in: .whitespaces)
         title = t.isEmpty ? definition.name : t
-        // Fold into the document's searchable text immediately.
         await refreshSearchText()
     }
 
@@ -778,9 +881,6 @@ struct WorkflowRunnerView: View {
         let summary = parts.joined(separator: " · ")
         try? await SQLiteEmailStore.shared.updateDocumentSearchText(
             wfNumber, summary: summary, refs: client.isEmpty ? definition.defID : client)
-        // Attach the full run as STRUCTURED data — every step's fields as typed
-        // key/value rows — so opening WF-… shows a spreadsheet-like table that
-        // exports to CSV and feeds custom reports.
         try? await SQLiteEmailStore.shared.attachDocumentPayload(
             wfNumber, contentType: "application/json", body: buildCapturedDocument().jsonString())
     }

@@ -165,8 +165,16 @@ struct MainNavigationHubView: View {
         }
     }
 
+    /// macOS: open the run in its own window. iOS: fall back to a sheet.
+    private func startWorkflow(_ def: WorkflowDefinition) {
+        let opened = WorkflowWindow.open(
+            definition: def,
+            onOpenDestination: { onNavigate($0) })
+        if !opened { workflowToRun = def }
+    }
+
     private func workflowCard(_ def: WorkflowDefinition) -> some View {
-        Button { workflowToRun = def } label: {
+        Button { startWorkflow(def) } label: {
             VStack(alignment: .leading, spacing: Spacing.xSmall) {
                 HStack(spacing: Spacing.xSmall) {
                     Image(systemName: workflowIcon(def.defID))
