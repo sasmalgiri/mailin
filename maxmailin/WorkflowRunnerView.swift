@@ -434,11 +434,27 @@ struct WorkflowRunnerView: View {
         }
         // Persist the data the user entered (reusable in the completion doc).
         try? await SQLiteEmailStore.shared.saveFieldValues(wf: wfNumber, seq: op.seq, values: fieldValues)
-        // The step posts its document type (if any) as evidence it happened.
+        // The step posts its document type (if any) as evidence it happened —
+        // captured STRUCTURED so opening the child document shows this step's
+        // own fields (its name's meaning), linked back to the parent WF.
         var docNumber: String? = nil
         if let docType = op.postsDocType {
-            docNumber = await DocumentRegistry.post(
-                docType, summary: "\(definition.name): \(op.title)", refs: wfNumber)
+            var fields: [CapturedDocument.Field] = [
+                .init(key: "Workflow", value: definition.name),
+                .init(key: "Step", value: op.title),
+                .init(key: "Run", value: wfNumber),
+            ]
+            for f in op.fields where !(fieldValues[f.key] ?? "").isEmpty {
+                fields.append(.init(key: f.label, value: fieldValues[f.key] ?? ""))
+            }
+            if !noteText.trimmingCharacters(in: .whitespaces).isEmpty {
+                fields.append(.init(key: "Note", value: noteText))
+            }
+            docNumber = await DocumentRegistry.captureStructured(
+                docType, summary: "\(definition.name): \(op.title)",
+                document: CapturedDocument(title: "\(definition.name) — \(op.title)",
+                                           sections: [.init(name: op.title, fields: fields)]),
+                refs: wfNumber)
         }
         // A concise result line from the first meaningful field, else "done".
         let auto = op.fields.compactMap { fieldValues[$0.key]?.isEmpty == false ? fieldValues[$0.key] : nil }.first
