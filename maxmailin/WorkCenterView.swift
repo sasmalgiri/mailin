@@ -28,6 +28,9 @@ struct WorkCenterView: View {
     @State private var coverage: (analyzed: Int, total: Int) = (0, 0)
     @State private var documents: [SQLiteEmailStore.IssuedDocument] = []
     @State private var docSearch = ""
+    @State private var docDateFilterOn = false
+    @State private var docFrom = Date()
+    @State private var docTo = Date()
     @State private var openRuns: [SQLiteEmailStore.StoredInstance] = []
     @State private var personaTemplates: [WorkflowDefinition] = []
     @State private var runnerDef: WorkflowDefinition? = nil
@@ -432,6 +435,15 @@ struct WorkCenterView: View {
 
     // MARK: Documents
 
+    /// Documents after applying the optional date-range filter (inclusive).
+    private var visibleDocuments: [SQLiteEmailStore.IssuedDocument] {
+        guard docDateFilterOn else { return documents }
+        let cal = Calendar.current
+        let start = cal.startOfDay(for: docFrom)
+        let end = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: docTo)) ?? docTo
+        return documents.filter { $0.createdAt >= start && $0.createdAt < end }
+    }
+
     private var documentsTab: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: Spacing.xxSmall) {
@@ -448,14 +460,36 @@ struct WorkCenterView: View {
             .adaptiveGlass(in: RoundedRectangle(cornerRadius: CornerRadius.small))
             .padding(Spacing.small)
 
+            HStack(spacing: Spacing.xSmall) {
+                Toggle(isOn: $docDateFilterOn) {
+                    Label("Date range", systemImage: "calendar")
+                        .font(Typography.caption1)
+                }
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .help("Show only documents created between two dates.")
+                if docDateFilterOn {
+                    DatePicker("", selection: $docFrom, displayedComponents: .date)
+                        .labelsHidden().controlSize(.small)
+                    Text("→").foregroundColor(AppColors.secondary)
+                    DatePicker("", selection: $docTo, displayedComponents: .date)
+                        .labelsHidden().controlSize(.small)
+                }
+                Spacer()
+                Text("\(visibleDocuments.count) shown")
+                    .font(Typography.caption2).foregroundColor(AppColors.secondary)
+            }
+            .padding(.horizontal, Spacing.small)
+            .padding(.bottom, Spacing.xSmall)
+
             List {
-                if documents.isEmpty {
-                    Text(docSearch.isEmpty
+                if visibleDocuments.isEmpty {
+                    Text(docSearch.isEmpty && !docDateFilterOn
                          ? "No documents posted yet — every completed import, verdict, export, report, story version and cleanup posts one automatically."
-                         : "No document matches “\(docSearch)”.")
+                         : "No document matches the current search / date range.")
                         .foregroundColor(AppColors.secondary)
                 }
-                ForEach(documents) { doc in
+                ForEach(visibleDocuments) { doc in
                     HStack(alignment: .top, spacing: Spacing.small) {
                         Image(systemName: DocumentType(rawValue: doc.type)?.icon ?? "doc")
                             .foregroundColor(AppColors.primary)
