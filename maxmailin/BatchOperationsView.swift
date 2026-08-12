@@ -583,9 +583,12 @@ struct BatchOperationsView: View {
             // Record a numbered document of this bulk export.
             let exportCount = toExport.count
             let exportFormat = "\(format)"
-            Task { await DocumentRegistry.capture(.export,
-                summary: "Bulk export — \(exportCount) email\(exportCount == 1 ? "" : "s") as \(exportFormat)",
-                body: "BULK EXPORT\nEmails: \(exportCount)\nFormat: \(exportFormat)\nDate: \(Date().formatted(date: .abbreviated, time: .shortened))") }
+            Task { await DocumentRegistry.captureStructured(.export,
+                summary: "Bulk export — \(exportCount) emails as \(exportFormat)",
+                document: CapturedDocument(title: "Bulk Export", sections: [
+                  .init(name: "Bulk Export", fields: [
+                    .init(key: "Emails", value: "\(exportCount)"),
+                    .init(key: "Format", value: exportFormat)])])) }
 
             withAnimation(AnimationTiming.fast) {
                 resultMessage = "Exported \(toExport.count) email\(toExport.count == 1 ? "" : "s") as \(format)"

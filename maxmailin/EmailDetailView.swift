@@ -2179,8 +2179,12 @@ struct EmailDetailView: View {
             // text is the saved work, retrievable from Work Center ▸ Documents.
             let capturedText = redactedText
             let subj = subjectLine
-            Task { await DocumentRegistry.capture(.export,
-                summary: "Redaction — \(subj)", body: capturedText) }
+            Task { await DocumentRegistry.captureStructured(.export,
+                summary: "Redaction — \(subj)",
+                document: CapturedDocument(title: "Redaction — \(subj)", sections: [
+                  .init(name: "Redaction", fields: [
+                    .init(key: "Subject", value: subj),
+                    .init(key: "Redacted content", value: capturedText)])])) }
         } catch {
             exportError = error.localizedDescription
         }

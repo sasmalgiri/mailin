@@ -192,8 +192,10 @@ struct GDPRReportConfigView: View {
                 // Record a numbered document of this compliance report.
                 let bytes = pdfData.count
                 let body = "GDPR / COMPLIANCE REPORT\nGenerated: \(Date().formatted(date: .abbreviated, time: .shortened))\nPDF size: \(bytes) bytes"
-                Task { await DocumentRegistry.capture(.report,
-                    summary: "GDPR compliance report", body: body) }
+                Task { await DocumentRegistry.captureStructured(.report,
+                    summary: "GDPR compliance report",
+                    document: CapturedDocument(title: "GDPR Compliance Report", sections: [
+                      .init(name: "GDPR Report", fields: [.init(key: "PDF size (bytes)", value: "\(bytes)")])])) }
             }
         }
     }

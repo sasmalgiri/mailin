@@ -5705,9 +5705,15 @@ struct InvestigationReportConfigSheet: View {
                 Saved: \(Date().formatted(date: .abbreviated, time: .shortened))
                 Sections: title page · executive summary · email timeline · top contacts · category breakdown · evidence tags · flagged emails.
                 """
-                Task { await DocumentRegistry.capture(.report,
+                Task { await DocumentRegistry.captureStructured(.report,
                     summary: "Investigation Report: \(title) — \(count) emails",
-                    body: body, refs: examiner) }
+                    document: CapturedDocument(title: title, sections: [
+                      .init(name: "Investigation Report", fields: [
+                        .init(key: "Title", value: title),
+                        .init(key: "Examiner", value: examiner.isEmpty ? "—" : examiner),
+                        .init(key: "Emails analyzed", value: "\(count)"),
+                        .init(key: "Sections", value: "title page · executive summary · timeline · top contacts · category breakdown · evidence tags · flagged")
+                      ])])) }
             case .failure(let error):
                 generationError = "Failed to save: \(error.localizedDescription)"
             }

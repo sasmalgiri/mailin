@@ -563,9 +563,12 @@ struct KeywordMonitorView: View {
                 let kwCount = keywordsCopy.count
                 let hitCount = results.count
                 let body = "KEYWORD SWEEP\nKeywords: \(kwCount)\nMatches: \(hitCount)\nDate: \(Date().formatted(date: .abbreviated, time: .shortened))"
-                Task { await DocumentRegistry.capture(.report,
-                    summary: "Keyword sweep — \(kwCount) term\(kwCount == 1 ? "" : "s"), \(hitCount) match\(hitCount == 1 ? "" : "es")",
-                    body: body) }
+                Task { await DocumentRegistry.captureStructured(.report,
+                    summary: "Keyword sweep — \(kwCount) terms, \(hitCount) matches",
+                    document: CapturedDocument(title: "Keyword Sweep", sections: [
+                      .init(name: "Keyword Sweep", fields: [
+                        .init(key: "Keywords", value: "\(kwCount)"),
+                        .init(key: "Matches", value: "\(hitCount)")])])) }
             }
         }
     }

@@ -355,8 +355,10 @@ struct AnomalyDetectionView: View {
             if force {
                 let n = results.count
                 let body = "ANOMALY DETECTION\nRun: \(Date().formatted(date: .abbreviated, time: .shortened))\nAnomalies found: \(n)"
-                Task { await DocumentRegistry.capture(.report,
-                    summary: "Anomaly detection — \(n) anomal\(n == 1 ? "y" : "ies")", body: body) }
+                Task { await DocumentRegistry.captureStructured(.report,
+                    summary: "Anomaly detection — \(n) anomalies",
+                    document: CapturedDocument(title: "Anomaly Detection", sections: [
+                      .init(name: "Anomaly Detection", fields: [.init(key: "Anomalies found", value: "\(n)")])])) }
             }
         }
     }

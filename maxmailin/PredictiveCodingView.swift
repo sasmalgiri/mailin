@@ -67,8 +67,13 @@ struct PredictiveCodingView: View {
         let irr = engine.irrelevantIDs.count
         if rel + irr > 0 {
             let body = "PREDICTIVE CODING (TAR) SESSION\nRelevant: \(rel)\nIrrelevant: \(irr)\nSeed set: \(rel + irr) documents\nDate: \(Date().formatted(date: .abbreviated, time: .shortened))"
-            Task { await DocumentRegistry.capture(.report,
-                summary: "Predictive coding — \(rel) relevant, \(irr) irrelevant", body: body) }
+            Task { await DocumentRegistry.captureStructured(.report,
+                summary: "Predictive coding — \(rel) relevant, \(irr) irrelevant",
+                document: CapturedDocument(title: "Predictive Coding (TAR)", sections: [
+                  .init(name: "TAR Session", fields: [
+                    .init(key: "Relevant", value: "\(rel)"),
+                    .init(key: "Irrelevant", value: "\(irr)"),
+                    .init(key: "Seed set", value: "\(rel + irr)")])])) }
         }
         if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
     }
