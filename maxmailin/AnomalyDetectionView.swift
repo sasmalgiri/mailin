@@ -71,6 +71,7 @@ struct AnomalyDetectionView: View {
                     )
                     Button("Run Analysis") { analyze(force: true) }
                         .buttonStyle(PrimaryButtonStyle())
+                        .keyboardShortcut("r", modifiers: .command)
                         .padding(.top, Spacing.medium)
                     Spacer()
                 }

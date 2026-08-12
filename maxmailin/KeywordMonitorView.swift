@@ -328,6 +328,7 @@ struct KeywordMonitorView: View {
                 .frame(maxWidth: .infinity)
             }
             .buttonStyle(PrimaryButtonStyle())
+            .keyboardShortcut("r", modifiers: .command)
             .disabled(keywords.isEmpty || isScanning)
             .padding(.horizontal, Spacing.small)
             .padding(.bottom, Spacing.small)

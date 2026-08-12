@@ -5692,6 +5692,7 @@ struct InvestigationReportConfigSheet: View {
                                 }
                             }
                             .buttonStyle(PrimaryButtonStyle())
+                            .keyboardShortcut("r", modifiers: .command)
                             .disabled(isGenerating || selectedEmailIDs.isEmpty)
                         }
                     }

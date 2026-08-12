@@ -114,6 +114,7 @@ struct GDPRReportConfigView: View {
                                 }
                             }
                             .buttonStyle(PrimaryButtonStyle())
+                            .keyboardShortcut("r", modifiers: .command)
                             .disabled(dataSubject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isGenerating)
                         }
                     }
