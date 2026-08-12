@@ -386,6 +386,10 @@ struct ThreadSummarizerView: View {
 
             TutorialHelpButton(showTutorial: $showTutorial)
 
+            SaveToDocumentsButton(title: "Thread Summarizer") {
+                "THREAD SUMMARIZER\nMessages in thread: \(threadEmails.count)"
+            }
+
             if isPresented != nil {
                 Button {
                     closeSheet()

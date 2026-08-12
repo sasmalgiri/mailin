@@ -30,6 +30,9 @@ struct AIDigestView: View {
                     .font(Typography.headline)
                 Spacer()
                 TutorialHelpButton(showTutorial: $showTutorial)
+                SaveToDocumentsButton(title: "AI Digest") {
+                    "AI Digest\nRecorded: on-device analysis snapshot."
+                }
                 if isPresented != nil {
                     Button("Done") { closeSheet() }
                         .keyboardShortcut(.cancelAction)

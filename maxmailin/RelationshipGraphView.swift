@@ -381,6 +381,9 @@ struct RelationshipGraphView: View {
                 .buttonStyle(.bordered)
                 .accessibilityLabel("Rebuild the relationship graph")
             TutorialHelpButton(showTutorial: $showTutorial)
+            SaveToDocumentsButton(title: "Relationship Graph") {
+                "RELATIONSHIP GRAPH\nEmails: \(emails.count)"
+            }
             if isPresented != nil {
                 Button("Done") { closeSheet() }
                     .keyboardShortcut(.cancelAction)

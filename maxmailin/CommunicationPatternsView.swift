@@ -530,6 +530,9 @@ struct CommunicationPatternsView: View {
             }
             Spacer()
             TutorialHelpButton(showTutorial: $showTutorial)
+            SaveToDocumentsButton(title: "Communication Patterns") {
+                "COMMUNICATION PATTERNS\nEmails analyzed: \(analyzedCount)"
+            }
             if isPresented != nil {
                 Button("Done") { closeSheet() }
                     .keyboardShortcut(.cancelAction)

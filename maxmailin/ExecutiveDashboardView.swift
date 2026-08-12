@@ -82,6 +82,9 @@ struct ExecutiveDashboardView: View {
             }
             Spacer()
             TutorialHelpButton(showTutorial: $showTutorial)
+            SaveToDocumentsButton(title: "Executive Dashboard") {
+                "EXECUTIVE DASHBOARD\nEmails: \(dashboardData?.totalEmails ?? 0)"
+            }
             if isPresented != nil {
                 Button("Done") { closeSheet() }
                     .keyboardShortcut(.cancelAction)

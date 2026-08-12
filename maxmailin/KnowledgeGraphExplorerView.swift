@@ -60,6 +60,9 @@ struct KnowledgeGraphExplorerView: View {
                 }
                 .buttonStyle(.bordered)
             }
+            SaveToDocumentsButton(title: "Knowledge Graph") {
+                "KNOWLEDGE GRAPH\nEmails: \(emails.count)"
+            }
             TutorialHelpButton(showTutorial: $showTutorial)
         }
         .padding(Spacing.medium)

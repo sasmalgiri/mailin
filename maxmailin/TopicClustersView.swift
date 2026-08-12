@@ -242,6 +242,10 @@ struct TopicClustersView: View {
 
             TutorialHelpButton(showTutorial: $showTutorial)
 
+            SaveToDocumentsButton(title: "Topic Clusters") {
+                "TOPIC CLUSTERS\nClusters: \(clusters.count) · Emails: \(emails.count)"
+            }
+
             Button {
                 clusters = []
                 silhouetteScore = nil

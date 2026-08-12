@@ -117,6 +117,9 @@ struct ArchiveComparisonView: View {
                 .font(Typography.headline)
             Spacer()
             TutorialHelpButton(showTutorial: $showTutorial)
+            SaveToDocumentsButton(title: "Archive Compare") {
+                "ARCHIVE COMPARE\nArchive A: \(archiveA.count) · Archive B: \(archiveB.count)"
+            }
             if isPresented != nil {
                 Button { closeSheet() } label: {
                     Image(systemName: "xmark.circle.fill")

@@ -78,6 +78,9 @@ struct CustodianPanelView: View {
             .buttonStyle(CompactSecondaryButtonStyle())
             .accessibilityLabel("Export custodian report")
             TutorialHelpButton(showTutorial: $showTutorial)
+            SaveToDocumentsButton(title: "Custodian Panel") {
+                "CUSTODIAN PANEL\nWorking set: \(workingSet.count)"
+            }
             if isPresented != nil {
                 Button { closeSheet() } label: {
                     Image(systemName: "xmark.circle.fill")

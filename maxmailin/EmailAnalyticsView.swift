@@ -119,6 +119,10 @@ struct EmailAnalyticsView: View {
 
             TutorialHelpButton(showTutorial: $showTutorial)
 
+            SaveToDocumentsButton(title: "Email Analytics") {
+                "EMAIL ANALYTICS\nEmails analyzed: \(analyticsData?.totalCount ?? 0)"
+            }
+
             Button("Close") { if let onClose { onClose() } else { dismiss() } }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
