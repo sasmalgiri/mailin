@@ -52,6 +52,7 @@ struct SettingsView: View {
     @AppStorage("showEmailPreviews") private var showEmailPreviews = true
     @AppStorage("showBasicTagPills") private var showBasicTagPills = false
     @AppStorage("autoAdvanceAfterTag") private var autoAdvanceAfterTag = true
+    @AppStorage(DocumentCapturePrefs.autoKey) private var autoCaptureDocs = true
     @AppStorage("hasConsentedToCloudAI") private var hasConsentedToCloudAI = false
     @AppStorage("customModelName") private var customModelName = ""
     @State private var savedDataCleared = false
@@ -291,6 +292,19 @@ struct SettingsView: View {
             } header: {
                 Text("Email Identity")
                     .font(.headline)
+            }
+
+            Section {
+                Toggle("Auto-save my work to Documents", isOn: $autoCaptureDocs)
+                    .help("When on, using a tool records its result to Documents automatically — no need to press Save each time.")
+                    .accessibilityLabel("Auto-save my work to Documents")
+            } header: {
+                Text("Documents & History")
+                    .font(.headline)
+            } footer: {
+                Text("Every job you do is kept under a document number you can reopen, export to CSV, and pull into reports. Turn this off to save manually with a button instead.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
 
             #if os(macOS)

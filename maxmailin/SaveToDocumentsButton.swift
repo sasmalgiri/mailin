@@ -2,25 +2,31 @@
 //  SaveToDocumentsButton.swift
 //  maxmailin
 //
-//  A universal "Save to Documents" control. Drop it into any tool's header
-//  so the user can, at any moment, mint a numbered document that records the
-//  job they just did — as STRUCTURED key/value fields, so it opens as a
-//  spreadsheet-like table, exports to CSV, and feeds custom reports. Manual by
-//  design: the user decides when a result is worth keeping, so merely opening
-//  a view never spams the register.
+//  A universal capture control. Drop it into any tool's header so the tool's
+//  result is recorded as a numbered, STRUCTURED document (key/value fields →
+//  table/CSV/reports). Two modes, governed by the app-wide "Auto-save my work"
+//  setting (Settings ▸ default ON):
+//    • Auto  — records once, hands-free, after a short dwell (so a quick glance
+//              or a mis-tap never posts a document). Minimal-touch: no click.
+//    • Manual — shows a "Save to Documents" button the user taps when ready.
 //
 
 import SwiftUI
 
+/// App-wide preference: when on, viewer tools record their result hands-free.
+enum DocumentCapturePrefs {
+    static let autoKey = "autoCaptureViewerDocuments"
+}
+
 struct SaveToDocumentsButton: View {
     let type: DocumentType
     let title: String
-    /// Builds the structured document at the moment of tapping (captures the
-    /// current on-screen result).
     private let make: () -> CapturedDocument
 
+    @AppStorage(DocumentCapturePrefs.autoKey) private var autoCapture = true
     @State private var savedNumber: String?
     @State private var saving = false
+    @State private var didAutoAttempt = false
 
     /// Simple form: one section (named `title`) of key/value fields.
     init(type: DocumentType = .report, title: String,
@@ -42,30 +48,48 @@ struct SaveToDocumentsButton: View {
     }
 
     var body: some View {
-        Button {
-            guard !saving, savedNumber == nil else { return }
-            saving = true
-            let doc = make()
-            Task {
-                let number = await DocumentRegistry.captureStructured(type, summary: title, document: doc)
-                await MainActor.run {
-                    savedNumber = number
-                    saving = false
-                }
-            }
-        } label: {
-            if let n = savedNumber {
-                Label("Saved \(n)", systemImage: "checkmark.circle.fill")
-                    .foregroundColor(.green)
-            } else if saving {
-                Label("Saving…", systemImage: "square.and.arrow.down.on.square")
+        Group {
+            if autoCapture {
+                // Hands-free: a status chip, no button to press.
+                Label(savedNumber.map { "Auto-saved \($0)" } ?? "Auto-save on",
+                      systemImage: savedNumber != nil ? "checkmark.circle.fill" : "square.and.arrow.down.on.square")
+                    .font(Typography.caption2)
+                    .foregroundColor(savedNumber != nil ? .green : AppColors.secondary)
+                    .help("This result is recorded to Documents automatically. Turn off in Settings ▸ Auto-save my work.")
             } else {
-                Label("Save to Documents", systemImage: "square.and.arrow.down.on.square")
+                Button { Task { await performSave() } } label: {
+                    if let n = savedNumber {
+                        Label("Saved \(n)", systemImage: "checkmark.circle.fill").foregroundColor(.green)
+                    } else if saving {
+                        Label("Saving…", systemImage: "square.and.arrow.down.on.square")
+                    } else {
+                        Label("Save to Documents", systemImage: "square.and.arrow.down.on.square")
+                    }
+                }
+                .controlSize(.small)
+                .disabled(saving || savedNumber != nil)
+                .help("Record this result as a numbered document you can reopen from Work Center ▸ Documents.")
             }
         }
-        .controlSize(.small)
-        .disabled(saving || savedNumber != nil)
-        .help("Record this result as a numbered document you can reopen later from Work Center ▸ Documents.")
-        .accessibilityLabel(savedNumber.map { "Saved as \($0)" } ?? "Save to Documents")
+        .task {
+            // Auto mode: record once, but only after the view has stayed open
+            // ~1.5s (a real visit, not a glance). The .task is cancelled if the
+            // user leaves first, so nothing is posted for a quick pass-through.
+            guard autoCapture, !didAutoAttempt, savedNumber == nil else { return }
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard !Task.isCancelled, savedNumber == nil else { return }
+            didAutoAttempt = true
+            await performSave()
+        }
+    }
+
+    @MainActor
+    private func performSave() async {
+        guard !saving, savedNumber == nil else { return }
+        saving = true
+        let doc = make()
+        let number = await DocumentRegistry.captureStructured(type, summary: title, document: doc)
+        savedNumber = number
+        saving = false
     }
 }
