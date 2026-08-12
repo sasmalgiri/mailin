@@ -1855,6 +1855,36 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(textTable.sections.contains { $0.rows.contains(.init(key: "Indicators", value: "12")) })
     }
 
+    /// Cross-document custom report: many documents → one table (one row per
+    /// doc, union of field keys as columns), exportable to CSV.
+    func testCrossDocumentReport_build() {
+        let day = Date(timeIntervalSince1970: 1_754_800_000)
+        let a = DocumentTable.parse(contentType: "application/json",
+            body: CapturedDocument(title: "A", sections: [.init(name: "S", fields: [
+                .init(key: "Disposition", value: "Confirmed phishing"),
+                .init(key: "Severity", value: "P1")])]).jsonString())
+        let b = DocumentTable.parse(contentType: "application/json",
+            body: CapturedDocument(title: "B", sections: [.init(name: "S", fields: [
+                .init(key: "Disposition", value: "Safe")])]).jsonString())   // no Severity
+
+        let r = CrossDocumentReport.build([
+            (number: "VRD-2026-0001", date: day, table: a),
+            (number: "VRD-2026-0002", date: day, table: b),
+        ])
+        // Columns = Document, Date + union of keys (first-seen order).
+        XCTAssertEqual(r.columns, ["Document", "Date", "Disposition", "Severity"])
+        XCTAssertEqual(r.rows.count, 2)
+        XCTAssertEqual(r.rows[0][0], "VRD-2026-0001")
+        XCTAssertEqual(r.rows[0][2], "Confirmed phishing")
+        XCTAssertEqual(r.rows[0][3], "P1")
+        // Missing field → blank cell, not a crash.
+        XCTAssertEqual(r.rows[1][3], "")
+
+        let csv = CrossDocumentReport.csv(r)
+        XCTAssertTrue(csv.hasPrefix("\"Document\",\"Date\",\"Disposition\",\"Severity\"\n"))
+        XCTAssertTrue(csv.contains("\"VRD-2026-0002\""))
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default

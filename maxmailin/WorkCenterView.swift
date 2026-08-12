@@ -40,6 +40,10 @@ struct WorkCenterView: View {
     @State private var docPayloadType: String = "text/markdown"
     @State private var showFullWork = false
     @State private var csvSaved = false
+    @State private var docViewMode = 0   // 0 = Table, 1 = Readable text
+    @State private var reportType = "RPT"
+    @State private var reportResult: CrossDocumentReport.Result? = nil
+    @State private var buildingReport = false
     @State private var newNote = ""
     @AppStorage("selectedPersona") private var personaRaw = "general"
     @State private var isLoading = true
@@ -89,6 +93,9 @@ struct WorkCenterView: View {
                 documentsTab
                     .tabItem { Label("Documents", systemImage: "number.square") }
                     .tag(4)
+                reportsTab
+                    .tabItem { Label("Reports", systemImage: "tablecells") }
+                    .tag(5)
             }
             .padding(.top, Spacing.xxSmall)
         }
@@ -575,9 +582,24 @@ struct WorkCenterView: View {
                 }
             }
             .padding(Spacing.medium)
+            Picker("", selection: $docViewMode) {
+                Text("Table").tag(0)
+                Text("Readable").tag(1)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 240)
+            .padding(.horizontal, Spacing.medium)
+            .padding(.bottom, Spacing.xSmall)
             Divider()
             ScrollView {
-                if table.isEmpty {
+                if docViewMode == 1 {
+                    Text(readableText())
+                        .font(Typography.monoSmall)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(Spacing.medium)
+                } else if table.isEmpty {
                     Text("No structured data recorded for this document.")
                         .foregroundColor(AppColors.secondary)
                         .padding(Spacing.medium)
@@ -613,6 +635,16 @@ struct WorkCenterView: View {
                 .padding(Spacing.medium)
         }
         .frame(minWidth: 560, minHeight: 480)
+    }
+
+    /// The readable rendering — from the structured fields when the payload is
+    /// JSON, otherwise the raw text body as-saved. Both forms kept.
+    private func readableText() -> String {
+        let body = docPayload ?? ""
+        if docPayloadType.contains("json"), let doc = CapturedDocument.from(json: body) {
+            return doc.plainText()
+        }
+        return body.isEmpty ? "No saved work recorded for this document." : body
     }
 
     #if os(macOS)
@@ -668,6 +700,116 @@ struct WorkCenterView: View {
             documents = (try? await SQLiteEmailStore.shared.lookupDocuments(matching: needle)) ?? []
         }
     }
+
+    // MARK: Reports (cross-document custom reports)
+
+    private var reportTypeOptions: [(String, String)] {
+        [("WF", "Workflows"), ("IMP", "Import"), ("VRD", "Triage Verdict"),
+         ("EXP", "Export"), ("RPT", "Report"), ("STY", "Story Version"),
+         ("CLN", "Cleanup"), ("HLD", "Legal Hold"), ("TML", "Timeline"),
+         ("DSR", "Subject Response"), ("HNT", "Threat Hunt"), ("MAP", "Entity Map")]
+    }
+    private func reportTypeName(_ t: String) -> String {
+        reportTypeOptions.first { $0.0 == t }?.1 ?? t
+    }
+
+    private var reportsTab: some View {
+        VStack(alignment: .leading, spacing: Spacing.xSmall) {
+            HStack(spacing: Spacing.small) {
+                Text("Document type").font(Typography.caption1).foregroundColor(AppColors.secondary)
+                Picker("", selection: $reportType) {
+                    ForEach(reportTypeOptions, id: \.0) { Text($0.1).tag($0.0) }
+                }
+                .labelsHidden().frame(maxWidth: 220)
+                Button { Task { await buildReport() } } label: {
+                    Label(buildingReport ? "Building…" : "Build report", systemImage: "wand.and.stars")
+                }
+                .controlSize(.small).disabled(buildingReport)
+                Spacer()
+                if let r = reportResult, !r.isEmpty {
+                    Text("\(r.rows.count) rows").font(Typography.caption2).foregroundColor(AppColors.secondary)
+                    Button { PlatformClipboard.copyString(CrossDocumentReport.csv(r)) } label: {
+                        Label("Copy CSV", systemImage: "doc.on.doc")
+                    }.controlSize(.small)
+                    #if os(macOS)
+                    Button { exportReportCSV(r) } label: {
+                        Label("Export CSV…", systemImage: "square.and.arrow.down")
+                    }.controlSize(.small)
+                    #endif
+                }
+            }
+            .padding(.horizontal, Spacing.small).padding(.top, Spacing.small)
+            Text("Pull every \(reportTypeName(reportType)) document into one spreadsheet — one row per document, a column for every field. Export to Excel/Numbers.")
+                .font(Typography.caption2).foregroundColor(AppColors.secondary)
+                .padding(.horizontal, Spacing.small)
+            Divider()
+            if let r = reportResult {
+                if r.isEmpty {
+                    Text("No \(reportTypeName(reportType)) documents yet.")
+                        .foregroundColor(AppColors.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView([.horizontal, .vertical]) {
+                        Grid(alignment: .leading, horizontalSpacing: Spacing.medium, verticalSpacing: 4) {
+                            GridRow {
+                                ForEach(Array(r.columns.enumerated()), id: \.offset) { _, col in
+                                    Text(col).font(Typography.caption2).fontWeight(.bold)
+                                        .foregroundColor(AppColors.primary)
+                                }
+                            }
+                            Divider()
+                            ForEach(Array(r.rows.enumerated()), id: \.offset) { _, row in
+                                GridRow {
+                                    ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
+                                        Text(cell).font(Typography.caption2)
+                                            .textSelection(.enabled).lineLimit(2)
+                                    }
+                                }
+                            }
+                        }
+                        .padding(Spacing.small)
+                    }
+                }
+            } else {
+                VStack(spacing: Spacing.small) {
+                    Image(systemName: "tablecells").font(.largeTitle).foregroundColor(AppColors.secondary)
+                    Text("Choose a document type and Build report to combine every matching document into one table.")
+                        .font(Typography.caption1).foregroundColor(AppColors.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity).padding()
+            }
+        }
+    }
+
+    @MainActor
+    private func buildReport() async {
+        buildingReport = true
+        reportResult = nil
+        let all = (try? await SQLiteEmailStore.shared.recentDocuments(limit: 1000)) ?? []
+        let matching = all.filter { $0.type == reportType }
+        var rows: [(number: String, date: Date, table: DocumentTable)] = []
+        for d in matching {
+            let p = try? await SQLiteEmailStore.shared.documentPayload(d.number)
+            let table = DocumentTable.parse(contentType: p?.contentType ?? "text/markdown",
+                                            body: p?.body ?? d.summary)
+            rows.append((d.number, d.createdAt, table))
+        }
+        reportResult = CrossDocumentReport.build(rows)
+        buildingReport = false
+    }
+
+    #if os(macOS)
+    @MainActor
+    private func exportReportCSV(_ r: CrossDocumentReport.Result) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(reportType)_report.csv"
+        panel.allowedContentTypes = [.commaSeparatedText]
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        try? CrossDocumentReport.csv(r).write(to: url, atomically: true, encoding: .utf8)
+    }
+    #endif
 
     // MARK: data
 

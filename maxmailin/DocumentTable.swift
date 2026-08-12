@@ -41,6 +41,18 @@ struct CapturedDocument: Codable, Equatable {
         guard let data = json.data(using: .utf8) else { return nil }
         return try? JSONDecoder().decode(CapturedDocument.self, from: data)
     }
+
+    /// A human-readable rendering of the same structured data — so we keep
+    /// BOTH forms (table for manipulation, prose for reading) from one payload.
+    func plainText() -> String {
+        var out = "\(title)\n" + String(repeating: "=", count: max(3, title.count)) + "\n\n"
+        for section in sections {
+            out += "\(section.name)\n"
+            for f in section.fields { out += "  \(f.key): \(f.value)\n" }
+            out += "\n"
+        }
+        return out
+    }
 }
 
 /// A rendered, display/export-ready table derived from a document payload.
@@ -109,6 +121,52 @@ struct DocumentTable: Equatable {
                 out += [section.name, row.key, row.value].map(esc).joined(separator: ",") + "\n"
             }
         }
+        return out
+    }
+}
+
+/// A customized report built across MANY documents: one row per document,
+/// columns = the union of their field keys. The substrate for "pull all the
+/// verdicts / privilege counts / whatever into one spreadsheet."
+enum CrossDocumentReport {
+    struct Result: Equatable {
+        var columns: [String]
+        var rows: [[String]]
+        var isEmpty: Bool { rows.isEmpty }
+    }
+
+    /// `docs`: (documentNumber, date, its parsed table). Keys keep first-seen
+    /// order; a doc missing a key gets a blank cell.
+    static func build(_ docs: [(number: String, date: Date, table: DocumentTable)]) -> Result {
+        var keyOrder: [String] = []
+        var seen = Set<String>()
+        var perDoc: [[String: String]] = []
+        for d in docs {
+            var flat: [String: String] = [:]
+            for section in d.table.sections {
+                for row in section.rows where row.key != "•" {
+                    if flat[row.key] == nil { flat[row.key] = row.value }
+                    if !seen.contains(row.key) { seen.insert(row.key); keyOrder.append(row.key) }
+                }
+            }
+            perDoc.append(flat)
+        }
+        let fmt = DateFormatter(); fmt.dateStyle = .short
+        var rows: [[String]] = []
+        for (i, d) in docs.enumerated() {
+            var row = [d.number, fmt.string(from: d.date)]
+            for k in keyOrder { row.append(perDoc[i][k] ?? "") }
+            rows.append(row)
+        }
+        return Result(columns: ["Document", "Date"] + keyOrder, rows: rows)
+    }
+
+    static func csv(_ r: Result) -> String {
+        func esc(_ s: String) -> String {
+            "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+        }
+        var out = r.columns.map(esc).joined(separator: ",") + "\n"
+        for row in r.rows { out += row.map(esc).joined(separator: ",") + "\n" }
         return out
     }
 }
