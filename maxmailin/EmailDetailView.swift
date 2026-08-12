@@ -2175,6 +2175,12 @@ struct EmailDetailView: View {
             #if os(iOS)
             iOSShareFile(at: url)
             #endif
+            // Record a numbered document of this redaction — the redacted
+            // text is the saved work, retrievable from Work Center ▸ Documents.
+            let capturedText = redactedText
+            let subj = subjectLine
+            Task { await DocumentRegistry.capture(.export,
+                summary: "Redaction — \(subj)", body: capturedText) }
         } catch {
             exportError = error.localizedDescription
         }

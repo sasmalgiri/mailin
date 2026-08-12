@@ -60,6 +60,16 @@ struct PredictiveCodingView: View {
     }
 
     private func closeSheet() {
+        // Record the TAR session as a numbered document — but only if real
+        // coding happened this session, so merely opening/closing the view
+        // never posts an empty document.
+        let rel = engine.relevantIDs.count
+        let irr = engine.irrelevantIDs.count
+        if rel + irr > 0 {
+            let body = "PREDICTIVE CODING (TAR) SESSION\nRelevant: \(rel)\nIrrelevant: \(irr)\nSeed set: \(rel + irr) documents\nDate: \(Date().formatted(date: .abbreviated, time: .shortened))"
+            Task { await DocumentRegistry.capture(.report,
+                summary: "Predictive coding — \(rel) relevant, \(irr) irrelevant", body: body) }
+        }
         if let isPresented { isPresented.wrappedValue = false } else { envDismiss() }
     }
 
