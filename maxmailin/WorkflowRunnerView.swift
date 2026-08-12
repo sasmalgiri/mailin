@@ -14,9 +14,24 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 #if os(macOS)
 import AppKit
 #endif
+
+/// One piece of evidence attached to a step: an external file copied into the
+/// case, or an email already in the archive. Persisted (JSON) inside the step's
+/// saved values so it survives close/reopen and appears in the saved document.
+struct WorkflowStepRef: Codable, Identifiable, Equatable {
+    enum Kind: String, Codable { case file, mail }
+    var id: String        // file path (file) or email UUID string (mail)
+    var kind: Kind
+    var title: String     // filename or subject
+    var detail: String    // size (file) or "from · date" (mail)
+}
+
+/// Identifiable wrapper so a step seq can drive a `.sheet(item:)`.
+private struct SeqID: Identifiable { let seq: Int; var id: Int { seq } }
 
 struct WorkflowRunnerView: View {
     let definition: WorkflowDefinition
@@ -48,6 +63,7 @@ struct WorkflowRunnerView: View {
     // Inline-step interaction state.
     @State private var expanded: Set<Int> = []
     @State private var openedSteps: Set<Int> = []
+    @State private var touchedSeqs: Set<Int> = []
     @State private var dirtySeqs: Set<Int> = []
     @State private var savedFlashSeq: Int? = nil
     @State private var saveTasks: [Int: Task<Void, Never>] = [:]
@@ -61,6 +77,13 @@ struct WorkflowRunnerView: View {
     @AppStorage("wfAutoComplete") private var autoComplete = true
     @State private var showIntro = false
     @State private var openPromptOp: WorkflowOperation? = nil
+    // Attach-evidence UI state.
+    @State private var showFileImporter = false
+    @State private var fileImportSeq: Int? = nil
+    @State private var archivePick: SeqID? = nil
+
+    /// Reserved per-step key holding the JSON list of attached evidence.
+    private static let refsKey = "__refs"
 
     private var needsSignoff: Bool { definition.persona == "forensic" || definition.persona == "legal" }
     private var doneLabel: String { needsSignoff ? "Sign off" : "Mark done" }
@@ -112,6 +135,23 @@ struct WorkflowRunnerView: View {
         } message: { op in
             Text("\(op.hint)\n\nA separate window opens for this. Do the work there, then come back and fill this step's fields — it saves automatically\(autoComplete ? " and marks itself done" : "; then press \(doneLabel)").")
         }
+        .fileImporter(isPresented: $showFileImporter,
+                      allowedContentTypes: [.item],
+                      allowsMultipleSelection: true) { result in
+            if case .success(let urls) = result, let seq = fileImportSeq {
+                importFiles(urls, seq: seq)
+            }
+            fileImportSeq = nil
+        }
+        .sheet(item: $archivePick) { item in
+            ArchiveEmailPickerView(onDone: { summaries in
+                addRefs(item.seq, summaries.map {
+                    WorkflowStepRef(id: $0.id.uuidString, kind: .mail,
+                                    title: $0.subject.isEmpty ? "(no subject)" : $0.subject,
+                                    detail: "\($0.from) · \($0.date.formatted(date: .abbreviated, time: .omitted))")
+                })
+            })
+        }
     }
 
     private var footerText: String {
@@ -130,9 +170,12 @@ struct WorkflowRunnerView: View {
     private func saveVariant() async {
         let name = variantName.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else { return }
+        // Strip reserved keys (attachment refs) — a variant is master data, not
+        // a specific run's evidence.
+        let clean = savedValues.mapValues { $0.filter { !$0.key.hasPrefix("__") } }
         try? await SQLiteEmailStore.shared.saveVariant(
             defID: definition.defID, name: name,
-            values: VariantCodec.flatten(savedValues),
+            values: VariantCodec.flatten(clean),
             createdBy: ForensicManager.shared.examinerName)
         ForensicManager.shared.logAction("Workflow variant saved", detail: "\(definition.name): \(name)")
     }
@@ -247,6 +290,18 @@ struct WorkflowRunnerView: View {
         return .upcoming
     }
 
+    /// One colour per state — used consistently by the rail chips, the row
+    /// accent bar and the progress bar so completion reads at a glance:
+    /// green = done, accent = you-are-here, orange = locked, grey = upcoming.
+    private func stateColor(_ st: StepState) -> Color {
+        switch st {
+        case .done:     return .green
+        case .current:  return AppColors.primary
+        case .locked:   return .orange
+        case .upcoming: return AppColors.secondary
+        }
+    }
+
     /// The step the user should be on now: first not-done, unlocked step.
     private var currentOp: WorkflowOperation? {
         definition.operations.first { confirmations[$0.seq] == nil && lockedReasons($0).isEmpty }
@@ -345,6 +400,12 @@ struct WorkflowRunnerView: View {
                     .font(Typography.caption1)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            // Overall progress — the green fill grows as each step completes.
+            ProgressView(value: Double(confirmations.count),
+                         total: Double(max(definition.operations.count, 1)))
+                .tint(.green)
+                .frame(maxWidth: 360)
+                .animation(.easeInOut(duration: 0.35), value: confirmations.count)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: Spacing.xSmall) {
                     ForEach(Array(definition.operations.enumerated()), id: \.element.id) { i, op in
@@ -382,6 +443,7 @@ struct WorkflowRunnerView: View {
                     Text(op.title)
                         .font(Typography.caption2)
                         .fontWeight(st == .current ? .bold : .semibold)
+                        .foregroundColor(st == .upcoming ? .primary : color)
                         .lineLimit(1)
                     Text(shortHint(op))
                         .font(Typography.caption2)
@@ -390,14 +452,16 @@ struct WorkflowRunnerView: View {
                 }
             }
             .padding(.horizontal, 8).padding(.vertical, 5)
-            .background(st == .current ? AppColors.primary.opacity(0.12) : AppColors.secondary.opacity(0.08))
+            .background(color.opacity(st == .upcoming ? 0.08 : 0.15))
             .overlay(
                 RoundedRectangle(cornerRadius: CornerRadius.small)
-                    .stroke(st == .current ? AppColors.primary.opacity(0.5) : Color.clear, lineWidth: 1))
+                    .stroke(st == .current ? color.opacity(0.6) : (st == .done ? color.opacity(0.35) : Color.clear),
+                            lineWidth: st == .current ? 1.5 : 1))
             .clipShape(RoundedRectangle(cornerRadius: CornerRadius.small))
         }
         .buttonStyle(.plain)
         .help(chipHelp(op, state: st))
+        .animation(.easeInOut(duration: 0.3), value: confirmations.count)
     }
 
     private var introCard: some View {
@@ -460,6 +524,8 @@ struct WorkflowRunnerView: View {
         let conf = confirmations[op.seq]
         let locks = conf == nil ? lockedReasons(op) : []
         let isOpen = expanded.contains(op.seq)
+        let st = stepState(op)
+        let accent = stateColor(st)
         VStack(alignment: .leading, spacing: Spacing.xSmall) {
             // Header line — tap to expand/collapse.
             Button {
@@ -467,13 +533,18 @@ struct WorkflowRunnerView: View {
                 else { prefillDerived(op); expanded.insert(op.seq) }
             } label: {
                 HStack(alignment: .top, spacing: Spacing.small) {
+                    // State accent bar — turns green as the step completes.
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(st == .upcoming ? accent.opacity(0.25) : accent)
+                        .frame(width: 4)
+                        .frame(maxHeight: .infinity)
                     Image(systemName: conf != nil ? "checkmark.circle.fill" : (locks.isEmpty ? "circle" : "lock.circle"))
-                        .foregroundColor(conf != nil ? .green : (locks.isEmpty ? AppColors.secondary : .orange))
+                        .foregroundColor(conf != nil ? .green : (locks.isEmpty ? (st == .current ? AppColors.primary : AppColors.secondary) : .orange))
                         .frame(width: 22)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("\(op.seq). \(op.title)")
                             .font(Typography.callout).fontWeight(.semibold)
-                            .foregroundColor(.primary)
+                            .foregroundColor(conf != nil ? .green : (st == .current ? AppColors.primary : .primary))
                         Text(op.hint)
                             .font(Typography.caption1).foregroundColor(AppColors.secondary)
                             .lineLimit(isOpen ? nil : 1)
@@ -505,7 +576,12 @@ struct WorkflowRunnerView: View {
 
             if isOpen { stepDetail(op, conf: conf, locks: locks) }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 4)
+        .padding(.horizontal, 4)
+        .background(
+            RoundedRectangle(cornerRadius: CornerRadius.small)
+                .fill(st == .current ? accent.opacity(0.06) : (st == .done ? Color.green.opacity(0.05) : Color.clear)))
+        .animation(.easeInOut(duration: 0.3), value: confirmations.count)
     }
 
     @ViewBuilder
@@ -537,6 +613,8 @@ struct WorkflowRunnerView: View {
                 Label("Some fields were filled in from your archive — check and adjust.", systemImage: "wand.and.stars")
                     .font(Typography.caption2).foregroundColor(AppColors.primary)
             }
+
+            evidenceSection(op.seq)
 
             // Optional note.
             VStack(alignment: .leading, spacing: 2) {
@@ -602,12 +680,32 @@ struct WorkflowRunnerView: View {
                 }
             }
             switch field.kind {
-            case .text, .number, .date:
+            case .text, .number:
                 TextField(field.placeholder, text: binding(seq, field.key))
                     .textFieldStyle(.roundedBorder)
                     #if os(iOS)
                     .keyboardType(field.kind == .number ? .numbersAndPunctuation : .default)
                     #endif
+            case .date:
+                DatePicker("", selection: dateBinding(seq, field.key), displayedComponents: .date)
+                    .datePickerStyle(.compact)
+                    .labelsHidden()
+            case .dateRange:
+                HStack(spacing: Spacing.small) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("From").font(Typography.caption2).foregroundColor(AppColors.secondary)
+                        DatePicker("", selection: rangeStartBinding(seq, field.key), displayedComponents: .date)
+                            .datePickerStyle(.compact).labelsHidden()
+                    }
+                    Image(systemName: "arrow.right").font(.caption).foregroundColor(AppColors.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("To").font(Typography.caption2).foregroundColor(AppColors.secondary)
+                        DatePicker("", selection: rangeEndBinding(seq, field.key),
+                                   in: (parseDay(rangeParts(seq, field.key).0) ?? .distantPast)...,
+                                   displayedComponents: .date)
+                            .datePickerStyle(.compact).labelsHidden()
+                    }
+                }
             case .longText:
                 TextField(field.placeholder.isEmpty ? "…" : field.placeholder,
                           text: binding(seq, field.key), axis: .vertical)
@@ -649,6 +747,160 @@ struct WorkflowRunnerView: View {
     }
     private func noteBinding(_ seq: Int) -> Binding<String> {
         Binding(get: { notes[seq] ?? "" }, set: { notes[seq] = $0; onFieldEdited(seq) })
+    }
+
+    // MARK: Date pickers (single date + date range, stored as ISO strings)
+
+    private static let dayFmt: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
+        f.locale = Locale(identifier: "en_US_POSIX"); return f
+    }()
+    private func parseDay(_ s: String) -> Date? {
+        Self.dayFmt.date(from: s.trimmingCharacters(in: .whitespaces))
+    }
+    private func setValue(_ seq: Int, _ key: String, _ val: String) {
+        var d = savedValues[seq] ?? [:]; d[key] = val; savedValues[seq] = d
+        onFieldEdited(seq)
+    }
+    private func dateBinding(_ seq: Int, _ key: String) -> Binding<Date> {
+        Binding(get: { parseDay(savedValues[seq]?[key] ?? "") ?? Date() },
+                set: { setValue(seq, key, Self.dayFmt.string(from: $0)) })
+    }
+    /// Split a "start → end" range value into its two ISO parts.
+    private func rangeParts(_ seq: Int, _ key: String) -> (String, String) {
+        let raw = savedValues[seq]?[key] ?? ""
+        let parts = raw.components(separatedBy: "→")
+        let a = parts.first?.trimmingCharacters(in: .whitespaces) ?? ""
+        let b = parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespaces) : ""
+        return (a, b)
+    }
+    private func rangeStartBinding(_ seq: Int, _ key: String) -> Binding<Date> {
+        Binding(get: { parseDay(rangeParts(seq, key).0) ?? Date() },
+                set: { new in
+                    let end = rangeParts(seq, key).1
+                    setValue(seq, key, "\(Self.dayFmt.string(from: new)) → \(end)")
+                })
+    }
+    private func rangeEndBinding(_ seq: Int, _ key: String) -> Binding<Date> {
+        Binding(get: { parseDay(rangeParts(seq, key).1) ?? Date() },
+                set: { new in
+                    let start = rangeParts(seq, key).0
+                    setValue(seq, key, "\(start) → \(Self.dayFmt.string(from: new))")
+                })
+    }
+
+    // MARK: Attach evidence (external files + archive emails)
+
+    @ViewBuilder
+    private func evidenceSection(_ seq: Int) -> some View {
+        let list = refs(seq)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: Spacing.xSmall) {
+                Text("Evidence & files").font(Typography.caption2).fontWeight(.semibold)
+                Spacer()
+                Button { fileImportSeq = seq; showFileImporter = true } label: {
+                    Label("Add file…", systemImage: "paperclip")
+                }
+                .controlSize(.small)
+                .help("Attach a file from your computer — copied into this case so it stays with the record, offline")
+                Button { archivePick = SeqID(seq: seq) } label: {
+                    Label("Add from archive", systemImage: "tray.full")
+                }
+                .controlSize(.small)
+                .help("Attach emails already imported into mailin")
+            }
+            if list.isEmpty {
+                Text("No files or emails attached yet.")
+                    .font(Typography.caption2).foregroundColor(AppColors.secondary)
+            } else {
+                ForEach(list) { r in
+                    HStack(spacing: Spacing.xSmall) {
+                        Image(systemName: r.kind == .file ? "doc.fill" : "envelope.fill")
+                            .foregroundColor(AppColors.secondary).frame(width: 16)
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(r.title).font(Typography.caption2).lineLimit(1)
+                            if !r.detail.isEmpty {
+                                Text(r.detail).font(Typography.caption2)
+                                    .foregroundColor(AppColors.secondary).lineLimit(1)
+                            }
+                        }
+                        Spacer()
+                        Button { removeRef(seq, r) } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundColor(AppColors.secondary)
+                        }
+                        .buttonStyle(.plain).help("Remove this attachment from the step")
+                    }
+                    .padding(.vertical, 1)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(Spacing.small)
+        .background(AppColors.secondary.opacity(0.05))
+        .cornerRadius(CornerRadius.small)
+    }
+
+    private func refs(_ seq: Int) -> [WorkflowStepRef] {
+        guard let s = savedValues[seq]?[Self.refsKey],
+              let data = s.data(using: .utf8),
+              let arr = try? JSONDecoder().decode([WorkflowStepRef].self, from: data) else { return [] }
+        return arr
+    }
+    private func setRefs(_ seq: Int, _ list: [WorkflowStepRef]) {
+        var d = savedValues[seq] ?? [:]
+        if list.isEmpty {
+            d[Self.refsKey] = nil
+        } else if let data = try? JSONEncoder().encode(list),
+                  let s = String(data: data, encoding: .utf8) {
+            d[Self.refsKey] = s
+        }
+        savedValues[seq] = d
+        onFieldEdited(seq)
+    }
+    private func addRefs(_ seq: Int, _ new: [WorkflowStepRef]) {
+        guard !new.isEmpty else { return }
+        var cur = refs(seq)
+        for r in new where !cur.contains(where: { $0.id == r.id && $0.kind == r.kind }) { cur.append(r) }
+        setRefs(seq, cur)
+    }
+    private func removeRef(_ seq: Int, _ ref: WorkflowStepRef) {
+        setRefs(seq, refs(seq).filter { !($0.id == ref.id && $0.kind == ref.kind) })
+    }
+
+    /// Per-run folder where attached external files are copied (offline).
+    private static func attachmentsDir(wf: String) -> URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return appSupport
+            .appendingPathComponent("com.ecosanskriti.mailin", isDirectory: true)
+            .appendingPathComponent("WorkflowAttachments", isDirectory: true)
+            .appendingPathComponent(wf.isEmpty ? "misc" : wf, isDirectory: true)
+    }
+
+    /// Copy picked files into the case folder and record them on the step.
+    private func importFiles(_ urls: [URL], seq: Int) {
+        let dir = Self.attachmentsDir(wf: wfNumber)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var added: [WorkflowStepRef] = []
+        for src in urls {
+            let scoped = src.startAccessingSecurityScopedResource()
+            defer { if scoped { src.stopAccessingSecurityScopedResource() } }
+            let name = src.lastPathComponent
+            let dest = dir.appendingPathComponent("\(UUID().uuidString)-\(name)")
+            do {
+                if FileManager.default.fileExists(atPath: dest.path) {
+                    try? FileManager.default.removeItem(at: dest)
+                }
+                try FileManager.default.copyItem(at: src, to: dest)
+                let attrs = try? FileManager.default.attributesOfItem(atPath: dest.path)
+                let bytes = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+                let sizeStr = bytes > 0 ? ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) : ""
+                added.append(WorkflowStepRef(id: dest.path, kind: .file, title: name, detail: sizeStr))
+            } catch {
+                ForensicManager.shared.logAction("Workflow attach failed", detail: name)
+            }
+        }
+        addRefs(seq, added)
     }
 
     private var summarySheet: some View {
@@ -734,6 +986,7 @@ struct WorkflowRunnerView: View {
     /// short dwell, auto-complete the step if it's eligible and the option is on.
     private func onFieldEdited(_ seq: Int) {
         validationBySeq[seq] = nil
+        touchedSeqs.insert(seq)
         guard let op = definition.operations.first(where: { $0.seq == seq }) else { return }
         if autoSave {
             saveTasks[seq]?.cancel()
@@ -770,8 +1023,10 @@ struct WorkflowRunnerView: View {
         guard confirmations[op.seq] == nil, lockedReasons(op).isEmpty else { return false }
         guard op.fields.contains(where: { $0.required }) else { return false }
         guard WorkflowFieldValidation.missingRequired(op.fields, values: savedValues[op.seq] ?? [:]).isEmpty else { return false }
+        // Require genuine engagement so seeded/derived defaults never auto-fire:
+        // a tool step needs its tool opened; any step needs a field touched.
         if op.launches != nil { return openedSteps.contains(op.seq) }
-        return true
+        return touchedSeqs.contains(op.seq)
     }
 
     /// User pressed the explicit finalize button.
@@ -802,6 +1057,10 @@ struct WorkflowRunnerView: View {
             ]
             for f in op.fields where !(vals[f.key] ?? "").isEmpty {
                 fields.append(.init(key: f.label, value: vals[f.key] ?? ""))
+            }
+            for r in refs(op.seq) {
+                fields.append(.init(key: r.kind == .file ? "File" : "Email",
+                                    value: r.detail.isEmpty ? r.title : "\(r.title) — \(r.detail)"))
             }
             if !note.isEmpty { fields.append(.init(key: "Note", value: note)) }
             docNumber = await DocumentRegistry.captureStructured(
@@ -836,18 +1095,38 @@ struct WorkflowRunnerView: View {
         scrollTarget = op.seq
     }
 
-    /// Fill any archive-derived fields that are still empty (one-time per step).
+    /// Fill any archive-derived fields, and give date pickers a sensible
+    /// starting value, when a step is first opened — WITHOUT marking the step
+    /// touched, so these defaults never trigger auto-complete on their own.
     private func prefillDerived(_ op: WorkflowOperation) {
         guard confirmations[op.seq] == nil else { return }
-        let derived = FieldDerivation.derive(defID: definition.defID, opKey: op.key, ctx: derivation)
-        guard !derived.isEmpty else { return }
         var d = savedValues[op.seq] ?? [:]
         var filled: Set<String> = []
-        for (k, v) in derived where (d[k] ?? "").isEmpty { d[k] = v; filled.insert(k) }
-        if !filled.isEmpty {
-            savedValues[op.seq] = d
-            derivedKeysBySeq[op.seq] = filled
-            if autoSave { onFieldEdited(op.seq) } else { dirtySeqs.insert(op.seq) }
+        for (k, v) in FieldDerivation.derive(defID: definition.defID, opKey: op.key, ctx: derivation)
+        where (d[k] ?? "").isEmpty { d[k] = v; filled.insert(k) }
+        // Seed date/date-range fields so the calendar opens on a real date.
+        let today = Self.dayFmt.string(from: Date())
+        for f in op.fields where (d[f.key] ?? "").isEmpty {
+            switch f.kind {
+            case .date:
+                d[f.key] = today
+            case .dateRange:
+                let start = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+                d[f.key] = "\(Self.dayFmt.string(from: start)) → \(today)"
+            default: break
+            }
+        }
+        guard d != (savedValues[op.seq] ?? [:]) else { return }
+        savedValues[op.seq] = d
+        if !filled.isEmpty { derivedKeysBySeq[op.seq] = filled }
+        // Persist quietly (no touch, no auto-complete).
+        if autoSave {
+            Task { @MainActor in
+                try? await SQLiteEmailStore.shared.saveFieldValues(wf: wfNumber, seq: op.seq, values: savedValues[op.seq] ?? [:])
+                await refreshSearchText()
+            }
+        } else {
+            dirtySeqs.insert(op.seq)
         }
     }
 
@@ -877,6 +1156,9 @@ struct WorkflowRunnerView: View {
             if let note = confirmations[op.seq]?.note, !note.isEmpty {
                 parts.append("Note: \(note)")
             }
+            for r in refs(op.seq) {
+                parts.append("\(r.kind == .file ? "File" : "Email"): \(r.title)")
+            }
         }
         let summary = parts.joined(separator: " · ")
         try? await SQLiteEmailStore.shared.updateDocumentSearchText(
@@ -904,6 +1186,10 @@ struct WorkflowRunnerView: View {
                 if let v = savedValues[op.seq]?[f.key], !v.isEmpty {
                     fields.append(.init(key: f.label, value: v))
                 }
+            }
+            for r in refs(op.seq) {
+                fields.append(.init(key: r.kind == .file ? "File" : "Email",
+                                    value: r.detail.isEmpty ? r.title : "\(r.title) — \(r.detail)"))
             }
             if let c = confirmations[op.seq] {
                 fields.append(.init(key: "Confirmed", value: c.confirmedAt.formatted(date: .abbreviated, time: .shortened)))

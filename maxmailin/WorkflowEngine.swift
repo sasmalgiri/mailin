@@ -17,7 +17,7 @@ import Foundation
 /// uses (chain-of-custody intake, eDiscovery coding, phishing IR report,
 /// verification checklist).
 struct WorkflowField: Identifiable, Equatable, Sendable {
-    enum Kind: String, Equatable, Sendable { case text, longText, number, choice, bool, date }
+    enum Kind: String, Equatable, Sendable { case text, longText, number, choice, bool, date, dateRange }
     var id: String { key }
     let key: String
     let label: String
@@ -320,7 +320,7 @@ enum WorkflowCatalog {
         persona: "forensic", builtin: true, operations: [
             op(1, "scope", "Set Scope", "Fix the window and custodians the timeline will cover.", nil, launches: .emailInbox, [
                 f("caseNumber", "Case / Matter number", .text, "Ties this timeline to the investigation.", placeholder: "CASE-2026-0001", required: true),
-                f("window", "Time window", .text, "The date range the timeline spans.", placeholder: "2025-01-01 → 2025-06-30"),
+                f("window", "Time window", .dateRange, "The date range the timeline spans — pick From and To."),
                 f("custodians", "Custodians in scope", .longText, "Whose mail is included — one per line."),
             ]),
             op(2, "build", "Build Timeline", "Assemble the chronological event list from the set.", nil, launches: .timeline, [
@@ -665,7 +665,7 @@ enum WorkflowCatalog {
         persona: "forensic", builtin: true, operations: [
             op(1, "scope", "Scope Subject", "Fix the subject and window under review.", nil, launches: .communicationPatterns, [
                 f("subject", "Subject", .text, "The mailbox/person under review.", placeholder: "jdoe@corp.com", required: true),
-                f("window", "Time window", .text, "The period you're examining."),
+                f("window", "Time window", .dateRange, "The period you're examining — pick From and To."),
             ]),
             op(2, "patterns", "Communication Patterns", "Look for off-hours, external, or unusual volume.", nil, launches: .communicationPatterns, [
                 f("findings", "Pattern findings", .longText, "External recipients, off-hours spikes, new contacts."),
@@ -1054,7 +1054,7 @@ enum WorkflowCatalog {
         persona: "it_admin", builtin: true, operations: [
             op(1, "scope", "Scope", "Define the sensitive terms and window to review.", nil, launches: .keywordMonitor, [
                 f("scopeName", "Scope name", .text, "What exfiltration concern you are reviewing.", placeholder: "PII leak Q3", required: true),
-                f("window", "Time window", .text, "The period under review.", placeholder: "2026-07-01 → 2026-09-30"),
+                f("window", "Time window", .dateRange, "The period under review — pick From and To."),
             ]),
             op(2, "scan", "Scan Sensitive Terms", "Search the traffic for sensitive terms.", nil, launches: .keywordMonitor, [
                 f("hits", "Term hits", .number, "How many messages hit a sensitive term."),
