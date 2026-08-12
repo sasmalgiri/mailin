@@ -746,7 +746,25 @@ struct ContentView: View {
 
     // MARK: - Hub Navigation
 
+    /// Track the tools the user actually opens, so the hub can show a
+    /// "Recently used" row (recognition over recall). Persisted, newest-first,
+    /// unique, capped; the hub reads it via @AppStorage and refreshes live.
+    private func recordRecentTool(_ dest: HubDestination) {
+        switch dest {
+        case .settings, .personaHub, .emailInbox: return   // not "tools"
+        default: break
+        }
+        let key = "recentTools"
+        var list = (UserDefaults.standard.string(forKey: key) ?? "")
+            .split(separator: ",").map(String.init)
+        list.removeAll { $0 == dest.rawValue }
+        list.insert(dest.rawValue, at: 0)
+        if list.count > 8 { list = Array(list.prefix(8)) }
+        UserDefaults.standard.set(list.joined(separator: ","), forKey: key)
+    }
+
     private func handleHubNavigation(_ destination: HubDestination) {
+        recordRecentTool(destination)
         switch destination {
         case .settings:
             openSettingsAction()

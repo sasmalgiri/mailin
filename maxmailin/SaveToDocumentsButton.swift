@@ -67,8 +67,9 @@ struct SaveToDocumentsButton: View {
                     }
                 }
                 .controlSize(.small)
+                .keyboardShortcut("s", modifiers: .command)
                 .disabled(saving || savedNumber != nil)
-                .help("Record this result as a numbered document you can reopen from Work Center ▸ Documents.")
+                .help("Record this result as a numbered document you can reopen from Work Center ▸ Documents. (⌘S)")
             }
         }
         .task {

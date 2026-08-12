@@ -56,6 +56,9 @@ struct MainNavigationHubView: View {
     /// The guided workflow to run, presented as a sheet (same pattern as
     /// Work Center) — set by tapping a "Start a job" card.
     @State private var workflowToRun: WorkflowDefinition?
+    /// Comma-joined recent tool destinations (written by ContentView), so the
+    /// hub can offer a one-tap "jump back to what you were doing" row.
+    @AppStorage("recentTools") private var recentToolsRaw = ""
 
     private var gridColumns: Int {
         switch sizeClass {
@@ -106,6 +109,7 @@ struct MainNavigationHubView: View {
                 emailInboxHero
                 guidedWorkflowsSection
                 personaHeroSection
+                recentToolsSection
                 ForEach(deDupedToolSections) { section in
                     toolSectionView(section)
                 }
@@ -337,6 +341,34 @@ struct MainNavigationHubView: View {
             }
         }
         return out
+    }
+
+    // MARK: Recently used (recognition over recall)
+
+    /// Every tool tile the app knows about, for looking up a recent dest.
+    private var allTiles: [HubTile] {
+        coreSection.tiles + analysisSection.tiles + securitySection.tiles
+            + legalForensicSection.tiles + exportSection.tiles + aiSection.tiles
+    }
+
+    private var recentTools: [HubTile] {
+        let dests = recentToolsRaw.split(separator: ",").compactMap { HubDestination(rawValue: String($0)) }
+        let map = Dictionary(allTiles.map { ($0.dest, $0) }, uniquingKeysWith: { first, _ in first })
+        return Array(dests.compactMap { map[$0] }.prefix(6))
+    }
+
+    @ViewBuilder
+    private var recentToolsSection: some View {
+        if !recentTools.isEmpty {
+            VStack(alignment: .leading, spacing: Spacing.small) {
+                sectionHeader(title: "Recently used", icon: "clock.arrow.circlepath", color: AppColors.secondary)
+                LazyVGrid(columns: featureColumns, spacing: Spacing.small) {
+                    ForEach(recentTools) { tile in
+                        hubTile(tile)
+                    }
+                }
+            }
+        }
     }
 
     private func toolSectionView(_ section: ToolSection) -> some View {

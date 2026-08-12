@@ -46,21 +46,25 @@ the intent (everything is a saved "job") with fewer, not more, interactions.
 | 6 | Auto‑save status is visible ("Auto‑saved WF‑…") | Visibility of system status | **Added** with this change. |
 | 7 | Glossary of legal/forensic terms | Recognition | Present. |
 
-## Top recommendations still open (prioritized)
-1. **First‑run 30‑second path**: on an empty archive, one primary CTA ("Import")
-   and, right after import, auto‑select the persona's top workflow card. (Fitts
-   + defaults.) — small.
-2. **Consistent header pattern** across all tool windows (title · help · close
-   in the same place) so recognition transfers between tools. — small sweep.
-3. **Keyboard shortcuts** on the primary action of each tool window (⌘S save,
-   ⌘R run) for experts. — small.
-4. **"Recently used tools"** row on the hub (recognition of prior work). — small.
+## Top recommendations
+1. ✅ **"Recently used tools" row** on the hub (recognition of prior work) —
+   **shipped**: newest‑first, one tap to resume, above the full grid.
+2. ✅ **⌘S** on the manual Save‑to‑Documents action (expert flexibility) —
+   **shipped**.
+3. **First‑run 30‑second path**: empty archive already shows a single Import
+   CTA + "Start a job" cards + a "Import your first archive" suggestion, so the
+   path is one decision. (Considered satisfied; no risky auto‑navigation added.)
+4. **Consistent header pattern** across all tool windows (title · help · close
+   in the same place). — small sweep, still open.
+5. **More shortcuts** (⌘R run) on tool primaries. — optional; auto‑save reduced
+   the need to press Save at all.
 
-## What shipped in this pass
+## What shipped
 - **Auto‑save my work** toggle (Settings ▸ Documents & History, default **ON**).
-- `SaveToDocumentsButton` now auto‑records hands‑free after a 1.5s dwell (a
-  glance or mis‑tap posts nothing), showing "Auto‑saved WF‑…"; manual button
-  mode when the setting is off.
+- `SaveToDocumentsButton` auto‑records hands‑free after a 1.5s dwell (a glance
+  or mis‑tap posts nothing), showing "Auto‑saved WF‑…"; manual button + **⌘S**
+  when the setting is off.
+- **"Recently used" hub row** — jump back to the last tools you used in one tap.
 
 ## Sources
 - [Laws of UX (Hick, Fitts, progressive disclosure) — uxness.in](https://www.uxness.in/2024/03/12-laws-of-ux-designing-with-principles.html)
