@@ -503,9 +503,44 @@ struct WorkflowRunnerView: View {
         let summary = parts.joined(separator: " · ")
         try? await SQLiteEmailStore.shared.updateDocumentSearchText(
             wfNumber, summary: summary, refs: client.isEmpty ? definition.defID : client)
-        // Attach the full run so opening WF-… reproduces the entire job —
-        // every step, field value, who/when, and the documents it posted.
-        try? await SQLiteEmailStore.shared.attachDocumentPayload(wfNumber, body: renderReport())
+        // Attach the full run as STRUCTURED data — every step's fields as typed
+        // key/value rows — so opening WF-… shows a spreadsheet-like table that
+        // exports to CSV and feeds custom reports.
+        try? await SQLiteEmailStore.shared.attachDocumentPayload(
+            wfNumber, contentType: "application/json", body: buildCapturedDocument().jsonString())
+    }
+
+    /// The full run captured as structured sections/fields (maximum fidelity).
+    private func buildCapturedDocument() -> CapturedDocument {
+        var sections: [CapturedDocument.Section] = []
+        var runFields: [CapturedDocument.Field] = [
+            .init(key: "Document", value: wfNumber),
+            .init(key: "Workflow", value: definition.name),
+            .init(key: "Status", value: status.capitalized),
+            .init(key: "By", value: ForensicManager.shared.examinerName),
+        ]
+        let client = clientName.trimmingCharacters(in: .whitespaces)
+        if !client.isEmpty { runFields.append(.init(key: "Client / matter", value: client)) }
+        sections.append(.init(name: "Run", fields: runFields))
+
+        for op in definition.operations {
+            var fields: [CapturedDocument.Field] = []
+            for f in op.fields {
+                if let v = savedValues[op.seq]?[f.key], !v.isEmpty {
+                    fields.append(.init(key: f.label, value: v))
+                }
+            }
+            if let c = confirmations[op.seq] {
+                fields.append(.init(key: "Confirmed", value: c.confirmedAt.formatted(date: .abbreviated, time: .shortened)))
+                if !c.confirmedBy.isEmpty { fields.append(.init(key: "Confirmed by", value: c.confirmedBy)) }
+                if let doc = c.docNumber { fields.append(.init(key: "Document posted", value: doc)) }
+                if !c.note.isEmpty { fields.append(.init(key: "Note", value: c.note)) }
+            }
+            if !fields.isEmpty {
+                sections.append(.init(name: "\(op.seq). \(op.title)", fields: fields))
+            }
+        }
+        return CapturedDocument(title: client.isEmpty ? definition.name : client, sections: sections)
     }
 
     @MainActor

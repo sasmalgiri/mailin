@@ -104,6 +104,23 @@ enum DocumentRegistry {
         ForensicManager.shared.logAction("Document posted: \(number)", detail: summary)
         return number
     }
+
+    /// Structured capture — stores every field as typed key/value data (JSON),
+    /// so the document opens as a spreadsheet-like table and can be exported to
+    /// CSV / manipulated into custom reports. Maximum data fidelity.
+    @MainActor
+    @discardableResult
+    static func captureStructured(_ type: DocumentType, summary: String,
+                                  document: CapturedDocument, refs: String = "") async -> String? {
+        let store = SQLiteEmailStore.shared
+        let who = ForensicManager.shared.examinerName
+        guard let number = try? await store.issueDocument(
+            type: type.rawValue, summary: summary, refs: refs, createdBy: who) else { return nil }
+        try? await store.attachDocumentPayload(number, contentType: "application/json",
+                                               body: document.jsonString())
+        ForensicManager.shared.logAction("Document posted: \(number)", detail: summary)
+        return number
+    }
 }
 
 // MARK: - Workflow facade (v8)

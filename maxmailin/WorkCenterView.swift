@@ -10,6 +10,10 @@
 //
 
 import SwiftUI
+#if os(macOS)
+import AppKit
+import UniformTypeIdentifiers
+#endif
 
 struct WorkCenterView: View {
     var onOpenDestination: ((HubDestination) -> Void)? = nil
@@ -33,7 +37,9 @@ struct WorkCenterView: View {
     @State private var expandedDoc: String? = nil
     @State private var docNotes: [SQLiteEmailStore.DocNote] = []
     @State private var docPayload: String? = nil
+    @State private var docPayloadType: String = "text/markdown"
     @State private var showFullWork = false
+    @State private var csvSaved = false
     @State private var newNote = ""
     @AppStorage("selectedPersona") private var personaRaw = "general"
     @State private var isLoading = true
@@ -544,40 +550,93 @@ struct WorkCenterView: View {
     }
 
     private func fullWorkSheet(_ doc: SQLiteEmailStore.IssuedDocument) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let table = DocumentTable.parse(contentType: docPayloadType, body: docPayload ?? "")
+        return VStack(alignment: .leading, spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(doc.number).font(Typography.monoBody).fontWeight(.bold)
                     Text(doc.summary).font(Typography.caption1).foregroundColor(AppColors.secondary).lineLimit(2)
                 }
                 Spacer()
-                if let payload = docPayload {
-                    Button { PlatformClipboard.copyString(payload) } label: { Image(systemName: "doc.on.doc") }
-                        .buttonStyle(.plain).help("Copy the full saved work")
+                if !table.isEmpty {
+                    Text("\(table.rowCount) fields")
+                        .font(Typography.caption2).foregroundColor(AppColors.secondary)
+                    Button { PlatformClipboard.copyString(table.csv()) } label: {
+                        Label("Copy CSV", systemImage: "tablecells")
+                    }
+                    .controlSize(.small)
+                    .help("Copy every field as CSV — paste into Excel/Numbers")
+                    #if os(macOS)
+                    Button { exportCSV(table, number: doc.number) } label: {
+                        Label(csvSaved ? "Saved" : "Export CSV…", systemImage: "square.and.arrow.down")
+                    }
+                    .controlSize(.small).disabled(csvSaved)
+                    #endif
                 }
             }
             .padding(Spacing.medium)
             Divider()
             ScrollView {
-                Text(docPayload ?? "No saved work recorded for this document.")
-                    .font(Typography.body)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                if table.isEmpty {
+                    Text("No structured data recorded for this document.")
+                        .foregroundColor(AppColors.secondary)
+                        .padding(Spacing.medium)
+                } else {
+                    VStack(alignment: .leading, spacing: Spacing.medium) {
+                        ForEach(Array(table.sections.enumerated()), id: \.offset) { _, section in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(section.name)
+                                    .font(Typography.callout).fontWeight(.semibold)
+                                    .foregroundColor(AppColors.primary)
+                                ForEach(Array(section.rows.enumerated()), id: \.offset) { _, row in
+                                    HStack(alignment: .top, spacing: Spacing.small) {
+                                        Text(row.key)
+                                            .font(Typography.caption1).fontWeight(.medium)
+                                            .foregroundColor(AppColors.secondary)
+                                            .frame(width: 180, alignment: .leading)
+                                        Text(row.value)
+                                            .font(Typography.caption1)
+                                            .textSelection(.enabled)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                    .padding(.vertical, 1)
+                                    Divider().opacity(0.3)
+                                }
+                            }
+                        }
+                    }
                     .padding(Spacing.medium)
+                }
             }
             Divider()
             HStack { Spacer(); Button("Done") { showFullWork = false } }
                 .padding(Spacing.medium)
         }
-        .frame(minWidth: 520, minHeight: 460)
+        .frame(minWidth: 560, minHeight: 480)
     }
+
+    #if os(macOS)
+    @MainActor
+    private func exportCSV(_ table: DocumentTable, number: String) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(number).csv"
+        panel.allowedContentTypes = [.commaSeparatedText]
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        try? table.csv().write(to: url, atomically: true, encoding: .utf8)
+        csvSaved = true
+    }
+    #endif
 
     @MainActor
     private func toggleDocDetail(_ number: String) async {
         if expandedDoc == number { expandedDoc = nil; return }
         expandedDoc = number
         docNotes = (try? await SQLiteEmailStore.shared.documentNotes(number)) ?? []
-        docPayload = (try? await SQLiteEmailStore.shared.documentPayload(number))?.body
+        let p = try? await SQLiteEmailStore.shared.documentPayload(number)
+        docPayload = p?.body
+        docPayloadType = p?.contentType ?? "text/markdown"
+        csvSaved = false
         newNote = ""
     }
 

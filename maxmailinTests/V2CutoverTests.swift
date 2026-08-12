@@ -1823,6 +1823,38 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertNil(barePayload)
     }
 
+    /// Structured document data: a CapturedDocument round-trips through JSON,
+    /// parses into a table, and exports Excel-ready CSV — so any saved job can
+    /// be manipulated into custom reports.
+    func testDocumentTable_structuredJSONAndCSV() {
+        let doc = CapturedDocument(title: "Acme v. Roe", sections: [
+            .init(name: "Run", fields: [.init(key: "Document", value: "WF-2026-0007"),
+                                        .init(key: "Client / matter", value: "Acme v. Roe")]),
+            .init(name: "3. Privilege Log", fields: [.init(key: "Privilege basis", value: "Work Product"),
+                                                     .init(key: "Privileged count", value: "3")]),
+        ])
+        // JSON round-trips exactly.
+        let back = CapturedDocument.from(json: doc.jsonString())
+        XCTAssertEqual(back, doc)
+
+        // Parses to a table with every field preserved.
+        let table = DocumentTable.parse(contentType: "application/json", body: doc.jsonString())
+        XCTAssertEqual(table.sections.count, 2)
+        XCTAssertEqual(table.rowCount, 4)
+        XCTAssertEqual(table.sections[1].rows.first, .init(key: "Privilege basis", value: "Work Product"))
+
+        // CSV is Excel-ready: header + one row per field, quoted.
+        let csv = table.csv()
+        XCTAssertTrue(csv.hasPrefix("Section,Field,Value\n"))
+        XCTAssertTrue(csv.contains("\"3. Privilege Log\",\"Privileged count\",\"3\""))
+
+        // A plain-text payload still tabulates via best-effort "Key: value".
+        let textTable = DocumentTable.parse(contentType: "text/markdown",
+            body: "IOC EXPORT\nIndicators: 12\nSource: inbox")
+        XCTAssertTrue(textTable.rowCount >= 2)
+        XCTAssertTrue(textTable.sections.contains { $0.rows.contains(.init(key: "Indicators", value: "12")) })
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default
