@@ -819,6 +819,398 @@ enum WorkflowCatalog {
             ]),
         ])
 
+    // MARK: - Batch: 19 additional built-in secondary jobs
+
+    static let forensicHeaders = WorkflowDefinition(
+        defID: "builtin.forensic.headers", name: "Header & Authentication Analysis",
+        persona: "forensic", builtin: true, operations: [
+            op(1, "scope", "Scope", "Pick the messages whose headers you will examine.", nil, launches: .itAdminDashboard, [
+                f("caseNumber", "Case / Matter number", .text, "Ties this analysis to the investigation.", placeholder: "CASE-2026-0001", required: true),
+                f("messageCount", "Messages in scope", .number, "How many messages you are inspecting."),
+            ]),
+            op(2, "inspect", "Inspect Headers", "Read the raw headers and trace the Received hops.", nil, launches: .itAdminDashboard, [
+                f("originIP", "Originating IP", .text, "The first sending IP in the Received chain.", placeholder: "203.0.113.4"),
+                f("hopNotes", "Hop notes", .longText, "What the Received chain reveals about routing."),
+            ]),
+            op(3, "auth", "Check Auth & Spoofing", "Evaluate SPF, DKIM and DMARC, and flag spoofing.", nil, launches: .smartAlerts, [
+                f("authResults", "Auth results", .longText, "SPF/DKIM/DMARC pass or fail per message."),
+                f("spoofSuspected", "Spoofing suspected", .bool, "Turn on when the sender appears forged."),
+            ]),
+            op(4, "report", "Report", "Write up the header findings. Posts a Report.", .report, launches: .investigationReport, [
+                f("title", "Report title", .text, "Label for this header-analysis report."),
+                f("summary", "Findings summary", .longText, "What the headers prove about origin and authenticity."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+        ])
+
+    static let forensicCull = WorkflowDefinition(
+        defID: "builtin.forensic.cull", name: "Deduplication & Culling",
+        persona: "forensic", builtin: true, operations: [
+            op(1, "load", "Load Set", "Load the evidence set you will cull.", nil, launches: .emailInbox, [
+                f("caseNumber", "Case / Matter number", .text, "Ties this cull to the investigation.", placeholder: "CASE-2026-0001", required: true),
+                f("startCount", "Starting count", .number, "Documents before culling."),
+            ]),
+            op(2, "dedupe", "Remove Duplicates", "Strip exact duplicates from the set.", nil, launches: .duplicateManager, [
+                f("removedDupes", "Duplicates removed", .number, "How many exact duplicates were dropped."),
+            ]),
+            op(3, "nearDupe", "Near-Duplicate & Date Cull", "Trim near-duplicates and out-of-range dates.", nil, launches: .nearDuplicates, [
+                f("nearRemoved", "Near-duplicates removed", .number, "How many near-duplicates were dropped."),
+                f("dateFiltered", "Date-filtered out", .number, "How many fell outside the relevant window."),
+            ]),
+            op(4, "record", "Record Cull", "Record the culling results. Posts a Cleanup.", .cleanup, launches: .investigationReport, [
+                f("finalCount", "Final count", .number, "Documents remaining after the cull."),
+                f("notes", "Cull notes", .longText, "What was removed and why."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+        ])
+
+    static let forensicIOCReport = WorkflowDefinition(
+        defID: "builtin.forensic.iocreport", name: "IOC Extraction & Report",
+        persona: "forensic", builtin: true, operations: [
+            op(1, "scope", "Scope", "Pick the messages to mine for indicators.", nil, launches: .emailInbox, [
+                f("caseNumber", "Case / Matter number", .text, "Ties this extraction to the investigation.", placeholder: "CASE-2026-0001", required: true),
+                f("scopeNote", "Scope note", .longText, "What set you are extracting indicators from."),
+            ]),
+            op(2, "extract", "Extract IOCs", "Pull URLs, domains, IPs and hashes from the set.", nil, launches: .iocExtractor, [
+                f("iocCount", "IOCs extracted", .number, "How many indicators were pulled."),
+                f("iocTypes", "IOC types", .longText, "Which kinds of indicator you found."),
+            ]),
+            op(3, "assess", "Assess", "Judge which indicators are genuinely malicious.", nil, launches: .anomalyDetection, [
+                f("maliciousCount", "Malicious IOCs", .number, "How many indicators were confirmed bad."),
+                f("assessment", "Assessment notes", .longText, "Why these indicators matter."),
+            ]),
+            op(4, "export", "Export & Report", "Export the indicators and write them up. Posts an Export.", .export, launches: .investigationReport, [
+                f("format", "Export format", .text, "How the indicators are delivered.", placeholder: "STIX / CSV"),
+                f("summary", "Report summary", .longText, "What the indicators reveal."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+        ])
+
+    static let forensicAffidavit = WorkflowDefinition(
+        defID: "builtin.forensic.affidavit", name: "Expert Report",
+        persona: "forensic", builtin: true, operations: [
+            op(1, "gather", "Gather Findings", "Assemble the findings the report will rest on.", nil, launches: .forensicReview, [
+                f("caseNumber", "Case / Matter number", .text, "Ties this report to the investigation.", placeholder: "CASE-2026-0001", required: true),
+                f("findings", "Findings", .longText, "The evidence-backed findings you will attest to."),
+            ]),
+            op(2, "verify", "Verify Integrity", "Confirm the evidence is unchanged since intake.", nil, launches: .chainOfCustody, [
+                f("hashMatches", "Hashes match", .bool, "Turn on when re-hashing confirms integrity."),
+                f("custodyNotes", "Custody notes", .longText, "The chain-of-custody basis for your integrity claim."),
+            ]),
+            op(3, "draft", "Draft Report", "Write the body of the expert report.", nil, launches: .investigationReport, [
+                f("methodology", "Methodology", .longText, "The methods you applied, stated defensibly."),
+                f("opinions", "Opinions", .longText, "The conclusions you are prepared to defend."),
+            ]),
+            op(4, "finalize", "Finalize", "Finalize and sign off the report. Posts a Report.", .report, launches: .investigationReport, [
+                f("title", "Report title", .text, "Label for this expert report."),
+                f("signOff", "Signed off", .bool, "Turn on when the report is final and attested."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+        ])
+
+    static let legalCollection = WorkflowDefinition(
+        defID: "builtin.legal.collection", name: "Collection",
+        persona: "legal", builtin: true, operations: [
+            op(1, "identify", "Identify Custodians", "List whose mail must be collected.", nil, launches: .custodianPanel, [
+                f("matter", "Matter name", .text, "The matter this collection serves.", placeholder: "Acme v. Roe", required: true),
+                f("custodians", "Custodians", .longText, "Everyone whose data is in scope — one per line."),
+            ]),
+            op(2, "collect", "Collect", "Pull the in-scope mailboxes into the case.", nil, launches: .emailInbox, [
+                f("collectedCount", "Items collected", .number, "How many messages were collected."),
+                f("sources", "Sources", .longText, "Which mailboxes and stores were collected."),
+            ]),
+            op(3, "verify", "Verify Completeness", "Confirm nothing in scope was missed.", nil, launches: .custodianPanel, [
+                f("verified", "Completeness verified", .bool, "Turn on when every custodian's data is accounted for."),
+                f("gaps", "Gaps", .longText, "Any custodians or sources still outstanding."),
+            ]),
+            op(4, "record", "Record Collection", "Record the collection results. Posts an Import.", .importRun, launches: .reviewDashboard, [
+                f("totalCount", "Total collected", .number, "Final count of collected items."),
+                f("notes", "Collection notes", .longText, "How and when the collection was done."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+        ])
+
+    static let legalProcessing = WorkflowDefinition(
+        defID: "builtin.legal.processing", name: "Processing & Deduplication",
+        persona: "legal", builtin: true, operations: [
+            op(1, "load", "Load", "Load the collected set for processing.", nil, launches: .emailInbox, [
+                f("matter", "Matter name", .text, "The matter being processed.", placeholder: "Acme v. Roe", required: true),
+                f("startCount", "Starting count", .number, "Documents before processing."),
+            ]),
+            op(2, "dedupe", "Deduplicate", "Remove duplicate documents from the set.", nil, launches: .duplicateManager, [
+                f("removedDupes", "Duplicates removed", .number, "How many duplicates were dropped."),
+            ]),
+            op(3, "thread", "Thread", "Group messages into conversation threads.", nil, launches: .threadSummarizer, [
+                f("threadCount", "Threads formed", .number, "How many threads the set resolves into."),
+                f("notes", "Threading notes", .longText, "Anything notable about the threading."),
+            ]),
+            op(4, "record", "Record", "Record the processing results. Posts a Cleanup.", .cleanup, launches: .reviewDashboard, [
+                f("finalCount", "Final count", .number, "Documents remaining after processing."),
+                f("summary", "Processing summary", .longText, "What processing did to the set."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+        ])
+
+    static let legalFirstPass = WorkflowDefinition(
+        defID: "builtin.legal.firstpass", name: "First-Pass Review",
+        persona: "legal", builtin: true, operations: [
+            op(1, "assemble", "Assemble Batch", "Build the batch reviewers will code.", nil, launches: .reviewBatches, [
+                f("matter", "Matter name", .text, "The matter under review.", placeholder: "Acme v. Roe", required: true),
+                f("batchSize", "Batch size", .number, "How many documents in this batch."),
+            ]),
+            op(2, "code", "Code Responsiveness", "Tag each document responsive or not.", nil, launches: .emailInbox, [
+                f("responsive", "Responsive", .number, "How many were coded responsive."),
+                f("nonResponsive", "Non-responsive", .number, "How many were coded non-responsive."),
+            ]),
+            op(3, "velocity", "Track Velocity", "Watch the review rate against the deadline.", nil, launches: .reviewDashboard, [
+                f("docsPerHour", "Docs per hour", .number, "Current review throughput."),
+                f("onTrack", "On track", .bool, "Turn on if the pace meets the deadline."),
+            ]),
+            op(4, "report", "Report", "Report first-pass results. Posts a Report.", .report, launches: .reviewDashboard, [
+                f("title", "Report title", .text, "Label for this first-pass report."),
+                f("summary", "Summary", .longText, "Where the review stands and what is left."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+        ])
+
+    static let legalClawback = WorkflowDefinition(
+        defID: "builtin.legal.clawback", name: "Clawback",
+        persona: "legal", builtin: true, operations: [
+            op(1, "identify", "Identify Disclosure", "Pin down the inadvertently disclosed material.", nil, launches: .reviewDashboard, [
+                f("matter", "Matter name", .text, "The matter this clawback serves.", placeholder: "Acme v. Roe", required: true),
+                f("disclosed", "Disclosed items", .longText, "What was produced that should not have been."),
+            ]),
+            op(2, "notify", "Notify & Log", "Send the clawback notice and log it.", nil, launches: .custodianPanel, [
+                f("noticeSent", "Notice sent", .bool, "Turn on once the clawback notice has gone out."),
+                f("recipients", "Recipients", .longText, "Who was notified of the clawback."),
+            ]),
+            op(3, "redact", "Redact or Remove", "Redact or pull the affected material.", nil, launches: .redaction, [
+                f("itemsRemedied", "Items remedied", .number, "How many documents were redacted or removed."),
+            ]),
+            op(4, "record", "Record", "Record the clawback outcome. Posts a Report.", .report, launches: .reportBuilder, [
+                f("title", "Record title", .text, "Label for this clawback record."),
+                f("summary", "Summary", .longText, "What was clawed back and how it was resolved."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+        ])
+
+    static let itQuarantine = WorkflowDefinition(
+        defID: "builtin.it.quarantine", name: "Quarantine Review",
+        persona: "it_admin", builtin: true, operations: [
+            op(1, "load", "Load Quarantine", "Pull the quarantined messages to review.", nil, launches: .phishingTriage, [
+                f("queueName", "Queue name", .text, "Which quarantine queue you are working.", placeholder: "Default quarantine", required: true),
+                f("itemCount", "Items in queue", .number, "How many messages are quarantined."),
+            ]),
+            op(2, "analyze", "Analyze", "Extract indicators and inspect the messages.", nil, launches: .iocExtractor, [
+                f("iocCount", "IOCs found", .number, "How many indicators the messages contain."),
+                f("notes", "Analysis notes", .longText, "What the analysis shows."),
+            ]),
+            op(3, "verdict", "Verdict", "Decide malicious, spam or clean per message.", nil, launches: .phishingTriage, [
+                f("malicious", "Malicious", .number, "How many were judged malicious."),
+                f("clean", "Clean", .number, "How many were judged safe to release."),
+            ]),
+            op(4, "close", "Release or Close", "Release the clean, hold the rest. Posts a Triage Verdict.", .triageVerdict, launches: .phishingTriage, [
+                f("released", "Released", .number, "How many messages were released to users."),
+                f("summary", "Disposition summary", .longText, "What happened to the queue."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+        ])
+
+    static let itRules = WorkflowDefinition(
+        defID: "builtin.it.rules", name: "Inbox Rule Audit",
+        persona: "it_admin", builtin: true, operations: [
+            op(1, "scope", "Scope Mailboxes", "Choose the mailboxes to audit.", nil, launches: .itAdminDashboard, [
+                f("scopeName", "Scope name", .text, "Which mailboxes or group you are auditing.", placeholder: "Finance dept", required: true),
+                f("mailboxCount", "Mailboxes in scope", .number, "How many mailboxes are covered."),
+            ]),
+            op(2, "find", "Find Rules", "Surface auto-forward and hidden inbox rules.", nil, launches: .anomalyDetection, [
+                f("rulesFound", "Rules found", .number, "How many inbox rules were discovered."),
+                f("suspicious", "Suspicious rules", .longText, "Rules that forward or hide mail."),
+            ]),
+            op(3, "assess", "Assess", "Judge which rules signal compromise.", nil, launches: .iocExtractor, [
+                f("maliciousRules", "Malicious rules", .number, "How many rules are hostile."),
+                f("assessment", "Assessment", .longText, "Why these rules are a concern."),
+            ]),
+            op(4, "report", "Report", "Report the rule findings. Posts a Report.", .report, launches: .investigationReport, [
+                f("title", "Report title", .text, "Label for this rule-audit report."),
+                f("summary", "Summary", .longText, "What the audit found and what to remediate."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+        ])
+
+    static let itBlocklist = WorkflowDefinition(
+        defID: "builtin.it.blocklist", name: "Blocklist Export",
+        persona: "it_admin", builtin: true, operations: [
+            op(1, "gather", "Gather IOCs", "Collect the indicators to block.", nil, launches: .iocExtractor, [
+                f("sourceName", "Source name", .text, "Where these indicators come from.", placeholder: "Campaign 2026-08", required: true),
+                f("iocCount", "IOCs gathered", .number, "How many indicators you collected."),
+            ]),
+            op(2, "validate", "Validate", "Weed out false positives before blocking.", nil, launches: .anomalyDetection, [
+                f("validated", "Validated IOCs", .number, "How many indicators survived validation."),
+                f("rejected", "Rejected", .number, "How many were dropped as false positives."),
+            ]),
+            op(3, "compile", "Compile Blocklist", "Assemble the final blocklist.", nil, launches: .iocExtractor, [
+                f("entryCount", "Blocklist entries", .number, "How many entries the blocklist contains."),
+                f("notes", "Compile notes", .longText, "Anything notable about the list."),
+            ]),
+            op(4, "export", "Export", "Export the blocklist for the gateway. Posts an Export.", .export, launches: .investigationReport, [
+                f("format", "Export format", .text, "The format the gateway expects.", placeholder: "CSV / plaintext"),
+                f("summary", "Export summary", .longText, "What was exported and where it goes."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+        ])
+
+    static let itDLP = WorkflowDefinition(
+        defID: "builtin.it.dlp", name: "Data Exfiltration Review",
+        persona: "it_admin", builtin: true, operations: [
+            op(1, "scope", "Scope", "Define the sensitive terms and window to review.", nil, launches: .keywordMonitor, [
+                f("scopeName", "Scope name", .text, "What exfiltration concern you are reviewing.", placeholder: "PII leak Q3", required: true),
+                f("window", "Time window", .text, "The period under review.", placeholder: "2026-07-01 → 2026-09-30"),
+            ]),
+            op(2, "scan", "Scan Sensitive Terms", "Search the traffic for sensitive terms.", nil, launches: .keywordMonitor, [
+                f("hits", "Term hits", .number, "How many messages hit a sensitive term."),
+                f("terms", "Terms used", .longText, "The sensitive terms you scanned for."),
+            ]),
+            op(3, "traffic", "Traffic Analysis", "Look for abnormal outbound patterns.", nil, launches: .communicationPatterns, [
+                f("anomalies", "Anomalies", .number, "How many abnormal outbound patterns you found."),
+                f("notes", "Traffic notes", .longText, "What the outbound patterns reveal."),
+            ]),
+            op(4, "report", "Report", "Report the exfiltration findings. Posts a Report.", .report, launches: .investigationReport, [
+                f("title", "Report title", .text, "Label for this exfiltration report."),
+                f("summary", "Summary", .longText, "What data may have left and how."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+        ])
+
+    static let journalistProvenance = WorkflowDefinition(
+        defID: "builtin.journalist.provenance", name: "Provenance Check",
+        persona: "journalist", builtin: true, operations: [
+            op(1, "receive", "Receive Material", "Take in the material and note where it came from.", nil, launches: .emailInbox, [
+                f("storyName", "Story name", .text, "The story this material feeds.", placeholder: "The leaked memos", required: true),
+                f("origin", "Stated origin", .longText, "Where the source says the material came from."),
+            ]),
+            op(2, "verify", "Verify Authenticity", "Check the material is genuine, not fabricated.", nil, launches: .forensicReview, [
+                f("authentic", "Appears authentic", .bool, "Turn on when the material checks out."),
+                f("checks", "Authenticity checks", .longText, "What you did to confirm authenticity."),
+            ]),
+            op(3, "corroborate", "Corroborate Source", "Find independent support for the material.", nil, launches: .emailInbox, [
+                f("corroboration", "Corroboration", .longText, "Independent evidence that backs the material."),
+                f("sourceCount", "Corroborating sources", .number, "How many independent sources agree."),
+            ]),
+            op(4, "record", "Record", "Record the provenance finding. Posts a Report.", .report, launches: .storyFile, [
+                f("title", "Record title", .text, "Label for this provenance record."),
+                f("finding", "Provenance finding", .longText, "Your conclusion on the material's provenance."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+        ])
+
+    static let journalistFOIA = WorkflowDefinition(
+        defID: "builtin.journalist.foia", name: "Records Request (FOIA)",
+        persona: "journalist", builtin: true, operations: [
+            op(1, "draft", "Draft Request", "Write the records request to send.", nil, launches: .emailInbox, [
+                f("agency", "Agency", .text, "Which body you are requesting records from.", placeholder: "City Housing Authority", required: true),
+                f("request", "Request text", .longText, "What records you are asking for."),
+            ]),
+            op(2, "track", "Track Responses", "Follow the agency's replies and deadlines.", nil, launches: .emailInbox, [
+                f("status", "Response status", .text, "Where the request stands.", placeholder: "Acknowledged / partial / denied"),
+                f("dueDate", "Statutory due date", .text, "When the response is legally due.", placeholder: "2026-09-15"),
+            ]),
+            op(3, "review", "Review Released Records", "Read what the agency released.", nil, launches: .emailInbox, [
+                f("recordCount", "Records released", .number, "How many records you received."),
+                f("notes", "Review notes", .longText, "What the released records show."),
+            ]),
+            op(4, "log", "Log", "Log the request outcome. Posts a Report.", .report, launches: .reportBuilder, [
+                f("title", "Log title", .text, "Label for this request log."),
+                f("outcome", "Outcome", .longText, "What was released, withheld, or appealed."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+        ])
+
+    static let journalistQuotes = WorkflowDefinition(
+        defID: "builtin.journalist.quotes", name: "Quote & Attribution",
+        persona: "journalist", builtin: true, operations: [
+            op(1, "find", "Find Statements", "Locate the quotable statements in the mail.", nil, launches: .emailInbox, [
+                f("storyName", "Story name", .text, "The story these quotes serve.", placeholder: "The leaked memos", required: true),
+                f("query", "Search for", .text, "Terms that surface the statements you need.", placeholder: "\"we knew\""),
+            ]),
+            op(2, "summarize", "Summarize Threads", "Read the surrounding threads for context.", nil, launches: .threadSummarizer, [
+                f("threadCount", "Threads read", .number, "How many threads you reviewed for context."),
+                f("context", "Context notes", .longText, "What the threads add to the quotes."),
+            ]),
+            op(3, "attribute", "Attribute Sources", "Tie each quote to who said it and when.", nil, launches: .storyFile, [
+                f("attributions", "Attributions", .longText, "Each quote with its speaker and date."),
+            ]),
+            op(4, "save", "Save", "Save the attributed quotes. Posts a Story Version.", .storyVersion, launches: .storyFile, [
+                f("versionLabel", "Version label", .text, "Label for this saved quote set."),
+                f("summary", "Summary", .longText, "What these quotes establish for the story."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+        ])
+
+    static let journalistCrossRef = WorkflowDefinition(
+        defID: "builtin.journalist.crossref", name: "Cross-Reference Datasets",
+        persona: "journalist", builtin: true, operations: [
+            op(1, "load", "Load Datasets", "Load the datasets you will cross-reference.", nil, launches: .archiveComparison, [
+                f("storyName", "Story name", .text, "The story this comparison serves.", placeholder: "The leaked memos", required: true),
+                f("datasets", "Datasets", .longText, "Which sets you are comparing — one per line."),
+            ]),
+            op(2, "compare", "Compare", "Diff the datasets to surface differences.", nil, launches: .archiveComparison, [
+                f("differences", "Differences", .number, "How many differences the comparison found."),
+                f("notes", "Comparison notes", .longText, "What the differences suggest."),
+            ]),
+            op(3, "map", "Map Overlaps", "Chart where the datasets connect.", nil, launches: .relationshipGraph, [
+                f("overlaps", "Overlaps", .number, "How many overlapping entities you mapped."),
+                f("mapNotes", "Map notes", .longText, "What the overlaps reveal."),
+            ]),
+            op(4, "report", "Report", "Report the cross-reference findings. Posts a Report.", .report, launches: .storyFile, [
+                f("title", "Report title", .text, "Label for this cross-reference report."),
+                f("summary", "Summary", .longText, "What linking the datasets uncovered."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+        ])
+
+    static let personalBackup = WorkflowDefinition(
+        defID: "builtin.personal.backup", name: "Full Backup",
+        persona: "personal", builtin: true, operations: [
+            op(1, "scope", "Choose Scope", "Pick what to back up.", nil, launches: .emailInbox, [
+                f("scopeName", "What to back up", .text, "Which mail you are backing up.", placeholder: "All mail", required: true),
+                f("itemCount", "Items in scope", .number, "How many messages are covered."),
+            ]),
+            op(2, "dedupe", "Deduplicate", "Drop duplicates so the backup stays lean.", nil, launches: .duplicateManager, [
+                f("removedDupes", "Duplicates removed", .number, "How many duplicates were dropped."),
+            ]),
+            op(3, "export", "Export Backup", "Write the backup out.", nil, launches: .emailInbox, [
+                f("format", "Backup format", .text, "The format you are saving in.", placeholder: "MBOX / ZIP"),
+                f("size", "Backup size", .text, "Roughly how big the backup is.", placeholder: "2.3 GB"),
+            ]),
+            op(4, "confirm", "Confirm", "Confirm the backup is complete and readable. Posts an Export.", .export, launches: .emailInbox, [
+                f("destination", "Saved to", .text, "Where the backup lives."),
+                f("verified", "Verified readable", .bool, "Turn on once you have confirmed the backup opens."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+        ])
+
+    static let personalAttachments = WorkflowDefinition(
+        defID: "builtin.personal.attachments", name: "Find Attachments",
+        persona: "personal", builtin: true, operations: [
+            op(1, "search", "Search", "Search for the mail with the attachments you want.", nil, launches: .emailInbox, [
+                f("query", "Search for", .text, "Terms that find the right mail.", placeholder: "invoice pdf", required: true),
+                f("found", "Matches found", .number, "How many messages matched."),
+            ]),
+            op(2, "browse", "Browse Gallery", "Skim the attachments in the gallery.", nil, launches: .attachmentGallery, [
+                f("attachmentCount", "Attachments shown", .number, "How many attachments the gallery holds."),
+            ]),
+            op(3, "select", "Select", "Keep the attachments you want.", nil, launches: .attachmentGallery, [
+                f("selected", "Selected", .number, "How many attachments you are keeping."),
+            ]),
+            op(4, "export", "Export", "Save the selected attachments. Posts an Export.", .export, launches: .emailInbox, [
+                f("destination", "Saved to", .text, "Where you saved the attachments."),
+                f("count", "Files exported", .number, "How many files were saved out."),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+        ])
+
+    static let personalContacts = WorkflowDefinition(
+        defID: "builtin.personal.contacts", name: "Contacts Roundup",
+        persona: "personal", builtin: true, operations: [
+            op(1, "analyze", "Analyze Contacts", "See who you correspond with most.", nil, launches: .emailAnalytics, [
+                f("scopeName", "What to analyze", .text, "Which mail you are drawing contacts from.", placeholder: "All mail", required: true),
+                f("contactCount", "Contacts found", .number, "How many distinct contacts appear."),
+            ]),
+            op(2, "patterns", "Communication Patterns", "Look at how often you talk to each.", nil, launches: .communicationPatterns, [
+                f("topContacts", "Top contacts", .longText, "The people you correspond with most."),
+            ]),
+            op(3, "select", "Select Key Contacts", "Pick the contacts worth keeping.", nil, launches: .emailInbox, [
+                f("selected", "Selected", .number, "How many contacts you are keeping."),
+            ]),
+            op(4, "export", "Export", "Export the contacts list. Posts an Export.", .export, launches: .emailInbox, [
+                f("destination", "Saved to", .text, "Where you saved the contacts."),
+                f("format", "Format", .text, "The format you exported in.", placeholder: "vCard / CSV"),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+        ])
+
     static let all: [WorkflowDefinition] = [
         forensic, legal, itAdmin, journalist, personal,
         forensicTimeline, legalHold, legalECA, legalDSAR, itThreatHunt, journalistNetwork,
@@ -826,6 +1218,11 @@ enum WorkflowCatalog {
         itBEC, journalistFactCheck, journalistPublish, personalFindExport, personalDeclutter,
         forensicExhibit, forensicInsider, legalPrivQC, legalCompliance,
         itAuthAudit, itMetrics, journalistTips, journalistDataPack, personalReceipts,
+        forensicHeaders, forensicCull, forensicIOCReport, forensicAffidavit,
+        legalCollection, legalProcessing, legalFirstPass, legalClawback,
+        itQuarantine, itRules, itBlocklist, itDLP,
+        journalistProvenance, journalistFOIA, journalistQuotes, journalistCrossRef,
+        personalBackup, personalAttachments, personalContacts,
     ]
 
     static func templates(for persona: String) -> [WorkflowDefinition] {
@@ -894,6 +1291,44 @@ enum WorkflowCatalog {
             return "Round up receipts and records — search, select, collect attachments, and export them in one go."
         case "builtin.personal.cleanup":
             return "Tidy a personal archive — import, dedupe, categorize, and export a clean backup."
+        case "builtin.forensic.headers":
+            return "Read the raw headers, trace the routing, and prove whether a message is authentic or spoofed."
+        case "builtin.forensic.cull":
+            return "Shrink the evidence set defensibly — drop exact and near-duplicates and out-of-range dates, then record the cull."
+        case "builtin.forensic.iocreport":
+            return "Mine the mail for indicators of compromise, judge which are real, and export a reported set."
+        case "builtin.forensic.affidavit":
+            return "Turn your findings into a signed expert report, with evidence integrity verified before you attest."
+        case "builtin.legal.collection":
+            return "Collect the custodians' mail into the case and prove the collection was complete."
+        case "builtin.legal.processing":
+            return "Get a collected set review-ready — deduplicate, thread, and record what processing changed."
+        case "builtin.legal.firstpass":
+            return "Run the first-pass responsiveness review — batch it, code it, watch the pace, and report progress."
+        case "builtin.legal.clawback":
+            return "Recover inadvertently produced material — identify it, notify opposing counsel, redact or remove, and log it."
+        case "builtin.it.quarantine":
+            return "Work the quarantine queue — analyze the held mail, verdict each one, and release the clean or hold the rest."
+        case "builtin.it.rules":
+            return "Audit mailboxes for hostile auto-forward and hidden inbox rules that signal a compromise, and report them."
+        case "builtin.it.blocklist":
+            return "Turn confirmed indicators into a validated blocklist your mail gateway can import."
+        case "builtin.it.dlp":
+            return "Hunt for data leaving the org — scan sensitive terms, analyze outbound traffic, and report suspected exfiltration."
+        case "builtin.journalist.provenance":
+            return "Establish where leaked material came from — verify it is genuine, corroborate the source, and record the finding."
+        case "builtin.journalist.foia":
+            return "Run a public-records request end to end — draft it, track responses, review what's released, and log the outcome."
+        case "builtin.journalist.quotes":
+            return "Pull quotable statements, read the surrounding threads for context, and attribute each quote to who said it."
+        case "builtin.journalist.crossref":
+            return "Cross-reference two datasets — compare them, map where they overlap, and report what the links reveal."
+        case "builtin.personal.backup":
+            return "Make a lean, verified backup of your mail — pick the scope, dedupe, export, and confirm it opens."
+        case "builtin.personal.attachments":
+            return "Find and save the attachments you need — search, browse the gallery, select, and export."
+        case "builtin.personal.contacts":
+            return "Round up your key contacts — analyze who you talk to, spot the patterns, pick the keepers, and export them."
         default:
             return "A guided recipe that does the job step by step and keeps a numbered record for you."
         }

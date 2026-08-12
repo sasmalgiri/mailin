@@ -1137,8 +1137,8 @@ final class V2CutoverTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         let store = SQLiteEmailStore(directory: root)
 
-        // Built-in catalog is well-formed: 28 recipes, sequential ops.
-        XCTAssertEqual(WorkflowCatalog.all.count, 28)
+        // Built-in catalog is well-formed: 47 recipes, sequential ops.
+        XCTAssertEqual(WorkflowCatalog.all.count, 47)
         for def in WorkflowCatalog.all {
             XCTAssertEqual(def.operations.map(\.seq), Array(1...def.operations.count),
                            "\(def.defID) operations must be 1..n in order")
@@ -1565,11 +1565,11 @@ final class V2CutoverTests: XCTestCase {
     /// unique IDs, defined doc types, and gates that point at real operations.
     func testCatalog_expandedPersonaCoverage() {
         // Per-persona workflow counts after adding the secondary jobs.
-        XCTAssertEqual(WorkflowCatalog.templates(for: "forensic").count, 6)   // intake, timeline, sweep, custody, exhibit, insider
-        XCTAssertEqual(WorkflowCatalog.templates(for: "legal").count, 6)   // production, hold, ECA, DSAR, privQC, compliance
-        XCTAssertEqual(WorkflowCatalog.templates(for: "it_admin").count, 6)   // phishing, hunt, campaign, BEC, authAudit, metrics
-        XCTAssertEqual(WorkflowCatalog.templates(for: "journalist").count, 6)   // story, network, fact-check, publish, tips, datapack
-        XCTAssertEqual(WorkflowCatalog.templates(for: "personal").count, 4)   // cleanup, find/export, declutter, receipts
+        XCTAssertEqual(WorkflowCatalog.templates(for: "forensic").count, 10)   // intake, timeline, sweep, custody, exhibit, insider, headers, cull, iocreport, affidavit
+        XCTAssertEqual(WorkflowCatalog.templates(for: "legal").count, 10)   // production, hold, ECA, DSAR, privQC, compliance, collection, processing, firstpass, clawback
+        XCTAssertEqual(WorkflowCatalog.templates(for: "it_admin").count, 10)   // phishing, hunt, campaign, BEC, authAudit, metrics, quarantine, rules, blocklist, dlp
+        XCTAssertEqual(WorkflowCatalog.templates(for: "journalist").count, 10)   // story, network, fact-check, publish, tips, datapack, provenance, foia, quotes, crossref
+        XCTAssertEqual(WorkflowCatalog.templates(for: "personal").count, 7)   // cleanup, find/export, declutter, receipts, backup, attachments, contacts
 
         // The new jobs are present by name.
         let names = Set(WorkflowCatalog.all.map(\.name))
@@ -1582,7 +1582,16 @@ final class V2CutoverTests: XCTestCase {
                          "Court Exhibit Package", "Insider Threat Review", "Privilege QC & Redaction",
                          "Retention & Compliance Audit", "Email Authentication Audit",
                          "Security Metrics Report", "Tip & Lead Intake", "Data Story Pack",
-                         "Receipts & Records Roundup"] {
+                         "Receipts & Records Roundup",
+                         "Header & Authentication Analysis", "Deduplication & Culling",
+                         "IOC Extraction & Report", "Expert Report",
+                         "Collection", "Processing & Deduplication",
+                         "First-Pass Review", "Clawback",
+                         "Quarantine Review", "Inbox Rule Audit",
+                         "Blocklist Export", "Data Exfiltration Review",
+                         "Provenance Check", "Records Request (FOIA)",
+                         "Quote & Attribution", "Cross-Reference Datasets",
+                         "Full Backup", "Find Attachments", "Contacts Roundup"] {
             XCTAssertTrue(names.contains(expected), "missing workflow: \(expected)")
         }
 
@@ -1641,6 +1650,16 @@ final class V2CutoverTests: XCTestCase {
             WorkflowCatalog.itAuthAudit, WorkflowCatalog.itMetrics,
             WorkflowCatalog.journalistTips, WorkflowCatalog.journalistDataPack,
             WorkflowCatalog.personalReceipts,
+            WorkflowCatalog.forensicHeaders, WorkflowCatalog.forensicCull,
+            WorkflowCatalog.forensicIOCReport, WorkflowCatalog.forensicAffidavit,
+            WorkflowCatalog.legalCollection, WorkflowCatalog.legalProcessing,
+            WorkflowCatalog.legalFirstPass, WorkflowCatalog.legalClawback,
+            WorkflowCatalog.itQuarantine, WorkflowCatalog.itRules,
+            WorkflowCatalog.itBlocklist, WorkflowCatalog.itDLP,
+            WorkflowCatalog.journalistProvenance, WorkflowCatalog.journalistFOIA,
+            WorkflowCatalog.journalistQuotes, WorkflowCatalog.journalistCrossRef,
+            WorkflowCatalog.personalBackup, WorkflowCatalog.personalAttachments,
+            WorkflowCatalog.personalContacts,
         ]
         for def in newDefs {
             let ops = def.operations.map {
