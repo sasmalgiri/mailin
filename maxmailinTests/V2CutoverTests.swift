@@ -1137,8 +1137,8 @@ final class V2CutoverTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         let store = SQLiteEmailStore(directory: root)
 
-        // Built-in catalog is well-formed: 19 recipes, sequential ops.
-        XCTAssertEqual(WorkflowCatalog.all.count, 19)
+        // Built-in catalog is well-formed: 28 recipes, sequential ops.
+        XCTAssertEqual(WorkflowCatalog.all.count, 28)
         for def in WorkflowCatalog.all {
             XCTAssertEqual(def.operations.map(\.seq), Array(1...def.operations.count),
                            "\(def.defID) operations must be 1..n in order")
@@ -1565,11 +1565,11 @@ final class V2CutoverTests: XCTestCase {
     /// unique IDs, defined doc types, and gates that point at real operations.
     func testCatalog_expandedPersonaCoverage() {
         // Per-persona workflow counts after adding the secondary jobs.
-        XCTAssertEqual(WorkflowCatalog.templates(for: "forensic").count, 4)   // intake, timeline, sweep, custody
-        XCTAssertEqual(WorkflowCatalog.templates(for: "legal").count, 4)   // production, hold, ECA, DSAR
-        XCTAssertEqual(WorkflowCatalog.templates(for: "it_admin").count, 4)   // phishing, hunt, campaign, BEC
-        XCTAssertEqual(WorkflowCatalog.templates(for: "journalist").count, 4)   // story, network, fact-check, publish
-        XCTAssertEqual(WorkflowCatalog.templates(for: "personal").count, 3)   // cleanup, find/export, declutter
+        XCTAssertEqual(WorkflowCatalog.templates(for: "forensic").count, 6)   // intake, timeline, sweep, custody, exhibit, insider
+        XCTAssertEqual(WorkflowCatalog.templates(for: "legal").count, 6)   // production, hold, ECA, DSAR, privQC, compliance
+        XCTAssertEqual(WorkflowCatalog.templates(for: "it_admin").count, 6)   // phishing, hunt, campaign, BEC, authAudit, metrics
+        XCTAssertEqual(WorkflowCatalog.templates(for: "journalist").count, 6)   // story, network, fact-check, publish, tips, datapack
+        XCTAssertEqual(WorkflowCatalog.templates(for: "personal").count, 4)   // cleanup, find/export, declutter, receipts
 
         // The new jobs are present by name.
         let names = Set(WorkflowCatalog.all.map(\.name))
@@ -1578,7 +1578,11 @@ final class V2CutoverTests: XCTestCase {
                          "Threat Hunt", "Entity & Network Map", "Phishing Campaign (Bulk)",
                          "Keyword / Term Sweep", "Custody Verification",
                          "Account Compromise (BEC)", "Fact-Check & Verify",
-                         "Source Protection & Publish", "Find & Export", "Unsubscribe & Declutter"] {
+                         "Source Protection & Publish", "Find & Export", "Unsubscribe & Declutter",
+                         "Court Exhibit Package", "Insider Threat Review", "Privilege QC & Redaction",
+                         "Retention & Compliance Audit", "Email Authentication Audit",
+                         "Security Metrics Report", "Tip & Lead Intake", "Data Story Pack",
+                         "Receipts & Records Roundup"] {
             XCTAssertTrue(names.contains(expected), "missing workflow: \(expected)")
         }
 
@@ -1632,6 +1636,11 @@ final class V2CutoverTests: XCTestCase {
             WorkflowCatalog.itBEC, WorkflowCatalog.journalistFactCheck,
             WorkflowCatalog.journalistPublish, WorkflowCatalog.personalFindExport,
             WorkflowCatalog.personalDeclutter,
+            WorkflowCatalog.forensicExhibit, WorkflowCatalog.forensicInsider,
+            WorkflowCatalog.legalPrivQC, WorkflowCatalog.legalCompliance,
+            WorkflowCatalog.itAuthAudit, WorkflowCatalog.itMetrics,
+            WorkflowCatalog.journalistTips, WorkflowCatalog.journalistDataPack,
+            WorkflowCatalog.personalReceipts,
         ]
         for def in newDefs {
             let ops = def.operations.map {

@@ -234,6 +234,15 @@ struct MainNavigationHubView: View {
         case "builtin.personal.cleanup": return "sparkles"
         case "builtin.personal.findexport": return "magnifyingglass"
         case "builtin.personal.declutter": return "trash"
+        case "builtin.forensic.exhibit": return "doc.zipper"
+        case "builtin.forensic.insider": return "person.crop.circle.badge.exclamationmark"
+        case "builtin.legal.privqc": return "checkmark.shield"
+        case "builtin.legal.compliance": return "checklist"
+        case "builtin.it.authaudit": return "lock.shield"
+        case "builtin.it.metrics": return "chart.bar.doc.horizontal"
+        case "builtin.journalist.tips": return "tray.and.arrow.down"
+        case "builtin.journalist.datapack": return "chart.bar.xaxis"
+        case "builtin.personal.receipts": return "doc.text.magnifyingglass"
         default: return "flowchart"
         }
     }
