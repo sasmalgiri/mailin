@@ -728,13 +728,22 @@ class ContentViewModel: ObservableObject {
     func ingestEmails(_ emails: [MBOXParser.RawEmail], sourceLabel: String) async {
         guard !emails.isEmpty else { return }
         do {
-            try await SQLiteEmailStore.shared.insertBatch(emails)
+            let result = try await SQLiteEmailStore.shared.insertBatch(
+                emails, sourceFileHash: nil, accountID: nil,
+                sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID,
+                batchSize: 200, progress: nil)
             try await FTSSearchIndex.shared.indexBatch(emails)
             _ = try? await ArchiveCorpusRevision.shared.bump()
             totalParsedCount = (try? await ArchiveDataService.shared.count()) ?? totalParsedCount
             isParsed = totalParsedCount > 0
             updateMetadataDisplay()
-            statusMessage = "Added \(emails.count) email\(emails.count == 1 ? "" : "s") from \(sourceLabel)."
+            let added = result.insertedIDs.count
+            var msg = "Added \(added) email\(added == 1 ? "" : "s") from \(sourceLabel)."
+            let skipped = result.blockedByTombstoneIDs.count
+            if skipped > 0 {
+                msg += " \(skipped) previously-deleted email\(skipped == 1 ? "" : "s") skipped — Settings ▸ Deleted Emails to allow re-import."
+            }
+            statusMessage = msg
             statusColor = .green
             NotificationCenter.default.post(name: .parsingFinished, object: nil)
         } catch {

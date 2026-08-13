@@ -121,6 +121,8 @@ final class BulkImportCoordinator {
         var indexed = 0
         /// Emails handed to the store this run (upper bound on inserted).
         var persistAttempted = 0
+        /// Emails skipped because the user previously deleted them (tombstone).
+        var blockedByTombstone = 0
         var attachmentsSeen = 0
         /// FTS degraded mode (1f): failed index batches were logged and the
         /// launch FTSReconciler will backfill.
@@ -366,6 +368,7 @@ final class BulkImportCoordinator {
                             throw PersistFailureSignal(underlying: error)
                         }
                         summary.persistAttempted += pending.count
+                        summary.blockedByTombstone += insertResult.blockedByTombstoneIDs.count
 
                         try Task.checkCancellation()
 
@@ -489,6 +492,10 @@ final class BulkImportCoordinator {
         }
         if let before = dupBefore, let after = dupAfter {
             summary.duplicates = max(0, after - before)
+        }
+        if summary.blockedByTombstone > 0 {
+            let n = summary.blockedByTombstone
+            summary.warnings.append("\(n) email\(n == 1 ? " was" : "s were") skipped because you previously deleted \(n == 1 ? "it" : "them"). To allow re-importing, use Settings ▸ Deleted Emails ▸ Forget deleted emails.")
         }
 
         // Phase 12: build, sign (self-hash) and persist the import receipt.
