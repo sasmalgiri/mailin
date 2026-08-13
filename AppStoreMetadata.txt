@@ -30,7 +30,7 @@ mailin is the only forensic-grade email archive analyzer that runs natively on i
 
 Open Gmail Takeout .mbox, Outlook .pst/.msg, Apple Mail .emlx, Lotus Notes .nsf, or any RFC 822 .eml file. Search across millions of messages with sub-second full-text search. Analyze with on-device Apple Intelligence. Export with forensic chain-of-custody artifacts, Bates numbering, and cryptographic signatures.
 
-Other email tools force you to choose: Mac-only (MailSteward), Windows-only (Aid4Mail, Intella, MailXaminer), or cloud upload (Relativity, Logikcull). mailin is none of those. Universal Apple-native. Strictly on-device. Verifiable in App Sandbox.
+Other email tools force you to choose: Mac-only (MailSteward), Windows-only (Aid4Mail, Intella, MailXaminer), or cloud upload (Relativity, Logikcull). mailin is none of those. Universal Apple-native. On-device by default (optional Cloud AI is opt-in). Verifiable in App Sandbox.
 
 IMPORT & BROWSE
 - Open .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, and .zip archives from any email provider
@@ -112,7 +112,7 @@ BUILT FOR PRIVACY
 - Zero data collection — no analytics, no tracking, no telemetry
 - All processing happens on-device using Apple frameworks
 - App Sandbox with minimal permissions
-- All AI features run on-device — your email data never leaves your device
+- AI runs on-device by default — your email data stays on your device unless you enable the optional, opt-in Cloud AI
 
 FLEXIBLE PLANS
 - Free tier: browse up to 500 emails with basic filtering and NLP
@@ -131,7 +131,7 @@ VERIFIABLE PRIVACY
 - Zero analytics, zero third-party SDKs, zero cloud calls in offline mode
 - Apple App Sandbox enforced — Apple's own runtime verifies the privacy claim
 - Privacy Manifest declares: no tracking, no data collection
-- All AI runs on-device using Apple NaturalLanguage and Foundation Models
+- AI runs on-device by default using Apple NaturalLanguage and Foundation Models (optional Cloud AI is opt-in)
 - File Protection (Complete class) on persistent storage — files unreadable when device locked
 - Ed25519 cryptographic signatures on exports (forensic chain anchor)
 
@@ -172,7 +172,7 @@ mailin v1.0 — the first forensic-grade email archive analyzer native to iPhone
 
 ✓ 7 archive formats: .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf
 ✓ HMAC chain of custody, Bates numbering, IOC extraction
-✓ On-device Apple Intelligence — no cloud, no tracking
+✓ On-device Apple Intelligence by default — no tracking; optional Cloud AI is opt-in
 ✓ Sub-second full-text search
 ✓ 11 languages
 ✓ Universal Purchase across all your Apple devices
@@ -183,7 +183,7 @@ Free to try. Subscribe monthly, yearly, or buy once for lifetime access.
 PROMOTIONAL TEXT (170 characters max)
 ------------------------------------
 
-Forensic-grade email archive analyzer. Open .mbox, .pst, .nsf, .msg on iPhone, iPad & Mac. On-device AI. Bates, IOC, custody. Zero cloud, zero tracking. Free to try.
+Forensic-grade email archive analyzer. Open .mbox, .pst, .nsf, .msg on iPhone, iPad & Mac. On-device AI by default. Bates, IOC, custody. No tracking; optional Cloud AI opt-in. Free to try.
 
 ------------------------------------
 SUPPORT URL
