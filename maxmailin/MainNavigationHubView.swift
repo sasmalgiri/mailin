@@ -753,7 +753,7 @@ struct MainNavigationHubView: View {
         HStack(spacing: Spacing.xxSmall) {
             Image(systemName: "lock.shield.fill")
                 .font(.system(size: 10))
-            Text("100% on-device processing · Your emails never leave your Mac")
+            Text("On-device by default · No account · No tracking")
                 .font(.system(size: 10))
         }
         .foregroundColor(.secondary.opacity(0.7))

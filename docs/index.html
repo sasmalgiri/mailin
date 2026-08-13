@@ -4,15 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>mailin · AI Email Archive Analyzer · iPhone, iPad &amp; Mac</title>
-    <meta name="description" content="The Apple-native email archive analyzer with on-device AI — Apple Intelligence + NaturalLanguage. Open .mbox, .pst, .eml. Search, analyze, and export. No network, no data collection — 100% private. Universal Purchase across iPhone, iPad, and Mac.">
+    <meta name="description" content="The Apple-native email archive analyzer with on-device AI — Apple Intelligence + NaturalLanguage. Open .mbox, .pst, .eml. Search, analyze, and export. On-device by default; no accounts, no tracking. Optional Cloud AI is opt-in. Universal Purchase across iPhone, iPad, and Mac.">
     <meta name="keywords" content="mbox viewer, pst viewer, gmail takeout, email archive, email analyzer, apple intelligence, on-device ai, private email app, offline email analyzer, no data collection, mac email analyzer, ipad email archive">
     <meta property="og:title" content="mailin · AI Email Archive Analyzer on iPhone, iPad &amp; Mac">
-    <meta property="og:description" content="On-device Apple AI. Open .mbox, .pst, .eml archives. Search, analyze, export. No network, no data collection — 100% private. Universal Apple-native.">
+    <meta property="og:description" content="On-device Apple AI. Open .mbox, .pst, .eml archives. Search, analyze, export. On-device by default; no accounts, no tracking. Optional Cloud AI is opt-in. Universal Apple-native.">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://sasmalgiri.github.io/mailin/">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="mailin · AI Email Archive Analyzer for Apple">
-    <meta name="twitter:description" content="An email archive analyzer with on-device Apple AI, native on iPhone, iPad, and Mac. No network, no data collection.">
+    <meta name="twitter:description" content="An email archive analyzer with on-device Apple AI, native on iPhone, iPad, and Mac. On-device by default; no tracking.">
     <link rel="canonical" href="https://sasmalgiri.github.io/mailin/">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -419,7 +419,7 @@
         <h1>Email archive analysis,<br><span class="gradient">powered by AI, on-device.</span></h1>
         <p class="tagline">
             mailin parses Gmail Takeout, Outlook PST, .mbox, and .eml archives natively on iPhone, iPad, and Mac.
-            All AI runs on-device — Apple Intelligence and NaturalLanguage. No network, no data collection, nothing ever leaves your device. Signed, verifiable exports.
+            AI runs on-device by default — Apple Intelligence and NaturalLanguage. No account, no tracking; the developer collects nothing. An optional Cloud AI mode is opt-in and off by default. Signed, verifiable exports.
         </p>
         <div class="cta-row">
             <a href="https://apps.apple.com/app/mailin/id6767245397" class="cta-button primary"><span class="icon">⬇</span> Download on App Store</a>
@@ -527,10 +527,11 @@
             </div>
         </div>
         <p style="text-align:center; font-size:13px; color:#86868b; margin-top:28px; max-width:640px; margin-left:auto; margin-right:auto;">
-            <strong>Still offline by default.</strong>
-            mailin v2 contains no IMAP, no SMTP, no live-mail code in its
-            shipped binary. Your archive stays on your device. That's not
-            a temporary posture — it's the product.
+            <strong>Offline by default.</strong>
+            mailin needs no account and works fully offline. The only feature
+            that can send anything out is the optional Cloud AI mode — opt-in,
+            off by default, and clearly disclosed in-app. Otherwise your archive
+            stays on your device.
         </p>
     </div>
 </section>
@@ -538,9 +539,9 @@
 <!-- Trust badges -->
 <section class="trust-banner">
     <div class="badges">
-        <div class="badge"><span class="badge-icon">✓</span> No network — can't connect to the internet</div>
-        <div class="badge"><span class="badge-icon">✓</span> Zero data collection</div>
-        <div class="badge"><span class="badge-icon">✓</span> 100% on-device</div>
+        <div class="badge"><span class="badge-icon">✓</span> Offline by default — no account required</div>
+        <div class="badge"><span class="badge-icon">✓</span> Zero data collection by the developer</div>
+        <div class="badge"><span class="badge-icon">✓</span> On-device by default</div>
         <div class="badge"><span class="badge-icon">✓</span> Apple App Sandbox</div>
         <div class="badge"><span class="badge-icon">✓</span> Zero third-party SDKs</div>
         <div class="badge"><span class="badge-icon">✓</span> Universal Purchase</div>
@@ -551,7 +552,7 @@
 <section id="hybrid-ai" class="section section-dark">
     <h2>Two AI engines. <span class="gradient">Both on-device.</span></h2>
     <p class="subtitle">
-        mailin runs every AI task locally on your device using Apple's own frameworks. There is no cloud, no API key, no network — your email never leaves your device.
+        By default, mailin runs AI locally using Apple's own frameworks — no cloud, no API key. An optional Cloud AI mode is available if you choose it: opt-in, off by default, and it uses your own provider key.
     </p>
 
     <div class="hybrid-ai-diagram">
@@ -571,12 +572,12 @@
 
     <div class="hybrid-bullets">
         <div class="b">
-            <strong>No network, by design.</strong><br>
-            The app has no network entitlement — it physically cannot connect to the internet. Verify it yourself with Little Snitch or the sandbox profile.
+            <strong>On-device by default.</strong><br>
+            Apple Intelligence and NaturalLanguage run entirely on your device — no cloud and no API key for the default engines.
         </div>
         <div class="b">
-            <strong>Nothing to leak.</strong><br>
-            No cloud, no API keys, no telemetry, no analytics. Your archive is processed entirely on your device and stays there.
+            <strong>The developer collects nothing.</strong><br>
+            No telemetry, no analytics, no accounts, no third-party SDKs. If you opt into Cloud AI, only the excerpts you choose go to your provider (OpenAI/Anthropic) with your own key — never to us.
         </div>
         <div class="b">
             <strong>Every output is tagged.</strong><br>
@@ -861,7 +862,7 @@
         <div class="feature-card">
             <div class="f-icon">🔒</div>
             <h3>Privacy enforcement, not just claims</h3>
-            <p>mailin ships with <strong>no network entitlement</strong> — the sandboxed binary cannot make a network call, period. No telemetry, no analytics, no data collection. Every AI output is tagged with the on-device engine that produced it (AIProvenance).</p>
+            <p>Offline by default. The only feature that transmits anything is the optional, opt-in Cloud AI mode (using your own OpenAI/Anthropic key) — off unless you enable it. No telemetry, no analytics, no data collection by the developer. Every AI output is tagged with the engine that produced it (AIProvenance).</p>
         </div>
         <div class="feature-card">
             <div class="f-icon">🛡️</div>

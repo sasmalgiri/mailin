@@ -266,7 +266,7 @@ struct WelcomeHubView: View {
         HStack(spacing: Spacing.xxSmall) {
             Image(systemName: "lock.shield.fill")
                 .foregroundColor(.green)
-            Text("100% on-device. Zero tracking. Your emails never leave your device.")
+            Text("On-device by default. Zero tracking. No account required.")
                 .foregroundColor(.secondary)
         }
         .font(Typography.caption1)

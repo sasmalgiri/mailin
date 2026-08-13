@@ -83,7 +83,7 @@ struct AboutView: View {
                     featureRow(
                         icon: "lock.shield.fill",
                         title: "Offline & Private",
-                        description: "Your archive never leaves the device. No mail servers, no accounts, no data collection."
+                        description: "No account, no mail servers, no data collection. Your archive stays on your device by default — optional Cloud AI is opt-in."
                     )
                     featureRow(
                         icon: "chart.bar.fill",
@@ -145,7 +145,7 @@ struct AboutView: View {
                 .buttonStyle(.borderless)
                 #endif
 
-                Text("\u{00A9} 2025-2026 mailin. All rights reserved.")
+                Text("\u{00A9} 2025-2026 EcoSanskriti Innovation Pvt Ltd. All rights reserved.")
                     .font(Typography.caption2)
                     .foregroundColor(AppColors.secondary)
             }

@@ -85,7 +85,7 @@ class LegalComplianceManager: ObservableObject {
 
     Data Collection: mailin collects NO personal data. Zero analytics, zero tracking, zero telemetry.
 
-    On-Device Processing: All email parsing, NLP analysis, search indexing, and AI features run entirely on your device. Your email data never leaves your device — period.
+    On-Device Processing: Email parsing, NLP analysis, search indexing, and the default AI features run entirely on your device. Your email data never leaves your device unless you explicitly enable the optional Cloud AI feature (see Third-Party Services below).
 
     Data Storage: Parsed emails and settings are stored locally using Apple's standard frameworks (UserDefaults, file system). No server-side storage. If you enable iCloud Sync, review metadata (tags, annotations, case info) syncs via Apple's iCloud Drive — your email content is never uploaded.
 
