@@ -376,6 +376,21 @@
             .cta-row { flex-direction: column; align-items: stretch; }
         }
 
+        /* Captioned screenshot gallery */
+        .shot-gallery {
+            display: grid; grid-template-columns: repeat(2, 1fr);
+            gap: 28px; max-width: 1080px; margin: 0 auto;
+        }
+        .shot-card {
+            border-radius: 18px; overflow: hidden;
+            border: 1px solid #e8e8ed; background: #fff;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.06);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .shot-card:hover { transform: translateY(-4px); box-shadow: 0 16px 40px rgba(0,0,0,0.10); }
+        .shot-card img { width: 100%; display: block; }
+        @media (max-width: 768px) { .shot-gallery { grid-template-columns: 1fr; } }
+
         /* Scroll-reveal */
         .reveal {
             opacity: 0;
@@ -400,6 +415,7 @@
         <div class="nav-links">
             <a href="#hybrid-ai">On-device AI</a>
             <a href="#workflows">Workflows</a>
+            <a href="#gallery">Screenshots</a>
             <a href="#features">Features</a>
             <a href="#under-the-hood">How it works</a>
             <a href="#pricing">Pricing</a>
@@ -412,26 +428,17 @@
 <section class="hero">
     <div class="hero-inner">
         <div class="hero-icon"><img src="app-icon.png" alt="mailin app icon" width="100" height="100"></div>
-        <div class="hero-pill" style="background:linear-gradient(90deg,#5e5ce6,#00b3ff); color:#fff;">
-            mailin 2.0 is here · Bigger archives · Faster search · Resumable imports
-        </div>
-        <div class="hero-pill">Now live on the App Store · Built for iPhone, iPad &amp; Mac</div>
-        <h1>Email archive analysis,<br><span class="gradient">powered by AI, on-device.</span></h1>
+        <h1>Run the whole email job —<br><span class="gradient">guided, private, on-device.</span></h1>
         <p class="tagline">
-            mailin parses Gmail Takeout, Outlook PST, .mbox, and .eml archives natively on iPhone, iPad, and Mac.
-            AI runs on-device by default — Apple Intelligence and NaturalLanguage. No account, no tracking; the developer collects nothing. An optional Cloud AI mode is opt-in and off by default. Signed, verifiable exports.
+            Import Gmail Takeout, Outlook PST, .mbox or .eml, then let mailin walk you through the job step by step —
+            search, analyze, redact, export — keeping a numbered record of every task. On-device by default; the
+            developer collects nothing. Optional Cloud AI is opt-in. Signed, verifiable exports.
         </p>
         <div class="cta-row">
             <a href="https://apps.apple.com/app/mailin/id6767245397" class="cta-button primary"><span class="icon">⬇</span> Download on App Store</a>
             <a href="#hybrid-ai" class="cta-button"><span class="icon">⚡</span> See on-device AI</a>
         </div>
         <p class="hero-note">Free tier available · No signup · No tracking · Universal Purchase</p>
-        <div class="hero-stats">
-            <div class="hero-stat"><div class="number">8</div><div class="label">File formats</div></div>
-            <div class="hero-stat"><div class="number">2</div><div class="label">On-device AI engines</div></div>
-            <div class="hero-stat"><div class="number">3</div><div class="label">Apple platforms</div></div>
-            <div class="hero-stat"><div class="number">0</div><div class="label">Tracking SDKs</div></div>
-        </div>
     </div>
 </section>
 
@@ -442,7 +449,7 @@
             <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
             <span class="title">mailin</span>
         </div>
-        <img src="shot-hero.png" alt="mailin running on macOS">
+        <img src="shot-hero.png" alt="mailin Forensic Hub on macOS — every tool organized by role">
     </div>
 </section>
 
@@ -533,6 +540,20 @@
             off by default, and clearly disclosed in-app. Otherwise your archive
             stays on your device.
         </p>
+    </div>
+</section>
+
+<!-- Captioned screenshot gallery -->
+<section class="section" id="gallery">
+    <h2>See it in <span class="gradient">action</span></h2>
+    <p class="subtitle">Real screens from mailin — guided workflows, the Work Center, and the on‑device analysis tools.</p>
+    <div class="shot-gallery">
+        <div class="shot-card"><img src="feature-hub.png" alt="Every tool, organized by role" loading="lazy" decoding="async"></div>
+        <div class="shot-card"><img src="feature-workcenter.png" alt="Work Center — jobs, documents and reports" loading="lazy" decoding="async"></div>
+        <div class="shot-card"><img src="feature-runner.png" alt="Run the whole job, step by step" loading="lazy" decoding="async"></div>
+        <div class="shot-card"><img src="feature-evidence.png" alt="Attach the exact files and emails to each step" loading="lazy" decoding="async"></div>
+        <div class="shot-card"><img src="feature-analytics.png" alt="See the shape of your archive" loading="lazy" decoding="async"></div>
+        <div class="shot-card"><img src="feature-ai.png" alt="On-device AI by default" loading="lazy" decoding="async"></div>
     </div>
 </section>
 
@@ -967,7 +988,7 @@
         '.section h2', '.section .subtitle',
         '.feature-card', '.format-card', '.engine-card', '.hybrid-bullets .b',
         '.showcase-row', '.persona', '.platform-card', '.price-card',
-        '.universal-note', '.trust-banner .badge', '#v2 .section-inner > div'
+        '.universal-note', '.trust-banner .badge', '#v2 .section-inner > div', '.shot-card'
     ];
     var els = [];
     selectors.forEach(function (s) {
