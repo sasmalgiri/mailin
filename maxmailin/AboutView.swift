@@ -125,6 +125,16 @@ struct AboutView: View {
                 .buttonStyle(.borderless)
                 #endif
 
+                Button("Rate mailin on the App Store") {
+                    guard let url = URL(string: "https://apps.apple.com/app/id6767245397?action=write-review") else { return }
+                    openURL(url)
+                }
+                #if os(macOS)
+                .buttonStyle(.link)
+                #else
+                .buttonStyle(.borderless)
+                #endif
+
                 Button("Contact Support") {
                     guard let url = URL(string: "mailto:sasmalgiri@gmail.com") else { return }
                     openURL(url)
