@@ -55,6 +55,8 @@ struct SettingsView: View {
     @AppStorage(DocumentCapturePrefs.autoKey) private var autoCaptureDocs = true
     @AppStorage("wfAutoSave") private var wfAutoSave = true
     @AppStorage("wfAutoComplete") private var wfAutoComplete = true
+    @State private var tombstoneCount = 0
+    @State private var showForgetDeletedConfirm = false
     @AppStorage("hasConsentedToCloudAI") private var hasConsentedToCloudAI = false
     @AppStorage("customModelName") private var customModelName = ""
     @State private var savedDataCleared = false
@@ -323,6 +325,39 @@ struct SettingsView: View {
                 Text("Controls the guided workflow runner. With both off, you save and finalize every step by hand — Forensic and Legal users who want an explicit sign-off on each step may prefer that. You can also flip these from the sliders menu in any workflow window.")
                     .font(.caption)
                     .foregroundColor(.secondary)
+            }
+
+            Section {
+                Button(role: .destructive) {
+                    showForgetDeletedConfirm = true
+                } label: {
+                    Label("Forget deleted emails (allow re-import)", systemImage: "arrow.uturn.backward")
+                }
+                .disabled(tombstoneCount == 0)
+                .help("Re-importing a file never brings back emails you deleted. Forget that history to allow re-importing them.")
+                .alert("Forget deleted emails?", isPresented: $showForgetDeletedConfirm) {
+                    Button("Cancel", role: .cancel) {}
+                    Button("Forget", role: .destructive) {
+                        Task {
+                            try? await SQLiteEmailStore.shared.clearDeletionTombstones()
+                            tombstoneCount = (try? await SQLiteEmailStore.shared.tombstoneCount()) ?? 0
+                        }
+                    }
+                } message: {
+                    Text("After this, re-importing a file that includes previously-deleted emails will add them back. It does not restore anything on its own.")
+                }
+            } header: {
+                Text("Deleted Emails")
+                    .font(.headline)
+            } footer: {
+                Text(tombstoneCount == 0
+                     ? "mailin remembers emails you delete so re-importing the same file never silently brings them back."
+                     : "mailin is remembering \(tombstoneCount) deleted email\(tombstoneCount == 1 ? "" : "s") so re-importing the same file won't bring them back. Forget them to allow re-importing.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .task {
+                tombstoneCount = (try? await SQLiteEmailStore.shared.tombstoneCount()) ?? 0
             }
 
             #if os(macOS)

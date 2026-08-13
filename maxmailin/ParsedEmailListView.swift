@@ -385,11 +385,12 @@ struct ParsedEmailListView: View {
                             Button {
                                 downloadAllAttachments()
                             } label: {
-                                Label("Export (\(totalAttachments))", systemImage: "arrow.down.circle.fill")
+                                Label("Attachments (\(totalAttachments))", systemImage: "arrow.down.circle.fill")
                                     .font(Typography.caption1)
                             }
                             .buttonStyle(CompactPrimaryButtonStyle())
                             .controlSize(.small)
+                            .help("Save all attachments in the filtered emails to a folder")
                         }
 
                         if !model.visibleEmails.isEmpty {

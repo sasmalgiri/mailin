@@ -121,7 +121,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// store fully at the previous version — never half-migrated, and a user
     /// DB is NEVER silently recreated. A store newer than this build refuses
     /// to open instead of guessing.
-    static let currentSchemaVersion = 12
+    static let currentSchemaVersion = 13
 
     private func migrateSchema(_ handle: OpaquePointer) throws {
         var v = try scalarInt(handle, "PRAGMA user_version;")
@@ -372,6 +372,25 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 try exec(handle, "PRAGMA user_version = 12;")
             }
             v = 12
+        }
+        if v == 12 {
+            try inExclusiveTransaction(handle) {
+                // v13: deletion tombstones — remember the identity of emails the
+                // user deleted so re-importing the same source never silently
+                // resurrects them. Keyed by dedup_key and/or Message-ID; either
+                // match blocks re-insertion until the user clears the history.
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS deletion_tombstones(
+                        dedup_key   TEXT,
+                        message_id  TEXT,
+                        deleted_at  INTEGER NOT NULL DEFAULT 0
+                    );
+                """)
+                try exec(handle, "CREATE UNIQUE INDEX IF NOT EXISTS idx_tombstone_dedup ON deletion_tombstones(dedup_key) WHERE dedup_key IS NOT NULL;")
+                try exec(handle, "CREATE INDEX IF NOT EXISTS idx_tombstone_mid ON deletion_tombstones(message_id) WHERE message_id IS NOT NULL;")
+                try exec(handle, "PRAGMA user_version = 13;")
+            }
+            v = 13
         }
     }
 
@@ -1315,6 +1334,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
         sourceID: Int64?,
         firstOrdinal: Int?,
         dedupPolicy: DedupPolicy,
+        respectTombstones: Bool = true,
         batchSize: Int,
         progress: ((Int, Int) -> Void)?
     ) throws -> BatchInsertResult {
@@ -1322,6 +1342,10 @@ actor SQLiteEmailStore: EmailArchiveStore {
         let total = emails.count
         var processed = 0
         var result = BatchInsertResult(attempted: total)
+        // Previously-deleted identities — skip them so a re-import can't silently
+        // resurrect deleted mail (cleared via "Forget deleted emails").
+        let tombstones: (keys: Set<String>, mids: Set<String>) =
+            respectTombstones ? ((try? loadTombstones()) ?? (keys: [], mids: [])) : (keys: [], mids: [])
 
         let insertEmail = try prepare(db, """
             INSERT OR IGNORE INTO emails(
@@ -1368,6 +1392,14 @@ actor SQLiteEmailStore: EmailArchiveStore {
                         $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0
                     }
                     let dedupKey = Self.dedupKey(for: email, messageID: mid, policy: dedupPolicy)
+                    // Skip anything the user previously deleted (tombstone match
+                    // on dedup_key or Message-ID) unless the override is on.
+                    if respectTombstones,
+                       (dedupKey.map { tombstones.keys.contains($0) } ?? false)
+                        || (mid.map { tombstones.mids.contains($0) } ?? false) {
+                        result.blockedByTombstoneIDs.append(email.id)
+                        continue
+                    }
                     let ordinal: Int64? = firstOrdinal.map { Int64($0 + offset + i) }
                     let date = Self.parsedDate(from: email.headers["Date"]) ?? Date.distantPast
                     let dateInt = Int64(date.timeIntervalSince1970.rounded())
@@ -3943,18 +3975,30 @@ actor SQLiteEmailStore: EmailArchiveStore {
     func delete(ids: Set<UUID>) throws {
         guard !ids.isEmpty else { return }
         let db = try ensureDB()
+        let now = Int64(Date().timeIntervalSince1970)
         try exec(db, "BEGIN TRANSACTION;")
         do {
             for chunk in Array(ids).chunked(into: 500) {
                 let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+                // Record a deletion tombstone for each row BEFORE removing it, so
+                // re-importing the same source can't silently resurrect it.
+                let ts = try prepare(db, """
+                    INSERT OR IGNORE INTO deletion_tombstones(dedup_key, message_id, deleted_at)
+                    SELECT dedup_key, message_id, \(now) FROM emails WHERE id IN (\(placeholders));
+                """)
+                for (i, id) in chunk.enumerated() { bindText(ts, Int32(i + 1), id.uuidString) }
+                let tsOK = sqlite3_step(ts) == SQLITE_DONE
+                sqlite3_finalize(ts)
+                guard tsOK else { throw SQLiteStoreError.step(lastError(db)) }
                 // (table, id column) — derived tables are keyed by email_id.
+                // `duplicates` is keyed by duplicate_id (clears orphan bookkeeping).
                 for (table, col) in [("emails", "id"), ("email_bodies", "id"), ("derived", "email_id"),
                                      ("thread_keys", "email_id"), ("predictive_records", "email_id"),
                                      ("near_dup_findings", "email_id"),
                                      ("attachments", "email_id"), ("email_participants", "email_id"),
                                      ("email_tags", "email_id"), ("email_domains", "email_id"),
                                      ("email_review_state", "email_id"), ("email_user_tags", "email_id"),
-                                     ("email_annotations", "email_id"),
+                                     ("email_annotations", "email_id"), ("duplicates", "duplicate_id"),
                                      ("attachment_search", "email_id"), ("attachment_text_state", "email_id")] {
                     let stmt = try prepare(db, "DELETE FROM \(table) WHERE \(col) IN (\(placeholders));")
                     defer { sqlite3_finalize(stmt) }
@@ -3975,9 +4019,38 @@ actor SQLiteEmailStore: EmailArchiveStore {
                       "predictive_records", "near_dup_findings", "sources", "attachments",
                       "email_participants", "email_tags", "email_domains",
                       "email_review_state", "email_user_tags", "email_annotations",
-                      "attachment_search", "attachment_text_state"] {
+                      "attachment_search", "attachment_text_state", "deletion_tombstones"] {
             try exec(db, "DELETE FROM \(table);")
         }
+    }
+
+    // MARK: - Deletion tombstones (no-resurrection on re-import)
+
+    /// How many deleted-email identities are currently remembered.
+    func tombstoneCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM deletion_tombstones;")
+    }
+
+    /// Forget every deletion tombstone — the "allow re-import" override. After
+    /// this, re-importing a previously-deleted source re-adds those emails.
+    func clearDeletionTombstones() throws {
+        let db = try ensureDB()
+        try exec(db, "DELETE FROM deletion_tombstones;")
+    }
+
+    /// The set of remembered (dedup_key, message_id) identities, loaded once per
+    /// insert so re-imports can skip previously-deleted mail without per-row SQL.
+    fileprivate func loadTombstones() throws -> (keys: Set<String>, mids: Set<String>) {
+        let db = try ensureDB()
+        var keys = Set<String>(); var mids = Set<String>()
+        let stmt = try prepare(db, "SELECT dedup_key, message_id FROM deletion_tombstones;")
+        defer { sqlite3_finalize(stmt) }
+        while try stepRow(stmt, db) {
+            if let k = columnTextOptional(stmt, 0), !k.isEmpty { keys.insert(k) }
+            if let m = columnTextOptional(stmt, 1), !m.isEmpty { mids.insert(m) }
+        }
+        return (keys, mids)
     }
 
     /// Fold the WAL back into the main db file. Keeps the on-disk footprint

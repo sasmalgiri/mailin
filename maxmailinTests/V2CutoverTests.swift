@@ -840,6 +840,61 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(after.isEmpty, "idempotent — nothing left to remove")
     }
 
+    /// Deletion tombstones (schema v13): deleting emails records their identity
+    /// so re-importing the same source never silently resurrects them — until
+    /// the user explicitly forgets the deletion history.
+    func testDeletionTombstone_blocksReimportUntilForgotten() async throws {
+        let env = try makeEnv()
+
+        var first: [MBOXParser.RawEmail] = []
+        for i in 0..<4 {
+            var e = makeEmail(i: i, total: 8, body: "b\(i)")
+            e.headers["Message-ID"] = "<tomb-\(i)@test>"
+            first.append(e)
+        }
+        _ = try await env.store.insertBatch(
+            first, sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID,
+            batchSize: 10, progress: nil)
+        let initial = try await env.archive.count()
+        XCTAssertEqual(initial, 4)
+
+        // Delete them all → each identity is tombstoned.
+        try await env.store.delete(ids: Set(first.map(\.id)))
+        let afterDelete = try await env.archive.count()
+        XCTAssertEqual(afterDelete, 0)
+        let tombstones = try await env.store.tombstoneCount()
+        XCTAssertEqual(tombstones, 4, "each deleted email is remembered")
+
+        // Re-import the same source (same Message-IDs, NEW UUIDs) → all blocked.
+        var reimport: [MBOXParser.RawEmail] = []
+        for i in 0..<4 {
+            var e = makeEmail(i: 100 + i, total: 8, body: "b\(i)")
+            e.headers["Message-ID"] = "<tomb-\(i)@test>"
+            reimport.append(e)
+        }
+        let blocked = try await env.store.insertBatch(
+            reimport, sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID,
+            batchSize: 10, progress: nil)
+        XCTAssertEqual(blocked.insertedIDs.count, 0, "previously-deleted emails are not resurrected")
+        XCTAssertEqual(blocked.blockedByTombstoneIDs.count, 4)
+        let stillEmpty = try await env.archive.count()
+        XCTAssertEqual(stillEmpty, 0, "no resurrection on re-import")
+
+        // Override: forget the history, then the same re-import restores them.
+        try await env.store.clearDeletionTombstones()
+        let clearedCount = try await env.store.tombstoneCount()
+        XCTAssertEqual(clearedCount, 0)
+        let restored = try await env.store.insertBatch(
+            reimport, sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID,
+            batchSize: 10, progress: nil)
+        XCTAssertEqual(restored.insertedIDs.count, 4, "after forgetting, re-import restores them")
+        let finalCount = try await env.archive.count()
+        XCTAssertEqual(finalCount, 4)
+    }
+
     /// Email History (document flow): dated events sort oldest-first into
     /// the timeline; undated facts land in current state; empty inputs
     /// produce empty sections (never placeholder junk); the report carries

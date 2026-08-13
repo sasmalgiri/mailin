@@ -41,6 +41,10 @@ struct BatchInsertResult: Sendable {
     var existingSourceOccurrenceIDs: [UUID] = []
     /// Rows skipped by the dedup policy (recorded as duplicate findings).
     var duplicateIDs: [UUID] = []
+    /// Rows skipped because the user previously DELETED an email with the same
+    /// identity (deletion tombstone) — so re-importing a source never silently
+    /// resurrects deleted mail. Cleared via "Forget deleted emails".
+    var blockedByTombstoneIDs: [UUID] = []
 }
 
 protocol EmailArchiveStore: Sendable {
