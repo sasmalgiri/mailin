@@ -41,6 +41,10 @@ enum HubDestination: String, Hashable {
     }
 }
 
+extension HubDestination: Identifiable {
+    var id: String { rawValue }
+}
+
 // MARK: - Main Navigation Hub
 
 struct MainNavigationHubView: View {

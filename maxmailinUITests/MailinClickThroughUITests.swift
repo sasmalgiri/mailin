@@ -102,6 +102,92 @@ final class MailinClickThroughUITests: XCTestCase {
     }
     #endif
 
+    #if os(iOS)
+    /// Capture App Store screenshots from the real iOS build on the seeded
+    /// demo archive. Each screen is saved as a keep-always attachment; the
+    /// harness exports them to disk. Navigation is best-effort (existence-
+    /// guarded) so the run always produces a set even if a surface moves.
+    func testCaptureAppStoreScreenshots_iOS() {
+        _ = app.buttons.firstMatch.waitForExistence(timeout: 120)
+        Thread.sleep(forTimeInterval: 2.5)
+        snap("01-list")
+
+        // Feature Guide (nav "?").
+        if tap(app.buttons["Feature Guide"]) {
+            Thread.sleep(forTimeInterval: 1.5); snap("02-guide"); dismissModal()
+        }
+
+        // AI Assistant (nav sparkles).
+        if tap(app.buttons["AI Assistant"]) {
+            Thread.sleep(forTimeInterval: 1.5); snap("03-ai"); dismissModal()
+        }
+
+        // More menu → Analytics (dismiss the tool's first-run tutorial first).
+        if tap(app.buttons["More"].firstMatch) {
+            Thread.sleep(forTimeInterval: 0.8)
+            let analytics = app.buttons["Analytics"].firstMatch
+            if analytics.waitForExistence(timeout: 3) {
+                analytics.tap(); Thread.sleep(forTimeInterval: 1.5)
+                dismissTutorial()
+                snap("04-analytics"); dismissModal()
+            } else {
+                app.swipeDown(velocity: .fast)   // close the menu
+                Thread.sleep(forTimeInterval: 0.6)
+            }
+        }
+
+        // Email detail (rows are buttons labelled "… from <sender>").
+        let row = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'from '")).firstMatch
+        if row.waitForExistence(timeout: 10) {
+            row.tap(); Thread.sleep(forTimeInterval: 2.0); snap("05-detail")
+            let back = app.navigationBars.buttons.firstMatch
+            if back.exists { back.tap(); Thread.sleep(forTimeInterval: 1.0) }
+        }
+
+        // Filters & Tools panel (the tools/workflows hub), then a tool inside.
+        if tap(app.buttons["Filters & Tools"]) {
+            Thread.sleep(forTimeInterval: 1.5); snap("06-tools")
+            let dup = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Duplicate'")).firstMatch
+            if dup.waitForExistence(timeout: 3) {
+                dup.tap(); Thread.sleep(forTimeInterval: 1.5)
+                dismissTutorial()
+                snap("07-duplicates"); dismissModal()
+            }
+        }
+    }
+
+    /// Dismiss a feature's first-run tutorial sheet ("Got It …") if present.
+    private func dismissTutorial() {
+        let gotIt = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Got It'")).firstMatch
+        if gotIt.waitForExistence(timeout: 3) { gotIt.tap(); Thread.sleep(forTimeInterval: 1.2) }
+    }
+
+    @discardableResult
+    private func tap(_ el: XCUIElement, timeout: TimeInterval = 8) -> Bool {
+        guard el.waitForExistence(timeout: timeout), el.isHittable else { return false }
+        el.tap(); return true
+    }
+
+    private func dismissModal() {
+        let done = app.buttons["Done"].firstMatch
+        if done.exists { done.tap() }
+        else {
+            let close = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Close' OR identifier CONTAINS 'xmark'")).firstMatch
+            if close.exists { close.tap() } else { app.swipeDown(velocity: .fast) }
+        }
+        Thread.sleep(forTimeInterval: 1.0)
+    }
+
+    private func snap(_ name: String) {
+        let shot = XCUIScreen.main.screenshot()
+        let att = XCTAttachment(screenshot: shot)
+        att.name = name
+        att.lifetime = .keepAlways
+        add(att)
+    }
+
+    #endif
+
     #if os(macOS)
     /// One end-to-end pass over the primary surfaces. Grouped in a single
     /// test so the app launches (and seeds) once; each step asserts a

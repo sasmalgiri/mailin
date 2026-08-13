@@ -102,6 +102,8 @@ struct ContentView: View {
     @State private var showIOSSettings = false
     @State private var showReviewImporter = false
     @State private var showFiltersSheet = false
+    @State private var showWorkCenter = false
+    @State private var iosToolDestination: HubDestination?
     @State private var iPadSelectedEmailID: UUID?
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     #endif
@@ -771,13 +773,13 @@ struct ContentView: View {
         case .eDiscovery, .predictiveCoding, .gdprCompliance, .chainOfCustody,
              .forensicReview, .investigationReport, .batesNumbering,
              .reviewBatches, .custodianPanel, .legalWorkspace:
-            if storeManager.requireProfessional() { sidebarSelection = destination }
+            if storeManager.requireProfessional() { goToDestination(destination) }
         case .iocExtractor, .phishingTriage, .reviewDashboard:
-            if storeManager.requireProfessional() { sidebarSelection = destination }
+            if storeManager.requireProfessional() { goToDestination(destination) }
         case .storyFile:
-            if storeManager.requirePremium() { sidebarSelection = destination }
+            if storeManager.requirePremium() { goToDestination(destination) }
         case .workCenter:
-            sidebarSelection = destination
+            goToDestination(destination)
         case .anomalyDetection, .smartAlerts, .keywordMonitor, .nearDuplicates,
              .emailAnalytics, .topicClusters, .timeline, .communicationPatterns,
              .relationshipGraph, .duplicateManager, .threadSummarizer,
@@ -787,12 +789,24 @@ struct ContentView: View {
              .knowledgeGraphExplorer, .aiVisualizations, .backgroundFindings,
              .predictiveInsights, .pluginManager,
              .itAdminDashboard, .journalistWorkbench:
-            if storeManager.requirePremium() { sidebarSelection = destination }
+            if storeManager.requirePremium() { goToDestination(destination) }
         case .emailInbox, .customExperts, .workspaceManager,
              .personalOrganizer, .generalExplorer,
              .personaHub:
-            sidebarSelection = destination
+            goToDestination(destination)
         }
+    }
+
+    /// Present a hub destination: on macOS via the sidebar selection; on iOS
+    /// as a sheet hosting the same destination view (the phone has no
+    /// persistent sidebar, so this is how "Open tool" from a workflow reaches
+    /// the tool).
+    private func goToDestination(_ destination: HubDestination) {
+        #if os(iOS)
+        iosToolDestination = destination
+        #else
+        sidebarSelection = destination
+        #endif
     }
 
     private func personaHubDestination(for persona: PersonaManager.Persona) -> HubDestination {
@@ -1121,12 +1135,21 @@ struct ContentView: View {
                     }
                     .accessibilityLabel("Feature Guide")
                     if viewModel.isParsed {
+                        Button { showWorkCenter = true } label: {
+                            Image(systemName: "briefcase")
+                        }
+                        .accessibilityLabel("Work Center")
                         Button { appState.showAIAssistant = true } label: {
                             Image(systemName: "sparkles")
                         }
                         .accessibilityLabel("AI Assistant")
 
                         Menu {
+                            Section("Work") {
+                                Button { showWorkCenter = true } label: {
+                                    Label("Work Center — jobs, documents, reports", systemImage: "briefcase")
+                                }
+                            }
                             Section("Tools") {
                                 Button {
                                     if storeManager.requirePremium() {
@@ -1216,6 +1239,37 @@ struct ContentView: View {
                         onClose: { withAnimation { selectedEmailIDs = [] } },
                         searchText: modelVM.searchText
                     )
+                }
+            }
+            .sheet(isPresented: $showWorkCenter) {
+                NavigationStack {
+                    WorkCenterView(onOpenDestination: { destination in
+                        // Close Work Center first, then present the tool at the
+                        // root — otherwise the tool sheet would sit behind it.
+                        showWorkCenter = false
+                        Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 450_000_000)
+                            handleHubNavigation(destination)
+                        }
+                    })
+                    .navigationTitle("Work Center")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Done") { showWorkCenter = false }
+                        }
+                    }
+                }
+            }
+            .sheet(item: $iosToolDestination) { dest in
+                NavigationStack {
+                    hubDestinationView(for: dest)
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .topBarTrailing) {
+                                Button("Done") { iosToolDestination = nil }
+                            }
+                        }
                 }
             }
             .sheet(isPresented: $showFiltersSheet) {
