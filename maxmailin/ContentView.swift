@@ -1,47 +1,9 @@
 import SwiftUI
 import UniformTypeIdentifiers
-import StoreKit
 import TipKit
 #if os(macOS)
 import AppKit
 #endif
-
-// MARK: - Smart Review Prompt Manager
-
-enum ReviewPromptManager {
-    @AppStorage("reviewPrompt_importCount") static var importCount = 0
-    @AppStorage("reviewPrompt_lastPromptDate") static var lastReviewPromptDateStr = ""
-
-    static func recordImport() {
-        importCount += 1
-        checkAndPrompt()
-    }
-
-    static func checkAndPrompt() {
-        // Only prompt after 3+ successful imports
-        guard importCount >= 3 else { return }
-
-        // Don't prompt more than once per 90 days
-        let formatter = ISO8601DateFormatter()
-        if let lastDate = formatter.date(from: lastReviewPromptDateStr) {
-            let daysSince = Calendar.current.dateComponents([.day], from: lastDate, to: Date()).day ?? 0
-            if daysSince < 90 { return }
-        }
-
-        // Request review using platform-appropriate API
-        #if os(macOS)
-        SKStoreReviewController.requestReview()
-        #elseif os(iOS)
-        if let windowScene = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .first(where: { $0.activationState == .foregroundActive }) {
-            SKStoreReviewController.requestReview(in: windowScene)
-        }
-        #endif
-
-        lastReviewPromptDateStr = formatter.string(from: Date())
-    }
-}
 
 struct ContentView: View {
     @Environment(AppStateManager.self) var appState
@@ -4214,11 +4176,6 @@ private func handleMultipleFiles(_ urls: [URL]) {
                 #endif
                 AIAssistantView.invalidateNLPCache()
                 AIAssistantView.invalidateNLPPrecomputation()
-
-                // Record successful import and prompt for review if appropriate
-                if viewModel.totalParsedCount > 0 {
-                    ReviewPromptManager.recordImport()
-                }
             }
         }
         if autoDetectSender && viewModel.senderEmail.isEmpty && !defaultSenderEmail.isEmpty {
@@ -5770,14 +5727,6 @@ struct InvestigationReportConfigSheet: View {
                 let count = selectedEmailIDs.count
                 let title = reportTitle
                 let examiner = examinerName
-                let body = """
-                INVESTIGATION REPORT
-                Title: \(title)
-                Examiner: \(examiner.isEmpty ? "—" : examiner)
-                Emails analyzed: \(count)
-                Saved: \(Date().formatted(date: .abbreviated, time: .shortened))
-                Sections: title page · executive summary · email timeline · top contacts · category breakdown · evidence tags · flagged emails.
-                """
                 Task { await DocumentRegistry.captureStructured(.report,
                     summary: "Investigation Report: \(title) — \(count) emails",
                     document: CapturedDocument(title: title, sections: [

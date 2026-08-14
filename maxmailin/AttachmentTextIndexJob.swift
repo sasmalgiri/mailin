@@ -39,7 +39,7 @@ final class AttachmentTextIndexJob {
     private var runGeneration = 0
 
     /// Extracted text cap per attachment — plenty for search, never unbounded.
-    static let maxTextPerAttachment = 500_000
+    nonisolated static let maxTextPerAttachment = 500_000
 
     struct Outcome: Sendable, Equatable {
         var indexedEmails = 0

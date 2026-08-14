@@ -1,0 +1,68 @@
+mailin turns exported email into an organized, searchable, defensible case file — on your Mac. No account, no tracking.
+
+Import Gmail Takeout (.mbox), Apple Mail (.emlx), Outlook (.msg/.pst/.ost), Lotus Notes (.nsf), or .eml files and mailin builds a fast, structured archive you can search, analyze, and export.
+
+GUIDED JOBS, NOT JUST TOOLS
+Pick the job you came to do and mailin walks you through it step by step — saving your work as you go and producing a numbered document you can reopen, export to CSV, and pull into reports.
+- 47 built-in workflows across 5 roles: Forensic, Legal/eDiscovery, IT, Journalist, Personal
+- Auto-save, sequential step gates, sign-off, and who/when attestation
+- Attach the exact files and archive emails as evidence to each step
+- A numbered document trail (issue, notes, reversal) tied to a tamper-evident log
+
+SEARCH AND BROWSE
+- Full-text and structured search across subjects, senders, and body content
+- Conversation threading, smart filters (sender, domain, date, attachments, flagged, size)
+- Gmail label detection from Takeout
+- Command palette and a macOS menu-bar quick search
+
+ANALYSIS AND INSIGHTS
+- Analytics dashboard: volume timeline, top contacts, activity heatmap, attachment mix
+- Communication patterns, relationship/entity network graphs, topic clusters
+- Thread Story: a one-click narrative of any thread, grounded to only its emails
+- Duplicate and near-duplicate detection with a review pass
+- Anomaly detection and smart alerts for unusual senders, off-hours, and auth failures
+- PII detection and GDPR data-subject-access reporting with a redaction pass
+- Executive dashboard for a case-level KPI overview
+
+ON-DEVICE AI
+- AI assistant that cites the exact emails behind every answer and abstains when ungrounded
+- On-device by default via Apple Intelligence (macOS 26 and later); sentiment, topics, keywords, language detection
+- Optional weekly digest of your saved searches
+- An optional Cloud AI mode is opt-in and off by default, using your own provider key
+
+EXPORT
+- Per-email: EML, PDF, TIFF, MSG
+- Documents: Word, CSV, JSON, Markdown, plain text, MBOX, portable HTML viewer, vCard, ICS
+- Bates-stamped PDF and Concordance load files for legal production
+- Forensic reports with SHA-256 hashes and hash manifests
+- Bulk attachment download and redaction marking for safe sharing
+
+FORENSIC AND LEGAL
+- Tamper-evident, HMAC-chained audit log across every action
+- Chain of custody: acquire, hash, preserve, verify
+- Custodians and legal holds: issue, acknowledge, preserve, release
+- SPF, DKIM, and DMARC authentication analysis; MIME tree inspection
+- Cryptographically signed exports (Ed25519)
+
+PRIVATE BY DESIGN
+On-device by default. The developer collects nothing.
+- Zero analytics, zero tracking, zero third-party SDKs
+- Optional Face ID / Touch ID lock and App Sandbox with minimal permissions
+- Privacy Manifest declares no data collection by the developer
+
+Built natively with SwiftUI. Universal Purchase — buy once, use on iPhone, iPad, and Mac.
+
+SUBSCRIPTION INFORMATION
+mailin Personal — Monthly: USD 4.99 / month
+mailin Personal — Yearly: USD 44.99 / year (save 25%)
+mailin Personal — Lifetime: USD 99.99 one-time
+mailin Professional — Monthly: USD 9.99 / month
+mailin Professional — Yearly: USD 79.99 / year (save 33%)
+mailin Professional — Lifetime: USD 249.99 one-time
+Subscriptions auto-renew unless cancelled at least 24 hours before the end of the billing period. Payment is charged to your Apple ID at purchase confirmation. Manage subscriptions in System Settings > Apple ID > Subscriptions. Lifetime purchases are permanent and do not auto-renew.
+
+Terms of Use (EULA): https://www.apple.com/legal/internet-services/itunes/dev/stdeula/
+Privacy Policy: https://sasmalgiri.github.io/mailin/privacy/
+
+DISCLAIMER
+mailin augments your judgment; it does not make legal determinations for you. All software, including AI features, can produce inaccurate or incomplete results — always verify important outputs before relying on them. Forensic features (chain-of-custody, Bates numbering, signed exports, HMAC-chained audit logs) support common forensic and eDiscovery workflows, but the admissibility of digital evidence is jurisdiction-specific. Consult qualified legal counsel for evidentiary use. mailin makes no warranty of fitness for any specific legal or regulatory purpose.

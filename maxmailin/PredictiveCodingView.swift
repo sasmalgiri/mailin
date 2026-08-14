@@ -66,7 +66,6 @@ struct PredictiveCodingView: View {
         let rel = engine.relevantIDs.count
         let irr = engine.irrelevantIDs.count
         if rel + irr > 0 {
-            let body = "PREDICTIVE CODING (TAR) SESSION\nRelevant: \(rel)\nIrrelevant: \(irr)\nSeed set: \(rel + irr) documents\nDate: \(Date().formatted(date: .abbreviated, time: .shortened))"
             Task { await DocumentRegistry.captureStructured(.report,
                 summary: "Predictive coding — \(rel) relevant, \(irr) irrelevant",
                 document: CapturedDocument(title: "Predictive Coding (TAR)", sections: [

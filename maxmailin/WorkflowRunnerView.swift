@@ -45,8 +45,6 @@ struct WorkflowRunnerView: View {
     var onClose: (() -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.requestReview) private var requestReview
-    @AppStorage("askedForReview") private var askedForReview = false
     @State private var wfNumber: String = ""
     @State private var title: String = ""
     @State private var status: String = "open"
@@ -120,14 +118,6 @@ struct WorkflowRunnerView: View {
         }
         .toolWindowFrame()
         .task { await bootstrap() }
-        .onChange(of: completedNumber) { _, done in
-            // A finished job is a genuine positive moment — ask for a review
-            // once, ever. Apple throttles the actual prompt regardless.
-            if done != nil && !askedForReview {
-                askedForReview = true
-                requestReview()
-            }
-        }
         .sheet(isPresented: $showSummary) { summarySheet }
         .alert("Save as Variant", isPresented: $showSaveVariant) {
             TextField("Variant name", text: $variantName)

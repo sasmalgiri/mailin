@@ -82,12 +82,12 @@ struct ThreadKeyDeriver {
 /// one page resident at a time.
 @MainActor
 final class ArchiveThreadService {
-    static let shared = ArchiveThreadService(store: .shared)
+    nonisolated static let shared = ArchiveThreadService(store: .shared)
 
     private let store: SQLiteEmailStore
     private var backfillTask: Task<Void, Never>?
 
-    init(store: SQLiteEmailStore) { self.store = store }
+    nonisolated init(store: SQLiteEmailStore) { self.store = store }
 
     /// Derive + persist thread keys for every email that doesn't have one yet.
     /// Bounded batches (100–500), resumable (the work list is a LEFT JOIN on

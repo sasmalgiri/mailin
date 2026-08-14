@@ -21,13 +21,13 @@ import Foundation
 final class ArchiveDataService {
 
     /// Production instance over the activated SQLite store + FTS5.
-    static let shared = ArchiveDataService(
+    nonisolated static let shared = ArchiveDataService(
         repository: EmailStoreRepository(store: SQLiteEmailStore.shared, fts: .shared)
     )
 
     private let repository: any EmailRepository
 
-    init(repository: any EmailRepository) {
+    nonisolated init(repository: any EmailRepository) {
         self.repository = repository
     }
 

@@ -30,7 +30,11 @@ struct ImportLogEntry: Codable, Identifiable, Sendable {
 
 // MARK: - WatchFolderManager
 
-final class WatchFolderManager: ObservableObject {
+// Thread-safety is managed internally: `knownFiles` is guarded by `importQueue`
+// and all `@Published` state is mutated on the main actor. The `@unchecked`
+// conformance asserts that contract so the manager can be used from the
+// background file-watch closures.
+final class WatchFolderManager: ObservableObject, @unchecked Sendable {
     static let shared = WatchFolderManager()
 
     @Published var watchPath: URL? {

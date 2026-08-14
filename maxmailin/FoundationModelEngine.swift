@@ -1477,7 +1477,11 @@ struct FoundationModelEngine {
         provenanceBuilder.totalFindings = allFindings.count
         provenanceBuilder.highRelevanceCount = highCount
         provenanceBuilder.linkedFindings = linkedCount
-        provenanceBuilder.synthesisLayerCount = layerCount + (cloudExpertCount > 0 ? 1 : 0)
+        var synthesisLayers = layerCount
+        #if !OFFLINE_MODE
+        if cloudExpertCount > 0 { synthesisLayers += 1 }
+        #endif
+        provenanceBuilder.synthesisLayerCount = synthesisLayers
         provenanceBuilder.contextCharCount = synthesisContext.count
         provenanceBuilder.answerCharCount = finalContent.count
         provenanceBuilder.archiveHash = AIProvenance.hash(ofUUIDs: emails.map(\.id))
@@ -1492,7 +1496,7 @@ struct FoundationModelEngine {
             intent: intent,
             totalFindings: allFindings.count,
             highRelevanceCount: highCount,
-            layerCount: layerCount + (cloudExpertCount > 0 ? 1 : 0)
+            layerCount: synthesisLayers
         )
     }
 

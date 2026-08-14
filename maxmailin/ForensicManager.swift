@@ -673,7 +673,7 @@ class ForensicManager: ObservableObject {
                 md5: hash.md5, sha1: hash.sha1, sha256: hash.sha256, byteCount: hash.byteCount)
         }
         trimHashWindow(keeping: emails.map(\.id))
-        persistToStore("email hashes") { [store] in try await store.forensicHashUpsert(batch) }
+        persistToStore("email hashes") { [store, batch] in try await store.forensicHashUpsert(batch) }
     }
 
     func verifyEmailIntegrity(_ email: MBOXParser.RawEmail) -> (passed: Bool, detail: String) {

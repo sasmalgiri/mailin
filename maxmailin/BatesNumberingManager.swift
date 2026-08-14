@@ -304,7 +304,6 @@ struct BatesConfigView: View {
                     assignmentComplete = true
                     // Record a numbered document of this Bates run.
                     let n = emails.count
-                    let body = "BATES NUMBERING\nAssigned sequential Bates numbers to \(n) email\(n == 1 ? "" : "s")\nDate: \(Date().formatted(date: .abbreviated, time: .shortened))"
                     Task { await DocumentRegistry.captureStructured(.report,
                         summary: "Bates numbering — \(n) emails",
                         document: CapturedDocument(title: "Bates Numbering", sections: [

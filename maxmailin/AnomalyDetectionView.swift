@@ -355,7 +355,6 @@ struct AnomalyDetectionView: View {
             // numbered document, so opening the view doesn't spam the registry.
             if force {
                 let n = results.count
-                let body = "ANOMALY DETECTION\nRun: \(Date().formatted(date: .abbreviated, time: .shortened))\nAnomalies found: \(n)"
                 Task { await DocumentRegistry.captureStructured(.report,
                     summary: "Anomaly detection — \(n) anomalies",
                     document: CapturedDocument(title: "Anomaly Detection", sections: [

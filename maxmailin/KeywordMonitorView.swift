@@ -563,7 +563,6 @@ struct KeywordMonitorView: View {
                 // Record this keyword sweep as a numbered document.
                 let kwCount = keywordsCopy.count
                 let hitCount = results.count
-                let body = "KEYWORD SWEEP\nKeywords: \(kwCount)\nMatches: \(hitCount)\nDate: \(Date().formatted(date: .abbreviated, time: .shortened))"
                 Task { await DocumentRegistry.captureStructured(.report,
                     summary: "Keyword sweep — \(kwCount) terms, \(hitCount) matches",
                     document: CapturedDocument(title: "Keyword Sweep", sections: [

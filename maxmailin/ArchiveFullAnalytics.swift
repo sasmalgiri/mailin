@@ -29,7 +29,7 @@ final class ArchiveFullAnalyticsService {
 
     static let shared = ArchiveFullAnalyticsService(service: .shared)
 
-    static let defaultNLPCap = 5000
+    nonisolated static let defaultNLPCap = 5000
 
     private let service: ArchiveDataService
     init(service: ArchiveDataService) { self.service = service }
