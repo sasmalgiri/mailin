@@ -1,6 +1,6 @@
 mailin turns exported email into an organized, searchable, defensible case file — on your Mac. No account, no tracking.
 
-Import Gmail Takeout (.mbox), Apple Mail (.emlx), Outlook (.msg/.pst/.ost), Lotus Notes (.nsf), or .eml files and mailin builds a fast, structured archive you can search, analyze, and export.
+Import Gmail Takeout (.mbox), Apple Mail (.emlx), Outlook (.msg/.pst/.ost), Lotus Notes (.nsf), or .eml files and mailin builds a fast, structured archive.
 
 GUIDED JOBS, NOT JUST TOOLS
 Pick the job you came to do and mailin walks you through it step by step — saving your work as you go and producing a numbered document you can reopen, export to CSV, and pull into reports.
@@ -11,8 +11,7 @@ Pick the job you came to do and mailin walks you through it step by step — sav
 
 SEARCH AND BROWSE
 - Full-text and structured search across subjects, senders, and body content
-- Conversation threading, smart filters (sender, domain, date, attachments, flagged, size)
-- Gmail label detection from Takeout
+- Conversation threading, smart filters, and Gmail label detection from Takeout
 - Command palette and a macOS menu-bar quick search
 
 ANALYSIS AND INSIGHTS
@@ -22,20 +21,20 @@ ANALYSIS AND INSIGHTS
 - Duplicate and near-duplicate detection with a review pass
 - Anomaly detection and smart alerts for unusual senders, off-hours, and auth failures
 - PII detection and GDPR data-subject-access reporting with a redaction pass
-- Executive dashboard for a case-level KPI overview
+- Executive dashboard for a case-level overview
 
 ON-DEVICE AI
-- AI assistant that cites the exact emails behind every answer and abstains when ungrounded
-- On-device by default via Apple Intelligence (macOS 26 and later); sentiment, topics, keywords, language detection
+- AI assistant that cites the exact emails behind every answer
+- On-device via Apple Intelligence (macOS 26+); sentiment, topics, keywords, language detection
 - Optional weekly digest of your saved searches
-- An optional Cloud AI mode is opt-in and off by default, using your own provider key
+- Optional Cloud AI mode is opt-in and off by default, using your own provider key
 
 EXPORT
 - Per-email: EML, PDF, TIFF, MSG
-- Documents: Word, CSV, JSON, Markdown, plain text, MBOX, portable HTML viewer, vCard, ICS
-- Bates-stamped PDF and Concordance load files for legal production
-- Forensic reports with SHA-256 hashes and hash manifests
-- Bulk attachment download and redaction marking for safe sharing
+- Documents: Word, CSV, JSON, Markdown, plain text, MBOX, portable HTML, vCard, ICS
+- Bates-stamped PDF and Concordance load files
+- Forensic reports with SHA-256 hash manifests
+- Bulk attachment download and redaction marking
 
 FORENSIC AND LEGAL
 - Tamper-evident, HMAC-chained audit log across every action
@@ -47,8 +46,7 @@ FORENSIC AND LEGAL
 PRIVATE BY DESIGN
 On-device by default. The developer collects nothing.
 - Zero analytics, zero tracking, zero third-party SDKs
-- Optional Face ID / Touch ID lock and App Sandbox with minimal permissions
-- Privacy Manifest declares no data collection by the developer
+- Optional Face ID / Touch ID lock; App Sandbox with minimal permissions
 
 Built natively with SwiftUI. Universal Purchase — buy once, use on iPhone, iPad, and Mac.
 
@@ -65,4 +63,4 @@ Terms of Use (EULA): https://www.apple.com/legal/internet-services/itunes/dev/st
 Privacy Policy: https://sasmalgiri.github.io/mailin/privacy/
 
 DISCLAIMER
-mailin augments your judgment; it does not make legal determinations for you. All software, including AI features, can produce inaccurate or incomplete results — always verify important outputs before relying on them. Forensic features (chain-of-custody, Bates numbering, signed exports, HMAC-chained audit logs) support common forensic and eDiscovery workflows, but the admissibility of digital evidence is jurisdiction-specific. Consult qualified legal counsel for evidentiary use. mailin makes no warranty of fitness for any specific legal or regulatory purpose.
+mailin augments your judgment; it does not make legal determinations for you. AI features can produce inaccurate results — always verify important outputs. Forensic features support common forensic and eDiscovery workflows, but the admissibility of digital evidence is jurisdiction-specific; consult qualified legal counsel for evidentiary use. mailin makes no warranty of fitness for any specific legal or regulatory purpose.
