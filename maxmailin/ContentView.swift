@@ -4028,35 +4028,24 @@ private func handleMultipleFiles(_ urls: [URL]) {
         let response = panel.runModal()
         guard response == .OK, let url = panel.url else { return }
         runStreamingExport("Exporting PST") { service in
-            // KNOWN LIMITATION: the PST container writer builds the whole file
-            // in memory, so this export materializes an EXPLICITLY CAPPED
-            // array (ArchiveExportService.pstExportCap = PSTWriter's 5,000) —
-            // never unbounded. The cap is surfaced to the user below; larger
-            // sets should use the streaming EML/MSG exports.
-            let collected = try await service.collectForPST(
+            // Streams every message in scope straight to disk — no count
+            // cap; the PST format's own 50 GB ceiling is the only limit.
+            let count = try await service.exportPST(
                 scope: scope,
+                to: url,
                 onProgress: self.exportProgress)
-            let count = try PSTWriter.write(emails: collected.emails, to: url)
-            if collected.capped {
-                return "Exported first \(count) of \(collected.total) emails to PST (PST export is capped at \(ArchiveExportService.pstExportCap) messages — use EML or MSG for the full set)."
-            }
             return "Exported \(count) emails to PST."
         }
         #else
         let vm = viewModel
         ExportRunCenter.shared.run(title: "Exporting PST") {
             do {
-                // Same explicit cap as macOS (writer materializes in memory).
-                let collected = try await ArchiveExportService.shared.collectForPST(scope: scope)
-                let data = try PSTWriter.writeData(emails: collected.emails)
-                if let url = PlatformFileSaver.tempFileURL(name: "export.pst", data: data) {
-                    shareItems = [url]
-                    showShareSheet = true
-                }
-                if collected.capped {
-                    vm.statusMessage = "PST export capped at \(ArchiveExportService.pstExportCap) messages — use EML or MSG for the full set."
-                    vm.statusColor = .orange
-                }
+                let tmpURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("export.pst")
+                try? FileManager.default.removeItem(at: tmpURL)
+                _ = try await ArchiveExportService.shared.exportPST(scope: scope, to: tmpURL)
+                shareItems = [tmpURL]
+                showShareSheet = true
             } catch {
                 vm.statusMessage = "PST export failed: \(error.localizedDescription)"
                 vm.statusColor = .red

@@ -337,11 +337,11 @@ struct PSTReader {
     private func readMessage(node: NodeEntry, blockEntries: [UInt64: BlockEntry]) throws -> PSTMessage {
         var msg = PSTMessage()
 
-        guard let block = blockEntries[node.dataBid] else {
+        guard blockEntries[node.dataBid] != nil else {
             throw PSTError.blockNotFound
         }
 
-        let blockData = readBlockData(block)
+        let blockData = readNodeData(bid: node.dataBid, blockEntries: blockEntries)
         let properties = parsePropertyContext(blockData)
 
         // Core addressing
@@ -396,32 +396,52 @@ struct PSTReader {
 
     private func extractAttachments(for node: NodeEntry, blockEntries: [UInt64: BlockEntry], message: PSTMessage) throws -> PSTMessage {
         var msg = message
-        let attachTableNID = (node.nid & ~UInt32(0x1F)) | 0x0D
-        guard let attachNode = findSubnode(nid: attachTableNID, subBid: node.subBid, blockEntries: blockEntries) else {
-            return msg
-        }
-        guard let attachBlock = blockEntries[attachNode.dataBid] else { return msg }
-        let attachData = readBlockData(attachBlock)
-        let attachProps = parsePropertyContext(attachData)
+        // Every subnode entry whose nid type is 0x0D is an attachment
+        // property context. Iterating the table (rather than exact-matching
+        // one derived NID) supports any number of attachments per message.
+        for attachNode in subnodeEntries(subBid: node.subBid, blockEntries: blockEntries)
+        where (attachNode.nid & 0x1F) == 0x0D {
+            guard blockEntries[attachNode.dataBid] != nil else { continue }
+            let attachData = readNodeData(bid: attachNode.dataBid, blockEntries: blockEntries)
+            let attachProps = parsePropertyContext(attachData)
 
-        for (propID, binData) in attachProps.binaries {
-            if propID == 0x3701 {
-                let filename = attachProps.strings[0x3707] ?? attachProps.strings[0x3704] ?? "attachment"
-                let mimeType = attachProps.strings[0x370E] ?? "application/octet-stream"
-                let b64 = binData.base64EncodedString()
-                msg.attachments.append(AttachmentMetadata(
-                    filename: filename, mimeType: mimeType, size: binData.count,
-                    isInline: false, contentID: attachProps.strings[0x3712],
-                    base64: b64, fileURL: nil
-                ))
+            for (propID, binData) in attachProps.binaries {
+                if propID == 0x3701 {
+                    let filename = attachProps.strings[0x3707] ?? attachProps.strings[0x3704] ?? "attachment"
+                    let mimeType = attachProps.strings[0x370E] ?? "application/octet-stream"
+                    let b64 = binData.base64EncodedString()
+                    msg.attachments.append(AttachmentMetadata(
+                        filename: filename, mimeType: mimeType, size: binData.count,
+                        isInline: false, contentID: attachProps.strings[0x3712],
+                        base64: b64, fileURL: nil
+                    ))
+                }
             }
         }
         return msg
     }
 
+    /// All entries in a node's subnode table.
+    private func subnodeEntries(subBid: UInt64, blockEntries: [UInt64: BlockEntry]) -> [NodeEntry] {
+        guard subBid > 0, blockEntries[subBid] != nil else { return [] }
+        let subData = readNodeData(bid: subBid, blockEntries: blockEntries)
+        guard subData.count >= 8 else { return [] }
+        let entrySize = isUnicode ? 24 : 12
+        var offset = isUnicode ? 8 : 4
+        var entries: [NodeEntry] = []
+        while offset + entrySize <= subData.count {
+            let subNid = pstReadUInt32(subData, offset: offset)
+            let dataBid = isUnicode ? pstReadUInt64(subData, offset: offset + 8) : UInt64(pstReadUInt32(subData, offset: offset + 4))
+            let subSubBid = isUnicode ? pstReadUInt64(subData, offset: offset + 16) : UInt64(pstReadUInt32(subData, offset: offset + 8))
+            entries.append(NodeEntry(nid: subNid, dataBid: dataBid, subBid: subSubBid))
+            offset += entrySize
+        }
+        return entries
+    }
+
     private func findSubnode(nid: UInt32, subBid: UInt64, blockEntries: [UInt64: BlockEntry]) -> NodeEntry? {
-        guard subBid > 0, let block = blockEntries[subBid] else { return nil }
-        let subData = readBlockData(block)
+        guard subBid > 0, blockEntries[subBid] != nil else { return nil }
+        let subData = readNodeData(bid: subBid, blockEntries: blockEntries)
         guard subData.count >= 8 else { return nil }
         let entrySize = isUnicode ? 24 : 12
         var offset = isUnicode ? 8 : 4
@@ -438,6 +458,26 @@ struct PSTReader {
     }
 
     // MARK: - Block Data Reading
+
+    /// Materializes a node's full data. Blocks flagged internal (bid bit 1)
+    /// are XBLOCK/XXBLOCK data trees (MS-PST §2.2.2.8.3.2): a header
+    /// (btype 0x01, cLevel, cEnt, lcbTotal) followed by child bids whose
+    /// blocks are concatenated in order. Everything else is a plain block.
+    private func readNodeData(bid: UInt64, blockEntries: [UInt64: BlockEntry], depth: Int = 0) -> Data {
+        guard depth < 3, let block = blockEntries[bid] else { return Data() }
+        let raw = readBlockData(block)
+        guard (bid & 0x2) != 0, raw.count >= 8, raw[raw.startIndex] == 0x01 else {
+            return raw
+        }
+        let count = Int(pstReadUInt16(raw, offset: 2))
+        var out = Data()
+        for i in 0..<count {
+            let childBid = pstReadUInt64(raw, offset: 8 + i * 8)
+            guard childBid != 0 else { break }
+            out.append(readNodeData(bid: childBid, blockEntries: blockEntries, depth: depth + 1))
+        }
+        return out
+    }
 
     private func readBlockData(_ block: BlockEntry) -> Data {
         let offset = Int(block.offset)
@@ -484,7 +524,9 @@ struct PSTReader {
                 let strOffset = Int(valueRef)
                 if strOffset > 0 && strOffset < data.count {
                     let remaining = data[strOffset...]
-                    let maxLen = min(remaining.count, 4096)
+                    // Values written by mailin are NUL-terminated, so the
+                    // split below recovers the exact string at any length.
+                    let maxLen = remaining.count
                     if propType == 0x001F {
                         if let str = String(data: Data(remaining.prefix(maxLen)), encoding: .utf16LittleEndian) {
                             props.strings[propID] = str.components(separatedBy: "\0").first ?? str
@@ -500,8 +542,10 @@ struct PSTReader {
                 let valueRef = pstReadUInt32(data, offset: offset + 4)
                 let binOffset = Int(valueRef)
                 if binOffset > 0 && binOffset < data.count {
-                    let maxSize = min(data.count - binOffset, 10_485_760)
-                    props.binaries[propID] = Data(data[binOffset...].prefix(maxSize))
+                    // Binary values run to the end of the node data (one
+                    // binary per property context), bounded by the node
+                    // itself — no artificial size cap.
+                    props.binaries[propID] = Data(data[binOffset...])
                 }
             } else if propType == 0x0040 {
                 if offset + 12 <= data.count {

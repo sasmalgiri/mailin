@@ -706,27 +706,30 @@ final class ArchiveExportService {
         return (passed, failed, unverified)
     }
 
-    // MARK: - PST (explicitly capped materialization — known limitation)
+    // MARK: - PST (streaming, uncapped)
 
-    /// The PST container writer builds the whole file in memory (single-file
-    /// OST/PST B-tree layout), so it REQUIRES a materialized array. That
-    /// materialization is explicitly capped at `PSTWriter` limit (5,000) —
-    /// never unbounded — and the cap is surfaced to the user.
-    static let pstExportCap = 5_000
-
-    func collectForPST(scope: ArchiveSelectionScope,
-                       onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> (emails: [MBOXParser.RawEmail], capped: Bool, total: Int) {
+    /// Streams the whole scope into a PST file on disk. Memory stays bounded
+    /// (one batch + B-tree bookkeeping); message count is unlimited. The only
+    /// size ceiling is the PST format's own 50 GB, surfaced as an error.
+    func exportPST(scope: ArchiveSelectionScope,
+                   to url: URL,
+                   onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> Int {
         let total = try await archive.count(scope: scope)
-        var collected: [MBOXParser.RawEmail] = []
-        collected.reserveCapacity(min(total, Self.pstExportCap))
-        for try await batch in archive.streamSelected(scope: scope) {
-            try Task.checkCancellation()
-            for email in batch {
-                if collected.count >= Self.pstExportCap { return (collected, true, total) }
-                collected.append(email)
+        let writer = try PSTStreamWriter(url: url)
+        do {
+            var done = 0
+            for try await batch in archive.streamSelected(scope: scope) {
+                try Task.checkCancellation()
+                for email in batch {
+                    try writer.append(email: email)
+                    done += 1
+                }
+                onProgress?(done, total)
             }
-            onProgress?(collected.count, min(total, Self.pstExportCap))
+            return try writer.finalize()
+        } catch {
+            writer.abort()
+            throw error
         }
-        return (collected, total > collected.count, total)
     }
 }
