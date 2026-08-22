@@ -2,6 +2,7 @@ import SwiftUI
 
 struct WelcomeHubView: View {
     @ObservedObject private var personaManager = PersonaManager.shared
+    @EnvironmentObject private var storeManager: StoreManager
     var onOpenArchive: () -> Void
     var onBrowseFiles: () -> Void
 
@@ -116,6 +117,31 @@ struct WelcomeHubView: View {
             .buttonStyle(.plain)
             .sheet(isPresented: $showPersonaSwitcher) {
                 personaSwitcherSheet
+            }
+
+            // Discoverable upgrade entry — the paywall was previously only
+            // reachable via Settings, which App Review (and users) missed.
+            if storeManager.currentTier < .professional {
+                Button {
+                    storeManager.showPaywall = true
+                } label: {
+                    HStack(spacing: Spacing.xxSmall) {
+                        Image(systemName: "sparkles")
+                        Text(storeManager.currentTier == .free ? "Unlock Pro" : "Upgrade to Professional")
+                    }
+                    .font(Typography.caption1.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, Spacing.small)
+                    .padding(.vertical, Spacing.xxSmall)
+                    .background(
+                        LinearGradient(colors: [.blue, .purple],
+                                       startPoint: .leading, endPoint: .trailing)
+                    )
+                    .clipShape(Capsule())
+                    .shadow(color: .purple.opacity(0.3), radius: 6, y: 2)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Unlock Pro — view subscription options")
             }
 
             Text(personaManager.config.emptyStateMessage)
