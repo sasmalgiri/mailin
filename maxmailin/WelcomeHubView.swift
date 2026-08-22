@@ -185,7 +185,85 @@ struct WelcomeHubView: View {
             ForEach(Array(orderedCategories.enumerated()), id: \.element.title) { index, category in
                 featureCategorySection(category, index: index)
             }
+
+            if storeManager.currentTier < .professional {
+                inAppPurchasesSection
+            }
         }
+    }
+
+    // MARK: - In-App Purchases (visible section, matches category styling)
+
+    private var inAppPurchasesSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.small) {
+            HStack(spacing: Spacing.xSmall) {
+                Image(systemName: "crown")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.yellow)
+                Text("In-App Purchases")
+                    .font(Typography.headline)
+                Text("UPGRADE")
+                    .font(.system(.caption2, design: .rounded).weight(.bold))
+                    .foregroundColor(.purple)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.purple.opacity(0.12))
+                    .clipShape(Capsule())
+            }
+
+            LazyVGrid(columns: featureColumns, spacing: Spacing.xSmall) {
+                purchaseCard(icon: "person", color: .blue,
+                             name: "mailin Personal",
+                             tagline: "From $4.99/mo · lifetime available")
+                purchaseCard(icon: "briefcase", color: .purple,
+                             name: "mailin Professional",
+                             tagline: "From $9.99/mo · lifetime available")
+            }
+        }
+        .opacity(animateCards ? 1 : 0)
+        .offset(y: animateCards ? 0 : 12)
+        .animation(.easeOut(duration: 0.4).delay(0.24), value: animateCards)
+    }
+
+    private func purchaseCard(icon: String, color: Color, name: String, tagline: String) -> some View {
+        Button {
+            storeManager.showPaywall = true
+        } label: {
+            HStack(spacing: Spacing.xSmall) {
+                Image(systemName: icon)
+                    .font(.body)
+                    .foregroundStyle(color.gradient)
+                    .frame(width: 28, height: 28)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(name)
+                        .font(.system(.caption, design: .rounded).weight(.semibold))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+
+                    Text(tagline)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.right")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            .padding(Spacing.xSmall)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            #if os(iOS)
+            .background(Color(.secondarySystemGroupedBackground))
+            #else
+            .background(AppColors.backgroundSecondary.opacity(0.7))
+            #endif
+            .clipShape(RoundedRectangle(cornerRadius: CornerRadius.medium))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(name) — view purchase options")
     }
 
     private func featureCategorySection(_ category: FeatureCategory, index: Int) -> some View {
