@@ -214,10 +214,10 @@ struct WelcomeHubView: View {
             LazyVGrid(columns: featureColumns, spacing: Spacing.xSmall) {
                 purchaseCard(icon: "person", color: .blue,
                              name: "mailin Personal",
-                             tagline: "From $4.99/mo · lifetime available")
+                             tagline: "Monthly · yearly · lifetime")
                 purchaseCard(icon: "briefcase", color: .purple,
                              name: "mailin Professional",
-                             tagline: "From $9.99/mo · lifetime available")
+                             tagline: "All features · monthly, yearly, lifetime")
             }
         }
         .opacity(animateCards ? 1 : 0)
