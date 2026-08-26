@@ -115,8 +115,11 @@ Import, search, analyze, and export email archives from Gmail, Outlook, Thunderb
 
 ## Installation
 
-### Mac App Store
-> *Coming soon*
+### App Store
+**[Download mailin on the App Store](https://apps.apple.com/app/mailin/id6767245397)**
+
+Universal Purchase — one download covers iPhone, iPad and Mac.
+Requires iOS 17.6+ / macOS 14.6+. Free tier included, no signup.
 
 ### Build from Source
 
