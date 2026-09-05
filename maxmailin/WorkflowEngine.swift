@@ -1211,6 +1211,72 @@ enum WorkflowCatalog {
             ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
         ])
 
+    // MARK: - Researcher jobs (V3 Phase 5 — kalsmritikosh RES-01/07/08, INV-06)
+    // Shipped under the General Explorer persona until the dedicated
+    // Researcher persona lands; the jobs themselves are complete.
+
+    static let researchProtocol = WorkflowDefinition(
+        defID: "builtin.researcher.protocol", name: "Research Protocol",
+        persona: "general", builtin: true, operations: [
+            op(1, "question", "Research Question", "State the question this corpus should answer — the protocol persists with the record.", nil, launches: .emailInbox, [
+                f("question", "Question", .longText, "The question being investigated.", required: true),
+                f("scope", "Corpus scope", .text, "Which archives / senders / date range are in scope.", required: true),
+                f("dateBounds", "Date bounds", .text, "Earliest and latest dates considered.", placeholder: "e.g. 2019-01 to 2022-12"),
+            ]),
+            op(2, "method", "Method Plan", "Record how you will search, screen, and code — before you start.", nil, launches: .reasoningStudio, [
+                f("searchPlan", "Search plan", .longText, "Terms, operators, and saved searches you will run.", required: true),
+                f("criteria", "Include / exclude criteria", .longText, "What qualifies an email into the study.", required: true),
+            ], gates: afterPrevious(2)),
+            op(3, "protocolDoc", "Post Protocol", "Posts the protocol as a numbered document — the method is now on record.", .report, launches: .emailInbox, [
+                f("notes", "Protocol notes", .longText, "Anything future readers need to reproduce the study."),
+            ], gates: afterPrevious(3)),
+        ])
+
+    static let researcherScreening = WorkflowDefinition(
+        defID: "builtin.researcher.screening", name: "Screening (Include / Exclude)",
+        persona: "general", builtin: true, operations: [
+            op(1, "criteria", "Confirm Criteria", "Restate the include/exclude criteria from your protocol.", nil, launches: .emailInbox, [
+                f("criteria", "Criteria", .longText, "The rules that decide inclusion.", required: true),
+            ]),
+            op(2, "screen", "Screen the Corpus", "Search and tag: decisions are recorded, reversible, never silent.", nil, launches: .emailInbox, [
+                f("included", "Included", .number, "How many emails were screened in."),
+                f("excluded", "Excluded", .number, "How many were screened out."),
+                f("excludeReasons", "Exclusion reasons", .longText, "Why the excluded ones were excluded — recorded, not silent."),
+            ], gates: afterPrevious(2)),
+            op(3, "log", "Post Screening Log", "Posts the screening decisions as a numbered document.", .report, launches: .emailInbox, [
+                f("notes", "Notes", .longText, "Edge cases and judgment calls."),
+            ], gates: afterPrevious(3)),
+        ])
+
+    static let researcherCoding = WorkflowDefinition(
+        defID: "builtin.researcher.coding", name: "Extraction & Coding",
+        persona: "general", builtin: true, operations: [
+            op(1, "codebook", "Codebook", "Define the codes before coding — each code needs a definition.", nil, launches: .emailInbox, [
+                f("codes", "Codes & definitions", .longText, "One code per line with its meaning.", required: true),
+            ]),
+            op(2, "code", "Code the Passages", "Tag emails with codes; every coded passage cites its email.", nil, launches: .emailInbox, [
+                f("codedCount", "Emails coded", .number, "How many emails carry at least one code."),
+            ], gates: afterPrevious(2)),
+            op(3, "dataset", "Post Coded Dataset", "Posts the coded dataset summary as a numbered document; export CSV for analysis.", .report, launches: .emailInbox, [
+                f("export", "Exported to", .text, "Where the coded dataset was saved."),
+            ], gates: afterPrevious(3)),
+        ])
+
+    static let forensicEvidencePlan = WorkflowDefinition(
+        defID: "builtin.forensic.evidenceplan", name: "Evidence Collection Plan",
+        persona: "forensic", builtin: true, operations: [
+            op(1, "hypotheses", "Hypotheses & Gaps", "List what each hypothesis still lacks — start from your ACH matrix.", nil, launches: .achMatrix, [
+                f("gaps", "Evidence gaps", .longText, "What is missing, per hypothesis.", required: true),
+            ]),
+            op(2, "requests", "Evidence Requests", "One request per gap: source, custodian, and what it would show. Requests assert nothing.", nil, launches: .evidenceDesks, [
+                f("requests", "Requests", .longText, "Numbered requests linked to hypotheses.", required: true),
+                f("custodians", "Custodians involved", .text, "Who holds each requested item."),
+            ], gates: afterPrevious(2)),
+            op(3, "plan", "Post Collection Plan", "Posts the plan as a numbered document — never asserts the evidence exists.", .report, launches: .emailInbox, [
+                f("notes", "Notes", .longText, "Constraints, deadlines, legal considerations."),
+            ], gates: afterPrevious(3)),
+        ])
+
     static let all: [WorkflowDefinition] = [
         forensic, legal, itAdmin, journalist, personal,
         forensicTimeline, legalHold, legalECA, legalDSAR, itThreatHunt, journalistNetwork,
@@ -1223,6 +1289,7 @@ enum WorkflowCatalog {
         itQuarantine, itRules, itBlocklist, itDLP,
         journalistProvenance, journalistFOIA, journalistQuotes, journalistCrossRef,
         personalBackup, personalAttachments, personalContacts,
+        researchProtocol, researcherScreening, researcherCoding, forensicEvidencePlan,
     ]
 
     static func templates(for persona: String) -> [WorkflowDefinition] {
