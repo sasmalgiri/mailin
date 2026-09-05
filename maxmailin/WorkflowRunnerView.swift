@@ -260,6 +260,23 @@ struct WorkflowRunnerView: View {
             .background(Color.green.opacity(0.1))
             .cornerRadius(CornerRadius.small)
         }
+        // V3 Phase 4: the job's prohibited outcomes stand above every run —
+        // the record shows the examiner worked under these rules.
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(ProhibitedOutcomes.outcomes(for: definition.defID), id: \.self) { rule in
+                    Label(rule, systemImage: "hand.raised")
+                        .font(Typography.caption2)
+                        .foregroundColor(AppColors.secondary)
+                }
+            }
+            .padding(.top, 2)
+        } label: {
+            Label("What this job will never assert", systemImage: "hand.raised.fill")
+                .font(Typography.caption1)
+                .foregroundColor(AppColors.secondary)
+        }
+        .padding(.horizontal, Spacing.xSmall)
       }
       .padding(Spacing.medium)
     }

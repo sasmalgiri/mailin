@@ -41,8 +41,20 @@ final class CloudAIManager: ObservableObject {
         didSet { UserDefaults.standard.set(selectedModel, forKey: "cloudAIModel") }
     }
     @Published var isEnabled: Bool {
-        didSet { UserDefaults.standard.set(isEnabled, forKey: "cloudAIEnabled") }
+        didSet {
+            // E1 hard gate: a managed "disableCloudAI" policy wins over any
+            // UI toggle — the org's off is not user-overridable.
+            if isEnabled && ManagedConfig.disableCloudAI {
+                isEnabled = false
+                return
+            }
+            UserDefaults.standard.set(isEnabled, forKey: "cloudAIEnabled")
+        }
     }
+
+    /// True when MDM policy forbids cloud AI (used by Settings to explain
+    /// why the toggle is disabled).
+    var isDisabledByPolicy: Bool { ManagedConfig.disableCloudAI }
     @Published var preferCloudAI: Bool {
         didSet { UserDefaults.standard.set(preferCloudAI, forKey: "cloudAIPreferred") }
     }
@@ -53,7 +65,10 @@ final class CloudAIManager: ObservableObject {
         let providerRaw = UserDefaults.standard.string(forKey: "cloudAIProvider") ?? CloudAIProviderType.openAI.rawValue
         self.selectedProvider = CloudAIProviderType(rawValue: providerRaw) ?? .openAI
         self.selectedModel = UserDefaults.standard.string(forKey: "cloudAIModel") ?? CloudAIProviderType.openAI.defaultModel
-        self.isEnabled = UserDefaults.standard.bool(forKey: "cloudAIEnabled")
+        // E1 hard gate: managed installs with disableCloudAI start (and stay) off.
+        self.isEnabled = ManagedConfig.disableCloudAI
+            ? false
+            : UserDefaults.standard.bool(forKey: "cloudAIEnabled")
         self.preferCloudAI = UserDefaults.standard.bool(forKey: "cloudAIPreferred")
     }
 
@@ -87,7 +102,7 @@ final class CloudAIManager: ObservableObject {
     }
 
     var isReady: Bool {
-        isEnabled && hasAPIKey
+        !ManagedConfig.disableCloudAI && isEnabled && hasAPIKey
     }
 
     // MARK: - Chat Completion

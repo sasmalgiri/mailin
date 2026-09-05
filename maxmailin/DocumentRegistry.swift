@@ -108,6 +108,12 @@ enum DocumentRegistry {
     /// Structured capture — stores every field as typed key/value data (JSON),
     /// so the document opens as a spreadsheet-like table and can be exported to
     /// CSV / manipulated into custom reports. Maximum data fidelity.
+    ///
+    /// V3 Phase 4: every structured document is SEALED at capture — a
+    /// "Sealed Receipt" section is appended carrying the SHA-256 of the
+    /// document content (excluding the receipt itself) plus an Ed25519
+    /// signature and the public key, so any recipient can verify the
+    /// document was not altered after posting.
     @MainActor
     @discardableResult
     static func captureStructured(_ type: DocumentType, summary: String,
@@ -116,10 +122,62 @@ enum DocumentRegistry {
         let who = ForensicManager.shared.examinerName
         guard let number = try? await store.issueDocument(
             type: type.rawValue, summary: summary, refs: refs, createdBy: who) else { return nil }
+        let sealed = sealing(document, sealedBy: who)
         try? await store.attachDocumentPayload(number, contentType: "application/json",
-                                               body: document.jsonString())
+                                               body: sealed.jsonString())
         ForensicManager.shared.logAction("Document posted: \(number)", detail: summary)
         return number
+    }
+
+    // MARK: - Sealed receipts (V3 Phase 4)
+
+    static let receiptSectionName = "Sealed Receipt (Ed25519)"
+
+    /// Appends the tamper-evidence section. The seal covers the document
+    /// content WITHOUT the receipt section (verification strips it first).
+    @MainActor
+    static func sealing(_ document: CapturedDocument, sealedBy: String) -> CapturedDocument {
+        var doc = document
+        doc.sections.removeAll { $0.name == receiptSectionName }
+        guard let receipt = try? ReceiptSealer.seal(text: doc.jsonString(), sealedBy: sealedBy) else {
+            return doc  // sealing failure never blocks posting; the doc just has no receipt
+        }
+        let fmt = ISO8601DateFormatter()
+        doc.sections.append(.init(name: receiptSectionName, fields: [
+            .init(key: "SHA-256", value: receipt.sha256Hex),
+            .init(key: "Signature (Ed25519, base64)", value: receipt.signatureBase64),
+            .init(key: "Public key (base64)", value: receipt.publicKeyBase64),
+            .init(key: "Sealed at", value: fmt.string(from: receipt.sealedAt)),
+            .init(key: "Sealed by", value: receipt.sealedBy),
+            .init(key: "Covers", value: "this document excluding this section"),
+        ]))
+        return doc
+    }
+
+    /// Verifies a sealed document: strips the receipt section, re-serializes,
+    /// and checks digest + signature. Returns nil when the document carries
+    /// no receipt (pre-V3 documents).
+    @MainActor
+    static func verifyReceipt(of document: CapturedDocument) -> SealedReceipt.VerifyResult? {
+        guard let section = document.sections.first(where: { $0.name == receiptSectionName }) else {
+            return nil
+        }
+        func field(_ key: String) -> String? {
+            section.fields.first(where: { $0.key == key })?.value
+        }
+        guard let sha = field("SHA-256"),
+              let sig = field("Signature (Ed25519, base64)"),
+              let pub = field("Public key (base64)"),
+              let atString = field("Sealed at"),
+              let by = field("Sealed by"),
+              let at = ISO8601DateFormatter().date(from: atString) else {
+            return .malformed
+        }
+        var stripped = document
+        stripped.sections.removeAll { $0.name == receiptSectionName }
+        let receipt = SealedReceipt(sha256Hex: sha, signatureBase64: sig,
+                                    publicKeyBase64: pub, sealedAt: at, sealedBy: by)
+        return ReceiptSealer.verify(text: stripped.jsonString(), receipt: receipt)
     }
 }
 

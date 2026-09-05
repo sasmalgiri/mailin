@@ -16,8 +16,8 @@ Forensic,INV-15,Root-cause assessment,F1,ReasoningStudio (shared),Present,shippe
 Forensic,INV-16,CAPA register,F3,ActionRegisterStudio (shared),Present,shipped + behaviorally verified (cause + human-verify gates)
 Forensic,INV-17,Effectiveness review,F3,ActionRegisterStudio (shared),Present,shipped + behaviorally verified (cause + human-verify gates)
 Forensic,INV-18,Chain of custody,existing,ChainOfCustodyManager + custodyverify,Present,behaviorally verified (hold blocking)
-Forensic,INV-19,Investigation findings,F2+F5,affidavit + citation gate + receipt,Partial,gate + receipt in Phases 2/4
-Forensic,INV-20,Closure & export,F5,workflow closure + sealed receipt,Partial,receipt in Phase 4
+Forensic,INV-19,Investigation findings,F2+F5,affidavit workflow + prohibited outcomes + sealed doc,Present,receipts on all structured docs (Phase 4)
+Forensic,INV-20,Closure & export,F5,workflow closure + sealed receipts,Present,shipped Phase 4
 Legal,LAW-01,Matter intake,F2,legal intake + parties/issues,Partial,issues register in Phase 3
 Legal,LAW-02,Parties & issues,F3,custodians + issues register,Partial,Phase 3
 Legal,LAW-03,Case chronology,existing,timeline,Present,
@@ -65,7 +65,7 @@ Personal,IND-19,Why did this happen?,F1,ReasoningStudio (shared),Present,shipped
 Personal,IND-20,Fix-it list,F3,ActionRegisterStudio (shared),Present,shipped + behaviorally verified (cause + human-verify gates)
 Personal,IND-21,Did the fix work?,F3,ActionRegisterStudio (shared),Present,shipped + behaviorally verified (cause + human-verify gates)
 Personal,IND-22,Document vault,existing,attachment gallery + custody,Present,
-Personal,IND-23,Close a matter,F5,workflow closure,Partial,receipt Phase 4
+Personal,IND-23,Close a matter,F5,workflow closure + sealed receipts,Present,shipped Phase 4
 Researcher,RES-01,Research protocol,P5,builtin.researcher.protocol workflow,Present,shipped under General Explorer
 Researcher,RES-02,Corpus catalogue,P5,archive list + provenance,Partial,Phase 5
 Researcher,RES-07,Screening include/exclude,P5,builtin.researcher.screening workflow,Present,decisions recorded; exclusions never silent
@@ -73,4 +73,4 @@ Researcher,RES-08,Extraction & coding,P5,builtin.researcher.coding workflow,Pres
 Researcher,RES-09,Chronology & periodisation,P5,timeline + periods,Partial,Phase 5
 Researcher,RES-15,Ask the corpus,existing,AI assistant,Present,
 Researcher,RES-17,Causal analysis,F1,ReasoningStudio (shared),Present,shipped + behaviorally verified (cite-or-unknown + human root-cause gates)
-Researcher,RES-20,Matter closure,F5,workflow closure,Partial,Phase 4/5
+Researcher,RES-20,Matter closure,F5,workflow closure + sealed receipts,Present,shipped Phase 4

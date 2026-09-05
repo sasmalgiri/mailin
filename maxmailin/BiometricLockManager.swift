@@ -50,9 +50,14 @@ class BiometricLockManager: ObservableObject {
 
     // MARK: - Init
 
+    /// E1 policy: managed installs can force the lock on; the org's setting
+    /// wins over the user's toggle.
+    var isEffectivelyEnabled: Bool { isEnabled || ManagedConfig.requireBiometricLock }
+
     private init() {
         checkBiometricAvailability()
-        if isEnabled {
+        if ManagedConfig.requireBiometricLock { isEnabled = true }
+        if isEffectivelyEnabled {
             isLocked = true
         }
     }
@@ -152,7 +157,7 @@ class BiometricLockManager: ObservableObject {
     // MARK: - Lock
 
     func lock() {
-        guard isEnabled else {
+        guard isEffectivelyEnabled else {
             isLocked = false
             return
         }
@@ -161,7 +166,7 @@ class BiometricLockManager: ObservableObject {
     }
 
     func ensureUnlockedIfDisabled() {
-        if !isEnabled && isLocked {
+        if !isEffectivelyEnabled && isLocked {
             isLocked = false
             authError = nil
         }
