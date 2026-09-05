@@ -17,7 +17,7 @@ enum HubDestination: String, Hashable {
     case personaHub
     case reviewBatches, custodianPanel, workspaceManager
     case legalWorkspace, itAdminDashboard, journalistWorkbench, personalOrganizer, generalExplorer
-    case achMatrix
+    case achMatrix, factMatrix
     case settings
 
     /// The minimum subscription tier required to actually use this destination.
@@ -33,7 +33,7 @@ enum HubDestination: String, Hashable {
         case .eDiscovery, .predictiveCoding, .gdprCompliance, .chainOfCustody,
              .forensicReview, .investigationReport, .batesNumbering,
              .reviewBatches, .custodianPanel, .legalWorkspace, .iocExtractor,
-             .phishingTriage, .reviewDashboard, .achMatrix:
+             .phishingTriage, .reviewDashboard, .achMatrix, .factMatrix:
             return .professional
         // Personal — premium analytics, AI, automation
         default:
@@ -467,6 +467,7 @@ struct MainNavigationHubView: View {
         case .legal:
             return [
                 t(.legalWorkspace, "Privilege Review", "Code privilege & responsiveness", "building.columns", .indigo),
+                t(.factMatrix, "Fact–Evidence Matrix", "Facts vs supporting & opposing emails", "checklist.checked", .indigo),
                 t(.eDiscovery, "eDiscovery Workflow", "EDRM process", "checklist", .blue),
                 t(.batesNumbering, "Bates Numbering", "Production stamping", "number", .purple),
                 t(.gdprCompliance, "GDPR Compliance", "Data protection reports", "hand.raised", .green),
@@ -483,6 +484,7 @@ struct MainNavigationHubView: View {
         case .journalist:
             return [
                 t(.journalistWorkbench, "Source Tracking", "Sources & credibility", "newspaper", .purple),
+                t(.factMatrix, "Fact-Check Board", "Claims vs supporting & opposing evidence", "checklist.checked", .indigo),
                 t(.timeline, "Timeline Builder", "Event chronology", "calendar.day.timeline.left", .purple),
                 t(.communicationPatterns, "Network Mapping", "Contact connections", "person.2", .cyan),
                 t(.topicClusters, "Topic Discovery", "NLP clustering", "circle.grid.3x3", .teal),
@@ -545,6 +547,7 @@ struct MainNavigationHubView: View {
             t(.investigationReport, "Investigation Report", "Court-ready docs", "doc.text.magnifyingglass", .red),
             t(.batesNumbering, "Bates Numbers", "Document stamping", "number", .purple),
             t(.achMatrix, "Hypothesis Matrix", "ACH evidence scoring", "tablecells.badge.ellipsis", .purple),
+            t(.factMatrix, "Fact–Evidence Matrix", "Facts vs evidence, both sides", "checklist.checked", .indigo),
             t(.reviewBatches, "Review Batches", "Batch workflow", "list.bullet.rectangle", .mint),
             t(.reviewDashboard, "Review Dashboard", "Progress & privilege log", "chart.bar.doc.horizontal", .indigo),
             t(.custodianPanel, "Custodian Panel", "Data custodians", "person.badge.key", .cyan),

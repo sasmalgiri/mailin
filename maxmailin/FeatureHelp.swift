@@ -39,6 +39,7 @@ extension HubDestination {
         case .nearDuplicates:       return "Find emails that are almost identical."
 
         case .achMatrix:            return "Score competing hypotheses against email evidence — ranked by fewest inconsistencies, decided by you."
+        case .factMatrix:           return "Map each contested fact to the emails that support or oppose it — both sides preserved."
         case .eDiscovery:           return "Legal discovery workflow — review and produce documents."
         case .predictiveCoding:     return "AI-assisted document review that learns from your tagging."
         case .forensicReview:       return "Court-ready evidence coding and integrity verification."

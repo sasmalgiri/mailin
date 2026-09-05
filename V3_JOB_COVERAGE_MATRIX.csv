@@ -21,7 +21,7 @@ Forensic,INV-20,Closure & export,F5,workflow closure + sealed receipt,Partial,re
 Legal,LAW-01,Matter intake,F2,legal intake + parties/issues,Partial,issues register in Phase 3
 Legal,LAW-02,Parties & issues,F3,custodians + issues register,Partial,Phase 3
 Legal,LAW-03,Case chronology,existing,timeline,Present,
-Legal,LAW-04,Fact-evidence matrix,F2,Fact-Evidence Matrix studio,Absent,Phase 2
+Legal,LAW-04,Fact-evidence matrix,F2,FactEvidenceMatrixStudio (Legal + Journalist tiles),Present,shipped + behaviorally verified (statuses + gate)
 Legal,LAW-05,Witness profiles,F2,entity dossier,Partial,cited dossier Phase 2
 Legal,LAW-06,Document coding,existing,tags + review batches + TAR,Present,TAR gold case pending
 Legal,LAW-07,Privilege log,existing,legal.privqc + production log,Present,
@@ -37,7 +37,7 @@ Legal,LAW-20,Remediation register,F3,shared CAPA register,Absent,Phase 3
 Legal,LAW-21,Remediation effectiveness,F3,shared register,Absent,Phase 3
 Legal,LAW-22,Matter closure & reopen,F5,closure + reopen history,Partial,Phase 4
 Journalist,JRN-01,Story intake,existing,journalist.story,Present,
-Journalist,JRN-02,Fact-check board,F2,cited claim board,Partial,citations + gate Phase 2
+Journalist,JRN-02,Fact-check board,F2,FactEvidenceMatrixStudio (journalist tile),Present,same studio; claims cite emails; both sides preserved
 Journalist,JRN-03,Source map,existing,journalist.network,Present,
 Journalist,JRN-04,Source reliability,F4,Admiralty grid,Absent,Phase 3
 Journalist,JRN-06,Quote book,existing,journalist.quotes,Present,
