@@ -17,11 +17,11 @@ claim must pass a behavioral check. Results of this round:
 | 3 | Bates numbering | 5 emails → MAILIN000001–000005 sequential; CSV index with 7 std columns | ✅ PASS |
 | 4 | Concordance load file | Generated DAT: þ-delimited, 13 standard fields (DOCID…CUSTODIAN,TAG), row/header parity | ✅ PASS |
 | 5 | Legal hold blocks deletion | Held 1 of 3, attempted delete of all → held email blocked | ✅ PASS |
-| 6 | Person redaction (GDPR/share-safely) | Redact "Priya Sharma"/address → **standalone first name "Priya" LEAKED** | ❌ **DEFECT** |
-| 7 | S/MIME verification | Not yet behaviorally checked (needs a signed sample email) | ⬜ TODO |
-| 8 | Predictive coding ranking quality | Not yet behaviorally checked (needs labeled gold set) | ⬜ TODO |
-| 9 | Bates-stamped PDF (stamp visible on page) | Not yet behaviorally checked (PDFKit read-back) | ⬜ TODO |
-| 10 | Anomaly detection statistics | Not yet behaviorally checked (synthetic spike corpus) | ⬜ TODO |
+| 6 | Person redaction (GDPR/share-safely) | Leak found → FIXED (token rules + case-insensitive + LAW-14 validator); re-verified: original text, lowercase text, dirty output all correct | ✅ PASS (was ❌, fixed 81c7184) |
+| 7 | S/MIME verification | Needs a signed sample email — gold-case work | ⬜ DEFERRED to gold cases |
+| 8 | Predictive coding ranking quality | Attempted in-process; snippet host blocks the main actor the trainer publishes on (harness deadlock, not an engine defect — training loop confirmed started). Needs an XCTest async host | ⬜ DEFERRED to gold cases (XCTest) |
+| 9 | Bates-stamped PDF (stamp visible on page) | Stamping is drawn in the page header inside the export path (EmailDetailView.exportBatesStampedPDF); full PDFKit read-back deferred to gold-case UI test | 🟡 code-path verified |
+| 10 | Anomaly detection statistics | Synthetic corpora: frequency spike ✅, unusual-hours ✅ (fires >5 late-night), new-domain ✅ at realistic scale (recent window = last 10%, needs ≥3 — cannot fire on tiny corpora, documented calibration) | ✅ PASS |
 | 11 | PST/EML/MSG export round-trips | ✅ Done in 2.0.1 cycle (write → re-parse → byte-compare) | ✅ PASS |
 
 **Defect V3-D1 (fix in 2.0.x, before v3):** `RedactionEngine.personRedactionRules` covers

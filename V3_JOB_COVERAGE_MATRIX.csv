@@ -1,0 +1,76 @@
+Persona,JobID,JobName,V3Family,MailinSurface,Status,Notes
+Forensic,INV-01,Case intake & scope,existing,builtin.forensic.intake workflow,Present,
+Forensic,INV-02,Subject workup,F2,entity graph + search,Partial,needs cited dossier (locators)
+Forensic,INV-03,Identity resolution,existing,EntityResolver reversible merge,Present,
+Forensic,INV-04,Brainstorm board,F1,Reasoning Studio,Absent,Phase 1b
+Forensic,INV-05,5W1H worksheet,F1,Reasoning Studio,Absent,Phase 1b
+Forensic,INV-06,Evidence collection plan,F3,request register,Absent,Phase 3
+Forensic,INV-07,Hypothesis matrix (ACH),F1,ACH Matrix studio,Absent,Phase 1 headline
+Forensic,INV-08,Source reliability,F4,Admiralty grid seeded from SPF/DKIM,Absent,Phase 3
+Forensic,INV-09,Investigation timeline,F2,EmailTimelineView + forensic.timeline,Partial,undated labels + row locators
+Forensic,INV-10,Relationship graph,existing,RelationshipGraphView,Present,
+Forensic,INV-12,Contradiction & gap desk,F4,desk,Absent,Phase 3
+Forensic,INV-13,Five Whys,F1,Reasoning Studio,Absent,Phase 1b
+Forensic,INV-14,Fishbone,F1,Reasoning Studio,Absent,Phase 1b
+Forensic,INV-15,Root-cause assessment,F1,Reasoning Studio human-gated,Absent,Phase 1b
+Forensic,INV-16,CAPA register,F3,shared register,Absent,Phase 3
+Forensic,INV-17,Effectiveness review,F3,shared register,Absent,Phase 3
+Forensic,INV-18,Chain of custody,existing,ChainOfCustodyManager + custodyverify,Present,behaviorally verified (hold blocking)
+Forensic,INV-19,Investigation findings,F2+F5,affidavit + citation gate + receipt,Partial,gate + receipt in Phases 2/4
+Forensic,INV-20,Closure & export,F5,workflow closure + sealed receipt,Partial,receipt in Phase 4
+Legal,LAW-01,Matter intake,F2,legal intake + parties/issues,Partial,issues register in Phase 3
+Legal,LAW-02,Parties & issues,F3,custodians + issues register,Partial,Phase 3
+Legal,LAW-03,Case chronology,existing,timeline,Present,
+Legal,LAW-04,Fact-evidence matrix,F2,Fact-Evidence Matrix studio,Absent,Phase 2
+Legal,LAW-05,Witness profiles,F2,entity dossier,Partial,cited dossier Phase 2
+Legal,LAW-06,Document coding,existing,tags + review batches + TAR,Present,TAR gold case pending
+Legal,LAW-07,Privilege log,existing,legal.privqc + production log,Present,
+Legal,LAW-12,Exhibit list & binder,existing,forensic.exhibit + Bates,Present,Bates behaviorally verified
+Legal,LAW-13,Document production,existing,legal.production + Concordance DAT,Present,DAT format behaviorally verified
+Legal,LAW-14,Redaction validation,done,RedactionEngine.validateRedaction,Present,shipped 81c7184
+Legal,LAW-15,Ask the case file,existing,grounded AI assistant,Present,
+Legal,LAW-16,Method workbench,F1,Reasoning Studio,Absent,Phase 1b
+Legal,LAW-17,Party & alias resolution,existing,EntityResolver,Present,
+Legal,LAW-18,Source reliability desk,F4,Admiralty grid,Absent,Phase 3
+Legal,LAW-19,Causation analysis,F1,Reasoning Studio,Absent,Phase 1b
+Legal,LAW-20,Remediation register,F3,shared CAPA register,Absent,Phase 3
+Legal,LAW-21,Remediation effectiveness,F3,shared register,Absent,Phase 3
+Legal,LAW-22,Matter closure & reopen,F5,closure + reopen history,Partial,Phase 4
+Journalist,JRN-01,Story intake,existing,journalist.story,Present,
+Journalist,JRN-02,Fact-check board,F2,cited claim board,Partial,citations + gate Phase 2
+Journalist,JRN-03,Source map,existing,journalist.network,Present,
+Journalist,JRN-04,Source reliability,F4,Admiralty grid,Absent,Phase 3
+Journalist,JRN-06,Quote book,existing,journalist.quotes,Present,
+Journalist,JRN-08,Tick-tock timeline,existing,timeline,Present,
+Journalist,JRN-09,Fact verification,F2,crossref + citation gate,Partial,Phase 2
+Journalist,JRN-10,Open questions,F4,gap register,Absent,Phase 3
+Journalist,JRN-12,Publication decision,F2+F5,publish workflow + enforced gate,Partial,gate Phase 2
+Journalist,JRN-14,Publication package,existing,datapack + publish exports,Present,
+Journalist,JRN-15,Ask the story file,existing,AI assistant,Present,
+Journalist,JRN-16,Method workbench,F1,Reasoning Studio,Absent,Phase 1b
+Journalist,JRN-18,Who's who resolution,existing,EntityResolver,Present,
+Journalist,JRN-19,Causal analysis,F1,Reasoning Studio,Absent,Phase 1b
+Journalist,JRN-20,Source-document vault,existing,provenance + attachments + custody,Present,
+Journalist,JRN-21,Correction actions,F3,shared CAPA register,Absent,Phase 3
+Journalist,JRN-22,Correction effectiveness,F3,shared register,Absent,Phase 3
+Personal,IND-08,Applications & cases,existing,personal.findexport,Present,
+Personal,IND-09,Dates & renewals,existing,saved-search digest,Partial,renewal extraction later
+Personal,IND-11,Share safely (redacted),done,redaction + LAW-14 validator,Present,leak fixed 81c7184
+Personal,IND-12,Personal chronology,existing,timeline,Present,
+Personal,IND-14,Ask my records,existing,AI assistant,Present,
+Personal,IND-15,Guided methods,F1,Reasoning Studio (personal vocabulary),Absent,Phase 1b
+Personal,IND-16,Name & alias resolution,existing,EntityResolver,Present,
+Personal,IND-18,Conflicts & gaps,F4,desk (personal vocabulary),Absent,Phase 3
+Personal,IND-19,Why did this happen?,F1,Reasoning Studio,Absent,Phase 1b
+Personal,IND-20,Fix-it list,F3,shared register,Absent,Phase 3
+Personal,IND-21,Did the fix work?,F3,shared register,Absent,Phase 3
+Personal,IND-22,Document vault,existing,attachment gallery + custody,Present,
+Personal,IND-23,Close a matter,F5,workflow closure,Partial,receipt Phase 4
+Researcher,RES-01,Research protocol,P5,new workflow,Absent,Phase 5
+Researcher,RES-02,Corpus catalogue,P5,archive list + provenance,Partial,Phase 5
+Researcher,RES-07,Screening include/exclude,P5,new workflow + review batches,Absent,Phase 5
+Researcher,RES-08,Extraction & coding,P5,tags + new workflow,Absent,Phase 5
+Researcher,RES-09,Chronology & periodisation,P5,timeline + periods,Partial,Phase 5
+Researcher,RES-15,Ask the corpus,existing,AI assistant,Present,
+Researcher,RES-17,Causal analysis,F1,Reasoning Studio,Absent,Phase 1b
+Researcher,RES-20,Matter closure,F5,workflow closure,Partial,Phase 4/5
