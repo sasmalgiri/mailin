@@ -6,10 +6,10 @@ Forensic,INV-04,Brainstorm board,F1,Reasoning Studio,Absent,Phase 1b
 Forensic,INV-05,5W1H worksheet,F1,Reasoning Studio,Absent,Phase 1b
 Forensic,INV-06,Evidence collection plan,F3,request register,Absent,Phase 3
 Forensic,INV-07,Hypothesis matrix (ACH),F1,ACHMatrixStudio (hub: Forensic + Legal tiles),Present,shipped + behaviorally verified (ranking + gates)
-Forensic,INV-08,Source reliability,F4,Admiralty grid seeded from SPF/DKIM,Absent,Phase 3
+Forensic,INV-08,Source reliability,F4,EvidenceDesksStudio (shared),Present,shipped + behaviorally verified (seeder + gates)
 Forensic,INV-09,Investigation timeline,F2,EmailTimelineView + forensic.timeline,Partial,undated labels + row locators
 Forensic,INV-10,Relationship graph,existing,RelationshipGraphView,Present,
-Forensic,INV-12,Contradiction & gap desk,F4,desk,Absent,Phase 3
+Forensic,INV-12,Contradiction & gap desk,F4,EvidenceDesksStudio (shared),Present,shipped + behaviorally verified (seeder + gates)
 Forensic,INV-13,Five Whys,F1,Reasoning Studio,Absent,Phase 1b
 Forensic,INV-14,Fishbone,F1,Reasoning Studio,Absent,Phase 1b
 Forensic,INV-15,Root-cause assessment,F1,Reasoning Studio human-gated,Absent,Phase 1b
@@ -31,7 +31,7 @@ Legal,LAW-14,Redaction validation,done,RedactionEngine.validateRedaction,Present
 Legal,LAW-15,Ask the case file,existing,grounded AI assistant,Present,
 Legal,LAW-16,Method workbench,F1,Reasoning Studio,Absent,Phase 1b
 Legal,LAW-17,Party & alias resolution,existing,EntityResolver,Present,
-Legal,LAW-18,Source reliability desk,F4,Admiralty grid,Absent,Phase 3
+Legal,LAW-18,Source reliability desk,F4,EvidenceDesksStudio (shared),Present,shipped + behaviorally verified (seeder + gates)
 Legal,LAW-19,Causation analysis,F1,Reasoning Studio,Absent,Phase 1b
 Legal,LAW-20,Remediation register,F3,ActionRegisterStudio (shared),Present,shipped + behaviorally verified (cause + human-verify gates)
 Legal,LAW-21,Remediation effectiveness,F3,ActionRegisterStudio (shared),Present,shipped + behaviorally verified (cause + human-verify gates)
@@ -39,11 +39,11 @@ Legal,LAW-22,Matter closure & reopen,F5,closure + reopen history,Partial,Phase 4
 Journalist,JRN-01,Story intake,existing,journalist.story,Present,
 Journalist,JRN-02,Fact-check board,F2,FactEvidenceMatrixStudio (journalist tile),Present,same studio; claims cite emails; both sides preserved
 Journalist,JRN-03,Source map,existing,journalist.network,Present,
-Journalist,JRN-04,Source reliability,F4,Admiralty grid,Absent,Phase 3
+Journalist,JRN-04,Source reliability,F4,EvidenceDesksStudio (shared),Present,shipped + behaviorally verified (seeder + gates)
 Journalist,JRN-06,Quote book,existing,journalist.quotes,Present,
 Journalist,JRN-08,Tick-tock timeline,existing,timeline,Present,
 Journalist,JRN-09,Fact verification,F2,crossref + citation gate,Partial,Phase 2
-Journalist,JRN-10,Open questions,F4,gap register,Absent,Phase 3
+Journalist,JRN-10,Open questions,F4,EvidenceDesksStudio (shared),Present,shipped + behaviorally verified (seeder + gates)
 Journalist,JRN-12,Publication decision,F2+F5,publish workflow + enforced gate,Partial,gate Phase 2
 Journalist,JRN-14,Publication package,existing,datapack + publish exports,Present,
 Journalist,JRN-15,Ask the story file,existing,AI assistant,Present,
@@ -60,7 +60,7 @@ Personal,IND-12,Personal chronology,existing,timeline,Present,
 Personal,IND-14,Ask my records,existing,AI assistant,Present,
 Personal,IND-15,Guided methods,F1,Reasoning Studio (personal vocabulary),Absent,Phase 1b
 Personal,IND-16,Name & alias resolution,existing,EntityResolver,Present,
-Personal,IND-18,Conflicts & gaps,F4,desk (personal vocabulary),Absent,Phase 3
+Personal,IND-18,Conflicts & gaps,F4,EvidenceDesksStudio (shared),Present,shipped + behaviorally verified (seeder + gates)
 Personal,IND-19,Why did this happen?,F1,Reasoning Studio,Absent,Phase 1b
 Personal,IND-20,Fix-it list,F3,ActionRegisterStudio (shared),Present,shipped + behaviorally verified (cause + human-verify gates)
 Personal,IND-21,Did the fix work?,F3,ActionRegisterStudio (shared),Present,shipped + behaviorally verified (cause + human-verify gates)

@@ -17,7 +17,7 @@ enum HubDestination: String, Hashable {
     case personaHub
     case reviewBatches, custodianPanel, workspaceManager
     case legalWorkspace, itAdminDashboard, journalistWorkbench, personalOrganizer, generalExplorer
-    case achMatrix, factMatrix, actionRegister
+    case achMatrix, factMatrix, actionRegister, evidenceDesks
     case settings
 
     /// The minimum subscription tier required to actually use this destination.
@@ -33,7 +33,8 @@ enum HubDestination: String, Hashable {
         case .eDiscovery, .predictiveCoding, .gdprCompliance, .chainOfCustody,
              .forensicReview, .investigationReport, .batesNumbering,
              .reviewBatches, .custodianPanel, .legalWorkspace, .iocExtractor,
-             .phishingTriage, .reviewDashboard, .achMatrix, .factMatrix:
+             .phishingTriage, .reviewDashboard, .achMatrix, .factMatrix,
+             .evidenceDesks:
             return .professional
         // Personal — premium analytics, AI, automation
         default:
@@ -553,6 +554,7 @@ struct MainNavigationHubView: View {
             t(.reviewDashboard, "Review Dashboard", "Progress & privilege log", "chart.bar.doc.horizontal", .indigo),
             t(.custodianPanel, "Custodian Panel", "Data custodians", "person.badge.key", .cyan),
             t(.actionRegister, "Action Register", "CAPA / remediation, verified closes", "checkmark.rectangle.stack", .green),
+            t(.evidenceDesks, "Evidence Desks", "Source reliability · contradictions · gaps", "scalemass", .teal),
             t(.redaction, "Redaction", "PII / source protection", "eye.slash", .gray),
         ])
     }

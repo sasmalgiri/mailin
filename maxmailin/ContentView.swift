@@ -734,7 +734,8 @@ struct ContentView: View {
             openSettingsAction()
         case .eDiscovery, .predictiveCoding, .gdprCompliance, .chainOfCustody,
              .forensicReview, .investigationReport, .batesNumbering,
-             .reviewBatches, .custodianPanel, .legalWorkspace, .achMatrix, .factMatrix:
+             .reviewBatches, .custodianPanel, .legalWorkspace, .achMatrix, .factMatrix,
+             .evidenceDesks:
             if storeManager.requireProfessional() { goToDestination(destination) }
         case .iocExtractor, .phishingTriage, .reviewDashboard:
             if storeManager.requireProfessional() { goToDestination(destination) }
@@ -806,6 +807,10 @@ struct ContentView: View {
         case .actionRegister:
             ActionRegisterStudioView()
                 .navigationTitle("Action Register")
+
+        case .evidenceDesks:
+            hubWorkingSet { EvidenceDesksStudioView(workingSet: $0) }
+                .navigationTitle("Evidence Desks")
 
         case .eDiscovery:
             hubWorkingSet { EDiscoveryWorkflowView(emails: $0) }
