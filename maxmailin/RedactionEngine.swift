@@ -80,6 +80,14 @@ struct RedactionEngine {
             }
         }
 
+        // V3-D1: standalone name tokens ("Priya will bring it.") previously
+        // survived redaction. Redact each name part on its own — over-redaction
+        // is the safe failure mode for a privacy feature; a leaked name is not.
+        for part in parts where part.count >= 2 {
+            let token = NSRegularExpression.escapedPattern(for: part)
+            rules.append(RedactionRule(type: .person, pattern: "\\b\(token)\\b", replacement: replacement, isEnabled: true))
+        }
+
         if let emailAddr = email, !emailAddr.isEmpty {
             let escapedEmail = NSRegularExpression.escapedPattern(for: emailAddr)
             rules.append(RedactionRule(type: .person, pattern: escapedEmail, replacement: "[REDACTED EMAIL]", isEnabled: true))
@@ -168,7 +176,9 @@ struct RedactionEngine {
         var totalCount = 0
 
         for rule in rules where rule.isEnabled {
-            guard let regex = try? NSRegularExpression(pattern: rule.pattern, options: []) else {
+            // V3-D1: patterns must be case-insensitive — "priya sharma" in a
+            // body must not slip past a "Priya Sharma" rule.
+            guard let regex = try? NSRegularExpression(pattern: rule.pattern, options: [.caseInsensitive]) else {
                 redactionLog.warning("Invalid regex pattern for rule \(rule.type.rawValue): \(rule.pattern)")
                 continue
             }
@@ -210,6 +220,36 @@ struct RedactionEngine {
     /// Redact a batch of emails.
     static func redactBatch(emails: [MBOXParser.RawEmail], rules: [RedactionRule]) -> [RedactedEmail] {
         emails.map { redactEmail($0, rules: rules) }
+    }
+
+    // MARK: - Redaction Validation (LAW-14)
+
+    /// Independent post-redaction check: re-scans OUTPUT text for target
+    /// terms. Returns the terms still present (case-insensitive), so a
+    /// production/export can be blocked until the output is actually clean.
+    /// This is deliberately not the rule engine — a second pair of eyes.
+    static func validateRedaction(text: String, targets: [String]) -> [String] {
+        let lowered = text.lowercased()
+        return targets
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && $0.count >= 2 }
+            .filter { lowered.contains($0.lowercased()) }
+    }
+
+    /// Validates a redacted email against a person's identifiers (full name,
+    /// each name part, email address, address local part). Empty result =
+    /// clean; non-empty = leaked terms that must block the export.
+    static func validatePersonRedaction(_ redacted: RedactedEmail, name: String, email: String? = nil) -> [String] {
+        var targets = [name]
+        targets.append(contentsOf: name.components(separatedBy: .whitespaces).filter { $0.count >= 2 })
+        if let email, !email.isEmpty {
+            targets.append(email)
+            if let local = email.split(separator: "@").first, local.count >= 2 {
+                targets.append(String(local))
+            }
+        }
+        let combined = [redacted.subject, redacted.from, redacted.to, redacted.body].joined(separator: "\n")
+        return Array(Set(validateRedaction(text: combined, targets: targets))).sorted()
     }
 
     // MARK: - Redaction Log Export
