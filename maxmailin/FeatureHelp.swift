@@ -40,6 +40,7 @@ extension HubDestination {
 
         case .achMatrix:            return "Score competing hypotheses against email evidence — ranked by fewest inconsistencies, decided by you."
         case .factMatrix:           return "Map each contested fact to the emails that support or oppose it — both sides preserved."
+        case .actionRegister:       return "Track corrective actions to their causes; closing requires a named human verifier with evidence."
         case .eDiscovery:           return "Legal discovery workflow — review and produce documents."
         case .predictiveCoding:     return "AI-assisted document review that learns from your tagging."
         case .forensicReview:       return "Court-ready evidence coding and integrity verification."

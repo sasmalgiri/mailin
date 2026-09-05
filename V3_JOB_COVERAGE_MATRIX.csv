@@ -13,8 +13,8 @@ Forensic,INV-12,Contradiction & gap desk,F4,desk,Absent,Phase 3
 Forensic,INV-13,Five Whys,F1,Reasoning Studio,Absent,Phase 1b
 Forensic,INV-14,Fishbone,F1,Reasoning Studio,Absent,Phase 1b
 Forensic,INV-15,Root-cause assessment,F1,Reasoning Studio human-gated,Absent,Phase 1b
-Forensic,INV-16,CAPA register,F3,shared register,Absent,Phase 3
-Forensic,INV-17,Effectiveness review,F3,shared register,Absent,Phase 3
+Forensic,INV-16,CAPA register,F3,ActionRegisterStudio (shared),Present,shipped + behaviorally verified (cause + human-verify gates)
+Forensic,INV-17,Effectiveness review,F3,ActionRegisterStudio (shared),Present,shipped + behaviorally verified (cause + human-verify gates)
 Forensic,INV-18,Chain of custody,existing,ChainOfCustodyManager + custodyverify,Present,behaviorally verified (hold blocking)
 Forensic,INV-19,Investigation findings,F2+F5,affidavit + citation gate + receipt,Partial,gate + receipt in Phases 2/4
 Forensic,INV-20,Closure & export,F5,workflow closure + sealed receipt,Partial,receipt in Phase 4
@@ -33,8 +33,8 @@ Legal,LAW-16,Method workbench,F1,Reasoning Studio,Absent,Phase 1b
 Legal,LAW-17,Party & alias resolution,existing,EntityResolver,Present,
 Legal,LAW-18,Source reliability desk,F4,Admiralty grid,Absent,Phase 3
 Legal,LAW-19,Causation analysis,F1,Reasoning Studio,Absent,Phase 1b
-Legal,LAW-20,Remediation register,F3,shared CAPA register,Absent,Phase 3
-Legal,LAW-21,Remediation effectiveness,F3,shared register,Absent,Phase 3
+Legal,LAW-20,Remediation register,F3,ActionRegisterStudio (shared),Present,shipped + behaviorally verified (cause + human-verify gates)
+Legal,LAW-21,Remediation effectiveness,F3,ActionRegisterStudio (shared),Present,shipped + behaviorally verified (cause + human-verify gates)
 Legal,LAW-22,Matter closure & reopen,F5,closure + reopen history,Partial,Phase 4
 Journalist,JRN-01,Story intake,existing,journalist.story,Present,
 Journalist,JRN-02,Fact-check board,F2,FactEvidenceMatrixStudio (journalist tile),Present,same studio; claims cite emails; both sides preserved
@@ -51,8 +51,8 @@ Journalist,JRN-16,Method workbench,F1,Reasoning Studio,Absent,Phase 1b
 Journalist,JRN-18,Who's who resolution,existing,EntityResolver,Present,
 Journalist,JRN-19,Causal analysis,F1,Reasoning Studio,Absent,Phase 1b
 Journalist,JRN-20,Source-document vault,existing,provenance + attachments + custody,Present,
-Journalist,JRN-21,Correction actions,F3,shared CAPA register,Absent,Phase 3
-Journalist,JRN-22,Correction effectiveness,F3,shared register,Absent,Phase 3
+Journalist,JRN-21,Correction actions,F3,ActionRegisterStudio (shared),Present,shipped + behaviorally verified (cause + human-verify gates)
+Journalist,JRN-22,Correction effectiveness,F3,ActionRegisterStudio (shared),Present,shipped + behaviorally verified (cause + human-verify gates)
 Personal,IND-08,Applications & cases,existing,personal.findexport,Present,
 Personal,IND-09,Dates & renewals,existing,saved-search digest,Partial,renewal extraction later
 Personal,IND-11,Share safely (redacted),done,redaction + LAW-14 validator,Present,leak fixed 81c7184
@@ -62,8 +62,8 @@ Personal,IND-15,Guided methods,F1,Reasoning Studio (personal vocabulary),Absent,
 Personal,IND-16,Name & alias resolution,existing,EntityResolver,Present,
 Personal,IND-18,Conflicts & gaps,F4,desk (personal vocabulary),Absent,Phase 3
 Personal,IND-19,Why did this happen?,F1,Reasoning Studio,Absent,Phase 1b
-Personal,IND-20,Fix-it list,F3,shared register,Absent,Phase 3
-Personal,IND-21,Did the fix work?,F3,shared register,Absent,Phase 3
+Personal,IND-20,Fix-it list,F3,ActionRegisterStudio (shared),Present,shipped + behaviorally verified (cause + human-verify gates)
+Personal,IND-21,Did the fix work?,F3,ActionRegisterStudio (shared),Present,shipped + behaviorally verified (cause + human-verify gates)
 Personal,IND-22,Document vault,existing,attachment gallery + custody,Present,
 Personal,IND-23,Close a matter,F5,workflow closure,Partial,receipt Phase 4
 Researcher,RES-01,Research protocol,P5,new workflow,Absent,Phase 5

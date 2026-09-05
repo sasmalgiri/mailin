@@ -17,7 +17,7 @@ enum HubDestination: String, Hashable {
     case personaHub
     case reviewBatches, custodianPanel, workspaceManager
     case legalWorkspace, itAdminDashboard, journalistWorkbench, personalOrganizer, generalExplorer
-    case achMatrix, factMatrix
+    case achMatrix, factMatrix, actionRegister
     case settings
 
     /// The minimum subscription tier required to actually use this destination.
@@ -498,6 +498,7 @@ struct MainNavigationHubView: View {
                 t(.attachmentGallery, "Attachments", "Photos & files", "paperclip", .brown),
                 t(.duplicateManager, "Cleanup", "Remove duplicates", "doc.on.doc", .indigo),
                 t(.threadSummarizer, "Summarizer", "Thread TL;DR", "text.bubble", .green),
+                t(.actionRegister, "Fix-It List", "Track fixes; verify they worked", "checkmark.rectangle.stack", .green),
             ]
         case .general:
             return [
@@ -551,6 +552,7 @@ struct MainNavigationHubView: View {
             t(.reviewBatches, "Review Batches", "Batch workflow", "list.bullet.rectangle", .mint),
             t(.reviewDashboard, "Review Dashboard", "Progress & privilege log", "chart.bar.doc.horizontal", .indigo),
             t(.custodianPanel, "Custodian Panel", "Data custodians", "person.badge.key", .cyan),
+            t(.actionRegister, "Action Register", "CAPA / remediation, verified closes", "checkmark.rectangle.stack", .green),
             t(.redaction, "Redaction", "PII / source protection", "eye.slash", .gray),
         ])
     }
