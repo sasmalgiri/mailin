@@ -115,3 +115,67 @@ Present/Partial/Absent status per job) — to be created at Phase 0 start and bu
 No v3 claim ships without its behavioral check passing (extends the no-artificial-caps /
 round-trip-verify rules). The website's professional section may add features only when the
 matching Phase exit criterion is green.
+
+---
+
+## 6. Enterprise track (v3-E) — mailin as an enterprise tool
+
+Positioning: **the enterprise email-forensics tool with nothing to breach** — local-first is
+the enterprise feature. No server, no tenant, no data processor agreement needed for the
+core product; IT departments deploy an app, not a service. Everything below preserves the
+offline-first rule; team features are file-based or MDM-based, never cloud-required.
+
+### What already exists to build on
+- File-based team review exchange (`CollaborationManager`: shared folder, review-state
+  files, auto-export, monitoring) — the seed of multi-examiner work
+- Per-examiner attribution everywhere (who-stamps, sign-offs, HMAC audit log, custody)
+- Workspaces (multi-archive), custodians/legal holds, numbered document registry
+
+### E1 — Managed deployment (MDM / Apple Business Manager)
+- **Managed App Configuration** (`com.apple.configuration.managed` UserDefaults): org-set
+  keys for examiner name/org, disable Cloud AI org-wide (hard off, not just default-off),
+  enforce biometric lock, preset case-number prefix, retention notes, license key
+- **Managed feedback** (`com.apple.feedback.managed`) reporting license/version state to MDM
+- Deliverable: `ENTERPRISE_DEPLOYMENT.md` — MDM guide + full managed-config key reference
+- Exit criterion: app behavior verifiably changes under a managed profile (behavioral test
+  by injecting the managed defaults key)
+
+### E2 — Licensing decision (required early: affects App Store setup)
+Consumer IAP subscriptions do NOT flow through Apple Business Manager volume purchasing.
+Options, with recommendation:
+1. **RECOMMENDED: separate "mailin Enterprise" paid-upfront SKU** (universal purchase,
+   VPP-compatible, all Professional features unlocked, managed-config aware). Keeps the
+   consumer app's IAP model untouched; enterprises buy N seats through ABM.
+2. Custom App (ABM private distribution) for large accounts — same binary, private pricing.
+3. License-key unlock inside the existing app via managed config — fastest, but weakest
+   revenue enforcement; acceptable interim for pilot customers.
+Decision owner: Shirshendu. Until decided, E1 ships with option 3 as the pilot mechanism.
+
+### E3 — Sealed case bundles (team handoff without a server)
+- Export a case as a single `.mailincase` bundle: selected emails (raw), numbered documents,
+  audit-chain segment, custody records, studio artifacts (ACH/fact-matrix/registers), and a
+  **sealed receipt** (SHA-256 manifest + Ed25519 signature)
+- Import on a colleague's Mac verifies the seal before opening; tampered bundles are
+  refused with a diff of what failed
+- This is Phase 4's sealed-receipt work generalized to whole cases — build them together
+- Exit criterion: round-trip a bundle between two user accounts; tamper test fails loudly
+
+### E4 — Multi-examiner review at team scale
+- Upgrade `CollaborationManager` from review-state files to the full document model:
+  merge review batches, privilege calls, and studio artifacts from N examiners with
+  per-examiner attribution preserved (conflicts surfaced, never silently merged)
+- Reviewer assignment + progress in Review Dashboard (who has which batch)
+- Exit criterion: two-examiner merge with a deliberate conflict → both readings preserved
+
+### E5 — Enterprise assurance pack (documents, not code)
+- Security whitepaper: threat model, data-flow diagram (kalsmritikosh PRIVACY_DATA_FLOW
+  pattern), key management (Keychain), what leaves the device (nothing by default; Cloud AI
+  opt-in + org-disable via E1)
+- Admissibility note for legal buyers (jurisdiction caveat as in the app disclaimer)
+- Gold-case validation report generated from the Phase 0/4 behavioral checks — "here is
+  the executed evidence behind every claim"
+
+### Sequencing with the main track
+E2 (decision) now → E1 with Phase 4 (both touch config/gating) → E3 with Phase 4's sealed
+receipts → E4 after Phase 4 → E5 last (it documents what shipped). Enterprise features are
+macOS-first; iOS follows where MDM parity exists.
