@@ -751,7 +751,7 @@ struct ContentView: View {
              .aiAssistant, .aiDigest, .smartAutoTagger,
              .knowledgeGraphExplorer, .aiVisualizations, .backgroundFindings,
              .predictiveInsights, .pluginManager,
-             .itAdminDashboard, .journalistWorkbench, .actionRegister:
+             .itAdminDashboard, .journalistWorkbench, .actionRegister, .reasoningStudio:
             if storeManager.requirePremium() { goToDestination(destination) }
         case .emailInbox, .customExperts, .workspaceManager,
              .personalOrganizer, .generalExplorer,
@@ -811,6 +811,10 @@ struct ContentView: View {
         case .evidenceDesks:
             hubWorkingSet { EvidenceDesksStudioView(workingSet: $0) }
                 .navigationTitle("Evidence Desks")
+
+        case .reasoningStudio:
+            ReasoningStudioView()
+                .navigationTitle("Reasoning Studio")
 
         case .eDiscovery:
             hubWorkingSet { EDiscoveryWorkflowView(emails: $0) }

@@ -2,17 +2,17 @@ Persona,JobID,JobName,V3Family,MailinSurface,Status,Notes
 Forensic,INV-01,Case intake & scope,existing,builtin.forensic.intake workflow,Present,
 Forensic,INV-02,Subject workup,F2,entity graph + search,Partial,needs cited dossier (locators)
 Forensic,INV-03,Identity resolution,existing,EntityResolver reversible merge,Present,
-Forensic,INV-04,Brainstorm board,F1,Reasoning Studio,Absent,Phase 1b
-Forensic,INV-05,5W1H worksheet,F1,Reasoning Studio,Absent,Phase 1b
+Forensic,INV-04,Brainstorm board,F1,ReasoningStudio (shared),Present,shipped + behaviorally verified (cite-or-unknown + human root-cause gates)
+Forensic,INV-05,5W1H worksheet,F1,ReasoningStudio (shared),Present,shipped + behaviorally verified (cite-or-unknown + human root-cause gates)
 Forensic,INV-06,Evidence collection plan,F3,request register,Absent,Phase 3
 Forensic,INV-07,Hypothesis matrix (ACH),F1,ACHMatrixStudio (hub: Forensic + Legal tiles),Present,shipped + behaviorally verified (ranking + gates)
 Forensic,INV-08,Source reliability,F4,EvidenceDesksStudio (shared),Present,shipped + behaviorally verified (seeder + gates)
 Forensic,INV-09,Investigation timeline,F2,EmailTimelineView + forensic.timeline,Partial,undated labels + row locators
 Forensic,INV-10,Relationship graph,existing,RelationshipGraphView,Present,
 Forensic,INV-12,Contradiction & gap desk,F4,EvidenceDesksStudio (shared),Present,shipped + behaviorally verified (seeder + gates)
-Forensic,INV-13,Five Whys,F1,Reasoning Studio,Absent,Phase 1b
-Forensic,INV-14,Fishbone,F1,Reasoning Studio,Absent,Phase 1b
-Forensic,INV-15,Root-cause assessment,F1,Reasoning Studio human-gated,Absent,Phase 1b
+Forensic,INV-13,Five Whys,F1,ReasoningStudio (shared),Present,shipped + behaviorally verified (cite-or-unknown + human root-cause gates)
+Forensic,INV-14,Fishbone,F1,ReasoningStudio (shared),Present,shipped + behaviorally verified (cite-or-unknown + human root-cause gates)
+Forensic,INV-15,Root-cause assessment,F1,ReasoningStudio (shared),Present,shipped + behaviorally verified (cite-or-unknown + human root-cause gates)
 Forensic,INV-16,CAPA register,F3,ActionRegisterStudio (shared),Present,shipped + behaviorally verified (cause + human-verify gates)
 Forensic,INV-17,Effectiveness review,F3,ActionRegisterStudio (shared),Present,shipped + behaviorally verified (cause + human-verify gates)
 Forensic,INV-18,Chain of custody,existing,ChainOfCustodyManager + custodyverify,Present,behaviorally verified (hold blocking)
@@ -29,10 +29,10 @@ Legal,LAW-12,Exhibit list & binder,existing,forensic.exhibit + Bates,Present,Bat
 Legal,LAW-13,Document production,existing,legal.production + Concordance DAT,Present,DAT format behaviorally verified
 Legal,LAW-14,Redaction validation,done,RedactionEngine.validateRedaction,Present,shipped 81c7184
 Legal,LAW-15,Ask the case file,existing,grounded AI assistant,Present,
-Legal,LAW-16,Method workbench,F1,Reasoning Studio,Absent,Phase 1b
+Legal,LAW-16,Method workbench,F1,ReasoningStudio (shared),Present,shipped + behaviorally verified (cite-or-unknown + human root-cause gates)
 Legal,LAW-17,Party & alias resolution,existing,EntityResolver,Present,
 Legal,LAW-18,Source reliability desk,F4,EvidenceDesksStudio (shared),Present,shipped + behaviorally verified (seeder + gates)
-Legal,LAW-19,Causation analysis,F1,Reasoning Studio,Absent,Phase 1b
+Legal,LAW-19,Causation analysis,F1,ReasoningStudio (shared),Present,shipped + behaviorally verified (cite-or-unknown + human root-cause gates)
 Legal,LAW-20,Remediation register,F3,ActionRegisterStudio (shared),Present,shipped + behaviorally verified (cause + human-verify gates)
 Legal,LAW-21,Remediation effectiveness,F3,ActionRegisterStudio (shared),Present,shipped + behaviorally verified (cause + human-verify gates)
 Legal,LAW-22,Matter closure & reopen,F5,closure + reopen history,Partial,Phase 4
@@ -47,9 +47,9 @@ Journalist,JRN-10,Open questions,F4,EvidenceDesksStudio (shared),Present,shipped
 Journalist,JRN-12,Publication decision,F2+F5,publish workflow + enforced gate,Partial,gate Phase 2
 Journalist,JRN-14,Publication package,existing,datapack + publish exports,Present,
 Journalist,JRN-15,Ask the story file,existing,AI assistant,Present,
-Journalist,JRN-16,Method workbench,F1,Reasoning Studio,Absent,Phase 1b
+Journalist,JRN-16,Method workbench,F1,ReasoningStudio (shared),Present,shipped + behaviorally verified (cite-or-unknown + human root-cause gates)
 Journalist,JRN-18,Who's who resolution,existing,EntityResolver,Present,
-Journalist,JRN-19,Causal analysis,F1,Reasoning Studio,Absent,Phase 1b
+Journalist,JRN-19,Causal analysis,F1,ReasoningStudio (shared),Present,shipped + behaviorally verified (cite-or-unknown + human root-cause gates)
 Journalist,JRN-20,Source-document vault,existing,provenance + attachments + custody,Present,
 Journalist,JRN-21,Correction actions,F3,ActionRegisterStudio (shared),Present,shipped + behaviorally verified (cause + human-verify gates)
 Journalist,JRN-22,Correction effectiveness,F3,ActionRegisterStudio (shared),Present,shipped + behaviorally verified (cause + human-verify gates)
@@ -58,10 +58,10 @@ Personal,IND-09,Dates & renewals,existing,saved-search digest,Partial,renewal ex
 Personal,IND-11,Share safely (redacted),done,redaction + LAW-14 validator,Present,leak fixed 81c7184
 Personal,IND-12,Personal chronology,existing,timeline,Present,
 Personal,IND-14,Ask my records,existing,AI assistant,Present,
-Personal,IND-15,Guided methods,F1,Reasoning Studio (personal vocabulary),Absent,Phase 1b
+Personal,IND-15,Guided methods,F1,ReasoningStudio (shared),Present,shipped + behaviorally verified (cite-or-unknown + human root-cause gates)
 Personal,IND-16,Name & alias resolution,existing,EntityResolver,Present,
 Personal,IND-18,Conflicts & gaps,F4,EvidenceDesksStudio (shared),Present,shipped + behaviorally verified (seeder + gates)
-Personal,IND-19,Why did this happen?,F1,Reasoning Studio,Absent,Phase 1b
+Personal,IND-19,Why did this happen?,F1,ReasoningStudio (shared),Present,shipped + behaviorally verified (cite-or-unknown + human root-cause gates)
 Personal,IND-20,Fix-it list,F3,ActionRegisterStudio (shared),Present,shipped + behaviorally verified (cause + human-verify gates)
 Personal,IND-21,Did the fix work?,F3,ActionRegisterStudio (shared),Present,shipped + behaviorally verified (cause + human-verify gates)
 Personal,IND-22,Document vault,existing,attachment gallery + custody,Present,
@@ -72,5 +72,5 @@ Researcher,RES-07,Screening include/exclude,P5,new workflow + review batches,Abs
 Researcher,RES-08,Extraction & coding,P5,tags + new workflow,Absent,Phase 5
 Researcher,RES-09,Chronology & periodisation,P5,timeline + periods,Partial,Phase 5
 Researcher,RES-15,Ask the corpus,existing,AI assistant,Present,
-Researcher,RES-17,Causal analysis,F1,Reasoning Studio,Absent,Phase 1b
+Researcher,RES-17,Causal analysis,F1,ReasoningStudio (shared),Present,shipped + behaviorally verified (cite-or-unknown + human root-cause gates)
 Researcher,RES-20,Matter closure,F5,workflow closure,Partial,Phase 4/5

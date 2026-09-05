@@ -17,7 +17,7 @@ enum HubDestination: String, Hashable {
     case personaHub
     case reviewBatches, custodianPanel, workspaceManager
     case legalWorkspace, itAdminDashboard, journalistWorkbench, personalOrganizer, generalExplorer
-    case achMatrix, factMatrix, actionRegister, evidenceDesks
+    case achMatrix, factMatrix, actionRegister, evidenceDesks, reasoningStudio
     case settings
 
     /// The minimum subscription tier required to actually use this destination.
@@ -525,6 +525,7 @@ struct MainNavigationHubView: View {
             t(.threadSummarizer, "Thread Summarizer", "Conversation TL;DR", "text.bubble", .green),
             t(.attachmentGallery, "Attachments", "File gallery", "paperclip", .brown),
             t(.executiveDashboard, "Executive Dashboard", "KPI overview", "gauge.with.dots.needle.33percent", .blue),
+            t(.reasoningStudio, "Reasoning Studio", "5W1H · Five Whys · Fishbone · Root cause", "brain.head.profile", .purple),
         ])
     }
 
