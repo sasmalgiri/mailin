@@ -734,7 +734,7 @@ struct ContentView: View {
             openSettingsAction()
         case .eDiscovery, .predictiveCoding, .gdprCompliance, .chainOfCustody,
              .forensicReview, .investigationReport, .batesNumbering,
-             .reviewBatches, .custodianPanel, .legalWorkspace:
+             .reviewBatches, .custodianPanel, .legalWorkspace, .achMatrix:
             if storeManager.requireProfessional() { goToDestination(destination) }
         case .iocExtractor, .phishingTriage, .reviewDashboard:
             if storeManager.requireProfessional() { goToDestination(destination) }
@@ -794,6 +794,10 @@ struct ContentView: View {
         switch destination {
         case .emailInbox:
             emailInboxDestination
+
+        case .achMatrix:
+            ACHMatrixStudioView()
+                .navigationTitle("Hypothesis Matrix (ACH)")
 
         case .eDiscovery:
             hubWorkingSet { EDiscoveryWorkflowView(emails: $0) }

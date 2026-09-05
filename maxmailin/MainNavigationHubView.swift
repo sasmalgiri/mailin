@@ -17,6 +17,7 @@ enum HubDestination: String, Hashable {
     case personaHub
     case reviewBatches, custodianPanel, workspaceManager
     case legalWorkspace, itAdminDashboard, journalistWorkbench, personalOrganizer, generalExplorer
+    case achMatrix
     case settings
 
     /// The minimum subscription tier required to actually use this destination.
@@ -32,7 +33,7 @@ enum HubDestination: String, Hashable {
         case .eDiscovery, .predictiveCoding, .gdprCompliance, .chainOfCustody,
              .forensicReview, .investigationReport, .batesNumbering,
              .reviewBatches, .custodianPanel, .legalWorkspace, .iocExtractor,
-             .phishingTriage, .reviewDashboard:
+             .phishingTriage, .reviewDashboard, .achMatrix:
             return .professional
         // Personal — premium analytics, AI, automation
         default:
@@ -455,6 +456,7 @@ struct MainNavigationHubView: View {
         case .forensic:
             return [
                 t(.forensicReview, "Evidence Coding", "Code & tag evidence", "shield.checkered", .orange),
+                t(.achMatrix, "Hypothesis Matrix", "ACH — score competing explanations", "tablecells.badge.ellipsis", .purple),
                 t(.chainOfCustody, "Chain of Custody", "Track evidence handling", "link", .orange),
                 t(.iocExtractor, "IOC Detection", "Threat indicators", "exclamationmark.shield", .red),
                 t(.anomalyDetection, "Anomaly Detection", "Statistical outliers", "waveform.path.ecg", .red),
@@ -542,6 +544,7 @@ struct MainNavigationHubView: View {
             t(.gdprCompliance, "GDPR Compliance", "Data Protection", "hand.raised", .green),
             t(.investigationReport, "Investigation Report", "Court-ready docs", "doc.text.magnifyingglass", .red),
             t(.batesNumbering, "Bates Numbers", "Document stamping", "number", .purple),
+            t(.achMatrix, "Hypothesis Matrix", "ACH evidence scoring", "tablecells.badge.ellipsis", .purple),
             t(.reviewBatches, "Review Batches", "Batch workflow", "list.bullet.rectangle", .mint),
             t(.reviewDashboard, "Review Dashboard", "Progress & privilege log", "chart.bar.doc.horizontal", .indigo),
             t(.custodianPanel, "Custodian Panel", "Data custodians", "person.badge.key", .cyan),

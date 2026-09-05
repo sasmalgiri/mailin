@@ -5,7 +5,7 @@ Forensic,INV-03,Identity resolution,existing,EntityResolver reversible merge,Pre
 Forensic,INV-04,Brainstorm board,F1,Reasoning Studio,Absent,Phase 1b
 Forensic,INV-05,5W1H worksheet,F1,Reasoning Studio,Absent,Phase 1b
 Forensic,INV-06,Evidence collection plan,F3,request register,Absent,Phase 3
-Forensic,INV-07,Hypothesis matrix (ACH),F1,ACH Matrix studio,Absent,Phase 1 headline
+Forensic,INV-07,Hypothesis matrix (ACH),F1,ACHMatrixStudio (hub: Forensic + Legal tiles),Present,shipped + behaviorally verified (ranking + gates)
 Forensic,INV-08,Source reliability,F4,Admiralty grid seeded from SPF/DKIM,Absent,Phase 3
 Forensic,INV-09,Investigation timeline,F2,EmailTimelineView + forensic.timeline,Partial,undated labels + row locators
 Forensic,INV-10,Relationship graph,existing,RelationshipGraphView,Present,

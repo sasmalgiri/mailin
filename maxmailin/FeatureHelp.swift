@@ -38,6 +38,7 @@ extension HubDestination {
         case .keywordMonitor:       return "Watch for emails containing key terms."
         case .nearDuplicates:       return "Find emails that are almost identical."
 
+        case .achMatrix:            return "Score competing hypotheses against email evidence — ranked by fewest inconsistencies, decided by you."
         case .eDiscovery:           return "Legal discovery workflow — review and produce documents."
         case .predictiveCoding:     return "AI-assisted document review that learns from your tagging."
         case .forensicReview:       return "Court-ready evidence coding and integrity verification."
