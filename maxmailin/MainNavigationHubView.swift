@@ -296,6 +296,7 @@ struct MainNavigationHubView: View {
         case .itAdmin: return .itAdminDashboard
         case .journalist: return .journalistWorkbench
         case .personal: return .personalOrganizer
+        case .researcher: return .generalExplorer
         case .general: return .generalExplorer
         }
     }
@@ -306,6 +307,7 @@ struct MainNavigationHubView: View {
         case .itAdmin: return "IT Admin Analysis"
         case .journalist: return "Investigation Workbench"
         case .personal: return "Personal Organizer"
+        case .researcher: return "Research Corpus"
         case .general: return "Feature Explorer"
         }
     }
@@ -316,6 +318,7 @@ struct MainNavigationHubView: View {
         case .itAdmin: return "Headers, authentication, routing, MIME structure"
         case .journalist: return "Sources, timeline, leads, key quotes"
         case .personal: return "Contacts, categories, attachments, cleanup"
+        case .researcher: return "Protocols, screening, coding, cited chronologies"
         case .general: return "Discover all features, tips, and guided tour"
         }
     }
@@ -326,6 +329,7 @@ struct MainNavigationHubView: View {
         case .itAdmin: return "server.rack"
         case .journalist: return "newspaper"
         case .personal: return "tray.full"
+        case .researcher: return "books.vertical"
         case .general: return "sparkles"
         }
     }
@@ -336,6 +340,7 @@ struct MainNavigationHubView: View {
         case .itAdmin: return .teal
         case .journalist: return .purple
         case .personal: return .blue
+        case .researcher: return .brown
         case .general: return .mint
         }
     }
@@ -363,6 +368,8 @@ struct MainNavigationHubView: View {
             out += [analysisSection, aiSection]
         case .personal:
             out += [analysisSection]
+        case .researcher:
+            out += [analysisSection, exportSection, aiSection]
         case .general:
             // Explorer keeps the full catalog.
             out += [securitySection, legalForensicSection, analysisSection, exportSection, aiSection]
@@ -443,6 +450,7 @@ struct MainNavigationHubView: View {
         case .itAdmin: return "Admin Tools"
         case .journalist: return "Investigation Tools"
         case .personal: return "Organizer Tools"
+        case .researcher: return "Research Tools"
         case .general: return "Explorer Tools"
         }
     }
@@ -500,6 +508,15 @@ struct MainNavigationHubView: View {
                 t(.duplicateManager, "Cleanup", "Remove duplicates", "doc.on.doc", .indigo),
                 t(.threadSummarizer, "Summarizer", "Thread TL;DR", "text.bubble", .green),
                 t(.actionRegister, "Fix-It List", "Track fixes; verify they worked", "checkmark.rectangle.stack", .green),
+            ]
+        case .researcher:
+            return [
+                t(.reasoningStudio, "Reasoning Studio", "5W1H · whys · root cause", "brain.head.profile", .purple),
+                t(.timeline, "Chronology", "Cited timeline of the corpus", "calendar.day.timeline.left", .indigo),
+                t(.evidenceDesks, "Source Criticism", "Reliability · contradictions · gaps", "scalemass", .teal),
+                t(.knowledgeGraphExplorer, "Entities & Authorities", "People, orgs, connections", "point.3.connected.trianglepath.dotted", .purple),
+                t(.topicClusters, "Topic Discovery", "Auto-grouped by subject", "circle.grid.3x3", .teal),
+                t(.factMatrix, "Claim–Evidence Matrix", "Claims vs supporting sources", "checklist.checked", .indigo),
             ]
         case .general:
             return [

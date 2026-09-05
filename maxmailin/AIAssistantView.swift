@@ -1543,6 +1543,7 @@ struct AIAssistantView: View {
         case .legal: return "Analyze documents for review"
         case .itAdmin: return "Diagnose email infrastructure"
         case .journalist: return "Discover patterns and stories"
+        case .researcher: return "Interrogate your corpus with citations"
         case .personal, .general: return "Ask anything about your emails"
         }
     }

@@ -561,6 +561,8 @@ struct ContentView: View {
                     sidebarRow(.journalistWorkbench, "Investigation", "newspaper")
                 case .personal:
                     sidebarRow(.personalOrganizer, "Personal Organizer", "tray.full")
+                case .researcher:
+                    sidebarRow(.reasoningStudio, "Reasoning Studio", "brain.head.profile")
                 case .general:
                     sidebarRow(.generalExplorer, "Feature Explorer", "sparkles")
                 }
@@ -779,6 +781,7 @@ struct ContentView: View {
         case .itAdmin: return .itAdminDashboard
         case .journalist: return .journalistWorkbench
         case .personal: return .personalOrganizer
+        case .researcher: return .generalExplorer
         case .general: return .generalExplorer
         }
     }
@@ -3294,6 +3297,12 @@ struct ContentView: View {
                 BadgeInfo(icon: "checkmark.seal.fill", text: "Tamper-Proof", color: .orange),
                 BadgeInfo(icon: "doc.badge.gearshape", text: "Court-Ready", color: .blue)
             ]
+        case .researcher:
+            return [
+                BadgeInfo(icon: "lock.shield.fill", text: "On-Device Only", color: .green),
+                BadgeInfo(icon: "text.quote", text: "Cited Answers", color: .indigo),
+                BadgeInfo(icon: "calendar.day.timeline.left", text: "Chronologies", color: .brown)
+            ]
         case .legal:
             return [
                 BadgeInfo(icon: "lock.shield.fill", text: "Privilege-Safe", color: .indigo),
@@ -3333,6 +3342,7 @@ struct ContentView: View {
         case .legal: return "Documents never leave your Mac. Privilege review stays confidential."
         case .itAdmin: return "All header analysis happens locally. No email content is transmitted externally."
         case .journalist: return "Source material stays on your Mac. No data is shared with external servers."
+        case .researcher: return "Your corpus stays on your Mac. Analysis and citations are produced locally."
         case .personal, .general: return "No data ever leaves your device. All analysis is performed locally."
         }
     }
@@ -3345,6 +3355,7 @@ struct ContentView: View {
         case .legal: return "Review & code"
         case .itAdmin: return "Inspect headers"
         case .journalist: return "Find patterns"
+        case .researcher: return "Screen & code"
         case .personal, .general: return "Filter & explore"
         }
     }
@@ -3355,6 +3366,7 @@ struct ContentView: View {
         case .legal: return "Code documents for privilege, relevance, and responsiveness"
         case .itAdmin: return "Examine MIME structure, routing headers, and authentication results"
         case .journalist: return "Discover connections, timelines, and communication patterns"
+        case .researcher: return "Screen the corpus in or out, code passages, and keep every decision on record"
         case .personal, .general: return "Filter by sender, recipient, date range, or reply frequency"
         }
     }
@@ -3365,6 +3377,7 @@ struct ContentView: View {
         case .legal: return "building.columns"
         case .itAdmin: return "terminal"
         case .journalist: return "sparkles"
+        case .researcher: return "books.vertical"
         case .personal, .general: return "sparkles"
         }
     }
@@ -3375,6 +3388,7 @@ struct ContentView: View {
         case .legal: return "Produce documents"
         case .itAdmin: return "Export & diagnose"
         case .journalist: return "Ask AI"
+        case .researcher: return "Build chronologies"
         case .personal, .general: return "Ask AI"
         }
     }
@@ -3385,6 +3399,7 @@ struct ContentView: View {
         case .legal: return "Export Bates-numbered production sets, privilege logs, and redacted copies"
         case .itAdmin: return "Export CSV data, analyze routing, and identify authentication failures"
         case .journalist: return "Use AI to summarize threads, find contradictions, and build timelines"
+        case .researcher: return "Build cited chronologies, compare accounts, and export the coded dataset"
         case .personal, .general: return "Use the AI assistant to summarize, analyze sentiment, or ask questions"
         }
     }

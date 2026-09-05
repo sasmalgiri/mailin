@@ -66,8 +66,8 @@ Personal,IND-20,Fix-it list,F3,ActionRegisterStudio (shared),Present,shipped + b
 Personal,IND-21,Did the fix work?,F3,ActionRegisterStudio (shared),Present,shipped + behaviorally verified (cause + human-verify gates)
 Personal,IND-22,Document vault,existing,attachment gallery + custody,Present,
 Personal,IND-23,Close a matter,F5,workflow closure + sealed receipts,Present,shipped Phase 4
-Researcher,RES-01,Research protocol,P5,builtin.researcher.protocol workflow,Present,shipped under General Explorer
-Researcher,RES-02,Corpus catalogue,P5,archive list + provenance,Partial,Phase 5
+Researcher,RES-01,Research protocol,P5,builtin.researcher.protocol workflow,Present,shipped under Researcher persona
+Researcher,RES-02,Corpus catalogue,P5,archive list + provenance + Researcher persona,Partial,persona shipped; dedicated catalogue view later
 Researcher,RES-07,Screening include/exclude,P5,builtin.researcher.screening workflow,Present,decisions recorded; exclusions never silent
 Researcher,RES-08,Extraction & coding,P5,builtin.researcher.coding workflow,Present,codebook-first; coded passages cite emails
 Researcher,RES-09,Chronology & periodisation,P5,timeline + periods,Partial,Phase 5

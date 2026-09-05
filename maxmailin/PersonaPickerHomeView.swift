@@ -237,6 +237,14 @@ struct PersonaPickerHomeView: View {
                 FeatureItem(icon: "person.2", title: "Contact network mapping"),
                 FeatureItem(icon: "circle.grid.3x3", title: "Topic discovery & clusters"),
             ]
+        case .researcher:
+            return [
+                FeatureItem(icon: "books.vertical", title: "Research protocol on record"),
+                FeatureItem(icon: "checklist", title: "Screening — include / exclude"),
+                FeatureItem(icon: "tag", title: "Extraction & coding (codebook)"),
+                FeatureItem(icon: "calendar.day.timeline.left", title: "Cited chronologies"),
+                FeatureItem(icon: "brain.head.profile", title: "Reasoning studio & source criticism"),
+            ]
         case .personal:
             return [
                 FeatureItem(icon: "tray.full", title: "Smart email categories"),

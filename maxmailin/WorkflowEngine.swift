@@ -1217,7 +1217,7 @@ enum WorkflowCatalog {
 
     static let researchProtocol = WorkflowDefinition(
         defID: "builtin.researcher.protocol", name: "Research Protocol",
-        persona: "general", builtin: true, operations: [
+        persona: "researcher", builtin: true, operations: [
             op(1, "question", "Research Question", "State the question this corpus should answer — the protocol persists with the record.", nil, launches: .emailInbox, [
                 f("question", "Question", .longText, "The question being investigated.", required: true),
                 f("scope", "Corpus scope", .text, "Which archives / senders / date range are in scope.", required: true),
@@ -1234,7 +1234,7 @@ enum WorkflowCatalog {
 
     static let researcherScreening = WorkflowDefinition(
         defID: "builtin.researcher.screening", name: "Screening (Include / Exclude)",
-        persona: "general", builtin: true, operations: [
+        persona: "researcher", builtin: true, operations: [
             op(1, "criteria", "Confirm Criteria", "Restate the include/exclude criteria from your protocol.", nil, launches: .emailInbox, [
                 f("criteria", "Criteria", .longText, "The rules that decide inclusion.", required: true),
             ]),
@@ -1250,7 +1250,7 @@ enum WorkflowCatalog {
 
     static let researcherCoding = WorkflowDefinition(
         defID: "builtin.researcher.coding", name: "Extraction & Coding",
-        persona: "general", builtin: true, operations: [
+        persona: "researcher", builtin: true, operations: [
             op(1, "codebook", "Codebook", "Define the codes before coding — each code needs a definition.", nil, launches: .emailInbox, [
                 f("codes", "Codes & definitions", .longText, "One code per line with its meaning.", required: true),
             ]),

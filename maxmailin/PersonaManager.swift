@@ -45,13 +45,14 @@ class PersonaManager: ObservableObject {
         case itAdmin = "it_admin"
         case journalist = "journalist"
         case personal = "personal"
+        case researcher = "researcher"
         case general = "general"
 
         /// Personas shown in pickers. `.general` is retained in the enum for
         /// backward compatibility with previously-stored preferences, but is
         /// no longer offered as a selectable workspace.
         static var pickableCases: [Persona] {
-            [.forensic, .legal, .itAdmin, .journalist, .personal]
+            [.forensic, .legal, .itAdmin, .journalist, .researcher, .personal]
         }
 
         var displayName: String {
@@ -59,7 +60,8 @@ class PersonaManager: ObservableObject {
             case .forensic: return "Forensic Investigator"
             case .legal: return "Legal / eDiscovery"
             case .itAdmin: return "IT Administrator"
-            case .journalist: return "Journalist / Researcher"
+            case .journalist: return "Journalist"
+            case .researcher: return "Researcher / Historian"
             case .personal: return "Personal Use"
             case .general: return "Other / Just Exploring"
             }
@@ -71,6 +73,7 @@ class PersonaManager: ObservableObject {
             case .legal: return "building.columns"
             case .itAdmin: return "server.rack"
             case .journalist: return "newspaper"
+            case .researcher: return "books.vertical"
             case .personal: return "person.crop.circle"
             case .general: return "ellipsis.circle"
             }
@@ -82,6 +85,7 @@ class PersonaManager: ObservableObject {
             case .legal: return "Privilege review, keyword search, production sets"
             case .itAdmin: return "Technical headers, MIME analysis, server routing"
             case .journalist: return "Pattern discovery, timelines, contact networks"
+            case .researcher: return "Protocols, screening, coding, cited chronologies"
             case .personal: return "Simple reading, search, and attachment recovery"
             case .general: return "All features available — customize later in Settings"
             }
@@ -93,6 +97,7 @@ class PersonaManager: ObservableObject {
             case .legal: return "Shows: privilege filters, Bates numbering, production exports, review batches"
             case .itAdmin: return "Shows: MIME tree, SPF/DKIM analysis, routing headers, domain filters"
             case .journalist: return "Shows: analytics dashboard, reply patterns, sentiment filters, redaction"
+            case .researcher: return "Shows: research protocol, screening & coding jobs, timeline, reasoning studio"
             case .personal: return "Shows: clean layout, basic search and filters, attachment gallery"
             case .general: return "Shows: everything — you can toggle features on or off as needed"
             }
@@ -104,6 +109,7 @@ class PersonaManager: ObservableObject {
             case .legal: return .indigo
             case .itAdmin: return .teal
             case .journalist: return .purple
+            case .researcher: return .brown
             case .personal: return .blue
             case .general: return .mint
             }
@@ -117,6 +123,7 @@ class PersonaManager: ObservableObject {
             case .legal: return "Legal"
             case .itAdmin: return "IT Admin"
             case .journalist: return "Journalist"
+            case .researcher: return "Researcher"
             case .personal: return "Personal"
             case .general: return "General"
             }
@@ -197,6 +204,8 @@ class PersonaManager: ObservableObject {
             return [.browse, .security, .analysis]
         case .journalist:
             return [.browse, .analysis, .aiIntelligence]
+        case .researcher:
+            return [.browse, .analysis, .aiIntelligence, .exportReports]
         case .general:
             return Set(SidebarGroup.allCases)
         }
@@ -339,6 +348,29 @@ class PersonaManager: ObservableObject {
                 welcomeTitle: "Email Archive"
             )
 
+        case .researcher:
+            return PersonaConfig(
+                defaultDensity: "comfortable",
+                showEmailPreviews: true,
+                showForensicByDefault: false,
+                enableAIByDefault: true,
+                showAnalyticsProminent: true,
+                showTechnicalHeaders: false,
+                showQuickFilters: [.sent, .received, .attachments, .flagged, .hasLinks, .aiImportant],
+                sidebarSections: [.summary, .dateRange, .senders, .recipients, .labels, .domains],
+                exportOrder: [.csv, .pdf, .word, .plainText, .redacted, .forensicReport, .batesPDF],
+                sampleAIQueries: [
+                    "Build a chronology of the correspondence",
+                    "Who are the principal correspondents and how are they connected?",
+                    "Which emails discuss a specific topic or event?",
+                    "Find the earliest mention of a person or term",
+                    "Compare how two people describe the same event",
+                    "Which claims in this corpus are supported by only one source?"
+                ],
+                emptyStateMessage: "Import a corpus (mbox, eml, pst) to catalogue, screen, code, and build cited chronologies. Everything stays on-device.",
+                welcomeTitle: "Research Corpus"
+            )
+
         case .general:
             return PersonaConfig(
                 defaultDensity: "comfortable",
@@ -455,6 +487,20 @@ class PersonaManager: ObservableObject {
                 reportStyle: .conversational,
                 synthesisGuidance: "Use simple, friendly language. Highlight what's personally relevant: important contacts, memorable conversations, key attachments."
             )
+        case .researcher:
+            return AIPersonaConfig(
+                expertWeights: [
+                    "entityExpert": 1.3,
+                    "timelineExpert": 1.4,
+                    "topicExpert": 1.3,
+                    "sentimentExpert": 0.9,
+                    "securityExpert": 0.6
+                ],
+                systemInstruction: "You are a research assistant for scholarly corpus analysis. Focus on chronology, provenance, and sourcing. Distinguish what a source SAYS from what is CORROBORATED; flag single-source claims. Cite specific emails for every claim.",
+                focusKeywords: ["chronology", "source", "corroborated", "provenance", "period", "correspondence", "archive", "first mention"],
+                reportStyle: .analytical,
+                synthesisGuidance: "Organize findings chronologically with citations. Explicitly separate corroborated findings from single-source claims. Note gaps in the corpus rather than smoothing over them."
+            )
         case .general:
             return AIPersonaConfig(
                 expertWeights: [
@@ -511,6 +557,9 @@ class PersonaManager: ObservableObject {
         case .personal:
             UserDefaults.standard.set(false, forKey: "showAdvancedFeatures")
             UserDefaults.standard.set(false, forKey: "aiTagsApplied")
+        case .researcher:
+            UserDefaults.standard.set(false, forKey: "showAdvancedFeatures")
+            UserDefaults.standard.set(true, forKey: "aiTagsApplied")
         case .general:
             UserDefaults.standard.set(false, forKey: "showAdvancedFeatures")
             UserDefaults.standard.set(false, forKey: "aiTagsApplied")

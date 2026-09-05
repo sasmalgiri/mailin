@@ -1026,6 +1026,10 @@ struct ParsedEmailListView: View {
             activeFilterTags = ["sent", "received", "personal", "negative", "positive"]
             showAdvancedFeatures = false
             aiTagsApplied = true
+        case .researcher:
+            activeFilterTags = ["sent", "received", "attachments", "flagged"]
+            showAdvancedFeatures = false
+            aiTagsApplied = true
         case .personal:
             activeFilterTags = ["sent", "received", "attachments"]
             showAdvancedFeatures = false
@@ -3088,6 +3092,7 @@ struct ParsedEmailListView: View {
         case .forensic: return "Evidence"
         case .legal: return "Documents"
         case .itAdmin: return "Messages"
+        case .researcher: return "Corpus"
         case .journalist, .personal, .general: return "Emails"
         }
     }

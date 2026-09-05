@@ -471,6 +471,7 @@ struct WelcomeHubView: View {
         case .legal:      return ["Forensics & Legal", "Analysis & Insights"]
         case .itAdmin:    return ["Security & Detection", "Analysis & Insights"]
         case .journalist: return ["AI Intelligence", "Analysis & Insights"]
+        case .researcher: return ["Analysis & Insights", "Export & Reports"]
         case .personal:   return ["AI Intelligence", "Export & Reports"]
         case .general:    return ["Analysis & Insights", "AI Intelligence"]
         }
