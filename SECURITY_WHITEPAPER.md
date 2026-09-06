@@ -78,10 +78,13 @@ observing the result (dates per repository history):
 | Managed policies enforce | injected MDM dictionary → cloud AI hard-off, forced lock, managed identity in seals | PASS |
 | Multi-examiner merge preserves conflicts | same-id different-content artifact → both readings kept with attribution | PASS |
 | PST/EML round-trip fidelity | write → re-parse → byte-compare (incl. 5 MB attachment) | PASS |
+| Bates-stamped PDF stamps readable | rendered 3-page PDF -> PDFKit read-back: Bates number + page x/y on EVERY page, case/examiner in header | PASS |
+| TAR ranking quality | Naive Bayes scorer on labeled synthetic corpus: unseen relevant 0.999 vs irrelevant 0.001, clean separation | PASS |
+| S/MIME safe verdicts | unsigned email -> "Not Signed"; malformed p7m -> "Unverifiable"; never a false "valid" | PASS |
 
-Deferred to the gold-case suite (documented, not claimed): S/MIME verification against a
-signed sample; TAR ranking quality under an async test host; Bates-stamped PDF visual
-read-back.
+Remaining known limitation: positive-path S/MIME verification (a genuinely signed sample
+returning "Valid & Trusted") requires a real signed message and is exercised manually;
+the verdict mapping and negative paths are validated above.
 
 ## 6. Honest limitations
 

@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>mailin Enterprise · Email forensics with nothing to breach</title>
+    <meta name="description" content="mailin Enterprise: local-first email-archive forensics for organizations. No server, no tenant, nothing to breach. MDM-managed, tamper-evident, deployed via Apple Business Manager.">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #1d1d1f; background: #fff; line-height: 1.6; }
+        a { color: #0071E3; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .hero { background: linear-gradient(180deg, #1d1d3f 0%, #24243e 100%); color: #fff; text-align: center; padding: 88px 24px 72px; }
+        .hero h1 { font-size: 44px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 14px; }
+        .hero .grad { background: linear-gradient(90deg, #7dd3fc, #a78bfa); -webkit-background-clip: text; background-clip: text; color: transparent; }
+        .hero p { font-size: 19px; opacity: 0.85; max-width: 720px; margin: 0 auto 28px; }
+        .cta { display: inline-block; background: #0071E3; color: #fff; padding: 13px 28px; border-radius: 980px; font-weight: 600; }
+        .cta:hover { background: #0077ED; text-decoration: none; }
+        .cta.ghost { background: transparent; border: 1px solid rgba(255,255,255,0.4); margin-left: 10px; }
+        .section { max-width: 980px; margin: 0 auto; padding: 64px 24px; }
+        .section h2 { font-size: 30px; font-weight: 700; margin-bottom: 10px; }
+        .section .sub { color: #6e6e73; margin-bottom: 32px; font-size: 17px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 22px; }
+        .card { background: #f5f5f7; border-radius: 16px; padding: 24px; }
+        .card h3 { font-size: 17px; margin-bottom: 6px; }
+        .card p { font-size: 14px; color: #515154; }
+        table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #e8e8ed; }
+        th { color: #6e6e73; font-weight: 600; }
+        .pass { color: #1a7f37; font-weight: 700; }
+        .steps li { margin-bottom: 12px; font-size: 15px; }
+        footer { border-top: 1px solid #e8e8ed; text-align: center; padding: 36px 24px; color: #86868b; font-size: 12px; }
+        @media (max-width: 640px) { .hero h1 { font-size: 32px; } }
+    </style>
+</head>
+<body>
+
+<section class="hero">
+    <h1>mailin Enterprise<br><span class="grad">The email-forensics tool with nothing to breach.</span></h1>
+    <p>Your investigations run entirely on your organization's Macs, iPhones, and iPads.
+    No server. No tenant. No vendor data processing. IT deploys an app — not a service.</p>
+    <a class="cta" href="mailto:sasmalgiri@gmail.com?subject=mailin%20Enterprise">Talk to us</a>
+    <a class="cta ghost" href="../">Consumer app</a>
+</section>
+
+<section class="section">
+    <h2>Why local-first is the enterprise feature</h2>
+    <p class="sub">The security review most SaaS tools fail is one mailin never has to take: your case data never leaves your devices.</p>
+    <div class="grid">
+        <div class="card"><h3>🔒 Zero egress by default</h3><p>Import, search, analysis, AI — all on-device. The one optional cloud feature (bring-your-own-key AI) can be disabled fleet-wide by MDM policy, a hard gate no user toggle can override.</p></div>
+        <div class="card"><h3>🛡️ Tamper-evident by design</h3><p>HMAC-chained audit logs, Ed25519-sealed work products, and sealed case bundles. Any edit after posting fails verification loudly — and a third party can verify without contacting your machines.</p></div>
+        <div class="card"><h3>🖥️ MDM-managed</h3><p>Standard Managed App Configuration: preset examiner identity, enforce the app lock, disable cloud AI org-wide, set case-number prefixes. Works with Jamf, Intune, Kandji, Mosyle.</p></div>
+        <div class="card"><h3>🤝 Team handoff without a server</h3><p>Sealed .mailincase bundles carry a case between examiners; imports verify the seal before opening and merge with per-examiner attribution — conflicts kept, never silently merged.</p></div>
+        <div class="card"><h3>⚖️ Evidence discipline</h3><p>Every finding cites its emails; contested facts keep both sides; the app never asserts guilt or closes an action — humans decide, on the record.</p></div>
+        <div class="card"><h3>🏢 Apple Business Manager</h3><p>Distributed as an Apple Custom App: your organization buys managed licenses in ABM and deploys through your MDM. All Professional features included — no in-app purchases.</p></div>
+    </div>
+</section>
+
+<section class="section" style="background:#f5f5f7; max-width:none;">
+    <div style="max-width:980px; margin:0 auto;">
+        <h2>Every claim, executed</h2>
+        <p class="sub">We don't claim features we haven't run. A sample from our validation ledger (full table in the security whitepaper):</p>
+        <table>
+            <tr><th>Claim</th><th>Executed check</th><th></th></tr>
+            <tr><td>Audit chain detects tampering</td><td>Append entries, verify; tamper detection walk</td><td class="pass">PASS</td></tr>
+            <tr><td>Sealed documents detect edits</td><td>Seal → mutate one field → content mismatch</td><td class="pass">PASS</td></tr>
+            <tr><td>Case bundles refuse tampering</td><td>Corrupt one character → import refused with digest diff</td><td class="pass">PASS</td></tr>
+            <tr><td>Legal hold blocks deletion</td><td>Delete attempt on held email → blocked</td><td class="pass">PASS</td></tr>
+            <tr><td>MDM policies enforce</td><td>Injected managed config → cloud AI hard-off, forced lock</td><td class="pass">PASS</td></tr>
+            <tr><td>Bates stamps readable on every page</td><td>Rendered PDF → PDFKit text read-back per page</td><td class="pass">PASS</td></tr>
+            <tr><td>Team merge preserves conflicts</td><td>Same-ID conflicting artifact → both readings kept, attributed</td><td class="pass">PASS</td></tr>
+        </table>
+    </div>
+</section>
+
+<section class="section">
+    <h2>Getting started</h2>
+    <p class="sub">Three steps from contact to a managed fleet:</p>
+    <ol class="steps">
+        <li><strong>Send us your Apple Business Manager Organization ID</strong> (ABM → Preferences → Enrollment Information) at <a href="mailto:sasmalgiri@gmail.com?subject=mailin%20Enterprise%20—%20Org%20ID">sasmalgiri@gmail.com</a>.</li>
+        <li><strong>We list mailin Enterprise privately for your organization</strong> — it appears under Custom Apps in your ABM within days; buy the seats you need.</li>
+        <li><strong>Deploy via your MDM</strong> with our managed-configuration keys (see the <a href="https://github.com/sasmalgiri/mailin/blob/main/ENTERPRISE_DEPLOYMENT.md">deployment guide</a>). Pilot licenses are available today via managed config while your listing is prepared.</li>
+    </ol>
+    <p style="margin-top:20px; font-size:15px;">
+        📄 <a href="https://github.com/sasmalgiri/mailin/blob/main/SECURITY_WHITEPAPER.md">Security &amp; assurance whitepaper</a> ·
+        🛠️ <a href="https://github.com/sasmalgiri/mailin/blob/main/ENTERPRISE_DEPLOYMENT.md">MDM deployment guide</a>
+    </p>
+</section>
+
+<footer>
+    &copy; 2025-2026 EcoSanskriti Innovation Pvt Ltd. mailin runs on macOS 14.6+, iOS/iPadOS 17.6+.
+    Admissibility of digital evidence is jurisdiction-specific; consult qualified counsel for evidentiary use.
+</footer>
+
+</body>
+</html>

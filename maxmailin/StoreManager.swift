@@ -97,7 +97,15 @@ class StoreManager: ObservableObject {
     @Published private(set) var isLifetimePurchase = false
     @Published var showPaywall = false
 
-    #if DEBUG
+    #if ENTERPRISE_EDITION
+    // mailin Enterprise (Custom App via Apple Business Manager): every
+    // Professional feature is included in the purchase price — there are no
+    // in-app purchases in this edition (IAP cannot be bulk-purchased through
+    // ABM, and App Review rejects dead IAP UI in custom apps).
+    var isPremium: Bool { true }
+    var isProfessional: Bool { true }
+    var isSubscribed: Bool { true }
+    #elseif DEBUG
     // Debug builds unlock all paid tiers so we can exercise gated features in
     // the simulator without going through StoreKit. Release builds (TestFlight,
     // App Store) keep the real entitlement check.
@@ -115,9 +123,14 @@ class StoreManager: ObservableObject {
     // MARK: - Lifecycle
 
     init() {
+        #if ENTERPRISE_EDITION
+        // Enterprise edition: everything is included; never touch StoreKit.
+        currentTier = .professional
+        #else
         transactionListener = listenForTransactions()
         Task { await loadProducts() }
         Task { await checkEntitlements() }
+        #endif
     }
 
     deinit {

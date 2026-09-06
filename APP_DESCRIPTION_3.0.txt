@@ -1,0 +1,58 @@
+mailin turns exported email into an organized, searchable, defensible case file — on your Mac. No account, no tracking.
+
+Import Gmail Takeout (.mbox), Apple Mail (.emlx), Outlook (.msg/.pst/.ost), Lotus Notes (.nsf), or .eml files and mailin builds a fast, structured archive.
+
+NEW IN 3.0 — EVIDENCE STUDIOS
+- Hypothesis Matrix (ACH): score competing explanations against cited emails; ranked by fewest inconsistencies — you decide, never the app
+- Fact–Evidence Matrix: map each contested fact to supporting AND opposing emails; both sides preserved
+- Reasoning Studio: 5W1H, Five Whys, Fishbone, and root-cause analysis — every cell cites emails or says UNKNOWN
+- Evidence Desks: Admiralty source-reliability grid (seeded from SPF/DKIM signals), contradiction and gap registers
+- Action Register: corrective actions linked to causes; closing requires a named human verifier with evidence
+- Sealed documents: every numbered work product carries a cryptographic seal — any later edit fails verification
+- Sealed case handoff: export a whole case as a verifiable .mailincase bundle; tampered bundles are refused
+- Team review: merge a colleague's work with attribution — conflicts kept side by side, never silently merged
+- New Researcher persona: protocols, screening, extraction & coding, cited chronologies
+
+GUIDED JOBS, NOT JUST TOOLS
+51 step-by-step jobs across 6 roles — Forensic, Legal/eDiscovery, IT, Journalist, Researcher, Personal — with auto-save, sign-off, evidence attachment, and a numbered document trail. Every job states what it will never assert.
+
+SEARCH AND ANALYSIS
+- Full-text and structured search, threading, smart filters, Gmail labels
+- Analytics: timelines, heatmaps, entity graphs, topic clusters, anomaly detection
+- Thread Story, duplicate detection, PII and GDPR reporting with validated redaction
+
+ON-DEVICE AI
+- AI assistant that cites the exact emails behind every answer
+- Apple Intelligence (macOS 26+); optional Cloud AI is opt-in, off by default
+
+EXPORT
+- Per-email: EML, PDF, TIFF, MSG · Documents: Word, CSV, JSON, Markdown, MBOX, PST, portable HTML, vCard, ICS
+- Bates-stamped PDFs (stamp on every page), Concordance load files
+- Forensic reports with SHA-256 manifests; cryptographically signed exports
+
+FORENSIC AND LEGAL
+- Tamper-evident HMAC audit log, chain of custody, custodians and legal holds
+- SPF/DKIM/DMARC analysis, MIME inspection
+
+FOR ORGANIZATIONS
+mailin Enterprise is available to businesses via Apple Business Manager (all Professional features, MDM-managed, org-wide policy controls). Contact us.
+
+PRIVATE BY DESIGN
+On-device by default. The developer collects nothing. Zero analytics, zero third-party SDKs. Optional Face ID / Touch ID lock.
+
+Universal Purchase — buy once, use on iPhone, iPad, and Mac.
+
+SUBSCRIPTION INFORMATION
+mailin Personal — Monthly: USD 4.99 / month
+mailin Personal — Yearly: USD 44.99 / year (save 25%)
+mailin Personal — Lifetime: USD 99.99 one-time
+mailin Professional — Monthly: USD 9.99 / month
+mailin Professional — Yearly: USD 79.99 / year (save 33%)
+mailin Professional — Lifetime: USD 249.99 one-time
+Subscriptions auto-renew unless cancelled at least 24 hours before the end of the billing period. Payment is charged to your Apple ID at purchase confirmation. Manage subscriptions in System Settings > Apple ID > Subscriptions. Lifetime purchases are permanent and do not auto-renew.
+
+Terms of Use (EULA): https://www.apple.com/legal/internet-services/itunes/dev/stdeula/
+Privacy Policy: https://sasmalgiri.github.io/mailin/privacy/
+
+DISCLAIMER
+mailin augments your judgment; it does not make legal determinations for you. AI features can produce inaccurate results — always verify important outputs. Forensic features support common forensic and eDiscovery workflows, but the admissibility of digital evidence is jurisdiction-specific; consult qualified legal counsel for evidentiary use. mailin makes no warranty of fitness for any specific legal or regulatory purpose.

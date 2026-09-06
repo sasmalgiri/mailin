@@ -448,9 +448,11 @@ struct SettingsView: View {
                     }
                 }
 
+                #if !ENTERPRISE_EDITION
                 Button("Restore Purchases") {
                     Task { await storeManager.restorePurchases() }
                 }
+                #endif
             } header: {
                 Text("Purchase")
                     .font(.headline)
@@ -574,10 +576,12 @@ struct SettingsView: View {
                     .accessibilityLabel("Manage or cancel subscription")
                 }
 
+                #if !ENTERPRISE_EDITION
                 Button("Restore Purchases") {
                     Task { await storeManager.restorePurchases() }
                 }
                 .accessibilityLabel("Restore purchases")
+                #endif
             } header: {
                 Text("Purchase")
                     .font(.headline)

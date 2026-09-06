@@ -402,7 +402,7 @@ class PredictiveCodingEngine: ObservableObject {
 
     // MARK: - Naive Bayes Classifier
 
-    nonisolated private static func naiveBayesPredict(
+    nonisolated static func naiveBayesPredict(
         relevantIDs: Set<UUID>,
         irrelevantIDs: Set<UUID>,
         emailTokens: [UUID: [String: Double]],
@@ -477,7 +477,7 @@ class PredictiveCodingEngine: ObservableObject {
 
     // MARK: - Cosine Similarity Predictor
 
-    nonisolated private static func cosinePredict(
+    nonisolated static func cosinePredict(
         relevantIDs: Set<UUID>,
         irrelevantIDs: Set<UUID>,
         emailVectors: [UUID: [Double]],

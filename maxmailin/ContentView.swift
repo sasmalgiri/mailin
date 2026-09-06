@@ -282,7 +282,7 @@ struct ContentView: View {
                 #endif
         }
         #endif
-        #if !DEBUG
+        #if !DEBUG && !ENTERPRISE_EDITION
         .sheet(isPresented: $storeManager.showPaywall) {
             PaywallView()
                 .environmentObject(storeManager)

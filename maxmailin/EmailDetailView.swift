@@ -1802,15 +1802,6 @@ struct EmailDetailView: View {
         let tag = forensicManager.tagForEmail(email.id)
         let emailHash = forensicManager.perEmailHashes[email.id]
 
-        let pageWidth: CGFloat = 612
-        let pageHeight: CGFloat = 792
-        let margin: CGFloat = 54
-        let headerHeight: CGFloat = 60
-        let footerHeight: CGFloat = 40
-        let contentWidth = pageWidth - margin * 2
-        let contentTop = pageHeight - margin - headerHeight
-        let contentBottom = margin + footerHeight
-
         var lines: [String] = []
         lines.append("Subject: \(subjectLine)")
         lines.append("From: \(header("From"))")
@@ -1830,41 +1821,6 @@ struct EmailDetailView: View {
         let bodyLines = emailBody.components(separatedBy: .newlines)
         lines.append(contentsOf: bodyLines)
 
-        let bodyFont = PlatformFont.monospacedSystemFont(ofSize: 10, weight: .regular)
-        let headerFont = PlatformFont.systemFont(ofSize: 8, weight: .medium)
-        let batesFont = PlatformFont.monospacedSystemFont(ofSize: 9, weight: .bold)
-        #if os(macOS)
-        let labelColor = PlatformColor.labelColor
-        let secondaryLabelColor = PlatformColor.secondaryLabelColor
-        let separatorColor = PlatformColor.separatorColor
-        #else
-        let labelColor = PlatformColor.label
-        let secondaryLabelColor = PlatformColor.secondaryLabel
-        let separatorColor = PlatformColor.separator
-        #endif
-        let bodyAttrs: [NSAttributedString.Key: Any] = [.font: bodyFont, .foregroundColor: labelColor]
-        let headerAttrs: [NSAttributedString.Key: Any] = [.font: headerFont, .foregroundColor: secondaryLabelColor]
-        let batesAttrs: [NSAttributedString.Key: Any] = [.font: batesFont, .foregroundColor: labelColor]
-
-        let lineHeight: CGFloat = 14
-        let usableHeight = contentTop - contentBottom
-        let linesPerPage = Int(usableHeight / lineHeight)
-
-        var pages: [[String]] = []
-        var currentPage: [String] = []
-        for line in lines {
-            let wrapped = wrapLine(line, maxWidth: contentWidth, font: bodyFont)
-            for w in wrapped {
-                currentPage.append(w)
-                if currentPage.count >= linesPerPage {
-                    pages.append(currentPage)
-                    currentPage = []
-                }
-            }
-        }
-        if !currentPage.isEmpty { pages.append(currentPage) }
-        if pages.isEmpty { pages.append([]) }
-
         let safeName = subjectLine.replacingOccurrences(of: "[^A-Za-z0-9 ]", with: "_", options: .regularExpression)
 
         #if os(macOS)
@@ -1877,102 +1833,25 @@ struct EmailDetailView: View {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(batesNumber)_\(safeName).pdf")
         #endif
 
-        var mediaBox = CGRect(x: 0, y: 0, width: pageWidth, height: pageHeight)
-        guard let context = CGContext(url as CFURL, mediaBox: &mediaBox, nil) else {
+        let pageCount = BatesPDFRenderer.render(
+            lines: lines,
+            metadata: .init(batesNumber: batesNumber,
+                            caseNumber: caseNum,
+                            examiner: examiner,
+                            md5Hash: emailHash?.md5),
+            to: url)
+        guard pageCount > 0 else {
             exportError = "Failed to create PDF context"
             return
         }
-
-        let dateStr = DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .short)
-
-        for (pageIndex, pageLines) in pages.enumerated() {
-            context.beginPage(mediaBox: &mediaBox)
-
-            #if os(macOS)
-            let nsContext = NSGraphicsContext(cgContext: context, flipped: false)
-            NSGraphicsContext.current = nsContext
-            #else
-            UIGraphicsPushContext(context)
-            #endif
-
-            // Header: case info left, Bates number right
-            let headerY = pageHeight - margin - 12
-            var headerLeft = "mailin Forensic Export"
-            if !caseNum.isEmpty { headerLeft = "Case: \(caseNum)" }
-            if !examiner.isEmpty { headerLeft += "  |  Examiner: \(examiner)" }
-            (headerLeft as NSString).draw(at: CGPoint(x: margin, y: headerY), withAttributes: headerAttrs)
-
-            let batesStr = "\(batesNumber) — Page \(pageIndex + 1) of \(pages.count)"
-            let batesSize = (batesStr as NSString).size(withAttributes: batesAttrs)
-            (batesStr as NSString).draw(at: CGPoint(x: pageWidth - margin - batesSize.width, y: headerY), withAttributes: batesAttrs)
-
-            // Header divider
-            context.setStrokeColor(separatorColor.cgColor)
-            context.setLineWidth(0.5)
-            context.move(to: CGPoint(x: margin, y: headerY - 4))
-            context.addLine(to: CGPoint(x: pageWidth - margin, y: headerY - 4))
-            context.strokePath()
-
-            // Body content
-            for (lineIdx, line) in pageLines.enumerated() {
-                let y = contentTop - CGFloat(lineIdx) * lineHeight - lineHeight
-                (line as NSString).draw(at: CGPoint(x: margin, y: y), withAttributes: bodyAttrs)
-            }
-
-            // Footer divider
-            context.setStrokeColor(separatorColor.cgColor)
-            context.move(to: CGPoint(x: margin, y: contentBottom + 8))
-            context.addLine(to: CGPoint(x: pageWidth - margin, y: contentBottom + 8))
-            context.strokePath()
-
-            // Footer: date left, hash right
-            let footerY = margin + 10
-            (dateStr as NSString).draw(at: CGPoint(x: margin, y: footerY), withAttributes: headerAttrs)
-            if let hash = emailHash {
-                let hashStr = "MD5: \(hash.md5)"
-                let hashSize = (hashStr as NSString).size(withAttributes: headerAttrs)
-                (hashStr as NSString).draw(at: CGPoint(x: pageWidth - margin - hashSize.width, y: footerY), withAttributes: headerAttrs)
-            }
-
-            #if os(macOS)
-            NSGraphicsContext.current = nil
-            #else
-            UIGraphicsPopContext()
-            #endif
-            context.endPage()
-        }
-
-        context.closePDF()
 
         #if os(iOS)
         iOSShareFile(at: url)
         #endif
 
         if forensicManager.isEnabled {
-            forensicManager.logAction("Bates PDF Export", detail: "\(batesNumber) — \(pages.count) pages, subject: \(subjectLine)")
+            forensicManager.logAction("Bates PDF Export", detail: "\(batesNumber) — \(pageCount) pages, subject: \(subjectLine)")
         }
-    }
-
-    private func wrapLine(_ line: String, maxWidth: CGFloat, font: PlatformFont) -> [String] {
-        if line.isEmpty { return [""] }
-        let attrs: [NSAttributedString.Key: Any] = [.font: font]
-        let size = (line as NSString).size(withAttributes: attrs)
-        if size.width <= maxWidth { return [line] }
-
-        var result: [String] = []
-        var current = ""
-        for char in line {
-            let test = current + String(char)
-            let testSize = (test as NSString).size(withAttributes: attrs)
-            if testSize.width > maxWidth {
-                result.append(current)
-                current = String(char)
-            } else {
-                current = test
-            }
-        }
-        if !current.isEmpty { result.append(current) }
-        return result
     }
 
     #if os(iOS)

@@ -38,6 +38,11 @@ R1.1 **Enterprise build configuration**
 - Managed-config `licenseKey` remains for pilots on the consumer build only
 - Exit: enterprise config builds; behavioral check confirms tier == professional and
   paywall/IAP surfaces absent
+- STATUS: code COMPLETE (StoreManager enterprise branch, no-IAP guards on paywall sheet /
+  Restore Purchases / Rate button, About badge + managed provenance). OWNER 5-minute step
+  in Xcode: Project > duplicate the maxmailin target as "mailin Enterprise" > set bundle id
+  com.ecosanskriti.mailin.enterprise > Build Settings > Other Swift Flags add
+  -DENTERPRISE_EDITION (all configs) > new scheme > archive from that scheme.
 
 R1.2 **Gold-case closure (the three deferred checks)**
 - S/MIME: generate a self-signed S/MIME sample message; verify SMIMEHandler verdict path

@@ -43,6 +43,21 @@ struct AboutView: View {
                         .foregroundColor(AppColors.secondary)
                 }
 
+                #if ENTERPRISE_EDITION
+                VStack(spacing: 2) {
+                    Text("ENTERPRISE EDITION")
+                        .font(.caption2.weight(.bold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Capsule().fill(Color.indigo))
+                    if let provenance = ManagedConfig.provenanceLine {
+                        Text(provenance)
+                            .font(Typography.caption2)
+                            .foregroundColor(AppColors.secondary)
+                    }
+                }
+                #endif
+
                 // maxmailin SwiftData status — confirms the v2 storage layer
                 // is wired and reachable from the UI.
                 swiftDataStatusBadge
@@ -125,6 +140,7 @@ struct AboutView: View {
                 .buttonStyle(.borderless)
                 #endif
 
+                #if !ENTERPRISE_EDITION
                 Button("Rate mailin on the App Store") {
                     guard let url = URL(string: "https://apps.apple.com/app/id6767245397?action=write-review") else { return }
                     openURL(url)
@@ -133,6 +149,7 @@ struct AboutView: View {
                 .buttonStyle(.link)
                 #else
                 .buttonStyle(.borderless)
+                #endif
                 #endif
 
                 Button("Contact Support") {
