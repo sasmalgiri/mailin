@@ -109,14 +109,52 @@ lives there cannot be confirmed from the shell. Launch-time items #10, #11,
 normal launch, but they do mutate the store (backfill, FTS dedupe). Measurement
 runs check the app's own archive state on launch before importing anything.
 
-Not measured yet, and why:
+### Measured — Release build, existing library, all optional pages off
+
+Host: this Mac (arm64, macOS 27.0). Build: `xcodebuild -configuration Release
+-destination platform=macOS,arch=arm64` → **BUILD SUCCEEDED**. Run: launched
+from DerivedData, left idle, sampled with `ps`/`lsof`, 2026-09-23.
+
+| Metric | Measured | Note |
+|---|---|---|
+| App bundle size | **81 MB** | Release, unstripped of dSYM side files |
+| Process visible after `open` | **≤ 3 s** | coarse: first `pgrep` check. Launch-to-usable is NOT MEASURED — needs signpost instrumentation |
+| Idle RSS | **526 MiB** (538,688 KB) | steady across ~10 min idle |
+| Idle CPU | **0.0 %** | no spin at rest |
+| Open FTS year-shard databases at idle | **20** (`email_search_0.db` + per-year shards) | each with `-wal` and `-shm` |
+| Main store open | `emails.db` + `-wal` + `-shm` | as expected |
+| Open regular files | **141** | |
+| **Network sockets** | **0** | zero-network baseline holds on the signed Release build (pre-3.0: `OFFLINE_MODE` excludes all connector code and the entitlements carry no `network.client`) |
+| Graceful quit | **vetoed** — AppleScript quit returned `-128 User cancelled`; needed `SIGTERM` | a modal launch gate (terms or persona sheet) is the suspect; confirm during P1's launch rework |
+
+**This is an existing-library baseline, not a fresh-install baseline.** The 20
+open year-shards prove a real archive lives in the container, spanning roughly
+2007–2026. A fresh-install baseline requires a clean container (separate bundle
+id or a moved-aside container) and is still NOT MEASURED.
+
+### Finding: 20 FTS shard handles stay open at idle
+
+`MemoryPressureHandler` only evicts shards *under pressure* (keep 4 on warning,
+2 otherwise — `mailinApp.swift:121–124`). With no pressure, all 20 stay open and
+hold their SQLite page caches, which is the bulk of the 526 MiB. Nothing here is
+an optional module: this is Page 1's own resting cost, and it grows with the
+number of years in the archive.
+
+Directly relevant to the §3.3 requirement — the all-off baseline is supposed to
+be the floor every other module is measured against, and a floor that scales
+with archive age is the wrong shape. Added to the plan as **A9: idle shard
+eviction** (close shards untouched for N minutes; open lazily on query) with a
+before/after RSS measurement.
+
+### Still not measured, and why
 
 | Metric | Status |
 |---|---|
-| Cold-launch time (Release) | NOT MEASURED — measurement run pending |
-| Idle RSS after launch | NOT MEASURED — same |
-| On-disk footprint of a fresh install | NOT MEASURED — same |
-| Import of `Sent.mbox` (time, peak RSS, FTS coverage) | NOT MEASURED — next step |
+| Fresh-install cold launch, idle RSS, footprint | NOT MEASURED — needs a clean container (see above) |
+| Launch-to-usable timing | NOT MEASURED — needs signpost instrumentation, added to P1 |
+| Import of `Sent.mbox` (time, peak RSS, FTS/attachment coverage) | **BLOCKED** — importing into the owner's real archive would pollute it; needs a clean container or a scratch workspace |
+| Signed-entitlement dump (`codesign -d --entitlements`) | NOT VERIFIED — the tooling call kept timing out in this environment; source entitlements are known (§1 B6), signed-binary confirmation still owed |
+| v1 JSON → SQLite migration timing | NOT MEASURED — needs a genuine v1 library fixture |
 | v1 JSON → SQLite migration timing | NOT MEASURED — needs a genuine v1 library fixture |
 | 2.x customer-library open timing | NOT MEASURED — needs a copy of a real 2.x library |
 | `HMACChainAuditLog.verifyChain()` cost vs chain length | NOT MEASURED — needs a long chain fixture |
