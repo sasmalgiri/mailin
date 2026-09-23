@@ -61,7 +61,10 @@ struct mailinApp: App {
         // Main window with proper sizing and controls
         WindowGroup {
             ZStack {
-                ContentView()
+                // A1/A2: the four-page frame. For a Page-1-only install this
+                // renders ContentView with no added chrome; a switcher appears
+                // only once a second page is enabled.
+                FourPageShell()
                     .environment(appState)
                     .environment(modules)
                     .environmentObject(storeManager)

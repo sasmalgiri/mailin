@@ -249,7 +249,7 @@ Import / Search / Export and **no persona picker, case setup, or AI prompt**.
 
 | ID | Work | Detail | Est. |
 |---|---|---|---|
-| A1 | Default-route to Archive | Remove persona onboarding from the launch path (B13); `PersonaManager` becomes a Page 3 preference, migrated silently for existing users. Fresh install: sidebar = All mail + imported sources; toolbar = Import, one search field, Export. | 3–5 d |
+| A1 | Default-route to Archive — **shell DONE, sidebar pending** | `FourPageShell` is the root (A1/A2 groundwork): `PageRouter` validates the visible page against the registry, falls back to Archive when a page is switched off, and persists the choice. A Page-1-only install gets **no page chrome at all**; the switcher appears only once a second page is enabled. Persona onboarding is already off the launch path (P1.1). Still open: the sidebar item per page as the directive describes (currently a top switcher), and Page 1's own toolbar/empty-state wording. | 2–3 d remaining |
 | A2 | Three-pane shell | Sidebar (All mail, source/folder tree, saved searches) / list / detail, with keyset pagination + stable IDs + lazy body hydration. Audit `ContentView.swift` (6,041 lines) and split it; any remaining `[RawEmail]` full-corpus array is a defect to remove. | 8–12 d |
 | A3 | Guided import sheet | Source-guided flow: pick format/source → copy vs reference → destination → duplicate policy → indexing choices → required space → Start. Shows unsupported/encrypted/corrupt variants **before** start. | 5–7 d |
 | A4 | Import queue UI | Start/pause/resume/stop per source, reorder, browse+search during import; per-source bytes, messages, throughput, stage, **current batch size**, resource status, indexed fraction, ETA-as-estimate, pause reason. | 4–6 d |
