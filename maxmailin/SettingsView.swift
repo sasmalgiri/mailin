@@ -136,6 +136,13 @@ struct SettingsView: View {
     @State private var notificationStatus: UNAuthorizationStatus = .notDetermined
     var body: some View {
         TabView {
+            // v3.0 §3.3: the one switchboard for the four pages. First tab so
+            // "what is on, what is running" is the first thing Settings shows.
+            ModulesSettingsView()
+                .tabItem {
+                    Label("Modules", systemImage: "square.grid.2x2")
+                }
+
             profileSettings
                 .tabItem {
                     Label("Profile", systemImage: personaManager.selectedPersona.icon)

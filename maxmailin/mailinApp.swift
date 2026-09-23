@@ -63,6 +63,7 @@ struct mailinApp: App {
             ZStack {
                 ContentView()
                     .environment(appState)
+                    .environment(modules)
                     .environmentObject(storeManager)
                     .adaptiveLayout()
                     #if os(macOS)
@@ -362,6 +363,9 @@ struct mailinApp: App {
         Settings {
             SettingsView()
                 .environment(appState)
+                // Same registry instance as the main window: Settings ▸ Modules
+                // must switch the live state, not a copy.
+                .environment(modules)
                 .environmentObject(storeManager)
         }
 
