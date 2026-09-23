@@ -38,9 +38,6 @@ struct SettingsView: View {
     @ObservedObject private var forensicManager = ForensicManager.shared
     @ObservedObject private var personaManager = PersonaManager.shared
     @ObservedObject private var collabManager = CollaborationManager.shared
-    #if !OFFLINE_MODE
-    @ObservedObject private var iCloudSync = iCloudSyncManager.shared
-    #endif
     @AppStorage("defaultSenderEmail") private var defaultSenderEmail = ""
     @AppStorage("autoDetectSender") private var autoDetectSender = true
     @AppStorage("showInlineImages") private var showInlineImages = true
@@ -173,13 +170,6 @@ struct SettingsView: View {
                 .tabItem {
                     Label("Forensic", systemImage: "shield.checkered")
                 }
-
-            #if !OFFLINE_MODE
-            iCloudSyncSettings
-                .tabItem {
-                    Label("Sync", systemImage: "icloud")
-                }
-            #endif
 
             collaborationSettings
                 .tabItem {
@@ -1454,114 +1444,6 @@ struct SettingsView: View {
         }
         #endif
     }
-
-    // MARK: - iCloud Sync Settings
-
-    #if !OFFLINE_MODE
-    private var iCloudSyncSettings: some View {
-        Form {
-            Section {
-                if !storeManager.isProfessional {
-                    HStack(spacing: Spacing.xSmall) {
-                        Image(systemName: "lock.fill")
-                            .foregroundColor(.purple)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Professional Feature")
-                                .font(Typography.headline)
-                            Text("iCloud Sync requires the Professional tier.")
-                                .font(Typography.caption1)
-                                .foregroundColor(AppColors.secondary)
-                        }
-                        Spacer()
-                        Button("Upgrade") {
-                            storeManager.showPaywall = true
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                    }
-                    .padding(.vertical, Spacing.xxSmall)
-                } else {
-                    Toggle("Enable iCloud Sync", isOn: $iCloudSync.isEnabled)
-                        .help("Sync forensic metadata (evidence tags, annotations, case info) across your devices via iCloud")
-
-                    if iCloudSync.isEnabled {
-                        HStack {
-                            Image(systemName: iCloudSync.syncStatus.icon)
-                                .foregroundColor(iCloudSync.syncStatus.color)
-                            Text(iCloudSync.syncStatus.label)
-                                .font(Typography.caption1)
-                                .foregroundColor(AppColors.secondary)
-                            Spacer()
-                            if let lastSync = iCloudSync.lastSyncDate {
-                                Text(lastSync.formatted(date: .omitted, time: .shortened))
-                                    .font(Typography.caption2)
-                                    .foregroundColor(AppColors.secondary)
-                            }
-                        }
-
-                        if !iCloudSync.isAvailable {
-                            HStack(spacing: Spacing.xSmall) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundColor(.orange)
-                                Text("Sign in to iCloud in System Settings to enable sync.")
-                                    .font(Typography.caption1)
-                                    .foregroundColor(.orange)
-                            }
-                        }
-
-                        Button("Sync Now") {
-                            iCloudSync.forceSyncNow()
-                        }
-                        .disabled(!iCloudSync.isAvailable)
-                    }
-                }
-            } header: {
-                Text("iCloud Sync")
-                    .font(.headline)
-            } footer: {
-                Text("Syncs evidence tags, annotations, and case information across your devices. Email content is never uploaded — only forensic metadata is synced.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            if storeManager.isProfessional && iCloudSync.isEnabled {
-                Section {
-                    HStack {
-                        Text("Synced Data")
-                        Spacer()
-                        Text("Evidence tags, annotations, case info")
-                            .font(Typography.caption1)
-                            .foregroundColor(AppColors.secondary)
-                    }
-                    HStack {
-                        Text("Sync Interval")
-                        Spacer()
-                        Text("Every 60 seconds")
-                            .font(Typography.caption1)
-                            .foregroundColor(AppColors.secondary)
-                    }
-                    HStack {
-                        Text("Email Content")
-                        Spacer()
-                        HStack(spacing: 4) {
-                            Image(systemName: "lock.shield.fill")
-                                .foregroundColor(.green)
-                                .font(.caption)
-                            Text("Never uploaded")
-                                .font(Typography.caption1)
-                                .foregroundColor(.green)
-                        }
-                    }
-                } header: {
-                    Text("Sync Details")
-                        .font(.headline)
-                }
-            }
-        }
-        .formStyle(.grouped)
-        .padding()
-    }
-    #endif
 
     private func chooseSharedFolder() {
         #if os(macOS)
