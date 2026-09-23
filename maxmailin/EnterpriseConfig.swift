@@ -16,6 +16,8 @@ import os.log
 //   requireBiometricLock bool  — forces app lock on; user cannot disable
 //   caseNumberPrefix   string  — preset prefix for case/Bates numbering
 //   licenseKey         string  — pilot enterprise licensing (E2 interim)
+//   disabledModules    [string]— hard-off page ids: aiInsights, professional,
+//                               liveMail (v3.0 §3.3; user cannot re-enable)
 
 enum ManagedConfig {
 
@@ -52,6 +54,13 @@ enum ManagedConfig {
 
     static var licenseKey: String? {
         dict["licenseKey"] as? String
+    }
+
+    /// HARD org gate: `AppModule` raw values an organization switches off for
+    /// the whole deployment. Settings ▸ Modules shows these as unavailable —
+    /// locked by the organization, not merely defaulted off.
+    static var disabledModules: [String] {
+        dict["disabledModules"] as? [String] ?? []
     }
 
     /// One-line provenance string for reports and About.

@@ -39,6 +39,9 @@ struct mailinApp: App {
     @NSApplicationDelegateAdaptor(MailinAppDelegate.self) var appDelegate
     #endif
     @State private var appState = AppStateManager()
+    /// v3.0 §3.3: the one authority for which pages are active. Everything
+    /// optional is gated on this, so a Page-1-only user runs nothing else.
+    @State private var modules = ModuleRegistry()
     @StateObject private var storeManager = StoreManager()
     @ObservedObject private var forensicManager = ForensicManager.shared
     @ObservedObject private var personaManager = PersonaManager.shared
@@ -75,7 +78,12 @@ struct mailinApp: App {
                     .sheet(item: Binding<LaunchSheet?>(
                         get: {
                             if compliance.needsTermsAcceptance { return .terms }
-                            if !personaManager.hasCompletedPersonaSelection { return .persona }
+                            // §3.3 R2: the persona picker belongs to Page 3.
+                            // A new customer lands in Archive and is never asked
+                            // to choose a persona (directive §0), so this sheet
+                            // only appears once Professional Workflows is on.
+                            if modules.isEnabled(.professional),
+                               !personaManager.hasCompletedPersonaSelection { return .persona }
                             return nil
                         },
                         set: { newValue in
@@ -100,9 +108,21 @@ struct mailinApp: App {
                     .onAppear {
                         StoreManager.resetDailyCountersIfNeeded()
                         configureAppearance()
+                        // §3.3: map 2.x state forward exactly once, before any
+                        // gate is read. An existing install keeps what it was
+                        // already using; a fresh install gets Page 1 only.
+                        modules.mapLegacyStateIfNeeded(
+                            isExistingInstall: personaManager.hasCompletedPersonaSelection
+                                || UserDefaults.standard.bool(forKey: "hasSeenLaunchAnimation"),
+                            legacyAIEnabled: enableAIFeatures,
+                            legacyPersonaCompleted: personaManager.hasCompletedPersonaSelection
+                        )
                         // Notification permission is opt-in via Settings → General
                         // → Notifications, not auto-prompted at launch.
-                        BackgroundAnalysisManager.shared.scheduleBackgroundAnalysis()
+                        // §3.3 R2: background analysis belongs to AI Insights.
+                        if modules.isEnabled(.aiInsights) {
+                            BackgroundAnalysisManager.shared.scheduleBackgroundAnalysis()
+                        }
                         try? Tips.configure([
                             .displayFrequency(.weekly)
                         ])
@@ -128,6 +148,11 @@ struct mailinApp: App {
                         // re-prompt, not a feature. On critical pressure,
                         // also drop the profile cache and precomputation
                         // state.
+                        //
+                        // §3.3 R2: registering these hooks at all would pull
+                        // the AI types in on a Page-1-only launch, so both AI
+                        // hooks are registered only while AI Insights is on.
+                        if modules.isEnabled(.aiInsights) {
                         MemoryPressureHandler.shared.register { level in
                             #if canImport(FoundationModels)
                             if #available(macOS 26, iOS 26, *) {
@@ -151,6 +176,7 @@ struct mailinApp: App {
                                 }
                             }
                         }
+                        }   // end AI Insights pressure hooks
                         // (Part F: the legacy in-RAM EmailSearchIndex is no
                         // longer built in production, so its dedicated
                         // memory-pressure drop hook was removed with it.)
@@ -171,10 +197,17 @@ struct mailinApp: App {
                         // and the read cutover gate on `isActive`. Idempotent —
                         // a fast no-op once active.
                         let storageState = await StorageActivationCoordinator.shared.activate()
-                        _ = try? HMACChainAuditLog.shared.append(
-                            action: "v2.storage.activation",
-                            detail: "SQLite activation state: \(storageState.rawValue)"
-                        )
+                        // §3.3 R6: the audit chain is Professional-owned. On a
+                        // Page-1-only launch it stays silent; Archive's import
+                        // and export receipts carry Page 1's provenance. When
+                        // Professional is later enabled, the chain's genesis
+                        // entry declares that it begins at enablement.
+                        if modules.isEnabled(.professional) {
+                            _ = try? HMACChainAuditLog.shared.append(
+                                action: "v2.storage.activation",
+                                detail: "SQLite activation state: \(storageState.rawValue)"
+                            )
+                        }
 
                         // Repair archives imported by pre-full-fidelity builds:
                         // re-extract message type / attachments / labels /
@@ -198,11 +231,19 @@ struct mailinApp: App {
                             // O(1) no-op once everything is indexed.
                             AttachmentTextIndexJob.shared.kickIfNeeded()
                             // Weekly saved-search digest (opt-in; ≤1/week).
-                            DigestScheduler.shared.checkAndDeliver()
-                            // Ship-ready workflows: the 5 built-in recipes are
-                            // seeded on launch so they're usable immediately —
-                            // no create/configure step. Idempotent upsert.
-                            Task { await WorkflowService.seedBuiltins() }
+                            // §3.3 R2: digests belong to AI Insights.
+                            if modules.isEnabled(.aiInsights) {
+                                DigestScheduler.shared.checkAndDeliver()
+                            }
+                            // Ship-ready workflows: the built-in recipes are
+                            // seeded so they're usable immediately — no
+                            // create/configure step. Idempotent upsert.
+                            // §3.3 R2 + directive §1: no workflow-catalog work
+                            // at all on a Professional-disabled launch, so this
+                            // moves to first activation of Page 3.
+                            if modules.isEnabled(.professional) {
+                                Task { await WorkflowService.seedBuiltins() }
+                            }
                         }
 
                         // Repair any store↔FTS drift (a crash between the
@@ -242,27 +283,33 @@ struct mailinApp: App {
                         let selfTestResult: MaxmailinSelfTest.Result = .skipped
                         #endif
 
-                        // Tamper-evident HMAC chain genesis entry on first
-                        // launch; subsequent launches append a "launch" event
-                        // so the chain shows continuous operation.
-                        switch selfTestResult {
-                        case .passed:
-                            _ = try? HMACChainAuditLog.shared.append(
-                                action: "v2.selfTest.passed",
-                                detail: "Maxmailin v2 self-test passed"
-                            )
-                        case .failed(let msg):
-                            _ = try? HMACChainAuditLog.shared.append(
-                                action: "v2.selfTest.failed",
-                                detail: msg
-                            )
-                        case .skipped:
-                            _ = try? HMACChainAuditLog.shared.append(
-                                action: "v2.launch",
-                                detail: "maxmailin launched"
-                            )
+                        // Tamper-evident HMAC chain: a launch event so the chain
+                        // shows continuous operation *while Professional is on*.
+                        //
+                        // §3.3 R6: no append and no verification on a launch
+                        // where Professional is off — which also takes a
+                        // whole-chain walk off every cold launch, a cost that
+                        // grew with archive age. Verification now runs on demand
+                        // and when Page 3 opens.
+                        if modules.isEnabled(.professional) {
+                            switch selfTestResult {
+                            case .passed:
+                                _ = try? HMACChainAuditLog.shared.append(
+                                    action: "v2.selfTest.passed",
+                                    detail: "Maxmailin v2 self-test passed"
+                                )
+                            case .failed(let msg):
+                                _ = try? HMACChainAuditLog.shared.append(
+                                    action: "v2.selfTest.failed",
+                                    detail: msg
+                                )
+                            case .skipped:
+                                _ = try? HMACChainAuditLog.shared.append(
+                                    action: "v2.launch",
+                                    detail: "maxmailin launched"
+                                )
+                            }
                         }
-                        _ = HMACChainAuditLog.shared.verifyChain()
                     }
                     .onChange(of: scenePhase) { _, newPhase in
                         biometricLock.handleScenePhaseChange(newPhase)
