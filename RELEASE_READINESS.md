@@ -170,6 +170,37 @@ Reconciliation is asserted, not eyeballed: `stored + damaged == discovered` and
 `ftsRows == stored` are test assertions, so the measurement fails if accounting
 ever drifts.
 
+### Measured — PRODUCTION-path import of the real fixture
+
+After plan task A10 (dependency injection into `BulkImportCoordinator`), the
+same coordinator the app uses can be driven over disposable storage. This row
+may be quoted as production-path; the Debug-configuration caveat still applies.
+
+| Metric | Measured |
+|---|---|
+| discovered / parsed / damaged | 526 / 526 / 0 |
+| inserted / stored | 526 / 526 |
+| duplicates / persistFailed | 0 / 0 |
+| indexed / FTS rows | 526 / 526 |
+| Wall time | 44.0 s (Debug) |
+
+Accounting identities asserted by the test, not read off a log:
+`discovered == parsed + damaged`, `stored == parsed - persistFailed`, and
+`ftsRows == stored`.
+
+### Measured — A9 idle shard eviction
+
+| Observation | Result |
+|---|---|
+| Handles open at launch (Release, existing 20-year archive) | 20 |
+| Handles after the 180 s idle TTL | **0** — verified by `lsof` on the shipped Release build |
+| Scheduler fires without being called | **yes** — `testScheduledSweep_firesWithoutBeingCalled` drives the real sweep task, not the sweep function |
+| Data after eviction | intact — rows, queries and re-indexing all verified after handles close |
+| Idle RSS reduction | **NOT DEMONSTRATED.** Samples were 421 MiB at 25 s, 388 MiB at 140 s, 392 MiB at 270 s (handles already 0). Closing a connection returns its page cache to SQLite's allocator, which need not return pages to the OS; `sqlite3_release_memory` is now called after a sweep, but no before/after A-B has been run. Claim only the handle result. |
+
+A true RSS before/after needs the eviction behind a runtime flag so one binary
+can be measured both ways — not yet built.
+
 ### Finding: the fixed 500-message batch ignores message size
 
 A 90 MiB source with 526 attachment-heavy messages fits in **two** batches at

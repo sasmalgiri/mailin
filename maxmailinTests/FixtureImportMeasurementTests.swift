@@ -91,6 +91,62 @@ final class FixtureImportMeasurementTests: XCTestCase {
         """)
     }
 
+    /// PRODUCTION-PATH measurement: the same BulkImportCoordinator the app
+    /// uses, driven over disposable storage via the A10 injection. This is the
+    /// number that may be quoted as production-path (configuration caveats
+    /// still apply — the test target builds Debug).
+    func testProductionPathImport_realMBOXFixture_measured() async throws {
+        guard let fixture = Self.fixtureURL else {
+            throw XCTSkip("fixture ~/Downloads/Mail/Sent.mbox not present on this machine")
+        }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fixture-prodpath-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // Disposable storage triple; the gate in MailinStorageEnvironment is
+        // asserted separately, and none of these point at production.
+        try MailinStorageEnvironment.assertNotProduction(root)
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store", isDirectory: true))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts", isDirectory: true))
+        let checkpoints = ImportCheckpointStore(storeURL: root.appendingPathComponent("checkpoints.json"))
+
+        let coordinator = await BulkImportCoordinator(
+            store: store, fts: fts, checkpoints: checkpoints,
+            requiresStorageActivation: false
+        )
+
+        let clock = ContinuousClock()
+        let rssBaseline = currentFootprintBytes()
+        let start = clock.now
+        let summary = try await coordinator.runImport(urls: [fixture])
+        let elapsed = start.duration(to: clock.now).components
+        let seconds = Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
+        let rssAfter = currentFootprintBytes()
+
+        let stored = try await store.totalCount()
+        let ftsRows = try await fts.rowCount()
+        let mib = { (b: UInt64) in Double(b) / 1_048_576.0 }
+
+        XCTAssertEqual(summary.discovered, summary.parsed + summary.damaged,
+                       "discovered must equal parsed + damaged")
+        XCTAssertEqual(stored, summary.parsed - summary.persistFailed,
+                       "stored rows must equal parsed minus hard persist failures")
+        XCTAssertEqual(ftsRows, stored, "FTS coverage must equal stored rows")
+
+        print("""
+        FIXTURE-MEASUREMENT production-path \
+        discovered=\(summary.discovered) parsed=\(summary.parsed) \
+        inserted=\(summary.inserted.map(String.init) ?? "nil") \
+        duplicates=\(summary.duplicates.map(String.init) ?? "nil") \
+        damaged=\(summary.damaged) persistFailed=\(summary.persistFailed) \
+        indexed=\(summary.indexed) stored=\(stored) ftsRows=\(ftsRows) \
+        seconds=\(String(format: "%.2f", seconds)) \
+        rssBaselineMiB=\(String(format: "%.1f", mib(rssBaseline))) \
+        rssAfterMiB=\(String(format: "%.1f", mib(rssAfter)))
+        """)
+    }
+
     /// The safety gate itself, asserted here too so a future refactor of the
     /// measurement cannot quietly start writing into the real archive.
     func testMeasurementCannotRootOnProduction() {

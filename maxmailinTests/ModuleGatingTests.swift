@@ -108,6 +108,49 @@ struct ModuleGatingTests {
         #expect(registry.isEnabled(.archive))
     }
 
+    // MARK: R3 — resource snapshot
+
+    @Test("Page-1-only snapshot holds no optional hosts and no optional jobs")
+    func archiveOnlySnapshotIsClean() throws {
+        let (registry, _) = makeRegistry()
+        final class Host {}
+        for module in AppModule.allCases where module.isOptional {
+            registry.register(module) { Host() }
+        }
+        registry.jobs.register(id: "archive.import", module: .archive, label: "Import") {}
+
+        let snapshot = registry.resourceSnapshot()
+        #expect(snapshot.enabled == [.archive])
+        #expect(snapshot.liveHosts.isEmpty)
+        #expect(snapshot.jobsByModule[.archive] == 1)
+        #expect(snapshot.jobsByModule[.aiInsights] == 0)
+        #expect(snapshot.jobsByModule[.professional] == 0)
+        #expect(snapshot.jobsByModule[.liveMail] == 0)
+        #expect(snapshot.footprintBytes > 0, "footprint must be readable for the R3 table")
+        #expect(snapshot.isArchiveOnlyClean)
+    }
+
+    @Test("Enabling a page shows up in the snapshot; disabling returns it to clean")
+    func snapshotTracksActivation() throws {
+        let (registry, _) = makeRegistry()
+        final class Host {}
+        registry.register(.aiInsights) { Host() }
+
+        try registry.enable(.aiInsights)
+        _ = try registry.host(for: .aiInsights)
+        registry.jobs.register(id: "ai.digest", module: .aiInsights, label: "Digest") {}
+
+        var snapshot = registry.resourceSnapshot()
+        #expect(snapshot.enabled.contains(.aiInsights))
+        #expect(snapshot.liveHosts == [.aiInsights])
+        #expect(snapshot.jobsByModule[.aiInsights] == 1)
+        #expect(!snapshot.isArchiveOnlyClean)
+
+        registry.disable(.aiInsights)
+        snapshot = registry.resourceSnapshot()
+        #expect(snapshot.isArchiveOnlyClean, "disabling must return to the all-off baseline")
+    }
+
     // MARK: Persistence
 
     @Test("Activation survives a relaunch")

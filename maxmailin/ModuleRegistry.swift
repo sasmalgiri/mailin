@@ -363,6 +363,37 @@ final class ModuleRegistry {
         hosts[module] != nil
     }
 
+    /// One reading of what the app is actually holding, for
+    /// `MODULE_ACTIVATION_MATRIX.md` and the §3.3 R3 measurements. Resident
+    /// memory is included so a snapshot can be compared across module states,
+    /// but note RSS is process-wide — it is evidence, not attribution.
+    struct ResourceSnapshot: Sendable, Equatable {
+        var enabled: [AppModule]
+        var liveHosts: [AppModule]
+        var jobsByModule: [AppModule: Int]
+        var footprintBytes: UInt64
+
+        /// The condition a Page-1-only install must satisfy: nothing optional
+        /// is constructed and nothing optional is running.
+        var isArchiveOnlyClean: Bool {
+            enabled == [.archive] && liveHosts.isEmpty
+                && jobsByModule.filter { $0.key.isOptional && $0.value > 0 }.isEmpty
+        }
+    }
+
+    func resourceSnapshot() -> ResourceSnapshot {
+        var counts: [AppModule: Int] = [:]
+        for module in AppModule.allCases {
+            counts[module] = jobs.jobs(for: module).count
+        }
+        return ResourceSnapshot(
+            enabled: enabledModules,
+            liveHosts: AppModule.allCases.filter { hosts[$0] != nil },
+            jobsByModule: counts,
+            footprintBytes: currentFootprintBytes()
+        )
+    }
+
     // MARK: Legacy mapping
 
     /// Maps 2.x state forward exactly once (directive §8.2: "safely map prior

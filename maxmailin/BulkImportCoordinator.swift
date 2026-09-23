@@ -50,6 +50,32 @@ final class BulkImportCoordinator {
     private static let logger = Logger(subsystem: "com.ecosanskriti.mailin",
                                        category: "BulkImport")
 
+    // MARK: - Injected storage (plan task A10)
+    //
+    // The coordinator used to reach for `SQLiteEmailStore.shared`,
+    // `FTSSearchIndex.shared` and `ImportCheckpointStore.shared` directly,
+    // which made the PRODUCTION import path impossible to measure or test
+    // against an isolated corpus — every fixture number was engine-path only.
+    // These default to the production singletons, so app behaviour is
+    // unchanged; a harness or test passes disposable instances instead.
+
+    private let store: SQLiteEmailStore
+    private let fts: FTSSearchIndex
+    private let checkpoints: ImportCheckpointStore
+    /// The storage-authority gate applies to the production store only: an
+    /// injected disposable store has no activation/migration state to wait for.
+    private let requiresStorageActivation: Bool
+
+    init(store: SQLiteEmailStore = .shared,
+         fts: FTSSearchIndex = .shared,
+         checkpoints: ImportCheckpointStore = .shared,
+         requiresStorageActivation: Bool = true) {
+        self.store = store
+        self.fts = fts
+        self.checkpoints = checkpoints
+        self.requiresStorageActivation = requiresStorageActivation
+    }
+
     enum Status: Equatable {
         case idle
         case hashing(file: String)
@@ -206,27 +232,29 @@ final class BulkImportCoordinator {
         // 0. (1d) Storage-authority gate: never write SQLite against
         //    unresolved storage. Fail explicitly — silently skipping persist
         //    is how archives used to look imported without reaching the store.
-        guard await StorageActivationCoordinator.shared.isActive else {
-            Self.logger.fault("Import blocked: storage authority is not active.")
-            throw MaxmailinError.persistence(.containerUnavailable,
-                detail: "Storage is not ready yet. The import was blocked (not skipped) — retry once activation completes.")
+        if requiresStorageActivation {
+            guard await StorageActivationCoordinator.shared.isActive else {
+                Self.logger.fault("Import blocked: storage authority is not active.")
+                throw MaxmailinError.persistence(.containerUnavailable,
+                    detail: "Storage is not ready yet. The import was blocked (not skipped) — retry once activation completes.")
+            }
         }
 
         // Surface (don't inherit) a corrupt checkpoint file: previously
         // ingested files may be re-imported this run.
-        if await ImportCheckpointStore.shared.corruptionDetected() {
+        if await checkpoints.corruptionDetected() {
             summary.warnings.append("The resume-checkpoint file was corrupt and has been quarantined; previously imported files may be re-imported (duplicates are deduplicated by the store).")
         }
 
         // Per-run baselines for inserted/duplicates accounting (B4). A read
         // failure is recorded as unavailable — never fabricated as 0.
         var storeBefore: Int? = nil
-        do { storeBefore = try await SQLiteEmailStore.shared.totalCount() } catch {
+        do { storeBefore = try await store.totalCount() } catch {
             Self.logger.fault("Store count unavailable before import: \(error.localizedDescription, privacy: .public)")
             summary.warnings.append("Store count unavailable before import — inserted/duplicate counts will be reported as unavailable.")
         }
         var dupBefore: Int? = nil
-        do { dupBefore = try await SQLiteEmailStore.shared.duplicatesCount() } catch {
+        do { dupBefore = try await store.duplicatesCount() } catch {
             Self.logger.error("Duplicate-findings count unavailable before import: \(error.localizedDescription, privacy: .public)")
         }
 
@@ -258,7 +286,7 @@ final class BulkImportCoordinator {
                 // produces is stamped (source_id, source_ordinal), so resume /
                 // re-parse can never duplicate an occurrence — regardless of
                 // dedup policy — and forensic evidence stays locatable.
-                let sourceID = try await SQLiteEmailStore.shared.registerSource(
+                let sourceID = try await store.registerSource(
                     SQLiteEmailStore.SourceDescriptor(
                         sha256: hash, filename: sourceName, byteSize: sizeBytes,
                         parser: parserID.name, parserVersion: parserID.version,
@@ -267,7 +295,7 @@ final class BulkImportCoordinator {
                     ))
 
                 // 2. Skip if we have already fully ingested this file.
-                if await ImportCheckpointStore.shared.isImported(sha256: hash) {
+                if await checkpoints.isImported(sha256: hash) {
                     summary.skippedFiles += 1
                     continue
                 }
@@ -280,7 +308,7 @@ final class BulkImportCoordinator {
                     sha256: hash, sizeBytes: sizeBytes,
                     parser: parserID.name, parserVersion: parserID.version
                 )
-                let resumeFrom = await ImportCheckpointStore.shared.resumePoint(for: identity)
+                let resumeFrom = await checkpoints.resumePoint(for: identity)
                 if resumeFrom > 0 {
                     summary.resumed = true
                     summary.resumedDetail = "Resumed \(sourceName) at message \(resumeFrom) (identity-verified checkpoint)."
@@ -352,7 +380,7 @@ final class BulkImportCoordinator {
                         // a retry resumes exactly at the failure point.
                         let insertResult: BatchInsertResult
                         do {
-                            insertResult = try await SQLiteEmailStore.shared.insertBatch(
+                            insertResult = try await store.insertBatch(
                                 pending,
                                 sourceFileHash: hash,
                                 accountID: options.accountID,
@@ -388,7 +416,7 @@ final class BulkImportCoordinator {
                         let toIndex = pending.filter { insertedSet.contains($0.id) }
                         do {
                             if !toIndex.isEmpty {
-                                try await FTSSearchIndex.shared.indexBatch(toIndex)
+                                try await fts.indexBatch(toIndex)
                             }
                             summary.indexed += toIndex.count
                         } catch {
@@ -401,7 +429,7 @@ final class BulkImportCoordinator {
                         // persists. `recordProgress` throws on write failure,
                         // which fail-stops the whole import.
                         committedOrdinal = batchStart + range.lowerBound + pending.count
-                        try await ImportCheckpointStore.shared.recordProgress(
+                        try await checkpoints.recordProgress(
                             identity: identity,
                             sourceName: sourceName,
                             messagesIngested: committedOrdinal
@@ -438,7 +466,7 @@ final class BulkImportCoordinator {
                 // 5. File fully ingested: record the completion checkpoint
                 //    (clears the in-progress one). Its write failure also
                 //    fail-stops (B3).
-                try await ImportCheckpointStore.shared.record(
+                try await checkpoints.record(
                     sha256: hash,
                     sourceName: sourceName,
                     emailCount: committedOrdinal
@@ -474,16 +502,16 @@ final class BulkImportCoordinator {
         // counts stay nil — reported as unavailable, never inflated.
         let completedAt = Date()
         var storeAfter: Int? = nil
-        do { storeAfter = try await SQLiteEmailStore.shared.totalCount() } catch {
+        do { storeAfter = try await store.totalCount() } catch {
             Self.logger.fault("Store count unavailable after import: \(error.localizedDescription, privacy: .public)")
             summary.warnings.append("Store count unavailable after import — inserted count is unavailable.")
         }
         var dupAfter: Int? = nil
-        do { dupAfter = try await SQLiteEmailStore.shared.duplicatesCount() } catch {
+        do { dupAfter = try await store.duplicatesCount() } catch {
             Self.logger.error("Duplicate-findings count unavailable after import: \(error.localizedDescription, privacy: .public)")
         }
         var ftsCount: Int? = nil
-        do { ftsCount = try await FTSSearchIndex.shared.rowCount() } catch {
+        do { ftsCount = try await fts.rowCount() } catch {
             Self.logger.error("FTS row count unavailable after import: \(error.localizedDescription, privacy: .public)")
             summary.warnings.append("Search-index row count unavailable after import.")
         }

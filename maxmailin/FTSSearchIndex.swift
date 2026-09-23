@@ -195,6 +195,18 @@ actor FTSSearchIndex {
     /// Last-access tick per shard. Used by `evictIdleShards` to decide which
     /// handles to close under memory pressure.
     private var shardLastAccess: [Int: UInt64] = [:]
+    /// Wall-clock (monotonic) last-touch per shard, used by the idle sweep.
+    /// Distinct from `shardLastAccess`, which is an LRU *ordering* tick and
+    /// says nothing about how long a handle has been sitting idle.
+    private var shardLastTouch: [Int: ContinuousClock.Instant] = [:]
+    /// A9: handles untouched for this long are closed, so Page 1's resting
+    /// cost stops scaling with how many years the archive spans. Measured
+    /// before/after in RELEASE_READINESS.md §P0.2. Injectable so a test can
+    /// drive the real scheduler instead of calling the sweep by hand.
+    private let idleShardTTL: Duration
+    /// The self-terminating sweep. Started when a shard opens, exits once no
+    /// handles remain — deliberately not a permanent timer (§3.3 R3).
+    private var idleSweep: Task<Void, Never>?
     private var didMigrateLegacy: Bool = false
 
     #if DEBUG
@@ -204,9 +216,12 @@ actor FTSSearchIndex {
     /// Test-only: close open shard handles + reset in-memory state so the next
     /// access re-opens from the (possibly newly-overridden) directory.
     func resetForTesting() {
+        idleSweep?.cancel()
+        idleSweep = nil
         for (_, handle) in shards { sqlite3_close(handle) }
         shards.removeAll()
         shardLastAccess.removeAll()
+        shardLastTouch.removeAll()
         didMigrateLegacy = false
     }
     #endif
@@ -217,12 +232,16 @@ actor FTSSearchIndex {
     /// Release-safe (not gated behind DEBUG).
     private let shardsDirectoryOverrideInstance: URL?
 
-    private init() { self.shardsDirectoryOverrideInstance = nil }
+    private init() {
+        self.shardsDirectoryOverrideInstance = nil
+        self.idleShardTTL = .seconds(180)
+    }
 
     /// Isolated instance storing shards under `shardsDirectory` — never the
     /// shared production index. Used by `MailinStorageEnvironment.disposable`.
-    init(shardsDirectory: URL) {
+    init(shardsDirectory: URL, idleShardTTL: Duration = .seconds(180)) {
         self.shardsDirectoryOverrideInstance = shardsDirectory
+        self.idleShardTTL = idleShardTTL
     }
 
     /// Close every shard handle except the `keep` most-recently-accessed.
@@ -233,14 +252,78 @@ actor FTSSearchIndex {
         guard shards.count > keep else { return }
         let ordered = shardLastAccess.sorted(by: { $0.value < $1.value })
         let toClose = ordered.prefix(shards.count - keep).map(\.key)
-        for year in toClose {
-            if let handle = shards[year] {
-                sqlite3_close(handle)
-            }
-            shards.removeValue(forKey: year)
-            shardLastAccess.removeValue(forKey: year)
-        }
+        for year in toClose { close(year: year) }
         logger.info("Evicted \(toClose.count) idle FTS shards under memory pressure.")
+    }
+
+    /// A9: close handles untouched for longer than `ttl`, regardless of memory
+    /// pressure. Before this, eviction fired *only* under OS pressure, so an
+    /// idle app kept every shard it had ever touched open — 20 handles and
+    /// their page caches on a 20-year archive, measured as the bulk of a
+    /// 526 MiB idle RSS.
+    ///
+    /// Safe because the actor never suspends while holding a shard pointer:
+    /// handles are obtained and used within a single isolated call, so a sweep
+    /// can only run between calls. Evicted shards re-open lazily on next
+    /// access — no data loss, just dropped SQLite page caches.
+    @discardableResult
+    func sweepIdleShards(ttl: Duration? = nil, now: ContinuousClock.Instant = ContinuousClock().now) -> Int {
+        let limit = ttl ?? idleShardTTL
+        let stale = shardLastTouch.filter { now - $0.value >= limit }.map(\.key)
+        for year in stale { close(year: year) }
+        if !stale.isEmpty {
+            // Closing a connection hands its page cache back to SQLite's
+            // allocator, which does not necessarily return pages to the OS —
+            // measured on 2026-09-23, handles went 20 → 0 with no visible RSS
+            // drop. Ask SQLite to actually release what it can.
+            sqlite3_release_memory(Int32.max)
+            // notice level: persisted by os_log, so idle eviction is observable
+            // in a shipped build instead of having to be inferred.
+            logger.notice("Closed \(stale.count) FTS shard(s) idle for \(limit.description); \(self.shards.count) still open.")
+        }
+        return stale.count
+    }
+
+    /// Open handle count — for the module/resting-cost measurements and the
+    /// A9 regression test.
+    var openShardCount: Int { shards.count }
+
+    private func close(year: Int) {
+        if let handle = shards[year] { sqlite3_close(handle) }
+        shards.removeValue(forKey: year)
+        shardLastAccess.removeValue(forKey: year)
+        shardLastTouch.removeValue(forKey: year)
+    }
+
+    private func touch(year: Int) {
+        lruCounter &+= 1
+        shardLastAccess[year] = lruCounter
+        shardLastTouch[year] = ContinuousClock().now
+        startIdleSweepIfNeeded()
+    }
+
+    /// Runs while any handle is open and stops on its own once they are all
+    /// closed, so an idle app has no repeating work pending.
+    private func startIdleSweepIfNeeded() {
+        guard idleSweep == nil else { return }
+        let interval = idleShardTTL
+        idleSweep = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: interval)
+                guard let self else { return }
+                if await self.sweepAndReportIdleWork() { continue } else { return }
+            }
+        }
+    }
+
+    /// One sweep pass; returns true while handles remain (keep sweeping).
+    private func sweepAndReportIdleWork() -> Bool {
+        sweepIdleShards()
+        if shards.isEmpty {
+            idleSweep = nil
+            return false
+        }
+        return true
     }
 
     // MARK: - Public API (stable shape — preserves pre-sharded surface)
@@ -792,8 +875,7 @@ actor FTSSearchIndex {
 
     private func ensureShard(year: Int) throws -> OpaquePointer {
         if let existing = shards[year] {
-            lruCounter &+= 1
-            shardLastAccess[year] = lruCounter
+            touch(year: year)
             return existing
         }
         try migrateLegacyIfNeeded()
@@ -860,8 +942,7 @@ actor FTSSearchIndex {
             try exec(db, "INSERT OR IGNORE INTO indexed_message(email_id, indexed_revision, indexed_at) SELECT email_id, 1, 0 FROM email_search;")
         }
         shards[year] = db
-        lruCounter &+= 1
-        shardLastAccess[year] = lruCounter
+        touch(year: year)
         logger.info("Opened FTS shard for year \(year)")
         return db
     }
