@@ -253,9 +253,11 @@ Import / Search / Export and **no persona picker, case setup, or AI prompt**.
 | A2 | Three-pane shell | Sidebar (All mail, source/folder tree, saved searches) / list / detail, with keyset pagination + stable IDs + lazy body hydration. Audit `ContentView.swift` (6,041 lines) and split it; any remaining `[RawEmail]` full-corpus array is a defect to remove. | 8–12 d |
 | A3 | Guided import sheet | Source-guided flow: pick format/source → copy vs reference → destination → duplicate policy → indexing choices → required space → Start. Shows unsupported/encrypted/corrupt variants **before** start. | 5–7 d |
 | A4 | Import queue UI | Start/pause/resume/stop per source, reorder, browse+search during import; per-source bytes, messages, throughput, stage, **current batch size**, resource status, indexed fraction, ETA-as-estimate, pause reason. | 4–6 d |
-| A5 | Import receipt | `ImportReceipt` value type + store: source SHA-256, parser/build version, start/end, offset/ordinal checkpoint, discovered/stored/duplicate/skipped, FTS coverage, attachment coverage, error list; printable/saveable; `Recheck`/`Retry`. Status is exactly one of Complete / **Partial** / Failed, decided by `Reconciler`, never by "no exception thrown". | 6–8 d |
+| A5 | Import receipt — **rescoped 2026-09-23** | `ImportReceipt.swift` **already exists** (312 lines): source name/size/SHA-256, parser+version, discovered/parsed/inserted/duplicates/damaged/skipped/persistFailed/indexed, FTS-drift state, resume provenance, self-hash, JSON persistence. Remaining work is therefore *not* the model: (a) a `Reconciler` verdict of exactly Complete / **Partial** / Failed, never inferred from "no exception thrown"; (b) the receipt window with `Recheck`/`Retry`; (c) printable/saveable output; (d) attachment-family coverage. | 3–4 d (was 6–8) |
 | A6 | Index-coverage truth | A coverage badge on search results; a partial index may **never** return an unqualified zero. Requires a per-source coverage record (bodies indexed, attachment text indexed, pending). | 4–5 d |
 | A7 | Advanced search sheet | Dates, people, folder, has-attachment, filename/type, phrase, AND/OR/NOT **only where tested**; results show matching field + Open exact original. | 4–6 d |
+| A10 | Inject the repository into `BulkImportCoordinator` | The coordinator is `@MainActor` and bound to the shared singletons, so the production import path cannot be measured or tested against an isolated corpus — every fixture number is currently engine-path only. Give it an injected `MailinStorageEnvironment`/repository. Prerequisite for honest production-path scale rows and for the ArchiveCore extraction. | 3–5 d |
+| A11 | Real-file measurement in the in-app harness | Release timing cannot come from the test target (`@testable` needs `ENABLE_TESTABILITY`, which Release does not set). Extend the Release-safe in-app `StressHarness` to accept a user-selected file so throughput numbers come from a Release build. | 2–3 d |
 | A9 | Idle shard eviction | Measured 2026-09-23: 20 FTS year-shard handles stay open at idle (526 MiB idle RSS), because eviction only fires under memory pressure. Close shards untouched for N minutes and open lazily on query, so Page 1's resting cost stops scaling with archive age. Exit: before/after idle RSS recorded in `RELEASE_READINESS.md`. | 3–4 d |
 | A8 | Export sheet + receipt | Scope (selected/filtered/folder/whole archive), format, destination, folder layout, attachment inclusion, collision rule, size estimate; progress → verification window with requested/written/failed, output hashes, Open in Finder. Interrupted exports resume or fail loudly. | 5–7 d |
 
@@ -283,6 +285,13 @@ actor AdaptiveBatchController {
     var trace: [EnvelopeTransition] { get }     // for diagnostics + receipt
 }
 ```
+
+**Measured justification (2026-09-23, not an assumption).** A 90.5 MiB real
+mbox of 526 messages — 152 of them with attachments — fits in **two** batches at
+today's `batchSize = 500`, and peak RSS rises **400 MiB** above baseline
+(`RELEASE_READINESS.md` §P0.2). Because the bound is a message *count*, batch
+memory scales with whatever those messages weigh. That is the concrete failure
+this controller exists to remove.
 
 - **Start envelope:** conservative, derived from machine RAM and source format —
   the directive's example is 128 messages / 16 MiB; the *shipped* numbers come

@@ -146,13 +146,51 @@ with archive age is the wrong shape. Added to the plan as **A9: idle shard
 eviction** (close shards untouched for N minutes; open lazily on query) with a
 before/after RSS measurement.
 
+### Measured — engine-path import of the real fixture (isolated)
+
+`FixtureImportMeasurementTests` parses `~/Downloads/Mail/Sent.mbox` into
+`MailinStorageEnvironment.disposable(at:)`, which hard-refuses any root
+overlapping the production tree, so the owner's real archive is untouched. This
+drives the production parser, store and FTS directly — it is **not** the
+`BulkImportCoordinator` production path (that is `@MainActor` and wired to the
+shared singletons; see task A10). **Configuration: Debug** — timing is not
+quotable, memory shape is.
+
+| Metric | Measured |
+|---|---|
+| Source | 94,915,160 bytes (90.5 MiB), Sent.mbox |
+| Discovered / stored / damaged | 526 / 526 / **0** |
+| Messages with attachments | **152** of 526 |
+| FTS rows after import | 526 — **coverage equals stored rows** |
+| Batches at the production default (500) | **2** |
+| Wall time | 44.6 s — **Debug build, not a throughput claim** |
+| RSS baseline → peak | 170.8 MiB → **571.3 MiB** (**+400.5 MiB**) |
+
+Reconciliation is asserted, not eyeballed: `stored + damaged == discovered` and
+`ftsRows == stored` are test assertions, so the measurement fails if accounting
+ever drifts.
+
+### Finding: the fixed 500-message batch ignores message size
+
+A 90 MiB source with 526 attachment-heavy messages fits in **two** batches at
+`batchSize = 500`, and peak RSS rises **400 MiB** above baseline. The batch
+bound is a message *count*, so batch memory scales with whatever those messages
+happen to weigh — exactly the failure mode `AdaptiveBatchController` exists to
+prevent (plan §5.1: bound parsed **bytes** as well as count). This is now
+measured evidence for that design rather than an assumption, and it is the
+before-number for A9/P3 work.
+
+Note the shape: 400 MiB of batch residency against a 526 MiB idle store cost
+means a large import on a small Mac is fighting the resting FTS cost too.
+
 ### Still not measured, and why
 
 | Metric | Status |
 |---|---|
 | Fresh-install cold launch, idle RSS, footprint | NOT MEASURED — needs a clean container (see above) |
 | Launch-to-usable timing | NOT MEASURED — needs signpost instrumentation, added to P1 |
-| Import of `Sent.mbox` (time, peak RSS, FTS/attachment coverage) | **BLOCKED** — importing into the owner's real archive would pollute it; needs a clean container or a scratch workspace |
+| Release-configuration timing of any measurement test | NOT MEASURABLE this way — `@testable import maxmailin` needs `ENABLE_TESTABILITY`, which Release correctly does not set. Route Release timing through the in-app `StressHarness` (Release-safe by design) extended to accept a real file — task A11 |
+| Production-path (`BulkImportCoordinator`) import of the fixture | NOT MEASURED — the coordinator is `@MainActor` and bound to the shared singletons; needs the repository injection in task A10 |
 | Signed-entitlement dump (`codesign -d --entitlements`) | NOT VERIFIED — the tooling call kept timing out in this environment; source entitlements are known (§1 B6), signed-binary confirmation still owed |
 | v1 JSON → SQLite migration timing | NOT MEASURED — needs a genuine v1 library fixture |
 | v1 JSON → SQLite migration timing | NOT MEASURED — needs a genuine v1 library fixture |
