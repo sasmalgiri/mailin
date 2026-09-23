@@ -160,6 +160,9 @@ final class BulkImportCoordinator {
         var fileErrors: [FileError] = []
         var warnings: [String] = []
         var receipt: ImportReceipt? = nil
+        /// A5: Complete / Partial / Failed, reconciled from the receipt's
+        /// counts and index state - never "no exception was thrown".
+        var verdict: ImportVerdict = .complete
         /// False when the receipt could not be written to disk (surfaced,
         /// never `try?`-swallowed).
         var receiptPersisted = false
@@ -556,6 +559,13 @@ final class BulkImportCoordinator {
         } catch {
             Self.logger.fault("Import receipt could not be signed: \(error.localizedDescription, privacy: .public)")
             summary.warnings.append("Import receipt could not be signed — it will not verify.")
+        }
+        // A5: reconcile the run. A receipt that does not add up must say so.
+        summary.verdict = receipt.verdict
+        if !summary.verdict.isComplete {
+            let names = summary.verdict.shortfalls.map(\.rawValue).joined(separator: ",")
+            Self.logger.error("Import verdict \(summary.verdict.label, privacy: .public): \(names, privacy: .public)")
+            summary.warnings.append("Import \(summary.verdict.label.lowercased()): \(summary.verdict.summary)")
         }
         summary.receipt = receipt
         do {
