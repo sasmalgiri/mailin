@@ -134,3 +134,49 @@ struct ImportVerdictTests {
         #expect(!r.verdict.summary.isEmpty)
     }
 }
+
+
+@Suite("Printable receipt (A5c)")
+@MainActor
+struct ImportReceiptRenderingTests {
+
+    @Test("The printable receipt carries verdict, source identity and accounting")
+    func plainTextIsSelfContained() {
+        var r = receipt(discovered: 526, parsed: 524, inserted: 520, duplicates: 4,
+                        damaged: 2, indexed: 500)
+        try? r.finalize()
+        let text = ImportReceiptView(receipt: r).plainText()
+
+        #expect(text.contains("Verdict: Partial"))
+        #expect(text.contains("source-0.mbox"))
+        #expect(text.contains("SHA-256 deadbeef0"))
+        #expect(text.contains("discovered: 526"))
+        #expect(text.contains("read: 524"))
+        #expect(text.contains("saved: 520"))
+        #expect(text.contains("duplicates: 4"))
+        #expect(text.contains("damaged: 2"))
+        #expect(text.contains("indexed: 500"))
+        #expect(text.contains("Integrity:"))
+        #expect(text.contains("Content hash:"))
+    }
+
+    @Test("An unavailable count prints as unavailable, never as zero")
+    func unavailableCountsAreNotZero() {
+        var r = receipt(discovered: 100, parsed: 100, inserted: nil, duplicates: nil, indexed: 100)
+        try? r.finalize()
+        let text = ImportReceiptView(receipt: r).plainText()
+
+        #expect(text.contains("saved: unavailable"))
+        #expect(text.contains("duplicates: unavailable"))
+        #expect(!text.contains("saved: 0"), "a count we could not read must not be reported as 0")
+    }
+
+    @Test("A tampered receipt says so in the printable copy")
+    func tamperIsVisibleInPrintout() {
+        var r = receipt(discovered: 10, parsed: 10, inserted: 10, duplicates: 0, indexed: 10)
+        try? r.finalize()
+        r.discovered = 999   // edit after signing
+        let text = ImportReceiptView(receipt: r).plainText()
+        #expect(text.contains("DOES NOT VERIFY"))
+    }
+}

@@ -369,6 +369,13 @@ struct mailinApp: App {
                 .environmentObject(storeManager)
         }
 
+        // Import receipt window (A5): what the last import actually did, read
+        // from the durable receipt on disk rather than from in-memory state.
+        Window("Import Receipt", id: "import-receipt") {
+            LatestImportReceiptView()
+                .frame(minWidth: 520, idealWidth: 700, minHeight: 420, idealHeight: 760)
+        }
+
         // About window
         Window("About mailin", id: "about") {
             AboutView()
@@ -407,6 +414,17 @@ struct mailinApp: App {
                 appState.triggerFileImport = true
             }
             .keyboardShortcut("o", modifiers: .command)
+
+            Divider()
+
+            // A5: the receipt is the answer to "did that import actually get
+            // everything?", so it needs a way in that does not depend on
+            // catching a banner right after the import finishes.
+            Button("Last Import Receipt...") {
+                #if os(macOS)
+                openWindow(id: "import-receipt")
+                #endif
+            }
 
             Divider()
 
