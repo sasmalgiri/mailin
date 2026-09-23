@@ -208,7 +208,22 @@ Debug and report in Release if a disabled module's host is built; (c) a launch
 instrumentation test that fails if any optional-module file, timer, or
 connection appears during a disabled cold launch.
 
-The six launch-time offenders that violate R2 today are inventoried in
+**R6 — No exceptions, including provenance.** Owner ruling, 2026-09-23: if the
+user works only in Page 1 and has activated nothing else, *every* other
+feature is off — there is no "core provenance" carve-out. Consequences:
+
+- `HMACChainAuditLog` is **Professional-owned**. No append, no genesis and no
+  `verifyChain()` on a launch where Professional is disabled. This also removes
+  a whole-chain walk from every cold launch, whose cost grew with usage.
+- Page 1 carries its own provenance instead: the per-import and per-export
+  **receipts** (source SHA-256, parser/build version, counts, coverage) are
+  Archive-owned, not Professional (§4 A5, §5).
+- When Professional is later enabled, the chain's genesis entry must state
+  that the chain begins at enablement and that earlier activity is documented
+  by receipts only. It may never imply unbroken continuity across a period
+  when the module was off.
+
+The eight launch-time items that violate R2/R6 today are inventoried in
 `RELEASE_READINESS.md` §P0.1 and are P1's first fixes.
 
 ### 3.4 Entitlement / capability matrix (3.0)

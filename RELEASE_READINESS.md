@@ -40,24 +40,30 @@ Every job that runs today on a cold launch with no user action, read out of
 | 9 | `AppSelfAttestation.shared.compute()` | :157 | AppShell | keep; measure cost |
 | 10 | `MigrationService.shared.migrateIfNeeded()` (v1 JSON → SQLite) | :164 | ArchiveCore | keep — archive-core migration is always allowed |
 | 11 | `StorageActivationCoordinator.shared.activate()` (SwiftData → SQLite gate) | :173 | ArchiveCore | keep |
-| 12 | `HMACChainAuditLog.shared.append("v2.storage.activation")` | :174 | Professional (provenance) | **decide** — audit-chain writes on a Professional-disabled launch; likely stays as core provenance, but must be declared in `MODULE_ACTIVATION_MATRIX.md` |
+| 12 | `HMACChainAuditLog.shared.append("v2.storage.activation")` | :174 | Professional | **gate** — owner ruling (§3.3 R6): no audit-chain write when Professional is off. Archive's own import receipt records the storage/activation provenance instead |
 | 13 | `FidelityBackfillJob.shared.kickIfNeeded()` | :195 | ArchiveCore | keep as bounded repair; **measure** and declare the schedule |
 | 14 | **`AttachmentTextIndexJob.shared.kickIfNeeded()`** | :199 | ArchiveCore | keep, but make it follow the per-import indexing choice (directive §2) instead of running unconditionally |
 | 15 | **`DigestScheduler.shared.checkAndDeliver()`** | :201 | AI Insights | **gate** — weekly digest must not exist on a disabled launch |
 | 16 | **`WorkflowService.seedBuiltins()`** | :205 | Professional | **gate** — directive §1 forbids workflow-catalog work on disabled launches |
 | 17 | Detached `FTSReconciler.reconcile` + `dedupeShards()` | :213–233 | ArchiveCore | keep; **measure** bounded cost |
 | 18 | `MaxmailinSelfTest.shared.runIfNeeded()` | :240 | AppShell | already `#if DEBUG` — fine |
-| 19 | `HMACChainAuditLog.append(launch/selfTest)` + `verifyChain()` | :248–265 | Professional (provenance) | **measure** — `verifyChain()` walks the whole chain on every launch; cost grows with usage |
+| 19 | `HMACChainAuditLog.append(launch/selfTest)` + `verifyChain()` | :248–265 | Professional | **gate + move off launch** (§3.3 R6) — no launch append when Professional is off; verification runs on demand or on Page 3 open, never as a whole-chain walk at every cold launch |
 | 20 | `TermsAcceptanceView` launch sheet | :90 | AppShell | keep |
 | 21 | **`PersonaOnboardingView` launch sheet** | :92 | Professional (preference) | **remove from the launch path** — directive §0: a new customer sees Archive with no persona choice |
 | 22 | `BiometricLockManager` lock overlay | :299 | AppShell / Enterprise | keep |
 | 23 | `SpotlightIndexer.shared.handleSpotlightActivity` | :282 | ArchiveCore | not launch work (user activity) — fine |
 
-**Six items must be gated or moved for P1's "disabled means nothing runs"
-criterion: #3, #7, #8, #15, #16, #21.** Two more (#12, #19) need an explicit
-declared decision because they write and verify the audit chain regardless of
-module state. Four (#9, #13, #17, #19) need measurement before we can claim the
-cold-launch budget is unaffected.
+**Eight items must be gated or moved for P1's "disabled means nothing runs"
+criterion: #3, #7, #8, #12, #15, #16, #19, #21.** #12 and #19 were resolved by
+the owner ruling recorded as `V3_0_PLAN.md` §3.3 R6 — no provenance carve-out;
+the audit chain is Professional-owned and silent while Professional is off,
+with Archive's receipts carrying Page 1 provenance. Three items (#9, #13, #17)
+need measurement before we can claim the cold-launch budget is unaffected.
+
+Consequence to implement with #12/#19: the chain's genesis entry must declare
+that it starts at Professional enablement and that earlier activity is
+evidenced by import/export receipts only — never implying unbroken continuity
+across a disabled period.
 
 ---
 
