@@ -6,7 +6,13 @@ struct ParserFactory {
         senderEmail: String,
         onProgress: ((Double) -> Void)? = nil
     ) throws -> [MBOXParser.RawEmail] {
-        let ext = fileURL.pathExtension.lowercased()
+        let classification = SourceFormatClassifier.classify(url: fileURL)
+        guard classification.isSupported else {
+            throw ExtractionError.unsupportedFormat(
+                reason: [classification.summary, classification.format.advice]
+                    .compactMap { $0 }.joined(separator: " "))
+        }
+        let ext = classification.format.parserToken
         switch ext {
         case "mbox", "eml", "":
             // Extensionless files are treated as MBOX (Google Takeout ships
@@ -44,6 +50,13 @@ struct ParserFactory {
     /// produced them (Part B5/C): a parser upgrade invalidates mid-file
     /// checkpoints instead of silently resuming against a different message
     /// ordering.
+    /// Identity of the parser that will actually run for `url`, from its
+    /// detected format. Prefer this over the extension-based overload: a
+    /// receipt must name the parser that ran, not the one the filename implied.
+    static func parserIdentity(for url: URL) -> (name: String, version: Int) {
+        parserIdentity(forExtension: SourceFormatClassifier.classify(url: url).format.parserToken)
+    }
+
     static func parserIdentity(forExtension ext: String) -> (name: String, version: Int) {
         switch ext.lowercased() {
         case "mbox", "eml", "":
@@ -89,7 +102,17 @@ struct ParserFactory {
         onProgress: ((Double) -> Void)? = nil,
         onBatch: ([MBOXParser.RawEmail]) async throws -> Void
     ) async throws -> MBOXParser.ParseRecoveryReport {
-        let ext = fileURL.pathExtension.lowercased()
+        // Content decides which parser runs. Routing on the extension alone
+        // sent a PST or ZIP named ".mbox" to the MBOX parser, which has no
+        // signature check and would manufacture junk messages from binary —
+        // and rejected a valid mbox named ".txt".
+        let classification = SourceFormatClassifier.classify(url: fileURL)
+        guard classification.isSupported else {
+            throw ExtractionError.unsupportedFormat(
+                reason: [classification.summary, classification.format.advice]
+                    .compactMap { $0 }.joined(separator: " "))
+        }
+        let ext = classification.format.parserToken
         switch ext {
         case "mbox", "eml", "":
             return try await MBOXParser.parseStreamingCallback(
