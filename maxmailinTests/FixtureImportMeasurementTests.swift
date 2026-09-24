@@ -136,6 +136,30 @@ final class FixtureImportMeasurementTests: XCTestCase {
         let mib = { (b: UInt64) in Double(b) / 1_048_576.0 }
         let shape = probe.snapshot
 
+        // S2: measured on-disk growth, so StoragePlanner's coefficients come
+        // from a real corpus instead of a guess.
+        func directoryBytes(_ url: URL) -> Int64 {
+            guard let walker = FileManager.default.enumerator(
+                at: url, includingPropertiesForKeys: [.fileSizeKey],
+                options: [.skipsHiddenFiles]) else { return 0 }
+            var total: Int64 = 0
+            for case let file as URL in walker {
+                let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                total += Int64(size)
+            }
+            return total
+        }
+        let storeBytes = directoryBytes(root.appendingPathComponent("store", isDirectory: true))
+        let ftsBytes = directoryBytes(root.appendingPathComponent("fts", isDirectory: true))
+        let sourceBytes = (try FileManager.default
+            .attributesOfItem(atPath: fixture.path)[.size] as? NSNumber)?.int64Value ?? 1
+        print("""
+        STORAGE-GROWTH sourceBytes=\(sourceBytes) storeBytes=\(storeBytes) ftsBytes=\(ftsBytes) \
+        storeRatio=\(String(format: "%.3f", Double(storeBytes) / Double(sourceBytes))) \
+        ftsRatio=\(String(format: "%.3f", Double(ftsBytes) / Double(sourceBytes))) \
+        totalRatio=\(String(format: "%.3f", Double(storeBytes + ftsBytes) / Double(sourceBytes)))
+        """)
+
         XCTAssertGreaterThan(shape.batches, 2,
                              "adaptive batching must split this attachment-heavy source into more than the two batches the fixed 500 produced")
         XCTAssertEqual(summary.discovered, summary.parsed + summary.damaged,

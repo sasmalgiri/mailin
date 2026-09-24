@@ -311,14 +311,40 @@ Ordered by value-per-risk, not by the order the design was written.
 - **Exit met:** 13 tests. Still owed: `SUPPORTED_FORMATS_AND_LIMITS.md` rewritten
   per format (format limit / tested ceiling / behaviour above it).
 
-### S2 — Storage preflight (2–3 d, low risk)
+### S2 — Storage preflight — **DONE 2026-09-24**
 
 - `StoragePlanner`: source bytes + blob copies + DB growth + WAL + FTS + temp
   spool + OS margin, measured per destination volume.
 - Refuse only when the numbers genuinely do not fit, and say how many bytes
   are missing.
-- **Exit:** an import that cannot finish is refused *before* it starts, with
-  exact numbers; one that can finish is never refused for size alone.
+- **Delivered** in `StoragePlanner.swift`, wired into `BulkImportCoordinator`
+  before any parsing begins. Refusal throws with the shortfall; a tight fit
+  proceeds and lands in the run's warnings; the plan is observable so the
+  import UI can show the itemised requirement.
+- **Coefficients are measured, not guessed.** Importing the 94,915,160-byte
+  fixture produced store 117,969,840 B (**1.243×**) and FTS 4,132,864 B
+  (**0.044×**), total **1.286×**. The planner uses 1.30 for the store and
+  deliberately **0.20** for the index — ~4× the measurement — because that
+  corpus is attachment-heavy and the S0 budget bounds indexed text; text-heavy
+  mail indexes far more. Both are P9 re-derivation targets.
+- **Two bugs the preflight found in itself**, both of which would have hit
+  production and not just tests:
+  1. *Every import was refused.* The destination directory does not exist yet
+     on a first import, `resourceValues` on a missing path reports 0 free, and
+     the (correct) "unknown free space is insufficient" rule then refused
+     everything. Fixed by resolving to the nearest existing ancestor — a
+     missing subdirectory is not an unreadable volume.
+  2. *A 95 MB import claimed it needed 10 GiB.* Overheads were flat (512 MiB
+     WAL + 1 GiB spool) and the safety margin was 2 % of the volume, so the
+     requirement scaled with the size of the user's **disk** rather than the
+     work. Now WAL and spool scale with the source under those caps, and
+     refusal uses a small 1 GiB hard floor while the volume-proportional
+     margin (2 %, clamped 2–20 GiB) only decides the `tight` **warning**.
+     Refusing a 95 MB import because a 500 GB disk is low was not mailin's
+     call to make.
+- **Exit met:** 16 tests, including the directive's own case — a 1 TB import on
+  a 250 GB Mac is refused with the shortfall stated and the requirement
+  itemised — and the real fixture import still succeeds through the new gate.
 
 ### S3 — External content-addressed blob tier (5–8 d, medium risk)
 

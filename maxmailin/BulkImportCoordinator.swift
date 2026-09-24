@@ -76,6 +76,9 @@ final class BulkImportCoordinator {
     /// True once a batch could not be indexed, so the controller can back off
     /// while the index is behind.
     private var indexBacklog = false
+    /// S2: the storage plan for the current run, so the import UI can show the
+    /// requirement and the refusal reason rather than a bare failure.
+    private(set) var storagePlan: StoragePlan?
 
     init(store: SQLiteEmailStore = .shared,
          fts: FTSSearchIndex = .shared,
@@ -122,6 +125,14 @@ final class BulkImportCoordinator {
         var dedupPolicy: DedupPolicy = .messageID
         /// Optional account attribution for imported rows.
         var accountID: String? = nil
+        /// S2: refuse an import that cannot finish, before it starts. This is
+        /// what makes S1's "not tested above N, proceeding" honest — something
+        /// still stops a run that genuinely does not fit. Off only for
+        /// harnesses measuring on deliberately small volumes.
+        var enforceStoragePreflight: Bool = true
+        /// Whether originals are copied into the library (vs referenced), which
+        /// doubles the source's contribution to the requirement.
+        var copiesOriginals: Bool = true
     }
 
     /// UI/side-effect hooks. All are invoked on the main actor.
@@ -299,6 +310,23 @@ final class BulkImportCoordinator {
         // 0. (1d) Storage-authority gate: never write SQLite against
         //    unresolved storage. Fail explicitly — silently skipping persist
         //    is how archives used to look imported without reaching the store.
+        // S2: storage preflight. Refuse only on real numbers, and say how
+        // many bytes are missing rather than failing partway through.
+        if options.enforceStoragePreflight {
+            let plan = StoragePlanner.plan(sources: urls,
+                                           destination: store.storeDirectory,
+                                           copyOriginals: options.copiesOriginals)
+            self.storagePlan = plan
+            if !plan.canProceed {
+                Self.logger.error("Import refused by storage preflight: \(plan.summary, privacy: .public)")
+                throw MaxmailinError.persistence(.containerUnavailable, detail: plan.summary)
+            }
+            if case .tight = plan {
+                summary.warnings.append(plan.summary)
+                Self.logger.notice("Storage preflight tight: \(plan.summary, privacy: .public)")
+            }
+        }
+
         // P3.3: an import gets a tighter storage memory budget than
         // interactive use - smaller page caches and fewer concurrent shard
         // connections - restored when the run ends, however it ends.
