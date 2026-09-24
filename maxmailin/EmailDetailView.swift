@@ -11,6 +11,9 @@ import UIKit
 #endif
 
 struct EmailDetailView: View {
+    /// One re-extraction per message, shared by all its attachments.
+    private let attachmentCache = AttachmentHydrator.Cache()
+
     let email: MBOXParser.RawEmail
     /// Part G: prev/next navigation needs only the ORDERED VISIBLE IDS of the
     /// current filtered list (the list's loaded page state), never the corpus.
@@ -1429,14 +1432,17 @@ struct EmailDetailView: View {
         #endif
     }
 
+    /// Bytes for an attachment of the message on screen.
+    ///
+    /// A stored (imported) email has neither a live temp file nor an inline
+    /// payload — parse-time temp files do not survive, and the store keeps the
+    /// bytes inside the raw MIME instead. `AttachmentHydrator` re-extracts from
+    /// there, which is what makes Open/Save work on an archived message rather
+    /// than only on one just parsed this session.
     private func attachmentData(for att: AttachmentMetadata) -> Data? {
-        if let fileURL = att.fileURL {
-            return try? Data(contentsOf: fileURL)
-        }
-        if let base64 = att.base64 {
-            return Data(base64Encoded: base64)
-        }
-        return nil
+        let index = email.attachments.firstIndex { $0.filename == att.filename } ?? 0
+        return AttachmentHydrator.data(for: att, index: index, email: email,
+                                       cache: attachmentCache)
     }
 
     private func formatSize(_ bytes: Int) -> String {

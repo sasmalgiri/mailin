@@ -21,6 +21,8 @@ struct PaletteCommand: Identifiable {
 // MARK: - Command Palette View
 
 struct CommandPaletteView: View {
+    @Environment(ModuleRegistry.self) private var modules
+
     @Environment(\.dismiss) private var dismiss
     @AppStorage("showAdvancedFeatures") private var showAdvancedFeatures = false
     @State private var searchText = ""
@@ -31,6 +33,36 @@ struct CommandPaletteView: View {
     var onCommand: ((String) -> Void)?
 
     // MARK: - Command Registry
+
+    /// §3.3 R1: a command that belongs to an optional page is not offered
+    /// while that page is off. Without this the palette would list, say,
+    /// "Ask AI" to a Page-1-only user and then do nothing when chosen.
+    private static let commandOwners: [String: AppModule] = [
+        "Ask AI": .aiInsights,
+        "Topic Clusters": .aiInsights,
+        "Predictive Coding": .aiInsights,
+        "Smart Alerts": .aiInsights,
+        "Anomaly Detection": .aiInsights,
+        "Auto-Tagger": .aiInsights,
+        "Email Digest": .aiInsights,
+        "Keyword Monitor": .aiInsights,
+        "Toggle Forensic Mode": .professional,
+        "E-Discovery": .professional,
+        "Bates Numbering": .professional,
+        "PII Redaction": .professional,
+        "GDPR Report": .professional,
+        "Chain of Custody": .professional,
+        "Custodian Manager": .professional,
+        "Review Batches": .professional,
+        "Investigation Report": .professional,
+        "Report Builder": .professional,
+        "IOC Extractor": .professional,
+    ]
+
+    private func isOffered(_ command: PaletteCommand) -> Bool {
+        guard let owner = Self.commandOwners[command.name] else { return true }
+        return modules.isEnabled(owner)
+    }
 
     private var allCommands: [PaletteCommand] {
         [
@@ -155,7 +187,8 @@ struct CommandPaletteView: View {
     // MARK: - Filtered Commands
 
     private var filteredCommands: [PaletteCommand] {
-        let base = showAdvancedFeatures ? allCommands : allCommands.filter { $0.category != "Forensic" }
+        let offered = allCommands.filter(isOffered)
+        let base = showAdvancedFeatures ? offered : offered.filter { $0.category != "Forensic" }
         guard !searchText.isEmpty else { return base }
         let query = searchText.lowercased()
         return base.filter { command in

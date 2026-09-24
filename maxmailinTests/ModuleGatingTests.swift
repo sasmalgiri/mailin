@@ -240,3 +240,116 @@ struct ModuleGatingTests {
         #expect(!registry.isEnabled(.aiInsights))
     }
 }
+
+
+@Suite("Page isolation of feature flags (§3.3 R1)")
+@MainActor
+struct PageIsolationTests {
+
+    private func gatedState(enabled: [AppModule]) throws -> AppStateManager {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("isolation-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("modules.v1.json")
+        let registry = ModuleRegistry(store: ModuleStateStore(url: url),
+                                      excludedByBuild: [], trapsOnMisuse: false)
+        for module in enabled { try registry.enable(module) }
+        let state = AppStateManager()
+        state.isModuleEnabled = { registry.isEnabled($0) }
+        return state
+    }
+
+    @Test("Archive-only: no AI or Professional feature can be opened")
+    func archiveOnlyRefusesForeignFeatures() throws {
+        let state = try gatedState(enabled: [])
+
+        // Every owned feature refuses. The assertion trap is off in tests via
+        // the registry, and the state gate itself simply declines.
+        state.showAIAssistant = true
+        state.showAIDigest = true
+        state.showAnomalyDetection = true
+        state.showPredictiveCoding = true
+        state.showCustodianPanel = true
+        state.showAuditTrail = true
+        state.showEDiscovery = true
+        state.showBatesNumbering = true
+        state.showChainOfCustody = true
+        state.showReviewBatches = true
+
+        #expect(!state.showAIAssistant)
+        #expect(!state.showAIDigest)
+        #expect(!state.showAnomalyDetection)
+        #expect(!state.showPredictiveCoding)
+        #expect(!state.showCustodianPanel)
+        #expect(!state.showAuditTrail)
+        #expect(!state.showEDiscovery)
+        #expect(!state.showBatesNumbering)
+        #expect(!state.showChainOfCustody)
+        #expect(!state.showReviewBatches)
+    }
+
+    @Test("Archive's own features are never gated")
+    func archiveFeaturesAlwaysWork() throws {
+        let state = try gatedState(enabled: [])
+
+        state.showDuplicateManager = true
+        state.showAttachmentGrid = true
+        state.showTimeline = true
+        state.showAllAttachmentsGallery = true
+        state.triggerExport = true
+        state.triggerSearch = true
+
+        #expect(state.showDuplicateManager)
+        #expect(state.showAttachmentGrid, "reading attachments is Page 1 work")
+        #expect(state.showTimeline)
+        #expect(state.showAllAttachmentsGallery)
+        #expect(state.triggerExport, "export is Page 1 work")
+        #expect(state.triggerSearch, "search is Page 1 work")
+    }
+
+    @Test("Enabling AI Insights opens exactly its own features, not Professional's")
+    func enablingOnePageDoesNotOpenAnother() throws {
+        let state = try gatedState(enabled: [.aiInsights])
+
+        state.showAIAssistant = true
+        state.showAIDigest = true
+        state.showCustodianPanel = true
+        state.showAuditTrail = true
+
+        #expect(state.showAIAssistant)
+        #expect(state.showAIDigest)
+        #expect(!state.showCustodianPanel, "Professional stays closed")
+        #expect(!state.showAuditTrail, "Professional stays closed")
+    }
+
+    @Test("Enabling Professional opens its features, not AI's")
+    func professionalDoesNotOpenAI() throws {
+        let state = try gatedState(enabled: [.professional])
+
+        state.showCustodianPanel = true
+        state.showAuditTrail = true
+        state.showAIAssistant = true
+
+        #expect(state.showCustodianPanel)
+        #expect(state.showAuditTrail)
+        #expect(!state.showAIAssistant, "AI Insights stays closed")
+    }
+
+    @Test("A feature already open closes when its page is switched off")
+    func closingIsAlwaysAllowed() throws {
+        let state = try gatedState(enabled: [.aiInsights])
+        state.showAIAssistant = true
+        #expect(state.showAIAssistant)
+
+        // Closing must never be refused, whatever the page state.
+        state.showAIAssistant = false
+        #expect(!state.showAIAssistant)
+    }
+
+    @Test("Every owned feature declares an owning page")
+    func ownershipIsComplete() {
+        for feature in AppStateManager.OwnedFeature.allCases {
+            #expect(feature.module.isOptional,
+                    "\(feature.rawValue) must belong to an optional page, not Archive")
+        }
+    }
+}

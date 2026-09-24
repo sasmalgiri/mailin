@@ -2439,7 +2439,7 @@ struct ParsedEmailListView: View {
             .accessibilityLabel("View raw source")
 
             if !email.attachments.isEmpty {
-                AttachmentsPopoverButton(attachments: email.attachments)
+                AttachmentsPopoverButton(attachments: email.attachments, ownerEmail: email)
             }
         }
         .padding(.horizontal, Spacing.xSmall)
@@ -3015,8 +3015,22 @@ struct ParsedEmailListView: View {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         #endif
         var failedCount = 0
-        for att in email.attachments {
-            guard let source = att.fileURL else { continue }
+        // A stored email has no live temp file; re-extract from raw MIME so
+        // "Save attachments" works on an archived message, not only on one
+        // parsed this session.
+        let cache = AttachmentHydrator.Cache()
+        for (index, att) in email.attachments.enumerated() {
+            guard let data = AttachmentHydrator.data(for: att, index: index,
+                                                     email: email, cache: cache) else {
+                failedCount += 1
+                continue
+            }
+            let source = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString + "_" + att.filename)
+            guard (try? data.write(to: source, options: .atomic)) != nil else {
+                failedCount += 1
+                continue
+            }
             do {
                 let safeName = att.filename
                     .replacingOccurrences(of: "/", with: "_")
@@ -3453,6 +3467,9 @@ struct AttachmentsPopoverButton: View {
     #endif
     @State private var saveError: String?
     let attachments: [AttachmentMetadata]
+    /// The owning message: an archived email keeps its attachment bytes in the
+    /// raw MIME, so saving needs the message, not just the metadata.
+    var ownerEmail: MBOXParser.RawEmail? = nil
     @State private var showPopover = false
 
     var body: some View {
@@ -3557,7 +3574,22 @@ struct AttachmentsPopoverButton: View {
     }
 
     private func saveAttachment(_ att: AttachmentMetadata) {
-        guard let sourceURL = att.fileURL else { return }
+        // Same reason as the bulk path: an archived message carries its
+        // attachment bytes inside the raw MIME, not in a temp file.
+        let sourceURL: URL
+        if let live = att.fileURL, FileManager.default.fileExists(atPath: live.path) {
+            sourceURL = live
+        } else if let email = ownerEmail,
+                  let index = email.attachments.firstIndex(where: { $0.filename == att.filename }),
+                  let data = AttachmentHydrator.data(for: att, index: index, email: email),
+                  case let staged = FileManager.default.temporaryDirectory
+                      .appendingPathComponent(UUID().uuidString + "_" + att.filename),
+                  (try? data.write(to: staged, options: .atomic)) != nil {
+            sourceURL = staged
+        } else {
+            saveError = "The bytes for \(att.filename) could not be recovered from this message."
+            return
+        }
         #if os(macOS)
         let panel = NSSavePanel()
         panel.nameFieldStringValue = att.filename

@@ -10,6 +10,7 @@
 
 import SwiftUI
 import Observation
+import os
 import CoreSpotlight
 import TipKit
 #if os(macOS)
@@ -112,6 +113,11 @@ struct mailinApp: App {
                     .onAppear {
                         StoreManager.resetDailyCountersIfNeeded()
                         configureAppearance()
+                        // §3.3 R1: install the page gate before any surface can
+                        // try to open a foreign page's feature.
+                        appState.isModuleEnabled = { [modules] module in
+                            modules.isEnabled(module)
+                        }
                         // §3.3: map 2.x state forward exactly once, before any
                         // gate is read. An existing install keeps what it was
                         // already using; a fresh install gets Page 1 only.
@@ -853,10 +859,72 @@ struct mailinApp: App {
 @Observable
 @MainActor
 class AppStateManager {
+
+    // MARK: - Page ownership (v3.0 §3.3 R1)
+    //
+    // Every cross-page surface in the app opens through one of these flags, so
+    // gating the FLAG - rather than ~90 individual buttons - is what actually
+    // guarantees that Archive contains no AI or Professional features. A flag
+    // whose owning page is off refuses to be set, wherever it is set from:
+    // sidebar, toolbar, command palette, keyboard shortcut or menu.
+
+    /// Features that belong to an optional page.
+    enum OwnedFeature: String, CaseIterable, Sendable {
+        // AI Insights
+        case aiAssistant, aiDigest, anomalyDetection, smartAutoTagger
+        case predictiveCoding, topicClusters, threadSummarizer, smartAlerts
+        case keywordMonitor
+        // Professional Workflows
+        case custodianPanel, reviewBatches, auditTrail, eDiscovery
+        case batesNumbering, redaction, gdprReport, chainOfCustody
+        case investigationReport, reportBuilder
+
+        var module: AppModule {
+            switch self {
+            case .aiAssistant, .aiDigest, .anomalyDetection, .smartAutoTagger,
+                 .predictiveCoding, .topicClusters, .threadSummarizer,
+                 .smartAlerts, .keywordMonitor:
+                return .aiInsights
+            case .custodianPanel, .reviewBatches, .auditTrail, .eDiscovery,
+                 .batesNumbering, .redaction, .gdprReport, .chainOfCustody,
+                 .investigationReport, .reportBuilder:
+                return .professional
+            }
+        }
+    }
+
+    /// Set once at launch by the app shell. Until then nothing is gated, which
+    /// keeps previews and tests that never install a registry working.
+    var isModuleEnabled: (@MainActor (AppModule) -> Bool)?
+
+    private var openFeatures: Set<OwnedFeature> = []
+
+    private func isOpen(_ feature: OwnedFeature) -> Bool {
+        openFeatures.contains(feature)
+    }
+
+    private func setOpen(_ feature: OwnedFeature, _ newValue: Bool) {
+        guard newValue else { openFeatures.remove(feature); return }
+        if let gate = isModuleEnabled, !gate(feature.module) {
+            // Refused and recorded. Deliberately NOT an assertion: a stale
+            // restored sheet or an old keyboard shortcut can legitimately
+            // arrive here, and crashing a Debug build for that would be worse
+            // than declining it. The visible surfaces are filtered separately;
+            // this is the backstop that makes the rule true regardless.
+            Logger(subsystem: Bundle.main.bundleIdentifier ?? "mailin", category: "PageIsolation")
+                .fault("refused \(feature.rawValue, privacy: .public) — \(feature.module.rawValue, privacy: .public) is disabled")
+            return
+        }
+        openFeatures.insert(feature)
+    }
+
     var triggerFileImport = false
     var triggerExport = false
     var showReplyStats = false
-    var showAIAssistant = false
+    var showAIAssistant: Bool {
+        get { isOpen(.aiAssistant) }
+        set { setOpen(.aiAssistant, newValue) }
+    }
     var showAnalytics = false
     var showReplyStatsSheet = false
     var hasFilteredEmails = false
@@ -869,10 +937,22 @@ class AppStateManager {
     var triggerPrint = false
     var triggerNewImport = false
     var showDuplicateManager = false
-    var showTopicClusters = false
-    var showPredictiveCoding = false
-    var showCustodianPanel = false
-    var showReviewBatches = false
+    var showTopicClusters: Bool {
+        get { isOpen(.topicClusters) }
+        set { setOpen(.topicClusters, newValue) }
+    }
+    var showPredictiveCoding: Bool {
+        get { isOpen(.predictiveCoding) }
+        set { setOpen(.predictiveCoding, newValue) }
+    }
+    var showCustodianPanel: Bool {
+        get { isOpen(.custodianPanel) }
+        set { setOpen(.custodianPanel, newValue) }
+    }
+    var showReviewBatches: Bool {
+        get { isOpen(.reviewBatches) }
+        set { setOpen(.reviewBatches, newValue) }
+    }
     var triggerExportVCard = false
     var triggerExportICS = false
     var triggerExportHashManifest = false
@@ -886,28 +966,70 @@ class AppStateManager {
     var showTimeline = false
     var showRelationshipGraph = false
     var showArchiveComparison = false
-    var showInvestigationReport = false
-    var showAuditTrail = false
+    var showInvestigationReport: Bool {
+        get { isOpen(.investigationReport) }
+        set { setOpen(.investigationReport, newValue) }
+    }
+    var showAuditTrail: Bool {
+        get { isOpen(.auditTrail) }
+        set { setOpen(.auditTrail, newValue) }
+    }
     // v7: Intelligence & Automation
     var showAutomationRules = false
     var showBatchOperations = false
-    var showThreadSummarizer = false
-    var showSmartAlerts = false
+    var showThreadSummarizer: Bool {
+        get { isOpen(.threadSummarizer) }
+        set { setOpen(.threadSummarizer, newValue) }
+    }
+    var showSmartAlerts: Bool {
+        get { isOpen(.smartAlerts) }
+        set { setOpen(.smartAlerts, newValue) }
+    }
     // v7: Forensics & Compliance
-    var showEDiscovery = false
-    var showBatesNumbering = false
-    var showRedaction = false
-    var showGDPRReport = false
-    var showChainOfCustody = false
+    var showEDiscovery: Bool {
+        get { isOpen(.eDiscovery) }
+        set { setOpen(.eDiscovery, newValue) }
+    }
+    var showBatesNumbering: Bool {
+        get { isOpen(.batesNumbering) }
+        set { setOpen(.batesNumbering, newValue) }
+    }
+    var showRedaction: Bool {
+        get { isOpen(.redaction) }
+        set { setOpen(.redaction, newValue) }
+    }
+    var showGDPRReport: Bool {
+        get { isOpen(.gdprReport) }
+        set { setOpen(.gdprReport, newValue) }
+    }
+    var showChainOfCustody: Bool {
+        get { isOpen(.chainOfCustody) }
+        set { setOpen(.chainOfCustody, newValue) }
+    }
     // v8: Intelligence & Polish
     var showNearDuplicates = false
-    var showAnomalyDetection = false
-    var showSmartAutoTagger = false
-    var showAIDigest = false
+    var showAnomalyDetection: Bool {
+        get { isOpen(.anomalyDetection) }
+        set { setOpen(.anomalyDetection, newValue) }
+    }
+    var showSmartAutoTagger: Bool {
+        get { isOpen(.smartAutoTagger) }
+        set { setOpen(.smartAutoTagger, newValue) }
+    }
+    var showAIDigest: Bool {
+        get { isOpen(.aiDigest) }
+        set { setOpen(.aiDigest, newValue) }
+    }
     // v9: Dashboard & Reporting
     var showExecutiveDashboard = false
-    var showReportBuilder = false
-    var showKeywordMonitor = false
+    var showReportBuilder: Bool {
+        get { isOpen(.reportBuilder) }
+        set { setOpen(.reportBuilder, newValue) }
+    }
+    var showKeywordMonitor: Bool {
+        get { isOpen(.keywordMonitor) }
+        set { setOpen(.keywordMonitor, newValue) }
+    }
     var showCommunicationPatterns = false
     // v9: Security & Workspaces
     var showWorkspaceManager = false

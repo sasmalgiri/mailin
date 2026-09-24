@@ -6,6 +6,11 @@ import AppKit
 #endif
 
 struct ContentView: View {
+    /// §3.3 R1: Archive shows only Archive. Any surface belonging to AI
+    /// Insights or Professional Workflows is hidden unless that page is on —
+    /// and `AppStateManager` refuses the flag even if a surface is missed.
+    @Environment(ModuleRegistry.self) private var modules
+
     @Environment(AppStateManager.self) var appState
     @EnvironmentObject var storeManager: StoreManager
     @ObservedObject private var forensicManager = ForensicManager.shared
@@ -455,6 +460,7 @@ struct ContentView: View {
                 } else if let dest = sidebarSelection {
                     hubDestinationView(for: dest)
                 } else {
+                    // §3.3 R1: the persona home belongs to Page 3, not Archive.
                     PersonaPickerHomeView(onSelectPersona: { persona in
                         personaManager.switchPersona(to: persona)
                         sidebarSelection = .personaHub
@@ -1121,19 +1127,26 @@ struct ContentView: View {
                     }
                     .accessibilityLabel("Feature Guide")
                     if viewModel.isParsed {
-                        Button { showWorkCenter = true } label: {
-                            Image(systemName: "briefcase")
+                        // §3.3 R1: these belong to Pages 3 and 2.
+                        if modules.isEnabled(.professional) {
+                            Button { showWorkCenter = true } label: {
+                                Image(systemName: "briefcase")
+                            }
+                            .accessibilityLabel("Work Center")
                         }
-                        .accessibilityLabel("Work Center")
-                        Button { appState.showAIAssistant = true } label: {
-                            Image(systemName: "sparkles")
+                        if modules.isEnabled(.aiInsights) {
+                            Button { appState.showAIAssistant = true } label: {
+                                Image(systemName: "sparkles")
+                            }
+                            .accessibilityLabel("AI Assistant")
                         }
-                        .accessibilityLabel("AI Assistant")
 
                         Menu {
-                            Section("Work") {
-                                Button { showWorkCenter = true } label: {
-                                    Label("Work Center — jobs, documents, reports", systemImage: "briefcase")
+                            if modules.isEnabled(.professional) {
+                                Section("Work") {
+                                    Button { showWorkCenter = true } label: {
+                                        Label("Work Center — jobs, documents, reports", systemImage: "briefcase")
+                                    }
                                 }
                             }
                             Section("Tools") {
@@ -1167,8 +1180,10 @@ struct ContentView: View {
                                 Button { if storeManager.requirePremium() { appState.showDuplicateManager = true } } label: {
                                     Label("Duplicates", systemImage: "doc.on.doc")
                                 }
-                                Button { appState.showPredictiveCoding = true } label: {
-                                    Label("Predictive", systemImage: "brain")
+                                if modules.isEnabled(.aiInsights) {
+                                    Button { appState.showPredictiveCoding = true } label: {
+                                        Label("Predictive", systemImage: "brain")
+                                    }
                                 }
                                 Button { appState.showReplyStatsSheet = true } label: {
                                     Label("Replies", systemImage: "arrow.turn.up.left")
@@ -1181,6 +1196,7 @@ struct ContentView: View {
                                 }
                             }
                             Section("Advanced") {
+                                if modules.isEnabled(.professional) {
                                 Button { appState.showAuditTrail = true } label: {
                                     Label("Audit Trail", systemImage: "clock.arrow.circlepath")
                                 }
@@ -1193,6 +1209,7 @@ struct ContentView: View {
                                 Button { if storeManager.requireProfessional() { appState.showReviewBatches = true } } label: {
                                     Label("Review Batches", systemImage: "list.bullet.rectangle")
                                 }
+                                }   // end Professional-only Advanced section
                             }
                             Section {
                                 Button { showNewImportConfirmation = true } label: {
@@ -2198,7 +2215,10 @@ struct ContentView: View {
 
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: Spacing.xSmall) {
-                        compactToolIcon("sparkles", color: .purple) { appState.showAIAssistant = true }
+                        // §3.3 R1: AI icon only when Page 2 is on.
+                        if modules.isEnabled(.aiInsights) {
+                            compactToolIcon("sparkles", color: .purple) { appState.showAIAssistant = true }
+                        }
                         compactToolIcon("chart.bar", color: .blue) { appState.showAnalytics = true }
                         compactToolIcon("circle.grid.3x3", color: .teal) {
                             withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? nil : .topics }
@@ -2207,8 +2227,10 @@ struct ContentView: View {
                             withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .subjects ? nil : .subjects }
                         }
                         compactToolIcon("doc.on.doc", color: .indigo) { if storeManager.requirePremium() { appState.showDuplicateManager = true } }
-                        if isForensicPersona {
+                        if isForensicPersona && modules.isEnabled(.aiInsights) {
                             compactToolIcon("brain", color: .pink) { appState.showPredictiveCoding = true }
+                        }
+                        if isForensicPersona && modules.isEnabled(.professional) {
                             compactToolIcon("person.badge.key", color: .cyan) { appState.showCustodianPanel = true }
                             compactToolIcon("doc.text.magnifyingglass", color: .red) { appState.showInvestigationReport = true }
                             compactToolIcon("clock.arrow.circlepath", color: .orange) { appState.showAuditTrail = true }
@@ -2302,8 +2324,12 @@ struct ContentView: View {
                         .padding(.horizontal, Spacing.xxLarge)
                     }
 
-                    // MARK: Forensic & Investigation Tools (persona-gated)
-                    if isForensicPersona {
+                    // MARK: Forensic & Investigation Tools
+                    // §3.3 R1: this whole section is Professional Workflows
+                    // (Page 3) and AI Insights (Page 2) work. Archive shows
+                    // none of it until those pages are enabled — persona alone
+                    // is no longer enough to surface another page's features.
+                    if isForensicPersona && (modules.isEnabled(.professional) || modules.isEnabled(.aiInsights)) {
                         Divider().padding(.horizontal, Spacing.xxLarge)
 
                         VStack(spacing: Spacing.medium) {
@@ -5238,6 +5264,9 @@ struct V9SheetsModifier: ViewModifier {
 }
 
 struct V9UtilitySheetsModifier: ViewModifier {
+    /// §3.3 R1: needed for the stale-invocation guard in `handleCommand`.
+    @Environment(ModuleRegistry.self) private var modules
+
     @Bindable var appState: AppStateManager
     @ObservedObject var modelVM: ParsedEmailListViewModel
     @EnvironmentObject private var storeManager: StoreManager
@@ -5309,7 +5338,26 @@ struct V9UtilitySheetsModifier: ViewModifier {
             }
     }
 
+    /// Which page owns a palette command id, for the stale-invocation guard.
+    static func commandOwner(_ id: String) -> AppModule? {
+        switch id {
+        case "askAI", "topicClusters", "predictiveCoding", "smartAlerts",
+             "anomalyDetection", "smartAutoTagger", "aiDigest", "keywordMonitor":
+            return .aiInsights
+        case "forensicMode", "eDiscovery", "batesNumbering", "redaction",
+             "gdprReport", "chainOfCustody", "custodianManager", "reviewBatches",
+             "investigationReport", "reportBuilder", "iocExtractor":
+            return .professional
+        default:
+            return nil
+        }
+    }
+
     private func handleCommand(_ id: String) {
+        // §3.3 R1: the palette already filters by page, so reaching here for a
+        // disabled page means a stale invocation (an old keyboard shortcut, a
+        // restored sheet). Drop it quietly rather than tripping the state gate.
+        if let owner = Self.commandOwner(id), !modules.isEnabled(owner) { return }
         switch id {
         case "askAI":
             if storeManager.requirePremium() { appState.showAIAssistant = true }

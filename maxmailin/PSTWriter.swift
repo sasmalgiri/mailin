@@ -556,20 +556,12 @@ final class PSTStreamWriter {
         email: MBOXParser.RawEmail,
         hydrated: inout [AttachmentMetadata]?
     ) -> Data? {
-        if let url = att.fileURL, let d = try? Data(contentsOf: url) { return d }
-        if let b64 = att.base64,
-           let d = Data(base64Encoded: b64, options: .ignoreUnknownCharacters) { return d }
-
-        if hydrated == nil {
-            hydrated = (try? EmailBodyExtractor.extractContents(from: email.rawSource))?.attachments ?? []
-        }
-        guard let list = hydrated, !list.isEmpty else { return nil }
-        let match = list.first { $0.filename == att.filename }
-            ?? (index < list.count ? list[index] : nil)
-        if let url = match?.fileURL, let d = try? Data(contentsOf: url) { return d }
-        if let b64 = match?.base64,
-           let d = Data(base64Encoded: b64, options: .ignoreUnknownCharacters) { return d }
-        return nil
+        // Shared with the detail view, save-attachment and export paths:
+        // AttachmentHydrator is this logic, previously private to PSTWriter,
+        // which is why every other reader failed on an archived message.
+        if hydrated == nil { hydrated = [] }
+        let cache = AttachmentHydrator.Cache()
+        return AttachmentHydrator.data(for: att, index: index, email: email, cache: cache)
     }
 
     // MARK: - Helpers
