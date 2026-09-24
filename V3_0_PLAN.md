@@ -11,9 +11,15 @@ architecture described by the directive, including Live Mail.
 
 **Locked decisions (owner, 2026-09-23):**
 
+> **SUPERSEDED 2026-09-24 — see `V3_0_PRIVATE_PLAN.md`.** 3.0 now ships as a
+> private, network-free app: Pages 1–3 only. Live Mail, iCloud Overflow, the
+> Cloud AI provider, IAP/paywall and the consumer store artefacts are deferred
+> out of 3.0. Everything else in this document still applies; the Live Mail
+> (§8) and iCloud (§9) sections are deferred work, not 3.0 work.
+
 | Decision | Choice |
 |---|---|
-| 3.0 scope | All four pages, **including Live Mail** + iCloud Overflow prototype |
+| 3.0 scope | ~~All four pages, including Live Mail + iCloud Overflow prototype~~ → **Pages 1–3, network-free, privately distributed** |
 | Module boundaries | Extract **ArchiveCore as a local Swift package**; AI / Professional / Live Mail stay in-target behind a registry with lazy construction, extracted package-by-package later |
 | Release order | iOS 2.0 → 2.0.1 → **2.1 (studios)** → 3.0 (this plan) |
 | Platforms | **macOS-first** and verified there; the iOS build must keep compiling and stay usable, but iOS parity does not gate 3.0 |
