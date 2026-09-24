@@ -15,11 +15,19 @@ struct NSFParser {
     ) throws -> [MBOXParser.RawEmail] {
         let attrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)
         let fileSize = attrs[.size] as? Int64 ?? 0
-        // 64 GB cap aligns with practical NSF database sizes seen in the
-        // wild. Memory-mapped I/O below means peak RSS is bounded by the
-        // working set the reader touches, not by the file size.
-        if fileSize > 64_000_000_000 {
-            throw NSFError.fileTooLarge(fileSize)
+        // S1: 64 GB is the PRE-ODS-53 limit. HCL documents 256 GB for Domino
+        // 10+ databases at ODS 53 or higher, so the old refusal rejected valid
+        // modern databases. mailin cannot yet read the ODS version from the
+        // header (offset not documented in the sources consulted), so a file
+        // between the two ceilings is accepted with a warning that says so.
+        // mmap below means peak RSS tracks the working set, not the file size.
+        switch SourceSizePolicy.nsfVerdict(fileSize: fileSize) {
+        case .refuse(let reason):
+            throw NSFError.invalidFormat(reason)
+        case .warn(let note):
+            Self.logger.notice("NSF import warning: \(note, privacy: .public)")
+        case .ok:
+            break
         }
         if fileSize < 256 {
             throw NSFError.invalidFormat("File too small for NSF format")
@@ -149,7 +157,10 @@ struct NSFParser {
             case .invalidFormat(let reason):
                 return "Invalid NSF format: \(reason)"
             case .fileTooLarge(let size):
-                return "NSF file is too large (\(size / 1_000_000) MB). Maximum supported size is 64 GB."
+                // S1: the honest ceiling is HCL's documented 256 GB (ODS 53+);
+                // 64 GB applies only below ODS 53. This case is retained for
+                // callers that still construct it; SourceSizePolicy decides.
+                return "NSF file is \(size / 1_073_741_824) GiB. HCL documents 256 GB as the maximum database size (64 GB below ODS 53)."
             case .unsupportedVersion(let ver):
                 return "Unsupported NSF version: \(ver). Only NSF versions 2-5 are supported."
             case .corruptDatabase(let detail):

@@ -146,7 +146,13 @@ enum SourceFormatClassifier {
                 extensionHint: ext, nameContentMismatch: false, warning: nil)
         }
 
-        if let byMagic = classifyByMagic(probe, ext: ext) { return byMagic }
+        if var byMagic = classifyByMagic(probe, ext: ext) {
+            // S1: attach the documented size verdict now, so the pre-import
+            // sheet can warn before a parse is attempted rather than after.
+            byMagic.warning = sizeWarning(for: byMagic.format, url: url, probe: probe)
+                ?? byMagic.warning
+            return byMagic
+        }
         if let byText = classifyByText(probe, ext: ext) { return byText }
 
         return SourceClassification(
@@ -217,6 +223,25 @@ enum SourceFormatClassifier {
         }
 
         return nil
+    }
+
+    /// The documented format/product size verdict for a detected binary
+    /// format, phrased for the user. Refusals are enforced by the parsers;
+    /// this is the early warning.
+    private static func sizeWarning(for format: SourceFormat, url: URL, probe: Data) -> String? {
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?
+            .int64Value ?? 0
+        switch format {
+        case .pst, .ost:
+            let verdict = SourceSizePolicy.pstVerdict(
+                version: SourceSizePolicy.pstFormatVersion(fromHeader: probe), fileSize: size)
+            return verdict.refusal ?? verdict.warning
+        case .nsf:
+            let verdict = SourceSizePolicy.nsfVerdict(fileSize: size)
+            return verdict.refusal ?? verdict.warning
+        default:
+            return nil
+        }
     }
 
     // MARK: - Text structure

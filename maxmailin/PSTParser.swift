@@ -9,11 +9,15 @@ struct PSTParser {
     static let parserVersion = 1
 
     enum PSTError: LocalizedError {
-        case fileTooLarge(Int64)
+        /// A documented format limit says the file cannot be what it claims to
+        /// be — currently only ANSI PST's 2 GB ceiling. Replaces the old
+        /// `fileTooLarge(50 GB)`, which was Outlook's configurable default
+        /// rather than a limit of the format (S1).
+        case formatViolation(String)
         var errorDescription: String? {
             switch self {
-            case .fileTooLarge(let size):
-                return "PST file is too large (\(size / 1_000_000) MB). Maximum supported size is 50 GB."
+            case .formatViolation(let reason):
+                return reason
             }
         }
     }
@@ -25,12 +29,24 @@ struct PSTParser {
     ) throws -> [MBOXParser.RawEmail] {
         let attrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)
         let fileSize = attrs[.size] as? Int64 ?? 0
-        // 50 GB cap matches Outlook's own PST size limit. Memory-mapped I/O
-        // below means peak RSS is bounded by the working set the B-tree
-        // traversal touches, not by the file size — so the file can be
-        // many GB without paging out the user.
-        if fileSize > 50_000_000_000 {
-            throw PSTError.fileTooLarge(fileSize)
+        // S1: 50 GB was Outlook's DEFAULT MaxLargeFileSize, not the format's
+        // limit — it is registry-configurable to 100 GB and beyond, so the old
+        // refusal rejected real files. Decide from the declared format version
+        // instead: ANSI genuinely cannot exceed 2 GB, Unicode can. mmap below
+        // means peak RSS tracks the working set the B-tree touches, not the
+        // file size.
+        let headerProbe = (try? FileHandle(forReadingFrom: fileURL)).flatMap { handle -> Data? in
+            defer { try? handle.close() }
+            return try? handle.read(upToCount: 16)
+        } ?? Data()
+        let declaredVersion = SourceSizePolicy.pstFormatVersion(fromHeader: headerProbe)
+        switch SourceSizePolicy.pstVerdict(version: declaredVersion, fileSize: fileSize) {
+        case .refuse(let reason):
+            throw PSTError.formatViolation(reason)
+        case .warn(let note):
+            pstLog.notice("PST import warning: \(note, privacy: .public)")
+        case .ok:
+            break
         }
         // `.mappedIfSafe` returns Data backed by mmap'd file pages. The OS
         // pages in only the bytes our B-tree reader actually touches, so

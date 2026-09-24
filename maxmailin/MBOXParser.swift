@@ -197,10 +197,11 @@ struct MBOXParser {
         senderEmail: String,
         onProgress: ((Double) -> Void)? = nil
     ) throws -> (emails: [RawEmail], report: ParseRecoveryReport) {
-        // Ceiling on the non-streaming path: this reads the whole file into a
-        // String. Files above the cap must use the streaming parser, not be
-        // materialised whole (OOM). 500 MB is well above any single .eml or a
-        // small mbox; larger archives go through parseStreamingCallback.
+        // Ceiling on the non-streaming path ONLY: this function reads the whole
+        // file into a String, so it must refuse what it cannot hold. It is not
+        // a limit on mbox import — `parseStreamingCallback` has no file-size
+        // ceiling and is what the importer uses (S1/S4 of
+        // SIZE_LIMITS_DESIGN.md). Anything above the cap belongs on that path.
         let maxNonStreamingBytes = 500 * 1024 * 1024
         if let size = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size]) as? Int,
            size > maxNonStreamingBytes {

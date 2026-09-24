@@ -274,7 +274,7 @@ Ordered by value-per-risk, not by the order the design was written.
 - Still open in S0's spirit: the **search-results coverage badge** (the receipt
   and per-message data exist; the results-list badge is not wired yet).
 
-### S1 — Correct the format caps (2–3 d, low risk, needs fixtures)
+### S1 — Correct the format caps — **DONE 2026-09-24**
 
 - PST: read the header's format flag; ANSI above 2 GB → report corrupt
   (Microsoft's own rule). Unicode: drop the 50 GB refusal.
@@ -283,9 +283,33 @@ Ordered by value-per-risk, not by the order the design was written.
 - Replace every remaining "file too large" refusal with the directive's
   language: **"not tested above N GB"** plus proceed, gated by S2's preflight
   once it exists.
-- **Exit:** `SUPPORTED_FORMATS_AND_LIMITS.md` states, per format, the format
-  limit, the tested ceiling and the current behaviour above it — no invented
-  numbers.
+- **Delivered** in `SourceSizePolicy.swift`, as pure functions so the
+  decisions are testable without fabricating 50 GB fixtures:
+  - PST `wVer` is read from **offset 10** per MS-PST (14/15 = ANSI, ≥23 =
+    Unicode, 37 = possible Windows Information Protection). An **ANSI PST above
+    2 GB is now refused as corrupt** — a real format limit that was previously
+    not checked at all.
+  - The **50 GB PST refusal is gone.** A 60 GB Unicode PST warns ("not been
+    tested above 50 GB … will not be refused") and proceeds.
+  - A WIP-marked PST warns that some content may be encrypted and that anything
+    undecodable is reported rather than skipped silently.
+  - **NSF's ceiling is now HCL's documented 256 GB**, not 64 GB. Between the
+    two the warning states plainly that Domino allows it only at ODS 53+ and
+    that **mailin cannot yet read the ODS version from the header** — the
+    field's offset is not documented in the sources consulted, and guessing a
+    byte offset inside a forensic tool is not acceptable. `libnsfdb` and
+    `sherlock-nsf-parser` are the references to mine for it.
+  - The classifier attaches the verdict **before** import, so the pre-import
+    sheet can warn rather than failing partway.
+- Stale messages corrected: `PSTError.fileTooLarge("Maximum supported size is
+  50 GB")` is replaced by `formatViolation(reason)`; the NSF message no longer
+  claims 64 GB is the maximum.
+- Also documented, not changed: `MBOXParser.parse` (the **non-streaming**
+  array path) refuses above 500 MB because it materialises the file as a
+  `String`. That is not an mbox import limit — `parseStreamingCallback`, which
+  the importer uses, has no file-size ceiling.
+- **Exit met:** 13 tests. Still owed: `SUPPORTED_FORMATS_AND_LIMITS.md` rewritten
+  per format (format limit / tested ceiling / behaviour above it).
 
 ### S2 — Storage preflight (2–3 d, low risk)
 
