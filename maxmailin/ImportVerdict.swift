@@ -33,6 +33,16 @@ enum ImportShortfall: String, Sendable, Equatable, CaseIterable {
     /// persist failures — an accounting hole, the most serious shortfall short
     /// of outright failure.
     case unaccountedMessages
+    /// S4: messages archived from their HEADERS only, because they exceeded
+    /// the offset engine's full-parse ceiling. They are stored and their
+    /// original bytes are locatable, but they have no body text, no parsed
+    /// attachment list, and nothing searchable beyond their headers.
+    ///
+    /// This case exists because without it such an import reported
+    /// **Complete** — "Every message was imported and is searchable" — which
+    /// is false for exactly those messages. They were counted as successfully
+    /// parsed and stored, so no existing shortfall noticed them.
+    case bodiesNotDecoded
 
     var explanation: String {
         switch self {
@@ -48,6 +58,8 @@ enum ImportShortfall: String, Sendable, Equatable, CaseIterable {
             return "The search index is behind and needs to be rebuilt."
         case .unaccountedMessages:
             return "Some messages are unaccounted for between reading and saving."
+        case .bodiesNotDecoded:
+            return "Some messages were too large to read fully, so only their headers were imported. They are stored and their original bytes are recorded, but their text is not searchable."
         }
     }
 }
@@ -120,6 +132,12 @@ enum ImportReconciler {
                 shortfalls.append(.unaccountedMessages)
             }
         }
+
+        // S4: header-only messages are STORED and PARSED, so every check above
+        // passes and the verdict came out Complete — claiming "every message
+        // was imported and is searchable" about messages with no body. They
+        // are a shortfall precisely because nothing else notices them.
+        if receipt.bodiesNotDecoded > 0 { shortfalls.append(.bodiesNotDecoded) }
 
         guard !shortfalls.isEmpty else { return .complete }
 

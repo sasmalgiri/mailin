@@ -39,6 +39,14 @@ private let offsetImportLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? 
 
 struct OffsetImportEngine: Sendable {
 
+    /// Bump when message extraction or ORDERING changes — resume checkpoints
+    /// bound to the previous version are then invalidated rather than
+    /// silently resumed against a different ordering. Same contract as
+    /// `MBOXParser.parserVersion`, tracked separately because this engine's
+    /// ordering is genuinely different (see `ParserFactory
+    /// .offsetParserIdentity()`).
+    static let engineVersion = 1
+
     /// Messages at or below this size take the existing full-fidelity path.
     /// Set to the old hard ceiling, so the change is purely additive: every
     /// message that imports today still imports the same way, and the ones
@@ -89,7 +97,7 @@ struct OffsetImportEngine: Sendable {
         var parsed = 0
         var failed = 0
         var categories: [String: Int] = [:]
-        let reader = LocatorReader(verifiesDigest: false)   // same file, same run
+        let reader = LocatorReader()   // same file, same run — no provenance claim needed
 
         // The scanner awaits this callback, so the scan cannot outrun the
         // consumer and locators are never accumulated for the whole file.

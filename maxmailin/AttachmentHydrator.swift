@@ -64,9 +64,13 @@ enum AttachmentHydrator {
         if !email.rawSource.isEmpty { return email.rawSource }
         guard let provider = locatorProvider, let locator = provider(email.id) else { return nil }
         do {
+            // A cheap, bounds-checked read. It catches a source that has moved,
+            // shrunk, or cannot supply the range; it does NOT prove the file is
+            // unchanged — that is `LocatorReader.verifySource`, which costs a
+            // full hash of the source and belongs on export/provenance paths,
+            // not on opening an attachment. See the note in `LocatorReader`.
             let data = try LocatorReader().read(locator.messageRange,
-                                                from: locator.sourcePath,
-                                                expectedDigest: locator.sourceDigest)
+                                                from: locator.sourcePath)
             return String(data: data, encoding: .utf8)
                 ?? String(data: data, encoding: .isoLatin1)
         } catch {

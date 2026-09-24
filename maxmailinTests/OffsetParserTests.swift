@@ -214,7 +214,7 @@ final class OffsetScannerTests: XCTestCase {
         let url = try write(message(subject: "readback", body: "distinctive body text"))
         let scan = try await OffsetMBOXScanner().scan(fileURL: url)
         let locator = try XCTUnwrap(scan.locators.first)
-        let reader = LocatorReader(verifiesDigest: false)
+        let reader = LocatorReader()
 
         let headerData = try reader.read(locator.headerRange, from: url.path)
         let headerText = String(decoding: headerData, as: UTF8.self)
@@ -253,6 +253,63 @@ final class OffsetScannerTests: XCTestCase {
                 return XCTFail("expected sourceMissing, got \(error)")
             }
         }
+    }
+
+    // MARK: - Provenance verification
+
+    /// The bug this pins: `LocatorReader` used to ACCEPT an `expectedDigest`,
+    /// document that it verified the source, carry a `verifiesDigest` flag and
+    /// a `digestMismatch` error — and check none of it. An edited source file
+    /// was read and its bytes presented as the original message.
+    ///
+    /// Verification is now its own operation, and it actually fails on a
+    /// changed file.
+    func testVerifySourceDetectsATamperedFile() async throws {
+        let url = try write(message(subject: "provenance", body: "original body text"))
+        let digest = try OffsetImportEngine.digest(of: url)
+        let scan = try await OffsetMBOXScanner().scan(fileURL: url)
+        var locator = try XCTUnwrap(scan.locators.first)
+        locator.sourceDigest = digest
+
+        // Unchanged file: verification passes.
+        XCTAssertNoThrow(try LocatorReader().verifySource(locator))
+        XCTAssertTrue(locator.hasVerifiableSource)
+
+        // Same-LENGTH edit — the case a bounds check cannot catch.
+        var bytes = try Data(contentsOf: url)
+        let target = bytes.count - 12
+        bytes[target] = bytes[target] == 0x41 ? 0x42 : 0x41
+        try bytes.write(to: url)
+        XCTAssertEqual(bytes.count, Int(scan.sourceSize),
+                       "the edit must not change the file length, or the bounds check would catch it")
+
+        XCTAssertThrowsError(try LocatorReader().verifySource(locator)) { error in
+            guard case LocatorReadError.digestMismatch = error else {
+                return XCTFail("a tampered source must be a digestMismatch, got \(error)")
+            }
+        }
+
+        // And the cheap read still succeeds — it never claimed to verify.
+        // That is the honest split, not a gap: opening an attachment must not
+        // hash a multi-gigabyte mailbox.
+        XCTAssertNoThrow(try LocatorReader().read(locator.messageRange, from: locator.sourcePath))
+    }
+
+    /// A locator with no recorded digest must NOT report as verified. "We
+    /// never recorded a hash" and "the hash matches" are different facts, and
+    /// conflating them would let an unverifiable message be produced as
+    /// verified.
+    func testLocatorWithoutADigestIsNotVerifiable() async throws {
+        let url = try write(message(subject: "nodigest", body: "body"))
+        let scan = try await OffsetMBOXScanner().scan(fileURL: url)
+        let locator = try XCTUnwrap(scan.locators.first)
+
+        XCTAssertNil(locator.sourceDigest)
+        XCTAssertFalse(locator.hasVerifiableSource,
+                       "no digest means not verifiable, which is not the same as verified")
+        // Verification is a no-op rather than a false pass — it cannot claim
+        // anything, so it asserts nothing.
+        XCTAssertNoThrow(try LocatorReader().verifySource(locator))
     }
 
     /// Streaming must deliver exactly the range, in chunks, so a
@@ -410,7 +467,7 @@ final class OffsetImportEngineTests: XCTestCase {
                        "headers are parsed even when the body is not")
 
         // And its bytes are locatable, which is what lets S5 serve it later.
-        let reader = LocatorReader(verifiesDigest: false)
+        let reader = LocatorReader()
         let bytes = try reader.read(huge.locator.messageRange, from: url.path)
         XCTAssertEqual(Int64(bytes.count), huge.locator.byteCount)
         XCTAssertTrue(String(decoding: bytes, as: UTF8.self).contains("Subject: huge"))
@@ -469,6 +526,109 @@ final class OffsetImportEngineTests: XCTestCase {
                 imported += batch
             }
         XCTAssertEqual(imported.map(\.locator.ordinal), [0, 1, 2, 3, 4])
+    }
+
+    /// A header-only import must NOT report Complete.
+    ///
+    /// Found by audit. A message archived from its headers is parsed, stored
+    /// and indexed, so every existing check in `ImportReconciler` passed and
+    /// the receipt said "Every message was imported and is searchable" — about
+    /// messages with no body at all. The receipt is the durable, honest
+    /// record; that made it lie.
+    func testHeaderOnlyImportIsPartialNotComplete() {
+        let now = Date()
+
+        // A clean run with nothing deferred is still Complete.
+        var clean = ImportReceipt(startedAt: now, completedAt: now)
+        clean.discovered = 10
+        clean.parsed = 10
+        clean.inserted = 10
+        clean.duplicates = 0
+        clean.indexed = 10
+        XCTAssertEqual(ImportReconciler.verdict(for: clean), .complete,
+                       "a run with no deferred bodies must still be Complete")
+
+        // Same run, but two messages were imported header-only.
+        var deferred = clean
+        deferred.bodiesNotDecoded = 2
+        let verdict = ImportReconciler.verdict(for: deferred)
+
+        XCTAssertNotEqual(verdict, .complete, """
+            an import that left bodies undecoded must not claim every message \
+            is searchable
+            """)
+        XCTAssertEqual(verdict.label, "Partial")
+        XCTAssertTrue(verdict.shortfalls.contains(.bodiesNotDecoded),
+                      "the verdict must name the reason: \(verdict.shortfalls)")
+        XCTAssertTrue(verdict.summary.lowercased().contains("headers"),
+                      "the explanation must say what happened: \(verdict.summary)")
+    }
+
+    /// Receipts written before this field existed must decode as zero rather
+    /// than failing — otherwise an upgrade would make old receipts unreadable,
+    /// and a receipt is meant to be the durable record.
+    func testOlderReceiptsDecodeWithNoDeferredBodies() throws {
+        let json = """
+        {
+          "schemaVersion": 3,
+          "sources": [],
+          "discovered": 5, "parsed": 5, "damaged": 0, "skipped": 0,
+          "persistFailed": 0, "indexed": 5, "attachmentsSeen": 0,
+          "fileFailures": [], "warnings": [],
+          "startedAt": 780000000, "completedAt": 780000001,
+          "durationSeconds": 1, "resumed": false
+        }
+        """
+        let decoder = JSONDecoder()
+        let receipt = try decoder.decode(ImportReceipt.self, from: Data(json.utf8))
+        XCTAssertEqual(receipt.bodiesNotDecoded, 0)
+        XCTAssertEqual(ImportReconciler.verdict(for: receipt), .complete,
+                       "an old clean receipt must still read as Complete")
+    }
+
+    /// The two engines must NOT share a resume identity, because they do not
+    /// agree on message ordinals.
+    ///
+    /// Found by audit, not by a failing test. Checkpoints match on
+    /// `(sha256, size, parser, parserVersion)` so that a parser change cannot
+    /// resume mid-file against a different ordering — but
+    /// `parserIdentity(forExtension:)` returned `("mbox", 1)` for both
+    /// engines. The streaming parser DROPS a message over
+    /// `MBOXParser.maxMessageBytes`; the offset engine IMPORTS it. One
+    /// oversized message therefore shifts every later ordinal between them, so
+    /// a half-finished streaming import resuming under the offset engine would
+    /// "skip the first N" and skip a DIFFERENT N — duplicating some messages
+    /// and losing others, in an evidence archive.
+    func testEnginesDoNotShareAResumeIdentity() throws {
+        let url = directory.appendingPathComponent("identity.mbox")
+        try Data("From a@b.c Tue Mar 14 09:41:00 2017\nFrom: a@b.c\n\nbody\n".utf8)
+            .write(to: url)
+
+        let streaming = ParserFactory.parserIdentity(for: url, useOffsetEngine: false)
+        let offset = ParserFactory.parserIdentity(for: url, useOffsetEngine: true)
+
+        XCTAssertEqual(streaming.name, "mbox")
+        XCTAssertEqual(offset.name, "mbox-offset")
+        XCTAssertNotEqual(streaming.name, offset.name, """
+            the engines must have distinct parser identities, or a checkpoint \
+            written by one will be honoured by the other
+            """)
+    }
+
+    /// A non-streamable format ignores the engine flag: there is no offset
+    /// engine for PST, so asking for one must not mislabel the source record.
+    func testNonStreamableFormatKeepsItsOwnIdentity() throws {
+        let url = directory.appendingPathComponent("fake.pst")
+        // "!BDN" + a Unicode wVer, enough for the classifier to route it.
+        var header = Data([0x21, 0x42, 0x44, 0x4E])
+        header.append(Data(repeating: 0, count: 6))
+        header.append(Data([23, 0]))                  // wVer = 23 → Unicode
+        header.append(Data(repeating: 0, count: 512))
+        try header.write(to: url)
+
+        let asked = ParserFactory.parserIdentity(for: url, useOffsetEngine: true)
+        XCTAssertEqual(asked.name, "pst",
+                       "the offset engine only handles line-structured mail; got \(asked.name)")
     }
 
     /// A file with no line structure must be refused, not scanned until

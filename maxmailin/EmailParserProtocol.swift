@@ -76,6 +76,40 @@ struct ParserFactory {
         parserIdentity(forExtension: SourceFormatClassifier.classify(url: url).format.parserToken)
     }
 
+    /// Identity of the OFFSET engine for a line-structured source.
+    ///
+    /// A distinct name, and that is load-bearing rather than cosmetic. Resume
+    /// checkpoints match on `(sha256, size, parser, parserVersion)` precisely
+    /// so a parser change cannot resume mid-file against a different message
+    /// ordering. The offset engine and the streaming parser **do** disagree on
+    /// ordering: the streaming parser DROPS a message over
+    /// `MBOXParser.maxMessageBytes` (it never reaches a batch), while the
+    /// offset engine IMPORTS it. One oversized message therefore shifts every
+    /// subsequent ordinal between the two engines.
+    ///
+    /// With both reporting `("mbox", 1)`, a half-finished streaming import
+    /// would resume under the offset engine and "skip the first N" would skip
+    /// a DIFFERENT N messages — some imported twice, some never, in an
+    /// evidence archive. Giving the engine its own name makes the checkpoint
+    /// fail to match, so the file restarts from scratch, which is the correct
+    /// and safe outcome.
+    static func offsetParserIdentity() -> (name: String, version: Int) {
+        ("mbox-offset", OffsetImportEngine.engineVersion)
+    }
+
+    /// The identity of the engine that will ACTUALLY run, given the caller's
+    /// engine choice. Prefer this over the format-only overloads anywhere a
+    /// checkpoint or a source record is written.
+    static func parserIdentity(for url: URL,
+                               useOffsetEngine: Bool) -> (name: String, version: Int) {
+        let classification = SourceFormatClassifier.classify(url: url)
+        let token = classification.format.parserToken
+        let offsetEligible = useOffsetEngine
+            && streamableExtensions.contains(token)
+            && !SourceFormatClassifier.isDirectoryForm(classification.format)
+        return offsetEligible ? offsetParserIdentity() : parserIdentity(forExtension: token)
+    }
+
     static func parserIdentity(forExtension ext: String) -> (name: String, version: Int) {
         switch ext.lowercased() {
         case "mbox", "eml", "":

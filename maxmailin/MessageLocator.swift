@@ -20,6 +20,7 @@
 //
 
 import Foundation
+import CryptoKit
 
 /// A half-open byte range `[offset, offset + length)` in some source.
 struct ByteRange: Sendable, Equatable, Codable, CustomStringConvertible {
@@ -68,6 +69,14 @@ struct MessageLocator: Sendable, Equatable, Codable, Identifiable {
     var ordinal: Int
 
     var byteCount: Int64 { messageRange.length }
+
+    /// True when a digest was recorded at import, so `LocatorReader
+    /// .verifySource` can actually establish provenance. False means the
+    /// message predates digest recording — which is NOT the same as
+    /// "verification failed", and callers must not present it as verified.
+    var hasVerifiableSource: Bool {
+        !(sourceDigest ?? "").isEmpty
+    }
 }
 
 /// Where one MIME part lives, so an attachment can be read without decoding
@@ -130,12 +139,35 @@ enum LocatorReadError: LocalizedError, Equatable {
 /// evidence.
 struct LocatorReader: Sendable {
 
-    /// Verify the source digest before reading. On by default — the whole
-    /// value of a locator read is that it returns the original bytes, and a
-    /// changed file means it would not.
-    var verifiesDigest: Bool = true
+    // NOTE ON VERIFICATION — read this before trusting a locator read.
+    //
+    // A locator read does NOT prove the source file is unchanged, and an
+    // earlier version of this type claimed it did: it took an
+    // `expectedDigest` parameter, documented "verify the source digest before
+    // reading", carried a `verifiesDigest` flag and a `digestMismatch` error —
+    // and used none of them. `AttachmentHydrator` passed the digest in good
+    // faith. The effect was that an edited or swapped source file would be
+    // read and its bytes presented as the original message, silently, which is
+    // the worst failure mode this app has.
+    //
+    // It is not fixed by verifying on every read: the digest covers the WHOLE
+    // source, so checking it before showing one attachment would hash a
+    // possibly multi-gigabyte mailbox on every click. That is not a trade worth
+    // making for an interactive read.
+    //
+    // So the split is explicit instead:
+    //   • `read` / `stream` are cheap and bounds-checked. They detect a file
+    //     that has MOVED, SHRUNK, or cannot supply the range — all of which
+    //     throw. They do not detect same-length tampering.
+    //   • `verifySource(_:)` does the real thing: streams the whole file and
+    //     compares the digest recorded at import. Call it before anything that
+    //     asserts provenance — an export, a hash claim, a produced exhibit.
+    //
+    // A cheap read is the right default for opening an attachment. A claim
+    // about original bytes is not the same operation, and now has its own
+    // name.
 
-    func read(_ range: ByteRange, from path: String, expectedDigest: String? = nil) throws -> Data {
+    func read(_ range: ByteRange, from path: String) throws -> Data {
         guard FileManager.default.fileExists(atPath: path) else {
             throw LocatorReadError.sourceMissing(path)
         }
@@ -164,6 +196,44 @@ struct LocatorReader: Sendable {
             throw error
         } catch {
             throw LocatorReadError.ioError(error.localizedDescription)
+        }
+    }
+
+    /// Streams the WHOLE source and compares its digest to the one recorded
+    /// at import. This is the operation that actually establishes "these are
+    /// the original bytes".
+    ///
+    /// Costs a full read of the file, so it is deliberately not on the path
+    /// that opens an attachment. Call it before an export, a hash claim, or a
+    /// produced exhibit.
+    ///
+    /// Returns without error when the locator carries no digest — that means
+    /// the message predates digest recording, which is a different fact from
+    /// "verified", and `hasVerifiableSource` distinguishes them so a caller
+    /// cannot mistake one for the other.
+    func verifySource(_ locator: MessageLocator,
+                      chunkSize: Int = 4 * 1_048_576) throws {
+        guard let expected = locator.sourceDigest, !expected.isEmpty else { return }
+        guard FileManager.default.fileExists(atPath: locator.sourcePath) else {
+            throw LocatorReadError.sourceMissing(locator.sourcePath)
+        }
+        guard let handle = FileHandle(forReadingAtPath: locator.sourcePath) else {
+            throw LocatorReadError.ioError("cannot open \(locator.sourcePath)")
+        }
+        defer { try? handle.close() }
+
+        var hasher = SHA256()
+        while true {
+            let chunk: Data?
+            do { chunk = try handle.read(upToCount: chunkSize) }
+            catch { throw LocatorReadError.ioError(error.localizedDescription) }
+            guard let chunk, !chunk.isEmpty else { break }
+            hasher.update(data: chunk)
+        }
+        let actual = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        guard actual == expected else {
+            throw LocatorReadError.digestMismatch(expected: expected,
+                                                  path: locator.sourcePath)
         }
     }
 

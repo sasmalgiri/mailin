@@ -463,6 +463,52 @@ of taking a 1 MiB gulp, which on an 8-message fixture is 128 KiB of header
 reads instead of 8 MiB. That is justified on bytes read — arithmetic — not on
 footprint, because no footprint claim survived measurement.
 
+### S4/S5 — three defects found by audit after the suite was green
+
+None of these was caught by 441 passing tests, because each was a **false
+assurance** rather than a wrong computation — the code did something
+defensible and claimed something stronger.
+
+**1. `LocatorReader` did not verify anything.** It accepted an
+`expectedDigest`, documented "verify the source digest before reading",
+carried a `verifiesDigest` flag and a `digestMismatch` error case — and used
+none of them. `AttachmentHydrator` passed the digest in good faith. An edited
+or swapped source file would be read and its bytes presented as the original
+message.
+
+Not fixed by verifying on every read: the digest covers the whole source, so
+checking it before showing one attachment would hash a multi-gigabyte mailbox
+on every click. Verification is now its own operation —
+`LocatorReader.verifySource(_:)`, which streams the file and really does
+compare — and `read`/`stream` document that they detect a moved, shrunk or
+unreadable source but **not** same-length tampering.
+`MessageLocator.hasVerifiableSource` distinguishes "no digest recorded" from
+"verified", so the two cannot be conflated.
+
+**2. The two engines shared a resume identity.** Checkpoints match on
+`(sha256, size, parser, parserVersion)` precisely so a parser change cannot
+resume mid-file against a different ordering — and
+`parserIdentity(forExtension:)` returned `("mbox", 1)` for both engines. But
+they **disagree on ordinals**: the streaming parser drops a message over
+`maxMessageBytes`, the offset engine imports it, so one oversized message
+shifts every later ordinal. A half-finished streaming import resuming under
+the offset engine would "skip the first N" and skip a *different* N —
+duplicating some messages and losing others. Fixed by giving the offset engine
+its own identity (`"mbox-offset"`, `engineVersion`), so the checkpoint fails
+to match and the file restarts, which is the safe outcome.
+
+**3. A header-only import reported Complete.** A message archived from its
+headers is parsed, stored and indexed, so every check in `ImportReconciler`
+passed and the receipt said "Every message was imported and is searchable" —
+about messages with no body at all. The receipt is the durable record; that
+made it lie. Added `ImportShortfall.bodiesNotDecoded` and
+`ImportReceipt.bodiesNotDecoded` (defaulted, so older receipts still decode),
+counted against committed rows only, so such a run is now **Partial** with the
+reason named.
+
+**The pattern worth remembering:** all three passed their tests because the
+tests checked what the code *did*, and the defect was in what it *claimed*.
+
 **The standing lesson.** Three separate conclusions in this section were
 reached by comparing two numbers taken in the same process, and all three were
 wrong. `phys_footprint` on this machine is dominated by allocator and process

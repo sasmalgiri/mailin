@@ -140,6 +140,15 @@ struct ImportReceipt: Codable, Sendable, Equatable {
     var skipped: Int = 0
     var persistFailed: Int = 0
     var indexed: Int = 0
+    /// S4: messages archived from their HEADERS only, because they exceeded
+    /// the offset engine's full-parse ceiling. Stored and locatable, but with
+    /// no body text and nothing searchable beyond their headers.
+    ///
+    /// Counted separately because these messages pass every other check —
+    /// they are parsed, stored and indexed — so without this field the
+    /// verdict reported Complete for an import containing undecoded bodies.
+    /// Defaulted, so receipts written by earlier builds decode as 0.
+    var bodiesNotDecoded: Int = 0
     var attachmentsSeen: Int = 0
     var fileFailures: [FileFailure] = []
     var warnings: [String] = []

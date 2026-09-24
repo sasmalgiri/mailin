@@ -191,6 +191,11 @@ final class BulkImportCoordinator {
         /// Emails skipped because the user previously deleted them (tombstone).
         var blockedByTombstone = 0
         var attachmentsSeen = 0
+        /// S4: committed messages whose body was never decoded (header-only
+        /// import). These pass every other accounting check, so they need
+        /// their own counter or the verdict reports Complete for an import
+        /// that left bodies unread.
+        var bodiesNotDecoded = 0
         /// FTS degraded mode (1f): failed index batches were logged and the
         /// launch FTSReconciler will backfill.
         var ftsDegraded = false
@@ -399,7 +404,20 @@ final class BulkImportCoordinator {
                 callbacks.onFileProgress?(sourceName, fileIndex, urls.count, 0)
                 let hash = try await Self.sha256(of: url)
                 let sizeBytes: Int = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
-                let parserID = ParserFactory.parserIdentity(forExtension: url.pathExtension)
+                // The identity of the engine that will ACTUALLY run, not the
+                // one the filename implies. Two reasons, both load-bearing:
+                //
+                //  • Checkpoints match on parser identity so a parser change
+                //    cannot resume mid-file against a different message
+                //    ordering. The offset engine imports oversized messages
+                //    that the streaming parser drops, so their ordinals
+                //    diverge — with both reporting ("mbox", 1) a resumed
+                //    import would skip the wrong messages.
+                //  • The receipt and the source record must name the parser
+                //    that produced the rows, or a later reader cannot tell
+                //    which engine's output they are looking at.
+                let parserID = ParserFactory.parserIdentity(
+                    for: url, useOffsetEngine: options.useOffsetEngine)
                 sources.append(ImportReceipt.SourceRecord(
                     filename: sourceName, sizeBytes: sizeBytes,
                     sha256: hash, parser: parserID.name, parserVersion: parserID.version
@@ -602,6 +620,10 @@ final class BulkImportCoordinator {
                         if !batchLocators.isEmpty {
                             for id in insertResult.insertedIDs {
                                 guard let entry = batchLocators[id] else { continue }
+                                // Counted against COMMITTED rows only: a
+                                // header-only message that was deduped away is
+                                // not a shortfall in this archive.
+                                if !entry.bodyDecoded { summary.bodiesNotDecoded += 1 }
                                 do {
                                     try await store.saveLocator(entry.locator, emailID: id,
                                                                 bodyDecoded: entry.bodyDecoded)
@@ -757,6 +779,7 @@ final class BulkImportCoordinator {
         receipt.skipped = summary.skippedFiles
         receipt.persistFailed = summary.persistFailed
         receipt.indexed = summary.indexed
+        receipt.bodiesNotDecoded = summary.bodiesNotDecoded
         receipt.attachmentsSeen = summary.attachmentsSeen
         receipt.fileFailures = summary.fileErrors.map {
             ImportReceipt.FileFailure(filename: $0.filename, message: $0.message)
