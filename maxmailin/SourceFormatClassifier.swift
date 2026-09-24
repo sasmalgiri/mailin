@@ -39,11 +39,13 @@ enum SourceFormat: String, Sendable, Equatable, CaseIterable {
     /// Directory forms.
     case appleMailMailbox     // Apple Mail's .mbox *package*
     case maildir              // cur/new/tmp
+    case emlFolder            // a plain folder of .eml files
     case unknown
 
     var isSupported: Bool {
         switch self {
-        case .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, .appleMailMailbox, .maildir:
+        case .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf,
+             .appleMailMailbox, .maildir, .emlFolder:
             return true
         case .zip, .gzip, .unknown:
             return false
@@ -54,7 +56,7 @@ enum SourceFormat: String, Sendable, Equatable, CaseIterable {
     /// `ParserFactory` dispatch understands.
     var parserToken: String {
         switch self {
-        case .mbox, .appleMailMailbox, .maildir: return "mbox"
+        case .mbox, .appleMailMailbox, .maildir, .emlFolder: return "mbox"
         case .eml: return "eml"
         case .emlx: return "emlx"
         case .msg: return "msg"
@@ -78,6 +80,7 @@ enum SourceFormat: String, Sendable, Equatable, CaseIterable {
         case .gzip: return "gzip-compressed file"
         case .appleMailMailbox: return "Apple Mail mailbox package"
         case .maildir: return "Maildir folder"
+        case .emlFolder: return "folder of .eml messages"
         case .unknown: return "unrecognised file"
         }
     }
@@ -353,11 +356,91 @@ enum SourceFormatClassifier {
                 extensionHint: ext, nameContentMismatch: false, warning: nil)
         }
 
+        // Plain folders of individual messages — what a Mail "Save As" or an
+        // unpacked export usually produces. Routing these as "unknown" made
+        // mailin reject message sets it can read file by file.
+        let emlxCount = names.filter { $0.lowercased().hasSuffix(".emlx") }.count
+        if emlxCount > 0 {
+            // EMLXParser reads a directory of .emlx natively, so this is NOT
+            // a directory form for expansion purposes.
+            return SourceClassification(
+                format: .emlx,
+                evidence: "directory containing \(emlxCount) .emlx message file\(emlxCount == 1 ? "" : "s")",
+                extensionHint: ext, nameContentMismatch: false, warning: nil)
+        }
+
+        let emlCount = names.filter { $0.lowercased().hasSuffix(".eml") }.count
+        if emlCount > 0 {
+            return SourceClassification(
+                format: .emlFolder,
+                evidence: "directory containing \(emlCount) .eml message file\(emlCount == 1 ? "" : "s")",
+                extensionHint: ext, nameContentMismatch: false, warning: nil)
+        }
+
         return SourceClassification(
             format: .unknown,
             evidence: "a folder that is not an Apple Mail package or a Maildir",
             extensionHint: ext, nameContentMismatch: false,
             warning: "Select the mailbox files inside it, or the folder itself if it is an exported mailbox.")
+    }
+
+    // MARK: - Directory expansion
+
+    /// Directory formats do not hold their messages in the directory itself —
+    /// they hold them in files inside it. Returns the files that must actually
+    /// be parsed, in a stable order.
+    ///
+    /// Without this, `.appleMailMailbox` and `.maildir` classified as
+    /// *supported* and were then handed to the MBOX parser as a directory
+    /// path, which cannot be opened as a byte stream: the import failed with
+    /// an I/O error instead of reading the mailbox. Any other format returns
+    /// itself, so callers can treat every source uniformly.
+    static func expand(_ url: URL, format: SourceFormat) -> [URL] {
+        let fm = FileManager.default
+        switch format {
+        case .appleMailMailbox:
+            // Apple Mail keeps the mbox at the package root in some exports
+            // and under `Data/…/Messages` in others. Take the root one when
+            // it exists, otherwise every `mbox` file in the package.
+            let root = url.appendingPathComponent("mbox")
+            if fm.fileExists(atPath: root.path) { return [root] }
+            guard let walker = fm.enumerator(at: url,
+                                             includingPropertiesForKeys: [.isRegularFileKey],
+                                             options: [.skipsHiddenFiles]) else { return [] }
+            var found: [URL] = []
+            for case let child as URL in walker where child.lastPathComponent == "mbox" {
+                found.append(child)
+            }
+            return found.sorted { $0.path < $1.path }
+
+        case .emlFolder:
+            return (((try? fm.contentsOfDirectory(at: url,
+                                                  includingPropertiesForKeys: nil,
+                                                  options: [.skipsHiddenFiles])) ?? [])
+                .filter { $0.pathExtension.lowercased() == "eml" })
+                .sorted { $0.path < $1.path }
+
+        case .maildir:
+            // `cur` holds read mail, `new` holds unread; `tmp` is delivery
+            // scratch space and is deliberately skipped. Each file is one
+            // RFC 822 message.
+            return ["cur", "new"]
+                .map { url.appendingPathComponent($0, isDirectory: true) }
+                .flatMap { directory -> [URL] in
+                    ((try? fm.contentsOfDirectory(at: directory,
+                                                  includingPropertiesForKeys: nil,
+                                                  options: [.skipsHiddenFiles])) ?? [])
+                }
+                .sorted { $0.path < $1.path }
+
+        default:
+            return [url]
+        }
+    }
+
+    /// True when `format` needs `expand(_:format:)` before a parser can run.
+    static func isDirectoryForm(_ format: SourceFormat) -> Bool {
+        format == .appleMailMailbox || format == .maildir || format == .emlFolder
     }
 
     // MARK: - I/O

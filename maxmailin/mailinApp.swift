@@ -118,6 +118,10 @@ struct mailinApp: App {
                         appState.isModuleEnabled = { [modules] module in
                             modules.isEnabled(module)
                         }
+                        // The second gate: the per-capability matrix switch.
+                        appState.isCapabilityOn = { [modules] capability in
+                            modules.isOn(capability)
+                        }
                         // §3.3: map 2.x state forward exactly once, before any
                         // gate is read. An existing install keeps what it was
                         // already using; a fresh install gets Page 1 only.
@@ -127,10 +131,23 @@ struct mailinApp: App {
                             legacyAIEnabled: enableAIFeatures,
                             legacyPersonaCompleted: personaManager.hasCompletedPersonaSelection
                         )
+                        // AFTER the legacy mapping, so the initial arming sees
+                        // final page state: push every capability into the
+                        // machinery that reads a plain flag rather than the
+                        // registry (the synchronous attachment and export
+                        // readers). The registry re-pushes on every later
+                        // change, so this is only the initial arming.
+                        CapabilityWiring.applyAll(modules)
                         // Notification permission is opt-in via Settings → General
                         // → Notifications, not auto-prompted at launch.
-                        // §3.3 R2: background analysis belongs to AI Insights.
-                        if modules.isEnabled(.aiInsights) {
+                        // §3.3 R2: background analysis belongs to AI Insights,
+                        // and within it to the capabilities that consume it —
+                        // if the user has switched all of them off there is
+                        // nothing for the background pass to produce.
+                        if modules.isEnabled(.aiInsights),
+                           [Capability.anomalyDetection, .smartAutoTagger,
+                            .topicClusters, .threadSummarizer, .smartAlerts,
+                            .keywordMonitor, .aiDigest].contains(where: { modules.isOn($0) }) {
                             BackgroundAnalysisManager.shared.scheduleBackgroundAnalysis()
                         }
                         try? Tips.configure([
@@ -891,11 +908,23 @@ class AppStateManager {
                 return .professional
             }
         }
+
+        /// The matrix switch that governs this surface. Matched by raw value,
+        /// so the two enums cannot drift into disagreement without the
+        /// `ownedFeaturesAllMapToACapability` test noticing.
+        var capability: Capability? { Capability(rawValue: rawValue) }
     }
 
     /// Set once at launch by the app shell. Until then nothing is gated, which
     /// keeps previews and tests that never install a registry working.
     var isModuleEnabled: (@MainActor (AppModule) -> Bool)?
+
+    /// Second gate, also installed by the shell: the per-capability switch
+    /// from the on/off matrix. The page gate above answers "is this page on?";
+    /// this one answers "has the user switched this particular feature off?".
+    /// Both must pass, and the page gate is checked first so a capability can
+    /// never outlive its page.
+    var isCapabilityOn: (@MainActor (Capability) -> Bool)?
 
     private var openFeatures: Set<OwnedFeature> = []
 
@@ -913,6 +942,15 @@ class AppStateManager {
             // this is the backstop that makes the rule true regardless.
             Logger(subsystem: Bundle.main.bundleIdentifier ?? "mailin", category: "PageIsolation")
                 .fault("refused \(feature.rawValue, privacy: .public) — \(feature.module.rawValue, privacy: .public) is disabled")
+            return
+        }
+        // Every `OwnedFeature` has a same-named `Capability`, so the matrix
+        // switch governs this surface with no second table to keep in step.
+        // A future `OwnedFeature` with no matching capability is ungated here
+        // rather than silently blocked — the page gate above still applies.
+        if let capability = feature.capability, let gate = isCapabilityOn, !gate(capability) {
+            Logger(subsystem: Bundle.main.bundleIdentifier ?? "mailin", category: "PageIsolation")
+                .info("declined \(feature.rawValue, privacy: .public) — capability switched off")
             return
         }
         openFeatures.insert(feature)

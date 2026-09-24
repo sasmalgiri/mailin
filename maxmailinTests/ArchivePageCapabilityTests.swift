@@ -136,6 +136,10 @@ final class ArchivePageCapabilityTests: XCTestCase {
     // MARK: - 3. Export the archive
 
     func testArchive_exportsMBOXThatReparses() async throws {
+        // Imports ~95 MB and exports ~95 MB through SQLite. On a full volume
+        // this failed as `step("disk I/O error")`, which reads as a store bug
+        // and is not one — see TestPreconditions.
+        try TestPreconditions.requireFreeSpace(TestPreconditions.referenceFixtureBudget)
         let (store, fts, root, _) = try await importFixture()
         // Deliberately NOT removing `root` here: BulkImportCoordinator's
         // budget-restore runs in a deferred Task (P3.3) that may still hold the

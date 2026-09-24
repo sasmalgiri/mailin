@@ -12,6 +12,25 @@ struct ParserFactory {
                 reason: [classification.summary, classification.format.advice]
                     .compactMap { $0 }.joined(separator: " "))
         }
+
+        // Apple Mail packages and Maildirs are directories: the messages live
+        // in files inside them, so the parser must be pointed at those files.
+        // Handing the directory itself to MBOXParser failed to open.
+        if SourceFormatClassifier.isDirectoryForm(classification.format) {
+            let members = SourceFormatClassifier.expand(fileURL, format: classification.format)
+            guard !members.isEmpty else {
+                throw ExtractionError.unsupportedFormat(
+                    reason: "\(classification.summary). No message files were found inside it.")
+            }
+            var all: [MBOXParser.RawEmail] = []
+            for (index, member) in members.enumerated() {
+                all += try MBOXParser.parse(fileURL: member, senderEmail: senderEmail) { fraction in
+                    onProgress?((Double(index) + fraction) / Double(members.count))
+                }
+            }
+            return all
+        }
+
         let ext = classification.format.parserToken
         switch ext {
         case "mbox", "eml", "":
@@ -112,6 +131,40 @@ struct ParserFactory {
                 reason: [classification.summary, classification.format.advice]
                     .compactMap { $0 }.joined(separator: " "))
         }
+
+        // Directory forms stream member-by-member: each file is drained
+        // through `onBatch` before the next is opened, so peak memory stays
+        // bounded by one member's batch rather than the whole mailbox.
+        if SourceFormatClassifier.isDirectoryForm(classification.format) {
+            let members = SourceFormatClassifier.expand(fileURL, format: classification.format)
+            guard !members.isEmpty else {
+                throw ExtractionError.unsupportedFormat(
+                    reason: "\(classification.summary). No message files were found inside it.")
+            }
+            var total = 0, parsed = 0, failed = 0
+            var categories: [String: Int] = [:]
+            for (index, member) in members.enumerated() {
+                let report = try await MBOXParser.parseStreamingCallback(
+                    fileURL: member,
+                    senderEmail: senderEmail,
+                    batchSize: batchSize,
+                    envelopeProvider: envelopeProvider,
+                    retainAttachmentBytes: retainAttachmentBytes,
+                    onProgress: { fraction in
+                        onProgress?((Double(index) + fraction) / Double(members.count))
+                    },
+                    onBatch: onBatch
+                )
+                total += report.totalMessages
+                parsed += report.successfullyParsed
+                failed += report.failed
+                for (key, count) in report.errorCategories { categories[key, default: 0] += count }
+            }
+            return MBOXParser.ParseRecoveryReport(
+                totalMessages: total, successfullyParsed: parsed,
+                failed: failed, errorCategories: categories)
+        }
+
         let ext = classification.format.parserToken
         switch ext {
         case "mbox", "eml", "":

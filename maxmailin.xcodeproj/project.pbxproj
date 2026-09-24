@@ -26,6 +26,14 @@
 		B4F63B9430650A4D008C7D92 /* SourceSizePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63B9330650A4D008C7D92 /* SourceSizePolicyTests.swift */; };
 		B4F63B9830650D45008C7D92 /* StoragePlannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63B9730650D45008C7D92 /* StoragePlannerTests.swift */; };
 		B4F63B9C30651380008C7D92 /* BlobStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63B9B30651380008C7D92 /* BlobStoreTests.swift */; };
+		B4F63BA030652DB1008C7D92 /* GoldCaseClosureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63B9F30652DB1008C7D92 /* GoldCaseClosureTests.swift */; };
+		B4F63BA2306530D8008C7D92 /* StudioBehaviourTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BA1306530D8008C7D92 /* StudioBehaviourTests.swift */; };
+		B4F63BA430653798008C7D92 /* BlobTierWiringTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BA330653798008C7D92 /* BlobTierWiringTests.swift */; };
+		B4F63BC2306543C7008C7D92 /* CapabilityMatrixTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BC1306543C7008C7D92 /* CapabilityMatrixTests.swift */; };
+		B4F63BC430654436008C7D92 /* OffsetParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BC330654436008C7D92 /* OffsetParserTests.swift */; };
+		B4F63BCC30655AC5008C7D92 /* ActivationMeasurementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BCB30655AC5008C7D92 /* ActivationMeasurementTests.swift */; };
+		B4F63BDC3065756A008C7D92 /* TestPreconditions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BDB3065756A008C7D92 /* TestPreconditions.swift */; };
+		B4F63BDE306576A6008C7D92 /* SMIMEGoldCaseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BDD306576A6008C7D92 /* SMIMEGoldCaseTests.swift */; };
 		C0DE0FF1CE20260807AB0002 /* V2CutoverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0FF1CE20260807AB0001 /* V2CutoverTests.swift */; };
 		FE90CA2542E92965622E2D37 /* V2VerificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B137BCFD52463D2F34C4DAE4 /* V2VerificationTests.swift */; };
 /* End PBXBuildFile section */
@@ -82,6 +90,14 @@
 		B4F63B9330650A4D008C7D92 /* SourceSizePolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceSizePolicyTests.swift; sourceTree = "<group>"; };
 		B4F63B9730650D45008C7D92 /* StoragePlannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoragePlannerTests.swift; sourceTree = "<group>"; };
 		B4F63B9B30651380008C7D92 /* BlobStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlobStoreTests.swift; sourceTree = "<group>"; };
+		B4F63B9F30652DB1008C7D92 /* GoldCaseClosureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoldCaseClosureTests.swift; sourceTree = "<group>"; };
+		B4F63BA1306530D8008C7D92 /* StudioBehaviourTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioBehaviourTests.swift; sourceTree = "<group>"; };
+		B4F63BA330653798008C7D92 /* BlobTierWiringTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlobTierWiringTests.swift; sourceTree = "<group>"; };
+		B4F63BC1306543C7008C7D92 /* CapabilityMatrixTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapabilityMatrixTests.swift; sourceTree = "<group>"; };
+		B4F63BC330654436008C7D92 /* OffsetParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OffsetParserTests.swift; sourceTree = "<group>"; };
+		B4F63BCB30655AC5008C7D92 /* ActivationMeasurementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivationMeasurementTests.swift; sourceTree = "<group>"; };
+		B4F63BDB3065756A008C7D92 /* TestPreconditions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestPreconditions.swift; sourceTree = "<group>"; };
+		B4F63BDD306576A6008C7D92 /* SMIMEGoldCaseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SMIMEGoldCaseTests.swift; sourceTree = "<group>"; };
 		C0DE0FF1CE20260807AB0001 /* V2CutoverTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = V2CutoverTests.swift; sourceTree = "<group>"; };
 		C3B67A602E2FE445009C208C /* ModelRunner.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = ModelRunner.xcodeproj; sourceTree = "<group>"; };
 		C3B687F12E2F3CE7009C208C /* ModelRunner.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = ModelRunner.xcodeproj; sourceTree = "<group>"; };
@@ -181,6 +197,14 @@
 				B4F63B9330650A4D008C7D92 /* SourceSizePolicyTests.swift */,
 				B4F63B9730650D45008C7D92 /* StoragePlannerTests.swift */,
 				B4F63B9B30651380008C7D92 /* BlobStoreTests.swift */,
+				B4F63B9F30652DB1008C7D92 /* GoldCaseClosureTests.swift */,
+				B4F63BA1306530D8008C7D92 /* StudioBehaviourTests.swift */,
+				B4F63BA330653798008C7D92 /* BlobTierWiringTests.swift */,
+				B4F63BC1306543C7008C7D92 /* CapabilityMatrixTests.swift */,
+				B4F63BC330654436008C7D92 /* OffsetParserTests.swift */,
+				B4F63BCB30655AC5008C7D92 /* ActivationMeasurementTests.swift */,
+				B4F63BDB3065756A008C7D92 /* TestPreconditions.swift */,
+				B4F63BDD306576A6008C7D92 /* SMIMEGoldCaseTests.swift */,
 			);
 			path = maxmailinTests;
 			sourceTree = SOURCE_ROOT;
@@ -384,24 +408,32 @@
 			files = (
 				B4F63B9830650D45008C7D92 /* StoragePlannerTests.swift in Sources */,
 				B4F63B763064B0A7008C7D92 /* ImportMemoryBudgetTests.swift in Sources */,
+				B4F63BC2306543C7008C7D92 /* CapabilityMatrixTests.swift in Sources */,
+				B4F63BA430653798008C7D92 /* BlobTierWiringTests.swift in Sources */,
 				B4F63B1830641E20008C7D92 /* FixtureImportMeasurementTests.swift in Sources */,
 				B4F63B803064EE61008C7D92 /* SourceFormatClassifierTests.swift in Sources */,
 				B4F63B6030648B96008C7D92 /* PageRouterTests.swift in Sources */,
 				1D0190B9A4314C4F1E974268 /* SmokeTests.swift in Sources */,
+				B4F63BA2306530D8008C7D92 /* StudioBehaviourTests.swift in Sources */,
 				FE90CA2542E92965622E2D37 /* V2VerificationTests.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* V2DerivedStateTests.swift in Sources */,
 				B4F63B9430650A4D008C7D92 /* SourceSizePolicyTests.swift in Sources */,
 				B4F63B5030643A2A008C7D92 /* ImportVerdictTests.swift in Sources */,
 				B4F63B783064B119008C7D92 /* ImportMemoryAttributionTests.swift in Sources */,
+				B4F63BDE306576A6008C7D92 /* SMIMEGoldCaseTests.swift in Sources */,
 				AB12CD34EF5601789ABCDE02 /* V2ExportTests.swift in Sources */,
+				B4F63BDC3065756A008C7D92 /* TestPreconditions.swift in Sources */,
 				B4F63B8A3064FFF2008C7D92 /* IndexCoverageTests.swift in Sources */,
 				B4F63B643064A09C008C7D92 /* AdaptiveBatchControllerTests.swift in Sources */,
 				C0DE0FF1CE20260807AB0002 /* V2CutoverTests.swift in Sources */,
+				B4F63BA030652DB1008C7D92 /* GoldCaseClosureTests.swift in Sources */,
+				B4F63BC430654436008C7D92 /* OffsetParserTests.swift in Sources */,
 				B4F63B0A306419C2008C7D92 /* ModuleGatingTests.swift in Sources */,
 				B4F63B9C30651380008C7D92 /* BlobStoreTests.swift in Sources */,
 				B4F63B2430642102008C7D92 /* IdleShardEvictionTests.swift in Sources */,
 				AB12CD34EF5601789ABCDE04 /* V2SecurityTests.swift in Sources */,
 				B4F63B7C3064EA45008C7D92 /* ArchivePageCapabilityTests.swift in Sources */,
+				B4F63BCC30655AC5008C7D92 /* ActivationMeasurementTests.swift in Sources */,
 				B4EE09033025C63B003F6F45 /* V2SearchTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

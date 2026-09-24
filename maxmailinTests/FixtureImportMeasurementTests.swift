@@ -36,6 +36,9 @@ final class FixtureImportMeasurementTests: XCTestCase {
         guard let fixture = Self.fixtureURL else {
             throw XCTSkip("fixture ~/Downloads/Mail/Sent.mbox not present on this machine")
         }
+        // A full volume makes this fail as `exec("disk I/O error")`, which
+        // looks like a store defect. Skip with the shortfall named instead.
+        try TestPreconditions.requireFreeSpace(TestPreconditions.referenceFixtureBudget)
         let bytes = (try FileManager.default.attributesOfItem(atPath: fixture.path)[.size] as? NSNumber)?.int64Value ?? 0
 
         let root = FileManager.default.temporaryDirectory
@@ -99,6 +102,9 @@ final class FixtureImportMeasurementTests: XCTestCase {
         guard let fixture = Self.fixtureURL else {
             throw XCTSkip("fixture ~/Downloads/Mail/Sent.mbox not present on this machine")
         }
+        // A full volume makes this fail as `exec("disk I/O error")`, which
+        // looks like a store defect. Skip with the shortfall named instead.
+        try TestPreconditions.requireFreeSpace(TestPreconditions.referenceFixtureBudget)
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("fixture-prodpath-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

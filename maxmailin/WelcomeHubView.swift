@@ -3,6 +3,14 @@ import SwiftUI
 struct WelcomeHubView: View {
     @ObservedObject private var personaManager = PersonaManager.shared
     @EnvironmentObject private var storeManager: StoreManager
+    /// A1: this is Page 1's empty state, and Page 1 may not advertise other
+    /// pages' features. Before this the showcase listed AI Intelligence,
+    /// Forensics & Legal and Security & Detection unconditionally — so a
+    /// Page-1-only install was shown, on its very first screen, a catalogue of
+    /// things it had deliberately not enabled. The registry decides what
+    /// appears; the Page Activation Sheet remains the place to see the full
+    /// matrix and opt in.
+    @Environment(ModuleRegistry.self) private var modules
     var onOpenArchive: () -> Void
     var onBrowseFiles: () -> Void
 
@@ -445,18 +453,27 @@ struct WelcomeHubView: View {
         let title: String
         let color: Color
         let isPrimary: Bool
+        /// The page that owns these features. `.archive` is always shown;
+        /// everything else appears only while its page is enabled.
+        let owner: AppModule
         let features: [FeatureItem]
     }
 
     // MARK: - Persona-Ordered Categories
 
     private var orderedCategories: [FeatureCategory] {
-        let all = [analysisCategory, forensicsCategory, securityCategory, exportCategory, aiCategory]
+        // Only categories whose owning page is on. Archive is always on, so
+        // Page 1's empty state is never empty.
+        let all = [archiveCategory, analysisCategory, forensicsCategory,
+                   securityCategory, exportCategory, aiCategory]
+            .filter { $0.owner == .archive || modules.isEnabled($0.owner) }
+
         let primaryOrder = personaPrimaryCategoryOrder
         var ordered: [FeatureCategory] = []
         for title in primaryOrder {
             if let cat = all.first(where: { $0.title == title }) {
-                ordered.append(FeatureCategory(icon: cat.icon, title: cat.title, color: cat.color, isPrimary: true, features: cat.features))
+                ordered.append(FeatureCategory(icon: cat.icon, title: cat.title, color: cat.color,
+                                               isPrimary: true, owner: cat.owner, features: cat.features))
             }
         }
         for cat in all where !primaryOrder.contains(cat.title) {
@@ -479,22 +496,34 @@ struct WelcomeHubView: View {
 
     // MARK: - Feature Categories
 
-    private var analysisCategory: FeatureCategory {
-        FeatureCategory(icon: "chart.bar.xaxis", title: "Analysis & Insights", color: .blue, isPrimary: false, features: [
+    /// Page 1's own capabilities — import, search, read, export. Always shown,
+    /// because the Archive page is always on.
+    private var archiveCategory: FeatureCategory {
+        FeatureCategory(icon: "tray.full", title: "Archive", color: .blue, isPrimary: false, owner: .archive, features: [
             FeatureItem(icon: "magnifyingglass", name: "Smart Search", tagline: "Boolean, regex, proximity", color: .blue),
-            FeatureItem(icon: "chart.xyaxis.line", name: "Visual Analytics", tagline: "Charts, trends, patterns", color: .purple),
-            FeatureItem(icon: "bubble.left.and.text.bubble.right", name: "Sentiment Analysis", tagline: "Tone and emotion detection", color: .orange),
-            FeatureItem(icon: "rectangle.3.group", name: "Topic Clusters", tagline: "Auto-grouped by subject", color: .teal),
             FeatureItem(icon: "calendar.day.timeline.left", name: "Email Timeline", tagline: "Chronological exploration", color: .indigo),
-            FeatureItem(icon: "person.3", name: "Relationship Graph", tagline: "Who talks to whom", color: .pink),
-            FeatureItem(icon: "arrow.triangle.branch", name: "Thread Summarizer", tagline: "Conversation overviews", color: .cyan),
+            FeatureItem(icon: "paperclip", name: "Attachments", tagline: "Read, preview and save", color: .teal),
+            FeatureItem(icon: "chart.xyaxis.line", name: "Visual Analytics", tagline: "Charts, trends, patterns", color: .purple),
             FeatureItem(icon: "chart.line.uptrend.xyaxis", name: "Communication Patterns", tagline: "Volume and frequency", color: .mint),
             FeatureItem(icon: "doc.on.doc", name: "Duplicate Detection", tagline: "Exact and near-matches", color: .gray),
+            FeatureItem(icon: "square.and.arrow.up", name: "Export", tagline: "mbox, PDF, CSV — round-trip verified", color: .green),
+        ])
+    }
+
+    /// Derived analysis that needs the AI Insights page's jobs. Sentiment,
+    /// clustering and summarisation are not Archive facts — they are produced
+    /// by models, and on a Page-1-only install nothing produces them.
+    private var analysisCategory: FeatureCategory {
+        FeatureCategory(icon: "chart.bar.xaxis", title: "Analysis & Insights", color: .blue, isPrimary: false, owner: .aiInsights, features: [
+            FeatureItem(icon: "bubble.left.and.text.bubble.right", name: "Sentiment Analysis", tagline: "Tone and emotion detection", color: .orange),
+            FeatureItem(icon: "rectangle.3.group", name: "Topic Clusters", tagline: "Auto-grouped by subject", color: .teal),
+            FeatureItem(icon: "person.3", name: "Relationship Graph", tagline: "Who talks to whom", color: .pink),
+            FeatureItem(icon: "arrow.triangle.branch", name: "Thread Summarizer", tagline: "Conversation overviews", color: .cyan),
         ])
     }
 
     private var forensicsCategory: FeatureCategory {
-        FeatureCategory(icon: "shield.checkered", title: "Forensics & Legal", color: .orange, isPrimary: false, features: [
+        FeatureCategory(icon: "shield.checkered", title: "Forensics & Legal", color: .orange, isPrimary: false, owner: .professional, features: [
             FeatureItem(icon: "number.square", name: "Bates Numbering", tagline: "Legal production stamping", color: .indigo),
             FeatureItem(icon: "checkmark.seal", name: "Hash Verification", tagline: "MD5, SHA-1, SHA-256", color: .orange),
             FeatureItem(icon: "list.clipboard", name: "Audit Trail", tagline: "Tamper-evident HMAC chain", color: .brown),
@@ -508,7 +537,7 @@ struct WelcomeHubView: View {
     }
 
     private var securityCategory: FeatureCategory {
-        FeatureCategory(icon: "shield.lefthalf.filled", title: "Security & Detection", color: .red, isPrimary: false, features: [
+        FeatureCategory(icon: "shield.lefthalf.filled", title: "Security & Detection", color: .red, isPrimary: false, owner: .professional, features: [
             FeatureItem(icon: "exclamationmark.shield", name: "Phishing Detection", tagline: "Multi-signal risk scoring", color: .red),
             FeatureItem(icon: "waveform.badge.exclamationmark", name: "Anomaly Detection", tagline: "Frequency, timing, domains", color: .orange),
             FeatureItem(icon: "eye.trianglebadge.exclamationmark", name: "PII Exposure Scan", tagline: "Find sensitive data leaks", color: .purple),
@@ -518,10 +547,12 @@ struct WelcomeHubView: View {
         ])
     }
 
+    /// Legal load files and case reports belong to the Professional page; the
+    /// plain formats (mbox, PDF, CSV) are Archive capabilities and live in
+    /// `archiveCategory`, so a Page-1-only install still sees that it can
+    /// export.
     private var exportCategory: FeatureCategory {
-        FeatureCategory(icon: "square.and.arrow.up", title: "Export & Reports", color: .green, isPrimary: false, features: [
-            FeatureItem(icon: "doc.richtext", name: "PDF Export", tagline: "Print-ready documents", color: .red),
-            FeatureItem(icon: "tablecells", name: "CSV / Spreadsheet", tagline: "Structured data export", color: .green),
+        FeatureCategory(icon: "square.and.arrow.up", title: "Export & Reports", color: .green, isPrimary: false, owner: .professional, features: [
             FeatureItem(icon: "person.text.rectangle", name: "vCard Contacts", tagline: "Extract email contacts", color: .blue),
             FeatureItem(icon: "calendar", name: "ICS Calendar", tagline: "Export meeting events", color: .orange),
             FeatureItem(icon: "doc.badge.gearshape", name: "Concordance / Relativity", tagline: "Legal load file formats", color: .indigo),
@@ -532,7 +563,7 @@ struct WelcomeHubView: View {
     }
 
     private var aiCategory: FeatureCategory {
-        FeatureCategory(icon: "sparkles", title: "AI Intelligence", color: .purple, isPrimary: false, features: [
+        FeatureCategory(icon: "sparkles", title: "AI Intelligence", color: .purple, isPrimary: false, owner: .aiInsights, features: [
             FeatureItem(icon: "bubble.left.and.bubble.right", name: "AI Assistant", tagline: "Ask questions about emails", color: .purple),
             FeatureItem(icon: "text.page.badge.magnifyingglass", name: "AI Email Digest", tagline: "Auto-generated summaries", color: .blue),
             FeatureItem(icon: "brain.head.profile", name: "Smart Classification", tagline: "Auto-categorize emails", color: .indigo),

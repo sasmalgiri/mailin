@@ -62,6 +62,11 @@ struct ContentView: View {
     @State private var legalForensicExpanded: Bool = !(PersonaManager.shared.selectedPersona == .personal)
     @State private var exportReportsExpanded: Bool = !(PersonaManager.shared.selectedPersona == .personal)
     @State private var aiIntelligenceExpanded: Bool = !(PersonaManager.shared.selectedPersona == .personal)
+    /// A3: files awaiting the guided-import sheet. Non-nil presents it; the
+    /// import does not start until the sheet's Start button is pressed.
+    @State private var pendingImportURLs: [URL]?
+    /// A4: the session import queue window.
+    @State private var showImportQueue = false
     #if os(iOS)
     @State private var showFileImporter = false
     @State private var showShareSheet = false
@@ -170,6 +175,15 @@ struct ContentView: View {
         .onChange(of: storeManager.isPremium) { handlePremiumChange() }
         .onChange(of: modelVM.visibleEmails.count) { handleFilteredChange() }
         .onAppear { handleAppear() }
+        // A3/A4 in one modifier: this body is already at the type-checker's
+        // limit, and attaching the two sheets inline pushed it over ("unable
+        // to type-check this expression in reasonable time").
+        .modifier(ImportSurfacesModifier(
+            pendingURLs: $pendingImportURLs,
+            showQueue: $showImportQueue,
+            dedupPolicy: removeDuplicates ? .messageID : .preserveAll,
+            modules: modules,
+            onStart: { accepted in startImport(accepted) }))
         .onChange(of: viewModel.parseErrors) { _, errors in
             // Surface a friendly error sheet when parsing fails. Apple App
             // Review specifically tests corrupt/unsupported inputs.
@@ -3493,16 +3507,42 @@ struct ContentView: View {
     }
 
 private func handleMultipleFiles(_ urls: [URL]) {
+        // NOTE: the extension filter here is a cheap pre-filter only. The
+        // CONTENT classifier is what actually decides, and the guided sheet
+        // shows its verdict — which is how a PST named `.mbox` becomes
+        // visible before it is parsed rather than after.
         let supported = Set(ParserFactory.allSupportedExtensions)
-        let validURLs = urls.filter { supported.contains($0.pathExtension.lowercased()) }
+        let validURLs = urls.filter {
+            supported.contains($0.pathExtension.lowercased()) || $0.pathExtension.isEmpty
+        }
         guard !validURLs.isEmpty else {
             parseFailed = true
             return
         }
+        beginImport(validURLs)
+    }
+
+    /// A3: one funnel for every import entry point. With
+    /// `Capability.guidedImport` on, the user sees what will happen first;
+    /// with it off, the import starts immediately exactly as in 2.x.
+    private func beginImport(_ urls: [URL]) {
+        if modules.isOn(.guidedImport) {
+            pendingImportURLs = urls
+            return
+        }
+        startImport(urls)
+    }
+
+    private func startImport(_ urls: [URL]) {
         showSpinner = true
         parseFailed = false
+        // A4: the queue is a view of this session's work; the durable record
+        // is still the receipt.
+        if modules.isOn(.importQueue) {
+            ImportQueue.shared.enqueue(urls: urls)
+        }
         let cap = storeManager.isPremium ? nil : StoreManager.freeEmailLimit
-        viewModel.parseSelectedFiles(validURLs, removeDuplicates: removeDuplicates, maxEmails: cap)
+        viewModel.parseSelectedFiles(urls, removeDuplicates: removeDuplicates, maxEmails: cap)
     }
 
     private func resolveAndHandleSelectedFile(_ url: URL) {
@@ -3524,10 +3564,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
     }
 
     private func handleSelectedFile(_ url: URL) {
-        showSpinner = true
-        parseFailed = false
-        let cap = storeManager.isPremium ? nil : StoreManager.freeEmailLimit
-        viewModel.parseSelectedFiles([url], removeDuplicates: removeDuplicates, maxEmails: cap)
+        beginImport([url])
     }
 
     private static let freeExportLimit = 10
@@ -4193,6 +4230,13 @@ private func handleMultipleFiles(_ urls: [URL]) {
 
     // MARK: - Lifecycle Handlers
     private func handleAppear() {
+        // S4/S5: give the import view model the capability matrix, so it can
+        // choose its parse engine. Set here rather than in the app shell
+        // because this is where the view model is owned. Nil in previews, and
+        // nil reads as "every capability off" — the proven engine.
+        viewModel.isCapabilityOn = { [modules] capability in
+            modules.isOn(capability)
+        }
         // First-run tour for new users — shown once, dismissable any time.
         // Gated on the launch flow being complete: if Terms or Persona
         // onboarding is still showing in the parent scene, presenting another

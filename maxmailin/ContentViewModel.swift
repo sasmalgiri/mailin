@@ -32,6 +32,14 @@ class ContentViewModel: ObservableObject {
     // ArchiveDataService. `totalParsedCount` is the store-backed archive
     // count (committed truth), never an array count.
     @Published var totalParsedCount: Int = 0
+
+    /// The capability matrix, injected by the shell. Import reads it here
+    /// because `BulkImportCoordinator` is not main-actor and must not hold the
+    /// registry. Nil in previews and tests, where every capability reads as
+    /// off — which is the conservative direction: a test gets the proven
+    /// streaming engine unless it asks otherwise.
+    var isCapabilityOn: (@MainActor (Capability) -> Bool)?
+
     private(set) var metadata: [String: Any] = [:]
     private var isParsing = false
     private var memoryMonitorTask: Task<Void, Never>?
@@ -338,11 +346,21 @@ class ContentViewModel: ObservableObject {
                 }
             }
 
+            // S4/S5: the engine choice is the matrix switch, read here because
+            // the coordinator is not main-actor. Both default OFF, so an
+            // install that has not opted in imports exactly as 2.1 did.
+            let useOffsetEngine = self.isCapabilityOn?(.offsetParser) ?? false
+            let recordLocators = self.isCapabilityOn?(.locatorReads) ?? false
+
             let options = BulkImportCoordinator.Options(
                 batchSize: 500,
                 senderEmail: self.senderEmail,
                 maxEmails: maxEmails,
-                dedupPolicy: removeDuplicates ? .messageID : .preserveAll
+                dedupPolicy: removeDuplicates ? .messageID : .preserveAll,
+                useOffsetEngine: useOffsetEngine,
+                // Locators are only produced by the offset engine, so
+                // recording them without it would silently do nothing.
+                recordLocators: recordLocators && useOffsetEngine
             )
 
             do {

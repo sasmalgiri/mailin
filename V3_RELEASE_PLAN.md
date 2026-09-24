@@ -1,7 +1,11 @@
 # mailin v3 — Release Plan (consumer 3.0 + Enterprise Custom App)
 
-Date: 2026-09-06. All v3 feature work is code-complete and behaviorally verified
-(see `V3_PLAN.md`, `V3_JOB_COVERAGE_MATRIX.csv`: 64 Present / 11 Partial / 0 Absent).
+Date: 2026-09-06. **Claim corrected 2026-09-24 — see `RELEASE_NOTES_2_1.md`.**
+All v3 feature work is code-complete (`V3_JOB_COVERAGE_MATRIX.csv`: 64 Present /
+11 Partial / 0 Absent). It was **not** behaviourally verified when this line was
+written: no test in the target referenced any of the five studios. Behavioural
+tests now exist (`StudioBehaviourTests.swift`, `GoldCaseClosureTests.swift`) but
+have not been executed, so "behaviourally verified" is not yet available as a claim.
 This plan covers the path from "code-complete" to "on the store + sellable to orgs".
 
 **E2 licensing decision — RESOLVED:** Enterprise ships as an Apple **Custom App**

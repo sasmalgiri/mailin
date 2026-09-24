@@ -64,6 +64,260 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// reopen gate to prove durability with a fresh connection.
     nonisolated var storeDirectory: URL { directory }
 
+    // MARK: - Raw-MIME blob tier (S3b)
+    //
+    // SQLite's default maximum BLOB length is 1 GB, and that is also its
+    // maximum ROW size — no page size makes a 1.5 GB message storable as a
+    // row. So raw MIME above `BlobStore.inlineThresholdBytes` goes to the
+    // content-addressed store beside the database and the row keeps a
+    // reference.
+    //
+    // Invariants every path below depends on:
+    //  1. Exactly one of `raw` / `raw_blob_digest` is non-empty for a row.
+    //  2. The blob is written and fsynced BEFORE the row that references it
+    //     commits, so a crash in between leaves a collectable orphan rather
+    //     than a row pointing at nothing. Orphans cost disk; dangling
+    //     references lose evidence.
+    //  3. `raw_blob_length` is in the row, so size predicates and byte-budget
+    //     paging never open a blob to learn how big it is.
+
+    /// `<store>/blobs`. Same directory as the database, so a store copied or
+    /// moved carries its bodies with it.
+    nonisolated var blobStore: BlobStore { BlobStore.production(storeDirectory: directory) }
+
+    /// The raw MIME for a row, from whichever tier holds it.
+    ///
+    /// Returns "" when the row genuinely has no raw source (pre-v2 migrated
+    /// rows), which the fidelity and header-recovery passes treat as work to
+    /// do. A blob-backed row whose blob is MISSING throws instead of returning
+    /// "" — silently reporting a stored message as having no source would send
+    /// the backfills off to "heal" a row that is merely unreadable.
+    nonisolated func rawMIME(inline: String?, digest: String?, blobLength: Int64) throws -> String {
+        if let inline, !inline.isEmpty { return inline }
+        guard let digest, !digest.isEmpty else { return "" }
+        let data = try blobStore.read(BlobReference(digest: digest, length: blobLength))
+        // Raw MIME is stored as bytes; decode leniently because a mailbox may
+        // carry any charset and a strict UTF-8 failure must not read as
+        // "no source".
+        return String(data: data, encoding: .utf8)
+            ?? String(data: data, encoding: .isoLatin1)
+            ?? ""
+    }
+
+    /// The tier a raw source belongs in, with the blob already durable.
+    ///
+    /// Called INSIDE the insert loop but the blob write happens outside the
+    /// SQLite transaction — deliberately. A blob written inside a transaction
+    /// that then rolls back is an orphan either way, and holding a write
+    /// transaction open across an fsync of a multi-gigabyte file would block
+    /// every reader for the duration.
+    private struct RawTier {
+        var inline: Data?
+        var digest: String?
+        var length: Int64
+    }
+
+    private func rawTier(for rawSource: String) throws -> RawTier {
+        guard let data = rawSource.data(using: .utf8) else {
+            return RawTier(inline: nil, digest: nil, length: 0)
+        }
+        guard data.count > BlobStore.inlineThresholdBytes else {
+            return RawTier(inline: data, digest: nil, length: 0)
+        }
+        let reference = try blobStore.write(data)
+        return RawTier(inline: nil, digest: reference.digest, length: reference.length)
+    }
+
+    /// Every digest still referenced by a row — the input orphan collection
+    /// needs to be safe. A blob is deleted only if it appears in no row.
+    func referencedBlobDigests() throws -> Set<String> {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT DISTINCT raw_blob_digest FROM email_bodies WHERE raw_blob_digest IS NOT NULL AND raw_blob_digest <> '';")
+        defer { sqlite3_finalize(stmt) }
+        var digests: Set<String> = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let text = sqlite3_column_text(stmt, 0) {
+                digests.insert(String(cString: text))
+            }
+        }
+        return digests
+    }
+
+    /// Deletes blobs no row references. Safe to call at any time: it asks the
+    /// database for the live set first, so a blob written by an import that is
+    /// still in flight is only collected if that import never committed.
+    @discardableResult
+    func collectBlobOrphans() throws -> (deleted: Int, bytesReclaimed: Int64) {
+        let referenced = try referencedBlobDigests()
+        return blobStore.collectOrphans(referenced: referenced)
+    }
+
+    /// Total bytes held in the blob tier — `StoragePlanner` counts this as
+    /// part of the archive's footprint, because it is.
+    nonisolated func blobTierBytes() -> Int64 { blobStore.totalBytes() }
+
+    // MARK: - Message locators (S4/S5)
+    //
+    // Optional per message. A row without a locator is served exactly as
+    // before, from its stored raw MIME — which is every message imported
+    // before the offset parser was switched on. Nothing here changes how an
+    // existing archive behaves.
+
+    /// Records (or replaces) where one message's original bytes live.
+    func saveLocator(_ locator: MessageLocator, emailID: UUID, bodyDecoded: Bool) throws {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            INSERT INTO message_locators(
+                email_id, source_path, source_digest,
+                msg_offset, msg_length, header_offset, header_length,
+                body_offset, body_length, envelope_offset, envelope_length,
+                ordinal, body_decoded
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(email_id) DO UPDATE SET
+                source_path = excluded.source_path,
+                source_digest = excluded.source_digest,
+                msg_offset = excluded.msg_offset, msg_length = excluded.msg_length,
+                header_offset = excluded.header_offset, header_length = excluded.header_length,
+                body_offset = excluded.body_offset, body_length = excluded.body_length,
+                envelope_offset = excluded.envelope_offset, envelope_length = excluded.envelope_length,
+                ordinal = excluded.ordinal, body_decoded = excluded.body_decoded;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, emailID.uuidString)
+        bindText(stmt, 2, locator.sourcePath)
+        bindTextOrNull(stmt, 3, locator.sourceDigest)
+        sqlite3_bind_int64(stmt, 4, locator.messageRange.offset)
+        sqlite3_bind_int64(stmt, 5, locator.messageRange.length)
+        sqlite3_bind_int64(stmt, 6, locator.headerRange.offset)
+        sqlite3_bind_int64(stmt, 7, locator.headerRange.length)
+        sqlite3_bind_int64(stmt, 8, locator.bodyRange.offset)
+        sqlite3_bind_int64(stmt, 9, locator.bodyRange.length)
+        if let envelope = locator.envelopeRange {
+            sqlite3_bind_int64(stmt, 10, envelope.offset)
+            sqlite3_bind_int64(stmt, 11, envelope.length)
+        } else {
+            sqlite3_bind_null(stmt, 10)
+            sqlite3_bind_null(stmt, 11)
+        }
+        sqlite3_bind_int64(stmt, 12, Int64(locator.ordinal))
+        sqlite3_bind_int(stmt, 13, bodyDecoded ? 1 : 0)
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+    }
+
+    func locator(forEmailID id: UUID) throws -> MessageLocator? {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT source_path, source_digest, msg_offset, msg_length,
+                   header_offset, header_length, body_offset, body_length,
+                   envelope_offset, envelope_length, ordinal
+            FROM message_locators WHERE email_id = ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, id.uuidString)
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+
+        let envelope: ByteRange? = sqlite3_column_type(stmt, 8) == SQLITE_NULL
+            ? nil
+            : ByteRange(offset: sqlite3_column_int64(stmt, 8),
+                        length: sqlite3_column_int64(stmt, 9))
+
+        return MessageLocator(
+            id: id,
+            sourceDigest: columnTextOptional(stmt, 1),
+            sourcePath: columnText(stmt, 0),
+            messageRange: ByteRange(offset: sqlite3_column_int64(stmt, 2),
+                                    length: sqlite3_column_int64(stmt, 3)),
+            envelopeRange: envelope,
+            headerRange: ByteRange(offset: sqlite3_column_int64(stmt, 4),
+                                   length: sqlite3_column_int64(stmt, 5)),
+            bodyRange: ByteRange(offset: sqlite3_column_int64(stmt, 6),
+                                 length: sqlite3_column_int64(stmt, 7)),
+            ordinal: Int(sqlite3_column_int64(stmt, 10))
+        )
+    }
+
+    /// Messages archived from their headers only, whose bodies were never
+    /// decoded. Surfaced honestly rather than left as an invisible partial
+    /// state: the receipt and the message itself both say so, and this is the
+    /// work list for processing them later.
+    func deferredBodyCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM message_locators WHERE body_decoded = 0;")
+    }
+
+    /// Synchronous locator read on its own read-only connection.
+    ///
+    /// Needed because the attachment and export readers are synchronous UI
+    /// paths and the store is an actor — the same pattern
+    /// `FTSSearchIndex.partiallyIndexedCountSnapshot` uses. Read-only, so it
+    /// cannot interfere with a running import, and it returns nil on any
+    /// problem rather than throwing into a view body: a missing locator means
+    /// "fall back to the stored raw MIME", which is always a valid answer.
+    nonisolated static func locatorSnapshot(emailID: UUID,
+                                            storeDirectory: URL = SQLiteEmailStore.productionDirectory)
+        -> MessageLocator? {
+        let path = storeDirectory.appendingPathComponent("emails.db").path
+        guard FileManager.default.fileExists(atPath: path) else { return nil }
+        var handle: OpaquePointer?
+        guard sqlite3_open_v2(path, &handle, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
+              let handle else { return nil }
+        defer { sqlite3_close(handle) }
+
+        var stmt: OpaquePointer?
+        let sql = """
+            SELECT source_path, source_digest, msg_offset, msg_length,
+                   header_offset, header_length, body_offset, body_length,
+                   envelope_offset, envelope_length, ordinal
+            FROM message_locators WHERE email_id = ?;
+        """
+        guard sqlite3_prepare_v2(handle, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else {
+            return nil
+        }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, emailID.uuidString, -1, Self.staticSQLiteTransient)
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+
+        func text(_ index: Int32) -> String? {
+            guard let raw = sqlite3_column_text(stmt, index) else { return nil }
+            return String(cString: raw)
+        }
+        guard let sourcePath = text(0) else { return nil }
+
+        let envelope: ByteRange? = sqlite3_column_type(stmt, 8) == SQLITE_NULL
+            ? nil
+            : ByteRange(offset: sqlite3_column_int64(stmt, 8),
+                        length: sqlite3_column_int64(stmt, 9))
+
+        return MessageLocator(
+            id: emailID,
+            sourceDigest: text(1),
+            sourcePath: sourcePath,
+            messageRange: ByteRange(offset: sqlite3_column_int64(stmt, 2),
+                                    length: sqlite3_column_int64(stmt, 3)),
+            envelopeRange: envelope,
+            headerRange: ByteRange(offset: sqlite3_column_int64(stmt, 4),
+                                   length: sqlite3_column_int64(stmt, 5)),
+            bodyRange: ByteRange(offset: sqlite3_column_int64(stmt, 6),
+                                 length: sqlite3_column_int64(stmt, 7)),
+            ordinal: Int(sqlite3_column_int64(stmt, 10))
+        )
+    }
+
+    func deferredBodyIDs(limit: Int) throws -> [UUID] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT email_id FROM message_locators
+            WHERE body_decoded = 0 ORDER BY ordinal LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        var out: [UUID] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let id = columnUUID(stmt, 0) { out.append(id) }
+        }
+        return out
+    }
+
     deinit { if let db { sqlite3_close(db) } }
 
     // MARK: - Open / schema
@@ -163,7 +417,17 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// store fully at the previous version — never half-migrated, and a user
     /// DB is NEVER silently recreated. A store newer than this build refuses
     /// to open instead of guessing.
-    static let currentSchemaVersion = 13
+    /// MUST be bumped in the same change as a new migration step. Leaving it
+    /// behind is not a cosmetic slip: the migration writes the new
+    /// `user_version`, and the guard below then refuses to open anything
+    /// above this number — so the app would migrate its own store and then
+    /// refuse to reopen it on the next launch. Adding v14/v15 without
+    /// bumping this did exactly that, caught by the existing
+    /// `testFreshStore_atLatestSchemaVersion_integrityOK`.
+    ///
+    ///   v14 = raw-MIME blob tier (S3b)
+    ///   v15 = message locators (S4/S5)
+    static let currentSchemaVersion = 15
 
     private func migrateSchema(_ handle: OpaquePointer) throws {
         var v = try scalarInt(handle, "PRAGMA user_version;")
@@ -434,6 +698,64 @@ actor SQLiteEmailStore: EmailArchiveStore {
             }
             v = 13
         }
+        if v == 13 {
+            try inExclusiveTransaction(handle) {
+                // v14 (S3b): the raw-MIME blob tier. A message whose raw source
+                // exceeds `BlobStore.inlineThresholdBytes` is stored in the
+                // content-addressed blob store and the row keeps a reference,
+                // because SQLite's default maximum BLOB length (1 GB) is also
+                // its maximum ROW size — a 1.5 GB message cannot be a row at
+                // any page size.
+                //
+                // Purely additive: existing inline `raw` values stay inline and
+                // are never rewritten. Every read path handles both tiers, so
+                // there is no migration of user data and no version of the app
+                // that can see a row it cannot read.
+                try exec(handle, "ALTER TABLE email_bodies ADD COLUMN raw_blob_digest TEXT;")
+                try exec(handle, "ALTER TABLE email_bodies ADD COLUMN raw_blob_length INTEGER NOT NULL DEFAULT 0;")
+                // Orphan GC asks "which digests are still referenced?" — that
+                // query must not table-scan a million-row table.
+                try exec(handle, "CREATE INDEX IF NOT EXISTS idx_bodies_raw_blob ON email_bodies(raw_blob_digest) WHERE raw_blob_digest IS NOT NULL;")
+                try exec(handle, "PRAGMA user_version = 14;")
+            }
+            v = 14
+        }
+        if v == 14 {
+            try inExclusiveTransaction(handle) {
+                // v15 (S4/S5): where a message's ORIGINAL bytes are, so an
+                // attachment or an export can be served from the source
+                // instead of from a re-parse — and so a message too large to
+                // decode at import can still be archived and later read.
+                //
+                // Additive and independent: no row is required to have a
+                // locator. Every read path falls back to the stored raw MIME
+                // when there is none, which is every message imported before
+                // the offset parser was switched on.
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS message_locators(
+                        email_id       TEXT PRIMARY KEY,
+                        source_path    TEXT NOT NULL,
+                        source_digest  TEXT,
+                        msg_offset     INTEGER NOT NULL,
+                        msg_length     INTEGER NOT NULL,
+                        header_offset  INTEGER NOT NULL,
+                        header_length  INTEGER NOT NULL,
+                        body_offset    INTEGER NOT NULL,
+                        body_length    INTEGER NOT NULL,
+                        envelope_offset INTEGER,
+                        envelope_length INTEGER,
+                        ordinal        INTEGER NOT NULL DEFAULT 0,
+                        body_decoded   INTEGER NOT NULL DEFAULT 1
+                    );
+                """)
+                // "Which messages still need their body processed?" must not
+                // table-scan; the deferred-body work list is driven by this.
+                try exec(handle, "CREATE INDEX IF NOT EXISTS idx_locators_deferred ON message_locators(body_decoded) WHERE body_decoded = 0;")
+                try exec(handle, "CREATE INDEX IF NOT EXISTS idx_locators_source ON message_locators(source_digest);")
+                try exec(handle, "PRAGMA user_version = 15;")
+            }
+            v = 15
+        }
     }
 
     /// v2 → v3 (§21): forensic state moves from whole-in-memory JSON maps to
@@ -529,6 +851,14 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 headers_json BLOB
             );
         """)
+        // The S3b blob-tier columns (`raw_blob_digest`, `raw_blob_length`) are
+        // added by the v14 migration, NOT declared here. Declaring them in
+        // both places made a FRESH database get them from this CREATE and then
+        // fail the v14 `ALTER TABLE` with "duplicate column name" — the
+        // migration chain runs from user_version 0 on a new file, so it walks
+        // v13 → v14 regardless of what this statement created. Same reason the
+        // `emails` table leaves `message_type`, `dedup_key` and the rest to
+        // the v2 migration.
         // Keyset paging index: (date DESC, id DESC) is served by this.
         try exec(handle, "CREATE INDEX IF NOT EXISTS idx_emails_date_id ON emails(date, id);")
         // v1 dedup index: unique on Message-ID where present. Replaced in v2
@@ -1399,8 +1729,8 @@ actor SQLiteEmailStore: EmailArchiveStore {
             ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?);
         """)
         let insertBody = try prepare(db, """
-            INSERT OR IGNORE INTO email_bodies(id, plain, html, raw, headers_json)
-            VALUES (?,?,?,?,?);
+            INSERT OR IGNORE INTO email_bodies(id, plain, html, raw, headers_json, raw_blob_digest, raw_blob_length)
+            VALUES (?,?,?,?,?,?,?);
         """)
         let insertDup = try prepare(db, """
             INSERT INTO duplicates(duplicate_id, message_id, source_hash, created_at)
@@ -1473,12 +1803,19 @@ actor SQLiteEmailStore: EmailArchiveStore {
                     }
                     if sqlite3_changes(db) == 1 {
                         result.insertedIDs.append(email.id)
+                        // S3b: the raw source goes inline or to the blob tier.
+                        // `rawTier` has already written and fsynced the blob by
+                        // the time this row is bound, so the reference can
+                        // never outlive its bytes.
+                        let tier = try rawTier(for: email.rawSource)
                         sqlite3_reset(insertBody); sqlite3_clear_bindings(insertBody)
                         bindText(insertBody, 1, idStr)
                         bindBlob(insertBody, 2, email.plainBody.data(using: .utf8))
                         bindBlob(insertBody, 3, email.htmlBody.data(using: .utf8))
-                        bindBlob(insertBody, 4, email.rawSource.data(using: .utf8))
+                        bindBlob(insertBody, 4, tier.inline)
                         bindBlob(insertBody, 5, try? JSONEncoder().encode(email.headers))
+                        bindTextOrNull(insertBody, 6, tier.digest)
+                        sqlite3_bind_int64(insertBody, 7, tier.length)
                         guard sqlite3_step(insertBody) == SQLITE_DONE else {
                             throw SQLiteStoreError.step(lastError(db))
                         }
@@ -2775,7 +3112,8 @@ actor SQLiteEmailStore: EmailArchiveStore {
             let stmt = try prepare(db, """
                 SELECT e.id, e.message_id, e.in_reply_to, e.references_ids, e.date,
                        b.plain, b.html, b.raw, b.headers_json,
-                       e.message_type, t.thread_key
+                       e.message_type, t.thread_key,
+                       b.raw_blob_digest, b.raw_blob_length
                 FROM emails e
                 LEFT JOIN email_bodies b ON e.id = b.id
                 LEFT JOIN thread_keys t ON e.id = t.email_id
@@ -2798,7 +3136,8 @@ actor SQLiteEmailStore: EmailArchiveStore {
         let stmt = try prepare(db, """
             SELECT e.id, e.message_id, e.in_reply_to, e.references_ids, e.date,
                    b.plain, b.html, b.raw, b.headers_json,
-                   e.message_type, t.thread_key
+                   e.message_type, t.thread_key,
+                   b.raw_blob_digest, b.raw_blob_length
             FROM emails e
             LEFT JOIN email_bodies b ON e.id = b.id
             LEFT JOIN thread_keys t ON e.id = t.email_id
@@ -3152,29 +3491,71 @@ actor SQLiteEmailStore: EmailArchiveStore {
     func fidelityBackfillCandidates(limit: Int) throws -> (candidates: [FidelityCandidate], rawless: [UUID]) {
         let db = try ensureDB()
         let stmt = try prepare(db, """
-            SELECT e.id, b.raw FROM emails e
+            SELECT e.id, b.raw, b.raw_blob_digest, b.raw_blob_length FROM emails e
             LEFT JOIN email_bodies b ON b.id = e.id
             WHERE e.message_type = '' LIMIT ?;
         """)
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_int(stmt, 1, Int32(limit))
-        var out: [FidelityCandidate] = []
-        var unrecoverable: [UUID] = []
         // M2: pages are bounded by BYTES as well as rows — raw MIME with
         // base64 attachments can run tens of MB per message.
-        let maxPageBytes = 32 * 1024 * 1024
+        return try drainRawCandidates(stmt, db, maxPageBytes: 32 * 1024 * 1024,
+                                      context: "fidelity backfill")
+    }
+
+    /// Drains a `(id, raw, raw_blob_digest, raw_blob_length)` result set into
+    /// candidates, reading whichever tier holds each raw source.
+    ///
+    /// One funnel for all three backfill work lists (fidelity, attachment
+    /// text, participants), because the S3b failure mode is identical in each:
+    /// a blob-backed row that is reported as having NO raw source gets marked
+    /// 'unknown' / done, and the backfill then never touches a message it
+    /// could have processed perfectly well.
+    ///
+    /// The byte budget is enforced against `raw_blob_length` from the row
+    /// BEFORE the blob is opened — a 1.5 GB body must not be pulled into
+    /// memory just to discover it overruns the page.
+    private func drainRawCandidates(
+        _ stmt: OpaquePointer?,
+        _ db: OpaquePointer,
+        maxPageBytes: Int,
+        context: String
+    ) throws -> (candidates: [FidelityCandidate], rawless: [UUID]) {
+        var out: [FidelityCandidate] = []
+        var rawless: [UUID] = []
         var pageBytes = 0
+
         while try stepRow(stmt, db) {
             guard let id = columnUUID(stmt, 0) else { continue }
-            if let raw = columnBlobString(stmt, 1), !raw.isEmpty {
-                out.append(FidelityCandidate(id: id, raw: raw))
-                pageBytes += raw.utf8.count
-                if pageBytes >= maxPageBytes { break }
+            let inline = columnBlobString(stmt, 1)
+            let digest = columnTextOptional(stmt, 2)
+            let blobLength = sqlite3_column_int64(stmt, 3)
+
+            if let inline, !inline.isEmpty {
+                out.append(FidelityCandidate(id: id, raw: inline))
+                pageBytes += inline.utf8.count
+            } else if let digest, !digest.isEmpty {
+                // Never return an empty page: if the very first candidate is
+                // larger than the whole budget it is still taken, because
+                // skipping it forever would leave it permanently unprocessed.
+                if !out.isEmpty, pageBytes + Int(blobLength) > maxPageBytes { break }
+                do {
+                    let raw = try rawMIME(inline: nil, digest: digest, blobLength: blobLength)
+                    out.append(FidelityCandidate(id: id, raw: raw))
+                    pageBytes += raw.utf8.count
+                } catch {
+                    // The row references bytes that are gone: damage, not
+                    // absence. The job cannot process it either way, so it
+                    // leaves the work list — but loudly, not silently.
+                    sqliteStoreLog.error("\(context, privacy: .public): blob missing for \(id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                    rawless.append(id)
+                }
             } else {
-                unrecoverable.append(id)
+                rawless.append(id)
             }
+            if pageBytes >= maxPageBytes { break }
         }
-        return (out, unrecoverable)
+        return (out, rawless)
     }
 
     struct HeaderFidelityCandidate: Sendable {
@@ -3192,6 +3573,10 @@ actor SQLiteEmailStore: EmailArchiveStore {
             SELECT e.id, CAST(b.headers_json AS TEXT) FROM emails e
             JOIN email_bodies b ON b.id = e.id
             WHERE (b.raw IS NULL OR length(b.raw) = 0)
+              -- S3b: a blob-backed row HAS raw MIME. Without this clause the
+              -- header-recovery pass would treat every large message as a
+              -- pre-v2 row with no source and "recover" headers it already has.
+              AND (b.raw_blob_digest IS NULL OR b.raw_blob_digest = '')
               AND b.headers_json IS NOT NULL AND length(b.headers_json) > 2
               AND e.id > ?
             ORDER BY e.id LIMIT ?;
@@ -3293,18 +3678,26 @@ actor SQLiteEmailStore: EmailArchiveStore {
     func healFidelity(from emails: [MBOXParser.RawEmail]) throws -> FidelityHealResult {
         let db = try ensureDB()
         var result = FidelityHealResult()
+        // S3b: "does this row already have raw source?" must count the blob
+        // tier. With `COALESCE(length(b.raw), 0)` alone, every blob-backed row
+        // read as length 0 and heal would OVERWRITE a stored large message
+        // with whatever the caller re-parsed — the one thing this function
+        // promises never to do ("rows that already carry raw source are left
+        // alone").
         let lookup = try prepare(db, """
-            SELECT e.id, COALESCE(length(b.raw), 0) FROM emails e
+            SELECT e.id, COALESCE(length(b.raw), 0) + COALESCE(b.raw_blob_length, 0) FROM emails e
             LEFT JOIN email_bodies b ON b.id = e.id
             WHERE e.message_id = ? LIMIT 1;
         """)
         defer { sqlite3_finalize(lookup) }
         let upsertBody = try prepare(db, """
-            INSERT INTO email_bodies(id, plain, html, raw, headers_json)
-            VALUES (?,?,?,?,?)
+            INSERT INTO email_bodies(id, plain, html, raw, headers_json, raw_blob_digest, raw_blob_length)
+            VALUES (?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
                 plain = excluded.plain, html = excluded.html,
-                raw = excluded.raw, headers_json = excluded.headers_json;
+                raw = excluded.raw, headers_json = excluded.headers_json,
+                raw_blob_digest = excluded.raw_blob_digest,
+                raw_blob_length = excluded.raw_blob_length;
         """)
         defer { sqlite3_finalize(upsertBody) }
 
@@ -3324,12 +3717,17 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 result.alreadyFull += 1
                 continue
             }
+            // Healing a large message must use the same tier rule as import,
+            // or the heal itself would fail on the 1 GB row limit.
+            let tier = try rawTier(for: email.rawSource)
             sqlite3_reset(upsertBody); sqlite3_clear_bindings(upsertBody)
             bindText(upsertBody, 1, existingID.uuidString)
             bindBlob(upsertBody, 2, Data(email.plainBody.utf8))
             bindBlob(upsertBody, 3, Data(email.htmlBody.utf8))
-            bindBlob(upsertBody, 4, Data(email.rawSource.utf8))
+            bindBlob(upsertBody, 4, tier.inline)
             bindBlob(upsertBody, 5, try? JSONEncoder().encode(email.headers))
+            bindTextOrNull(upsertBody, 6, tier.digest)
+            sqlite3_bind_int64(upsertBody, 7, tier.length)
             guard sqlite3_step(upsertBody) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
             try applyFidelity(id: existingID, from: email)
             result.healed += 1
@@ -3461,6 +3859,16 @@ actor SQLiteEmailStore: EmailArchiveStore {
         try exec(db, "DELETE FROM email_domains;")
         try exec(db, "DELETE FROM email_participants;")
     }
+
+    /// Test fixture: drop participants only, KEEPING `message_type`, which is
+    /// the exact state `participantsBackfillCandidates` exists for (a row
+    /// classified by an earlier build, or by SQL reclassification, which skips
+    /// participant extraction). `simulateLegacyRowsForTesting` cannot stand in
+    /// for it: that also blanks `message_type`, which the work list excludes.
+    func clearParticipantsForTesting() throws {
+        let db = try ensureDB()
+        try exec(db, "DELETE FROM email_participants;")
+    }
     #endif
 
     // MARK: - Attachment-content search (v6)
@@ -3470,7 +3878,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     func attachmentTextCandidates(limit: Int) throws -> (candidates: [FidelityCandidate], rawless: [UUID]) {
         let db = try ensureDB()
         let stmt = try prepare(db, """
-            SELECT e.id, b.raw FROM emails e
+            SELECT e.id, b.raw, b.raw_blob_digest, b.raw_blob_length FROM emails e
             LEFT JOIN email_bodies b ON b.id = e.id
             WHERE e.has_attach = 1
               AND NOT EXISTS (SELECT 1 FROM attachment_text_state s WHERE s.email_id = e.id)
@@ -3478,21 +3886,8 @@ actor SQLiteEmailStore: EmailArchiveStore {
         """)
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_int(stmt, 1, Int32(limit))
-        var out: [FidelityCandidate] = []
-        var rawless: [UUID] = []
-        let maxPageBytes = 32 * 1024 * 1024
-        var pageBytes = 0
-        while try stepRow(stmt, db) {
-            guard let id = columnUUID(stmt, 0) else { continue }
-            if let raw = columnBlobString(stmt, 1), !raw.isEmpty {
-                out.append(FidelityCandidate(id: id, raw: raw))
-                pageBytes += raw.utf8.count
-                if pageBytes >= maxPageBytes { break }
-            } else {
-                rawless.append(id)
-            }
-        }
-        return (out, rawless)
+        return try drainRawCandidates(stmt, db, maxPageBytes: 32 * 1024 * 1024,
+                                      context: "attachment text")
     }
 
     /// Record one email's extracted attachment texts (possibly none) — FTS
@@ -3898,7 +4293,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     func participantsBackfillCandidates(limit: Int) throws -> (candidates: [FidelityCandidate], rawless: [UUID]) {
         let db = try ensureDB()
         let stmt = try prepare(db, """
-            SELECT e.id, b.raw FROM emails e
+            SELECT e.id, b.raw, b.raw_blob_digest, b.raw_blob_length FROM emails e
             LEFT JOIN email_bodies b ON b.id = e.id
             WHERE e.message_type <> ''
               AND NOT EXISTS (SELECT 1 FROM email_participants p WHERE p.email_id = e.id)
@@ -3906,21 +4301,8 @@ actor SQLiteEmailStore: EmailArchiveStore {
         """)
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_int(stmt, 1, Int32(limit))
-        var out: [FidelityCandidate] = []
-        var rawless: [UUID] = []
-        let maxPageBytes = 32 * 1024 * 1024
-        var pageBytes = 0
-        while try stepRow(stmt, db) {
-            guard let id = columnUUID(stmt, 0) else { continue }
-            if let raw = columnBlobString(stmt, 1), !raw.isEmpty {
-                out.append(FidelityCandidate(id: id, raw: raw))
-                pageBytes += raw.utf8.count
-                if pageBytes >= maxPageBytes { break }
-            } else {
-                rawless.append(id)
-            }
-        }
-        return (out, rawless)
+        return try drainRawCandidates(stmt, db, maxPageBytes: 32 * 1024 * 1024,
+                                      context: "participants backfill")
     }
 
     /// Sentinel participant row (role NONE, empty address) — marks an email as
@@ -4116,9 +4498,26 @@ actor SQLiteEmailStore: EmailArchiveStore {
         let date = Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 4)))
         let plain = columnBlobString(stmt, 5) ?? ""
         let html = columnBlobString(stmt, 6) ?? ""
-        let raw = columnBlobString(stmt, 7) ?? ""
         let messageType = columnTextOptional(stmt, 9).flatMap { $0.isEmpty ? nil : $0 } ?? "stored"
         let threadKey = columnTextOptional(stmt, 10)
+
+        // S3b: the raw MIME is inline or in the blob tier. A missing blob is
+        // recorded as an anomaly on the message rather than thrown, because
+        // one unreadable body must not make a whole page of mail unopenable —
+        // and reporting it as "no raw source" would send the fidelity
+        // backfills off to heal a row that is merely damaged.
+        var raw = columnBlobString(stmt, 7) ?? ""
+        var rawAnomalies: [String] = []
+        let blobDigest = columnTextOptional(stmt, 11)
+        if raw.isEmpty, let blobDigest, !blobDigest.isEmpty {
+            let blobLength = sqlite3_column_int64(stmt, 12)
+            do {
+                raw = try rawMIME(inline: nil, digest: blobDigest, blobLength: blobLength)
+            } catch {
+                rawAnomalies.append("Raw source unreadable: \(error.localizedDescription)")
+                sqliteStoreLog.error("blob read failed for \(id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+        }
 
         var headers: [String: String] = [:]
         if let hdata = columnBlobData(stmt, 8),
@@ -4140,7 +4539,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
             threadID: threadKey ?? messageID,
             inReplyTo: inReplyTo,
             references: references.map { $0.components(separatedBy: "\n") },
-            tags: [], anomalies: []
+            tags: [], anomalies: rawAnomalies
         )
     }
 
@@ -4191,6 +4590,11 @@ actor SQLiteEmailStore: EmailArchiveStore {
     }
 
     private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+    /// Same value, reachable from the `nonisolated static` snapshot readers
+    /// (`locatorSnapshot`), which cannot touch an instance member.
+    nonisolated static let staticSQLiteTransient =
+        unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
     private func bindText(_ stmt: OpaquePointer?, _ index: Int32, _ value: String) {
         sqlite3_bind_text(stmt, index, value, -1, sqliteTransient)

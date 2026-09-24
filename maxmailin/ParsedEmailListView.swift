@@ -364,6 +364,11 @@ struct ParsedEmailListView: View {
                 .foregroundColor(.orange)
                 .accessibilityLabel("Search notice: \(notice)")
         }
+
+        // S0: index coverage is a different caveat from `searchNotice` (which
+        // is about the QUERY). This one is about the CORPUS: some messages are
+        // indexed only in part, so a miss is not proof of absence.
+        SearchCoverageBadge(isQueryActive: !model.searchText.isEmpty)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -709,6 +714,12 @@ struct ParsedEmailListView: View {
             .padding(.horizontal, Spacing.small)
             .padding(.vertical, Spacing.xxSmall)
             .adaptiveGlass(in: RoundedRectangle(cornerRadius: CornerRadius.medium))
+
+            // S0: an absent search hit must never be indistinguishable from
+            // "that phrase is not in the archive". Renders nothing when
+            // coverage is complete, which is the normal case.
+            SearchCoverageBadge(isQueryActive: !model.searchText.isEmpty)
+                .padding(.horizontal, Spacing.small)
 
             // NL mode: echo what the AI understood so the user can verify
             // the interpretation (and see that filtering is in progress).

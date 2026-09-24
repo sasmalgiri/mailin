@@ -1192,8 +1192,11 @@ final class V2CutoverTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         let store = SQLiteEmailStore(directory: root)
 
-        // Built-in catalog is well-formed: 47 recipes, sequential ops.
-        XCTAssertEqual(WorkflowCatalog.all.count, 47)
+        // Built-in catalog is well-formed: 51 recipes, sequential ops.
+        // 47 + the four added in the v3 cycle (3 researcher + the forensic
+        // evidence plan). This count was not updated when they landed, so the
+        // assertion had been failing since.
+        XCTAssertEqual(WorkflowCatalog.all.count, 51)
         for def in WorkflowCatalog.all {
             XCTAssertEqual(def.operations.map(\.seq), Array(1...def.operations.count),
                            "\(def.defID) operations must be 1..n in order")
@@ -1620,7 +1623,8 @@ final class V2CutoverTests: XCTestCase {
     /// unique IDs, defined doc types, and gates that point at real operations.
     func testCatalog_expandedPersonaCoverage() {
         // Per-persona workflow counts after adding the secondary jobs.
-        XCTAssertEqual(WorkflowCatalog.templates(for: "forensic").count, 10)   // intake, timeline, sweep, custody, exhibit, insider, headers, cull, iocreport, affidavit
+        XCTAssertEqual(WorkflowCatalog.templates(for: "forensic").count, 11)   // intake, timeline, sweep, custody, exhibit, insider, headers, cull, iocreport, affidavit, evidenceplan
+        XCTAssertEqual(WorkflowCatalog.templates(for: "researcher").count, 3)  // protocol, screening, coding
         XCTAssertEqual(WorkflowCatalog.templates(for: "legal").count, 10)   // production, hold, ECA, DSAR, privQC, compliance, collection, processing, firstpass, clawback
         XCTAssertEqual(WorkflowCatalog.templates(for: "it_admin").count, 10)   // phishing, hunt, campaign, BEC, authAudit, metrics, quarantine, rules, blocklist, dlp
         XCTAssertEqual(WorkflowCatalog.templates(for: "journalist").count, 10)   // story, network, fact-check, publish, tips, datapack, provenance, foia, quotes, crossref

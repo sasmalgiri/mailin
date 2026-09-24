@@ -207,4 +207,67 @@ enum StoragePlanner {
         }
         return URL(fileURLWithPath: "/")
     }
+
+    // MARK: On-disk footprint
+
+    /// What an archive currently occupies, split by tier.
+    ///
+    /// The blob tier has to be counted separately because after S3b it is not
+    /// a rounding error: a corpus of large messages keeps most of its bytes in
+    /// `blobs/`, and a "database size" that ignored them would understate the
+    /// archive by orders of magnitude — exactly the kind of number that later
+    /// gets quoted in a claim.
+    struct ArchiveFootprint: Sendable, Equatable {
+        /// `emails.db` itself.
+        var databaseBytes: Int64
+        /// `-wal` + `-shm`. Transient, but real while they exist.
+        var journalBytes: Int64
+        /// `blobs/` — raw MIME stored outside the row.
+        var blobBytes: Int64
+        /// FTS shard databases, if they live under the same directory.
+        var indexBytes: Int64
+
+        var total: Int64 { databaseBytes + journalBytes + blobBytes + indexBytes }
+
+        var summary: String {
+            func mb(_ bytes: Int64) -> String {
+                ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+            }
+            return "\(mb(total)) total — database \(mb(databaseBytes)), "
+                + "bodies \(mb(blobBytes)), index \(mb(indexBytes)), journal \(mb(journalBytes))"
+        }
+    }
+
+    static func archiveFootprint(storeDirectory: URL) -> ArchiveFootprint {
+        let fm = FileManager.default
+        func size(of url: URL) -> Int64 {
+            (try? fm.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
+        }
+        func directoryBytes(_ url: URL) -> Int64 {
+            guard let walker = fm.enumerator(at: url,
+                                             includingPropertiesForKeys: [.fileSizeKey],
+                                             options: []) else { return 0 }
+            var total: Int64 = 0
+            for case let child as URL in walker {
+                total += Int64((try? child.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+            }
+            return total
+        }
+
+        let db = storeDirectory.appendingPathComponent("emails.db")
+        // The FTS5 shards are a SIBLING of the store directory
+        // (`…/com.ecosanskriti.mailin/fts5`, beside `…/sqlite`), not a child —
+        // see `FTSSearchIndex`. An isolated test store has no sibling, and the
+        // existence check below reports 0 rather than inventing a number.
+        let indexDirectory = storeDirectory
+            .deletingLastPathComponent()
+            .appendingPathComponent("fts5", isDirectory: true)
+        return ArchiveFootprint(
+            databaseBytes: size(of: db),
+            journalBytes: size(of: URL(fileURLWithPath: db.path + "-wal"))
+                + size(of: URL(fileURLWithPath: db.path + "-shm")),
+            blobBytes: directoryBytes(storeDirectory.appendingPathComponent("blobs", isDirectory: true)),
+            indexBytes: fm.fileExists(atPath: indexDirectory.path) ? directoryBytes(indexDirectory) : 0
+        )
+    }
 }

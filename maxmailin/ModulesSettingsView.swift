@@ -18,6 +18,9 @@ struct ModulesSettingsView: View {
     /// The page the user is about to switch off, driving the retention dialog.
     @State private var pendingDisable: AppModule?
     @State private var enableError: String?
+    /// Which page's capability matrix is open, and the all-pages variant.
+    @State private var matrixScope: AppModule?
+    @State private var showFullMatrix = false
 
     var body: some View {
         Form {
@@ -48,6 +51,45 @@ struct ModulesSettingsView: View {
                     .foregroundColor(.secondary)
             }
 
+            // The level below pages: every capability, one switch each.
+            // Presented as its own section rather than inline per page,
+            // because the list is long and the page cards above are the
+            // decision most users make.
+            Section {
+                ForEach(AppModule.allCases, id: \.rawValue) { module in
+                    let all = Capability.all(for: module)
+                    if !all.isEmpty {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(module.displayName)
+                                Text("\(modules.activeCapabilities(of: module).count) of \(all.count) running")
+                                    .font(Typography.caption2)
+                                    .foregroundColor(AppColors.secondary)
+                            }
+                            Spacer()
+                            Button("Features…") { matrixScope = module }
+                                .controlSize(.small)
+                        }
+                    }
+                }
+                Button("Show the full matrix…") { showFullMatrix = true }
+                    .controlSize(.small)
+            } header: {
+                Text("Features")
+                    .font(.headline)
+            } footer: {
+                Text("""
+                    Each capability can be switched off on its own without giving up its page. \
+                    Anything switched off is hidden or stopped — never deleted: cases, \
+                    documents, holds, audit entries and imported mail all stay exactly as \
+                    they are and return unchanged when it is switched back on. New engines \
+                    ship switched off, so an update never changes how your archive behaves \
+                    until you ask it to.
+                    """)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
             if !modules.jobs.isIdle {
                 Section {
                     ForEach(modules.jobs.entries) { entry in
@@ -73,6 +115,12 @@ struct ModulesSettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
+        .sheet(item: $matrixScope) { module in
+            CapabilityMatrixView(scope: module)
+        }
+        .sheet(isPresented: $showFullMatrix) {
+            CapabilityMatrixView(scope: nil)
+        }
         .confirmationDialog(
             pendingDisable.map { "Turn off \($0.displayName)?" } ?? "",
             isPresented: Binding(get: { pendingDisable != nil },

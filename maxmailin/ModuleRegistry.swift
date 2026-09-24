@@ -90,11 +90,19 @@ enum ModuleRetention: String, Codable, Sendable {
 /// scattered `@AppStorage` flags, so "what is enabled" has exactly one
 /// authority that can be migrated.
 struct ModuleState: Codable, Sendable, Equatable {
-    static let currentVersion = 1
+    /// v2 adds `capabilities` — the per-feature on/off matrix under each page.
+    /// Additive: a v1 file decodes with an empty capability table, which means
+    /// "every capability at its default", which is exactly the behaviour a v1
+    /// install already had.
+    static let currentVersion = 2
 
     var version: Int = ModuleState.currentVersion
     /// Only optional modules appear here. Absent means disabled.
     var enabled: [String: Bool] = [:]
+    /// Explicit per-capability choices. **Absent means "use the default"**, not
+    /// "off" — so a capability added by a later build arrives at its own
+    /// default instead of being silently disabled by an older state file.
+    var capabilities: [String: Bool] = [:]
     /// Set once the 2.x defaults have been mapped forward, so the mapping
     /// cannot run twice and silently re-enable something the user turned off.
     var didMapLegacyDefaults: Bool = false
@@ -107,6 +115,45 @@ struct ModuleState: Codable, Sendable, Equatable {
     mutating func set(_ module: AppModule, enabled isOn: Bool) {
         guard module.isOptional else { return }
         enabled[module.rawValue] = isOn
+    }
+
+    /// The stored choice for a capability, ignoring its owning page and its
+    /// dependencies — `ModuleRegistry.isOn` applies those.
+    func isCapabilitySet(_ capability: Capability) -> Bool {
+        capabilities[capability.rawValue] ?? capability.defaultsOn
+    }
+
+    /// True when the user has made an explicit choice, so the UI can
+    /// distinguish "default" from "deliberately set to the same value".
+    func hasExplicitChoice(_ capability: Capability) -> Bool {
+        capabilities[capability.rawValue] != nil
+    }
+
+    mutating func set(_ capability: Capability, enabled isOn: Bool) {
+        capabilities[capability.rawValue] = isOn
+    }
+
+    mutating func clearChoice(_ capability: Capability) {
+        capabilities.removeValue(forKey: capability.rawValue)
+    }
+
+    init() {}
+
+    /// Written by hand, not synthesized, for one specific reason: Swift's
+    /// generated decoder does NOT fall back to a property's default value when
+    /// a key is missing — it throws. A v1 state file has no `capabilities`
+    /// key, so the synthesized decoder would fail, `ModuleStateStore.load`
+    /// would return a fresh `ModuleState`, and every optional page the user had
+    /// enabled would silently switch off on upgrade. Decoding each field
+    /// leniently is what makes the migration additive in practice as well as
+    /// on paper.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        enabled = try container.decodeIfPresent([String: Bool].self, forKey: .enabled) ?? [:]
+        capabilities = try container.decodeIfPresent([String: Bool].self, forKey: .capabilities) ?? [:]
+        didMapLegacyDefaults = try container.decodeIfPresent(
+            Bool.self, forKey: .didMapLegacyDefaults) ?? false
     }
 }
 
@@ -298,6 +345,111 @@ final class ModuleRegistry {
         AppModule.allCases.filter { isEnabled($0) }
     }
 
+    // MARK: Capabilities (the on/off matrix under each page)
+
+    /// Why a capability is not running. `nil` means it is.
+    enum CapabilityBlock: Equatable, Sendable {
+        case pageOff(AppModule)
+        case switchedOff
+        case dependencyOff(Capability)
+
+        var explanation: String {
+            switch self {
+            case .pageOff(let module):
+                return "\(module.displayName) is switched off."
+            case .switchedOff:
+                return "Switched off."
+            case .dependencyOff(let dependency):
+                return "Needs “\(dependency.displayName)”, which is switched off."
+            }
+        }
+    }
+
+    /// The single gate every capability-specific code path must ask.
+    ///
+    /// Requires the owning page AND the stored flag AND every declared
+    /// dependency. The page check comes first and is not overridable: a stale
+    /// "on" flag must never be able to resurrect a disabled page's work
+    /// (§3.3 R1–R6).
+    func isOn(_ capability: Capability) -> Bool {
+        block(capability) == nil
+    }
+
+    func block(_ capability: Capability) -> CapabilityBlock? {
+        guard isEnabled(capability.owner) else { return .pageOff(capability.owner) }
+        guard state.isCapabilitySet(capability) else { return .switchedOff }
+        for dependency in capability.requires where !isOn(dependency) {
+            return .dependencyOff(dependency)
+        }
+        return nil
+    }
+
+    /// The stored switch position, independent of page and dependencies — what
+    /// the matrix toggle shows, so a row does not appear to have flipped
+    /// itself when its page was turned off.
+    func switchPosition(_ capability: Capability) -> Bool {
+        state.isCapabilitySet(capability)
+    }
+
+    func hasExplicitChoice(_ capability: Capability) -> Bool {
+        state.hasExplicitChoice(capability)
+    }
+
+    func set(_ capability: Capability, enabled isOn: Bool) {
+        guard state.isCapabilitySet(capability) != isOn
+                || !state.hasExplicitChoice(capability) else { return }
+        state.set(capability, enabled: isOn)
+        store.save(state)
+        applyWiring(from: capability)
+        moduleLog.info("""
+            capability \(capability.rawValue, privacy: .public) \
+            \(isOn ? "on" : "off", privacy: .public)
+            """)
+    }
+
+    /// Returns to the shipped default, so a user can undo an experiment
+    /// without having to remember what the default was.
+    func resetToDefault(_ capability: Capability) {
+        state.clearChoice(capability)
+        store.save(state)
+        applyWiring(from: capability)
+        moduleLog.info("capability \(capability.rawValue, privacy: .public) reset to default")
+    }
+
+    /// Pushes the new state to the machinery that reads a plain flag rather
+    /// than the registry, for this capability AND anything that depends on it —
+    /// turning off a dependency must disarm its dependents too, not leave them
+    /// pointed at an engine that is no longer running.
+    private func applyWiring(from capability: Capability) {
+        CapabilityWiring.apply(capability, isOn: isOn(capability))
+        for dependent in capability.dependents {
+            CapabilityWiring.apply(dependent, isOn: isOn(dependent))
+        }
+    }
+
+    /// Switching a PAGE changes every capability it owns, so the same push has
+    /// to happen there. Called by `enable`/`disable`.
+    private func applyWiring(forPage module: AppModule) {
+        for capability in Capability.all(for: module) {
+            CapabilityWiring.apply(capability, isOn: isOn(capability))
+        }
+    }
+
+    /// Every capability of a page that is currently running — the honest
+    /// answer to "what is this page actually doing?".
+    func activeCapabilities(of module: AppModule) -> [Capability] {
+        Capability.all(for: module).filter { isOn($0) }
+    }
+
+    /// Capabilities whose switch is on but which are not running anyway, with
+    /// the reason. Surfaced in the matrix so a row is never mysteriously inert.
+    func blockedCapabilities() -> [(capability: Capability, block: CapabilityBlock)] {
+        Capability.allCases.compactMap { capability in
+            guard state.isCapabilitySet(capability), let block = block(capability) else { return nil }
+            return (capability, block)
+        }
+    }
+
     /// True when the user is running Page 1 only — the shape the resting-cost
     /// baseline in RELEASE_READINESS.md is measured against.
     var isArchiveOnly: Bool {
@@ -314,6 +466,7 @@ final class ModuleRegistry {
         guard !state.isEnabled(module) else { return }
         state.set(module, enabled: true)
         store.save(state)
+        applyWiring(forPage: module)
         moduleLog.info("enabled \(module.rawValue, privacy: .public)")
     }
 
@@ -326,6 +479,7 @@ final class ModuleRegistry {
         hosts[module] = nil
         state.set(module, enabled: false)
         store.save(state)
+        applyWiring(forPage: module)
         moduleLog.info("""
             disabled \(module.rawValue, privacy: .public) \
             (retention: \(retention.rawValue, privacy: .public))

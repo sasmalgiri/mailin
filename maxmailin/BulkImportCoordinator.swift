@@ -133,6 +133,19 @@ final class BulkImportCoordinator {
         /// Whether originals are copied into the library (vs referenced), which
         /// doubles the source's contribution to the requirement.
         var copiesOriginals: Bool = true
+        /// S4, behind `Capability.offsetParser` (OFF by default). Index message
+        /// boundaries and parse headers only, so import memory stops scaling
+        /// with the largest message and a message over 100 MB is ARCHIVED
+        /// instead of being reported as damaged and dropped.
+        ///
+        /// Passed in rather than read from the registry because the
+        /// coordinator is not main-actor. The caller is the one place that
+        /// knows the switch position.
+        var useOffsetEngine: Bool = false
+        /// S4/S5: record where each message's original bytes are, so an
+        /// attachment or an export can be served from the source. Meaningless
+        /// without `useOffsetEngine`, which is the only producer of locators.
+        var recordLocators: Bool = false
     }
 
     /// UI/side-effect hooks. All are invoked on the main actor.
@@ -446,17 +459,18 @@ final class BulkImportCoordinator {
                     } else {
                         envelopeProvider = nil
                     }
-                    fileReport = try await ParserFactory.parseStreamingCallback(
-                        fileURL: url,
-                        senderEmail: options.senderEmail,
-                        batchSize: batchSize,
-                        envelopeProvider: envelopeProvider,
-                        onProgress: { prog in
-                            Task { @MainActor in
-                                callbacks.onFileProgress?(sourceName, fileIndex, urls.count, prog)
-                            }
-                        }
-                    ) { [weak self] batch in
+                    // S4: locators for the batch currently in flight, keyed by
+                    // email id. Filled by the offset engine immediately before
+                    // `persistBatch` runs, and saved only for rows the store
+                    // actually committed — a locator for a deduped row would
+                    // point at bytes no row owns.
+                    var batchLocators: [UUID: (locator: MessageLocator, bodyDecoded: Bool)] = [:]
+
+                    // The persist → index → checkpoint body, shared by both
+                    // engines. Extracted to a local closure rather than
+                    // duplicated, so the streaming and offset paths cannot
+                    // drift in how they commit, count or checkpoint.
+                    let persistBatch: ([MBOXParser.RawEmail]) async throws -> Void = { [weak self] batch in
                         guard let self else { return }
                         try Task.checkCancellation()
 
@@ -580,9 +594,79 @@ final class BulkImportCoordinator {
                         }
                         await MainActor.run { callbacks.onCommittedBatch?(pending) }
 
+                        // S4/S5: record where the committed messages' bytes
+                        // are. After the insert, so a locator can never
+                        // reference a row that does not exist; only for
+                        // `insertedIDs`, so a deduped or resume-skipped row
+                        // gets none.
+                        if !batchLocators.isEmpty {
+                            for id in insertResult.insertedIDs {
+                                guard let entry = batchLocators[id] else { continue }
+                                do {
+                                    try await store.saveLocator(entry.locator, emailID: id,
+                                                                bodyDecoded: entry.bodyDecoded)
+                                } catch {
+                                    // A missing locator degrades a later read
+                                    // to the stored-raw-MIME path, which is
+                                    // the pre-S5 behaviour — not a reason to
+                                    // fail an import that has already
+                                    // committed the mail.
+                                    Self.logger.warning("locator save failed for \(id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                                }
+                            }
+                        }
+
                         if capped { throw CapReachedSignal() }
                         // pending falls out of scope here — its storage is
                         // released before the next batch begins.
+                    }
+
+                    // Engine choice. The offset engine only knows how to scan
+                    // line-structured mail, so a PST/NSF/MSG source still goes
+                    // through `ParserFactory` even when the capability is on —
+                    // it is an mbox/eml engine, and claiming otherwise would
+                    // route binary formats into a byte scanner.
+                    let classification = SourceFormatClassifier.classify(url: url)
+                    let offsetEligible = options.useOffsetEngine
+                        && ParserFactory.streamableExtensions.contains(classification.format.parserToken)
+                        && !SourceFormatClassifier.isDirectoryForm(classification.format)
+
+                    if offsetEligible {
+                        let engine = OffsetImportEngine()
+                        fileReport = try await engine.importMessages(
+                            fileURL: url,
+                            senderEmail: options.senderEmail,
+                            batchSize: batchSize,
+                            envelopeProvider: envelopeProvider,
+                            sourceDigest: hash,
+                            onProgress: { prog in
+                                Task { @MainActor in
+                                    callbacks.onFileProgress?(sourceName, fileIndex, urls.count, prog)
+                                }
+                            }
+                        ) { imported in
+                            batchLocators.removeAll(keepingCapacity: true)
+                            if options.recordLocators {
+                                for item in imported {
+                                    batchLocators[item.email.id] =
+                                        (item.locator, item.bodyWasDecoded)
+                                }
+                            }
+                            try await persistBatch(imported.map(\.email))
+                        }
+                    } else {
+                        fileReport = try await ParserFactory.parseStreamingCallback(
+                            fileURL: url,
+                            senderEmail: options.senderEmail,
+                            batchSize: batchSize,
+                            envelopeProvider: envelopeProvider,
+                            onProgress: { prog in
+                                Task { @MainActor in
+                                    callbacks.onFileProgress?(sourceName, fileIndex, urls.count, prog)
+                                }
+                            },
+                            onBatch: persistBatch
+                        )
                     }
                 } catch {
                     fileError = error

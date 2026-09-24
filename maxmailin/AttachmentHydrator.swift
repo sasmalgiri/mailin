@@ -18,6 +18,10 @@
 //
 
 import Foundation
+import os.log
+
+private let attachmentLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "mailin",
+                                   category: "AttachmentHydrator")
 
 /// Re-extracts attachment payloads from a message's raw MIME on demand.
 ///
@@ -30,6 +34,48 @@ enum AttachmentHydrator {
         fileprivate var hydrated: [AttachmentMetadata]?
         fileprivate var attemptedFor: UUID?
         init() {}
+    }
+
+    // MARK: - S5: source-backed reads (behind `Capability.locatorReads`)
+    //
+    // The re-extraction below needs `email.rawSource`, i.e. the whole message
+    // as a String. For a message imported header-only by the offset parser
+    // there IS no `rawSource` — the bytes are in the original file — and for a
+    // very large message, materialising it just to pull one attachment is the
+    // memory cost S4 exists to avoid.
+    //
+    // So when a locator is available, the message is read from its byte range
+    // in the source. Fidelity is better, not merely cheaper: those are the
+    // ORIGINAL bytes rather than a round-trip through our parse.
+    //
+    // Set by the app shell to `{ store.locator(forEmailID:) }` while
+    // `Capability.locatorReads` is on, and left nil otherwise — so switching
+    // the capability off returns this type to exactly its previous behaviour
+    // with no other code path changing.
+    nonisolated(unsafe) static var locatorProvider: (@Sendable (UUID) -> MessageLocator?)?
+
+    /// The raw MIME for a message, preferring the stored copy and falling back
+    /// to the original source bytes via its locator.
+    ///
+    /// A locator whose range no longer resolves returns nil rather than
+    /// substituting something else: a reviewer must be able to tell "the
+    /// source moved" from "the attachment is empty".
+    static func rawSource(for email: MBOXParser.RawEmail) -> String? {
+        if !email.rawSource.isEmpty { return email.rawSource }
+        guard let provider = locatorProvider, let locator = provider(email.id) else { return nil }
+        do {
+            let data = try LocatorReader().read(locator.messageRange,
+                                                from: locator.sourcePath,
+                                                expectedDigest: locator.sourceDigest)
+            return String(data: data, encoding: .utf8)
+                ?? String(data: data, encoding: .isoLatin1)
+        } catch {
+            attachmentLog.error("""
+                locator read failed for \(email.id.uuidString, privacy: .public): \
+                \(error.localizedDescription, privacy: .public)
+                """)
+            return nil
+        }
     }
 
     /// The bytes of `attachment`, or nil when they genuinely cannot be
@@ -52,8 +98,9 @@ enum AttachmentHydrator {
            let data = Data(base64Encoded: base64, options: .ignoreUnknownCharacters) {
             return data
         }
-        // 3. Re-extract from the raw MIME the store persisted.
-        guard !email.rawSource.isEmpty else { return nil }
+        // 3. Re-extract from the raw MIME — the stored copy, or the original
+        //    source bytes when a locator points at them.
+        guard rawSource(for: email) != nil else { return nil }
         let list = hydratedAttachments(for: email, cache: cache)
         guard !list.isEmpty else { return nil }
 
@@ -79,7 +126,12 @@ enum AttachmentHydrator {
         if let url = attachment.fileURL,
            FileManager.default.fileExists(atPath: url.path) { return true }
         if attachment.base64 != nil { return true }
-        return !email.rawSource.isEmpty
+        if !email.rawSource.isEmpty { return true }
+        // A locator counts as readable only if the source is still there. The
+        // UI would otherwise offer Open on a message whose file has been
+        // unmounted, and do nothing.
+        guard let provider = locatorProvider, let locator = provider(email.id) else { return false }
+        return FileManager.default.fileExists(atPath: locator.sourcePath)
     }
 
     private static func hydratedAttachments(for email: MBOXParser.RawEmail,
@@ -87,7 +139,11 @@ enum AttachmentHydrator {
         if let cache, cache.attemptedFor == email.id {
             return cache.hydrated ?? []
         }
-        let list = (try? EmailBodyExtractor.extractContents(from: email.rawSource))?.attachments ?? []
+        guard let raw = rawSource(for: email) else {
+            if let cache { cache.hydrated = []; cache.attemptedFor = email.id }
+            return []
+        }
+        let list = (try? EmailBodyExtractor.extractContents(from: raw))?.attachments ?? []
         if let cache {
             cache.hydrated = list
             cache.attemptedFor = email.id

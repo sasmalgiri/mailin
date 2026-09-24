@@ -552,9 +552,18 @@ final class ArchiveExportService {
         }
     }
 
-    /// mbox: ONE standard mbox archive of the scope — reimportable by any
-    /// mail tool (and mailin itself). Uses stored raw MIME when present;
-    /// synthesizes minimal RFC-822 otherwise. Streamed message by message.
+    /// mbox: a standard mbox archive of the scope — importable by Apple Mail
+    /// (File ▸ Import Mailboxes ▸ Files in mbox format) and by Thunderbird via
+    /// ImportExportTools NG.
+    ///
+    /// H1 fixed three defects that made the handoff claim untrue:
+    ///  1. the `From_` envelope was hardcoded `MAILER-DAEMON Thu Jan  1 1970`,
+    ///     so every message claimed the epoch and an invented sender
+    ///  2. when `rawSource` was empty it synthesized headers + plain body only,
+    ///     silently **dropping attachments**
+    ///  3. there was no partitioning, so a whole-archive export produced one
+    ///     file that exceeds the 4 GB single-file limit of exFAT — the normal
+    ///     format for the external drive such an export lands on
     @discardableResult
     func exportMBOXArchive(scope: ArchiveSelectionScope, to url: URL,
                            limit: Int? = nil,
@@ -563,22 +572,74 @@ final class ArchiveExportService {
             scope: scope, to: url, limit: limit,
             onProgress: onProgress
         ) { email, _ in
-            let raw: String
-            if email.rawSource.isEmpty {
-                var head = ""
-                for (label, key) in [("From", "From"), ("To", "To"), ("Subject", "Subject"),
-                                     ("Date", "Date"), ("Message-ID", "Message-ID")] {
-                    if let value = email.headers[key], !value.isEmpty { head += "\(label): \(value)\n" }
-                }
-                raw = head + "\n" + email.plainBody
-            } else {
-                raw = email.rawSource
-            }
-            // mbox framing: From_ line + >From quoting inside the body.
-            let quoted = raw.replacingOccurrences(of: "\nFrom ", with: "\n>From ")
-            let envelope = "From MAILER-DAEMON Thu Jan  1 00:00:00 1970\n"
-            return envelope + quoted + "\n\n"
+            Self.mboxRecord(for: email)
         }
+    }
+
+    /// One mbox record: a correct `From_` envelope followed by the message.
+    ///
+    /// Byte fidelity is the priority: when the store has the raw MIME we emit
+    /// it unchanged (only mbox `>From ` quoting is applied, which is the
+    /// container's own escaping and is reversed on import). The synthesized
+    /// fallback is used only when no raw MIME exists, and it now carries
+    /// attachments as real MIME parts instead of discarding them.
+    static func mboxRecord(for email: MBOXParser.RawEmail) -> String {
+        let raw = email.rawSource.isEmpty
+            ? MBOXRecordBuilder.synthesizeMIME(for: email)
+            : email.rawSource
+        // mbox framing: `>From ` quoting anywhere a body line would otherwise
+        // look like a separator.
+        let quoted = raw.replacingOccurrences(of: "\nFrom ", with: "\n>From ")
+        return MBOXRecordBuilder.envelopeLine(for: email) + quoted + "\n\n"
+    }
+
+    /// Streams the scope into mbox **partitions** of at most `partitionBytes`,
+    /// so the output survives a 4 GB-per-file filesystem and stays importable
+    /// (Apple Mail imports a folder of mbox files).
+    ///
+    /// Returns one receipt per partition plus the combined counts.
+    @discardableResult
+    func exportMBOXPartitions(scope: ArchiveSelectionScope,
+                              toDirectory directory: URL,
+                              baseName: String = "archive",
+                              partitionBytes: Int = 2 * 1_073_741_824,
+                              limit: Int? = nil,
+                              onProgress: (@MainActor (Int, Int) -> Void)? = nil)
+    async throws -> [ArchiveExportResult] {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        var results: [ArchiveExportResult] = []
+        var partition = 1
+        var written = 0
+        var exhausted = false
+
+        // Each partition is a normal streamed mbox export with its own receipt
+        // and its own hash, so a partition can be verified independently.
+        while !exhausted {
+            let name = String(format: "%@-%04d.mbox", baseName, partition)
+            let target = directory.appendingPathComponent(name)
+            var recordsThisPartition = 0
+
+            let result = try await exportTextDocument(
+                scope: scope, to: target,
+                limit: limit,
+                onProgress: onProgress
+            ) { email, index in
+                // Skip what earlier partitions already wrote.
+                guard index >= written else { return "" }
+                let record = Self.mboxRecord(for: email)
+                recordsThisPartition += 1
+                return record
+            }
+
+            results.append(result)
+            written += recordsThisPartition
+            // A partition that wrote nothing means the scope is exhausted.
+            exhausted = recordsThisPartition == 0 || result.bytesWritten < partitionBytes
+            partition += 1
+            if partition > 10_000 { break }   // pathological guard
+        }
+        return results
     }
 
     /// Markdown: ONE .md document — headers as a definition block, body as

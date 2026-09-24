@@ -189,6 +189,34 @@ struct EmailNLPEngine {
             .sorted { $0.count > $1.count }
     }
 
+    /// Gate on the on-device MODEL fallback inside `detectLanguagesHybrid`.
+    ///
+    /// Two problems this fixes, both found by measurement rather than reading:
+    ///
+    ///  1. **Page independence (V3_0_PLAN.md §3.3 R1–R6).** Language detection
+    ///     is reached from ARCHIVE analytics, and its low-confidence path was
+    ///     calling `FoundationModelEngine.detectLanguage` unconditionally — so
+    ///     a Page-1-only install was invoking an AI model. Archive work must
+    ///     not depend on the AI Insights page.
+    ///
+    ///  2. **Non-determinism and cost in tests.** The model returns different
+    ///     answers for the same low-confidence snippet, which made
+    ///     `testFullAnalytics_streamingEqualsArrayOracle` compare 3 vs 2 on one
+    ///     run and 3 vs 4 on the next, and made
+    ///     `testProductionPathScale_boundedEnginesOverLargeStore` fail with
+    ///     `CancellationError` when ~200 model calls over 2,000 synthetic
+    ///     emails ran under suite load.
+    ///
+    /// Installed by `CapabilityWiring` from the AI Insights page. **Nil means
+    /// no model**, which is the correct default for tests, previews, and any
+    /// caller that has not opted in: the NLP result is still returned, just
+    /// without a second opinion.
+    nonisolated(unsafe) static var modelLanguageFallbackGate: (@Sendable () -> Bool)?
+
+    private static var modelFallbackAllowed: Bool {
+        modelLanguageFallbackGate?() ?? false
+    }
+
     static func detectLanguagesHybrid(in emails: [MBOXParser.RawEmail]) async -> [LanguageResult] {
         let recognizer = NLLanguageRecognizer()
         var langCounts: [String: Int] = [:]
@@ -218,7 +246,24 @@ struct EmailNLPEngine {
         }
 
         // Phase 2: Apple AI fallback for low-confidence detections — parallelism scales with count
-        // Cap AI calls to prevent unbounded processing on huge archives
+        // Cap AI calls to prevent unbounded processing on huge archives.
+        //
+        // When the model is not permitted (Page 1 only, or a caller that has
+        // not opted in), every low-confidence snippet takes its NLP fallback
+        // name and the function returns without touching a model. The result
+        // is less refined and completely deterministic, which for batch
+        // analytics over a large archive is the better trade anyway.
+        guard modelFallbackAllowed else {
+            for item in lowConfidenceSnippets {
+                langCounts[item.nlpFallback, default: 0] += 1
+            }
+            let total = max(langCounts.values.reduce(0, +), 1)
+            return langCounts
+                .map { LanguageResult(language: $0.key, count: $0.value,
+                                      percentage: Double($0.value) / Double(total) * 100) }
+                .sorted { $0.count > $1.count }
+        }
+
         let maxAIFallbacks: Int
         switch emails.count {
         case 0...500: maxAIFallbacks = lowConfidenceSnippets.count

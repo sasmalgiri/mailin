@@ -103,7 +103,7 @@ Plus: **Researcher persona (light)** — 6 workflows reusing F1–F5 surfaces.
 | **2 — Citations & gates** | Locator type, fact–evidence matrix, uncited-assertion approval gate, publish gate | No report approvable with an uncited claim |
 | **3 — Registers & desks** | CAPA/remediation chain, contradiction & gap desk, Admiralty reliability grid | Each register round-trips to a numbered document |
 | **4 — Evidence-gating layer** | prohibitedOutcomes, sealed receipts, honesty-ledger labels | Receipt tamper-check demo passes |
-| **5 — Researcher persona + catalog** | 6 researcher workflows; wire all new surfaces into existing personas' catalogs | Coverage matrix: targeted jobs → Present |
+| **5 — Researcher persona + catalog** | 3 researcher workflows — Research Protocol, Screening (Include/Exclude), Extraction & Coding (corrected 2026-09-24: "6" was never built; `WorkflowEngine.swift` defines three); wire all new surfaces into existing personas' catalogs | Coverage matrix: targeted jobs → Present |
 
 Tracking artifact: `V3_JOB_COVERAGE_MATRIX.csv` (kalsmritikosh-style, honest
 Present/Partial/Absent status per job) — to be created at Phase 0 start and burned down.

@@ -4,8 +4,9 @@ Date: 2026-09-23 · Basis: `Mailin-Xcode-Agent-Revised-Directive-2026-09-23.md`
 (the directive), verified against working tree at `771e993`.
 
 **Relationship to the older V3 docs.** `V3_PLAN.md` and `V3_RELEASE_PLAN.md`
-describe the five-studio + Researcher-persona work, which is code-complete and
-behaviorally verified. That work **re-numbers to 2.1** and ships before this
+describe the five-studio + Researcher-persona work, which is code-complete
+(behavioural tests are written but unexecuted — see `RELEASE_NOTES_2_1.md`).
+That work **re-numbers to 2.1** and ships before this
 plan's work begins (§2). "3.0" from here on means the four-page module
 architecture described by the directive, including Live Mail.
 
@@ -255,7 +256,7 @@ Import / Search / Export and **no persona picker, case setup, or AI prompt**.
 
 | ID | Work | Detail | Est. |
 |---|---|---|---|
-| A1 | Default-route to Archive — **shell DONE, sidebar pending** | `FourPageShell` is the root (A1/A2 groundwork): `PageRouter` validates the visible page against the registry, falls back to Archive when a page is switched off, and persists the choice. A Page-1-only install gets **no page chrome at all**; the switcher appears only once a second page is enabled. Persona onboarding is already off the launch path (P1.1). Still open: the sidebar item per page as the directive describes (currently a top switcher), and Page 1's own toolbar/empty-state wording. | 2–3 d remaining |
+| A1 | Default-route to Archive — **shell DONE, sidebar pending** | `FourPageShell` is the root (A1/A2 groundwork): `PageRouter` validates the visible page against the registry, falls back to Archive when a page is switched off, and persists the choice. A Page-1-only install gets **no page chrome at all**; the switcher appears only once a second page is enabled. Persona onboarding is already off the launch path (P1.1). **Page 1 wording DONE 2026-09-24:** `WelcomeHubView`'s feature showcase was advertising AI Intelligence, Forensics & Legal, Security & Detection and legal export formats unconditionally — so a Page-1-only install was shown a catalogue of what it had deliberately not enabled, on its first screen. Categories now carry an `owner: AppModule` and are filtered by the registry; the Archive-owned capabilities (search, timeline, attachments, analytics, duplicates, plain export) were split out into their own always-visible category so the empty state is never empty. Still open: the sidebar item per page as the directive describes (currently a top switcher) — that is A2's three-pane work, 8–12 d, not a wording fix. | A2 remaining |
 | A2 | Three-pane shell | Sidebar (All mail, source/folder tree, saved searches) / list / detail, with keyset pagination + stable IDs + lazy body hydration. Audit `ContentView.swift` (6,041 lines) and split it; any remaining `[RawEmail]` full-corpus array is a defect to remove. | 8–12 d |
 | A12 | Source format classifier — **DONE 2026-09-24** | `SourceFormatClassifier` decides the parser from **content**, with the extension as a hint. Fixes a silent-corruption path: a PST/OST/ZIP/gzip named `.mbox` used to reach the MBOX parser, which has no signature check, and would fabricate messages from binary; a valid mbox named `.txt` used to be refused. Detects mbox, eml, emlx, msg, pst/ost, nsf, zip, gzip, Apple Mail `.mbox` packages and Maildir, reports the evidence for each decision, flags name/content disagreement, and gives actionable advice for recognised-but-unimportable formats. `ParserFactory.parserIdentity(for:)` now follows the detected format, so a receipt names the parser that actually ran. 15 tests. Remaining: surface the classification in the A3 pre-import sheet, and Maildir/package *parsing* (detection exists, the mbox parser handles the package's inner `mbox`; a Maildir walk is not built). | done |
 | A3 | Guided import sheet | Source-guided flow: pick format/source → copy vs reference → destination → duplicate policy → indexing choices → required space → Start. Shows unsupported/encrypted/corrupt variants **before** start. | 5–7 d |

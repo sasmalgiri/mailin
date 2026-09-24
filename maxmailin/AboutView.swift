@@ -100,6 +100,17 @@ struct AboutView: View {
                         title: "Offline & Private",
                         description: "No account, no mail servers, no data collection. Your archive stays on your device by default — optional Cloud AI is opt-in."
                     )
+                    // D1: state what the PLATFORM enforces for this build, read
+                    // from its own signed entitlements — not what the app
+                    // intends. The line above is a description; this one is
+                    // evidence, and it says so plainly when the sandbox is not
+                    // what is doing the enforcing.
+                    featureRow(
+                        icon: NoNetworkAttestation.verdict().networkIsStructurallyImpossible
+                            ? "checkmark.seal.fill" : "info.circle",
+                        title: "Verified for this build",
+                        description: NoNetworkAttestation.verdict().summary
+                    )
                     featureRow(
                         icon: "chart.bar.fill",
                         title: "Analytics Dashboard",

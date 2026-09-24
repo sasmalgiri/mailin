@@ -1408,6 +1408,9 @@ final class V2VerificationTests: XCTestCase {
     /// evidence that engine memory is independent of archive size. (The store
     /// itself is separately proven to 1,000,000 in V2_SCALE_RESULTS.md.)
     func testProductionPathScale_boundedEnginesOverLargeStore() async throws {
+        // 2,000 rows through the store, the FTS shards and seven analysis
+        // engines. Failed as `CancellationError` under a full volume.
+        try TestPreconditions.requireFreeSpace(TestPreconditions.scaleFixtureBudget)
         let n = 2_000
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-w4-\(UUID().uuidString)", isDirectory: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
@@ -1701,7 +1704,20 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertEqual(streamed.highPriorityCount, oracle.highPriorityCount)
         XCTAssertEqual(streamed.mediumPriorityCount, oracle.mediumPriorityCount)
         XCTAssertEqual(streamed.piiCounts, oracle.piiCounts)
+        // Asserted equal again, and deterministically so. This comparison used
+        // to be flaky — 3 vs 2 on one run, 3 vs 4 on the next — because
+        // `detectLanguagesHybrid` consulted the on-device language model for
+        // every low-confidence snippet, and these synthetic "word0 word0"
+        // bodies are all low confidence. The model is not deterministic.
+        //
+        // The model path is now gated by `EmailNLPEngine
+        // .modelLanguageFallbackGate`, which is nil in tests, so detection is
+        // pure NLP and the streaming/array equivalence this test exists to
+        // check is actually checkable.
         XCTAssertEqual(streamed.languages.count, oracle.languages.count)
+        XCTAssertEqual(Set(streamed.languages.map { "\($0.language):\($0.count)" }),
+                       Set(oracle.languages.map { "\($0.language):\($0.count)" }),
+                       "the two paths must agree on language tallies, not just their number")
         // Sanity: the fixture actually produced content.
         XCTAssertEqual(streamed.totalCount, 18)
         XCTAssertFalse(streamed.topContacts.isEmpty)

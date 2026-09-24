@@ -367,7 +367,29 @@ Ordered by value-per-risk, not by the order the design was written.
   hole of exactly the kind this project keeps finding. Behaviour is unchanged
   until S3b.
 
-### S3b — Wire the blob tier (the audited work list)
+### S3b — Wire the blob tier — **IMPLEMENTED 2026-09-24, NOT YET EXECUTED**
+
+Schema v14 (additive: `raw_blob_digest`, `raw_blob_length`, a partial index on
+the digest). All seven sites below are blob-aware in the same change as the
+writer, plus `healFidelity`'s upsert, orphan GC against a real
+referenced-digest query, and `StoragePlanner.archiveFootprint` counting the
+blob tier. Tests in `maxmailinTests/BlobTierWiringTests.swift` — **written,
+never run.** Three decisions worth recording:
+
+- **One drain funnel.** The three backfill work lists (fidelity, attachment
+  text, participants) now share `drainRawCandidates`, because the failure mode
+  was identical in each and duplicating it three times is how the next one
+  gets missed.
+- **A missing blob is damage, not absence.** `rawEmailFromRow` records an
+  anomaly on the message instead of throwing (one bad body must not make a
+  page of mail unopenable) and the backfills put the row on the *rawless* list
+  and log it, rather than reporting it as having no source.
+- **Budget before open.** Byte-budget paging is checked against
+  `raw_blob_length` from the row, so a 1.5 GB body is deferred to the next page
+  without ever being read — but a page is never returned empty, or an
+  oversized body would be skipped forever.
+
+The audited work list:
 
 Every place `email_bodies.raw` is touched, from a grep of
 `SQLiteEmailStore.swift`. All of these must become blob-aware **in the same
@@ -392,7 +414,77 @@ a real referenced-digest query; `StoragePlanner` counting `BlobStore.totalBytes(
   and a crash between blob write and row commit leaves a collectable orphan,
   never a dangling reference.
 
-### S4 — Offset-based mbox/eml parser (8–12 d, **high risk**)
+### S4 — Offset parser — **IMPLEMENTED + MEASURED 2026-09-24, BEHIND A SWITCH**
+
+**Exit criteria PARTIALLY met, measured** (`ActivationMeasurementTests`,
+numbers in `MODULE_ACTIVATION_MATRIX.md` §4).
+
+The functional exit is met:
+
+- A 110 MiB message: streaming imports **0** (reported `oversized_message`),
+  offset imports **1**. That is the case S4 exists for, and it works.
+
+The memory exit is **not** met as originally stated, and an earlier draft of
+this section published a wrong number:
+
+- Claimed: "peak RSS stays within the batch envelope", evidenced as 3.0 MiB
+  against the streaming parser's 71.5 MiB. **Withdrawn.** That came from
+  sampling once per message; per-window sampling measures **46.1 MiB on a
+  48 MiB file** and **109.4 MiB on a 192 MiB file**.
+- What IS established: peak is independent of MESSAGE size (2 × 24 MiB and
+  48 × 1 MiB both ≈ 47 MiB), which is the property that removes the 100 MB
+  ceiling. Peak still grows with FILE size, sub-linearly — most likely the
+  unified buffer cache, which `phys_footprint` charges to the process.
+
+Consequence for the plan: the offset parser is correct to keep and correct to
+ship switched off, but "bounded peak regardless of source size" is not yet
+true and should not be claimed. The next step, if this matters, is
+`F_NOCACHE` on the read handle or `madvise`-equivalent hinting, measured the
+same way.
+
+**Caveat the measurement found, and the plan above did not anticipate:** peak
+tracks the longest **line**, not the message, because the scanner accumulates
+until a newline. A 12 MiB body of 76-column lines costs 0.0 MiB; the same body
+as one unbroken line costs 16.5 MiB, bounded by `maxLineBytes` (16 MiB). Real
+mail wraps — RFC 5322 recommends 78 columns, base64 wraps at 76 — so the
+claim holds for mail, and the pathological case is bounded rather than
+unbounded. `testMeasure_peakTracksLongestLineNotMessage` pins it.
+
+Not measured: import **throughput** offset versus streaming. Memory was the
+question the design rested on; speed is a separate claim and is not asserted
+anywhere.
+
+Shipped as `Capability.offsetParser`, **Experimental, OFF by default**. The
+streaming parser is untouched and remains the default path, so this is a
+switch rather than a migration.
+
+Three deviations from the plan above, each deliberate:
+
+1. **`MBOXParser.maxMessageBytes` is NOT deleted.** The plan said to delete
+   it, which is right once the offset parser is the only engine. It still
+   governs the streaming path, which is still the default, so deleting it now
+   would remove the bound from the engine that is actually running. It goes
+   when the switch flips to on-by-default.
+2. **A message over the ceiling is imported from its HEADERS, not fully
+   parsed.** `OffsetImportEngine.fullParseCeilingBytes` keeps ordinary
+   messages on the proven `processRawMessage` path — byte-identical output,
+   which is what makes the switch safe — and above it a message is archived
+   with its headers, its locator and an explicit marker. Today such a message
+   is counted `oversized_message` and never enters the archive at all, so this
+   is strictly better than the status quo; it is not, and does not claim to be,
+   a searchable body for a 1.5 GB message.
+3. **The scanner's callback is `async`.** Locators are ~150 bytes each, so
+   collecting them for a 500 GB source (≈10 million messages ≈ 1.5 GB) would
+   have made the index the new memory ceiling. Awaiting the consumer gives
+   backpressure instead.
+
+Locators persist in schema **v15** (`message_locators`, additive — no row is
+required to have one). Tests in `maxmailinTests/OffsetParserTests.swift`,
+covering the declared guard rails: `>From` quoting, separators spanning a read
+window, end-of-file closure, bounds-checked reads, and engine-vs-engine output
+equality. **Written, never run.**
+
+### S4 — original plan (for reference)
 
 - `MessageLocator` / `PartLocator`; scan bytes with a bounded window; parse
   headers only; **never decode bodies at import**.

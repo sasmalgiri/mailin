@@ -1227,9 +1227,21 @@ enum WorkflowCatalog {
                 f("searchPlan", "Search plan", .longText, "Terms, operators, and saved searches you will run.", required: true),
                 f("criteria", "Include / exclude criteria", .longText, "What qualifies an email into the study.", required: true),
             ], gates: afterPrevious(2)),
-            op(3, "protocolDoc", "Post Protocol", "Posts the protocol as a numbered document — the method is now on record.", .report, launches: .emailInbox, [
-                f("notes", "Protocol notes", .longText, "Anything future readers need to reproduce the study."),
+            // The three researcher recipes shipped with three operations each,
+            // while the catalogue's own soundness rule (asserted by
+            // `testCatalog_expandedPersonaCoverage`) is four. The missing step
+            // in each case is the same one: the researcher's own declaration
+            // of the threats to validity / limits BEFORE the protocol is
+            // posted. A protocol that records only the method, and not what it
+            // cannot show, is the thing this persona exists to prevent.
+            op(3, "limits", "Limits & Threats to Validity", "State what this corpus cannot show — gaps, selection effects, and what would change the answer.", nil, launches: .evidenceDesks, [
+                f("gaps", "Known gaps", .longText, "What is absent from the corpus and why that matters.", required: true),
+                f("selectionEffects", "Selection effects", .longText, "How the corpus came to exist, and which conclusions that biases."),
+                f("falsifiers", "What would change the answer", .longText, "Evidence that would overturn the expected finding."),
             ], gates: afterPrevious(3)),
+            op(4, "protocolDoc", "Post Protocol", "Posts the protocol as a numbered document — the method is now on record.", .report, launches: .emailInbox, [
+                f("notes", "Protocol notes", .longText, "Anything future readers need to reproduce the study."),
+            ], gates: afterPrevious(4)),
         ])
 
     static let researcherScreening = WorkflowDefinition(
@@ -1243,9 +1255,18 @@ enum WorkflowCatalog {
                 f("excluded", "Excluded", .number, "How many were screened out."),
                 f("excludeReasons", "Exclusion reasons", .longText, "Why the excluded ones were excluded — recorded, not silent."),
             ], gates: afterPrevious(2)),
-            op(3, "log", "Post Screening Log", "Posts the screening decisions as a numbered document.", .report, launches: .emailInbox, [
-                f("notes", "Notes", .longText, "Edge cases and judgment calls."),
+            // Fourth operation: a second pass over the exclusions. Screening
+            // errors are asymmetric — a wrongly INCLUDED message is caught
+            // later by coding, a wrongly excluded one is never seen again —
+            // so the recipe has to make someone look at the exclusions again.
+            op(3, "recheck", "Re-check the Exclusions", "Sample the excluded set and confirm each exclusion still holds. An exclusion nobody revisits is invisible.", nil, launches: .emailInbox, [
+                f("sampled", "Exclusions re-checked", .number, "How many excluded messages were looked at again.", required: true),
+                f("reinstated", "Reinstated", .number, "How many were screened back in on second look."),
+                f("checkedBy", "Re-checked by", .text, "Who performed the second pass."),
             ], gates: afterPrevious(3)),
+            op(4, "log", "Post Screening Log", "Posts the screening decisions as a numbered document.", .report, launches: .emailInbox, [
+                f("notes", "Notes", .longText, "Edge cases and judgment calls."),
+            ], gates: afterPrevious(4)),
         ])
 
     static let researcherCoding = WorkflowDefinition(
@@ -1257,9 +1278,19 @@ enum WorkflowCatalog {
             op(2, "code", "Code the Passages", "Tag emails with codes; every coded passage cites its email.", nil, launches: .emailInbox, [
                 f("codedCount", "Emails coded", .number, "How many emails carry at least one code."),
             ], gates: afterPrevious(2)),
-            op(3, "dataset", "Post Coded Dataset", "Posts the coded dataset summary as a numbered document; export CSV for analysis.", .report, launches: .emailInbox, [
-                f("export", "Exported to", .text, "Where the coded dataset was saved."),
+            // Fourth operation: coder agreement. A coding scheme nobody has
+            // tested for consistency produces numbers that look like data and
+            // are not, which is the specific failure mode of qualitative
+            // coding — so the recipe asks for the check before the dataset is
+            // posted, and accepts "coded alone" as an honest answer.
+            op(3, "agreement", "Coder Agreement", "Re-code a sample and compare. If you coded alone, say so — a single coder is a stated limit, not a hidden one.", nil, launches: .reasoningStudio, [
+                f("sampleSize", "Sample re-coded", .number, "How many messages were coded a second time.", required: true),
+                f("agreementRate", "Agreement", .text, "Percentage or kappa, and how it was calculated.", placeholder: "e.g. 88% on 50 messages"),
+                f("disagreements", "How disagreements were resolved", .longText, "Which codes were adjusted, and why.", required: true),
             ], gates: afterPrevious(3)),
+            op(4, "dataset", "Post Coded Dataset", "Posts the coded dataset summary as a numbered document; export CSV for analysis.", .report, launches: .emailInbox, [
+                f("export", "Exported to", .text, "Where the coded dataset was saved."),
+            ], gates: afterPrevious(4)),
         ])
 
     static let forensicEvidencePlan = WorkflowDefinition(
@@ -1272,9 +1303,13 @@ enum WorkflowCatalog {
                 f("requests", "Requests", .longText, "Numbered requests linked to hypotheses.", required: true),
                 f("custodians", "Custodians involved", .text, "Who holds each requested item."),
             ], gates: afterPrevious(2)),
-            op(3, "plan", "Post Collection Plan", "Posts the plan as a numbered document — never asserts the evidence exists.", .report, launches: .emailInbox, [
-                f("notes", "Notes", .longText, "Constraints, deadlines, legal considerations."),
+            op(3, "authorise", "Prioritise & Authorise", "Rank the requests and record who authorised the collection scope — a plan with no authority is not actionable.", nil, launches: .evidenceDesks, [
+                f("priority", "Priority order", .longText, "Requests in the order they will be pursued, and why.", required: true),
+                f("authorisedBy", "Authorised by", .text, "Who approved this collection scope.", required: true),
             ], gates: afterPrevious(3)),
+            op(4, "plan", "Post Collection Plan", "Posts the plan as a numbered document — never asserts the evidence exists.", .report, launches: .emailInbox, [
+                f("notes", "Notes", .longText, "Constraints, deadlines, legal considerations."),
+            ], gates: afterPrevious(4)),
         ])
 
     static let all: [WorkflowDefinition] = [
@@ -1396,6 +1431,19 @@ enum WorkflowCatalog {
             return "Find and save the attachments you need — search, browse the gallery, select, and export."
         case "builtin.personal.contacts":
             return "Round up your key contacts — analyze who you talk to, spot the patterns, pick the keepers, and export them."
+        // The four workflows added in the v3 cycle. They shipped without
+        // purpose lines and fell through to the generic fallback, which
+        // `testWorkflowPurpose_presentAndSpecific` correctly refused: a
+        // catalogue entry the user cannot tell apart from any other is not
+        // discoverable.
+        case "builtin.researcher.protocol":
+            return "Set out your research protocol before you look — the question, the inclusion rules, and how you will code what you find."
+        case "builtin.researcher.screening":
+            return "Screen the corpus include/exclude against your stated criteria, recording a reason for every exclusion."
+        case "builtin.researcher.coding":
+            return "Extract and code the material against your scheme, so the same message coded twice lands the same way."
+        case "builtin.forensic.evidenceplan":
+            return "Turn open questions into a collection plan — hypotheses, the requests that would test them, priority order, and who authorised the scope."
         default:
             return "A guided recipe that does the job step by step and keeps a numbered record for you."
         }
