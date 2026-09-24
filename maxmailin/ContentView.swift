@@ -2013,8 +2013,17 @@ struct ContentView: View {
                             viewModel.scanForThunderbirdProfiles()
                             if !viewModel.thunderbirdProfiles.isEmpty {
                                 parseFailed = false
-                                viewModel.importThunderbirdProfile(viewModel.thunderbirdProfiles)
-                                showSpinner = true
+                                // Through the SAME funnel as every other
+                                // import. This used to call
+                                // `viewModel.importThunderbirdProfile`, which
+                                // went straight to `parseSelectedFiles` and so
+                                // skipped `beginImport` — meaning a user who
+                                // had switched on the pre-import sheet did not
+                                // get it here, and a Thunderbird import never
+                                // appeared in the import queue at all. Two
+                                // entry points, different behaviour, and the
+                                // capability descriptions drew no distinction.
+                                handleMultipleFiles(viewModel.thunderbirdProfiles)
                             }
                         } label: {
                             Label("Thunderbird", systemImage: "bird")

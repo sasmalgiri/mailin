@@ -211,6 +211,119 @@ final class RealMailboxEngineTests: XCTestCase {
         }
     }
 
+    /// The header-only path, on REAL mail.
+    ///
+    /// The previous commit recorded this as a gap: nothing in the reference
+    /// mailbox exceeds the 100 MB full-parse ceiling, so the one behaviour S4
+    /// exists for was still exercised by synthetic fixtures only. Lowering the
+    /// ceiling closes it — the same real messages, with real CRLF and real
+    /// MIME, now take the header-only route.
+    ///
+    /// A 1 MiB ceiling is not a realistic setting; it is a way to route real
+    /// mail down the path a 1.5 GB message would take in production.
+    func testRealMailbox_headerOnlyPathOnRealMessages() async throws {
+        let (url, _) = try fixture()
+
+        var engine = OffsetImportEngine()
+        engine.fullParseCeilingBytes = 1_048_576
+
+        var imported: [OffsetImportEngine.Imported] = []
+        let report = try await engine.importMessages(
+            fileURL: url, senderEmail: "", batchSize: 200,
+            sourceDigest: try OffsetImportEngine.digest(of: url)
+        ) { batch in imported += batch }
+
+        let headerOnly = imported.filter { !$0.bodyWasDecoded }
+        let fullyParsed = imported.filter(\.bodyWasDecoded)
+
+        print("""
+
+        ── Real mailbox: header-only path (1 MiB ceiling) ─────────
+        imported     : \(imported.count)
+        header-only  : \(headerOnly.count)
+        fully parsed : \(fullyParsed.count)
+        damaged      : \(report.failed)
+        ───────────────────────────────────────────────────────────
+
+        """)
+
+        XCTAssertEqual(report.failed, 0, "lowering the ceiling must not damage anything")
+        XCTAssertGreaterThan(headerOnly.count, 0,
+                             "a 1 MiB ceiling must route some real messages header-only")
+        XCTAssertEqual(imported.count, headerOnly.count + fullyParsed.count)
+
+        let reader = LocatorReader()
+        for item in headerOnly.prefix(10) {
+            // A header-only message must be honest about what it is.
+            XCTAssertTrue(item.email.rawSource.isEmpty,
+                          "a header-only message must not pretend to hold its body")
+            XCTAssertTrue(item.email.plainBody.isEmpty)
+            XCTAssertTrue(item.email.attachments.isEmpty,
+                          "attachments cannot be enumerated without decoding")
+            XCTAssertFalse(item.email.anomalies.isEmpty,
+                           "the deferred body must be marked so no surface calls it processed")
+
+            // But its headers must be real, from real mail.
+            XCTAssertFalse((item.email.headers["From"] ?? "").isEmpty,
+                           "headers are parsed even when the body is not")
+
+            // And its bytes must be locatable and correct — this is what makes
+            // the trade acceptable rather than data loss.
+            let bytes = try reader.read(item.locator.messageRange,
+                                        from: item.locator.sourcePath)
+            XCTAssertEqual(Int64(bytes.count), item.locator.byteCount)
+            XCTAssertTrue(item.locator.hasVerifiableSource)
+            XCTAssertNoThrow(try reader.verifySource(item.locator))
+
+            // The located bytes must actually be this message: its own
+            // Message-ID has to appear in them.
+            if let messageID = item.email.headers["Message-ID"],
+               !messageID.isEmpty {
+                let text = String(decoding: bytes.prefix(8192), as: UTF8.self)
+                XCTAssertTrue(text.contains(messageID), """
+                    located bytes do not contain the message's own Message-ID \
+                    (\(messageID)) — the locator points at the wrong message
+                    """)
+            }
+        }
+    }
+
+    /// The receipt must call such a run Partial, not Complete — on real
+    /// numbers rather than a hand-built receipt.
+    func testRealMailbox_headerOnlyRunWouldReportPartial() async throws {
+        let (url, _) = try fixture()
+
+        var engine = OffsetImportEngine()
+        engine.fullParseCeilingBytes = 1_048_576
+        var deferred = 0
+        var total = 0
+        _ = try await engine.importMessages(
+            fileURL: url, senderEmail: "", batchSize: 200
+        ) { batch in
+            total += batch.count
+            deferred += batch.filter { !$0.bodyWasDecoded }.count
+        }
+        XCTAssertGreaterThan(deferred, 0)
+
+        // A receipt shaped like that run.
+        let now = Date()
+        var receipt = ImportReceipt(startedAt: now, completedAt: now)
+        receipt.discovered = total
+        receipt.parsed = total
+        receipt.inserted = total
+        receipt.duplicates = 0
+        receipt.indexed = total
+        receipt.bodiesNotDecoded = deferred
+
+        let verdict = ImportReconciler.verdict(for: receipt)
+        XCTAssertNotEqual(verdict, .complete, """
+            \(deferred) of \(total) real messages had no body decoded; the receipt \
+            must not claim every message is searchable
+            """)
+        XCTAssertTrue(verdict.shortfalls.contains(.bodiesNotDecoded))
+        print("── Real mailbox: \(deferred)/\(total) deferred → verdict \(verdict.label)")
+    }
+
     /// Provenance, end to end on real bytes: the digest recorded at import must
     /// verify against the untouched file. This is the operation that replaced
     /// the parameter that claimed to verify and did not.

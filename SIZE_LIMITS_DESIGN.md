@@ -486,9 +486,28 @@ paths no LF fixture could reach.
 | Header range excludes the `From_` envelope | verified on a 14-message sample across the file |
 | Source digest verifies; a wrong digest fails | both |
 
-Nothing was header-only, because the largest message (12.5 MiB) is well under
-the 100 MB full-parse ceiling. So the header-only path remains exercised by
-synthetic fixtures only — this file cannot test it.
+At the production ceiling nothing was header-only, because the largest message
+(12.5 MiB) is well under 100 MB.
+
+**The header-only path is now covered on real mail too**, by lowering the
+ceiling to 1 MiB — not a realistic setting, but the way to route real messages
+down the route a 1.5 GB message takes in production:
+
+| Result | |
+|---|---|
+| Imported | **526** (15 header-only, 511 fully parsed) |
+| Damaged | **0** |
+| Verdict for such a run | **Partial**, naming `bodiesNotDecoded` |
+
+For each sampled header-only message: `rawSource` empty, no fabricated
+attachment list, the deferred-body anomaly present, real headers parsed, and
+the located bytes **contain that message's own Message-ID** — i.e. the locator
+points at the right message, not merely at plausible bytes. Source digest
+verifies on every one.
+
+That last check is the one worth having: a locator that resolved to the wrong
+message would still read back the right number of bytes and pass a bounds
+check.
 
 ### S4/S5 — three defects found by audit after the suite was green
 

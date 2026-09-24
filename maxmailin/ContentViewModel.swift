@@ -297,6 +297,17 @@ class ContentViewModel: ObservableObject {
     /// only UI side effects: progress publishing, forensic bookkeeping,
     /// widget/notification updates and temp-dir cleanup. No email preview is
     /// accumulated in RAM — list surfaces page the store after completion.
+    ///
+    /// **Invariant: call this only from `ContentView.startImport`.** That is
+    /// the single place that decides whether the pre-import sheet is shown
+    /// (`Capability.guidedImport`) and what is enqueued
+    /// (`Capability.importQueue`). The doc comment above says every entry
+    /// point "converges here", and for a while that was untrue: the
+    /// Thunderbird button called a wrapper that came straight to this method,
+    /// so it got no sheet and never appeared in the queue while Apple Mail
+    /// import — the adjacent button — behaved correctly. The wrapper is gone
+    /// and this now has exactly one production caller; keep it that way, or
+    /// the capability switches stop meaning anything for the new route.
     func parseSelectedFiles(_ urls: [URL], removeDuplicates: Bool = true, maxEmails: Int? = nil) {
         guard !isParsing else { return }
 
@@ -607,9 +618,18 @@ class ContentViewModel: ObservableObject {
         #endif
     }
 
-    func importThunderbirdProfile(_ urls: [URL], removeDuplicates: Bool = true, maxEmails: Int? = nil) {
-        parseSelectedFiles(urls, removeDuplicates: removeDuplicates, maxEmails: maxEmails)
-    }
+    // `importThunderbirdProfile` is deliberately GONE rather than deprecated.
+    //
+    // It did nothing but forward to `parseSelectedFiles`, which meant the
+    // Thunderbird button skipped the shared import funnel in `ContentView`
+    // (`beginImport`): no pre-import sheet for a user who had switched one on,
+    // and no entry in the import queue, so the import was invisible there.
+    // Apple Mail import, right next to it in the UI, went through the funnel
+    // correctly — two routes, different behaviour, nothing to tell them apart.
+    //
+    // Leaving a deprecated forwarder would leave the bypass available. Callers
+    // use `handleMultipleFiles`, which is the one place that decides whether
+    // to show the sheet and what to enqueue.
 
     // MARK: - Apple Mail Auto-Import
 
