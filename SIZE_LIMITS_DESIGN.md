@@ -437,10 +437,37 @@ this section published a wrong number:
   unified buffer cache, which `phys_footprint` charges to the process.
 
 Consequence for the plan: the offset parser is correct to keep and correct to
-ship switched off, but "bounded peak regardless of source size" is not yet
-true and should not be claimed. The next step, if this matters, is
-`F_NOCACHE` on the read handle or `madvise`-equivalent hinting, measured the
-same way.
+ship switched off, but "bounded peak regardless of source size" is not true
+and must not be claimed.
+
+**`F_NOCACHE` was tried and did nothing.** The hypothesis was that the growth
+was unified-buffer-cache pages, which `phys_footprint` charges to the process.
+A first comparison looked like a 10× win (4.3 vs 53.6 MiB on a 48 MiB source)
+and was wrong: both scans ran in one process, so the second inherited the
+first's inflated baseline. Re-measured one configuration per process, same
+fixture, same position, baseline ~361 MiB both times:
+
+| | Peak delta |
+|---|---|
+| `F_NOCACHE` ON | 29.3 MiB |
+| `F_NOCACHE` OFF | 29.5 MiB |
+
+No effect — most likely because the fixture is written immediately before
+being read, so its pages are already resident and a read handle's hint cannot
+evict them. Whether it helps on a genuinely cold file is **untested**: that
+needs a cache purge, which needs privileges a test does not have. The call is
+not shipped; the finding is recorded in `OffsetMBOXScanner`.
+
+**What did change:** the per-message header read now steps in 16 KiB instead
+of taking a 1 MiB gulp, which on an 8-message fixture is 128 KiB of header
+reads instead of 8 MiB. That is justified on bytes read — arithmetic — not on
+footprint, because no footprint claim survived measurement.
+
+**The standing lesson.** Three separate conclusions in this section were
+reached by comparing two numbers taken in the same process, and all three were
+wrong. `phys_footprint` on this machine is dominated by allocator and process
+history. The only footprint property that reproduced across every method is
+**independence from message size**, and that is the only one claimed.
 
 **Caveat the measurement found, and the plan above did not anticipate:** peak
 tracks the longest **line**, not the message, because the scanner accumulates

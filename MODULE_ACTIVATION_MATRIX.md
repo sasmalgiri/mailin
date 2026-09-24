@@ -159,13 +159,18 @@ Between batches — the question "what is the engine holding while it hands me
 work" — the per-message figure is ~3 MiB, and that is still true. It is simply
 not the peak.
 
-**Cold versus warm process.** The table above is from a cold process (a
-`RunCodeSnippet` run with nothing else allocated). The same measurement inside
-the test suite reports 0.0 MiB and 2.3 MiB for the same two fixtures, because
-by then the process footprint is already high enough to absorb the file-cache
-pages. Both are honest readings of `phys_footprint`; the cold numbers are the
-ones to quote, and the fact that they differ this much is itself the reason
-per-capability memory is reported as counts elsewhere in this document.
+**Process baseline dominates every absolute figure, and this defeated three
+attempted conclusions.** The same fixture measured 46 MiB in one process,
+0.0 MiB inside the test suite, and ~30 MiB in a third — because
+`phys_footprint` includes whatever the process had already allocated. A
+`F_NOCACHE` experiment appeared to give a 10× improvement and turned out to be
+nothing but this effect (29.3 vs 29.5 MiB once measured one configuration per
+process; see `SIZE_LIMITS_DESIGN.md` §S4).
+
+Treat the absolute numbers above as one machine's readings under one set of
+conditions, not as a specification. This is also why per-page and
+per-capability cost is reported as **counts** elsewhere in this document:
+counts are exact, footprint deltas are not.
 
 The message-size independence holds in both contexts (46.1 vs 47.9 cold;
 0.0 vs 2.3 warm), which is why that is the claim being made and the absolute

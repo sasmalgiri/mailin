@@ -54,6 +54,11 @@ struct OffsetMBOXScanner: Sendable {
     /// reported. This is a bound on the parse, not on the message.
     var maxHeaderBytes: Int = 1 << 20           // 1 MiB
 
+    /// Step size for reading a message's header block. Real mail terminates
+    /// its headers well inside one step, so a message normally costs a single
+    /// 16 KiB read rather than the whole `maxHeaderBytes` window.
+    static let headerReadStep = 16 * 1024
+
     /// Longest run of bytes tolerated with no line break before the file is
     /// judged not to be line-structured mail.
     ///
@@ -108,6 +113,34 @@ struct OffsetMBOXScanner: Sendable {
                 reason: "Cannot open \(fileURL.lastPathComponent) for scanning.")
         }
         defer { try? handle.close() }
+
+        // NOT setting `F_NOCACHE` here, and that is a measured decision rather
+        // than an oversight.
+        //
+        // The hypothesis was that footprint growth came from the unified
+        // buffer cache, which `phys_footprint` charges to the process, so
+        // asking the kernel to skip caching a file we read exactly once would
+        // bound it. A first comparison appeared to show a 10× win (4.3 MiB vs
+        // 53.6 MiB on a 48 MiB source) — but that measurement put both scans
+        // in ONE process, so the second inherited the first's inflated
+        // baseline. Re-measured properly, one configuration per process, same
+        // fixture, same position, baseline ~361 MiB both times:
+        //
+        //     F_NOCACHE ON  → peak delta 29.3 MiB
+        //     F_NOCACHE OFF → peak delta 29.5 MiB
+        //
+        // No effect. Most likely because the fixture is written immediately
+        // before being read, so its pages are already resident and a read
+        // handle's cache hint cannot evict them. Whether it would help on a
+        // genuinely cold file is untested — that needs a cache purge, which
+        // needs privileges a test does not have.
+        //
+        // So the call is gone rather than left in behind a dead flag.
+        // Shipping a syscall whose justification was disproven, with a comment
+        // claiming a measured reason, is worse than not shipping it; and a
+        // disabled branch is worse than both. If someone wants to retry this
+        // on a cold volume, the setup is described above and the one line is
+        // `fcntl(handle.fileDescriptor, F_NOCACHE, 1)`.
 
         var scan = Scan()
         scan.sourcePath = fileURL.path
@@ -245,14 +278,45 @@ struct OffsetMBOXScanner: Sendable {
         let resume = (try? handle.offset()) ?? 0
         defer { try? handle.seek(toOffset: resume) }
 
-        let headerWindow = Int(min(Int64(maxHeaderBytes), messageRange.length))
+        // Read the header block in STEPS, not in one `maxHeaderBytes` gulp.
+        //
+        // The first version read `min(maxHeaderBytes, messageLength)` — a full
+        // 1 MiB for any large message — to find a blank line that in real mail
+        // is within the first kilobyte or two.
+        //
+        // Justified on I/O, which is arithmetic rather than a noisy
+        // measurement: on an 8-message fixture this is 128 KiB of header reads
+        // instead of 8 MiB, and the ratio grows with message count. It was NOT
+        // possible to show a footprint improvement — every absolute
+        // `phys_footprint` figure in this file's history turned out to be
+        // dominated by process baseline — so the claim made for it is the
+        // reduction in bytes read, not a reduction in memory.
+        //
+        // `maxHeaderBytes` still bounds the total, so a hostile message with
+        // no blank line cannot make this unbounded.
         try? handle.seek(toOffset: UInt64(messageRange.offset))
-        let head: Data
-        do { head = try handle.read(upToCount: headerWindow) ?? Data() }
-        catch {
-            throw ExtractionError.invalidEmail(
-                reason: "I/O error reading headers at offset \(messageRange.offset): \(error.localizedDescription)")
+        let limit = Int(min(Int64(maxHeaderBytes), messageRange.length))
+        var head = Data()
+        var blankLineFound = false
+        while head.count < limit {
+            let want = min(Self.headerReadStep, limit - head.count)
+            let chunk: Data?
+            do { chunk = try handle.read(upToCount: want) }
+            catch {
+                throw ExtractionError.invalidEmail(
+                    reason: "I/O error reading headers at offset \(messageRange.offset): \(error.localizedDescription)")
+            }
+            guard let chunk, !chunk.isEmpty else { break }
+            head.append(chunk)
+            // Stop as soon as the header terminator is in hand. Searching from
+            // the start each time is fine: the search space is bounded by
+            // `maxHeaderBytes` and terminates on the first step for real mail.
+            if Self.indexOfBlankLine(in: head, from: 0) != nil {
+                blankLineFound = true
+                break
+            }
         }
+        _ = blankLineFound   // the ranges below re-derive it; kept for clarity
 
         // The envelope line, when present.
         var envelopeRange: ByteRange?
@@ -267,7 +331,10 @@ struct OffsetMBOXScanner: Sendable {
 
         // Header block ends at the first blank line.
         let blankOffset = Self.indexOfBlankLine(in: head, from: cursor)
-        let truncated = blankOffset == nil && messageRange.length > Int64(headerWindow)
+        // "Truncated" means we ran out of header budget before finding the
+        // blank line — not merely that we stopped reading, since stepping now
+        // stops early on purpose whenever the terminator is found.
+        let truncated = blankOffset == nil && messageRange.length > Int64(limit)
         let headerEndRelative = blankOffset ?? head.count
 
         let headerRange = ByteRange(offset: messageRange.offset + Int64(cursor),
