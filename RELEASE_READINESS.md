@@ -201,7 +201,40 @@ Accounting identities asserted by the test, not read off a log:
 A true RSS before/after needs the eviction behind a runtime flag so one binary
 can be measured both ways — not yet built.
 
-### Finding: the fixed 500-message batch ignores message size
+### CORRECTION (2026-09-24): the 400 MiB import peak is NOT batch-driven
+
+The finding below was written as the justification for `AdaptiveBatchController`
+and attributed the 400 MiB peak to batch sizing. Measurement after wiring the
+controller shows that attribution was **wrong**:
+
+| Batching | Batches | Max batch | Peak RSS delta |
+|---|---|---|---|
+| Fixed 500 messages | 2 | 500 | +400 MiB |
+| Adaptive, 32 MiB byte bound | 3 | 256 | +410 MiB |
+| Adaptive, expansion-aware 16 MiB bound | 4 | 168 | +423 MiB |
+
+Halving batch residency twice did not move peak memory at all, so the memory is
+not held by the batch. Attributing it properly:
+
+- **The fixture spans 19 years (2007–2025)**, so the import opens **19 FTS
+  shard connections**, each with its own SQLite page cache. That cost
+  accumulates with the import's date spread, not with batch size.
+- **`SQLiteEmailStore` sets `PRAGMA cache_size = -131072` (128 MB), plus
+  `mmap_size = 256 MB` and `temp_store = MEMORY`** (`SQLiteEmailStore.swift:103–105`).
+  The store is *configured* to hold up to 128 MB of pages, and touched mmap
+  pages count in `phys_footprint`.
+
+So the levers for import peak memory are the SQLite cache/mmap budget and the
+number of shard connections held open during an import — **not** batch size.
+Added to the plan as **P3.3**. The controller is still required (bounded,
+byte-aware batches; pause on real pressure; oversized-item spooling — all
+directive requirements), but it must not be sold as the fix for this number.
+
+Measured expansion factor worth keeping: a 32 MiB source-byte bound produced
+~410 MiB of peak footprint, so parsed objects run roughly **13×** the source
+bytes they came from. `BatchEnvelope.measuredParsedExpansion` records it.
+
+### Finding (SUPERSEDED as an explanation): the fixed 500-message batch ignores message size
 
 A 90 MiB source with 526 attachment-heavy messages fits in **two** batches at
 `batchSize = 500`, and peak RSS rises **400 MiB** above baseline. The batch

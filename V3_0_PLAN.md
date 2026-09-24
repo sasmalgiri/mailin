@@ -257,6 +257,7 @@ Import / Search / Export and **no persona picker, case setup, or AI prompt**.
 | A6 | Index-coverage truth | A coverage badge on search results; a partial index may **never** return an unqualified zero. Requires a per-source coverage record (bodies indexed, attachment text indexed, pending). | 4–5 d |
 | A7 | Advanced search sheet | Dates, people, folder, has-attachment, filename/type, phrase, AND/OR/NOT **only where tested**; results show matching field + Open exact original. | 4–6 d |
 | A10 | Inject the repository into `BulkImportCoordinator` | The coordinator is `@MainActor` and bound to the shared singletons, so the production import path cannot be measured or tested against an isolated corpus — every fixture number is currently engine-path only. Give it an injected `MailinStorageEnvironment`/repository. Prerequisite for honest production-path scale rows and for the ArchiveCore extraction. | 3–5 d |
+| P3.3 | Import-time memory budget | Measured owner of the 400 MiB import peak: `PRAGMA cache_size = -131072` (128 MB) + `mmap_size = 256 MB` on the store, and one SQLite connection per year-shard (19 for a 2007–2025 corpus). Lower the cache/mmap budget for the duration of an import and cap concurrently-open shards (or group batches by year), then re-measure. This — not batch size — is the lever. | 3–5 d |
 | A11 | Real-file measurement in the in-app harness | Release timing cannot come from the test target (`@testable` needs `ENABLE_TESTABILITY`, which Release does not set). Extend the Release-safe in-app `StressHarness` to accept a user-selected file so throughput numbers come from a Release build. | 2–3 d |
 | A9 | Idle shard eviction | Measured 2026-09-23: 20 FTS year-shard handles stay open at idle (526 MiB idle RSS), because eviction only fires under memory pressure. Close shards untouched for N minutes and open lazily on query, so Page 1's resting cost stops scaling with archive age. Exit: before/after idle RSS recorded in `RELEASE_READINESS.md`. | 3–4 d |
 | A8 | Export sheet + receipt | Scope (selected/filtered/folder/whole archive), format, destination, folder layout, attachment inclusion, collision rule, size estimate; progress → verification window with requested/written/failed, output hashes, Open in Finder. Interrupted exports resume or fail loudly. | 5–7 d |
@@ -294,12 +295,15 @@ actor AdaptiveBatchController {
 }
 ```
 
-**Measured justification (2026-09-23, not an assumption).** A 90.5 MiB real
-mbox of 526 messages — 152 of them with attachments — fits in **two** batches at
-today's `batchSize = 500`, and peak RSS rises **400 MiB** above baseline
-(`RELEASE_READINESS.md` §P0.2). Because the bound is a message *count*, batch
-memory scales with whatever those messages weigh. That is the concrete failure
-this controller exists to remove.
+**What this controller does and does not fix (measured, 2026-09-24).** It
+delivers what the directive requires: batches bounded by parsed bytes as well
+as count, an envelope that shrinks under real pressure, a pause with an
+actionable reason at hard limits, and oversized items spooled rather than
+inlined. It does **not** reduce the 400 MiB import peak — measurement after
+wiring showed 2 → 3 → 4 batches with peak RSS flat at 400/410/423 MiB, because
+that memory belongs to the SQLite cache/mmap budget and to one connection per
+year-shard (19 for the test fixture), not to batch residency. See
+`RELEASE_READINESS.md` §P0.2 CORRECTION and task **P3.3**.
 
 - **Start envelope:** conservative, derived from machine RAM and source format —
   the directive's example is 128 messages / 16 MiB; the *shipped* numbers come

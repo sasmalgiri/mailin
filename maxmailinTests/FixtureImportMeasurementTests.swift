@@ -119,7 +119,14 @@ final class FixtureImportMeasurementTests: XCTestCase {
         let clock = ContinuousClock()
         let rssBaseline = currentFootprintBytes()
         let start = clock.now
-        let summary = try await coordinator.runImport(urls: [fixture])
+        // P3.1: count batches and sample peak footprint per committed batch, so
+        // the adaptive envelope's effect is measured rather than assumed.
+        let probe = BatchProbe(baseline: rssBaseline)
+        var callbacks = BulkImportCoordinator.Callbacks()
+        callbacks.onCommittedBatch = { batch in
+            probe.record(count: batch.count, footprint: currentFootprintBytes())
+        }
+        let summary = try await coordinator.runImport(urls: [fixture], callbacks: callbacks)
         let elapsed = start.duration(to: clock.now).components
         let seconds = Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
         let rssAfter = currentFootprintBytes()
@@ -127,7 +134,10 @@ final class FixtureImportMeasurementTests: XCTestCase {
         let stored = try await store.totalCount()
         let ftsRows = try await fts.rowCount()
         let mib = { (b: UInt64) in Double(b) / 1_048_576.0 }
+        let shape = probe.snapshot
 
+        XCTAssertGreaterThan(shape.batches, 2,
+                             "adaptive batching must split this attachment-heavy source into more than the two batches the fixed 500 produced")
         XCTAssertEqual(summary.discovered, summary.parsed + summary.damaged,
                        "discovered must equal parsed + damaged")
         XCTAssertEqual(stored, summary.parsed - summary.persistFailed,
@@ -136,6 +146,9 @@ final class FixtureImportMeasurementTests: XCTestCase {
 
         print("""
         FIXTURE-MEASUREMENT production-path \
+        batches=\(shape.batches) minBatch=\(shape.minBatch) maxBatch=\(shape.maxBatch) \
+        rssPeakMiB=\(String(format: "%.1f", mib(shape.peak))) \
+        rssDeltaMiB=\(String(format: "%.1f", mib(shape.peak) - mib(rssBaseline))) \
         discovered=\(summary.discovered) parsed=\(summary.parsed) \
         inserted=\(summary.inserted.map(String.init) ?? "nil") \
         duplicates=\(summary.duplicates.map(String.init) ?? "nil") \
@@ -155,5 +168,32 @@ final class FixtureImportMeasurementTests: XCTestCase {
         XCTAssertThrowsError(
             try MailinStorageEnvironment.disposable(at: prod.appendingPathComponent("sqlite"))
         )
+    }
+}
+
+
+/// Records batch sizes and peak footprint during a production-path import.
+/// Lock-guarded rather than actor-isolated: the callback arrives on the main
+/// actor while the test body reads it from a non-isolated context.
+private final class BatchProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private(set) var batches = 0
+    private(set) var minBatch = Int.max
+    private(set) var maxBatch = 0
+    private(set) var peakFootprint: UInt64
+
+    init(baseline: UInt64) { self.peakFootprint = baseline }
+
+    func record(count: Int, footprint: UInt64) {
+        lock.lock(); defer { lock.unlock() }
+        batches += 1
+        minBatch = min(minBatch, count)
+        maxBatch = max(maxBatch, count)
+        peakFootprint = max(peakFootprint, footprint)
+    }
+
+    var snapshot: (batches: Int, minBatch: Int, maxBatch: Int, peak: UInt64) {
+        lock.lock(); defer { lock.unlock() }
+        return (batches, minBatch, maxBatch, peakFootprint)
     }
 }

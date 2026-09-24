@@ -262,10 +262,16 @@ struct MBOXParser {
     /// Returns the total number of messages successfully parsed.
     /// Returns the source-scoped recovery report (§7.7 — no global state).
     @discardableResult
+    /// - Parameter envelopeProvider: P3.1. When supplied, the batch boundary is
+    ///   decided by the `AdaptiveBatchController` - bounded by parsed BYTES as
+    ///   well as message count - and re-queried after every flush, so the
+    ///   envelope can shrink mid-file under pressure. When nil the fixed
+    ///   `batchSize` applies (manual troubleshooting override).
     static func parseStreamingCallback(
         fileURL: URL,
         senderEmail: String,
         batchSize: Int = 200,
+        envelopeProvider: (@Sendable () async -> BatchEnvelope)? = nil,
         onProgress: ((Double) -> Void)? = nil,
         onBatch: ([RawEmail]) async throws -> Void
     ) async throws -> ParseRecoveryReport {
@@ -286,6 +292,11 @@ struct MBOXParser {
         var errorCategories: [String: Int] = [:]
         var batch: [RawEmail] = []
         batch.reserveCapacity(batchSize)
+        // P3.1: bytes accumulated in the current batch, and the envelope in
+        // force. A message COUNT alone let a 90 MiB source sit in two batches.
+        var batchBytes = 0
+        var envelope = await envelopeProvider?()
+            ?? BatchEnvelope(maxMessages: batchSize, maxBytes: Int.max)
 
         func nextLine() throws -> String? {
             while true {
@@ -319,10 +330,14 @@ struct MBOXParser {
         }
 
         func flushBatchIfFull() async throws {
-            guard batch.count >= batchSize else { return }
+            guard batch.count >= envelope.maxMessages || batchBytes >= envelope.maxBytes else { return }
             try await onBatch(batch)
             totalParsed += batch.count
             batch.removeAll(keepingCapacity: true)
+            batchBytes = 0
+            // Re-ask after every flush so pressure that appears mid-file
+            // shrinks the NEXT batch rather than the next file.
+            if let envelopeProvider { envelope = await envelopeProvider() }
         }
 
         func flushCurrentMessage() {
@@ -336,6 +351,7 @@ struct MBOXParser {
             let raw = currentLines.joined(separator: "\n")
             do {
                 let email = try processRawMessage(raw, senderEmail: senderEmail)
+                batchBytes += raw.utf8.count
                 batch.append(email)
             } catch {
                 // Count the drop so it's surfaced in the returned report, not
@@ -380,6 +396,7 @@ struct MBOXParser {
             try await onBatch(batch)
             totalParsed += batch.count
             batch.removeAll(keepingCapacity: true)
+            batchBytes = 0
         }
         return ParseRecoveryReport(
             totalMessages: totalParsed + skippedCount,

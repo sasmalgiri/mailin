@@ -66,6 +66,17 @@ final class BulkImportCoordinator {
     /// injected disposable store has no activation/migration state to wait for.
     private let requiresStorageActivation: Bool
 
+    // MARK: - Adaptive batching state (P3.1)
+
+    private var batchController: AdaptiveBatchController?
+    private var lastBatchOutcome: BatchOutcome?
+    /// Set while the controller has paused the import. Observable so the queue
+    /// UI can show the reason instead of looking stalled.
+    private(set) var batchPauseReason: String?
+    /// True once a batch could not be indexed, so the controller can back off
+    /// while the index is behind.
+    private var indexBacklog = false
+
     init(store: SQLiteEmailStore = .shared,
          fts: FTSSearchIndex = .shared,
          checkpoints: ImportCheckpointStore = .shared,
@@ -90,8 +101,14 @@ final class BulkImportCoordinator {
     /// Everything the legacy ContentViewModel pipeline supported that the
     /// coordinator now owns (Part 1a–1e).
     struct Options {
-        /// Persist/index batch size. Clamped to 1...10_000.
+        /// Persist/index batch size. Clamped to 1...10_000. Used as the fixed
+        /// bound only when `adaptiveBatching` is off.
         var batchSize: Int = 500
+        /// P3.1: bound each batch by parsed bytes AND count via
+        /// `AdaptiveBatchController`, shrinking under pressure and pausing at
+        /// hard limits. The fixed `batchSize` survives as a troubleshooting
+        /// override, which is what turning this off selects.
+        var adaptiveBatching: Bool = true
         /// Used for sent/received classification during parsing (1a).
         var senderEmail: String = ""
         /// Free-tier cap: stop persisting once this many emails have been
@@ -222,6 +239,41 @@ final class BulkImportCoordinator {
         }
     }
 
+    // MARK: - Adaptive batching
+
+    /// Asked by the parser at every batch boundary. Blocks (with an explicit,
+    /// user-readable reason) while the controller says pause, so a low-disk or
+    /// critical-memory condition stops the import instead of pushing through
+    /// it. Resumes by itself when the condition clears.
+    private func nextEnvelope(storeDirectory: URL) async -> BatchEnvelope {
+        guard let controller = batchController else {
+            return BatchEnvelope(maxMessages: 500, maxBytes: Int.max)
+        }
+        while !Task.isCancelled {
+            let sample = LivePressureSampler.sample(
+                storeDirectory: storeDirectory,
+                indexBacklog: indexBacklog,
+                observedPressure: LivePressureSampler.currentPressure())
+            switch await controller.next(after: lastBatchOutcome, sample: sample) {
+            case .proceed(let envelope):
+                if batchPauseReason != nil {
+                    Self.logger.notice("Import resumed: pressure cleared")
+                    batchPauseReason = nil
+                }
+                return envelope
+            case .pause(let reason):
+                if batchPauseReason != reason {
+                    batchPauseReason = reason
+                    Self.logger.notice("Import paused: \(reason, privacy: .public)")
+                }
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
+        // Cancelled while paused: hand back the floor so the parser can unwind
+        // quickly rather than committing another large batch.
+        return BatchEnvelope(maxMessages: 8, maxBytes: 1_048_576)
+    }
+
     // MARK: - Pipeline
 
     private func run(urls: [URL], options: Options, callbacks: Callbacks) async throws -> RunSummary {
@@ -235,6 +287,13 @@ final class BulkImportCoordinator {
         // 0. (1d) Storage-authority gate: never write SQLite against
         //    unresolved storage. Fail explicitly — silently skipping persist
         //    is how archives used to look imported without reaching the store.
+        // P3.1: one controller per run, so the envelope adapts across all of
+        // this run's sources rather than restarting per file.
+        batchController = options.adaptiveBatching ? AdaptiveBatchController() : nil
+        lastBatchOutcome = nil
+        batchPauseReason = nil
+        indexBacklog = false
+
         if requiresStorageActivation {
             guard await StorageActivationCoordinator.shared.isActive else {
                 Self.logger.fault("Import blocked: storage authority is not active.")
@@ -325,10 +384,25 @@ final class BulkImportCoordinator {
                 var fileReport: MBOXParser.ParseRecoveryReport? = nil
 
                 do {
+                    let storeDirectory = store.storeDirectory
+                    // Hoisted (not inlined as a ternary): the type-checker
+                    // cannot infer a @Sendable async closure through `?:`.
+                    let envelopeProvider: (@Sendable () async -> BatchEnvelope)?
+                    if options.adaptiveBatching {
+                        envelopeProvider = { [weak self] in
+                            guard let self else {
+                                return BatchEnvelope(maxMessages: 500, maxBytes: Int.max)
+                            }
+                            return await self.nextEnvelope(storeDirectory: storeDirectory)
+                        }
+                    } else {
+                        envelopeProvider = nil
+                    }
                     fileReport = try await ParserFactory.parseStreamingCallback(
                         fileURL: url,
                         senderEmail: options.senderEmail,
                         batchSize: batchSize,
+                        envelopeProvider: envelopeProvider,
                         onProgress: { prog in
                             Task { @MainActor in
                                 callbacks.onFileProgress?(sourceName, fileIndex, urls.count, prog)
@@ -382,6 +456,10 @@ final class BulkImportCoordinator {
                         // checkpoint stays at the last committed ordinal, so
                         // a retry resumes exactly at the failure point.
                         let insertResult: BatchInsertResult
+                        let commitStart = ContinuousClock().now
+                        let batchBytes = pending.reduce(0) {
+                            $0 + max($1.rawSource.utf8.count, $1.plainBody.utf8.count)
+                        }
                         do {
                             insertResult = try await store.insertBatch(
                                 pending,
@@ -398,6 +476,13 @@ final class BulkImportCoordinator {
                             Self.logger.fault("Persist failed for \(sourceName, privacy: .public): \(error.localizedDescription, privacy: .public)")
                             throw PersistFailureSignal(underlying: error)
                         }
+                        let commitElapsed = commitStart.duration(to: ContinuousClock().now).components
+                        self.lastBatchOutcome = BatchOutcome(
+                            messages: pending.count,
+                            bytes: batchBytes,
+                            commitSeconds: Double(commitElapsed.seconds)
+                                + Double(commitElapsed.attoseconds) / 1e18
+                        )
                         summary.persistAttempted += pending.count
                         summary.blockedByTombstone += insertResult.blockedByTombstoneIDs.count
 

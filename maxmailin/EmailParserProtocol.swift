@@ -76,10 +76,15 @@ struct ParserFactory {
     /// Returns the SOURCE-SCOPED recovery report (§7.7 — no global mutable
     /// report; concurrent imports cannot race).
     @discardableResult
+    /// - Parameter envelopeProvider: P3.1 adaptive batching. Honoured by the
+    ///   streaming MBOX/EML path today. The non-streaming formats (PST/OST,
+    ///   NSF, MSG, EMLX) still drain in fixed `batchSize` chunks - wiring them
+    ///   is tracked as P3.2, and until then their memory profile is unchanged.
     static func parseStreamingCallback(
         fileURL: URL,
         senderEmail: String,
         batchSize: Int = 200,
+        envelopeProvider: (@Sendable () async -> BatchEnvelope)? = nil,
         onProgress: ((Double) -> Void)? = nil,
         onBatch: ([MBOXParser.RawEmail]) async throws -> Void
     ) async throws -> MBOXParser.ParseRecoveryReport {
@@ -90,6 +95,7 @@ struct ParserFactory {
                 fileURL: fileURL,
                 senderEmail: senderEmail,
                 batchSize: batchSize,
+                envelopeProvider: envelopeProvider,
                 onProgress: onProgress,
                 onBatch: onBatch
             )
@@ -99,7 +105,10 @@ struct ParserFactory {
             // chunks. These parsers throw on damage rather than recover,
             // so a successful parse reports zero failures.
             let parsed = try parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
-            for chunk in parsed.chunked(into: batchSize) {
+            // P3.2 placeholder: the message bound is honoured, the byte bound
+            // is not, because these parsers materialise before draining.
+            let chunkLimit = await envelopeProvider?().maxMessages ?? batchSize
+            for chunk in parsed.chunked(into: chunkLimit) {
                 try await onBatch(chunk)
             }
             return MBOXParser.ParseRecoveryReport(

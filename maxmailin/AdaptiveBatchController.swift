@@ -28,13 +28,32 @@ struct BatchEnvelope: Sendable, Equatable {
     var maxMessages: Int
     var maxBytes: Int
 
+    /// How much larger a batch is in memory than the source bytes it came from.
+    ///
+    /// MEASURED, not guessed (2026-09-24): a 32 MiB source-byte bound over the
+    /// real 90.5 MiB attachment-heavy fixture produced a 410 MiB peak, i.e.
+    /// ~13x. Decoded attachments, MIME part objects, and the retained
+    /// rawSource/plainBody/htmlBody copies all multiply the source bytes. A
+    /// source-byte bound alone therefore does NOT bound resident memory, which
+    /// is why this factor exists. Re-derive it per format in P9 — PST/NSF will
+    /// differ from MBOX.
+    static let measuredParsedExpansion = 13.0
+
+    /// Resident memory one batch may occupy. The envelope is derived backwards
+    /// from this through the expansion factor, so the thing being bounded is
+    /// the thing that actually runs the machine out of memory.
+    static func targetResidentBytes(forPhysicalMemory bytes: UInt64) -> Int {
+        // 1.5 % of RAM, clamped: 192 MiB on a 16 GB Mac, never below 96 MiB
+        // (progress must still be possible) nor above 512 MiB (import must not
+        // starve browsing, typing, search or export).
+        let derived = Int(Double(bytes) * 0.015)
+        return min(max(derived, 96 * 1_048_576), 512 * 1_048_576)
+    }
+
     static func starting(forPhysicalMemory bytes: UInt64) -> BatchEnvelope {
-        // Conservative and RAM-relative: ~0.2 % of physical memory as the byte
-        // bound, clamped to a floor/ceiling that hold on both an 8 GB Mac and a
-        // 128 GB one. The directive's example (128 messages / 16 MiB) sits in
-        // the middle of this range by design.
-        let derived = Int(bytes / 512)                 // 8 GB → 16 MiB
-        let byteBound = min(max(derived, 4 * 1_048_576), 64 * 1_048_576)
+        let target = targetResidentBytes(forPhysicalMemory: bytes)
+        let derived = Int(Double(target) / measuredParsedExpansion)
+        let byteBound = min(max(derived, 1_048_576), 64 * 1_048_576)
         let messageBound = max(32, min(256, byteBound / 131_072))
         return BatchEnvelope(maxMessages: messageBound, maxBytes: byteBound)
     }
@@ -103,6 +122,66 @@ enum OversizedItemPlan: Sendable, Equatable {
     /// Larger than the whole envelope: hand it to the bounded spool so one
     /// message cannot blow the memory bound. Never "grow the envelope to fit".
     case spoolAlone(bytes: Int)
+}
+
+// MARK: - Live signals
+
+/// Builds a `PressureSample` from the running system. Kept separate from the
+/// controller so the policy stays testable with synthetic samples.
+enum LivePressureSampler {
+
+    /// Share of physical memory one import may occupy before the controller
+    /// starts backing off. Conservative on purpose: import must not starve
+    /// browsing, typing, search or export (directive §3, work fairness).
+    static let memoryBudgetFraction = 0.25
+
+    /// Bytes that must stay free for the database, WAL, FTS, extracted text and
+    /// export temp. A starting value — P3/P9 measurements replace it.
+    static let diskReserveBytes: UInt64 = 5 * 1024 * 1_048_576   // 5 GiB
+
+    /// The OS memory-pressure reading. Separate because
+    /// `MemoryPressureHandler` is main-actor isolated, while the rest of the
+    /// sample is not.
+    @MainActor
+    static func currentPressure() -> PressureSample.MemoryPressure {
+        guard let observed = MemoryPressureHandler.shared.lastObservedLevel,
+              MemoryPressureHandler.shared.isUnderRecentPressure(window: 30) else {
+            return .nominal
+        }
+        switch observed {
+        case .critical: return .critical
+        case .warning, .thermal: return .warning
+        }
+    }
+
+    static func sample(storeDirectory: URL,
+                       indexBacklog: Bool,
+                       observedPressure: PressureSample.MemoryPressure) -> PressureSample {
+        let physical = ProcessInfo.processInfo.physicalMemory
+        let budget = UInt64(Double(physical) * memoryBudgetFraction)
+
+        let free: UInt64
+        if let values = try? storeDirectory.resourceValues(
+            forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
+           let important = values.volumeAvailableCapacityForImportantUsage {
+            free = UInt64(max(0, important))
+        } else {
+            // Unknown free space is treated as "just above the reserve" rather
+            // than as infinite: an unreadable volume must not unlock growth.
+            free = diskReserveBytes + 1
+        }
+
+        return PressureSample(
+            footprintBytes: currentFootprintBytes(),
+            memoryBudgetBytes: budget,
+            memoryPressure: observedPressure,
+            freeDiskBytes: free,
+            diskReserveBytes: diskReserveBytes,
+            thermalState: ProcessInfo.processInfo.thermalState,
+            lastCommitSeconds: nil,
+            indexBacklog: indexBacklog
+        )
+    }
 }
 
 // MARK: - Controller
