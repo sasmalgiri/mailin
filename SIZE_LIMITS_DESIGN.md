@@ -213,3 +213,132 @@ above N"** rather than pretend either capability or impossibility.
 - [Mime4J — MimeTokenStream API](https://james.apache.org/mime4j/apidocs/org/apache/james/mime4j/stream/MimeTokenStream.html)
 - [Python — email.parser](https://docs.python.org/3/library/email.parser.html)
 - [multipart_bench — on BytesFeedParser buffering everything in memory](https://github.com/defnull/multipart_bench)
+
+---
+
+## 6. Compared with what we already have
+
+Audited in the codebase rather than assumed. Several design elements are
+already half-built, which changes the order of work.
+
+| Design element | What exists today | Gap |
+|---|---|---|
+| Bodies out of the main row | **Done.** `email_bodies(id, plain, html, raw, headers_json)` is a separate table — "bounded memory by construction" (`SQLiteEmailStore.swift:524`), so the `emails` row stays small | `raw` is still one BLOB value → the 1 GB value/row ceiling applies to it |
+| Bounded text indexing | **Partly done, and silently.** `insertWithHandle` indexes `String(body.prefix(50_000))` (`FTSSearchIndex.swift:1054`) | The truncation is **never reported**. A 380 MB body is indexed to 50 K chars and search implies completeness |
+| Honest truncation pattern | **Already established elsewhere.** `BoundedRegexSearch` returns `truncated: true` whenever its scan cap cut results, with the comment "silent truncation is not acceptable" | FTS indexing must follow the same precedent |
+| Source identity for reference-by-locator | **Partly done.** `sources(sha256, filename, byte_size, parser, parser_version, source_kind)` records container identity | No per-message byte offsets, and no security-scoped bookmark to re-open the original later |
+| Resume position | Ordinal-based checkpoints (message index), identity-bound to source SHA-256 + parser version | Ordinals are not byte offsets; an offset-based parser wants both |
+| Chunking | `EmailChunker.swift` is **semantic** chunking for AI (header / body / signature / quotedReply / attachment) | Name collision only — nothing there helps byte-level blob storage |
+| Large-file reads | PST/NSF already use `Data(contentsOf:.mappedIfSafe)`, so RSS tracks the working set, not file size | mbox/eml path accumulates `[String]` then `joined()` — the opposite |
+| Attachment re-extraction | **Done today** (`AttachmentHydrator`), but it re-parses the whole message to find one part | Should be a seek + range read once `PartLocator`s exist |
+| Storage preflight | Not built (`StoragePlanner` is still a plan item) | Needed before any "proceed anyway" replaces a refusal |
+
+Two conclusions from the audit:
+
+1. **The cheapest, highest-value fix is not the parser.** The 50 K indexing
+   truncation is a live silent-truncation defect on exactly the large messages
+   this whole thread is about, and the codebase already contains the honest
+   pattern to copy.
+2. **`AttachmentHydrator` is a stopgap by design.** It restored a broken
+   capability, but its whole-message re-parse is what `PartLocator` replaces.
+
+---
+
+## 7. Finalized implementation plan
+
+Ordered by value-per-risk, not by the order the design was written.
+
+### S0 — Report the indexing budget (1–2 d, low risk)
+
+- Record per message: `indexedTextBytes`, `totalTextBytes`, `indexTruncated`.
+- Surface it where a user could otherwise be misled: the message detail, the
+  search-results coverage badge, and the import receipt's coverage section.
+- Raise the 50 K char cap to a byte budget (proposal 4 MB) now that it is
+  reported; keep it configurable.
+- **Exit:** a synthetic 10 MB text body reports `indexTruncated == true`, the
+  UI shows "indexed to 4 MB of 10 MB", and search over that message never
+  implies completeness. Follows the `BoundedRegexSearch` precedent.
+
+### S1 — Correct the format caps (2–3 d, low risk, needs fixtures)
+
+- PST: read the header's format flag; ANSI above 2 GB → report corrupt
+  (Microsoft's own rule). Unicode: drop the 50 GB refusal.
+- NSF: read the ODS version; 256 GB at ODS 53+, 64 GB below, and say which rule
+  applied.
+- Replace every remaining "file too large" refusal with the directive's
+  language: **"not tested above N GB"** plus proceed, gated by S2's preflight
+  once it exists.
+- **Exit:** `SUPPORTED_FORMATS_AND_LIMITS.md` states, per format, the format
+  limit, the tested ceiling and the current behaviour above it — no invented
+  numbers.
+
+### S2 — Storage preflight (2–3 d, low risk)
+
+- `StoragePlanner`: source bytes + blob copies + DB growth + WAL + FTS + temp
+  spool + OS margin, measured per destination volume.
+- Refuse only when the numbers genuinely do not fit, and say how many bytes
+  are missing.
+- **Exit:** an import that cannot finish is refused *before* it starts, with
+  exact numbers; one that can finish is never refused for size alone.
+
+### S3 — External content-addressed blob tier (5–8 d, medium risk)
+
+- `blobs/<sha256>` under the library; `email_bodies` gains
+  `raw_blob_digest`, `raw_blob_length`; rows above ~8 MB store the reference
+  instead of the value.
+- Write-and-fsync the blob, **then** commit the row, so a crash leaves a
+  collectable orphan rather than a row pointing at nothing. Add orphan GC.
+- Existing inline bodies stay inline — read path handles both tiers, so no
+  migration of user data.
+- **Exit:** a 1.5 GB message stores and reads back byte-identical (this is the
+  case that is impossible today); `ArchivePageCapabilityTests` still green;
+  crash-between-blob-and-row leaves no dangling reference.
+
+### S4 — Offset-based mbox/eml parser (8–12 d, **high risk**)
+
+- `MessageLocator` / `PartLocator`; scan bytes with a bounded window; parse
+  headers only; **never decode bodies at import**.
+- Delete `MBOXParser.maxMessageBytes`.
+- Guard rails that must stay green, non-negotiable: MBOX round-trip,
+  source-scoped recovery report, "I/O error throws — never fake EOF",
+  force-quit checkpoint reconciliation, and the 526-message fixture
+  reconciling exactly.
+- **Exit:** a 150 MB single message **imports** instead of being skipped as
+  damaged; peak RSS during that import stays within the batch envelope; the
+  fixture's numbers are unchanged.
+
+### S5 — Locator-backed attachment and export reads (3–5 d, low risk)
+
+- `AttachmentHydrator` switches from whole-message re-parse to seek + range
+  read via `PartLocator`.
+- Export streams parts from locators rather than materialising messages.
+- **Exit:** attachment read cost becomes O(part), not O(message); the
+  298,901-byte recovery test still passes byte-for-byte.
+
+### S6 — Executed size tests (hardware/corpus bound)
+
+- A synthetic single message above 2 GB (proves the S3 path and the SQLite
+  ceiling argument).
+- A PST above 50 GB if one can be obtained or generated.
+- Record in `SCALE_RESULTS.md` with the exact host, and mark anything
+  unobtainable as **NOT TESTED** rather than inferred.
+
+### Explicitly not doing
+
+- **Not raising `SQLITE_MAX_LENGTH`.** SQLite advises against it, and the
+  external blob tier removes the need.
+- **Not chunking bodies across rows.** External files are simpler, make range
+  reads a plain `pread`, and are the shape iCloud Overflow already needs.
+- **Not keeping whole-message re-parse** as the attachment read path beyond S5.
+- **Not claiming "unlimited".** After S0–S5 the honest statement is: limited by
+  free disk, the stated index budget, ANSI PST's 2 GB, NSF's ODS-dependent
+  ceiling, and SQLite's ~17.5 TB database size.
+
+### Order and why
+
+S0 → S1 → S2 first: three low-risk steps that remove *dishonesty* (silent
+truncation, wrong caps, refusals without numbers) before touching architecture.
+S3 next because it is what makes >1 GB messages possible at all. S4 last among
+the code steps because it is the risky rewrite, and by then S0–S3 have removed
+every reason to rush it. S5 is cleanup that pays for itself in read cost. S6
+converts claims into evidence.
