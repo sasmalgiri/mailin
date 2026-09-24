@@ -353,3 +353,56 @@ struct PageIsolationTests {
         }
     }
 }
+
+
+@Suite("Page activation matrix honesty")
+@MainActor
+struct PageFeatureCatalogTests {
+
+    @Test("Every page publishes a feature matrix")
+    func everyPageHasFeatures() {
+        for module in AppModule.allCases {
+            #expect(!PageFeatureCatalog.features(for: module).isEmpty,
+                    "\(module.rawValue) must tell the user what it contains")
+        }
+    }
+
+    @Test("Live Mail's rows all say they are not in this build")
+    func liveMailIsHonestlyUnbuilt() {
+        let rows = PageFeatureCatalog.features(for: .liveMail)
+        #expect(rows.allSatisfy { $0.availability == .notInThisBuild },
+                "no Live Mail capability may be advertised as included")
+        let consequences = PageFeatureCatalog.consequences(for: .liveMail)
+        #expect(consequences.contains { $0.contains("Nothing in this build") })
+    }
+
+    @Test("Archive costs nothing to have on")
+    func archiveHasNoConsequences() {
+        #expect(PageFeatureCatalog.consequences(for: .archive).isEmpty)
+        #expect(PageFeatureCatalog.features(for: .archive)
+            .allSatisfy { $0.availability == .available },
+            "Page 1 must not gate its own basics behind a purchase")
+    }
+
+    @Test("Optional pages disclose what they start doing")
+    func optionalPagesDiscloseConsequences() {
+        for module in AppModule.allCases where module.isOptional {
+            #expect(!PageFeatureCatalog.consequences(for: module).isEmpty,
+                    "\(module.rawValue) must say what turning it on starts")
+        }
+    }
+
+    @Test("Professional discloses that holds and cases survive being switched off")
+    func professionalDisclosesRetention() {
+        let lines = PageFeatureCatalog.consequences(for: .professional).joined(separator: " ")
+        #expect(lines.contains("hold"))
+        #expect(lines.lowercased().contains("kept") || lines.lowercased().contains("keeps"))
+    }
+
+    @Test("Every availability state has a user-facing label")
+    func availabilityLabels() {
+        #expect(PageFeature.Availability.available.label == "Included")
+        #expect(PageFeature.Availability.requiresProfessional.label == "Professional")
+        #expect(PageFeature.Availability.notInThisBuild.label == "Not in this build")
+    }
+}

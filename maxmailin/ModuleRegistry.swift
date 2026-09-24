@@ -27,11 +27,13 @@ private let moduleLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "maili
 
 /// The four top-level pages. Archive is Page 1 and cannot be switched off; the
 /// other three are off on a fresh install and appear only once enabled.
-enum AppModule: String, CaseIterable, Codable, Sendable {
+enum AppModule: String, CaseIterable, Codable, Sendable, Identifiable {
     case archive
     case aiInsights
     case professional
     case liveMail
+
+    var id: String { rawValue }
 
     /// Page 1 is mandatory; every other page is opt-in.
     var isOptional: Bool { self != .archive }

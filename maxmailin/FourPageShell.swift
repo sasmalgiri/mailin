@@ -4,11 +4,15 @@
 //
 //  Plan tasks A1/A2 — the top-level four-page frame (directive §0–§6).
 //
-//  The rule this enforces visually: a customer who has enabled nothing sees
-//  **no page chrome at all** — just the Archive, looking like an ordinary mail
-//  app. The page switcher appears only once a second page is enabled, so the
-//  four-page architecture costs a Page-1-only user nothing, on screen or
-//  otherwise.
+//  Shape (owner decision, 2026-09-24): all four tabs are always visible, so the
+//  app's structure is discoverable, and Archive is the page shown by default.
+//  Clicking an INACTIVE tab does not switch to it — it opens that page's
+//  feature matrix and asks whether to turn the page on. Nothing about an
+//  inactive page runs until the user agrees (§3.3 R2), so a visible tab costs
+//  a Page-1-only user nothing but a tab.
+//
+//  (This supersedes the earlier reading, where chrome was hidden entirely for a
+//  Page-1-only install.)
 //
 //  Each page hosts its own experience. Subwindows, sheets and tabs inside a
 //  page are not extra top-level pages.
@@ -66,24 +70,49 @@ final class PageRouter {
 
 struct FourPageShell: View {
     @Environment(ModuleRegistry.self) private var modules
+    @EnvironmentObject private var storeManager: StoreManager
     @State private var router = PageRouter()
+    /// The page whose activation sheet is showing. Set by tapping an inactive
+    /// tab: nothing is enabled until the user reads the matrix and agrees.
+    @State private var pendingActivation: AppModule?
 
     var body: some View {
         VStack(spacing: 0) {
-            // No chrome for a Page-1-only install.
-            if modules.enabledModules.count > 1 {
-                PageSwitcher(
-                    pages: modules.enabledModules,
-                    selection: router.selection,
-                    onSelect: { router.select($0, in: modules) }
-                )
-                Divider()
-            }
+            // All four tabs are always visible, so the app's shape is
+            // discoverable. An inactive tab does not switch to its page: it
+            // asks first, showing that page's feature matrix.
+            PageSwitcher(
+                pages: AppModule.allCases,
+                selection: router.selection,
+                isEnabled: { modules.isEnabled($0) },
+                isLocked: { !modules.activation($0).isUserSwitchable },
+                onSelect: { page in
+                    if modules.isEnabled(page) {
+                        router.select(page, in: modules)
+                    } else {
+                        pendingActivation = page
+                    }
+                }
+            )
+            Divider()
             page
         }
         .onAppear { router.reconcile(with: modules) }
         .onChange(of: modules.enabledModules) { _, _ in
             router.reconcile(with: modules)
+        }
+        .sheet(item: $pendingActivation) { module in
+            PageActivationSheet(
+                module: module,
+                activation: modules.activation(module),
+                hasProfessional: storeManager.isProfessional,
+                onEnable: {
+                    try? modules.enable(module)
+                    router.select(module, in: modules)
+                    pendingActivation = nil
+                },
+                onCancel: { pendingActivation = nil }
+            )
         }
     }
 
@@ -116,6 +145,8 @@ struct FourPageShell: View {
 private struct PageSwitcher: View {
     let pages: [AppModule]
     let selection: AppModule
+    let isEnabled: (AppModule) -> Bool
+    let isLocked: (AppModule) -> Bool
     let onSelect: (AppModule) -> Void
 
     var body: some View {
@@ -124,18 +155,33 @@ private struct PageSwitcher: View {
                 Button {
                     onSelect(page)
                 } label: {
-                    Label(page.displayName, systemImage: icon(page))
-                        .labelStyle(.titleAndIcon)
-                        .font(Typography.caption1)
-                        .padding(.horizontal, Spacing.xSmall)
-                        .padding(.vertical, 4)
-                        .background(
-                            page == selection ? Color.accentColor.opacity(0.18) : .clear,
-                            in: RoundedRectangle(cornerRadius: 6)
-                        )
+                    HStack(spacing: 4) {
+                        Image(systemName: icon(page))
+                        Text(page.displayName)
+                        // An inactive tab is marked, so the tab bar does not
+                        // imply the page is already running.
+                        if isLocked(page) {
+                            Image(systemName: "lock.fill").font(.caption2)
+                        } else if !isEnabled(page) {
+                            Image(systemName: "plus.circle").font(.caption2)
+                        }
+                    }
+                    .font(Typography.caption1)
+                    .foregroundColor(isEnabled(page) ? .primary : AppColors.secondary)
+                    .padding(.horizontal, Spacing.xSmall)
+                    .padding(.vertical, 4)
+                    .background(
+                        page == selection && isEnabled(page)
+                            ? Color.accentColor.opacity(0.18) : .clear,
+                        in: RoundedRectangle(cornerRadius: 6)
+                    )
                 }
                 .buttonStyle(.plain)
+                .help(isEnabled(page)
+                      ? page.displayName
+                      : "\(page.displayName) is off — click to see what it includes")
                 .accessibilityAddTraits(page == selection ? [.isSelected] : [])
+                .accessibilityHint(isEnabled(page) ? "" : "Off. Opens a summary before turning it on.")
             }
             Spacer()
         }
@@ -187,8 +233,10 @@ struct PageNotBuiltView: View {
 #Preview("Page switcher — three pages on") {
     VStack(spacing: 0) {
         PageSwitcher(
-            pages: [.archive, .aiInsights, .professional],
-            selection: .aiInsights,
+            pages: AppModule.allCases,
+            selection: .archive,
+            isEnabled: { $0 == .archive },
+            isLocked: { _ in false },
             onSelect: { _ in }
         )
         Divider()
