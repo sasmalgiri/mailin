@@ -227,6 +227,18 @@ final class BulkImportCoordinator {
         options: Options = Options(),
         callbacks: Callbacks = Callbacks()
     ) async throws -> RunSummary {
+        defer {
+            // Restore interactive storage budgets whether the run completed,
+            // threw, or was cancelled - a finished import must not leave the
+            // app in import-mode caches.
+            if options.adaptiveBatching {
+                let store = self.store, fts = self.fts
+                Task {
+                    await store.setMemoryBudget(SQLiteEmailStore.interactiveBudget)
+                    await fts.endImportMode()
+                }
+            }
+        }
         do {
             let summary = try await run(urls: urls, options: options, callbacks: callbacks)
             return summary
@@ -287,6 +299,14 @@ final class BulkImportCoordinator {
         // 0. (1d) Storage-authority gate: never write SQLite against
         //    unresolved storage. Fail explicitly — silently skipping persist
         //    is how archives used to look imported without reaching the store.
+        // P3.3: an import gets a tighter storage memory budget than
+        // interactive use - smaller page caches and fewer concurrent shard
+        // connections - restored when the run ends, however it ends.
+        if options.adaptiveBatching {
+            await store.setMemoryBudget(SQLiteEmailStore.importBudget)
+            await fts.beginImportMode()
+        }
+
         // P3.1: one controller per run, so the envelope adapts across all of
         // this run's sources rather than restarting per file.
         batchController = options.adaptiveBatching ? AdaptiveBatchController() : nil

@@ -100,13 +100,55 @@ actor SQLiteEmailStore: EmailArchiveStore {
         // off a cache cliff and go disk-bound. A fixed 128 MB cache + memory-
         // mapped reads keep import throughput and deep-page seeks flat. Both are
         // CONSTANT regardless of archive size, so resident memory stays bounded.
-        try exec(handle, "PRAGMA cache_size = -131072;")   // 128 MB (negative ⇒ KB)
-        try exec(handle, "PRAGMA mmap_size = 268435456;")  // 256 MB memory-mapped I/O
+        try applyMemoryBudget(Self.interactiveBudget, to: handle)
         try exec(handle, "PRAGMA temp_store = MEMORY;")
         try exec(handle, "PRAGMA busy_timeout = 5000;")
         try migrateSchema(handle)
         self.db = handle
         return handle
+    }
+
+    // MARK: - Memory budget (plan task P3.3)
+    //
+    // Measured 2026-09-24: an import of a 90.5 MiB / 19-year corpus peaked at
+    // ~420 MiB of footprint, and shrinking batches did not move it. The store's
+    // own page cache and mmap window are a large part of that, and unlike batch
+    // residency they are configuration we control directly.
+    //
+    // Interactive use keeps the large cache (deep-page seeks stay flat). An
+    // import lowers it: during import the access pattern is append-heavy and
+    // the win from a huge cache is smaller than the cost of holding it while
+    // 19 shard connections are also open.
+
+    struct MemoryBudget: Sendable, Equatable {
+        /// Page cache in KB (SQLite reads a negative cache_size as KB).
+        var cacheKB: Int
+        /// Memory-mapped I/O window in bytes.
+        var mmapBytes: Int
+    }
+
+    static let interactiveBudget = MemoryBudget(cacheKB: 131_072, mmapBytes: 268_435_456)
+    /// Import-time budget: 32 MB cache, 64 MB mmap window.
+    static let importBudget = MemoryBudget(cacheKB: 32_768, mmapBytes: 67_108_864)
+
+    private(set) var activeBudget: MemoryBudget = SQLiteEmailStore.interactiveBudget
+
+    private func applyMemoryBudget(_ budget: MemoryBudget, to handle: OpaquePointer) throws {
+        try exec(handle, "PRAGMA cache_size = -\(budget.cacheKB);")
+        try exec(handle, "PRAGMA mmap_size = \(budget.mmapBytes);")
+        activeBudget = budget
+    }
+
+    /// Switches the live connection to the given budget. Safe to call mid-run:
+    /// both pragmas take effect on the open connection.
+    func setMemoryBudget(_ budget: MemoryBudget) {
+        guard let db else { activeBudget = budget; return }
+        try? applyMemoryBudget(budget, to: db)
+        if budget.cacheKB < Self.interactiveBudget.cacheKB {
+            // Release pages the smaller cache no longer permits, rather than
+            // waiting for eviction to happen naturally.
+            sqlite3_db_release_memory(db)
+        }
     }
 
     // MARK: - Versioned schema migrations (§2)

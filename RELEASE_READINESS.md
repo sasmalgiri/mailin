@@ -234,6 +234,45 @@ Measured expansion factor worth keeping: a 32 MiB source-byte bound produced
 ~410 MiB of peak footprint, so parsed objects run roughly **13×** the source
 bytes they came from. `BatchEnvelope.measuredParsedExpansion` records it.
 
+### P3.3 attribution: the parser's per-message object graph owns the peak
+
+Three hypotheses, measured in order. Two were wrong:
+
+| Hypothesis | Change made | Peak RSS delta | Verdict |
+|---|---|---|---|
+| Batch size | fixed 500 → adaptive 256 → adaptive 168 | 400 → 410 → 423 MiB | **falsified** |
+| SQLite cache/mmap + shard cap | store 128→32 MB cache, 256→64 MB mmap, shard cap 20→4 | 419 MiB | **falsified** |
+| Parser residency | stage-by-stage attribution | see below | **confirmed** |
+
+Stage attribution over the same corpus and batch shape
+(`ImportMemoryAttributionTests`, deltas are per-stage because process RSS does
+not fall back when memory is freed):
+
+| Stage | Footprint delta |
+|---|---|
+| Parse only | **+334.8 MiB** |
+| Parse + store | +147.3 MiB (marginal; the heap had already grown in stage 1) |
+| Parse + store + index | +171.4 MiB (marginal) |
+
+Parsing alone accounts for the bulk. That also explains why changing the batch
+count did nothing: the high-water mark is set by the **per-message transient
+graph**, not by how many messages are in flight. For each message
+`MBOXParser` joins every line into one full string copy
+(`MBOXParser.swift`, `currentLines.joined`), `MIMEParser` builds part objects,
+attachments are decoded, and the resulting `RawEmail` then retains
+`rawSource` *and* `plainBody` *and* `htmlBody` — several copies of the same
+message resident at once. On a 173 KB average message that is a few hundred KB;
+on one message with a 20 MB attachment it is tens of MiB, and the worst single
+message sets the peak.
+
+So the lever is per-message parse residency — plan task **P3.4**. Note
+`RawEmail` already carries `isBodyCompacted` and `bodyPreview`, so a compaction
+path exists to build on.
+
+P3.3's budget work is kept as correctness hygiene (bounded caches, capped shard
+connections, both restored after an import) but it must not be claimed as a
+memory improvement: measured, it changed nothing.
+
 ### Finding (SUPERSEDED as an explanation): the fixed 500-message batch ignores message size
 
 A 90 MiB source with 526 attachment-heavy messages fits in **two** batches at

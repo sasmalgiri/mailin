@@ -871,7 +871,50 @@ actor FTSSearchIndex {
     /// "search across a decade" use case without leaking handles in the
     /// hypothetical 50-year archive. The actual file count on disk is
     /// unbounded; this only caps OPEN handles.
-    private let maxOpenShards = 20
+    /// Interactive cap: enough for "search across a decade" without leaking
+    /// handles on a 50-year archive.
+    private static let interactiveMaxOpenShards = 20
+    /// P3.3: during an import the date spread decides how many shards get
+    /// touched — a 2007–2025 corpus opened 19 connections, each with its own
+    /// page cache, and that cost accumulates independently of batch size. A
+    /// tighter cap during import trades a few reopens for bounded memory.
+    private static let importMaxOpenShards = 4
+    private var maxOpenShards = FTSSearchIndex.interactiveMaxOpenShards
+
+    /// Page cache per shard connection, in KB. SQLite's default (~2 MB) times
+    /// 19 shards is not the dominant term, but it is not nothing either.
+    private var shardCacheKB = 8_192
+
+    /// Enters import mode: fewer concurrent shard handles and a smaller cache
+    /// per handle. Already-open shards above the new cap are evicted now rather
+    /// than at the next open.
+    func beginImportMode() {
+        maxOpenShards = Self.importMaxOpenShards
+        shardCacheKB = 2_048
+        if shards.count > maxOpenShards {
+            evictIdleShards(keep: maxOpenShards)
+        }
+        for (_, handle) in shards {
+            _ = try? exec(handle, "PRAGMA cache_size = -\(shardCacheKB);")
+            sqlite3_db_release_memory(handle)
+        }
+        logger.notice("FTS import mode: max \(self.maxOpenShards) open shards, \(self.shardCacheKB) KB cache each")
+    }
+
+    /// Restores interactive limits once the import finishes.
+    func endImportMode() {
+        maxOpenShards = Self.interactiveMaxOpenShards
+        shardCacheKB = 8_192
+        for (_, handle) in shards {
+            _ = try? exec(handle, "PRAGMA cache_size = -\(shardCacheKB);")
+        }
+        logger.notice("FTS interactive mode restored")
+    }
+
+    /// Open handle count and the cap in force — for the P3.3 measurements.
+    var shardBudget: (open: Int, cap: Int, cacheKB: Int) {
+        (shards.count, maxOpenShards, shardCacheKB)
+    }
 
     private func ensureShard(year: Int) throws -> OpaquePointer {
         if let existing = shards[year] {
@@ -914,6 +957,9 @@ actor FTSSearchIndex {
         ArtifactProtection.applyBackgroundReadable(to: url)
         try exec(db, "PRAGMA journal_mode = WAL;")
         try exec(db, "PRAGMA synchronous = NORMAL;")
+        // P3.3: bound each shard connection's page cache explicitly instead of
+        // inheriting SQLite's default, so N open shards have a known cost.
+        try exec(db, "PRAGMA cache_size = -\(shardCacheKB);")
         try exec(db, """
             CREATE VIRTUAL TABLE IF NOT EXISTS email_search USING fts5(
                 email_id UNINDEXED,
