@@ -346,7 +346,7 @@ Ordered by value-per-risk, not by the order the design was written.
   a 250 GB Mac is refused with the shortfall stated and the requirement
   itemised — and the real fixture import still succeeds through the new gate.
 
-### S3 — External content-addressed blob tier (5–8 d, medium risk)
+### S3a — Blob store — **DONE 2026-09-24** (no behaviour change yet)
 
 - `blobs/<sha256>` under the library; `email_bodies` gains
   `raw_blob_digest`, `raw_blob_length`; rows above ~8 MB store the reference
@@ -355,9 +355,42 @@ Ordered by value-per-risk, not by the order the design was written.
   collectable orphan rather than a row pointing at nothing. Add orphan GC.
 - Existing inline bodies stay inline — read path handles both tiers, so no
   migration of user data.
-- **Exit:** a 1.5 GB message stores and reads back byte-identical (this is the
-  case that is impossible today); `ArchivePageCapabilityTests` still green;
-  crash-between-blob-and-row leaves no dangling reference.
+- **Delivered** in `BlobStore.swift` + 14 tests: content-addressed by SHA-256
+  (identical bodies stored once), two-level directory fan-out, temp → fsync →
+  atomic rename, streaming write from a file URL that never materialises the
+  body, verified reads that **fail on tamper** rather than serving modified
+  bytes, bounds-checked range reads (the primitive S5 needs), and orphan
+  collection that can never delete a referenced blob.
+- **Nothing writes blobs yet.** This is deliberate: wiring the write path
+  before every read path would make a blob-backed message invisible to the
+  fidelity, attachment-text and participants backfills — a silent correctness
+  hole of exactly the kind this project keeps finding. Behaviour is unchanged
+  until S3b.
+
+### S3b — Wire the blob tier (the audited work list)
+
+Every place `email_bodies.raw` is touched, from a grep of
+`SQLiteEmailStore.swift`. All of these must become blob-aware **in the same
+change** as the writer:
+
+| Site | Function | What it needs |
+|---|---|---|
+| 1402 (write) | batch insert | choose tier at 8 MiB: inline value, or blob + `raw_blob_digest` / `raw_blob_length`; blob durable **before** the row commits |
+| 2777, 2800 | full-email SELECT (`fullEmail`/`fullEmails`) | read inline `raw`, else fetch the blob |
+| 3155 | `fidelityBackfillCandidates` | same, and its byte-budget paging must count blob length |
+| 3194 | `headerFidelityCandidates` | its predicate `b.raw IS NULL OR length(b.raw) = 0` must treat a blob-backed row as **having** raw |
+| 3297 | `healFidelity` | `COALESCE(length(b.raw), 0)` must become `COALESCE(length(b.raw), b.raw_blob_length, 0)` |
+| 3473 | `attachmentTextCandidates` | blob-aware read |
+| 3901 | `participantsBackfillCandidates` | blob-aware read |
+
+Plus: additive `ALTER TABLE` migration for the two columns; orphan GC wired to
+a real referenced-digest query; `StoragePlanner` counting `BlobStore.totalBytes()`.
+
+- **Exit for S3b:** a 1.5 GB message stores and reads back byte-identical (the
+  case that is impossible today); every one of the seven sites above proven by
+  test against a blob-backed row; `ArchivePageCapabilityTests` still green;
+  and a crash between blob write and row commit leaves a collectable orphan,
+  never a dangling reference.
 
 ### S4 — Offset-based mbox/eml parser (8–12 d, **high risk**)
 
