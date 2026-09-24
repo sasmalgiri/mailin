@@ -34,6 +34,7 @@
 		B4F63BCC30655AC5008C7D92 /* ActivationMeasurementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BCB30655AC5008C7D92 /* ActivationMeasurementTests.swift */; };
 		B4F63BDC3065756A008C7D92 /* TestPreconditions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BDB3065756A008C7D92 /* TestPreconditions.swift */; };
 		B4F63BDE306576A6008C7D92 /* SMIMEGoldCaseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BDD306576A6008C7D92 /* SMIMEGoldCaseTests.swift */; };
+		B4F63BEC3065C16D008C7D92 /* ImportSurfaceWiringTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BEB3065C16D008C7D92 /* ImportSurfaceWiringTests.swift */; };
 		C0DE0FF1CE20260807AB0002 /* V2CutoverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0FF1CE20260807AB0001 /* V2CutoverTests.swift */; };
 		FE90CA2542E92965622E2D37 /* V2VerificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B137BCFD52463D2F34C4DAE4 /* V2VerificationTests.swift */; };
 /* End PBXBuildFile section */
@@ -98,6 +99,7 @@
 		B4F63BCB30655AC5008C7D92 /* ActivationMeasurementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivationMeasurementTests.swift; sourceTree = "<group>"; };
 		B4F63BDB3065756A008C7D92 /* TestPreconditions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestPreconditions.swift; sourceTree = "<group>"; };
 		B4F63BDD306576A6008C7D92 /* SMIMEGoldCaseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SMIMEGoldCaseTests.swift; sourceTree = "<group>"; };
+		B4F63BEB3065C16D008C7D92 /* ImportSurfaceWiringTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportSurfaceWiringTests.swift; sourceTree = "<group>"; };
 		C0DE0FF1CE20260807AB0001 /* V2CutoverTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = V2CutoverTests.swift; sourceTree = "<group>"; };
 		C3B67A602E2FE445009C208C /* ModelRunner.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = ModelRunner.xcodeproj; sourceTree = "<group>"; };
 		C3B687F12E2F3CE7009C208C /* ModelRunner.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = ModelRunner.xcodeproj; sourceTree = "<group>"; };
@@ -205,6 +207,7 @@
 				B4F63BCB30655AC5008C7D92 /* ActivationMeasurementTests.swift */,
 				B4F63BDB3065756A008C7D92 /* TestPreconditions.swift */,
 				B4F63BDD306576A6008C7D92 /* SMIMEGoldCaseTests.swift */,
+				B4F63BEB3065C16D008C7D92 /* ImportSurfaceWiringTests.swift */,
 			);
 			path = maxmailinTests;
 			sourceTree = SOURCE_ROOT;
@@ -412,6 +415,7 @@
 				B4F63BA430653798008C7D92 /* BlobTierWiringTests.swift in Sources */,
 				B4F63B1830641E20008C7D92 /* FixtureImportMeasurementTests.swift in Sources */,
 				B4F63B803064EE61008C7D92 /* SourceFormatClassifierTests.swift in Sources */,
+				B4F63BEC3065C16D008C7D92 /* ImportSurfaceWiringTests.swift in Sources */,
 				B4F63B6030648B96008C7D92 /* PageRouterTests.swift in Sources */,
 				1D0190B9A4314C4F1E974268 /* SmokeTests.swift in Sources */,
 				B4F63BA2306530D8008C7D92 /* StudioBehaviourTests.swift in Sources */,

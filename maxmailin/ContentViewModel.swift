@@ -337,6 +337,15 @@ class ContentViewModel: ObservableObject {
                     bytesProcessed: Int64(prog * Double(sizeBytes)),
                     totalBytes: sizeBytes
                 )
+                // A4: advance the session queue. Without this the queue only
+                // ever received `enqueue`, so every import sat at "Waiting"
+                // forever — including after it had finished — while the
+                // capability described "pending, running and finished imports,
+                // each with its verdict". Keyed by path because the queue may
+                // hold several entries with the same filename.
+                if idx < urls.count {
+                    ImportQueue.shared.markRunning(path: urls[idx].path, fraction: prog)
+                }
             }
             // (C1) Forensic email hashes over every COMMITTED batch, so hash
             // coverage matches the persisted corpus, not just the preview.
@@ -403,6 +412,35 @@ class ContentViewModel: ObservableObject {
     ) {
         isParsing = false
         stopMemoryMonitoring()
+
+        // A4: close out the session queue with the SAME verdict the receipt
+        // carries, derived from the same reconciliation — a queue that said
+        // "done" beside a receipt that said "partial" would be worse than no
+        // queue. Per-file granularity is not available here (the summary is
+        // run-scoped), so a file that failed outright is marked failed by name
+        // and everything else takes the run verdict. That is stated in the
+        // queue UI rather than implied.
+        let failedNames = Set(summary.fileErrors.map(\.filename))
+        let runVerdict = summary.receipt.map(ImportReconciler.verdict(for:))
+        for url in urls {
+            if failedNames.contains(url.lastPathComponent) {
+                let reason = summary.fileErrors
+                    .first { $0.filename == url.lastPathComponent }?.message
+                    ?? "This file could not be imported."
+                ImportQueue.shared.markFailed(path: url.path, reason: reason)
+            } else if let runVerdict {
+                ImportQueue.shared.markFinished(path: url.path, verdict: runVerdict,
+                                                messages: summary.persistAttempted)
+            } else {
+                // No receipt means no verdict was computed — say so rather
+                // than inventing "Complete".
+                ImportQueue.shared.markFailed(
+                    path: url.path,
+                    reason: "Import finished but no receipt was written, so its outcome could not be verified.")
+            }
+        }
+        // Anything still pending after the run ended never started.
+        ImportQueue.shared.markRemainingCancelled()
 
         // Post the import document: the run's number for custody logs and
         // intake references (IMP-2026-0001).

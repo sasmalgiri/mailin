@@ -186,15 +186,22 @@ struct ArchiveLocationStore: Sendable {
     }
 
     /// Recorded honesty, not a TODO: choosing a new location takes effect for
-    /// a NEW archive. Relocating an existing one means closing the live store,
-    /// copying the directory, reopening at the destination and verifying the
-    /// row count matches before anything is removed. That sequence is not
-    /// implemented, so the UI tells the user exactly where their archive is
-    /// and lets them move it themselves rather than half-doing it.
+    /// a NEW archive only. Relocating an existing one means closing the live
+    /// store, copying the directory, reopening at the destination and
+    /// verifying the row count before anything is removed. That sequence is
+    /// not implemented, so the UI says exactly where the archive is and lets
+    /// the user move it themselves rather than half-doing it.
+    ///
+    /// `SQLiteEmailStore.productionDirectory` enforces the "new archive only"
+    /// half: it adopts a chosen location ONLY when the default path holds no
+    /// `emails.db`. An earlier version of this string promised new archives
+    /// would use the chosen location while nothing read the stored value at
+    /// all — the claim is now true as written.
     static let moveIsNotAutomated = """
-        Choosing a new location does not move your existing archive. mailin will use the new \
-        location for archives created from now on. To move what you already have, quit mailin, \
-        copy the archive folder to the new location, and relaunch.
+        Choosing a new location does not move your existing archive, and mailin will keep using \
+        the archive you already have. A location you pick here is used only when there is no \
+        archive yet. To move what you already have, quit mailin, copy the archive folder to the \
+        new location, and relaunch.
         """
 
     func load() -> ArchiveLocation? {

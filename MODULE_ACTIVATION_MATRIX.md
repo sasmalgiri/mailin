@@ -54,7 +54,7 @@ the UI. Asserted by `testEveryCapabilityHasAnOwnerAndLiveMailOwnsNone`.
 | `blobTier` | Preview | **off** | Raw MIME over 8 MB stored beside the database instead of in the row | Existing external bodies still read; new messages over 8 MB fail to import |
 | `offsetParser` | **Experimental** | **off** | Boundary scan + header-only parse; removes the 100 MB single-message ceiling | Streaming parser as before; a message over 100 MB is reported damaged and skipped |
 | `locatorReads` | **Experimental** | **off** | Attachments and exports read from byte ranges in the source | Re-parse of the stored raw MIME, as before |
-| `externalStorage` | Preview | **off** | Archive can live on a chosen local volume | The archive stays where it is; only the chooser is hidden |
+| `externalStorage` | Preview | **off** | Shows the archive's location and footprint; a chosen folder applies to a NEW archive only | The archive stays where it is; only the chooser is hidden |
 | `guidedImport` | Preview | **off** | Pre-import sheet: format, cost, caveats, engine | Import starts on selection, as 2.x; preflight and receipt still run |
 | `importQueue` | Preview | **off** | Session list of pending / running / finished imports | Progress in the toolbar only; receipts still written |
 | `searchCoverageBadge` | Stable | on | Note under search results when messages are only partly indexed | Note hidden; coverage still recorded per message |

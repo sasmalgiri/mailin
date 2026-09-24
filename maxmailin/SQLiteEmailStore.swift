@@ -45,13 +45,46 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// non-destructive migration can read the old store while writing the new.
     static let shared = SQLiteEmailStore(directory: SQLiteEmailStore.productionDirectory)
 
-    static var productionDirectory: URL {
+    /// The default location, always under Application Support.
+    static var defaultProductionDirectory: URL {
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
         ).first ?? FileManager.default.temporaryDirectory
         return appSupport
             .appendingPathComponent("com.ecosanskriti.mailin", isDirectory: true)
             .appendingPathComponent("sqlite", isDirectory: true)
+    }
+
+    /// Where the production store actually lives.
+    ///
+    /// Honours a location chosen through B5 (`ArchiveLocationStore`) — but
+    /// ONLY when the default location holds no archive yet. That condition is
+    /// the whole safety of the feature: adopting a new path while an archive
+    /// exists at the old one would make that archive invisible, and a user
+    /// whose mail vanished after picking a folder would reasonably conclude
+    /// the app had destroyed it.
+    ///
+    /// Before this, the chosen location was recorded and then never read, so
+    /// `ArchiveLocationView` telling the user "mailin will use the new
+    /// location for archives created from now on" was simply false. It is now
+    /// true as written: new archives go there, existing ones do not move.
+    static var productionDirectory: URL {
+        let fallback = defaultProductionDirectory
+        guard let chosen = ArchiveLocationStore(url: ArchiveLocationStore.productionURL).load()
+        else { return fallback }
+
+        // An archive already at the default path wins, always.
+        if FileManager.default.fileExists(
+            atPath: fallback.appendingPathComponent("emails.db").path) {
+            return fallback
+        }
+        // The chosen volume must be present and writable right now; a detached
+        // external disk falls back rather than creating a second empty archive
+        // somewhere unexpected.
+        let target = chosen.url.appendingPathComponent("mailin-archive", isDirectory: true)
+            .appendingPathComponent("sqlite", isDirectory: true)
+        guard ArchiveLocationPolicy.verdict(for: chosen.url).isUsable else { return fallback }
+        return target
     }
 
     /// Isolated on-disk store under `directory` (harness/test), or the shared

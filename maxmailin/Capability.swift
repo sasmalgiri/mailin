@@ -230,7 +230,7 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
         case .locatorReads:
             return "Reads an attachment or an export straight from its byte range in the stored source, instead of re-parsing the whole message."
         case .externalStorage:
-            return "Keeps the archive on a volume you choose — an internal disk or a local external SSD. Never a cloud folder."
+            return "Shows where the archive lives and what it occupies, and lets you choose a folder for a NEW archive on a local disk. An archive you already have is never moved, and a cloud folder is refused."
         case .guidedImport:
             return "Before writing anything: the detected format, the space required, what will be indexed, and what will not."
         case .importQueue:
@@ -304,7 +304,7 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
         case .blobTier:
             return "Changes where large message bodies are written. Existing archives are not migrated or rewritten."
         case .externalStorage:
-            return "An archive on an external disk is unreadable while that disk is detached. Never point this at a cloud-synced folder."
+            return "An archive on an external disk is unreadable while that disk is detached. A folder you choose applies only when there is no archive yet — it does not move the one you have."
         default:
             return nil
         }
