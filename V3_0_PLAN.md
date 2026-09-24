@@ -270,6 +270,14 @@ four pages.
 
 ### 5.1 `AdaptiveBatchController` (ArchiveCoreImport)
 
+**Status 2026-09-24: the controller is BUILT and tested (14 tests) in
+`AdaptiveBatchController.swift`; it is NOT yet wired into the import path.**
+Wiring requires a parser-API change — `ParserFactory.parseStreamingCallback`
+takes one fixed `batchSize` for a whole file, so every parser must instead ask
+the controller for an envelope at each batch boundary. That is task P3.1 and it
+touches MBOXParser, PST/OST, NSF, MSG and EMLX. Until it lands, the shipped
+import still uses the fixed 500.
+
 Replaces B7's fixed 500. Bounds **both** message count and parsed bytes.
 
 ```swift
