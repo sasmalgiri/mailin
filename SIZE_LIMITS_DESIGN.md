@@ -463,6 +463,33 @@ of taking a 1 MiB gulp, which on an 8-message fixture is 128 KiB of header
 reads instead of 8 MiB. That is justified on bytes read — arithmetic — not on
 footprint, because no footprint claim survived measurement.
 
+### S4 — verified against REAL mail, 2026-09-25
+
+Every S4 claim until now rested on fixtures I wrote, and I wrote them to be
+easy to reason about: LF endings, 76-column lines, tidy headers. The reference
+mailbox is none of those. Measured shape: **90.5 MiB, 526 messages, CRLF line
+endings, longest line 2,632 characters, largest message 12.5 MiB, average
+180 KB.** CRLF alone exercises the blank-line terminator (`\r\n`, whose
+content is a bare `\r`) and the separator test on lines ending in `\r` —
+paths no LF fixture could reach.
+
+`RealMailboxEngineTests`, all passing:
+
+| Check | Result |
+|---|---|
+| Ranges tile the source exactly | **94,915,160 of 94,915,160 bytes** — no gap, no overlap, no lost or duplicated bytes |
+| Both engines' message count | **526 = 526**, 0 damaged either side |
+| Header blocks exhausting the budget | **0** |
+| `From` / `Message-ID` parsed | **526 / 526** each |
+| `Date` parsed | 525 / 526 |
+| `Subject` parsed | 480 / 526 (real mail; 46 genuinely have none) |
+| Header range excludes the `From_` envelope | verified on a 14-message sample across the file |
+| Source digest verifies; a wrong digest fails | both |
+
+Nothing was header-only, because the largest message (12.5 MiB) is well under
+the 100 MB full-parse ceiling. So the header-only path remains exercised by
+synthetic fixtures only — this file cannot test it.
+
 ### S4/S5 — three defects found by audit after the suite was green
 
 None of these was caught by 441 passing tests, because each was a **false

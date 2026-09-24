@@ -178,18 +178,29 @@ ceiling is not.
 
 ### S4 — throughput
 
-2,000 ordinary messages (630 KB), same file, same process:
+**On real mail** (`~/Downloads/Mail/Sent.mbox`, 90.5 MiB, 526 messages,
+CRLF, average message 180 KB):
 
-| Engine | Rate |
-|---|---|
-| Streaming parser | **4,261 msg/s** (1.3 MiB/s) |
-| Offset engine | **3,660 msg/s** (1.1 MiB/s) |
+| Operation | Time | Rate |
+|---|---|---|
+| Boundary + header scan only | **0.48 s** | **≈188 MiB/s** |
+| Both engines, full parse | 85.5 s combined | ≈2.1 MiB/s each |
 
-The offset engine is ~14% slower on small messages, which is the seek-per-
-message cost of reading each range back for full parsing. That is the expected
-trade and it is the right one: the cost is paid on the common case to make the
-impossible case possible. Not asserted in the test — a single timing run on a
-shared machine is not a benchmark — only printed.
+The scan-only number is the one that matters for the design: indexing a
+90 MiB mailbox costs half a second, because it reads a window and the header
+block and never decodes a body. Full parse is ~180× slower, and that cost is
+MIME decoding — the same for both engines.
+
+**A synthetic figure published earlier was misleading and is withdrawn.** It
+read "4,261 msg/s (streaming) vs 3,660 msg/s (offset), offset ~14% slower",
+measured on 2,000 messages totalling 630 KB — i.e. 315-byte messages. Real
+messages here average 180 KB, 570× larger, and the real rate is ≈12 msg/s.
+Messages per second is meaningless without a message size; MiB/s is the
+comparable unit, and there the synthetic (1.3) and real (2.1) figures at least
+agree in order of magnitude.
+
+Not asserted in any test — a single timing run on a shared machine is not a
+benchmark — only printed.
 
 Outcome difference for a 110 MiB message:
 
