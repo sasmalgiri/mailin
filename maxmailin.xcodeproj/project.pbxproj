@@ -22,6 +22,7 @@
 		B4F63B783064B119008C7D92 /* ImportMemoryAttributionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63B773064B119008C7D92 /* ImportMemoryAttributionTests.swift */; };
 		B4F63B7C3064EA45008C7D92 /* ArchivePageCapabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63B7B3064EA45008C7D92 /* ArchivePageCapabilityTests.swift */; };
 		B4F63B803064EE61008C7D92 /* SourceFormatClassifierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63B7F3064EE61008C7D92 /* SourceFormatClassifierTests.swift */; };
+		B4F63B8A3064FFF2008C7D92 /* IndexCoverageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63B893064FFF2008C7D92 /* IndexCoverageTests.swift */; };
 		C0DE0FF1CE20260807AB0002 /* V2CutoverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0FF1CE20260807AB0001 /* V2CutoverTests.swift */; };
 		FE90CA2542E92965622E2D37 /* V2VerificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B137BCFD52463D2F34C4DAE4 /* V2VerificationTests.swift */; };
 /* End PBXBuildFile section */
@@ -74,6 +75,7 @@
 		B4F63B773064B119008C7D92 /* ImportMemoryAttributionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportMemoryAttributionTests.swift; sourceTree = "<group>"; };
 		B4F63B7B3064EA45008C7D92 /* ArchivePageCapabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchivePageCapabilityTests.swift; sourceTree = "<group>"; };
 		B4F63B7F3064EE61008C7D92 /* SourceFormatClassifierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceFormatClassifierTests.swift; sourceTree = "<group>"; };
+		B4F63B893064FFF2008C7D92 /* IndexCoverageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IndexCoverageTests.swift; sourceTree = "<group>"; };
 		C0DE0FF1CE20260807AB0001 /* V2CutoverTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = V2CutoverTests.swift; sourceTree = "<group>"; };
 		C3B67A602E2FE445009C208C /* ModelRunner.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = ModelRunner.xcodeproj; sourceTree = "<group>"; };
 		C3B687F12E2F3CE7009C208C /* ModelRunner.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = ModelRunner.xcodeproj; sourceTree = "<group>"; };
@@ -169,6 +171,7 @@
 				B4F63B773064B119008C7D92 /* ImportMemoryAttributionTests.swift */,
 				B4F63B7B3064EA45008C7D92 /* ArchivePageCapabilityTests.swift */,
 				B4F63B7F3064EE61008C7D92 /* SourceFormatClassifierTests.swift */,
+				B4F63B893064FFF2008C7D92 /* IndexCoverageTests.swift */,
 			);
 			path = maxmailinTests;
 			sourceTree = SOURCE_ROOT;
@@ -380,6 +383,7 @@
 				B4F63B5030643A2A008C7D92 /* ImportVerdictTests.swift in Sources */,
 				B4F63B783064B119008C7D92 /* ImportMemoryAttributionTests.swift in Sources */,
 				AB12CD34EF5601789ABCDE02 /* V2ExportTests.swift in Sources */,
+				B4F63B8A3064FFF2008C7D92 /* IndexCoverageTests.swift in Sources */,
 				B4F63B643064A09C008C7D92 /* AdaptiveBatchControllerTests.swift in Sources */,
 				C0DE0FF1CE20260807AB0002 /* V2CutoverTests.swift in Sources */,
 				B4F63B0A306419C2008C7D92 /* ModuleGatingTests.swift in Sources */,

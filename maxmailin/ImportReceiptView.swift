@@ -105,6 +105,17 @@ struct ImportReceiptView: View {
         .background(verdictColor(verdict).opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
     }
 
+    /// S0: messages whose body exceeded the index budget are searchable only
+    /// in part. A receipt that stayed silent about that would overstate search
+    /// coverage for exactly the biggest messages in the import.
+    private var indexBudgetNote: String? {
+        guard let partial = try? FTSSearchIndex.partiallyIndexedCountSnapshot(),
+              partial > 0 else { return nil }
+        let budget = ByteCountFormatter.string(
+            fromByteCount: Int64(FTSSearchIndex.indexedTextBudgetBytes), countStyle: .file)
+        return "\(partial) message(s) in the archive are longer than the \(budget) search-index budget, so search covers only the first part of those messages."
+    }
+
     private func verdictIcon(_ verdict: ImportVerdict) -> String {
         switch verdict {
         case .complete: return "checkmark.seal.fill"
@@ -173,6 +184,11 @@ struct ImportReceiptView: View {
             row("Store rows before / after",
                  text: "\(countText(receipt.storeCountBefore)) → \(countText(receipt.storeCountAfter))")
             row("Index rows at finish", receipt.ftsRowCount)
+            if let partial = indexBudgetNote {
+                Label(partial, systemImage: "text.magnifyingglass")
+                    .font(Typography.caption1)
+                    .foregroundColor(.orange)
+            }
             if receipt.ftsDegraded {
                 Label("The index fell behind during this run (\(receipt.ftsFailedBatchCount) batch(es)). It needs rebuilding before search is complete.",
                       systemImage: "magnifyingglass.circle")

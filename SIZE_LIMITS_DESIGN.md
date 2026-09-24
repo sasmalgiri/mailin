@@ -248,16 +248,31 @@ Two conclusions from the audit:
 
 Ordered by value-per-risk, not by the order the design was written.
 
-### S0 — Report the indexing budget (1–2 d, low risk)
+### S0 — Report the indexing budget — **DONE 2026-09-24**
 
 - Record per message: `indexedTextBytes`, `totalTextBytes`, `indexTruncated`.
 - Surface it where a user could otherwise be misled: the message detail, the
   search-results coverage badge, and the import receipt's coverage section.
 - Raise the 50 K char cap to a byte budget (proposal 4 MB) now that it is
   reported; keep it configurable.
-- **Exit:** a synthetic 10 MB text body reports `indexTruncated == true`, the
-  UI shows "indexed to 4 MB of 10 MB", and search over that message never
-  implies completeness. Follows the `BoundedRegexSearch` precedent.
+- **Delivered:** the bound is now a **byte** budget of 4 MiB (it was 50,000
+  *characters*, a different quantity for non-ASCII mail), truncation lands on a
+  valid UTF-8 boundary, and `indexed_text_bytes` / `total_text_bytes` are
+  written to `indexed_message` **in the same transaction as the FTS row** so the
+  two cannot drift. Additive `ALTER TABLE` migration for existing shards.
+- **API:** `FTSSearchIndex.indexableText(_:)` → `TextCoverage` (with a
+  user-facing `summary`), `coverage(for:)` per message,
+  `partiallyIndexedCount()` for a coverage badge, and a nonisolated
+  `partiallyIndexedCountSnapshot()` for view code.
+- **Surfaced:** the import receipt's Coverage section now states how many
+  messages exceed the budget and that search covers only their first part.
+- **Exit met:** 7 tests — a body over budget reports the shortfall, a body
+  exactly at the budget is not mislabelled, the budget is bytes not characters
+  (verified with 4-byte scalars), truncation never emits U+FFFD, coverage
+  persists and reads back, the partial count is queryable, and a truncated
+  message is still findable by text inside the budget.
+- Still open in S0's spirit: the **search-results coverage badge** (the receipt
+  and per-message data exist; the results-list badge is not wired yet).
 
 ### S1 — Correct the format caps (2–3 d, low risk, needs fixtures)
 

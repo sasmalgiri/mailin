@@ -49,7 +49,11 @@ final class ArchivePageCapabilityTests: XCTestCase {
 
     func testArchive_canReadAttachmentBytesFromStoredEmail() async throws {
         let (store, _, root, _) = try await importFixture()
-        defer { try? FileManager.default.removeItem(at: root) }
+        // Deliberately NOT removing `root` here: BulkImportCoordinator's
+        // budget-restore runs in a deferred Task (P3.3) that may still hold the
+        // store and shard handles after this test returns, and deleting the
+        // directory underneath it races that teardown. The temp directory is
+        // reclaimed by the OS.
 
         // Find a STORED email that has attachments, reading it back the way the
         // detail view does.
@@ -97,7 +101,11 @@ final class ArchivePageCapabilityTests: XCTestCase {
 
     func testArchive_searchFindsStoredMessages() async throws {
         let (store, fts, root, _) = try await importFixture()
-        defer { try? FileManager.default.removeItem(at: root) }
+        // Deliberately NOT removing `root` here: BulkImportCoordinator's
+        // budget-restore runs in a deferred Task (P3.3) that may still hold the
+        // store and shard handles after this test returns, and deleting the
+        // directory underneath it races that teardown. The temp directory is
+        // reclaimed by the OS.
 
         let total = try await store.totalCount()
         XCTAssertGreaterThan(total, 0)
@@ -129,7 +137,11 @@ final class ArchivePageCapabilityTests: XCTestCase {
 
     func testArchive_exportsMBOXThatReparses() async throws {
         let (store, fts, root, _) = try await importFixture()
-        defer { try? FileManager.default.removeItem(at: root) }
+        // Deliberately NOT removing `root` here: BulkImportCoordinator's
+        // budget-restore runs in a deferred Task (P3.3) that may still hold the
+        // store and shard handles after this test returns, and deleting the
+        // directory underneath it races that teardown. The temp directory is
+        // reclaimed by the OS.
 
         let repo = EmailStoreRepository(store: store, fts: fts)
         let service = await ArchiveExportService(archive: ArchiveDataService(repository: repo))

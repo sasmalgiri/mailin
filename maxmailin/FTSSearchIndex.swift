@@ -980,9 +980,19 @@ actor FTSSearchIndex {
                 email_id TEXT PRIMARY KEY,
                 indexed_revision INTEGER NOT NULL DEFAULT 1,
                 content_hash TEXT,
-                indexed_at INTEGER NOT NULL DEFAULT 0
+                indexed_at INTEGER NOT NULL DEFAULT 0,
+                indexed_text_bytes INTEGER NOT NULL DEFAULT 0,
+                total_text_bytes INTEGER NOT NULL DEFAULT 0
             );
         """)
+        // S0: coverage columns added after first ship — additive ALTERs, each
+        // tolerated if the column is already there. A body larger than the
+        // index budget is indexed in part, and the app must be able to SAY so:
+        // silent truncation is not acceptable (the same rule BoundedRegexSearch
+        // already follows for scan caps).
+        for column in ["indexed_text_bytes", "total_text_bytes"] {
+            _ = try? exec(db, "ALTER TABLE indexed_message ADD COLUMN \(column) INTEGER NOT NULL DEFAULT 0;")
+        }
         // One-time backfill for shards indexed before the registry existed.
         if try !hasAnyRow(db, "indexed_message"), try hasAnyRow(db, "email_search") {
             try exec(db, "INSERT OR IGNORE INTO indexed_message(email_id, indexed_revision, indexed_at) SELECT email_id, 1, 0 FROM email_search;")
@@ -1019,6 +1029,116 @@ actor FTSSearchIndex {
         try insertWithHandle(email, db: db)
     }
 
+    // MARK: - Index text budget (S0)
+
+    /// How much body text is indexed per message.
+    ///
+    /// A full-text index over an unbounded body is not physically possible on a
+    /// laptop: a 380 MB message would dominate the index. The previous bound
+    /// was `String(body.prefix(50_000))` — 50,000 *characters*, applied
+    /// silently, so search implied completeness over a message it had barely
+    /// read. The bound stays (it must), but it is now a byte budget and it is
+    /// REPORTED.
+    static let indexedTextBudgetBytes = 4 * 1_048_576
+
+    struct TextCoverage: Sendable, Equatable {
+        var indexed: String
+        var indexedBytes: Int
+        var totalBytes: Int
+        var isTruncated: Bool { indexedBytes < totalBytes }
+
+        /// One line a user can act on.
+        var summary: String {
+            guard isTruncated else { return "Fully indexed for search." }
+            let fmt = ByteCountFormatter.string(fromByteCount:countStyle:)
+            return "Indexed \(fmt(Int64(indexedBytes), .file)) of \(fmt(Int64(totalBytes), .file)) — search covers the first part of this message only."
+        }
+    }
+
+    /// Truncates on a UTF-8 boundary so the indexed text is never invalid.
+    static func indexableText(_ body: String) -> TextCoverage {
+        let total = body.utf8.count
+        guard total > indexedTextBudgetBytes else {
+            return TextCoverage(indexed: body, indexedBytes: total, totalBytes: total)
+        }
+        var bytes = Array(body.utf8.prefix(indexedTextBudgetBytes))
+        // Back off to the last valid UTF-8 boundary rather than emitting a
+        // broken scalar.
+        var decoded = String(decoding: bytes, as: UTF8.self)
+        while decoded.utf8.count > 0, decoded.unicodeScalars.last == "\u{FFFD}" {
+            bytes.removeLast()
+            decoded = String(decoding: bytes, as: UTF8.self)
+        }
+        return TextCoverage(indexed: decoded, indexedBytes: decoded.utf8.count, totalBytes: total)
+    }
+
+    /// What was actually indexed for `id`, or nil when the message is not in
+    /// the index at all. Read by the detail view, the search-coverage badge and
+    /// the import receipt.
+    func coverage(for id: UUID, year: Int? = nil) throws -> (indexedBytes: Int, totalBytes: Int)? {
+        let years = try year.map { [$0] } ?? discoverAllShardYears()
+        for shardYear in years {
+            let db = try ensureShard(year: shardYear)
+            let stmt = try prepare(db, """
+                SELECT indexed_text_bytes, total_text_bytes
+                FROM indexed_message WHERE email_id = ?;
+            """)
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, id.uuidString)
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                return (Int(sqlite3_column_int64(stmt, 0)), Int(sqlite3_column_int64(stmt, 1)))
+            }
+        }
+        return nil
+    }
+
+    /// How many indexed messages had their body truncated by the budget —
+    /// the number a search-results coverage badge needs.
+    func partiallyIndexedCount() throws -> Int {
+        var total = 0
+        for shardYear in try discoverAllShardYears() {
+            let db = try ensureShard(year: shardYear)
+            let stmt = try prepare(db, """
+                SELECT COUNT(*) FROM indexed_message
+                WHERE total_text_bytes > indexed_text_bytes;
+            """)
+            defer { sqlite3_finalize(stmt) }
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                total += Int(sqlite3_column_int64(stmt, 0))
+            }
+        }
+        return total
+    }
+
+    /// Synchronous snapshot for view code that cannot await the actor. Opens
+    /// its own short-lived read connection per shard rather than touching the
+    /// actor's handles.
+    nonisolated static func partiallyIndexedCountSnapshot() throws -> Int {
+        let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask
+        ).first ?? FileManager.default.temporaryDirectory
+        let dir = appSupport
+            .appendingPathComponent("com.ecosanskriti.mailin", isDirectory: true)
+            .appendingPathComponent("fts5", isDirectory: true)
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        var total = 0
+        for name in files where name.hasSuffix(".db") {
+            var handle: OpaquePointer?
+            guard sqlite3_open_v2(dir.appendingPathComponent(name).path, &handle,
+                                  SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
+                  let db = handle else { continue }
+            defer { sqlite3_close(db) }
+            var stmt: OpaquePointer?
+            let sql = "SELECT COUNT(*) FROM indexed_message WHERE total_text_bytes > indexed_text_bytes;"
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let query = stmt else { continue }
+            defer { sqlite3_finalize(query) }
+            if sqlite3_step(query) == SQLITE_ROW {
+                total += Int(sqlite3_column_int64(query, 0))
+            }
+        }
+        return total
+    }
+
     private func insertWithHandle(_ email: MBOXParser.RawEmail, db: OpaquePointer) throws {
         let idString = email.id.uuidString
 
@@ -1051,7 +1171,11 @@ actor FTSSearchIndex {
         bindText(stmt, 2, subject)
         bindText(stmt, 3, sender)
         bindText(stmt, 4, recipients)
-        bindText(stmt, 5, String(body.prefix(50_000)))
+        // S0: bound the indexed text by BYTES (the old bound was 50,000
+        // *characters*, which is a different quantity for non-ASCII mail) and
+        // record what fraction of the body made it in.
+        let coverage = Self.indexableText(body)
+        bindText(stmt, 5, coverage.indexed)
 
         guard sqlite3_step(stmt) == SQLITE_DONE else {
             throw FTSError.execFailed(lastError(db))
@@ -1060,12 +1184,16 @@ actor FTSSearchIndex {
         // Registry upsert — same transaction as the FTS insert (indexBatch wraps
         // the shard group in BEGIN/COMMIT), so the two never drift.
         let reg = try prepare(db, """
-            INSERT OR REPLACE INTO indexed_message(email_id, indexed_revision, content_hash, indexed_at)
-            VALUES (?, 1, NULL, ?);
+            INSERT OR REPLACE INTO indexed_message(
+                email_id, indexed_revision, content_hash, indexed_at,
+                indexed_text_bytes, total_text_bytes)
+            VALUES (?, 1, NULL, ?, ?, ?);
         """)
         defer { sqlite3_finalize(reg) }
         bindText(reg, 1, idString)
         sqlite3_bind_int64(reg, 2, Int64(Date().timeIntervalSince1970))
+        sqlite3_bind_int64(reg, 3, Int64(coverage.indexedBytes))
+        sqlite3_bind_int64(reg, 4, Int64(coverage.totalBytes))
         guard sqlite3_step(reg) == SQLITE_DONE else {
             throw FTSError.execFailed(lastError(db))
         }
