@@ -273,6 +273,36 @@ P3.3's budget work is kept as correctness hygiene (bounded caches, capped shard
 connections, both restored after an import) but it must not be claimed as a
 memory improvement: measured, it changed nothing.
 
+### Hypothesis ledger for the import peak (four measured, three falsified)
+
+| # | Hypothesis | Change / instrument | Result | Verdict |
+|---|---|---|---|---|
+| 1 | Batch size | fixed 500 → adaptive 256 → 168 | 400 → 410 → 423 MiB | **falsified** |
+| 2 | SQLite cache/mmap + shard cap | 128→32 MB cache, 256→64 MB mmap, cap 20→4 | 419 MiB | **falsified** |
+| 3 | Attachment base64 retained per message | `retainAttachmentBytes: false` | `base64` is **already nil** — `EmailBodyExtractor.swift:325` never populates it | **falsified** |
+| 4 | Retained MIME part tree | deterministic object-byte count | **28 bytes** retained for a 1.4 MB message | **falsified** |
+| 5 | Per-message allocator churn | not yet measured | — | **remaining candidate** |
+
+Hypothesis 3's plumbing was **reverted**: it changed parser output (`mimeRoot`
+nil, which `ForensicManager.buildMIMETree` reads) for zero measured benefit.
+The parameter survives on `MBOXParser.processRawMessage` with a warning
+comment so the same wrong conclusion is not re-derived from its name.
+
+**Instrument caveat that matters more than any of the above:** identical runs
+produced 400, 410, 419, 423 and 478 MiB. That is roughly ±15 % variance, so a
+single run cannot attribute a change of this size. Deterministic object-byte
+counting (as in `AttachmentCompactionTests`) settled hypotheses 3 and 4 in
+seconds where RSS could not. Future memory work needs repeated runs, a larger
+corpus, or an allocation-level instrument — not another single-run RSS reading.
+
+What stage attribution does still say: parse-stage first-touch growth was
++334.8 MiB while store and index added marginal amounts, and since neither
+retained structure explains it, the remaining candidate is the per-message
+String/Array churn — `currentLines` holding one `String` per line, the
+`joined()` full copy, and `EmailBodyExtractor` re-splitting the same text.
+Addressing that means parsing from bytes rather than `[String]`: plan task
+**P3.5**, a real parser rewrite on the most safety-critical code in the app.
+
 ### Finding (SUPERSEDED as an explanation): the fixed 500-message batch ignores message size
 
 A 90 MiB source with 526 attachment-heavy messages fits in **two** batches at

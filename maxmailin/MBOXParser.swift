@@ -272,6 +272,7 @@ struct MBOXParser {
         senderEmail: String,
         batchSize: Int = 200,
         envelopeProvider: (@Sendable () async -> BatchEnvelope)? = nil,
+        retainAttachmentBytes: Bool = true,
         onProgress: ((Double) -> Void)? = nil,
         onBatch: ([RawEmail]) async throws -> Void
     ) async throws -> ParseRecoveryReport {
@@ -350,7 +351,9 @@ struct MBOXParser {
             guard !currentLines.isEmpty else { return }
             let raw = currentLines.joined(separator: "\n")
             do {
-                let email = try processRawMessage(raw, senderEmail: senderEmail)
+                let email = try processRawMessage(
+                    raw, senderEmail: senderEmail,
+                    retainAttachmentBytes: retainAttachmentBytes)
                 batchBytes += raw.utf8.count
                 batch.append(email)
             } catch {
@@ -407,7 +410,21 @@ struct MBOXParser {
     }
 
     // MARK: - Per-Email Processing
-    static func processRawMessage(_ raw: String, senderEmail: String) throws -> RawEmail {
+    /// - Parameter retainAttachmentBytes: when false, attachment metadata is
+    ///   kept but any decoded payload and the MIME part tree are dropped.
+    ///
+    ///   MEASURED WARNING (2026-09-24): this saves almost nothing, and the
+    ///   import path deliberately does NOT use it. `EmailBodyExtractor` already
+    ///   leaves `base64` nil (EmailBodyExtractor.swift:325), and the retained
+    ///   MIME tree measured **28 bytes** for a 1.4 MB message. The import peak
+    ///   lives in per-message allocator churn, not in retained structures — see
+    ///   `RELEASE_READINESS.md` §P0.2 and plan task P3.5. Kept only as the hook
+    ///   for a future compaction that has an actual measured benefit.
+    static func processRawMessage(
+        _ raw: String,
+        senderEmail: String,
+        retainAttachmentBytes: Bool = true
+    ) throws -> RawEmail {
         // §7.3: a bare RFC-822 message (e.g. a .eml whose first line is a
         // "From:" HEADER) gets a synthetic envelope on its OWN line — gluing
         // "From " onto the first header line used to swallow that header.
@@ -451,17 +468,27 @@ struct MBOXParser {
                 .filter { !$0.isEmpty }
         }
 
+        // P3.4: drop the duplicated payload when the caller does not need it.
+        let attachments: [AttachmentMetadata] = retainAttachmentBytes
+            ? extraction.attachments
+            : extraction.attachments.map {
+                AttachmentMetadata(filename: $0.filename, mimeType: $0.mimeType,
+                                   size: $0.size, isInline: $0.isInline,
+                                   contentID: $0.contentID, base64: nil, fileURL: $0.fileURL)
+            }
+        let retainedRoot = retainAttachmentBytes ? rootPart : nil
+
         return RawEmail(
             id: UUID(),
             headers: mappedHeaders,
             rawSource: fullRaw,
             messageType: type,
-            attachments: extraction.attachments,
+            attachments: attachments,
             timestamp: timestamp,
             domains: domains,
             plainBody: extraction.plainBody,
             htmlBody: extraction.htmlBody,
-            mimeRoot: rootPart,
+            mimeRoot: retainedRoot,
             mimeSummary: rootPart?.summary,
             mimeDiagnostics: generateMIMEDiagnostics(root: rootPart),
             threadID: detectThreadID(headers: mappedHeaders, plainBody: extraction.plainBody, htmlBody: extraction.htmlBody),

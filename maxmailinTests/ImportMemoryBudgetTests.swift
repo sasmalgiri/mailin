@@ -116,3 +116,90 @@ struct ImportMemoryBudgetTests {
         #expect(try await fts.rowCount() == 19, "every year is still indexed")
     }
 }
+
+
+@Suite("Attachment-byte compaction (P3.4)")
+struct AttachmentCompactionTests {
+
+    /// An mbox with one base64 attachment, so the payload is unambiguous.
+    private func writeMBOXWithAttachment(payloadKB: Int) throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("compact-\(UUID().uuidString).mbox")
+        let payload = Data(repeating: 0x41, count: payloadKB * 1024).base64EncodedString()
+        let text = """
+        From sender@example.com Tue Mar 14 09:41:00 2017
+        From: sender@example.com
+        To: recipient@example.com
+        Subject: Compaction probe
+        Date: Tue, 14 Mar 2017 09:41:00 +0000
+        Message-ID: <compaction@example.com>
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="BOUND"
+
+        --BOUND
+        Content-Type: text/plain
+
+        body text here
+        --BOUND
+        Content-Type: application/octet-stream; name="payload.bin"
+        Content-Disposition: attachment; filename="payload.bin"
+        Content-Transfer-Encoding: base64
+
+        \(payload)
+        --BOUND--
+
+        """
+        try text.write(to: url, atomically: true, encoding: .utf8)
+        return url
+    }
+
+    @Test("The extractor never populates attachment base64 — so that was not the cost")
+    func attachmentBytesAreNotRetainedEitherWay() async throws {
+        let url = try writeMBOXWithAttachment(payloadKB: 256)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        var retained: MBOXParser.RawEmail?
+        _ = try await MBOXParser.parseStreamingCallback(
+            fileURL: url, senderEmail: "", batchSize: 10, retainAttachmentBytes: true
+        ) { batch in retained = batch.first }
+
+        let full = try #require(retained)
+        #expect(full.attachments.count == 1)
+        // Recorded as a finding, not a wish: EmailBodyExtractor deliberately
+        // leaves base64 nil (EmailBodyExtractor.swift:325), so attachment
+        // payload duplication was never part of the import peak.
+        #expect(full.attachments[0].base64 == nil)
+        #expect(full.attachments[0].size > 0, "metadata is still complete")
+    }
+
+    @Test("The retained MIME tree is negligible — also not the cost")
+    func mimeTreeIsNegligible() async throws {
+        let url = try writeMBOXWithAttachment(payloadKB: 1024)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        var email: MBOXParser.RawEmail?
+        _ = try await MBOXParser.parseStreamingCallback(
+            fileURL: url, senderEmail: "", batchSize: 10, retainAttachmentBytes: true
+        ) { batch in email = batch.first }
+
+        let parsed = try #require(email)
+        let treeBytes = parsed.mimeRoot.map { Self.treeBytes($0) } ?? 0
+
+        // Recorded as measurement, not aspiration: for a 1.4 MB message the
+        // retained tree was 28 bytes, so dropping it cannot explain — or fix —
+        // the import peak. RSS itself varied 419–478 MiB across identical runs,
+        // which is why this suite counts object bytes instead.
+        #expect(parsed.rawSource.utf8.count > 1_000_000)
+        #expect(treeBytes < 10_000,
+                "the MIME tree does not retain the message payload")
+    }
+
+    /// Bytes a MIME part subtree retains: `body` and `rawBody` per part, plus
+    /// any `rawData`, recursively.
+    private static func treeBytes(_ part: MIMEPart) -> Int {
+        var total = part.body.utf8.count + part.rawBody.utf8.count
+        total += part.rawData?.count ?? 0
+        for sub in part.subparts { total += treeBytes(sub) }
+        return total
+    }
+}

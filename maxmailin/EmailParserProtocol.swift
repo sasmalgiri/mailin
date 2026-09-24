@@ -85,6 +85,7 @@ struct ParserFactory {
         senderEmail: String,
         batchSize: Int = 200,
         envelopeProvider: (@Sendable () async -> BatchEnvelope)? = nil,
+        retainAttachmentBytes: Bool = true,
         onProgress: ((Double) -> Void)? = nil,
         onBatch: ([MBOXParser.RawEmail]) async throws -> Void
     ) async throws -> MBOXParser.ParseRecoveryReport {
@@ -96,6 +97,7 @@ struct ParserFactory {
                 senderEmail: senderEmail,
                 batchSize: batchSize,
                 envelopeProvider: envelopeProvider,
+                retainAttachmentBytes: retainAttachmentBytes,
                 onProgress: onProgress,
                 onBatch: onBatch
             )
