@@ -23,6 +23,12 @@ struct ArchiveLocationView: View {
     @State private var chosen: ArchiveLocation?
     @State private var verdict: ArchiveLocationVerdict?
     @State private var showPicker = false
+    /// S4: messages stored from their headers only. The store has been able to
+    /// count these since the locator table existed, and nothing asked — so an
+    /// archive could hold messages with no searchable body and offer the user
+    /// no way to find that out after the import that created them. The receipt
+    /// reports it per run; this reports it for the archive as it stands.
+    @State private var deferredBodies: Int?
 
     private let store = ArchiveLocationStore(url: ArchiveLocationStore.productionURL)
 
@@ -73,6 +79,19 @@ struct ArchiveLocationView: View {
                 LabeledContent("Search index", value: bytes(footprint.indexBytes))
                 if footprint.journalBytes > 0 {
                     LabeledContent("Journal", value: bytes(footprint.journalBytes))
+                }
+
+                if let deferredBodies, deferredBodies > 0 {
+                    Divider()
+                    Label("""
+                        \(deferredBodies) message\(deferredBodies == 1 ? "" : "s") \
+                        \(deferredBodies == 1 ? "was" : "were") stored from headers only, because \
+                        \(deferredBodies == 1 ? "it was" : "they were") too large to read fully. \
+                        Their original bytes are recorded, but their text is not searchable.
+                        """, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             } else {
                 Text("Measuring…")
@@ -152,6 +171,12 @@ struct ArchiveLocationView: View {
         Task.detached(priority: .utility) {
             let measured = StoragePlanner.archiveFootprint(storeDirectory: directory)
             await MainActor.run { footprint = measured }
+        }
+        Task { @MainActor in
+            // Best effort: a store that cannot be opened is not a reason to
+            // fail the storage screen, and nil reads as "not counted" rather
+            // than as zero.
+            deferredBodies = try? await SQLiteEmailStore.shared.deferredBodyCount()
         }
     }
 

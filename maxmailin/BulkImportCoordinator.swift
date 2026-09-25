@@ -818,6 +818,36 @@ final class BulkImportCoordinator {
             summary.warnings.append("Import receipt failed to persist: \(error.localizedDescription)")
         }
 
+        // S3b: collect orphaned body blobs, AFTER the receipt is written so a
+        // GC failure can never cost the audit trail.
+        //
+        // This call was missing entirely. `collectBlobOrphans` existed and was
+        // reached only from a test, so every orphan the blob tier can create
+        // accumulated forever: one per crash between a blob write and its row
+        // commit, one per large message deduped away on re-import, one per
+        // deleted email whose body row went with it. The tier's own design
+        // note says "a crash leaves a COLLECTABLE orphan" — collectable only
+        // if something collects.
+        //
+        // End of import is the right moment: it is exactly when orphans are
+        // created, the user is already waiting, and the query is cheap because
+        // `idx_bodies_raw_blob` is partial — it indexes only rows that have a
+        // blob, so an archive with none scans nothing.
+        //
+        // Never fatal. An orphan costs disk; failing an import that has
+        // already committed its mail would cost far more.
+        do {
+            let collected = try await store.collectBlobOrphans()
+            if collected.deleted > 0 {
+                Self.logger.info("""
+                    reclaimed \(collected.deleted, privacy: .public) orphaned body blob(s), \
+                    \(collected.bytesReclaimed, privacy: .public) bytes
+                    """)
+            }
+        } catch {
+            Self.logger.warning("orphan blob collection failed: \(error.localizedDescription, privacy: .public)")
+        }
+
         self.lastReceipt = receipt
         self.lastRunSummary = summary
         self.status = .completed(

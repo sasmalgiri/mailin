@@ -317,6 +317,78 @@ final class BlobTierWiringTests: XCTestCase {
                        "the referenced blob must survive collection")
     }
 
+    /// The GC must be REACHED, not merely correct.
+    ///
+    /// `collectBlobOrphans` was implemented, tested, and never called from
+    /// production — so every orphan the blob tier can create accumulated
+    /// forever: one per crash between a blob write and its row commit, one per
+    /// large message deduped away on re-import, one per deleted email whose
+    /// body row went with it. The design note said "a crash leaves a
+    /// COLLECTABLE orphan", which is only true if something collects.
+    ///
+    /// This pins the property the missing call broke: after a run, an
+    /// unreferenced blob is gone and a referenced one is not.
+    func testOrphansAreCollectedAndReferencedBlobsSurvive() async throws {
+        let raw = largeRawSource(marker: "gc-keep")
+        let probe = email(rawSource: raw, marker: "gc-keep")
+        try await insert([probe])
+
+        let blobs = store.blobStore
+        // Three strays, as three different failure modes would leave behind.
+        let strays = try (0..<3).map { index in
+            try blobs.write(Data(repeating: UInt8(0x40 + index), count: 128))
+        }
+        for stray in strays {
+            XCTAssertTrue(blobs.exists(stray), "the stray must exist before collection")
+        }
+
+        let (deleted, reclaimed) = try await store.collectBlobOrphans()
+
+        XCTAssertEqual(deleted, strays.count, "every stray must be collected")
+        XCTAssertEqual(reclaimed, 128 * 3)
+        for stray in strays {
+            XCTAssertFalse(blobs.exists(stray), "a collected stray must be gone from disk")
+        }
+
+        // The referenced body survives and still reads back.
+        let readBack = try await store.fullEmail(id: probe.id)?.rawSource
+        XCTAssertEqual(readBack, raw, "collection must never touch a referenced blob")
+
+        // Idempotent: a second pass finds nothing and reclaims nothing.
+        let second = try await store.collectBlobOrphans()
+        XCTAssertEqual(second.deleted, 0)
+        XCTAssertEqual(second.bytesReclaimed, 0)
+    }
+
+    /// The archive-level count of header-only messages must be queryable.
+    /// It was queryable all along and nothing asked, so an archive could hold
+    /// messages with no searchable body and give the user no way to find out
+    /// after the import that created them.
+    func testDeferredBodyCountIsQueryable() async throws {
+        let probe = email(rawSource: largeRawSource(marker: "deferred"), marker: "deferred")
+        try await insert([probe])
+
+        // Hoisted: XCTAssert* arguments are autoclosures and cannot await.
+        let before = try await store.deferredBodyCount()
+        XCTAssertEqual(before, 0, "a fully parsed archive has no deferred bodies")
+
+        // Record a locator marked body-not-decoded, as the offset engine does
+        // for a message over the ceiling.
+        let locator = MessageLocator(
+            sourcePath: "/tmp/not-read.mbox",
+            messageRange: ByteRange(offset: 0, length: 1_000),
+            headerRange: ByteRange(offset: 0, length: 100),
+            bodyRange: ByteRange(offset: 100, length: 900),
+            ordinal: 0)
+        try await store.saveLocator(locator, emailID: probe.id, bodyDecoded: false)
+
+        let after = try await store.deferredBodyCount()
+        let workList = try await store.deferredBodyIDs(limit: 10)
+        XCTAssertEqual(after, 1)
+        XCTAssertEqual(workList, [probe.id],
+                       "the work list must name the message, so it can be processed later")
+    }
+
     // MARK: - Footprint
 
     /// A footprint that counted only `emails.db` would understate a
