@@ -3,8 +3,25 @@
 //  mailin
 //
 //  Lightweight per-query instrumentation for the hybrid AI pipeline.
-//  Lets us prove (or disprove) that each architectural change actually
-//  improves quality, latency, or citation density.
+//
+//  ⚠️ NOT WIRED. `begin` and `finalize` have no caller, so not one query has
+//  ever been recorded and `summary(lastN:)` has nothing to summarise.
+//
+//  The previous header said this "lets us prove (or disprove) that each
+//  architectural change actually improves quality, latency, or citation
+//  density." It does not, yet — which means no claim about the AI pipeline's
+//  quality, latency or citation density is currently backed by measurement
+//  from this app. Treat any such claim as unmeasured until this is wired.
+//
+//  What wiring it takes, and why it was not done as a drive-by: the API is
+//  `begin(...)` → mutate the record as it passes through the pipeline →
+//  `finalize(...)`. `AIAssistantView.askAI()` has several early returns
+//  (greeting, acknowledgment, smart-query shortcut, paywall) and then a
+//  switch over engines, each spawning its own Task. Recording only at the
+//  outer boundary would populate query/intent/timing and leave expertsRun,
+//  subQueryCount, toolsUsed, the findings counts, and the compression
+//  figures at zero — metrics that look complete and are not, which is worse
+//  than none. Each engine branch has to fill its own fields.
 //
 //  Stays 100% on-device. Stored in Application Support, never transmitted.
 //

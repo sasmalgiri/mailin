@@ -1,20 +1,20 @@
-# Reachability audit — 19 defects a green test suite did not catch
+# Reachability audit — 22 defects a green test suite did not catch
 
-Status: all 19 addressed and committed. 494 tests pass, 0 fail, 1 skipped by
+Status: all 22 addressed and committed. 497 tests pass, 0 fail, 1 skipped by
 design. Two files are quarantined pending deletion (see the end).
 
 ## Why this document exists
 
-The suite was green. The build was clean. Every one of these fifteen defects
-was live at that point, and they all have the **same shape**:
+The suite was green. The build was clean. Every one of these defects was live
+at that point, and they all have the **same shape**:
 
 > The code does something defensible. A comment, a UI string, or a doc claims
 > something stronger. The tests check the behaviour that exists, so they pass.
 
 Tests written against a function verify that the function works. They say
-nothing about whether anything calls it. Fourteen of these fifteen were found
-by asking one question of every surface — **"who actually calls this?"** — and
-the fifteenth by asking it of my own code from the same week.
+nothing about whether anything calls it. Every one was found by asking one
+question of every surface — **"who actually calls this?"** — including two of
+my own from the same week.
 
 ## The method
 
@@ -54,11 +54,7 @@ that represents a whole *feature*, because its consumer should by definition be
 elsewhere. That is how an entire enterprise deliverable (E3/E4) and two
 quarantined files turned up after twelve function-level rounds had finished.
 
-Noise to expect: SwiftUI protocol conformances (`makeNSView`, `placeSubviews`,
-`makeBody`), unused design-system modifiers, and Page 4 / live-mail, which does
-not ship. Signal: anything a UI string, doc comment, or checklist promises.
-
-## The fifteen
+## The twenty-two
 
 | # | Claim | Reality | Fix |
 |---|---|---|---|
@@ -81,6 +77,9 @@ not ship. Signal: anything a UI string, doc comment, or checklist promises.
 | 17 | Merge "skips identical artifacts" | Re-importing one bundle duplicated everything in it: the add path retitled an artifact, so the next pass compared the retitled local copy against the unlabelled incoming one. Three imports left four copies | Merged ids derived from (origin, sender); a genuine revision is still kept alongside |
 | 18 | "Encrypted at-rest storage for sensitive email archive data" | `EncryptedStorageManager` has no caller, and keeps only the **first 2,000 characters** of raw source, restoring the truncation as if it were the original. ~1% of a real message, and every recomputed hash differs | Quarantined with a blunt header + 3 tests; recommend deletion |
 | 19 | `PSTStreamingParser` protects against >2 GB PSTs "crashing on memory exhaustion" | No caller, and the premise expired at S1 — `PSTParser` mmaps, so only a correctness refusal remains. Its >2 GB branch throws `notYetSupported` for files that import today, so wiring it up would be a **regression** | Quarantined with the reason; covered by the same guard test |
+| 20 | `PartLocator`: "so an attachment can be read without decoding its siblings" | Nothing produces or consumes one. S5's delivered behaviour is message-scoped: a 10 KB attachment in a 12 MB message reads all 12 MB | Relabelled DESIGN ONLY with what implementing it needs; the message-scoped half is real and stays |
+| 21 | `canRead` is "used by UI that must decide whether to offer Open/Save rather than offering an action that then does nothing" | No caller. The bulk save path made the user pick a destination folder, wait, then reported "0 saved, N failed" | Asked before the panel; completion now separates unreadable-source from unwritable-destination |
+| 22 | `AIMetrics` "lets us prove (or disprove) that each architectural change actually improves quality, latency, or citation density" | `begin`/`finalize` have no caller — not one query has ever been recorded | Claim corrected in place; wiring it is owed (see below) |
 
 Defects 15, 18 and 19 share the lesson worth remembering: **dead code is not
 neutral.** Each carried the most authoritative name in its area — more obvious
@@ -135,6 +134,28 @@ fails if anything starts referencing them.
 - `maxmailin/PSTStreamingParser.swift` — superseded; wiring it up regresses
   large-PST import.
 
+## Checked and NOT defects
+
+Recorded so the same ground is not re-swept:
+
+- `GatePolicy.lockedReasons` / `WorkflowFieldValidation.missingRequired` — the
+  type sweep flagged `WorkflowGate` as having zero tests. False signal: the
+  gates are reachable through `WorkflowRunnerView` and genuinely unit-tested in
+  `V2CutoverTests`, covering all three named defensibility holes.
+- `dedupeShards` — runs at launch (`mailinApp.swift`).
+- `handleArchiveImportResult` / `handleReviewImportResult` — passed as
+  `onCompletion:` values.
+- `PSTReader` / `NSFReader` / `OLE2Reader` — internal helpers of parsers that
+  `EmailParserProtocol` does dispatch.
+- `ChainOfCustodyManager` — used by the view in its own file, which the hub
+  routes to.
+- `SharePlayManager` / `EmailReviewActivity` — unreachable, but nothing in the
+  UI or docs claims collaborative review, so there is no false claim and no
+  data risk. Left alone.
+- `SwiftMboxStreamingIterator` — unused local kit type, superseded by
+  `OffsetMBOXScanner`. Harmless; the `#if canImport(SwiftEmailKit)` branches
+  around it are correctly written as "if present".
+
 ## Still open
 
 - **Streaming parser discards the real `From_` envelope.** Deliberately
@@ -145,3 +166,12 @@ fails if anything starts referencing them.
 - **PST/OST/NSF/MSG have no fixtures.** A real PST would close those formats
   the way `Sent.mbox` closed the mbox path.
 - **Memory figures need a re-take** on a machine with disk headroom.
+- **`AIMetrics` is not wired** (defect 22). Until it is, no claim about the AI
+  pipeline's quality, latency or citation density is backed by measurement from
+  this app. Recording only at the outer boundary would leave `expertsRun`,
+  `subQueryCount`, `toolsUsed`, the findings counts and the compression figures
+  at zero — metrics that look complete and are not — so each engine branch in
+  `AIAssistantView.askAI()` has to fill its own fields.
+- **Per-part locators** (defect 20). Needs a producer in `OffsetMBOXScanner`
+  walking MIME boundaries in the same pass, a schema version for the table, and
+  a consumer in `AttachmentHydrator` ahead of the whole-message path.
