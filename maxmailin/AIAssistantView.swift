@@ -1930,6 +1930,44 @@ struct AIAssistantView: View {
         return nil
     }
 
+    // MARK: - Metrics (audit defect 22)
+
+    /// Opens a metrics record for one query.
+    ///
+    /// `intent` is the engine or shortcut that handled it, so a summary can
+    /// never be read as if one engine produced all of it.
+    private func beginMetrics(_ intent: String, query: String) -> AIMetrics.QueryRecord {
+        var record = AIMetrics.shared.begin(
+            query: query,
+            intent: intent,
+            persona: personaManager.selectedPersona.rawValue,
+            archiveEmailCount: emailCount(for: emailScope))
+        record.reported.insert(AIMetrics.QueryRecord.Group.identity)
+        return record
+    }
+
+    /// Closes a record, stamping elapsed time and the answer's shape.
+    ///
+    /// Only the groups this call can actually see are marked reported —
+    /// `timing` and `output`. Findings, routing and compression are added by
+    /// the branches that measure them, and stay absent (not zero) elsewhere.
+    private func finishMetrics(_ record: AIMetrics.QueryRecord,
+                               startedAt: Date,
+                               answer: String,
+                               citedEmailIDs: [UUID],
+                               failed: Bool = false,
+                               fallbackUsed: Bool = false) {
+        var closing = record
+        closing.totalElapsedMs = Int(Date().timeIntervalSince(startedAt) * 1000)
+        closing.answerCharCount = answer.count
+        closing.citedEmailCount = citedEmailIDs.count
+        closing.didFail = failed
+        closing.fallbackUsed = fallbackUsed
+        closing.reported.insert(AIMetrics.QueryRecord.Group.timing)
+        closing.reported.insert(AIMetrics.QueryRecord.Group.output)
+        AIMetrics.shared.finalize(closing)
+    }
+
     private func askAI() {
         let query = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
@@ -1938,6 +1976,8 @@ struct AIAssistantView: View {
         case .greeting:
             prompt = ""
             let totalCount = emailCount(for: emailScope)
+            let greetingMetrics = beginMetrics("greeting", query: query)
+            let greetingStart = Date()
             currentTask = Task {
                 let ws = await currentWorkingSet()
                 let sent = ws.filter { $0.messageType == "sent" }.count
@@ -1950,18 +1990,26 @@ struct AIAssistantView: View {
                         relatedEmailIDs: []
                     ))
                 }
+                finishMetrics(greetingMetrics, startedAt: greetingStart,
+                              answer: conversationHistory.last?.answer ?? "",
+                              citedEmailIDs: [])
             }
             return
         case .acknowledgment:
             prompt = ""
+            let ackMetrics = beginMetrics("acknowledgment", query: query)
+            let ackStart = Date()
+            let ackAnswer = "Glad to help! Feel free to ask anything about your emails — search, analytics, security scans, or summaries."
             withAnimation(AnimationTiming.normal) {
                 conversationHistory.append((
                     query: query,
-                    answer: "Glad to help! Feel free to ask anything about your emails — search, analytics, security scans, or summaries.",
+                    answer: ackAnswer,
                     timestamp: Date(),
                     relatedEmailIDs: []
                 ))
             }
+            finishMetrics(ackMetrics, startedAt: ackStart,
+                          answer: ackAnswer, citedEmailIDs: [])
             return
         case .notConversational:
             break
@@ -1970,6 +2018,8 @@ struct AIAssistantView: View {
         if let smartResult = Self.handleSmartQuery(query: query) {
             prompt = ""
             isProcessing = true
+            let smartMetrics = beginMetrics("smartQuery", query: query)
+            let smartStart = Date()
             currentTask = Task {
                 defer { isProcessing = false }
                 let emailsCopy = await currentWorkingSet()
@@ -1978,6 +2028,11 @@ struct AIAssistantView: View {
                     withAnimation(AnimationTiming.normal) {
                         conversationHistory.append(result)
                     }
+                    // The shortcut answers from the working set directly, so
+                    // its citations ARE the emails it named.
+                    finishMetrics(smartMetrics, startedAt: smartStart,
+                                  answer: result.answer,
+                                  citedEmailIDs: result.relatedEmailIDs)
                 }
             }
             return

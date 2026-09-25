@@ -2,26 +2,24 @@
 //  AIMetrics.swift
 //  mailin
 //
-//  Lightweight per-query instrumentation for the hybrid AI pipeline.
+//  Lightweight per-query instrumentation for the hybrid AI pipeline, so a
+//  claim about its latency, citation density or failure rate can be checked
+//  against recorded queries instead of asserted.
 //
-//  ⚠️ NOT WIRED. `begin` and `finalize` have no caller, so not one query has
-//  ever been recorded and `summary(lastN:)` has nothing to summarise.
+//  Recorded by `AIAssistantView.askAI()`: every engine branch and every
+//  early-return path (greeting, acknowledgment, smart-query shortcut) begins
+//  a record and finalizes it, including on failure and on cancellation.
 //
-//  The previous header said this "lets us prove (or disprove) that each
-//  architectural change actually improves quality, latency, or citation
-//  density." It does not, yet — which means no claim about the AI pipeline's
-//  quality, latency or citation density is currently backed by measurement
-//  from this app. Treat any such claim as unmeasured until this is wired.
-//
-//  What wiring it takes, and why it was not done as a drive-by: the API is
-//  `begin(...)` → mutate the record as it passes through the pipeline →
-//  `finalize(...)`. `AIAssistantView.askAI()` has several early returns
-//  (greeting, acknowledgment, smart-query shortcut, paywall) and then a
-//  switch over engines, each spawning its own Task. Recording only at the
-//  outer boundary would populate query/intent/timing and leave expertsRun,
-//  subQueryCount, toolsUsed, the findings counts, and the compression
-//  figures at zero — metrics that look complete and are not, which is worse
-//  than none. Each engine branch has to fill its own fields.
+//  HOW A ZERO STAYS HONEST. Engines see different things — the NLP path knows
+//  its findings counts; the streaming Apple AI path does not, and its expert
+//  pipeline runs inside a call this view cannot inspect. So each record
+//  carries `reported`: the field groups its engine actually measured.
+//  `summary(lastN:)` averages each metric only over the records that reported
+//  its group and returns the size of that subset, so an unmeasured metric
+//  reads as "not measured" rather than as 0.0. Filling every field with
+//  whatever was to hand would have produced numbers that look complete and
+//  are not — which is worse than none, and is the thing this file exists to
+//  prevent.
 //
 //  Stays 100% on-device. Stored in Application Support, never transmitted.
 //
@@ -80,6 +78,37 @@ final class AIMetrics: ObservableObject {
 
         // Optional user feedback collected later
         var userRating: Int? = nil
+
+        /// Which field GROUPS the recording path actually measured.
+        ///
+        /// Not decoration — it is what keeps a zero honest. Engines differ in
+        /// what they can see: the NLP path knows its findings counts, the
+        /// streaming Apple AI path does not, and its expert pipeline runs
+        /// inside a call this view cannot inspect. Averaging `totalFindings`
+        /// across every record would dilute the engines that do measure it
+        /// with zeros from the engines that cannot, and report the result as
+        /// a measurement. `summary(lastN:)` averages each metric only over the
+        /// records that reported its group, and says how many those were.
+        ///
+        /// A field outside these groups is UNMEASURED, not zero.
+        var reported: Set<String> = []
+
+        enum Group {
+            /// query, intent, persona, archiveEmailCount — always present.
+            static let identity = "identity"
+            /// totalElapsedMs, and retrieval/experts/synthesis when known.
+            static let timing = "timing"
+            /// answerCharCount, citedEmailCount.
+            static let output = "output"
+            /// totalFindings, highRelevanceCount, findingsLinkedToEmails.
+            static let findings = "findings"
+            /// kgNodesCited.
+            static let knowledgeGraph = "knowledgeGraph"
+            /// expertsRun, subQueryCount, toolsUsed.
+            static let routing = "routing"
+            /// synthesisLayerCount, contextChars.
+            static let compression = "compression"
+        }
 
         init(query: String, intent: String, persona: String, archiveEmailCount: Int) {
             self.id = UUID()
@@ -147,31 +176,62 @@ final class AIMetrics: ObservableObject {
 
     // MARK: - Aggregate views
 
-    /// Returns the rolling average over the last N records.
+    /// Rolling averages over the last N records.
+    ///
+    /// Each metric is averaged ONLY over the records whose engine reported
+    /// that field group, and carries the size of that subset. A metric with
+    /// `samples == 0` was not measured; it is not a value of zero.
     func summary(lastN: Int = 50) -> Summary {
         let slice = Array(recent.prefix(lastN))
         guard !slice.isEmpty else { return Summary() }
+
+        func average(_ group: String, _ value: (QueryRecord) -> Double) -> Measured {
+            let reporting = slice.filter { $0.reported.contains(group) }
+            guard !reporting.isEmpty else { return Measured() }
+            return Measured(
+                value: reporting.map(value).reduce(0, +) / Double(reporting.count),
+                samples: reporting.count)
+        }
+
         let count = Double(slice.count)
         return Summary(
             sampleSize: slice.count,
-            avgElapsedMs: Int(slice.map { Double($0.totalElapsedMs) }.reduce(0, +) / count),
-            avgFindings: slice.map { Double($0.totalFindings) }.reduce(0, +) / count,
-            avgHighRelevance: slice.map { Double($0.highRelevanceCount) }.reduce(0, +) / count,
-            avgCitedEmails: slice.map { Double($0.citedEmailCount) }.reduce(0, +) / count,
-            avgKGNodes: slice.map { Double($0.kgNodesCited) }.reduce(0, +) / count,
+            elapsedMs: average(QueryRecord.Group.timing) { Double($0.totalElapsedMs) },
+            findings: average(QueryRecord.Group.findings) { Double($0.totalFindings) },
+            highRelevance: average(QueryRecord.Group.findings) { Double($0.highRelevanceCount) },
+            citedEmails: average(QueryRecord.Group.output) { Double($0.citedEmailCount) },
+            kgNodes: average(QueryRecord.Group.knowledgeGraph) { Double($0.kgNodesCited) },
+            // Failure and fallback are recorded by every path, so these are
+            // over the whole slice.
             fallbackRate: Double(slice.filter { $0.fallbackUsed }.count) / count,
-            failureRate: Double(slice.filter { $0.didFail }.count) / count
+            failureRate: Double(slice.filter { $0.didFail }.count) / count,
+            byEngine: Dictionary(grouping: slice, by: \.intent).mapValues(\.count)
         )
+    }
+
+    /// An average and the number of records it came from. `samples == 0` means
+    /// no engine in the window measured it.
+    struct Measured: Equatable {
+        var value: Double = 0
+        var samples: Int = 0
+        var isMeasured: Bool { samples > 0 }
+        /// For display: the value, or an explicit "not measured".
+        func description(_ format: String = "%.1f") -> String {
+            isMeasured ? String(format: format, value) + " (n=\(samples))" : "not measured"
+        }
     }
 
     struct Summary {
         var sampleSize: Int = 0
-        var avgElapsedMs: Int = 0
-        var avgFindings: Double = 0
-        var avgHighRelevance: Double = 0
-        var avgCitedEmails: Double = 0
-        var avgKGNodes: Double = 0
+        var elapsedMs: Measured = Measured()
+        var findings: Measured = Measured()
+        var highRelevance: Measured = Measured()
+        var citedEmails: Measured = Measured()
+        var kgNodes: Measured = Measured()
         var fallbackRate: Double = 0
         var failureRate: Double = 0
+        /// Query count per engine, so a summary is never read as if one engine
+        /// produced all of it.
+        var byEngine: [String: Int] = [:]
     }
 }
