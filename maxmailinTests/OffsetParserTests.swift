@@ -653,3 +653,102 @@ final class OffsetImportEngineTests: XCTestCase {
         }
     }
 }
+
+// MARK: - S5: attachment readability is decided BEFORE offering the action
+
+/// `AttachmentHydrator.canRead` documents itself as the check "used by UI that
+/// must decide whether to offer Open/Save rather than offering an action that
+/// then does nothing" — and had no caller. The bulk save path made the user
+/// choose a destination folder first and only then reported "0 saved".
+///
+/// These pin the two answers that decision depends on.
+@MainActor
+final class AttachmentReadabilityTests: XCTestCase {
+
+    private var directory: URL!
+
+    override func setUp() async throws {
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("readable-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    override func tearDown() async throws {
+        try? FileManager.default.removeItem(at: directory)
+        AttachmentHydrator.locatorProvider = nil
+    }
+
+    private func headerOnlyEmail() -> MBOXParser.RawEmail {
+        MBOXParser.RawEmail(
+            headers: ["Message-ID": "<att@example.com>", "Subject": "Has an attachment",
+                      "From": "a@example.com", "To": "b@example.com",
+                      "Date": "Tue, 14 Mar 2017 09:41:00 +0000"],
+            // Header-only import: the bytes live in the source file, not here.
+            rawSource: "", messageType: "received",
+            attachments: [AttachmentMetadata(filename: "report.pdf", mimeType: "application/pdf", size: 1024)],
+            timestamp: "2017-03-14T09:41:00Z", domains: ["example.com"],
+            plainBody: "", htmlBody: "")
+    }
+
+    /// `nonisolated static` so the `locatorProvider` closure — which is a
+    /// plain `@Sendable` function, not main-actor work — can call it.
+    nonisolated static func locator(sourcePath: String) -> MessageLocator {
+        MessageLocator(
+            sourceDigest: nil,
+            sourcePath: sourcePath,
+            messageRange: ByteRange(offset: 0, length: 10),
+            envelopeRange: nil,
+            headerRange: ByteRange(offset: 0, length: 10),
+            bodyRange: ByteRange(offset: 10, length: 0),
+            ordinal: 0)
+    }
+
+    /// A message with no stored bytes and no live source is NOT readable, so
+    /// the UI must not offer to save it.
+    func testUnmountedSourceIsNotReadable() throws {
+        let email = headerOnlyEmail()
+        let missing = directory.appendingPathComponent("never-written.mbox").path
+        AttachmentHydrator.locatorProvider = { [missing] _ in
+            Self.locator(sourcePath: missing)
+        }
+        let attachment = try XCTUnwrap(email.attachments.first)
+        XCTAssertFalse(
+            AttachmentHydrator.canRead(attachment, index: 0, email: email),
+            "a locator pointing at a file that is not there must not read as readable")
+    }
+
+    /// The same message becomes readable once its source is present — so the
+    /// check is answering about the source, not refusing everything.
+    func testPresentSourceIsReadable() throws {
+        let email = headerOnlyEmail()
+        let url = directory.appendingPathComponent("present.mbox")
+        try Data("From a@example.com\nSubject: x\n\nbody\n".utf8).write(to: url)
+        AttachmentHydrator.locatorProvider = { [path = url.path] _ in
+            Self.locator(sourcePath: path)
+        }
+        let attachment = try XCTUnwrap(email.attachments.first)
+        XCTAssertTrue(
+            AttachmentHydrator.canRead(attachment, index: 0, email: email),
+            "a locator whose source exists must read as readable")
+    }
+
+    /// With no locator provider at all — capability off — a message that
+    /// carries its own bytes is still readable, and one that does not is not.
+    func testWithoutALocatorProviderStoredBytesStillCount() throws {
+        AttachmentHydrator.locatorProvider = nil
+        let attachment = AttachmentMetadata(filename: "x.pdf", mimeType: "application/pdf", size: 10)
+
+        var stored = headerOnlyEmail()
+        XCTAssertFalse(AttachmentHydrator.canRead(attachment, index: 0, email: stored),
+                       "no bytes, no locator — nothing to offer")
+
+        stored = MBOXParser.RawEmail(
+            headers: stored.headers,
+            rawSource: "From a@example.com\nSubject: x\n\nbody\n",
+            messageType: "received", attachments: [attachment],
+            timestamp: stored.timestamp, domains: ["example.com"],
+            plainBody: "body", htmlBody: "")
+        XCTAssertTrue(AttachmentHydrator.canRead(attachment, index: 0, email: stored),
+                      "a message carrying its own raw source needs no locator")
+    }
+}

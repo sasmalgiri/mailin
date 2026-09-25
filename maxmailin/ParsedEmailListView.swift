@@ -3053,6 +3053,23 @@ struct ParsedEmailListView: View {
     }
 
     private func saveAttachmentsForEmail(_ email: MBOXParser.RawEmail) {
+        // Ask BEFORE the folder panel whether anything can actually be
+        // recovered. `AttachmentHydrator.canRead` exists for exactly this —
+        // its doc says so — and had no caller, so the user picked a
+        // destination, waited, and was then told "0 saved, N failed". Most
+        // often that means the message's source volume is not mounted, which
+        // is worth saying rather than counting.
+        let cache = AttachmentHydrator.Cache()
+        let readable = email.attachments.enumerated().filter {
+            AttachmentHydrator.canRead($0.element, index: $0.offset, email: email, cache: cache)
+        }
+        guard !readable.isEmpty else {
+            listExportError = email.attachments.isEmpty
+                ? "This message has no attachments."
+                : "None of the \(email.attachments.count) attachment(s) can be read. The original file may not be available — check that the source volume is mounted."
+            return
+        }
+
         #if os(macOS)
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -3064,12 +3081,13 @@ struct ParsedEmailListView: View {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("attachments", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         #endif
-        var failedCount = 0
+        // Pre-counted above: anything unreadable is reported as skipped
+        // rather than attempted, so a failure here is a genuine write error.
+        var failedCount = email.attachments.count - readable.count
         // A stored email has no live temp file; re-extract from raw MIME so
         // "Save attachments" works on an archived message, not only on one
         // parsed this session.
-        let cache = AttachmentHydrator.Cache()
-        for (index, att) in email.attachments.enumerated() {
+        for (index, att) in readable {
             guard let data = AttachmentHydrator.data(for: att, index: index,
                                                      email: email, cache: cache) else {
                 failedCount += 1
@@ -3092,7 +3110,16 @@ struct ParsedEmailListView: View {
             }
         }
         if failedCount > 0 {
-            listExportError = "Failed to save \(failedCount) attachment(s)."
+            // Separate "could not be read" from "could not be written": the
+            // first is a missing source, the second a destination problem, and
+            // they need different actions from the user.
+            let unreadable = email.attachments.count - readable.count
+            let writeFailures = failedCount - unreadable
+            var parts: [String] = []
+            if unreadable > 0 { parts.append("\(unreadable) could not be read from this message") }
+            if writeFailures > 0 { parts.append("\(writeFailures) could not be written to that folder") }
+            listExportError = "Saved \(readable.count - writeFailures) of \(email.attachments.count): "
+                + parts.joined(separator: "; ") + "."
         }
         #if os(iOS)
         if failedCount == 0 {
