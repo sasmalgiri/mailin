@@ -320,22 +320,42 @@ final class EncryptedStorageLossTests: XCTestCase {
                           "a restored message that hashed the same would mean the truncation was harmless")
     }
 
-    /// Still unused. If this fails, something now calls it — read the file
-    /// header before allowing that.
-    func testNothingInTheAppUsesIt() throws {
+    /// Both quarantined types must stay unreferenced. If this fails, something
+    /// now calls one of them — read that file's header before allowing it.
+    ///
+    ///  • `EncryptedStorageManager` truncates raw source to 2,000 characters.
+    ///  • `PSTStreamingParser` refuses PSTs over 2 GB that `PSTParser` imports
+    ///    today via mmap, so routing through it would be a regression.
+    func testQuarantinedTypesStayUnused() throws {
         let source = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()      // maxmailinTests
             .deletingLastPathComponent()      // repo root
             .appendingPathComponent("maxmailin")
         let files = try FileManager.default.contentsOfDirectory(at: source, includingPropertiesForKeys: nil)
-        var callers: [String] = []
-        for file in files where file.pathExtension == "swift" {
-            guard file.lastPathComponent != "EncryptedStorageManager.swift" else { continue }
-            guard let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
-            if text.contains("EncryptedStorageManager") { callers.append(file.lastPathComponent) }
+            .filter { $0.pathExtension == "swift" }
+        // Without this the test passes when the path is wrong and it scanned
+        // nothing — the same way an earlier cloud-refusal test passed because
+        // the folder it pointed at did not exist.
+        XCTAssertGreaterThan(files.count, 100,
+                             "the source scan found \(files.count) files — it is not looking at the app")
+        for quarantined in ["EncryptedStorageManager", "PSTStreamingParser"] {
+            XCTAssertTrue(files.contains { $0.lastPathComponent == "\(quarantined).swift" },
+                          "\(quarantined).swift not found — this guard is checking nothing")
+            var callers: [String] = []
+            for file in files where file.lastPathComponent != "\(quarantined).swift" {
+                guard let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
+                // Comments may name it — a mention is not a call site.
+                let referenced = text
+                    .split(separator: "\n", omittingEmptySubsequences: false)
+                    .contains { line in
+                        let trimmed = line.trimmingCharacters(in: .whitespaces)
+                        return !trimmed.hasPrefix("//") && trimmed.contains(quarantined)
+                    }
+                if referenced { callers.append(file.lastPathComponent) }
+            }
+            XCTAssertTrue(callers.isEmpty,
+                          "\(quarantined) is quarantined but is now referenced by: \(callers.joined(separator: ", "))")
         }
-        XCTAssertTrue(callers.isEmpty,
-                      "EncryptedStorageManager truncates raw source to 2,000 chars — now referenced by: \(callers.joined(separator: ", "))")
     }
 }
 

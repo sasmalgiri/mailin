@@ -2,7 +2,32 @@
 //  PSTStreamingParser.swift
 //  maxmailin
 //
-//  STREAMING PST PARSER — v0.1 SKELETON
+//  ⛔️ SUPERSEDED AND UNUSED. WIRING THIS UP WOULD BE A REGRESSION. ⛔️
+//
+//  Nothing calls this. It is a deletion candidate; it stays only because
+//  removing the file requires a project-file change.
+//
+//  The premise below — that PSTParser is capped at 2 GB and anything larger
+//  "crashes on memory exhaustion" — stopped being true at S1. `PSTParser`
+//  now reads with `Data(contentsOf:options: .mappedIfSafe)`, so peak RSS
+//  tracks the working set the B-tree touches rather than the file size, and
+//  the only size-based refusal left is a correctness one: an ANSI PST over
+//  2 GB is corrupt by definition (`SourceSizePolicy.pstVerdict`). A Unicode
+//  PST of any size imports today.
+//
+//  So the fallback logic here is backwards. Its ≤2 GB branch delegates to
+//  PSTParser, and its >2 GB branch throws `notYetSupported` — for exactly the
+//  files PSTParser currently handles. Routing PST imports through this would
+//  break large-PST import, not protect it.
+//
+//  The "streaming infrastructure" it offers is also superseded:
+//  `OffsetMBOXScanner` and `LocatorReader` are the bounded, byte-range,
+//  cancellable readers the app actually uses, and they are tested against
+//  real mail.
+//
+//  If MS-PST streaming is ever implemented, start from those, not from here.
+//
+//  --- original scope statement, kept for context ---
 //
 //  Honest scope statement:
 //  The full PST format (Microsoft's MS-PST spec) is a b-tree of references

@@ -1,6 +1,7 @@
-# Reachability audit — 15 defects a green test suite did not catch
+# Reachability audit — 19 defects a green test suite did not catch
 
-Status: all 15 fixed and committed. 484 tests pass, 0 fail, 1 skipped by design.
+Status: all 19 addressed and committed. 494 tests pass, 0 fail, 1 skipped by
+design. Two files are quarantined pending deletion (see the end).
 
 ## Why this document exists
 
@@ -23,7 +24,7 @@ the fifteenth by asking it of my own code from the same week.
 grep -rhoE "\b$name\s*\(" maxmailin/*.swift | wc -l   # vs. declaration count
 ```
 
-Two traps in the method itself, both hit here:
+Three traps in the method itself, all hit here:
 
 1. **A pattern excluding a leading `.` finds nothing.** `[^a-zA-Z0-9_.]name\(`
    skips every method call on a receiver. It reported `dedupeShards` as dead
@@ -32,6 +33,26 @@ Two traps in the method itself, both hit here:
    that at least one test calls omitted `unarchiveEmail` — no caller, no test,
    and the UI promising it worked. The most dangerous dead code has no tests
    either.
+3. **A call-pattern grep cannot see a function used as a value.**
+   `onCompletion: handleArchiveImportResult` has no parentheses, so
+   `\bname\s*\(` misses it. Confirm every candidate with a bare-name grep
+   before acting: a function at exactly one bare occurrence is its own
+   declaration and nothing else.
+
+### Audit the type, not just the function
+
+The two largest findings came from widening the unit. For each top-level type,
+is it referenced in any file other than the one declaring it?
+
+```sh
+grep -rlw "$TypeName" maxmailin/*.swift | grep -v "^$declaringFile$"
+```
+
+Expect heavy noise — nested view types, `@Generable` model types, AppIntents
+registered by the system, unused design-system modifiers. The signal is a type
+that represents a whole *feature*, because its consumer should by definition be
+elsewhere. That is how an entire enterprise deliverable (E3/E4) and two
+quarantined files turned up after twelve function-level rounds had finished.
 
 Noise to expect: SwiftUI protocol conformances (`makeNSView`, `placeSubviews`,
 `makeBody`), unused design-system modifiers, and Page 4 / live-mail, which does
@@ -56,10 +77,16 @@ not ship. Signal: anything a UI string, doc comment, or checklist promises.
 | 13 | `blockedCapabilities()`: "surfaced in the matrix so a row is never mysteriously inert" | No caller | Banner naming each dependency-blocked capability and its cause |
 | 14 | eDiscovery checklist: "Verify source file integrity" | `verifySourceFile` had no caller, so the instruction had no button | Settings ▸ Source File Integrity ▸ "Check a Source File Against Its Hash…" |
 | 15 | — | `generateConcordanceLoadFile` was dead **and malformed**: U+0014 as both delimiter and qualifier, and missing BCC / SHA-256 / custodian / tag | Removed, with the reason recorded; format pinned by tests |
+| 16 | E3 sealed case bundles + E4 team merge, recorded as shipped | The **whole of `CaseBundleService`** had no caller and no test. Neither could be reached from the app, and neither had ever been executed | Forensic Export ▸ Team handoff; 7 tests, which the implementation passed unchanged |
+| 17 | Merge "skips identical artifacts" | Re-importing one bundle duplicated everything in it: the add path retitled an artifact, so the next pass compared the retitled local copy against the unlabelled incoming one. Three imports left four copies | Merged ids derived from (origin, sender); a genuine revision is still kept alongside |
+| 18 | "Encrypted at-rest storage for sensitive email archive data" | `EncryptedStorageManager` has no caller, and keeps only the **first 2,000 characters** of raw source, restoring the truncation as if it were the original. ~1% of a real message, and every recomputed hash differs | Quarantined with a blunt header + 3 tests; recommend deletion |
+| 19 | `PSTStreamingParser` protects against >2 GB PSTs "crashing on memory exhaustion" | No caller, and the premise expired at S1 — `PSTParser` mmaps, so only a correctness refusal remains. Its >2 GB branch throws `notYetSupported` for files that import today, so wiring it up would be a **regression** | Quarantined with the reason; covered by the same guard test |
 
-Defect 15 is the one worth remembering: dead code is not neutral. That function
-carried the most obvious name — more obvious than the path that actually ships
-— so the next person needing a load file would have found the broken one first.
+Defects 15, 18 and 19 share the lesson worth remembering: **dead code is not
+neutral.** Each carried the most authoritative name in its area — more obvious
+than the path that actually ships — so the next person to need a load file, an
+encrypted archive, or large-PST streaming would have found the broken one
+first. Two of the three would have destroyed evidence if wired up.
 
 ## What the tests now cover
 
@@ -77,9 +104,10 @@ Three tests exist specifically to fail if a fix regresses into looking correct:
 - `testEvidenceSeal_fourVerdicts` — including `.noSeal`, so a held message
   with nothing recorded can never read as intact.
 
-## Two mistakes I made while auditing
+## Mistakes I made while auditing
 
-Recorded because both produced a *passing* test that verified nothing:
+Recorded because each produced a *passing* test that verified nothing — the
+same failure as the defects themselves:
 
 - A cloud-refusal test pointed at `~/Library/Mobile Documents`, which does not
   exist on a machine without iCloud Drive. It was testing the environment.
@@ -87,6 +115,25 @@ Recorded because both produced a *passing* test that verified nothing:
 - The shared `probeEmail` fixture has `rawSource: ""`, so a hash assertion
   against it compared against an empty string. `String.contains("")` is
   `false`, which is the only reason it surfaced at all.
+- The quarantine guard scans the source directory for references. Had the path
+  been wrong it would have scanned nothing and passed, so it now asserts it
+  found the app (>100 files, including each quarantined file by name).
+
+One assertion I wrote was simply too broad, and the failure taught something:
+`blockedCapabilities()` is empty only for the chain under test, because a fresh
+registry has the optional pages off and *their* defaults-on capabilities are
+legitimately blocked. That is also why the matrix banner reports dependency
+blocks only — page-off blocks would fill it on every fresh install.
+
+## Quarantined, pending deletion
+
+Both need a project-file change to remove, which I did not make. Both are
+covered by `EncryptedStorageLossTests.testQuarantinedTypesStayUnused`, which
+fails if anything starts referencing them.
+
+- `maxmailin/EncryptedStorageManager.swift` (351 lines) — lossy "archive".
+- `maxmailin/PSTStreamingParser.swift` — superseded; wiring it up regresses
+  large-PST import.
 
 ## Still open
 
