@@ -207,24 +207,23 @@ struct ExportManager {
         #endif
     }
 
-    // MARK: - Concordance Load File (6F)
-
-    static func generateConcordanceLoadFile(from emails: [MBOXParser.RawEmail], batesPrefix: String = "MAIL") -> String {
-        var lines = ["\u{14}DOCID\u{14}\u{14}BEGBATES\u{14}\u{14}ENDBATES\u{14}\u{14}FROM\u{14}\u{14}TO\u{14}\u{14}CC\u{14}\u{14}SUBJECT\u{14}\u{14}DATE\u{14}\u{14}ATTACHMENTS\u{14}"]
-
-        for (idx, email) in emails.enumerated() {
-            let bates = String(format: "%@%06d", batesPrefix, idx + 1)
-            let from = (email.headers["From"] ?? "").replacingOccurrences(of: "\u{14}", with: "")
-            let to = (email.headers["To"] ?? "").replacingOccurrences(of: "\u{14}", with: "")
-            let cc = (email.headers["Cc"] ?? "").replacingOccurrences(of: "\u{14}", with: "")
-            let subject = (email.headers["Subject"] ?? "").replacingOccurrences(of: "\u{14}", with: "")
-            let date = email.timestamp
-            let attachCount = "\(email.attachments.count)"
-            lines.append("\u{14}\(email.id)\u{14}\u{14}\(bates)\u{14}\u{14}\(bates)\u{14}\u{14}\(from)\u{14}\u{14}\(to)\u{14}\u{14}\(cc)\u{14}\u{14}\(subject)\u{14}\u{14}\(date)\u{14}\u{14}\(attachCount)\u{14}")
-        }
-
-        return lines.joined(separator: "\n")
-    }
+    // MARK: - Concordance Load File
+    //
+    // REMOVED: `generateConcordanceLoadFile`. It had no caller and was wrong
+    // twice over, which made it a trap rather than merely dead — it is the
+    // more obvious name than the path that actually ships, so the next person
+    // to need a load file would have found it first.
+    //
+    //  • It used \u{14} (DC4) as BOTH the delimiter and the text qualifier, so
+    //    a review platform cannot tell one from the other. The convention, and
+    //    what `ForensicManager.concordanceDATHeader` emits, is \u{14} to
+    //    delimit and \u{FE} (þ) to qualify.
+    //  • It omitted BCC, the SHA-256 hash, the custodian and the tag — four
+    //    columns a production is judged on.
+    //
+    // Concordance .dat ships from `ForensicManager.concordanceDATRow` and
+    // `ArchiveExportService.exportConcordanceDAT`, which stream row by row
+    // instead of building the whole file in memory.
 
     // MARK: - Relativity Load File (6F+)
 
@@ -270,19 +269,12 @@ struct ExportManager {
         return "\(controlNum),\(csvEscape(custodianName)),\(dateSent),,\(from),\(to),\(cc),\(bcc),\(subject),\(messageID),\(conversationIdx),\(attachCount),\(hasAttach),\(fileSize),\(md5),\(nativePath)"
     }
 
-    static func generateRelativityLoadFile(
-        from emails: [MBOXParser.RawEmail],
-        batesPrefix: String = "MAIL",
-        custodianName: String = "",
-        caseNumber: String = ""
-    ) -> String {
-        var lines = [relativityLoadFileHeader]
-        for (idx, email) in emails.enumerated() {
-            lines.append(relativityRow(email: email, index: idx, batesPrefix: batesPrefix,
-                                       custodianName: custodianName, caseNumber: caseNumber))
-        }
-        return lines.joined(separator: "\r\n")
-    }
+    // REMOVED: `generateRelativityLoadFile`. No caller, and it accumulated the
+    // entire load file in one String — an archive-sized allocation, which is
+    // the thing the streaming exporter was written to avoid. The header and
+    // `relativityRow` above are the shared pieces and stay;
+    // `ArchiveExportService.exportRelativityCSV` writes the file a row at a
+    // time from a bounded stream.
 
     private static func csvEscape(_ value: String) -> String {
         var v = value

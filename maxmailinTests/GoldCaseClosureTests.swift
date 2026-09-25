@@ -266,6 +266,67 @@ final class PredictiveCodingRankingTests: XCTestCase {
     }
 }
 
+// MARK: - Concordance .dat load-file format
+
+/// A superseded `ExportManager.generateConcordanceLoadFile` used \u{14} as both
+/// the delimiter and the text qualifier — indistinguishable to a review
+/// platform — and omitted BCC, the SHA-256 hash, the custodian and the tag. It
+/// had no caller but carried the more obvious name, so it was removed. These
+/// pin what the shipping path emits, so the convention cannot drift back.
+@MainActor
+final class ConcordanceLoadFileTests: XCTestCase {
+
+    private let delimiter = "\u{14}"
+    private let qualifier = "\u{FE}"
+
+    func testHeader_usesDistinctDelimiterAndQualifier() {
+        let header = ForensicManager.concordanceDATHeader
+        XCTAssertTrue(header.contains(qualifier),
+                      "the text qualifier must be þ (U+00FE), not the delimiter")
+        XCTAssertTrue(header.contains(delimiter), "fields must be delimited by U+0014")
+        XCTAssertFalse(header.contains("\(qualifier)\(qualifier)"),
+                       "two qualifiers must never abut — that was the broken form")
+    }
+
+    func testHeader_carriesTheColumnsAProductionIsJudgedOn() {
+        let header = ForensicManager.concordanceDATHeader
+        for column in ["DOCID", "BEGBATES", "ENDBATES", "FROM", "TO", "CC", "BCC",
+                       "SUBJECT", "DATESENT", "MSGID", "HASHSHA256", "CUSTODIAN", "TAG"] {
+            XCTAssertTrue(header.contains(column), "missing column \(column)")
+        }
+    }
+
+    func testRow_hasOneFieldPerHeaderColumnAndCarriesTheHash() {
+        // A real rawSource, because the hash column is computed from it — a
+        // fixture with none would make the assertion below vacuous.
+        let email = MBOXParser.RawEmail(
+            headers: ["From": "sender@example.com", "To": "recipient@example.com",
+                      "Cc": "cc@example.com", "Bcc": "bcc@example.com",
+                      "Subject": "Production probe",
+                      "Date": "Tue, 14 Mar 2017 09:41:00 +0000",
+                      "Message-ID": "<dat-probe@example.com>"],
+            rawSource: "From sender@example.com\nSubject: Production probe\n\nbody\n",
+            messageType: "email", attachments: [],
+            timestamp: "Tue, 14 Mar 2017 09:41:00 +0000", domains: ["example.com"],
+            plainBody: "body", htmlBody: "")
+        let row = ForensicManager.shared.concordanceDATRow(email, bates: "MAIL000001")
+
+        func fieldCount(_ line: String) -> Int {
+            line.trimmingCharacters(in: .newlines).components(separatedBy: delimiter).count
+        }
+        XCTAssertEqual(fieldCount(row), fieldCount(ForensicManager.concordanceDATHeader),
+                       "a row with a different field count than the header cannot be loaded")
+        XCTAssertTrue(row.hasSuffix("\n"), "rows must be newline-terminated")
+
+        let expected = ForensicManager.computeEmailHash(rawSource: email.rawSource).sha256
+        XCTAssertEqual(expected.count, 64, "a SHA-256 hex digest is 64 characters")
+        XCTAssertTrue(row.contains(expected),
+                      "the row must carry the message's SHA-256 — the column the removed version dropped")
+        XCTAssertTrue(row.contains("bcc@example.com"),
+                      "BCC is another column the removed version dropped")
+    }
+}
+
 // MARK: - Defect V3-D1: the standalone-name redaction leak
 
 final class RedactionDefectV3D1Tests: XCTestCase {
