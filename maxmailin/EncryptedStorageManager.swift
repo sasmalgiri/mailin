@@ -2,7 +2,30 @@
 //  EncryptedStorageManager.swift
 //  mailin
 //
-//  Encrypted at-rest storage for sensitive email archive data using AES-GCM.
+//  ⛔️ UNUSED, AND LOSSY. DO NOT WIRE THIS UP AS AN ARCHIVE. ⛔️
+//
+//  Nothing in the app references this type — no caller, and until the test
+//  below, no test. It is a deletion candidate; it stays only because removing
+//  the file requires a project-file change.
+//
+//  The AES-GCM and Keychain handling are sound (256-bit key, random nonce,
+//  `WhenUnlockedThisDeviceOnly`). The problem is what gets encrypted:
+//  `SerializableEmail` keeps `rawSourceSnippet` — the FIRST 2,000 CHARACTERS
+//  of the message — and `toRawEmail()` restores that truncation into
+//  `rawSource` as though it were the original. Real mail averages ~180 KB, so
+//  a message would come back with roughly 1% of itself and no indication that
+//  anything was dropped. Every hash recomputed from it would differ from the
+//  one taken at import.
+//
+//  It is named like an archive and behaves like a preview cache. That mismatch
+//  is the danger: the name is more discoverable than the truth, exactly like
+//  the malformed Concordance writer removed in the same audit. If encrypted
+//  export is wanted, build it over the blob tier's raw bytes
+//  (`SQLiteEmailStore` + `BlobStore`), which is the only place full fidelity
+//  lives — do not extend this.
+//
+//  At-rest protection that IS real and IS wired: `ArtifactProtection` in
+//  ImportReceipt.swift (Data Protection on iOS, 700/600 on macOS).
 //
 
 import Foundation

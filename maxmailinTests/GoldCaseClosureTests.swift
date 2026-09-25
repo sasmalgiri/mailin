@@ -267,6 +267,78 @@ final class PredictiveCodingRankingTests: XCTestCase {
     }
 }
 
+// MARK: - EncryptedStorageManager is lossy and must stay unused
+
+/// `EncryptedStorageManager` has no caller anywhere. Its AES-GCM and Keychain
+/// handling are sound, but it serialises only the first 2,000 characters of a
+/// message's raw source and restores that truncation as if it were the
+/// original — an "archive" that is really a preview cache.
+///
+/// These tests exist so the truncation shows up in the suite instead of only
+/// in a comment. They assert the CURRENT behaviour deliberately: if someone
+/// fixes the fidelity, they fail, and whoever is doing that work should read
+/// the file header first and decide whether the type should exist at all.
+@MainActor
+final class EncryptedStorageLossTests: XCTestCase {
+
+    /// Real mail averages ~180 KB, so this is not an edge case.
+    private func largeEmail() -> MBOXParser.RawEmail {
+        let body = String(repeating: "evidence line that must survive an archive\n", count: 4_000)
+        return MBOXParser.RawEmail(
+            headers: ["Message-ID": "<large@example.com>", "Subject": "Large",
+                      "From": "a@example.com", "To": "b@example.com",
+                      "Date": "Tue, 14 Mar 2017 09:41:00 +0000"],
+            rawSource: "From a@example.com\nSubject: Large\n\n" + body,
+            messageType: "received", attachments: [],
+            timestamp: "2017-03-14T09:41:00Z", domains: ["example.com"],
+            plainBody: body, htmlBody: "")
+    }
+
+    func testSerialisationTruncatesRawSourceTo2000Characters() {
+        let email = largeEmail()
+        XCTAssertGreaterThan(email.rawSource.count, 100_000, "the fixture must be realistically large")
+
+        let restored = EncryptedStorageManager.SerializableEmail(from: email).toRawEmail()
+
+        XCTAssertEqual(restored.rawSource.count, 2_000,
+                       "raw source is silently cut to a 2,000-character snippet")
+        XCTAssertNotEqual(restored.rawSource, email.rawSource,
+                          "the restored message is NOT the message that went in")
+        XCTAssertTrue(email.rawSource.hasPrefix(restored.rawSource),
+                      "what survives is a prefix — the rest is simply gone, not encoded elsewhere")
+    }
+
+    /// The consequence that matters forensically: a hash recomputed from a
+    /// restored message cannot match the one taken at import.
+    func testRestoredMessageFailsItsOwnIntegrityHash() {
+        let email = largeEmail()
+        let atImport = ForensicManager.computeEmailHash(rawSource: email.rawSource).sha256
+        let restored = EncryptedStorageManager.SerializableEmail(from: email).toRawEmail()
+        let afterRestore = ForensicManager.computeEmailHash(rawSource: restored.rawSource).sha256
+
+        XCTAssertNotEqual(atImport, afterRestore,
+                          "a restored message that hashed the same would mean the truncation was harmless")
+    }
+
+    /// Still unused. If this fails, something now calls it — read the file
+    /// header before allowing that.
+    func testNothingInTheAppUsesIt() throws {
+        let source = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()      // maxmailinTests
+            .deletingLastPathComponent()      // repo root
+            .appendingPathComponent("maxmailin")
+        let files = try FileManager.default.contentsOfDirectory(at: source, includingPropertiesForKeys: nil)
+        var callers: [String] = []
+        for file in files where file.pathExtension == "swift" {
+            guard file.lastPathComponent != "EncryptedStorageManager.swift" else { continue }
+            guard let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
+            if text.contains("EncryptedStorageManager") { callers.append(file.lastPathComponent) }
+        }
+        XCTAssertTrue(callers.isEmpty,
+                      "EncryptedStorageManager truncates raw source to 2,000 chars — now referenced by: \(callers.joined(separator: ", "))")
+    }
+}
+
 // MARK: - V3-E3/E4 sealed case bundles
 
 /// The whole of `CaseBundleService` — export, seal verification, and the

@@ -30,15 +30,15 @@ import Foundation
 import CryptoKit
 
 /// W3: at-rest protection for locally-created evidence artifacts (SQLite DB,
-/// FTS shards, receipts, checkpoints, audit log, encrypted archives).
+/// FTS shards, receipts, checkpoints, audit log, exported files).
 ///
 ///  • iOS — Data Protection classes:
 ///      `.completeUntilFirstUserAuthentication` for artifacts that background
 ///      work must keep reading/writing after the device locks (the SQLite
 ///      store, FTS shards, import checkpoints/receipts written mid-import,
 ///      and the audit log that background jobs append to). `.complete` for
-///      strictly foreground, user-driven artifacts (encrypted archive
-///      export files) — unreadable whenever the device is locked.
+///      strictly foreground, user-driven artifacts (export files the user
+///      asked for) — unreadable whenever the device is locked.
 ///  • macOS — no Data Protection classes; instead ensure code-created
 ///      containing directories are 700 and files 600 (owner-only), so other
 ///      local users can never read the archive artifacts.
