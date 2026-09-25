@@ -17,6 +17,31 @@ import XCTest
 
 final class ArchivePageCapabilityTests: XCTestCase {
 
+    /// Temp roots created by this test case, removed in `tearDown`.
+    ///
+    /// Each test used to leak its root — three ~300 MB SQLite + FTS trees per
+    /// run — with a comment explaining that deleting it races
+    /// BulkImportCoordinator's deferred budget-restore Task. True, but leaking
+    /// was worse: the roots live under the app container's tmp, which macOS
+    /// treats as purgeable, so the OS unlinked those files WHILE SQLite still
+    /// had them open. libsqlite3 logged "vnode unlinked while in use" and the
+    /// next statement failed as `step("disk I/O error")` — which reads as a
+    /// store bug and is not one, the exact misreading the export test's own
+    /// comment warns about. It made the suite fail intermittently depending on
+    /// how much garbage previous runs had left behind.
+    ///
+    /// Removing them here instead, after a grace period for that deferred
+    /// Task, keeps the cleanup deterministic and off the critical path.
+    private var roots: [URL] = []
+
+    override func tearDown() async throws {
+        // Let the coordinator's deferred budget-restore finish before the
+        // directory goes away underneath it.
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        for root in roots { try? FileManager.default.removeItem(at: root) }
+        roots.removeAll()
+    }
+
     private static var fixtureURL: URL? {
         let url = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Downloads/Mail/Sent.mbox")
@@ -34,6 +59,7 @@ final class ArchivePageCapabilityTests: XCTestCase {
             .appendingPathComponent("archive-caps-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try MailinStorageEnvironment.assertNotProduction(root)
+        roots.append(root)
 
         let store = SQLiteEmailStore(directory: root.appendingPathComponent("store", isDirectory: true))
         let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts", isDirectory: true))
@@ -49,11 +75,7 @@ final class ArchivePageCapabilityTests: XCTestCase {
 
     func testArchive_canReadAttachmentBytesFromStoredEmail() async throws {
         let (store, _, root, _) = try await importFixture()
-        // Deliberately NOT removing `root` here: BulkImportCoordinator's
-        // budget-restore runs in a deferred Task (P3.3) that may still hold the
-        // store and shard handles after this test returns, and deleting the
-        // directory underneath it races that teardown. The temp directory is
-        // reclaimed by the OS.
+        // `root` is removed in tearDown — see the note on `roots`.
 
         // Find a STORED email that has attachments, reading it back the way the
         // detail view does.
@@ -101,11 +123,7 @@ final class ArchivePageCapabilityTests: XCTestCase {
 
     func testArchive_searchFindsStoredMessages() async throws {
         let (store, fts, root, _) = try await importFixture()
-        // Deliberately NOT removing `root` here: BulkImportCoordinator's
-        // budget-restore runs in a deferred Task (P3.3) that may still hold the
-        // store and shard handles after this test returns, and deleting the
-        // directory underneath it races that teardown. The temp directory is
-        // reclaimed by the OS.
+        // `root` is removed in tearDown — see the note on `roots`.
 
         let total = try await store.totalCount()
         XCTAssertGreaterThan(total, 0)
@@ -141,11 +159,7 @@ final class ArchivePageCapabilityTests: XCTestCase {
         // and is not one — see TestPreconditions.
         try TestPreconditions.requireFreeSpace(TestPreconditions.referenceFixtureBudget)
         let (store, fts, root, _) = try await importFixture()
-        // Deliberately NOT removing `root` here: BulkImportCoordinator's
-        // budget-restore runs in a deferred Task (P3.3) that may still hold the
-        // store and shard handles after this test returns, and deleting the
-        // directory underneath it races that teardown. The temp directory is
-        // reclaimed by the OS.
+        // `root` is removed in tearDown — see the note on `roots`.
 
         let repo = EmailStoreRepository(store: store, fts: fts)
         let service = await ArchiveExportService(archive: ArchiveDataService(repository: repo))
