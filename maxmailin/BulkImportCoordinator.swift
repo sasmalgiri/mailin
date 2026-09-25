@@ -482,7 +482,7 @@ final class BulkImportCoordinator {
                     // `persistBatch` runs, and saved only for rows the store
                     // actually committed — a locator for a deduped row would
                     // point at bytes no row owns.
-                    var batchLocators: [UUID: (locator: MessageLocator, bodyDecoded: Bool)] = [:]
+                    var batchLocators: [UUID: (locator: MessageLocator, bodyDecoded: Bool, parts: [PartLocator])] = [:]
 
                     // The persist → index → checkpoint body, shared by both
                     // engines. Extracted to a local closure rather than
@@ -620,6 +620,21 @@ final class BulkImportCoordinator {
                         if !batchLocators.isEmpty {
                             for id in insertResult.insertedIDs {
                                 guard let entry = batchLocators[id] else { continue }
+                                // Per-part ranges, when the engine produced
+                                // them. Saved before the message locator so a
+                                // failure here cannot leave parts referring to
+                                // a message whose own locator never landed.
+                                if !entry.parts.isEmpty {
+                                    do {
+                                        try await store.savePartLocators(entry.parts, emailID: id)
+                                    } catch {
+                                        // Degrades to the whole-message read
+                                        // path — the pre-S5 behaviour — and is
+                                        // never a reason to fail an import that
+                                        // has already committed the mail.
+                                        Self.logger.warning("part locators failed for \(id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                                    }
+                                }
                                 // Counted against COMMITTED rows only: a
                                 // header-only message that was deduped away is
                                 // not a shortfall in this archive.
@@ -671,7 +686,7 @@ final class BulkImportCoordinator {
                             if options.recordLocators {
                                 for item in imported {
                                     batchLocators[item.email.id] =
-                                        (item.locator, item.bodyWasDecoded)
+                                        (item.locator, item.bodyWasDecoded, item.parts)
                                 }
                             }
                             try await persistBatch(imported.map(\.email))

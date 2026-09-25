@@ -66,6 +66,15 @@ struct OffsetImportEngine: Sendable {
         var locator: MessageLocator
         /// False when only headers were parsed.
         var bodyWasDecoded: Bool
+        /// Where each MIME part's bytes are, so an attachment can later be
+        /// read without its siblings.
+        ///
+        /// Populated only on the under-ceiling path, where the message's bytes
+        /// have already been read and scanning them costs no extra I/O. A
+        /// header-only import leaves this empty on purpose: finding its parts
+        /// would mean a linear pass over the very body S4 declined to read.
+        /// Empty means "use the whole-message path", never "no attachments".
+        var parts: [PartLocator] = []
     }
 
     // MARK: - Import
@@ -160,6 +169,28 @@ struct OffsetImportEngine: Sendable {
             failed: failed, errorCategories: categories)
     }
 
+    // MARK: - Parts
+
+    /// Part ranges for a message whose bytes are already in hand.
+    ///
+    /// `messageData` must be the bytes of `locator.messageRange` exactly, so
+    /// the body's position inside it is a subtraction rather than a search.
+    /// Returns empty on anything inconsistent: a wrong range is worse than no
+    /// range, because the caller would read the wrong bytes and believe them.
+    private static func scanParts(messageData: Data,
+                                  locator: MessageLocator,
+                                  headers: [String: String],
+                                  messageID: UUID) -> [PartLocator] {
+        guard messageData.count == Int(locator.messageRange.length) else { return [] }
+        let bodyStart = Int(locator.bodyRange.offset - locator.messageRange.offset)
+        guard bodyStart >= 0, bodyStart <= messageData.count else { return [] }
+        let bodyData = messageData.subdata(in: bodyStart..<messageData.count)
+        return MIMEPartScanner.parts(bodyData: bodyData,
+                                     bodyOffset: locator.bodyRange.offset,
+                                     topHeaders: headers,
+                                     messageID: messageID)
+    }
+
     // MARK: - One message
 
     private func build(locator: MessageLocator,
@@ -176,7 +207,15 @@ struct OffsetImportEngine: Sendable {
             let email = try MBOXParser.processRawMessage(
                 raw, senderEmail: senderEmail,
                 retainAttachmentBytes: retainAttachmentBytes)
-            return Imported(email: email, locator: locator, bodyWasDecoded: true)
+
+            // Part ranges come from `data` — the ORIGINAL bytes — not from
+            // `raw`. Re-encoding the String would shift every offset whenever
+            // the source was not UTF-8 (latin-1 high bytes expand to two), and
+            // a shifted range corrupts the attachment it points at.
+            let parts = Self.scanParts(messageData: data, locator: locator,
+                                       headers: email.headers, messageID: email.id)
+            return Imported(email: email, locator: locator,
+                            bodyWasDecoded: true, parts: parts)
         }
 
         // Header-only import. This message would otherwise not exist in the

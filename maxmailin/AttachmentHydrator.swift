@@ -54,6 +54,16 @@ enum AttachmentHydrator {
     // with no other code path changing.
     nonisolated(unsafe) static var locatorProvider: (@Sendable (UUID) -> MessageLocator?)?
 
+    /// Per-part ranges for a message, when they were recorded at import.
+    ///
+    /// This is what makes the read proportional to the ATTACHMENT rather than
+    /// to the message: a 10 KB attachment inside a 12 MB message is 10 KB of
+    /// I/O and no MIME parse at all. Set alongside `locatorProvider` while
+    /// `Capability.locatorReads` is on; nil returns fall through to the
+    /// whole-message path, which is also what every message imported before
+    /// part recording existed will do.
+    nonisolated(unsafe) static var partProvider: (@Sendable (UUID) -> [PartLocator])?
+
     /// The raw MIME for a message, preferring the stored copy and falling back
     /// to the original source bytes via its locator.
     ///
@@ -102,7 +112,13 @@ enum AttachmentHydrator {
            let data = Data(base64Encoded: base64, options: .ignoreUnknownCharacters) {
             return data
         }
-        // 3. Re-extract from the raw MIME — the stored copy, or the original
+        // 3. The part's OWN bytes, when its range was recorded at import.
+        //    Reads the attachment and nothing else — no siblings, no MIME
+        //    parse, no whole-message String.
+        if let bytes = partBytes(for: attachment, index: index, email: email) {
+            return bytes
+        }
+        // 4. Re-extract from the raw MIME — the stored copy, or the original
         //    source bytes when a locator points at them.
         guard rawSource(for: email) != nil else { return nil }
         let list = hydratedAttachments(for: email, cache: cache)
@@ -118,6 +134,76 @@ enum AttachmentHydrator {
             return data
         }
         return nil
+    }
+
+    // MARK: - Per-part reads
+
+    /// Reads one attachment from its own byte range and decodes its transfer
+    /// encoding.
+    ///
+    /// Returns nil — falling through to the whole-message path — whenever the
+    /// part cannot be identified with confidence. Matching is by filename
+    /// first and by attachment ordinal second, and a wrong match would hand
+    /// back a different file under the requested name, so "not sure" must mean
+    /// "don't answer" rather than "best guess".
+    private static func partBytes(for attachment: AttachmentMetadata,
+                                  index: Int,
+                                  email: MBOXParser.RawEmail) -> Data? {
+        guard let provider = partProvider,
+              let locatorProvider,
+              let messageLocator = locatorProvider(email.id) else { return nil }
+        let parts = provider(email.id)
+        guard !parts.isEmpty else { return nil }
+
+        let attachments = parts.filter(\.isAttachment)
+        let match: PartLocator?
+        if !attachment.filename.isEmpty,
+           let byName = attachments.first(where: { $0.filename == attachment.filename }) {
+            match = byName
+        } else if index < attachments.count {
+            match = attachments[index]
+        } else {
+            match = nil
+        }
+        guard let part = match, part.contentRange.length > 0 else { return nil }
+
+        do {
+            let raw = try LocatorReader().read(part.contentRange,
+                                               from: messageLocator.sourcePath)
+            return decode(raw, encoding: part.contentTransferEncoding)
+        } catch {
+            attachmentLog.error("""
+                part read failed for \(email.id.uuidString, privacy: .public) \
+                \(attachment.filename, privacy: .public): \
+                \(error.localizedDescription, privacy: .public)
+                """)
+            return nil
+        }
+    }
+
+    /// Decodes a part's content from its declared transfer encoding.
+    ///
+    /// An unrecognised encoding returns the bytes unchanged rather than nil:
+    /// 7bit, 8bit and binary are all identity, and guessing wrong on an
+    /// unknown label should not make a recoverable attachment unrecoverable.
+    private static func decode(_ data: Data, encoding: String?) -> Data? {
+        switch (encoding ?? "").lowercased() {
+        case "base64":
+            // Line breaks inside base64 are expected; `.ignoreUnknownCharacters`
+            // is what makes a wrapped payload decode.
+            guard let text = String(data: data, encoding: .utf8)
+                    ?? String(data: data, encoding: .isoLatin1),
+                  let decoded = Data(base64Encoded: text, options: .ignoreUnknownCharacters),
+                  !decoded.isEmpty else { return nil }
+            return decoded
+        case "quoted-printable":
+            guard let text = String(data: data, encoding: .utf8)
+                    ?? String(data: data, encoding: .isoLatin1) else { return nil }
+            let decoded = QuotedPrintableDecoder.decode(text)
+            return decoded.data(using: .utf8) ?? Data(decoded.utf8)
+        default:
+            return data
+        }
     }
 
     /// True when this attachment's bytes are obtainable. Used by UI that must

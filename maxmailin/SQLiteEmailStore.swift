@@ -237,6 +237,91 @@ actor SQLiteEmailStore: EmailArchiveStore {
         guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
     }
 
+    /// Records (or replaces) where each of one message's MIME parts lives.
+    ///
+    /// Replaces rather than appends: a resumed or re-run import must not leave
+    /// a message with two generations of parts, which would make "the third
+    /// attachment" ambiguous.
+    func savePartLocators(_ parts: [PartLocator], emailID: UUID) throws {
+        let db = try ensureDB()
+        try inExclusiveTransaction(db) {
+            let clear = try prepare(db, "DELETE FROM part_locators WHERE email_id = ?;")
+            bindText(clear, 1, emailID.uuidString)
+            let cleared = sqlite3_step(clear) == SQLITE_DONE
+            sqlite3_finalize(clear)
+            guard cleared else { throw SQLiteStoreError.step(lastError(db)) }
+
+            guard !parts.isEmpty else { return }
+            let stmt = try prepare(db, """
+                INSERT INTO part_locators(
+                    email_id, part_index, mime_path, mime_type, filename, content_id,
+                    encoding, content_offset, content_length, header_offset, header_length
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?);
+            """)
+            defer { sqlite3_finalize(stmt) }
+            for (index, part) in parts.enumerated() {
+                sqlite3_reset(stmt)
+                sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, emailID.uuidString)
+                sqlite3_bind_int64(stmt, 2, Int64(index))
+                // The MIME path is structure, not a number — "1.0" and "1"
+                // are different positions — so it is stored as written.
+                bindText(stmt, 3, part.path.map(String.init).joined(separator: "."))
+                bindText(stmt, 4, part.mimeType)
+                bindTextOrNull(stmt, 5, part.filename)
+                bindTextOrNull(stmt, 6, part.contentID)
+                bindTextOrNull(stmt, 7, part.contentTransferEncoding)
+                sqlite3_bind_int64(stmt, 8, part.contentRange.offset)
+                sqlite3_bind_int64(stmt, 9, part.contentRange.length)
+                sqlite3_bind_int64(stmt, 10, part.headerRange.offset)
+                sqlite3_bind_int64(stmt, 11, part.headerRange.length)
+                guard sqlite3_step(stmt) == SQLITE_DONE else {
+                    throw SQLiteStoreError.step(lastError(db))
+                }
+            }
+        }
+    }
+
+    /// One message's parts, in document order. Empty means "no parts
+    /// recorded", which a caller must treat as "use the whole-message path"
+    /// and never as "this message has no attachments".
+    func partLocators(forEmailID id: UUID) throws -> [PartLocator] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT mime_path, mime_type, filename, content_id, encoding,
+                   content_offset, content_length, header_offset, header_length
+            FROM part_locators WHERE email_id = ? ORDER BY part_index;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, id.uuidString)
+
+        var parts: [PartLocator] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let path = columnText(stmt, 0)
+                .split(separator: ".")
+                .compactMap { Int($0) }
+            parts.append(PartLocator(
+                messageID: id,
+                path: path,
+                mimeType: columnText(stmt, 1),
+                filename: columnTextOptional(stmt, 2),
+                contentID: columnTextOptional(stmt, 3),
+                contentTransferEncoding: columnTextOptional(stmt, 4),
+                contentRange: ByteRange(offset: sqlite3_column_int64(stmt, 5),
+                                        length: sqlite3_column_int64(stmt, 6)),
+                headerRange: ByteRange(offset: sqlite3_column_int64(stmt, 7),
+                                       length: sqlite3_column_int64(stmt, 8))))
+        }
+        return parts
+    }
+
+    /// How many messages have their parts recorded — for the storage screen
+    /// and for judging whether the per-part read path is actually in use.
+    func partLocatorMessageCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(DISTINCT email_id) FROM part_locators;")
+    }
+
     func locator(forEmailID id: UUID) throws -> MessageLocator? {
         let db = try ensureDB()
         let stmt = try prepare(db, """
@@ -334,6 +419,54 @@ actor SQLiteEmailStore: EmailArchiveStore {
                                  length: sqlite3_column_int64(stmt, 7)),
             ordinal: Int(sqlite3_column_int64(stmt, 10))
         )
+    }
+
+    /// Part ranges for one message, read without touching the actor — the
+    /// same read-only snapshot route as `locatorSnapshot`, for the same
+    /// reason: `AttachmentHydrator` is called from synchronous UI paths that
+    /// cannot await the store.
+    nonisolated static func partSnapshot(emailID: UUID,
+                                         storeDirectory: URL = SQLiteEmailStore.productionDirectory)
+        -> [PartLocator] {
+        let path = storeDirectory.appendingPathComponent("emails.db").path
+        guard FileManager.default.fileExists(atPath: path) else { return [] }
+        var handle: OpaquePointer?
+        guard sqlite3_open_v2(path, &handle, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
+              let handle else { return [] }
+        defer { sqlite3_close(handle) }
+
+        var stmt: OpaquePointer?
+        let sql = """
+            SELECT mime_path, mime_type, filename, content_id, encoding,
+                   content_offset, content_length, header_offset, header_length
+            FROM part_locators WHERE email_id = ? ORDER BY part_index;
+        """
+        guard sqlite3_prepare_v2(handle, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else {
+            return []
+        }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, emailID.uuidString, -1, Self.staticSQLiteTransient)
+
+        func text(_ index: Int32) -> String? {
+            guard let raw = sqlite3_column_text(stmt, index) else { return nil }
+            return String(cString: raw)
+        }
+
+        var parts: [PartLocator] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            parts.append(PartLocator(
+                messageID: emailID,
+                path: (text(0) ?? "").split(separator: ".").compactMap { Int($0) },
+                mimeType: text(1) ?? "application/octet-stream",
+                filename: text(2),
+                contentID: text(3),
+                contentTransferEncoding: text(4),
+                contentRange: ByteRange(offset: sqlite3_column_int64(stmt, 5),
+                                        length: sqlite3_column_int64(stmt, 6)),
+                headerRange: ByteRange(offset: sqlite3_column_int64(stmt, 7),
+                                       length: sqlite3_column_int64(stmt, 8))))
+        }
+        return parts
     }
 
     func deferredBodyIDs(limit: Int) throws -> [UUID] {
@@ -460,7 +593,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     ///
     ///   v14 = raw-MIME blob tier (S3b)
     ///   v15 = message locators (S4/S5)
-    static let currentSchemaVersion = 15
+    static let currentSchemaVersion = 16
 
     private func migrateSchema(_ handle: OpaquePointer) throws {
         var v = try scalarInt(handle, "PRAGMA user_version;")
@@ -788,6 +921,43 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 try exec(handle, "PRAGMA user_version = 15;")
             }
             v = 15
+        }
+        if v == 15 {
+            try inExclusiveTransaction(handle) {
+                // v16 (S5 completion): where each MIME PART's bytes are, so an
+                // attachment is read without its siblings. Recorded at import,
+                // where the body is already in hand, so a later open costs the
+                // part's own bytes instead of a pass over the whole message.
+                //
+                // Additive like v15: a row with no parts falls back to the
+                // whole-message path, which is every message imported before
+                // this existed.
+                //
+                // `part_index` is the position in document order and, with
+                // `email_id`, the primary key — so re-recording a message's
+                // parts REPLACES them rather than accumulating duplicates when
+                // an import is resumed or re-run.
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS part_locators(
+                        email_id        TEXT NOT NULL,
+                        part_index      INTEGER NOT NULL,
+                        mime_path       TEXT NOT NULL,
+                        mime_type       TEXT NOT NULL,
+                        filename        TEXT,
+                        content_id      TEXT,
+                        encoding        TEXT,
+                        content_offset  INTEGER NOT NULL,
+                        content_length  INTEGER NOT NULL,
+                        header_offset   INTEGER NOT NULL,
+                        header_length   INTEGER NOT NULL,
+                        PRIMARY KEY (email_id, part_index)
+                    );
+                """)
+                // The read path asks "the parts of this message, in order".
+                try exec(handle, "CREATE INDEX IF NOT EXISTS idx_parts_email ON part_locators(email_id, part_index);")
+                try exec(handle, "PRAGMA user_version = 16;")
+            }
+            v = 16
         }
     }
 

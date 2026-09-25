@@ -79,29 +79,22 @@ struct MessageLocator: Sendable, Equatable, Codable, Identifiable {
     }
 }
 
-/// Where one MIME part lives.
+/// Where one MIME part lives, so an attachment can be read without decoding
+/// its siblings.
 ///
-/// ⚠️ DESIGN ONLY — NOT IMPLEMENTED, AND NOTHING USES IT.
+/// The chain, end to end:
+///   • `MIMEPartScanner` produces these from a message's body bytes, as
+///     ABSOLUTE ranges in the source file;
+///   • `OffsetImportEngine` scans them on the under-ceiling path, where the
+///     bytes are already read, so recording costs no extra I/O;
+///   • `BulkImportCoordinator` persists them to `part_locators` (schema v16);
+///   • `AttachmentHydrator.partBytes` reads the matched part's range and
+///     decodes only its transfer encoding.
 ///
-/// The intent was that an attachment could be read without decoding its
-/// siblings. That is not what S5 shipped, and this type's previous comment
-/// said otherwise. Nothing produces a `PartLocator` — no scanner emits one,
-/// there is no `part_locators` table — and nothing consumes one.
-///
-/// What S5 actually delivers is MESSAGE-scoped: `AttachmentHydrator` reads a
-/// message's whole `messageRange` from the source file via `LocatorReader`
-/// and decodes the MIME tree from those bytes. That is a real improvement on
-/// the previous behaviour (original bytes, and it works for a message
-/// imported header-only, which has no stored `rawSource` at all), but the
-/// per-part economy is still owed: pulling a 10 KB attachment out of a 12 MB
-/// message reads all 12 MB.
-///
-/// Implementing it means a producer in `OffsetMBOXScanner` that walks MIME
-/// boundaries during the same pass, a schema version for the table, and a
-/// consumer in `AttachmentHydrator` ahead of the whole-message path. The
-/// shape below is kept because it is the shape that work needs — the ranges
-/// are absolute in the source, and decoded size is deliberately not stored.
-/// It is NOT evidence that any of it works.
+/// A header-only import records none: finding its parts would mean the linear
+/// body pass S4 declined to make. An empty part list therefore means "use the
+/// whole-message path" — never "this message has no attachments" — and that
+/// is also what every message imported before v16 will do.
 struct PartLocator: Sendable, Equatable, Codable, Identifiable {
     var id: UUID = UUID()
     /// The message this part belongs to.

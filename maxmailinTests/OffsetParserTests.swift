@@ -1113,3 +1113,203 @@ final class MIMEPartScannerTests: XCTestCase {
                        "and must not include the delimiter: \(headerText)")
     }
 }
+
+// MARK: - S5 per-part reads, end to end (audit defect 20)
+
+/// The claim: an attachment is read WITHOUT its siblings. Proving it needs the
+/// whole chain — scanner produces ranges, store persists them, hydrator reads
+/// only the matched part's bytes — so these go through all three.
+@MainActor
+final class PartLocatorEndToEndTests: XCTestCase {
+
+    private var directory: URL!
+    private var savedLocator: (@Sendable (UUID) -> MessageLocator?)?
+    private var savedParts: (@Sendable (UUID) -> [PartLocator])?
+
+    override func setUp() async throws {
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("parts-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        savedLocator = AttachmentHydrator.locatorProvider
+        savedParts = AttachmentHydrator.partProvider
+    }
+
+    override func tearDown() async throws {
+        AttachmentHydrator.locatorProvider = savedLocator
+        AttachmentHydrator.partProvider = savedParts
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    /// One mbox message: a big text part and a small base64 attachment.
+    private func writeFixture(attachmentPayload: Data,
+                              fillerBytes: Int) throws -> (url: URL, filename: String) {
+        let filename = "small.bin"
+        let encoded = attachmentPayload.base64EncodedString()
+        let filler = String(repeating: "f", count: fillerBytes)
+        let raw = [
+            "From sender@example.com Tue Mar 14 09:41:00 2017",
+            "From: sender@example.com",
+            "To: recipient@example.com",
+            "Subject: has an attachment",
+            "Date: Tue, 14 Mar 2017 09:41:00 +0000",
+            "Message-ID: <parts-e2e@example.com>",
+            "MIME-Version: 1.0",
+            "Content-Type: multipart/mixed; boundary=\"SEP\"",
+            "",
+            "--SEP",
+            "Content-Type: text/plain",
+            "",
+            filler,
+            "--SEP",
+            "Content-Type: application/octet-stream",
+            "Content-Disposition: attachment; filename=\"\(filename)\"",
+            "Content-Transfer-Encoding: base64",
+            "",
+            encoded,
+            "--SEP--",
+            ""
+        ].joined(separator: "\r\n")
+        let url = directory.appendingPathComponent("fixture.mbox")
+        try Data(raw.utf8).write(to: url)
+        return (url, filename)
+    }
+
+    /// The full chain: import records parts, the hydrator reads the attachment
+    /// from its own range, and the bytes are byte-identical to what went in.
+    func testAttachmentIsRecoveredFromItsOwnRange() async throws {
+        let payload = Data((0..<4_096).map { UInt8($0 % 251) })
+        let (url, filename) = try writeFixture(attachmentPayload: payload, fillerBytes: 400_000)
+
+        let store = SQLiteEmailStore(directory: directory.appendingPathComponent("store"))
+        let engine = OffsetImportEngine()
+        var imported: [OffsetImportEngine.Imported] = []
+        _ = try await engine.importMessages(
+            fileURL: url, senderEmail: "", batchSize: 10,
+            envelopeProvider: nil, sourceDigest: nil, onProgress: nil
+        ) { batch in imported.append(contentsOf: batch) }
+
+        let item = try XCTUnwrap(imported.first)
+        XCTAssertTrue(item.bodyWasDecoded)
+        XCTAssertFalse(item.parts.isEmpty, "the engine must record part ranges")
+
+        // Persist both, the way the coordinator does.
+        try await store.saveLocator(item.locator, emailID: item.email.id, bodyDecoded: true)
+        try await store.savePartLocators(item.parts, emailID: item.email.id)
+
+        let readBack = try await store.partLocators(forEmailID: item.email.id)
+        XCTAssertEqual(readBack.count, item.parts.count, "parts must survive the store")
+        XCTAssertEqual(readBack.map(\.mimeType), item.parts.map(\.mimeType),
+                       "and keep document order")
+
+        // Route the hydrator at the store, as CapabilityWiring does.
+        let locator = item.locator
+        AttachmentHydrator.locatorProvider = { _ in locator }
+        AttachmentHydrator.partProvider = { [readBack] _ in readBack }
+
+        let attachment = AttachmentMetadata(filename: filename,
+                                            mimeType: "application/octet-stream",
+                                            size: payload.count)
+        // A message with no stored rawSource, so ONLY the part path can answer.
+        let stored = MBOXParser.RawEmail(
+            id: item.email.id, headers: item.email.headers,
+            rawSource: "", messageType: "email", attachments: [attachment],
+            timestamp: item.email.timestamp, domains: ["example.com"],
+            plainBody: "", htmlBody: "")
+
+        let recovered = try XCTUnwrap(
+            AttachmentHydrator.data(for: attachment, index: 0, email: stored),
+            "the attachment must be recoverable from its own range alone")
+        XCTAssertEqual(recovered, payload,
+                       "recovered bytes must be byte-identical to what was written")
+    }
+
+    /// The economy itself: the attachment's range is a tiny fraction of the
+    /// message, so reading it does not read the message.
+    func testAttachmentRangeIsTinyBesideTheMessage() async throws {
+        let payload = Data(repeating: 0xAB, count: 512)
+        let (url, filename) = try writeFixture(attachmentPayload: payload, fillerBytes: 500_000)
+
+        let engine = OffsetImportEngine()
+        var imported: [OffsetImportEngine.Imported] = []
+        _ = try await engine.importMessages(
+            fileURL: url, senderEmail: "", batchSize: 10,
+            envelopeProvider: nil, sourceDigest: nil, onProgress: nil
+        ) { batch in imported.append(contentsOf: batch) }
+
+        let item = try XCTUnwrap(imported.first)
+        let part = try XCTUnwrap(item.parts.first { $0.filename == filename })
+        let messageBytes = item.locator.byteCount
+
+        XCTAssertGreaterThan(messageBytes, 400_000, "the fixture must be large enough to matter")
+        // base64 of 512 bytes is ~684 chars plus wrapping; the point is the
+        // ORDER of magnitude against a half-megabyte message.
+        XCTAssertLessThan(part.contentRange.length, messageBytes / 100,
+                          "reading this attachment costs \(part.contentRange.length) of \(messageBytes) bytes")
+    }
+
+    /// With no parts recorded — every message imported before this existed —
+    /// the whole-message path must still answer. Absence of parts must never
+    /// read as "no attachments".
+    func testNoRecordedPartsFallsBackToTheWholeMessagePath() async throws {
+        let payload = Data(repeating: 0x7F, count: 256)
+        let (url, filename) = try writeFixture(attachmentPayload: payload, fillerBytes: 1_000)
+
+        let engine = OffsetImportEngine()
+        var imported: [OffsetImportEngine.Imported] = []
+        _ = try await engine.importMessages(
+            fileURL: url, senderEmail: "", batchSize: 10,
+            envelopeProvider: nil, sourceDigest: nil, onProgress: nil
+        ) { batch in imported.append(contentsOf: batch) }
+        let item = try XCTUnwrap(imported.first)
+
+        // Deliberately supply NO parts.
+        let locator = item.locator
+        AttachmentHydrator.locatorProvider = { _ in locator }
+        AttachmentHydrator.partProvider = { _ in [] }
+
+        let attachment = try XCTUnwrap(item.email.attachments.first { $0.filename == filename })
+        let recovered = try XCTUnwrap(
+            AttachmentHydrator.data(for: attachment, index: 0, email: item.email),
+            "with no parts recorded the whole-message path must still recover the bytes")
+        XCTAssertEqual(recovered, payload)
+    }
+
+    /// Switching the capability off must take the part path with it, leaving
+    /// exactly the previous behaviour.
+    func testPartProviderIsClearedWhenTheCapabilityGoesOff() {
+        CapabilityWiring.apply(.locatorReads, isOn: true)
+        XCTAssertNotNil(AttachmentHydrator.partProvider)
+        XCTAssertNotNil(AttachmentHydrator.locatorProvider)
+
+        CapabilityWiring.apply(.locatorReads, isOn: false)
+        XCTAssertNil(AttachmentHydrator.partProvider,
+                     "the part path must not survive the switch being turned off")
+        XCTAssertNil(AttachmentHydrator.locatorProvider)
+    }
+
+    /// Re-recording a message's parts REPLACES them. Without this an import
+    /// resumed twice would leave "the third attachment" ambiguous.
+    func testRecordingPartsTwiceDoesNotAccumulate() async throws {
+        let store = SQLiteEmailStore(directory: directory.appendingPathComponent("store2"))
+        let id = UUID()
+        let parts = (0..<3).map { index in
+            PartLocator(messageID: id, path: [index], mimeType: "text/plain",
+                        filename: "f\(index).txt", contentID: nil,
+                        contentTransferEncoding: nil,
+                        contentRange: ByteRange(offset: Int64(index * 10), length: 10),
+                        headerRange: ByteRange(offset: 0, length: 0))
+        }
+        try await store.savePartLocators(parts, emailID: id)
+        try await store.savePartLocators(parts, emailID: id)
+
+        let readBack = try await store.partLocators(forEmailID: id)
+        XCTAssertEqual(readBack.count, 3, "re-recording must replace, not append")
+        let messages = try await store.partLocatorMessageCount()
+        XCTAssertEqual(messages, 1)
+
+        // And clearing to empty removes them.
+        try await store.savePartLocators([], emailID: id)
+        let cleared = try await store.partLocators(forEmailID: id)
+        XCTAssertTrue(cleared.isEmpty)
+    }
+}

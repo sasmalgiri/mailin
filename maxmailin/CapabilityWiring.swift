@@ -43,8 +43,17 @@ enum CapabilityWiring {
                     SQLiteEmailStore.locatorSnapshot(emailID: id)
                 }
                 AttachmentHydrator.locatorProvider = provider
+                // Per-part ranges ride the same switch: both are locator
+                // reads, and a part range without its message locator is
+                // unusable anyway — the message locator is what supplies the
+                // source path.
+                let parts: @Sendable (UUID) -> [PartLocator] = { id in
+                    SQLiteEmailStore.partSnapshot(emailID: id)
+                }
+                AttachmentHydrator.partProvider = parts
             } else {
                 AttachmentHydrator.locatorProvider = nil
+                AttachmentHydrator.partProvider = nil
             }
 
         case .aiAssistant:
