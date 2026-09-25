@@ -3150,6 +3150,53 @@ final class V2ForensicPersistenceTests: XCTestCase {
         }
     }
 
+    // MARK: - Source-file integrity is checkable
+
+    /// `verifySourceFile` re-hashes an original file and compares it against
+    /// the values recorded at import. Nothing called it, so the eDiscovery
+    /// preservation checklist item "Verify source file integrity" had no button
+    /// behind it. It must pass on the untouched file, FAIL on a single changed
+    /// byte, and refuse rather than guess when there is no record.
+    @MainActor
+    func testVerifySourceFile_passesUnchanged_failsOnOneChangedByte() throws {
+        let root = tempRoot()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let fm = ForensicManager.shared
+        let backup = fm.sourceFileHashes
+        addTeardownBlock { @MainActor in fm.sourceFileHashes = backup }
+
+        let url = root.appendingPathComponent("Evidence-\(UUID().uuidString).mbox")
+        let original = Data("From a@b.com\nSubject: one\n\nbody text\n".utf8)
+        try original.write(to: url)
+
+        // No record yet: refused, not silently passed.
+        let unknown = fm.verifySourceFile(at: url)
+        XCTAssertFalse(unknown.passed, "a file with no recorded hash must not verify")
+        XCTAssertTrue(unknown.detail.contains("No stored hash"), unknown.detail)
+
+        let recorded = try XCTUnwrap(ForensicManager.computeHashes(for: url),
+                                     "hashing a readable file must succeed")
+        fm.sourceFileHashes = backup + [recorded]
+
+        let clean = fm.verifySourceFile(at: url)
+        XCTAssertTrue(clean.passed, "an untouched file must verify: \(clean.detail)")
+
+        // Flip one byte, keeping the length identical so only the hash can
+        // catch it — a size check would not.
+        var tampered = original
+        let index = tampered.count / 2
+        tampered[index] = tampered[index] == 0x41 ? 0x42 : 0x41
+        XCTAssertEqual(tampered.count, original.count, "same length, different content")
+        try tampered.write(to: url)
+
+        let broken = fm.verifySourceFile(at: url)
+        XCTAssertFalse(broken.passed, "one changed byte must fail verification")
+        XCTAssertTrue(broken.detail.contains("MISMATCH"),
+                      "the failure must say what mismatched: \(broken.detail)")
+    }
+
     /// Removing the hold drops the seal, so a re-held message is sealed against
     /// its content at the time of the NEW hold — not silently compared to a
     /// stale hash from a previous one.

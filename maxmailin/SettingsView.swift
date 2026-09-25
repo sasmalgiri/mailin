@@ -60,6 +60,20 @@ struct SettingsView: View {
     @State private var showClearConfirmation = false
     @State private var fidelityHealRunning = false
     @State private var fidelityHealReport: String?
+    @State private var showSourceVerifyPicker = false
+    @State private var sourceVerifyResult: (passed: Bool, detail: String)?
+
+    /// Re-hash a picked original file and compare it to the values recorded at
+    /// import. The verdict goes to the audit log either way — a failed
+    /// integrity check is exactly the kind of event the log exists for.
+    private func verifyPickedSourceFile(_ result: Result<[URL], Error>) {
+        guard case .success(let urls) = result, let url = urls.first else { return }
+        let verdict = forensicManager.verifySourceFile(at: url)
+        sourceVerifyResult = verdict
+        forensicManager.logAction(
+            verdict.passed ? "Source File Verified" : "Source File Verification FAILED",
+            detail: verdict.detail)
+    }
 
     /// Full Fidelity Restore: pick original archive files, re-parse, and
     /// heal matching rows in place (SQLiteEmailStore.healFidelity).
@@ -1181,6 +1195,20 @@ struct SettingsView: View {
                         }
                         .padding(.vertical, 2)
                     }
+                    Button("Check a Source File Against Its Hash…") { showSourceVerifyPicker = true }
+                        .controlSize(.small)
+                        .fileImporter(isPresented: $showSourceVerifyPicker,
+                                      allowedContentTypes: [.data],
+                                      allowsMultipleSelection: false) { result in
+                            verifyPickedSourceFile(result)
+                        }
+                    if let sourceVerifyResult {
+                        Label(sourceVerifyResult.detail, systemImage: sourceVerifyResult.passed
+                              ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                            .font(Typography.caption1)
+                            .foregroundColor(sourceVerifyResult.passed ? .green : .red)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 } else {
                     Text("No source files imported yet.")
                         .font(Typography.caption1)
@@ -1189,6 +1217,15 @@ struct SettingsView: View {
             } header: {
                 Text("Source File Integrity (MD5 + SHA-1 + SHA-256)")
                     .font(.headline)
+            } footer: {
+                // The eDiscovery preservation checklist tells the examiner to
+                // "Verify source file integrity". `verifySourceFile` has always
+                // been able to do it — nothing called it, so the instruction
+                // had no button behind it. Matched by filename, so the file can
+                // have been moved since the import.
+                Text("Pick an original file to re-hash it and compare against the values recorded at import. Matched by filename.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
 
             Section {
