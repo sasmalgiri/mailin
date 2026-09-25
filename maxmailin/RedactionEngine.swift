@@ -326,11 +326,37 @@ struct RedactionConfigView: View {
     @State private var exportMessage: String?
     @State private var showExportMessage = false
     @State private var showPreview = false
+    /// Redact every mention of one person. The rule set for this is generated
+    /// — full name, "Last, First", "F. Last", each name part on its own, the
+    /// address and its local part — because a human writing regex by hand
+    /// misses the variants, which is precisely how V3-D1 shipped.
+    @State private var personName = ""
+    @State private var personEmail = ""
+    /// Terms the independent post-check found still present in the OUTPUT.
+    /// Non-empty blocks the export: see `exportRedacted()`.
+    @State private var leakedTerms: [String] = []
     @Environment(\.dismiss) private var dismiss
     #if os(iOS)
     @State private var shareItems: [Any] = []
     @State private var showShareSheet = false
     #endif
+
+    /// What actually gets applied: the rule list on screen plus the generated
+    /// person rules. Preview and export must both use this — a preview that
+    /// showed different rules than the export applied would be worse than no
+    /// preview.
+    private var effectiveRules: [RedactionEngine.RedactionRule] {
+        rules + RedactionEngine.personRedactionRules(name: personName, email: trimmedPersonEmail)
+    }
+
+    private var trimmedPersonEmail: String? {
+        let value = personEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+    }
+
+    private var hasPersonTarget: Bool {
+        !personName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.medium) {
@@ -376,6 +402,34 @@ struct RedactionConfigView: View {
                         .accessibilityHint(rule.isEnabled ? "Enabled" : "Disabled")
                     }
                     .padding(.vertical, Spacing.xxSmall)
+                }
+            }
+            .padding(Spacing.small)
+            .background(AppColors.backgroundSecondary)
+            .cornerRadius(CornerRadius.medium)
+
+            // Redact a Person
+            VStack(alignment: .leading, spacing: Spacing.xSmall) {
+                Text("Redact a Person")
+                    .font(Typography.headline)
+
+                TextField("Full name", text: $personName)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Name of the person to redact")
+
+                TextField("Email address (optional)", text: $personEmail)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Email address of the person to redact")
+
+                if hasPersonTarget {
+                    Text("""
+                        Adds \(RedactionEngine.personRedactionRules(name: personName, email: trimmedPersonEmail).count) \
+                        generated rules covering name order, initials and each name part on its own. \
+                        The export is blocked if any of these terms survives redaction.
+                        """)
+                        .font(Typography.caption2)
+                        .foregroundColor(AppColors.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .padding(Spacing.small)
@@ -471,7 +525,7 @@ struct RedactionConfigView: View {
                 Button {
                     if let sample = emails.first {
                         previewEmail = sample
-                        previewResult = RedactionEngine.redactEmail(sample, rules: rules)
+                        previewResult = RedactionEngine.redactEmail(sample, rules: effectiveRules)
                         showPreview = true
                     }
                 } label: {
@@ -492,9 +546,11 @@ struct RedactionConfigView: View {
             }
 
             if let message = exportMessage, showExportMessage {
-                Label(message, systemImage: "doc.text")
+                Label(message, systemImage: leakedTerms.isEmpty
+                      ? "doc.text" : "exclamationmark.octagon.fill")
                     .font(Typography.caption1)
-                    .foregroundColor(AppColors.info)
+                    .foregroundColor(leakedTerms.isEmpty ? AppColors.info : AppColors.error)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(Spacing.medium)
@@ -511,8 +567,39 @@ struct RedactionConfigView: View {
     // MARK: - Export
 
     private func exportRedacted() {
-        let redacted = RedactionEngine.redactBatch(emails: emails, rules: rules)
+        let appliedRules = effectiveRules
+        let redacted = RedactionEngine.redactBatch(emails: emails, rules: appliedRules)
         let totalRedactions = redacted.reduce(0) { $0 + $1.redactionCount }
+
+        // LAW-14: independent post-redaction check. `validatePersonRedaction`
+        // re-scans the OUTPUT for the literal target terms — it is not the rule
+        // engine, so a regex that failed to match cannot also pass the check.
+        // A leak blocks the export: a redacted export that still names the
+        // person is worse than no export, because it will be relied on.
+        //
+        // This can only check LITERAL targets, so it runs when a person is
+        // named. The default categories are patterns, not terms, and no
+        // second-opinion check is claimed for them.
+        if hasPersonTarget {
+            var leaks = Set<String>()
+            for item in redacted {
+                leaks.formUnion(
+                    RedactionEngine.validatePersonRedaction(
+                        item, name: personName, email: trimmedPersonEmail))
+            }
+            if !leaks.isEmpty {
+                leakedTerms = leaks.sorted()
+                exportMessage = """
+                    Export blocked: “\(leakedTerms.joined(separator: "”, “"))” \
+                    \(leakedTerms.count == 1 ? "is" : "are") still present after redaction. \
+                    Add a rule covering \(leakedTerms.count == 1 ? "it" : "them") and export again.
+                    """
+                showExportMessage = true
+                redactionLog.error("redacted export blocked: \(leakedTerms.count) term(s) survived redaction")
+                return
+            }
+            leakedTerms = []
+        }
 
         // Build a combined text export
         var output = "REDACTED EMAIL EXPORT\n"
@@ -532,7 +619,7 @@ struct RedactionConfigView: View {
         let data = output.data(using: .utf8) ?? Data()
 
         // Also generate the redaction log
-        let logData = RedactionEngine.generateRedactionLog(emails: emails, rules: rules)
+        let logData = RedactionEngine.generateRedactionLog(emails: emails, rules: appliedRules)
 
         #if os(macOS)
         if PlatformFileSaver.saveData(data, suggestedName: "RedactedExport.txt") {

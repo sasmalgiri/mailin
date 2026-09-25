@@ -305,8 +305,9 @@ final class RedactionDefectV3D1Tests: XCTestCase {
                        "case must not defeat redaction: \(redacted.body)")
     }
 
-    /// The LAW-14 validator must find nothing in redacted output — the
-    /// belt-and-braces second pass that gates an export.
+    /// The LAW-14 validator must find nothing in redacted output — the second
+    /// pass that `RedactionConfigView.exportRedacted()` runs before it writes
+    /// anything, and that blocks the export when it finds a surviving term.
     func testValidatorFindsNoLeakInRedactedOutput() throws {
         let results = RedactionEngine.redactPerson(
             emails: [email("Priya will bring it. Ask Priya Sharma or priya.sharma@example.com.")],
@@ -348,5 +349,72 @@ final class RedactionDefectV3D1Tests: XCTestCase {
         XCTAssertFalse(redacted.from.contains("priya.sharma@example.com"), "From: \(redacted.from)")
         XCTAssertFalse(redacted.to.contains("Priya"), "To: \(redacted.to)")
         XCTAssertFalse(redacted.subject.contains("Priya"), "Subject: \(redacted.subject)")
+    }
+
+    // MARK: The export gate
+
+    /// Mirrors what `RedactionConfigView.exportRedacted()` now does: apply the
+    /// default categories PLUS the generated person rules, then validate every
+    /// item in the batch. This is the gate's pass path — if it ever fails, a
+    /// legitimate export is being blocked, which is as much a defect as a leak.
+    func testExportGate_passesAcrossTheWholeBatch() throws {
+        let batch = [
+            email("Priya will bring it."),
+            email("Ask Priya Sharma about the invoice."),
+            email("Sharma, Priya signed off on 2024-03-04."),
+            email("Forwarded by P. Sharma <priya.sharma@example.com>."),
+            email("Nothing sensitive in this one at all."),
+        ]
+        let rules = RedactionEngine.defaultRules
+            + RedactionEngine.personRedactionRules(
+                name: "Priya Sharma", email: "priya.sharma@example.com")
+        let redacted = RedactionEngine.redactBatch(emails: batch, rules: rules)
+
+        XCTAssertEqual(redacted.count, batch.count, "every email must appear in the output")
+
+        var leaks = Set<String>()
+        for item in redacted {
+            leaks.formUnion(
+                RedactionEngine.validatePersonRedaction(
+                    item, name: "Priya Sharma", email: "priya.sharma@example.com"))
+        }
+        XCTAssertTrue(leaks.isEmpty,
+                      "the gate would block a correct export over: \(leaks.sorted())")
+    }
+
+    /// And the person rules must be load-bearing. Without them the default
+    /// categories — SSN, card, phone, … — match nothing in a name, so the gate
+    /// blocks. This is the reason the gate exists: before it, this export was
+    /// written to disk and handed over.
+    func testExportGate_blocksWhenOnlyTheDefaultCategoriesAreApplied() {
+        let redacted = RedactionEngine.redactBatch(
+            emails: [email("Priya will bring it. Ask priya.sharma@example.com.")],
+            rules: RedactionEngine.defaultRules)
+
+        var leaks = Set<String>()
+        for item in redacted {
+            leaks.formUnion(
+                RedactionEngine.validatePersonRedaction(
+                    item, name: "Priya Sharma", email: "priya.sharma@example.com"))
+        }
+        XCTAssertFalse(leaks.isEmpty,
+                       "the default categories do not redact a name — the gate must catch this")
+        XCTAssertTrue(leaks.contains("Priya"), "the leaked term must be named: \(leaks.sorted())")
+    }
+
+    /// The generated rule set has to actually cover the variants the UI claims
+    /// it covers, because the count is shown to the user as justification for
+    /// not hand-writing regex.
+    func testGeneratedPersonRulesCoverTheNameVariants() {
+        let rules = RedactionEngine.personRedactionRules(
+            name: "Priya Sharma", email: "priya.sharma@example.com")
+        XCTAssertGreaterThanOrEqual(rules.count, 6,
+                                    "full name, First Last, Last-comma-First, F. Last, each part, address")
+        XCTAssertTrue(rules.allSatisfy(\.isEnabled), "a generated rule that ships disabled would leak")
+
+        // An empty name must generate nothing rather than a rule matching
+        // everything — the view leaves the field blank by default.
+        XCTAssertTrue(RedactionEngine.personRedactionRules(name: "   ").isEmpty,
+                      "a blank name must not generate rules")
     }
 }
