@@ -37,6 +37,7 @@ struct CapabilityMatrixView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            blockedBanner
             Divider()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 20) {
@@ -91,6 +92,46 @@ struct CapabilityMatrixView: View {
             }
         }
         .padding(16)
+    }
+
+    // MARK: Blocked summary
+
+    /// Capabilities switched ON that are not running because a DEPENDENCY is
+    /// off — the block a user cannot work out for themselves.
+    ///
+    /// Each row already states its own reason, but with this many capabilities
+    /// a reason is only visible once you have scrolled to the row that carries
+    /// it, so "switched on but inert" was discoverable only by looking for it.
+    ///
+    /// Page-off blocks are deliberately excluded. On a fresh install every
+    /// optional page is off, so including them would list most of the matrix
+    /// here — and each page section already carries a "page off" badge and a
+    /// line explaining that nothing below it runs. Repeating that at the top
+    /// would bury the one cause that is genuinely hard to spot.
+    @ViewBuilder
+    private var blockedBanner: some View {
+        let blocked = modules.blockedCapabilities()
+            .filter { scope == nil || $0.capability.owner == scope }
+            .filter { if case .dependencyOff = $0.block { return true } else { return false } }
+        if !blocked.isEmpty {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(blocked.count) switched on but waiting on something else")
+                        .font(.caption.weight(.semibold))
+                    ForEach(blocked, id: \.capability) { item in
+                        Text("\(item.capability.displayName) — \(item.block.explanation)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 12)
+        }
     }
 
     // MARK: One page

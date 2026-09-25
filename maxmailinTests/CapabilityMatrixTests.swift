@@ -331,4 +331,51 @@ final class CapabilityMatrixTests: XCTestCase {
                        Capability.allCases.count,
                        "two capabilities share a persistence key")
     }
+
+    // MARK: - The "switched on but inert" summary
+
+    /// `blockedCapabilities()` is what the matrix's banner reports. It must
+    /// name a dependency-blocked capability and its cause — a switch left on
+    /// while something it needs is off is the case a user cannot diagnose
+    /// without being told.
+    func testBlockedCapabilitiesNamesTheDependencyThatStoppedIt() {
+        let registry = freshRegistry()
+        registry.set(.blobTier, enabled: true)
+        registry.set(.offsetParser, enabled: true)
+        registry.set(.locatorReads, enabled: true)
+        // Scoped to this chain: a fresh registry has the optional pages off,
+        // so THEIR defaults-on capabilities are legitimately blocked already.
+        let chain: Set<Capability> = [.blobTier, .offsetParser, .locatorReads]
+        XCTAssertTrue(registry.blockedCapabilities().allSatisfy { !chain.contains($0.capability) },
+                      "nothing in this chain is blocked while all of it is on")
+
+        registry.set(.offsetParser, enabled: false)
+        let blocked = registry.blockedCapabilities()
+        XCTAssertEqual(blocked.first(where: { $0.capability == .locatorReads })?.block,
+                       .dependencyOff(.offsetParser))
+        XCTAssertFalse(blocked.contains { $0.capability == .offsetParser },
+                       "a capability the user switched off is not 'blocked' — it is off on purpose")
+    }
+
+    /// A capability whose page is off is reported with the page as the cause,
+    /// not silently omitted — the banner's whole job is that no switch is
+    /// mysteriously inert.
+    func testBlockedCapabilitiesReportsAPageOffCause() throws {
+        let registry = freshRegistry()
+        let capability = try XCTUnwrap(
+            Capability.allCases.first { $0.owner != .archive && $0.defaultsOn },
+            "need a defaults-on capability on an optional page")
+        let page = capability.owner
+
+        try registry.enable(page)
+        XCTAssertFalse(registry.blockedCapabilities().contains { $0.capability == capability })
+
+        registry.disable(page)
+        let blocked = registry.blockedCapabilities()
+        XCTAssertEqual(blocked.first(where: { $0.capability == capability })?.block,
+                       .pageOff(page),
+                       "the page must be named as the reason")
+        XCTAssertTrue(registry.switchPosition(capability),
+                      "and the capability's own switch is untouched, so it resumes on re-enable")
+    }
 }
