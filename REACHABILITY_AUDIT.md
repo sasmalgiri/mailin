@@ -1,7 +1,7 @@
 # Reachability audit — 22 defects a green test suite did not catch
 
-Status: all 22 addressed and committed. 497 tests pass, 0 fail, 1 skipped by
-design. Two files are quarantined pending deletion (see the end).
+Status: all 22 addressed and committed. 518 unit + UI tests pass, 0 fail, 1 skipped by
+design. Both quarantined files have been deleted.
 
 ## Why this document exists
 
@@ -75,11 +75,11 @@ quarantined files turned up after twelve function-level rounds had finished.
 | 15 | — | `generateConcordanceLoadFile` was dead **and malformed**: U+0014 as both delimiter and qualifier, and missing BCC / SHA-256 / custodian / tag | Removed, with the reason recorded; format pinned by tests |
 | 16 | E3 sealed case bundles + E4 team merge, recorded as shipped | The **whole of `CaseBundleService`** had no caller and no test. Neither could be reached from the app, and neither had ever been executed | Forensic Export ▸ Team handoff; 7 tests, which the implementation passed unchanged |
 | 17 | Merge "skips identical artifacts" | Re-importing one bundle duplicated everything in it: the add path retitled an artifact, so the next pass compared the retitled local copy against the unlabelled incoming one. Three imports left four copies | Merged ids derived from (origin, sender); a genuine revision is still kept alongside |
-| 18 | "Encrypted at-rest storage for sensitive email archive data" | `EncryptedStorageManager` has no caller, and keeps only the **first 2,000 characters** of raw source, restoring the truncation as if it were the original. ~1% of a real message, and every recomputed hash differs | Quarantined with a blunt header + 3 tests; recommend deletion |
-| 19 | `PSTStreamingParser` protects against >2 GB PSTs "crashing on memory exhaustion" | No caller, and the premise expired at S1 — `PSTParser` mmaps, so only a correctness refusal remains. Its >2 GB branch throws `notYetSupported` for files that import today, so wiring it up would be a **regression** | Quarantined with the reason; covered by the same guard test |
-| 20 | `PartLocator`: "so an attachment can be read without decoding its siblings" | Nothing produces or consumes one. S5's delivered behaviour is message-scoped: a 10 KB attachment in a 12 MB message reads all 12 MB | Relabelled DESIGN ONLY with what implementing it needs; the message-scoped half is real and stays |
+| 18 | "Encrypted at-rest storage for sensitive email archive data" | `EncryptedStorageManager` has no caller, and keeps only the **first 2,000 characters** of raw source, restoring the truncation as if it were the original. ~1% of a real message, and every recomputed hash differs | Deleted |
+| 19 | `PSTStreamingParser` protects against >2 GB PSTs "crashing on memory exhaustion" | No caller, and the premise expired at S1 — `PSTParser` mmaps, so only a correctness refusal remains. Its >2 GB branch throws `notYetSupported` for files that import today, so wiring it up would be a **regression** | Deleted |
+| 20 | `PartLocator`: "so an attachment can be read without decoding its siblings" | Nothing produces or consumes one. S5's delivered behaviour is message-scoped: a 10 KB attachment in a 12 MB message reads all 12 MB | **Built.** `MIMEPartScanner` → schema v16 `part_locators` → `AttachmentHydrator.partBytes`. Recorded at import where bytes are already read; 18 tests |
 | 21 | `canRead` is "used by UI that must decide whether to offer Open/Save rather than offering an action that then does nothing" | No caller. The bulk save path made the user pick a destination folder, wait, then reported "0 saved, N failed" | Asked before the panel; completion now separates unreadable-source from unwritable-destination |
-| 22 | `AIMetrics` "lets us prove (or disprove) that each architectural change actually improves quality, latency, or citation density" | `begin`/`finalize` have no caller — not one query has ever been recorded | Claim corrected in place; wiring it is owed (see below) |
+| 22 | `AIMetrics` "lets us prove (or disprove) that each architectural change actually improves quality, latency, or citation density" | `begin`/`finalize` have no caller — not one query has ever been recorded | **Wired** in all 5 engines + 3 early paths. Each record carries the field groups it measured; `summary` averages only over those, so unmeasured reads "not measured", never 0.0 |
 
 Defects 15, 18 and 19 share the lesson worth remembering: **dead code is not
 neutral.** Each carried the most authoritative name in its area — more obvious
@@ -158,6 +158,13 @@ Recorded so the same ground is not re-swept:
 
 ## Still open
 
+- **AIMetrics has no reading surface.** Records persist to
+  `Application Support/mailin/metrics/ai-metrics.jsonl` and `summary(lastN:)`
+  works (tested), but no screen shows it yet. Routing fields and KG citations
+  are reported by no engine; `summary` states that rather than showing zeros.
+- **Header-only imports record no part locators** — by design; they fall back
+  to the whole-message read.
+
 - **Streaming parser discards the real `From_` envelope.** Deliberately
   deferred: fixing it changes stored hashes and checkpoints. Pinned by a test
   that fails loudly if someone fixes it without migrating.
@@ -166,12 +173,3 @@ Recorded so the same ground is not re-swept:
 - **PST/OST/NSF/MSG have no fixtures.** A real PST would close those formats
   the way `Sent.mbox` closed the mbox path.
 - **Memory figures need a re-take** on a machine with disk headroom.
-- **`AIMetrics` is not wired** (defect 22). Until it is, no claim about the AI
-  pipeline's quality, latency or citation density is backed by measurement from
-  this app. Recording only at the outer boundary would leave `expertsRun`,
-  `subQueryCount`, `toolsUsed`, the findings counts and the compression figures
-  at zero — metrics that look complete and are not — so each engine branch in
-  `AIAssistantView.askAI()` has to fill its own fields.
-- **Per-part locators** (defect 20). Needs a producer in `OffsetMBOXScanner`
-  walking MIME boundaries in the same pass, a schema version for the table, and
-  a consumer in `AttachmentHydrator` ahead of the whole-message path.

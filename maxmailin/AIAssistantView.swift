@@ -2068,10 +2068,16 @@ struct AIAssistantView: View {
 
                 streamingQuery = currentQuery
                 streamingAnswer = ""
+                var metrics = beginMetrics("appleAIMoE", query: currentQuery)
+                let metricsStart = Date()
                 let emailsCopy = await currentWorkingSet()
+                let retrievalStart = Date()
                 let retrieved = await Self.retrieveRelevantEmails(query: currentQuery, emails: emailsCopy, priorContext: "", predictions: [:])
+                metrics.retrievalElapsedMs = Int(Date().timeIntervalSince(retrievalStart) * 1000)
                 let retrievedIDs = Array(retrieved.prefix(5).map(\.id))
                 var answer = await askFoundationModelStreaming(currentQuery)
+                // A cancelled query is not recorded: it has no answer to
+                // measure, and counting it as a failure would be false.
                 guard !Task.isCancelled else { return }
 
                 if !context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -2083,6 +2089,11 @@ struct AIAssistantView: View {
                     conversationHistory.append((query: currentQuery, answer: answer, timestamp: Date(), relatedEmailIDs: retrievedIDs))
                     if !storeManager.isPremium { freeQueryCount += 1 }
                 }
+                // The expert pipeline runs inside askFoundationModelStreaming,
+                // which this view cannot inspect — so routing and findings are
+                // NOT marked reported for this engine.
+                finishMetrics(metrics, startedAt: metricsStart,
+                              answer: answer, citedEmailIDs: retrievedIDs)
             }
 
         // ━━━ Engine 2: Apple AI (Direct) ━━━
@@ -2097,10 +2108,16 @@ struct AIAssistantView: View {
 
                 streamingQuery = currentQuery
                 streamingAnswer = ""
+                var metrics = beginMetrics("appleAI", query: currentQuery)
+                let metricsStart = Date()
                 let emailsCopy = await currentWorkingSet()
+                let retrievalStart = Date()
                 let retrieved = await Self.retrieveRelevantEmails(query: currentQuery, emails: emailsCopy, priorContext: "", predictions: [:])
+                metrics.retrievalElapsedMs = Int(Date().timeIntervalSince(retrievalStart) * 1000)
                 let retrievedIDs = Array(retrieved.prefix(5).map(\.id))
                 var answer = await askFoundationModelDirect(currentQuery)
+                // A cancelled query is not recorded: it has no answer to
+                // measure, and counting it as a failure would be false.
                 guard !Task.isCancelled else { return }
 
                 if !context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -2112,6 +2129,8 @@ struct AIAssistantView: View {
                     conversationHistory.append((query: currentQuery, answer: answer, timestamp: Date(), relatedEmailIDs: retrievedIDs))
                     if !storeManager.isPremium { freeQueryCount += 1 }
                 }
+                finishMetrics(metrics, startedAt: metricsStart,
+                              answer: answer, citedEmailIDs: retrievedIDs)
             }
 
         // ━━━ Engine 3: Hybrid (Best) ━━━
@@ -2126,6 +2145,13 @@ struct AIAssistantView: View {
                     streamingQuery = ""
                     streamingAnswer = ""
                 }
+
+                var metrics = beginMetrics("hybrid", query: currentQuery)
+                let metricsStart = Date()
+                // Hybrid falls back to its NLP baseline whenever the expert
+                // pipeline is unavailable, throws, or times out. Assume the
+                // fallback until the pipeline actually returns.
+                var usedFallback = true
 
                 // Layer 1: NLP foundation (deterministic — always runs as safety net)
                 let emailsCopy = await currentWorkingSet()
@@ -2144,7 +2170,9 @@ struct AIAssistantView: View {
                 if canUseAppleAI {
                     // Layer 2: Agentic RAG retrieval (parallel with NLP — evidence gathering)
                     let priorIDs = priorRetrievedEmailIDs
+                    let retrievalStart = Date()
                     let ragResult = await Self.agenticRetrieve(query: currentQuery, emails: emailsCopy, priorContext: priorContext, predictions: currentPredictions, priorRetrievedIDs: priorIDs)
+                    metrics.retrievalElapsedMs = Int(Date().timeIntervalSince(retrievalStart) * 1000)
 
                     priorRetrievedEmailIDs.formUnion(ragResult.retrievedEmails.map(\.id))
                     let ragIDs = Array(ragResult.retrievedEmails.prefix(5).map(\.id))
@@ -2187,6 +2215,12 @@ struct AIAssistantView: View {
                                 return result
                             }
                             answer = hybridResult.answer
+                            // The one engine that reports its findings, so the
+                            // one engine that marks them measured.
+                            metrics.totalFindings = hybridResult.totalFindings
+                            metrics.highRelevanceCount = hybridResult.highRelevanceCount
+                            metrics.reported.insert(AIMetrics.QueryRecord.Group.findings)
+                            usedFallback = hybridResult.layerCount == 0
 
                             // Layer 5: Self-correction — validate and fill gaps
                             streamingQuery = ""
@@ -2239,6 +2273,9 @@ struct AIAssistantView: View {
                     conversationHistory.append((query: currentQuery, answer: answer, timestamp: Date(), relatedEmailIDs: retrievedIDs))
                     if !storeManager.isPremium { freeQueryCount += 1 }
                 }
+                finishMetrics(metrics, startedAt: metricsStart,
+                              answer: answer, citedEmailIDs: retrievedIDs,
+                              fallbackUsed: usedFallback)
             }
 
         #if !OFFLINE_MODE
@@ -2253,6 +2290,10 @@ struct AIAssistantView: View {
                     streamingAnswer = ""
                 }
 
+                var metrics = beginMetrics("cloudAI", query: currentQuery)
+                let metricsStart = Date()
+                var usedFallback = false
+
                 // Layer 1: NLP baseline (deterministic foundation)
                 let emailsCopy = await currentWorkingSet()
                 let nlpResult = await Self.enhancedNLPPipeline(
@@ -2264,12 +2305,19 @@ struct AIAssistantView: View {
                 guard !Task.isCancelled else { return }
 
                 // Layer 2: RAG retrieval for focused email context
+                let retrievalStart = Date()
                 let retrieved = await Self.retrieveRelevantEmails(
                     query: currentQuery, emails: emailsCopy, priorContext: priorCtxCloud, predictions: cloudPredictions
                 )
+                metrics.retrievalElapsedMs = Int(Date().timeIntervalSince(retrievalStart) * 1000)
                 let retrievedIDs = Array(retrieved.prefix(10).map(\.id))
                 let targetEmails = retrieved.isEmpty ? emailsCopy : Array(retrieved.prefix(15))
                 let emailContext = CloudAIManager.buildEmailContext(from: targetEmails, maxEmails: 15)
+                // This path builds its context itself and synthesizes once,
+                // so both compression fields are genuinely known here.
+                metrics.contextChars = emailContext.count
+                metrics.synthesisLayerCount = 1
+                metrics.reported.insert(AIMetrics.QueryRecord.Group.compression)
 
                 // Layer 3: Cloud AI synthesis with NLP + RAG context
                 streamingQuery = currentQuery
@@ -2286,6 +2334,7 @@ struct AIAssistantView: View {
                         self.streamingAnswer = partial
                     }
                 } catch {
+                    usedFallback = true
                     answer = nlpResult.answer
                     if !answer.contains("error") {
                         answer = "*(Cloud AI unavailable — showing NLP analysis)*\n\n" + answer
@@ -2307,6 +2356,9 @@ struct AIAssistantView: View {
                     conversationHistory.append((query: currentQuery, answer: answer, timestamp: Date(), relatedEmailIDs: retrievedIDs))
                     if !storeManager.isPremium { freeQueryCount += 1 }
                 }
+                finishMetrics(metrics, startedAt: metricsStart,
+                              answer: answer, citedEmailIDs: retrievedIDs,
+                              fallbackUsed: usedFallback)
             }
         #endif
 
@@ -2326,6 +2378,8 @@ struct AIAssistantView: View {
                     streamingAnswer = ""
                 }
 
+                let metrics = beginMetrics("nlp", query: currentQuery)
+                let metricsStart = Date()
                 let emailsCopy = await currentWorkingSet()
                 let enhanced = await Self.enhancedNLPPipeline(
                     query: currentQuery,
@@ -2350,6 +2404,8 @@ struct AIAssistantView: View {
                     conversationHistory.append((query: currentQuery, answer: answer, timestamp: Date(), relatedEmailIDs: retrievedIDs))
                     if !storeManager.isPremium { freeQueryCount += 1 }
                 }
+                finishMetrics(metrics, startedAt: metricsStart,
+                              answer: answer, citedEmailIDs: retrievedIDs)
             }
         }
     }

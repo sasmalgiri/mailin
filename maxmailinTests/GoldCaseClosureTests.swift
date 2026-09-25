@@ -721,3 +721,107 @@ final class RedactionDefectV3D1Tests: XCTestCase {
                       "a blank name must not generate rules")
     }
 }
+
+// MARK: - AIMetrics: an unmeasured metric is not a zero (audit defect 22)
+
+/// `AIMetrics.begin`/`finalize` had no caller, so the instrumentation that was
+/// meant to "prove (or disprove)" AI-pipeline changes had recorded nothing.
+/// Wiring it exposed the second trap: engines see different things, so
+/// averaging every field over every record would dilute measured values with
+/// zeros from engines that cannot measure them — and report the result as a
+/// measurement. These pin the rule that prevents that.
+final class AIMetricsSummaryTests: XCTestCase {
+
+    private func record(_ engine: String,
+                        elapsed: Int,
+                        findings: Int? = nil,
+                        cited: Int = 0,
+                        fallback: Bool = false) -> AIMetrics.QueryRecord {
+        var r = AIMetrics.QueryRecord(query: "q", intent: engine, persona: "general",
+                                      archiveEmailCount: 100)
+        r.totalElapsedMs = elapsed
+        r.citedEmailCount = cited
+        r.fallbackUsed = fallback
+        r.reported = [AIMetrics.QueryRecord.Group.identity,
+                      AIMetrics.QueryRecord.Group.timing,
+                      AIMetrics.QueryRecord.Group.output]
+        if let findings {
+            r.totalFindings = findings
+            r.reported.insert(AIMetrics.QueryRecord.Group.findings)
+        }
+        return r
+    }
+
+    /// The core rule: findings averaged over the ONE engine that measured
+    /// them, not diluted by the three that could not.
+    func testFindingsAreAveragedOnlyOverEnginesThatMeasuredThem() {
+        let summary = AIMetrics.summarize([
+            record("hybrid", elapsed: 1_000, findings: 12),
+            record("appleAI", elapsed: 800),
+            record("appleAIMoE", elapsed: 900),
+            record("nlp", elapsed: 100),
+        ])
+
+        XCTAssertEqual(summary.findings.samples, 1, "only hybrid measured findings")
+        XCTAssertEqual(summary.findings.value, 12, accuracy: 0.001,
+                       "diluting across all four would have reported 3.0")
+        XCTAssertEqual(summary.elapsedMs.samples, 4, "every engine measures time")
+        XCTAssertEqual(summary.elapsedMs.value, 700, accuracy: 0.001)
+    }
+
+    /// A metric no engine in the window measured must say so, not read 0.0.
+    func testUnmeasuredMetricReadsAsNotMeasured() {
+        let summary = AIMetrics.summarize([
+            record("nlp", elapsed: 100),
+            record("appleAI", elapsed: 200),
+        ])
+        XCTAssertFalse(summary.findings.isMeasured)
+        XCTAssertFalse(summary.kgNodes.isMeasured,
+                       "no engine reports knowledge-graph citations yet")
+        XCTAssertEqual(summary.findings.description(), "not measured")
+        XCTAssertNotEqual(summary.findings.description(), "0.0",
+                          "a zero here would be a fabricated measurement")
+    }
+
+    /// A summary must never read as one engine's output.
+    func testSummaryBreaksQueriesDownByEngine() {
+        let summary = AIMetrics.summarize([
+            record("hybrid", elapsed: 1),
+            record("hybrid", elapsed: 1),
+            record("nlp", elapsed: 1),
+        ])
+        XCTAssertEqual(summary.byEngine["hybrid"], 2)
+        XCTAssertEqual(summary.byEngine["nlp"], 1)
+        XCTAssertEqual(summary.sampleSize, 3)
+    }
+
+    /// Fallback is recorded by every path, so its rate is over the whole window.
+    func testFallbackRateIsOverTheWholeWindow() {
+        let summary = AIMetrics.summarize([
+            record("hybrid", elapsed: 1, fallback: true),
+            record("hybrid", elapsed: 1, fallback: false),
+            record("cloudAI", elapsed: 1, fallback: true),
+            record("nlp", elapsed: 1),
+        ])
+        XCTAssertEqual(summary.fallbackRate, 0.5, accuracy: 0.001)
+    }
+
+    func testEmptyWindowMeasuresNothing() {
+        let summary = AIMetrics.summarize([])
+        XCTAssertEqual(summary.sampleSize, 0)
+        XCTAssertFalse(summary.elapsedMs.isMeasured)
+    }
+
+    /// A record that claims no groups counts toward no average. (There are no
+    /// pre-`reported` records on disk to worry about: `finalize` had never
+    /// been called before this change, so no metrics file was ever written.)
+    func testRecordWithNoReportedGroupsContributesToNoAverage() {
+        var legacy = AIMetrics.QueryRecord(query: "old", intent: "hybrid",
+                                           persona: "general", archiveEmailCount: 1)
+        legacy.totalElapsedMs = 99_999
+        legacy.reported = []
+        let summary = AIMetrics.summarize([legacy, record("nlp", elapsed: 100)])
+        XCTAssertEqual(summary.elapsedMs.samples, 1)
+        XCTAssertEqual(summary.elapsedMs.value, 100, accuracy: 0.001)
+    }
+}

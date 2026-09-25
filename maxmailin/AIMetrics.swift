@@ -6,9 +6,21 @@
 //  claim about its latency, citation density or failure rate can be checked
 //  against recorded queries instead of asserted.
 //
-//  Recorded by `AIAssistantView.askAI()`: every engine branch and every
-//  early-return path (greeting, acknowledgment, smart-query shortcut) begins
-//  a record and finalizes it, including on failure and on cancellation.
+//  Recorded by `AIAssistantView.askAI()`: every engine branch (appleAIMoE,
+//  appleAI, hybrid, cloudAI, nlp) and every early-return path (greeting,
+//  acknowledgment, smart-query shortcut) begins a record and finalizes it.
+//  A fallback to the NLP baseline is recorded as `fallbackUsed`. A CANCELLED
+//  query is not recorded at all: it has no answer to measure, and counting it
+//  as a failure would be false.
+//
+//  What each engine reports beyond identity/timing/output:
+//    hybrid  — findings (from HybridExpertResult), retrieval time
+//    cloudAI — compression (context size, one synthesis layer), retrieval time
+//    appleAI / appleAIMoE — retrieval time only; their expert pipeline runs
+//              inside a call this view cannot inspect
+//    nlp     — nothing further
+//  Routing (expertsRun / subQueryCount / toolsUsed) and knowledge-graph
+//  citations are reported by no engine yet, and `summary` says so.
 //
 //  HOW A ZERO STAYS HONEST. Engines see different things — the NLP path knows
 //  its findings counts; the streaming Apple AI path does not, and its expert
@@ -182,7 +194,12 @@ final class AIMetrics: ObservableObject {
     /// that field group, and carries the size of that subset. A metric with
     /// `samples == 0` was not measured; it is not a value of zero.
     func summary(lastN: Int = 50) -> Summary {
-        let slice = Array(recent.prefix(lastN))
+        Self.summarize(Array(recent.prefix(lastN)))
+    }
+
+    /// The averaging itself, pure so it can be tested without `finalize` —
+    /// which persists to the user's real Application Support file.
+    nonisolated static func summarize(_ slice: [QueryRecord]) -> Summary {
         guard !slice.isEmpty else { return Summary() }
 
         func average(_ group: String, _ value: (QueryRecord) -> Double) -> Measured {
