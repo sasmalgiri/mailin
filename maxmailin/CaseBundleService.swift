@@ -167,8 +167,41 @@ enum CaseBundleService {
     struct MergeReport {
         var artifactsAdded = 0
         var conflictsLabelled = 0
+        /// Artifacts already merged from this sender, unchanged — skipped.
+        /// Without this, re-importing one handoff duplicated everything in it.
+        var alreadyPresent = 0
         var emailsInBundle = 0
         var from = ""
+
+        var summary: String {
+            var parts = ["\(artifactsAdded) added"]
+            if conflictsLabelled > 0 { parts.append("\(conflictsLabelled) conflict(s) kept as labelled copies") }
+            if alreadyPresent > 0 { parts.append("\(alreadyPresent) already present") }
+            return parts.joined(separator: ", ")
+        }
+    }
+
+    /// A merged artifact's identity, derived from where it came from and who
+    /// sent it.
+    ///
+    /// It used to get a random UUID, which made re-importing the same bundle
+    /// duplicate everything: the add path retitled the artifact, so the next
+    /// pass compared a retitled local copy against the unlabelled incoming
+    /// one, saw a difference, and filed another "conflict". Three imports of
+    /// one handoff left four copies. A handoff arriving twice is normal.
+    ///
+    /// Deriving the id instead means the second pass finds the artifact it
+    /// wrote last time and skips it.
+    private static func mergedID(original: UUID, sender: String) -> UUID {
+        let digest = SHA256.hash(data: Data("\(original.uuidString)|\(sender)".utf8))
+        var bytes = Array(digest.prefix(16))
+        // RFC 4122 version 5-ish shaping: not a real name-based UUID, but it
+        // must not collide with a v4 id generated elsewhere.
+        bytes[6] = (bytes[6] & 0x0F) | 0x50
+        bytes[8] = (bytes[8] & 0x3F) | 0x80
+        return UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5],
+                           bytes[6], bytes[7], bytes[8], bytes[9], bytes[10], bytes[11],
+                           bytes[12], bytes[13], bytes[14], bytes[15]))
     }
 
     /// Merges a verified bundle's studio artifacts into the local stores.
@@ -189,17 +222,28 @@ enum CaseBundleService {
             retitle: (inout T, String) -> Void
         ) where T.ID == UUID {
             for var item in incoming {
-                if let existing = local.first(where: { $0.id == item.id }) {
-                    if existing == item { continue }         // identical — skip
-                    var relabelled = item                     // conflict — keep both
-                    relabelled = item
-                    retitle(&relabelled, senderLabel)
-                    // Give the copy a fresh id so both versions persist.
-                    relabelled = reassignID(relabelled)
-                    local.insert(relabelled, at: 0)
+                let incomingID = item.id
+                let identity = mergedID(original: incomingID, sender: senderLabel)
+                retitle(&item, senderLabel)
+                item = withID(item, identity)
+
+                if let existing = local.first(where: { $0.id == identity }) {
+                    if existing == item {
+                        // This exact artifact, from this sender, is already
+                        // here — the same handoff arriving again.
+                        report.alreadyPresent += 1
+                        continue
+                    }
+                    // Same origin and sender, but they changed it since. Both
+                    // readings stand, so the newer one takes a fresh id.
+                    local.insert(withID(item, UUID()), at: 0)
+                    report.conflictsLabelled += 1
+                } else if local.contains(where: { $0.id == incomingID }) {
+                    // We hold our own copy of the artifact they worked from.
+                    // Never overwritten: theirs arrives alongside, attributed.
+                    local.insert(item, at: 0)
                     report.conflictsLabelled += 1
                 } else {
-                    retitle(&item, senderLabel)
                     local.insert(item, at: 0)
                     report.artifactsAdded += 1
                 }
@@ -228,19 +272,21 @@ enum CaseBundleService {
 
         ForensicManager.shared.logAction(
             "Case bundle merged",
-            detail: "from \(senderLabel): \(report.artifactsAdded) added, \(report.conflictsLabelled) conflicts kept as labelled copies")
+            detail: "from \(senderLabel): \(report.summary)")
         return report
     }
 
-    /// Fresh identity for a conflict copy so both versions persist side by side.
-    private static func reassignID<T>(_ item: T) -> T {
+    /// Stamps a specific identity onto a studio artifact, so a merged copy can
+    /// be found again on a later merge and a conflict copy can persist beside
+    /// the original.
+    private static func withID<T>(_ item: T, _ id: UUID) -> T {
         var copy = item
         switch copy {
-        case var m as ACHMatrixModel:      m.id = UUID(); copy = m as! T
-        case var m as FactEvidenceModel:   m.id = UUID(); copy = m as! T
-        case var m as ActionRegisterModel: m.id = UUID(); copy = m as! T
-        case var m as EvidenceDeskModel:   m.id = UUID(); copy = m as! T
-        case var m as ReasoningCaseModel:  m.id = UUID(); copy = m as! T
+        case var m as ACHMatrixModel:      m.id = id; copy = m as! T
+        case var m as FactEvidenceModel:   m.id = id; copy = m as! T
+        case var m as ActionRegisterModel: m.id = id; copy = m as! T
+        case var m as EvidenceDeskModel:   m.id = id; copy = m as! T
+        case var m as ReasoningCaseModel:  m.id = id; copy = m as! T
         default: break
         }
         return copy

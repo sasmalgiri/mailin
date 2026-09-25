@@ -2987,6 +2987,18 @@ struct ContentView: View {
                             }
                         }
                     }
+                    Section("Team handoff") {
+                        Button {
+                            if storeManager.requireProfessional() { exportCaseBundle() }
+                        } label: {
+                            Label("Sealed Case Bundle (.mailincase)", systemImage: "shippingbox")
+                        }
+                        Button {
+                            if storeManager.requireProfessional() { importCaseBundle() }
+                        } label: {
+                            Label("Open a Case Bundle…", systemImage: "square.and.arrow.down.on.square")
+                        }
+                    }
                     if forensicManager.isEnabled {
                         Section("Integrity") {
                             Button {
@@ -3812,6 +3824,96 @@ private func handleMultipleFiles(_ urls: [URL]) {
             #endif
             return "Exported Concordance load file with \(result.recordsWritten) records (signed)."
         }
+    }
+
+    // MARK: - V3-E3/E4 sealed case bundles
+    //
+    // `CaseBundleService` implements export, seal verification and the
+    // attributed additive merge, and had no caller anywhere — E3 and E4 shipped
+    // as enterprise features that could not be reached from the app at all.
+    // These two actions are that missing wiring.
+
+    /// Exports the evidence-TAGGED emails plus the current studio artifacts as
+    /// one sealed `.mailincase` file.
+    ///
+    /// Scoped to tags rather than the whole archive on purpose. A bundle must
+    /// be sealed over its exact bytes, so its payload is necessarily built in
+    /// memory — making an archive-wide bundle proportional to the archive. The
+    /// tagged set is user-curated and bounded, and a case handoff is that set
+    /// anyway. The guard below states the requirement instead of silently
+    /// producing an empty bundle.
+    private func exportCaseBundle() {
+        let taggedIDs = Array(forensicManager.evidenceTags.keys)
+        guard !taggedIDs.isEmpty else {
+            viewModel.statusMessage = "Tag the emails for this case first — a bundle carries the tagged set."
+            viewModel.statusColor = .orange
+            return
+        }
+        #if os(macOS)
+        let panel = NSSavePanel()
+        let caseName = forensicManager.caseNumber.isEmpty ? "case" : forensicManager.caseNumber
+        panel.nameFieldStringValue = "\(caseName).\(CaseBundleService.fileExtension)"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        #else
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("case.\(CaseBundleService.fileExtension)")
+        #endif
+
+        let title = forensicManager.caseNumber.isEmpty ? "Untitled case" : forensicManager.caseNumber
+        Task { @MainActor in
+            var emails: [MBOXParser.RawEmail] = []
+            for id in taggedIDs {
+                if let email = try? await ArchiveDataService.shared.fullEmail(id: id) {
+                    emails.append(email)
+                }
+            }
+            guard !emails.isEmpty else {
+                viewModel.statusMessage = "None of the tagged emails could be read from the archive."
+                viewModel.statusColor = .red
+                return
+            }
+            do {
+                try CaseBundleService.export(caseTitle: title, emails: emails, to: url)
+                // Says how many were read, not how many were tagged: a tagged
+                // id the archive can no longer produce must not be counted as
+                // if it travelled.
+                viewModel.statusMessage = "Sealed case bundle: \(emails.count) of \(taggedIDs.count) tagged emails."
+                viewModel.statusColor = emails.count == taggedIDs.count ? .green : .orange
+                #if os(iOS)
+                iOSShareFile(at: url)
+                #endif
+            } catch {
+                viewModel.statusMessage = error.localizedDescription
+                viewModel.statusColor = .red
+            }
+        }
+    }
+
+    /// Verifies a `.mailincase` seal and merges its artifacts. A broken seal is
+    /// refused with the exact failure and nothing is merged.
+    private func importCaseBundle() {
+        #if os(macOS)
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let (bundle, receipt) = try CaseBundleService.open(url: url)
+            let report = CaseBundleService.mergeArtifacts(from: bundle)
+            viewModel.statusMessage = """
+                Verified bundle from \(report.from) (seal \(receipt.sha256Hex.prefix(12))…): \(report.summary). \
+                \(report.emailsInBundle) email(s) in the bundle.
+                """
+            viewModel.statusColor = report.conflictsLabelled > 0 ? .orange : .green
+        } catch {
+            // The refusal text names which check failed — content mismatch or
+            // a signature that does not verify are different problems.
+            viewModel.statusMessage = error.localizedDescription
+            viewModel.statusColor = .red
+        }
+        #endif
     }
 
     private func exportTaggedOnly() {
