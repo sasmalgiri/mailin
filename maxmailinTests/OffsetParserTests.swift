@@ -752,3 +752,364 @@ final class AttachmentReadabilityTests: XCTestCase {
                       "a message carrying its own raw source needs no locator")
     }
 }
+
+// MARK: - S5 per-part locators (audit defect 20)
+//
+// The scanner produces absolute byte ranges and decodes nothing, so the
+// assertions that matter are:
+//
+//  • a range read back from the source is EXACTLY the part's bytes — no
+//    leading newline, no trailing CRLF belonging to the next delimiter;
+//  • a boundary string appearing inside body text is not a delimiter;
+//  • nesting resolves to leaves in document order;
+//  • malformed input still yields reachable bytes rather than dropping them.
+//
+// Two bytes of drift here silently corrupts every extracted attachment, which
+// is why every test reads the range back and compares content rather than
+// checking lengths.
+//
+// Lives in this file because the maxmailinTests target does not use a
+// file-system synchronized group, so a new test file would not be compiled.
+
+final class MIMEPartScannerTests: XCTestCase {
+
+    private let messageID = UUID()
+
+    /// Builds a message, returns its body bytes and the offset they sit at in
+    /// a notional source file — a non-zero offset on purpose, because an
+    /// off-by-`bodyOffset` bug would be invisible at zero.
+    private func body(_ text: String, at offset: Int64 = 4_096) -> (Data, Int64) {
+        (Data(text.utf8), offset)
+    }
+
+    /// Reads a part's range out of the same buffer, undoing `bodyOffset`.
+    private func slice(_ part: PartLocator, from data: Data, bodyOffset: Int64) -> Data {
+        let start = Int(part.contentRange.offset - bodyOffset)
+        let end = start + Int(part.contentRange.length)
+        guard start >= 0, end <= data.count, start <= end else { return Data() }
+        return data.subdata(in: start..<end)
+    }
+
+    private func text(_ part: PartLocator, from data: Data, bodyOffset: Int64) -> String {
+        String(data: slice(part, from: data, bodyOffset: bodyOffset), encoding: .utf8) ?? "<undecodable>"
+    }
+
+    // MARK: - Single part
+
+    func testNonMultipartMessageIsOneLeafCoveringTheWholeBody() {
+        let (data, offset) = body("just a plain body\nwith two lines\n")
+        let parts = MIMEPartScanner.parts(
+            bodyData: data, bodyOffset: offset,
+            topHeaders: ["Content-Type": "text/plain; charset=utf-8"],
+            messageID: messageID)
+
+        XCTAssertEqual(parts.count, 1)
+        let part = try! XCTUnwrap(parts.first)
+        XCTAssertEqual(part.mimeType, "text/plain")
+        XCTAssertEqual(part.contentRange.offset, offset, "the leaf starts where the body starts")
+        XCTAssertEqual(part.contentRange.length, Int64(data.count), "and covers all of it")
+        XCTAssertEqual(text(part, from: data, bodyOffset: offset),
+                       "just a plain body\nwith two lines\n")
+    }
+
+    // MARK: - Flat multipart
+
+    func testTwoPartMixedYieldsExactContentForEach() {
+        let raw = [
+            "--BOUND",
+            "Content-Type: text/plain",
+            "",
+            "the readable body",
+            "--BOUND",
+            "Content-Type: application/pdf",
+            "Content-Disposition: attachment; filename=\"report.pdf\"",
+            "Content-Transfer-Encoding: base64",
+            "",
+            "QUJDREVG",
+            "--BOUND--",
+            ""
+        ].joined(separator: "\r\n")
+        let (data, offset) = body(raw)
+
+        let parts = MIMEPartScanner.parts(
+            bodyData: data, bodyOffset: offset,
+            topHeaders: ["Content-Type": "multipart/mixed; boundary=\"BOUND\""],
+            messageID: messageID)
+
+        XCTAssertEqual(parts.count, 2, "two parts, and the closing delimiter is not a third")
+
+        let first = try! XCTUnwrap(parts.first)
+        XCTAssertEqual(first.mimeType, "text/plain")
+        XCTAssertEqual(text(first, from: data, bodyOffset: offset), "the readable body",
+                       "no leading newline and no trailing CRLF from the next delimiter")
+
+        let second = try! XCTUnwrap(parts.last)
+        XCTAssertEqual(second.mimeType, "application/pdf")
+        XCTAssertEqual(second.filename, "report.pdf")
+        XCTAssertEqual(second.contentTransferEncoding, "base64")
+        XCTAssertTrue(second.isAttachment)
+        XCTAssertEqual(text(second, from: data, bodyOffset: offset), "QUJDREVG",
+                       "the encoded payload, exactly — this is what gets base64-decoded")
+    }
+
+    /// The whole point: the attachment's range must be a small fraction of a
+    /// large message, so reading it does not read the message.
+    func testAttachmentRangeIsIndependentOfTheSiblingSize() {
+        let filler = String(repeating: "x", count: 200_000)
+        let raw = [
+            "--B", "Content-Type: text/plain", "", filler,
+            "--B", "Content-Type: application/octet-stream",
+            "Content-Disposition: attachment; filename=\"small.bin\"", "", "TINY",
+            "--B--", ""
+        ].joined(separator: "\r\n")
+        let (data, offset) = body(raw)
+
+        let parts = MIMEPartScanner.parts(
+            bodyData: data, bodyOffset: offset,
+            topHeaders: ["Content-Type": "multipart/mixed; boundary=B"],
+            messageID: messageID)
+
+        let attachment = try! XCTUnwrap(parts.first { $0.filename == "small.bin" })
+        XCTAssertEqual(attachment.contentRange.length, 4,
+                       "reading this attachment must cost 4 bytes, not \(data.count)")
+        XCTAssertEqual(text(attachment, from: data, bodyOffset: offset), "TINY")
+        XCTAssertLessThan(attachment.encodedByteCount, Int64(data.count) / 1000)
+    }
+
+    // MARK: - The trap: boundary text inside a body
+
+    /// A line that merely CONTAINS the boundary, or is `--BOUND` mid-line, is
+    /// not a delimiter. Splitting on it would truncate the part.
+    func testBoundaryTextInsideBodyDoesNotSplitAPart() {
+        let raw = [
+            "--BOUND",
+            "Content-Type: text/plain",
+            "",
+            "discussing --BOUND inline is allowed",
+            "and a line mentioning --BOUND at the end --BOUND too",
+            "--BOUND--",
+            ""
+        ].joined(separator: "\r\n")
+        let (data, offset) = body(raw)
+
+        let parts = MIMEPartScanner.parts(
+            bodyData: data, bodyOffset: offset,
+            topHeaders: ["Content-Type": "multipart/mixed; boundary=BOUND"],
+            messageID: messageID)
+
+        XCTAssertEqual(parts.count, 1, "mid-line boundary text must not create parts")
+        let content = text(try! XCTUnwrap(parts.first), from: data, bodyOffset: offset)
+        XCTAssertTrue(content.contains("discussing --BOUND inline"), content)
+        XCTAssertTrue(content.contains("--BOUND at the end"),
+                      "the part must not be cut at the mention: \(content)")
+    }
+
+    /// A line that starts with the boundary text but continues with other
+    /// characters is a DIFFERENT boundary, not this one.
+    func testLongerBoundaryPrefixIsNotThisDelimiter() {
+        let raw = [
+            "--B",
+            "Content-Type: text/plain",
+            "",
+            "--BEXTRA is not our delimiter",
+            "--B--",
+            ""
+        ].joined(separator: "\r\n")
+        let (data, offset) = body(raw)
+
+        let parts = MIMEPartScanner.parts(
+            bodyData: data, bodyOffset: offset,
+            topHeaders: ["Content-Type": "multipart/mixed; boundary=B"],
+            messageID: messageID)
+
+        XCTAssertEqual(parts.count, 1)
+        XCTAssertTrue(text(try! XCTUnwrap(parts.first), from: data, bodyOffset: offset)
+                        .contains("--BEXTRA is not our delimiter"))
+    }
+
+    // MARK: - Line endings
+
+    func testBareLFMultipartIsHandled() {
+        let raw = [
+            "--B", "Content-Type: text/plain", "", "lf body",
+            "--B", "Content-Type: text/html", "", "<p>lf html</p>",
+            "--B--", ""
+        ].joined(separator: "\n")
+        let (data, offset) = body(raw)
+
+        let parts = MIMEPartScanner.parts(
+            bodyData: data, bodyOffset: offset,
+            topHeaders: ["Content-Type": "multipart/alternative; boundary=B"],
+            messageID: messageID)
+
+        XCTAssertEqual(parts.count, 2)
+        XCTAssertEqual(text(parts[0], from: data, bodyOffset: offset), "lf body")
+        XCTAssertEqual(text(parts[1], from: data, bodyOffset: offset), "<p>lf html</p>")
+    }
+
+    // MARK: - Nesting
+
+    func testNestedMultipartResolvesToLeavesInDocumentOrder() {
+        let raw = [
+            "--OUT",
+            "Content-Type: multipart/alternative; boundary=\"IN\"",
+            "",
+            "--IN",
+            "Content-Type: text/plain",
+            "",
+            "plain alternative",
+            "--IN",
+            "Content-Type: text/html",
+            "",
+            "<p>html alternative</p>",
+            "--IN--",
+            "--OUT",
+            "Content-Type: application/pdf",
+            "Content-Disposition: attachment; filename=\"a.pdf\"",
+            "",
+            "PDFBYTES",
+            "--OUT--",
+            ""
+        ].joined(separator: "\r\n")
+        let (data, offset) = body(raw)
+
+        let parts = MIMEPartScanner.parts(
+            bodyData: data, bodyOffset: offset,
+            topHeaders: ["Content-Type": "multipart/mixed; boundary=OUT"],
+            messageID: messageID)
+
+        XCTAssertEqual(parts.map(\.mimeType),
+                       ["text/plain", "text/html", "application/pdf"],
+                       "leaves must come out flattened, in document order")
+        XCTAssertEqual(text(parts[0], from: data, bodyOffset: offset), "plain alternative")
+        XCTAssertEqual(text(parts[1], from: data, bodyOffset: offset), "<p>html alternative</p>")
+        XCTAssertEqual(text(parts[2], from: data, bodyOffset: offset), "PDFBYTES")
+
+        // Paths distinguish nesting, so two leaves are never confused.
+        XCTAssertEqual(Set(parts.map(\.path)).count, parts.count,
+                       "every leaf needs a distinct MIME path: \(parts.map(\.path))")
+        XCTAssertGreaterThan(parts[0].path.count, parts[2].path.count,
+                             "a nested leaf is deeper than a top-level one")
+    }
+
+    // MARK: - Malformed input stays reachable
+
+    /// Declared multipart with no delimiter anywhere: the bytes must still be
+    /// reachable as one part rather than vanishing.
+    func testDeclaredMultipartWithNoDelimiterYieldsTheBodyAnyway() {
+        let (data, offset) = body("no delimiters in here at all\n")
+        let parts = MIMEPartScanner.parts(
+            bodyData: data, bodyOffset: offset,
+            topHeaders: ["Content-Type": "multipart/mixed; boundary=MISSING"],
+            messageID: messageID)
+
+        XCTAssertEqual(parts.count, 1, "the bytes must not be dropped")
+        XCTAssertEqual(text(try! XCTUnwrap(parts.first), from: data, bodyOffset: offset),
+                       "no delimiters in here at all\n")
+    }
+
+    /// Multipart declared with no boundary parameter — same rule.
+    func testMultipartWithoutABoundaryParameterYieldsTheBodyAnyway() {
+        let (data, offset) = body("orphaned content\n")
+        let parts = MIMEPartScanner.parts(
+            bodyData: data, bodyOffset: offset,
+            topHeaders: ["Content-Type": "multipart/mixed"],
+            messageID: messageID)
+        XCTAssertEqual(parts.count, 1)
+        XCTAssertEqual(text(try! XCTUnwrap(parts.first), from: data, bodyOffset: offset),
+                       "orphaned content\n")
+    }
+
+    func testEmptyBodyYieldsOneEmptyPartNotACrash() {
+        let (data, offset) = body("")
+        let parts = MIMEPartScanner.parts(
+            bodyData: data, bodyOffset: offset,
+            topHeaders: ["Content-Type": "text/plain"],
+            messageID: messageID)
+        XCTAssertEqual(parts.count, 1)
+        XCTAssertEqual(parts.first?.contentRange.length, 0)
+    }
+
+    /// Unbounded nesting must terminate. The inner content stays reachable as
+    /// a leaf at the depth limit rather than being lost to recursion.
+    func testDeeplyNestedMultipartTerminates() {
+        // Each level declares the next; far deeper than maxDepth.
+        var raw = ""
+        let levels = MIMEPartScanner.maxDepth + 10
+        for level in 0..<levels {
+            raw += "--B\(level)\r\nContent-Type: multipart/mixed; boundary=\"B\(level + 1)\"\r\n\r\n"
+        }
+        raw += "--B\(levels)\r\nContent-Type: text/plain\r\n\r\ndeep\r\n--B\(levels)--\r\n"
+        for level in stride(from: levels - 1, through: 0, by: -1) {
+            raw += "--B\(level)--\r\n"
+        }
+        let (data, offset) = body(raw)
+
+        let parts = MIMEPartScanner.parts(
+            bodyData: data, bodyOffset: offset,
+            topHeaders: ["Content-Type": "multipart/mixed; boundary=B0"],
+            messageID: messageID)
+
+        XCTAssertFalse(parts.isEmpty, "recursion must stop with the bytes still reachable")
+        XCTAssertLessThanOrEqual(parts.map(\.path.count).max() ?? 0,
+                                 MIMEPartScanner.maxDepth + 1,
+                                 "depth must be bounded")
+    }
+
+    // MARK: - Headers
+
+    func testPartHeadersAreParsedIncludingFoldedValues() {
+        let raw = [
+            "--B",
+            "Content-Type: application/pdf",
+            "Content-Disposition: attachment;",
+            " filename=\"a very long name.pdf\"",
+            "Content-ID: <cid-42@example.com>",
+            "",
+            "BYTES",
+            "--B--",
+            ""
+        ].joined(separator: "\r\n")
+        let (data, offset) = body(raw)
+
+        let parts = MIMEPartScanner.parts(
+            bodyData: data, bodyOffset: offset,
+            topHeaders: ["Content-Type": "multipart/mixed; boundary=B"],
+            messageID: messageID)
+
+        let part = try! XCTUnwrap(parts.first)
+        XCTAssertEqual(part.filename, "a very long name.pdf",
+                       "a folded Content-Disposition must still yield the filename")
+        XCTAssertEqual(part.contentID, "cid-42@example.com",
+                       "the angle brackets are not part of the id")
+        XCTAssertEqual(text(part, from: data, bodyOffset: offset), "BYTES")
+    }
+
+    /// The header range must cover the part's own headers and nothing else —
+    /// it is what lets a reader show a part's metadata without its content.
+    func testHeaderRangeCoversOnlyThePartHeaders() {
+        let raw = [
+            "--B",
+            "Content-Type: text/plain",
+            "",
+            "content here",
+            "--B--",
+            ""
+        ].joined(separator: "\r\n")
+        let (data, offset) = body(raw)
+
+        let part = try! XCTUnwrap(MIMEPartScanner.parts(
+            bodyData: data, bodyOffset: offset,
+            topHeaders: ["Content-Type": "multipart/mixed; boundary=B"],
+            messageID: messageID).first)
+
+        let start = Int(part.headerRange.offset - offset)
+        let end = start + Int(part.headerRange.length)
+        let headerText = String(data: data.subdata(in: start..<end), encoding: .utf8) ?? ""
+        XCTAssertTrue(headerText.contains("Content-Type: text/plain"), headerText)
+        XCTAssertFalse(headerText.contains("content here"),
+                       "the header range must stop before the content: \(headerText)")
+        XCTAssertFalse(headerText.contains("--B"),
+                       "and must not include the delimiter: \(headerText)")
+    }
+}
