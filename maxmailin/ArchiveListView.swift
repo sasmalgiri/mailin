@@ -126,6 +126,17 @@ struct ArchiveListView: View {
                             Button(role: .destructive) {
                                 Task { await model.delete([summary.id]); detail.invalidate(summary.id) }
                             } label: { Label("Move to Trash", systemImage: "trash") }
+
+                            // Offered only on a trash-inclusive query (`in:trash`),
+                            // because that is the only way a trashed row reaches
+                            // this list — elsewhere nothing here is restorable, and
+                            // an always-present Restore would be a no-op that
+                            // looked like an action.
+                            if model.query.includeTrashed {
+                                Button {
+                                    Task { await model.restore([summary.id]); detail.invalidate(summary.id) }
+                                } label: { Label("Restore from Trash", systemImage: "arrow.uturn.backward") }
+                            }
                         }
                         #if os(iOS)
                         .swipeActions(edge: .trailing) {

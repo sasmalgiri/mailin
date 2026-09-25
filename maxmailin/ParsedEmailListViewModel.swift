@@ -406,6 +406,27 @@ class ParsedEmailListViewModel: ObservableObject {
 
     @Published var showPinnedOnly = false { didSet { if !isResettingFilters { applyFilters() } } }
 
+    /// Which review state the list is showing. Trash and Archive are both
+    /// REVERSIBLE flags, and the UI says so in three places — "restorable from
+    /// the Trash view", "Trash is always restorable", "find it again with the
+    /// Archived filter". None of that was true: `applyFilters` hid both states
+    /// unconditionally and no surface showed either, so both were one-way
+    /// doors and `undeleteEmail`/`unarchiveEmail` had no caller. This is the
+    /// Trash view and the Archived filter those strings promise.
+    enum ReviewStateFilter: String, CaseIterable {
+        /// Normal browsing: neither trashed nor archived rows.
+        case active
+        /// The Trash view — trashed rows only, whatever else is set on them.
+        case trashed
+        /// Archived rows only, excluding anything also trashed (trash wins,
+        /// so a row can never be restorable from two places at once).
+        case archived
+    }
+
+    @Published var reviewStateFilter: ReviewStateFilter = .active {
+        didSet { if !isResettingFilters { applyFilters() } }
+    }
+
     /// Quick-chip type filter (Sent/Received) — compiles to SQL messageType
     /// so the chips filter the WHOLE archive, including header-recovered
     /// rows that have flags but no re-parsable metadata.
@@ -772,6 +793,9 @@ class ParsedEmailListViewModel: ObservableObject {
         selectedSmartTags.removeAll()
         selectedEvidenceTag = nil
         clusterFilterIDs = nil
+        // Trash and Archived are filters, so clearing filters leaves them —
+        // otherwise "Clear" would strand the user in the Trash view.
+        reviewStateFilter = .active
         isResettingFilters = false
         reloadPagesForQueryChange()
     }
@@ -1043,8 +1067,16 @@ class ParsedEmailListViewModel: ObservableObject {
         }
 
         var result = residentEmails.filter { email in
-            if review.isTrashed(email.id) { return false }
-            if review.isArchived(email.id) { return false }
+            switch reviewStateFilter {
+            case .active:
+                if review.isTrashed(email.id) { return false }
+                if review.isArchived(email.id) { return false }
+            case .trashed:
+                if !review.isTrashed(email.id) { return false }
+            case .archived:
+                if review.isTrashed(email.id) { return false }
+                if !review.isArchived(email.id) { return false }
+            }
             if showPinnedOnly && !review.isPinned(email.id) { return false }
             if let clusterIDs = clusterFilterIDs {
                 if !clusterIDs.contains(email.id) { return false }

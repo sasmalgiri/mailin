@@ -168,7 +168,7 @@ struct EmailDetailView: View {
                 mailActionGroup(
                     actions: [
                         ("trash", "Trash",
-                         "Move to Trash — restorable from the Trash view, never a permanent delete", {
+                         "Move to Trash — get it back with the Trash filter, never a permanent delete", {
                             NotificationCenter.default.post(name: .deleteCurrentEmail, object: email.id)
                         }),
                         ("archivebox", "Archive",
@@ -193,7 +193,7 @@ struct EmailDetailView: View {
                     ]
                 )
 
-                HelpDot(text: "Trash is always restorable. Archive hides an email from the main list. Read/unread and Pin mark emails and stick across restarts — hover any button for details.")
+                HelpDot(text: "Trash is always restorable — add the Trash filter, then right-click to restore. Archive hides an email from the main list; the Archived filter brings it back. Read/unread and Pin mark emails and stick across restarts — hover any button for details.")
 
                 mailActionDivider
 

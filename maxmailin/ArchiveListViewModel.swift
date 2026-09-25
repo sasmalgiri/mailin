@@ -215,7 +215,10 @@ final class ArchiveListViewModel: ObservableObject {
         await loadInitial()
     }
 
-    /// Restore trashed emails back into the browse surfaces.
+    /// Restore trashed emails back into the browse surfaces. Reached from the
+    /// row context menu on a trash-inclusive query (`in:trash`) — see
+    /// `ArchiveListView`. Until that existed, "Move to Trash" here was a
+    /// one-way door despite the comment above calling the flag restorable.
     func restore(_ ids: Set<EmailID>) async {
         guard !ids.isEmpty else { return }
         do {

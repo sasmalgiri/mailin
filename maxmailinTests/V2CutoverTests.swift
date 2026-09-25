@@ -1986,4 +1986,146 @@ final class V2CutoverTests: XCTestCase {
         }
         XCTAssertTrue(hits.isEmpty, "retired rollback flag still referenced: \(hits.joined(separator: ", "))")
     }
+
+    // MARK: - §19.1 — Trash and Archive are reversible THROUGH THE UI
+
+    /// The app tells the user three times that trashing is reversible:
+    /// "restorable from the Trash view", "Trash is always restorable", and a
+    /// doc comment calling it "a restorable review flag". It was not: the list
+    /// hid trashed rows unconditionally, no surface showed them, and
+    /// `undeleteEmail` had no production caller. This pins the round trip —
+    /// trash, find it again, restore it.
+    func testTrashedEmailIsVisibleInTheTrashFilterAndRestorable() async throws {
+        let env = try makeEnv()
+        _ = try await seed(env, count: 10)
+
+        let saved = ReviewStateService.testStoreOverride
+        ReviewStateService.testStoreOverride = env.store
+        addTeardownBlock { @MainActor in ReviewStateService.testStoreOverride = saved }
+
+        let vm = ParsedEmailListViewModel(viewModel: ContentViewModel(), archive: env.archive,
+                                          pageSize: 10, maxRetained: 50)
+        vm.isPremiumUser = true
+        await vm.reloadForQueryChangeNow()
+        let all = vm.visibleEmails.map(\.id)
+        XCTAssertEqual(all.count, 10, "the page window hydrated")
+
+        await ReviewStateService.shared.hydrateWindow(ids: all)
+        let victim = try XCTUnwrap(all.first)
+
+        // Trash it: it leaves normal browsing.
+        vm.deleteEmail(victim)
+        XCTAssertFalse(vm.visibleEmails.map(\.id).contains(victim),
+                       "a trashed email must leave the active list")
+        XCTAssertEqual(vm.visibleEmails.count, 9)
+
+        // The Trash view shows it — this is the surface that did not exist.
+        vm.reviewStateFilter = .trashed
+        XCTAssertEqual(vm.visibleEmails.map(\.id), [victim],
+                       "the Trash filter must show exactly what was trashed")
+
+        // And it can be restored from there.
+        vm.undeleteEmail(victim)
+        XCTAssertTrue(vm.visibleEmails.isEmpty, "the Trash view is now empty")
+
+        vm.reviewStateFilter = .active
+        XCTAssertTrue(vm.visibleEmails.map(\.id).contains(victim),
+                      "a restored email must return to normal browsing")
+        XCTAssertEqual(vm.visibleEmails.count, 10)
+    }
+
+    /// The same promise is made about archiving — "find it again with the
+    /// Archived filter" — and `unarchiveEmail` had neither a caller nor a test.
+    func testArchivedEmailIsVisibleInTheArchivedFilterAndRestorable() async throws {
+        let env = try makeEnv()
+        _ = try await seed(env, count: 10)
+
+        let saved = ReviewStateService.testStoreOverride
+        ReviewStateService.testStoreOverride = env.store
+        addTeardownBlock { @MainActor in ReviewStateService.testStoreOverride = saved }
+
+        let vm = ParsedEmailListViewModel(viewModel: ContentViewModel(), archive: env.archive,
+                                          pageSize: 10, maxRetained: 50)
+        vm.isPremiumUser = true
+        await vm.reloadForQueryChangeNow()
+        let all = vm.visibleEmails.map(\.id)
+        await ReviewStateService.shared.hydrateWindow(ids: all)
+        let filed = try XCTUnwrap(all.first)
+
+        vm.archiveEmail(filed)
+        XCTAssertFalse(vm.visibleEmails.map(\.id).contains(filed))
+
+        vm.reviewStateFilter = .archived
+        XCTAssertEqual(vm.visibleEmails.map(\.id), [filed],
+                       "the Archived filter must show exactly what was archived")
+
+        vm.unarchiveEmail(filed)
+        vm.reviewStateFilter = .active
+        XCTAssertTrue(vm.visibleEmails.map(\.id).contains(filed))
+    }
+
+    /// Trash wins over Archive, so a row that is both is restorable from one
+    /// place and one place only — otherwise "restore" means two different
+    /// things depending on which filter you happened to be in.
+    func testTrashTakesPrecedenceOverArchive() async throws {
+        let env = try makeEnv()
+        _ = try await seed(env, count: 6)
+
+        let saved = ReviewStateService.testStoreOverride
+        ReviewStateService.testStoreOverride = env.store
+        addTeardownBlock { @MainActor in ReviewStateService.testStoreOverride = saved }
+
+        let vm = ParsedEmailListViewModel(viewModel: ContentViewModel(), archive: env.archive,
+                                          pageSize: 10, maxRetained: 50)
+        vm.isPremiumUser = true
+        await vm.reloadForQueryChangeNow()
+        let all = vm.visibleEmails.map(\.id)
+        await ReviewStateService.shared.hydrateWindow(ids: all)
+        let both = try XCTUnwrap(all.first)
+
+        vm.archiveEmail(both)
+        vm.deleteEmail(both)
+
+        vm.reviewStateFilter = .archived
+        XCTAssertFalse(vm.visibleEmails.map(\.id).contains(both),
+                       "a trashed row must not also appear under Archived")
+
+        vm.reviewStateFilter = .trashed
+        XCTAssertTrue(vm.visibleEmails.map(\.id).contains(both),
+                      "Trash shows it whatever else is set")
+    }
+
+    /// Clearing filters must leave the Trash view, or "Clear" strands the user
+    /// looking at deleted mail with no obvious way back.
+    func testClearingFiltersLeavesTheTrashView() async throws {
+        let env = try makeEnv()
+        _ = try await seed(env, count: 4)
+
+        let vm = ParsedEmailListViewModel(viewModel: ContentViewModel(), archive: env.archive,
+                                          pageSize: 10, maxRetained: 50)
+        vm.reviewStateFilter = .trashed
+        vm.resetFilters()
+        XCTAssertEqual(vm.reviewStateFilter, .active)
+    }
+
+    /// The SQLite browse surface offers Move to Trash too, and its `restore`
+    /// also had no caller. A trash-inclusive query reaches the row; restore
+    /// returns it to the default query's count.
+    func testArchiveListRestoreReturnsARowToTheDefaultQuery() async throws {
+        let env = try makeEnv()
+        let fixtures = try await seed(env, count: 8)
+        let victim = try XCTUnwrap(fixtures.first?.id)
+
+        let list = ArchiveListViewModel(archive: env.archive, pageSize: 20, maxRetained: 100)
+        await list.loadInitial()
+        XCTAssertEqual(list.summaries.count, 8)
+
+        await list.delete([victim])
+        XCTAssertEqual(list.summaries.count, 7, "the trashed row leaves the default query")
+        XCTAssertFalse(list.summaries.map(\.id).contains(victim))
+
+        await list.restore([victim])
+        XCTAssertEqual(list.summaries.count, 8, "restore must bring it back")
+        XCTAssertTrue(list.summaries.map(\.id).contains(victim))
+    }
 }

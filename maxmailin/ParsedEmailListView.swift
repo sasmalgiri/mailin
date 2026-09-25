@@ -1093,6 +1093,12 @@ struct ParsedEmailListView: View {
 
         FilterChipInfo(key: "unreviewed", label: "Unreviewed", icon: "eye.slash", color: .secondary, section: "Review"),
         FilterChipInfo(key: "cleanup", label: "Cleanup", icon: "trash.circle", color: .secondary, section: "Review"),
+        // The Trash view and the Archived filter the UI has always promised.
+        // Mutually exclusive — see `filterBinding(for:)`. Their own section,
+        // NOT "Review": that one only appears with advanced features on, and
+        // getting a deleted email back is not an advanced feature.
+        FilterChipInfo(key: "trash", label: "Trash", icon: "trash", color: .red, section: "Review State"),
+        FilterChipInfo(key: "archived", label: "Archived", icon: "archivebox", color: .brown, section: "Review State"),
     ]
 
     private var activeFilterChips: [FilterChipInfo] {
@@ -1119,6 +1125,16 @@ struct ParsedEmailListView: View {
             set: { quickFilterHighPriority = $0; syncQuickFiltersToQuery() })
         case "hasLinks": return $quickFilterHasLinks
         case "cleanup": return $showCleanupMode
+        // Both map onto one enum, so switching one off returns to normal
+        // browsing and switching one on cannot leave the other engaged.
+        case "trash": return Binding(
+            get: { model.reviewStateFilter == .trashed },
+            set: { model.reviewStateFilter = $0 ? .trashed : .active
+                   if $0 { activeFilterTags.remove("archived") } })
+        case "archived": return Binding(
+            get: { model.reviewStateFilter == .archived },
+            set: { model.reviewStateFilter = $0 ? .archived : .active
+                   if $0 { activeFilterTags.remove("trash") } })
         case "important": return Binding(
             get: { quickFilterAIImportant },
             set: { quickFilterAIImportant = $0; syncQuickFiltersToQuery() })
@@ -1180,7 +1196,7 @@ struct ParsedEmailListView: View {
             }
 
             let sections = Dictionary(grouping: Self.allFilterChips, by: \.section)
-            let basicSections = ["Type"]
+            let basicSections = ["Type", "Review State"]
             let aiSections = ["Category", "Sentiment", "Priority", "Security"]
             let advancedSections = ["Evidence", "Review"]
 
@@ -1950,6 +1966,29 @@ struct ParsedEmailListView: View {
                 PlatformClipboard.copyString(email.headers["From"] ?? "")
             } label: {
                 Label("Copy Sender", systemImage: "person.crop.circle")
+            }
+
+            // Restore. Without this the Trash and Archived filters would only
+            // let the user LOOK at what they removed — which is not what
+            // "restorable" means.
+            if model.isDeleted(email.id) || model.isArchived(email.id) {
+                Divider()
+
+                if model.isDeleted(email.id) {
+                    Button {
+                        model.undeleteEmail(email.id)
+                    } label: {
+                        Label("Restore from Trash", systemImage: "arrow.uturn.backward")
+                    }
+                }
+
+                if model.isArchived(email.id) {
+                    Button {
+                        model.unarchiveEmail(email.id)
+                    } label: {
+                        Label("Move Back to Inbox", systemImage: "tray.and.arrow.up")
+                    }
+                }
             }
         }
     }
