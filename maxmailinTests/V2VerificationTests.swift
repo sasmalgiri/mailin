@@ -3086,6 +3086,101 @@ final class V2ForensicPersistenceTests: XCTestCase {
         XCTAssertEqual(stored, 7 * batchSize, "every hash row is durable even though the cache is bounded")
         fm.clearForensicData()
     }
+
+    // MARK: - Evidence seals are actually verified
+
+    /// Placing a legal hold seals the message with a SHA-256 over its headers
+    /// and bodies, and `verifyEvidenceSeal` recomputes that hash and returns a
+    /// four-state verdict. Nothing called it: seals were written and never
+    /// checked, so tampering under legal hold could not be detected and the
+    /// "Evidence Seal BROKEN" audit entry was unreachable. This pins all four
+    /// verdicts now that the custodian panel can ask for them.
+    @MainActor
+    func testEvidenceSeal_fourVerdicts() throws {
+        let manager = CustodianManager.shared
+        let heldBackup = manager.legalHolds
+        let sealBackup = manager.evidenceSeals
+        addTeardownBlock { @MainActor in
+            manager.legalHolds = heldBackup
+            manager.evidenceSeals = sealBackup
+        }
+        manager.legalHolds = []
+        manager.evidenceSeals = [:]
+
+        func probe(_ body: String, id: UUID = UUID()) -> MBOXParser.RawEmail {
+            MBOXParser.RawEmail(
+                id: id,
+                headers: ["Message-ID": "<seal@t>", "Subject": "Sealed", "From": "a@b.com",
+                          "To": "c@d.com", "Date": "Wed, 15 Jan 2025 14:30:00 +0000"],
+                rawSource: "From a@b.com\n\(body)", messageType: "received", attachments: [],
+                timestamp: "2025-01-15T14:30:00Z", domains: ["b.com"],
+                plainBody: body, htmlBody: "")
+        }
+
+        // Not held at all.
+        let loose = probe("nothing to do with this")
+        if case .notHeld = manager.verifyEvidenceSeal(loose) {} else {
+            XCTFail("an unheld message must report .notHeld, not a seal state")
+        }
+
+        // Held and sealed, unmodified.
+        let sealed = probe("the original body")
+        manager.placeLegalHold(sealed.id, email: sealed)
+        XCTAssertNotNil(manager.evidenceSeals[sealed.id], "placing a hold must record a seal")
+        if case .intact = manager.verifyEvidenceSeal(sealed) {} else {
+            XCTFail("an unmodified sealed message must verify as intact")
+        }
+
+        // Same id, different content — the tamper case the seal exists for.
+        let modified = probe("the body was changed after the hold", id: sealed.id)
+        switch manager.verifyEvidenceSeal(modified) {
+        case .tampered(let expected, let actual):
+            XCTAssertNotEqual(expected, actual, "a tamper verdict must carry two different hashes")
+            XCTAssertEqual(expected, manager.evidenceSeals[sealed.id],
+                           "the expected hash must be the stored seal")
+        default:
+            XCTFail("modified content under legal hold must verify as tampered")
+        }
+
+        // Held with no seal recorded — reported as such, never as intact.
+        let unsealed = probe("held before sealing existed")
+        manager.legalHolds.insert(unsealed.id)
+        if case .noSeal = manager.verifyEvidenceSeal(unsealed) {} else {
+            XCTFail("a held message with no seal must report .noSeal, not .intact")
+        }
+    }
+
+    /// Removing the hold drops the seal, so a re-held message is sealed against
+    /// its content at the time of the NEW hold — not silently compared to a
+    /// stale hash from a previous one.
+    @MainActor
+    func testRemovingLegalHoldDropsTheSeal() throws {
+        let manager = CustodianManager.shared
+        let heldBackup = manager.legalHolds
+        let sealBackup = manager.evidenceSeals
+        addTeardownBlock { @MainActor in
+            manager.legalHolds = heldBackup
+            manager.evidenceSeals = sealBackup
+        }
+        manager.legalHolds = []
+        manager.evidenceSeals = [:]
+
+        let email = MBOXParser.RawEmail(
+            headers: ["Message-ID": "<reseal@t>", "Subject": "Reseal", "From": "a@b.com",
+                      "To": "c@d.com", "Date": "Wed, 15 Jan 2025 14:30:00 +0000"],
+            rawSource: "raw", messageType: "received", attachments: [],
+            timestamp: "2025-01-15T14:30:00Z", domains: ["b.com"],
+            plainBody: "body", htmlBody: "")
+
+        manager.placeLegalHold(email.id, email: email)
+        XCTAssertNotNil(manager.evidenceSeals[email.id])
+
+        manager.removeLegalHold(email.id)
+        XCTAssertNil(manager.evidenceSeals[email.id], "lifting the hold must drop the seal with it")
+        if case .notHeld = manager.verifyEvidenceSeal(email) {} else {
+            XCTFail("after the hold is lifted there is nothing to verify")
+        }
+    }
 }
 
 import CryptoKit

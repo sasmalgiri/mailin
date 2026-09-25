@@ -15,6 +15,17 @@ struct CustodianPanelView: View {
     @State private var showAssignSheet = false
     @State private var showDetailOnIOS = false
     @State private var showTutorial = false
+    /// Seal verdicts from the last "Verify Seals" run, per email.
+    ///
+    /// Placing a legal hold computes a SHA-256 seal over the message and
+    /// persists it (`evidence_seals.json`), and `verifyEvidenceSeal` recomputes
+    /// it and logs "Evidence Seal BROKEN" on a mismatch — but nothing ever
+    /// called it. Seals were written and never checked, so the one audit-log
+    /// entry that records tampering under legal hold could not be produced and
+    /// the user had no way to ask whether held evidence was still intact.
+    @State private var sealVerdicts: [UUID: CustodianManager.SealVerification] = [:]
+    @State private var sealSummary: String?
+    @State private var sealSummaryIsBad = false
     #if os(iOS)
     @State private var showShareSheet = false
     @State private var shareItems: [Any] = []
@@ -191,6 +202,62 @@ struct CustodianPanelView: View {
         }
     }
 
+    // MARK: - Evidence seal verification
+
+    @ViewBuilder
+    private func sealBadge(_ verdict: CustodianManager.SealVerification) -> some View {
+        switch verdict {
+        case .intact:
+            Image(systemName: "checkmark.seal.fill")
+                .foregroundColor(AppColors.success)
+                .help("Seal intact — the message matches the hash taken when the hold was placed")
+                .accessibilityLabel("Evidence seal intact")
+        case .tampered:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundColor(AppColors.error)
+                .help("SEAL BROKEN — this message no longer matches its seal. Recorded in the audit trail.")
+                .accessibilityLabel("Evidence seal broken")
+        case .noSeal:
+            Image(systemName: "questionmark.circle")
+                .foregroundColor(AppColors.warning)
+                .help("Under legal hold but no seal was recorded — nothing to compare against")
+                .accessibilityLabel("No evidence seal recorded")
+        case .notHeld:
+            EmptyView()
+        }
+    }
+
+    /// Recompute every held message's hash and compare it to its seal. A
+    /// mismatch is logged to the audit trail by `verifyEvidenceSeal` itself,
+    /// so the record exists whether or not anyone reads this screen again.
+    private func verifySeals(_ emails: [MBOXParser.RawEmail]) {
+        var verdicts: [UUID: CustodianManager.SealVerification] = [:]
+        var intact = 0, broken = 0, unsealed = 0
+        for email in emails {
+            let verdict = manager.verifyEvidenceSeal(email)
+            verdicts[email.id] = verdict
+            switch verdict {
+            case .intact: intact += 1
+            case .tampered: broken += 1
+            case .noSeal: unsealed += 1
+            case .notHeld: verdicts.removeValue(forKey: email.id)
+            }
+        }
+        sealVerdicts = verdicts
+        sealSummaryIsBad = broken > 0 || unsealed > 0
+
+        var parts = ["\(intact) intact"]
+        if broken > 0 { parts.append("\(broken) BROKEN") }
+        if unsealed > 0 { parts.append("\(unsealed) with no seal recorded") }
+        sealSummary = "Verified \(verdicts.count) sealed message\(verdicts.count == 1 ? "" : "s"): "
+            + parts.joined(separator: ", ")
+            + (broken > 0 ? ". Every break is recorded in the audit trail." : "")
+
+        ForensicManager.shared.logAction(
+            "Evidence Seals Verified",
+            detail: "\(verdicts.count) checked — \(intact) intact, \(broken) broken, \(unsealed) unsealed")
+    }
+
     private var detailPanel: some View {
         VStack(alignment: .leading, spacing: Spacing.small) {
             let scopedEmails: [MBOXParser.RawEmail] = {
@@ -212,9 +279,26 @@ struct CustodianPanelView: View {
                     }
                     .buttonStyle(CompactSecondaryButtonStyle())
                 }
+                let heldInScope = scopedEmails.filter { manager.isUnderLegalHold($0.id) }
+                if !heldInScope.isEmpty {
+                    Button("Verify Seals (\(heldInScope.count))") {
+                        verifySeals(heldInScope)
+                    }
+                    .buttonStyle(CompactSecondaryButtonStyle())
+                    .help("Recompute each held message's hash and compare it to the seal taken when the hold was placed")
+                }
             }
             .padding(.horizontal, Spacing.small)
             .padding(.top, Spacing.small)
+
+            if let sealSummary {
+                Label(sealSummary, systemImage: sealSummaryIsBad
+                      ? "exclamationmark.triangle.fill" : "checkmark.seal.fill")
+                    .font(Typography.caption1)
+                    .foregroundColor(sealSummaryIsBad ? AppColors.error : AppColors.success)
+                    .padding(.horizontal, Spacing.small)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             List {
                 ForEach(scopedEmails, id: \.id) { email in
@@ -234,6 +318,9 @@ struct CustodianPanelView: View {
                                 .foregroundColor(.orange)
                                 .help("Under legal hold")
                                 .accessibilityLabel("Under legal hold")
+                        }
+                        if let verdict = sealVerdicts[email.id] {
+                            sealBadge(verdict)
                         }
                         if let c = manager.custodian(for: email.id) {
                             Text(c)
