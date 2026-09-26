@@ -51,6 +51,10 @@ enum LaunchJobs {
     static func run(modules: ModuleRegistry, storageActive: Bool, storageStateLabel: String) {
         // Page-owned hooks into Archive-owned surfaces.
         ArchiveExportService.installProfessionalHooks(enabled: modules.isEnabled(.professional))
+        // L1: the Live Mail network gate starts in the page's state — closed
+        // on every launch where the page is off, so no connection can be
+        // attempted before the user enables it.
+        LiveMailNetworkGate.shared.setOpen(modules.isEnabled(.liveMail))
 
         if modules.isEnabled(.professional) {
             _ = try? HMACChainAuditLog.shared.append(

@@ -21,9 +21,20 @@ struct IMAPConfig: Codable, Sendable {
     let port: UInt16
     let username: String
     let password: String
+    /// L3a: when set, authentication uses `AUTHENTICATE XOAUTH2` with this
+    /// bearer token instead of `LOGIN`.
+    var accessToken: String? = nil
+    /// L2: the account this connection belongs to; every record it produces
+    /// is keyed by it.
+    var accountID: UUID? = nil
 
     static let gmailDefaults = IMAPConfig(server: "imap.gmail.com", port: 993, username: "", password: "")
     static let outlookDefaults = IMAPConfig(server: "outlook.office365.com", port: 993, username: "", password: "")
+
+    /// RFC 7628 SASL XOAUTH2 initial client response, base64-encoded.
+    static func xoauth2Response(user: String, token: String) -> String {
+        Data("user=\(user)\u{1}auth=Bearer \(token)\u{1}\u{1}".utf8).base64EncodedString()
+    }
 }
 
 // MARK: - Errors
@@ -91,6 +102,8 @@ final class IMAPClient: ObservableObject {
     private let connectTimeout: TimeInterval = 15
 
     func connect(config: IMAPConfig) async throws {
+        // L1: no socket while Live Mail is off.
+        try await LiveMailNetworkGate.shared.permit(host: config.server)
         self.config = config
         connectionState = .connecting
         statusMessage = "Connecting to \(config.server):\(config.port)..."
@@ -147,10 +160,15 @@ final class IMAPClient: ObservableObject {
         connectionState = .connected
         statusMessage = "Connected. Authenticating..."
 
-        // Authenticate
-        let escapedUser = config.username.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
-        let escapedPass = config.password.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
-        let loginResp = try await sendCommand("LOGIN \"\(escapedUser)\" \"\(escapedPass)\"")
+        // Authenticate: XOAUTH2 when a bearer token is present (L3a), else LOGIN.
+        let loginResp: String
+        if let token = config.accessToken, !token.isEmpty {
+            loginResp = try await sendCommand("AUTHENTICATE XOAUTH2 \(IMAPConfig.xoauth2Response(user: config.username, token: token))")
+        } else {
+            let escapedUser = config.username.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+            let escapedPass = config.password.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+            loginResp = try await sendCommand("LOGIN \"\(escapedUser)\" \"\(escapedPass)\"")
+        }
         guard loginResp.contains("OK") else {
             connectionState = .error("Authentication failed")
             throw IMAPError.authenticationFailed(loginResp)
@@ -521,7 +539,7 @@ final class IMAPClient: ObservableObject {
         let fullCommand = "\(tag) \(command)\r\n"
 
         // Mask password in logs
-        let safeLog = command.contains("LOGIN") ? "\(tag) LOGIN ***" : "\(tag) \(command)"
+        let safeLog = (command.contains("LOGIN") || command.contains("AUTHENTICATE")) ? "\(tag) \(command.prefix(12)) ***" : "\(tag) \(command)"
         imapLog.debug(">>> \(safeLog)")
 
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in

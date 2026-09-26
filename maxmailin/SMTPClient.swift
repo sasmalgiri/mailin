@@ -74,6 +74,8 @@ actor SMTPClient {
     }
 
     func send(_ email: OutgoingEmail) async throws {
+        // L1: no socket while Live Mail is off.
+        try await LiveMailNetworkGate.shared.permit(host: config.server)
         try await connect()
         defer { disconnect() }
 

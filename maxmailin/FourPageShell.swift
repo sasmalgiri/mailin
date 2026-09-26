@@ -131,14 +131,10 @@ struct FourPageShell: View {
         case .professional:
             ProfessionalPageView()
         case .liveMail:
-            PageNotBuiltView(
-                module: .liveMail,
-                detail: """
-                    Live Mail is planned for this release but is not implemented in \
-                    this build. Nothing here connects to a mail server yet, and no \
-                    account can be added.
-                    """
-            )
+            // live-mail branch: accounts (L2) and connection test (L3a) are
+            // built; sync, read/act, compose/send and the archive bridge
+            // (L4–L8) are not — the page says so.
+            LiveMailPageView()
         }
     }
 }

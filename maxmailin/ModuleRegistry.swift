@@ -453,6 +453,10 @@ final class ModuleRegistry {
         if module == .professional {
             ArchiveExportService.installProfessionalHooks(enabled: isEnabled(.professional))
         }
+        // L1: the Live Mail network gate follows the page switch exactly.
+        if module == .liveMail {
+            LiveMailNetworkGate.shared.setOpen(isEnabled(.liveMail))
+        }
     }
 
     /// Every capability of a page that is currently running — the honest

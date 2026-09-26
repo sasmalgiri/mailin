@@ -10,6 +10,7 @@
 		06F74B69F94348368FBB87E7 /* ProfessionalGatingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9337FA5439084EAFBFC9AC16 /* ProfessionalGatingTests.swift */; };
 		1D0190B9A4314C4F1E974268 /* SmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C03A43C05B823F769A9169F /* SmokeTests.swift */; };
 		33AF4556AF7E44BA8A8DE23A /* LargeMessageBlobTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BAC124E5B7340F79FCD9199 /* LargeMessageBlobTests.swift */; };
+		39476346CD2E4AE39624CC99 /* EnterpriseDeploymentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10AE3557C3D34FC19C62765B /* EnterpriseDeploymentTests.swift */; };
 		86A7BC7AEC2649109C6ED099 /* FormatMatrixTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30251AA72DEA429D850E9BF5 /* FormatMatrixTests.swift */; };
 		9E22DA26BC42426D9554D677 /* HandoffRoundTripTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C22B5F6D42254ABB8DEC58EE /* HandoffRoundTripTests.swift */; };
 		A1B2C3D4E5F60718293A4B5C /* V2DerivedStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5D /* V2DerivedStateTests.swift */; };
@@ -41,7 +42,7 @@
 		B4F63BDE306576A6008C7D92 /* SMIMEGoldCaseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BDD306576A6008C7D92 /* SMIMEGoldCaseTests.swift */; };
 		B4F63BEC3065C16D008C7D92 /* ImportSurfaceWiringTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BEB3065C16D008C7D92 /* ImportSurfaceWiringTests.swift */; };
 		B4F63BEE3065C8C5008C7D92 /* RealMailboxEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BED3065C8C5008C7D92 /* RealMailboxEngineTests.swift */; };
-		39476346CD2E4AE39624CC99 /* EnterpriseDeploymentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10AE3557C3D34FC19C62765B /* EnterpriseDeploymentTests.swift */; };
+		7008B785546F488AAFE01E23 /* LiveMailBranchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61E41AE9217E445AA6E8D4FF /* LiveMailBranchTests.swift */; };
 		B4F63BF23065D2A1008C7D92 /* SearchMatchFieldsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BF13065D2A1008C7D92 /* SearchMatchFieldsTests.swift */; };
 		B8D50BE236064FD8AA3D5297 /* OverflowSegmentStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BBD9A10512F4BF88E01DFB0 /* OverflowSegmentStoreTests.swift */; };
 		C0DE0FF1CE20260807AB0002 /* V2CutoverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0FF1CE20260807AB0001 /* V2CutoverTests.swift */; };
@@ -81,6 +82,7 @@
 
 /* Begin PBXFileReference section */
 		0BBD9A10512F4BF88E01DFB0 /* OverflowSegmentStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverflowSegmentStoreTests.swift; sourceTree = "<group>"; };
+		10AE3557C3D34FC19C62765B /* EnterpriseDeploymentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnterpriseDeploymentTests.swift; sourceTree = "<group>"; };
 		22D0E31030BC48C3933DA8D7 /* LegacyLibraryMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyLibraryMigrationTests.swift; sourceTree = "<group>"; };
 		30251AA72DEA429D850E9BF5 /* FormatMatrixTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FormatMatrixTests.swift; sourceTree = "<group>"; };
 		54BC4D4E1CDE48DD8D0E0F20 /* ArchiveRelocationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArchiveRelocationTests.swift; sourceTree = "<group>"; };
@@ -119,7 +121,7 @@
 		B4F63BDD306576A6008C7D92 /* SMIMEGoldCaseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SMIMEGoldCaseTests.swift; sourceTree = "<group>"; };
 		B4F63BEB3065C16D008C7D92 /* ImportSurfaceWiringTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportSurfaceWiringTests.swift; sourceTree = "<group>"; };
 		B4F63BED3065C8C5008C7D92 /* RealMailboxEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealMailboxEngineTests.swift; sourceTree = "<group>"; };
-		10AE3557C3D34FC19C62765B /* EnterpriseDeploymentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnterpriseDeploymentTests.swift; sourceTree = "<group>"; };
+		61E41AE9217E445AA6E8D4FF /* LiveMailBranchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveMailBranchTests.swift; sourceTree = "<group>"; };
 		B4F63BF13065D2A1008C7D92 /* SearchMatchFieldsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchMatchFieldsTests.swift; sourceTree = "<group>"; };
 		C0DE0FF1CE20260807AB0001 /* V2CutoverTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = V2CutoverTests.swift; sourceTree = "<group>"; };
 		C22B5F6D42254ABB8DEC58EE /* HandoffRoundTripTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandoffRoundTripTests.swift; sourceTree = "<group>"; };
@@ -231,6 +233,7 @@
 				B4F63BDD306576A6008C7D92 /* SMIMEGoldCaseTests.swift */,
 				B4F63BEB3065C16D008C7D92 /* ImportSurfaceWiringTests.swift */,
 				B4F63BED3065C8C5008C7D92 /* RealMailboxEngineTests.swift */,
+				61E41AE9217E445AA6E8D4FF /* LiveMailBranchTests.swift */,
 				10AE3557C3D34FC19C62765B /* EnterpriseDeploymentTests.swift */,
 				22D0E31030BC48C3933DA8D7 /* LegacyLibraryMigrationTests.swift */,
 				0BBD9A10512F4BF88E01DFB0 /* OverflowSegmentStoreTests.swift */,
@@ -443,6 +446,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B4F63BEE3065C8C5008C7D92 /* RealMailboxEngineTests.swift in Sources */,
+				7008B785546F488AAFE01E23 /* LiveMailBranchTests.swift in Sources */,
 				39476346CD2E4AE39624CC99 /* EnterpriseDeploymentTests.swift in Sources */,
 				E796FDC4B9BA48C98C4995A3 /* LegacyLibraryMigrationTests.swift in Sources */,
 				B8D50BE236064FD8AA3D5297 /* OverflowSegmentStoreTests.swift in Sources */,
@@ -709,7 +713,7 @@
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
 				SUPPORTS_MACCATALYST = NO;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG NO_NETWORK_BUILD ENTERPRISE_EDITION $(inherited)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -761,7 +765,7 @@
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
 				SUPPORTS_MACCATALYST = NO;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "NO_NETWORK_BUILD ENTERPRISE_EDITION";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
