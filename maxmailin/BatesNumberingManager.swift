@@ -83,6 +83,17 @@ class BatesNumberingManager: ObservableObject {
         assignments[emailID]
     }
 
+    /// F-4: a production run's numbers join the record and the sequence
+    /// continues after them, so two productions never reuse a number.
+    func merge(assignments new: [UUID: String], nextStart: Int) {
+        for (id, number) in new { assignments[id] = number }
+        startNumber = max(startNumber, nextStart)
+        persistAssignments()
+        ForensicManager.shared.logAction(
+            "Bates Numbers Assigned",
+            detail: "Production assigned \(new.count) Bates numbers; sequence continues at \(formatNumber(startNumber))")
+    }
+
     /// Removes all Bates number assignments. This is typically irreversible
     /// in legal proceedings — use with caution.
     func removeAllNumbers() {

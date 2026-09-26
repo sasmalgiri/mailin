@@ -863,6 +863,19 @@ struct FoundationModelEngine {
     private static func retrieveContext(query: String, contextLimit: Int = 15) async -> (emails: [MBOXParser.RawEmail], total: Int) {
         var contextEmails = ((try? await ArchiveRetrievalService.shared.retrieve(query, limit: contextLimit)) ?? []).map(\.email)
         let total = (try? await ArchiveDataService.shared.count()) ?? contextEmails.count
+        // I4: the opt-in semantic index adds messages that say the same thing
+        // in other words. A no-op while the switch is off or nothing is
+        // indexed; bounded by `contextLimit` like the lexical retrieval.
+        let semanticIDs = await SemanticIndexController.shared.neighbors(of: query, limit: contextLimit)
+        if !semanticIDs.isEmpty {
+            var seen = Set(contextEmails.map(\.id))
+            let extra = semanticIDs.filter { !seen.contains($0) }
+            if !extra.isEmpty, let hydrated = try? await ArchiveDataService.shared.fullEmails(ids: Array(extra.prefix(contextLimit))) {
+                for email in hydrated where !seen.contains(email.id) && contextEmails.count < contextLimit * 2 {
+                    contextEmails.append(email); seen.insert(email.id)
+                }
+            }
+        }
         if contextEmails.count < 3 {
             // Thin retrieval → fall back to a bounded most-recent window.
             var seen = Set(contextEmails.map(\.id))

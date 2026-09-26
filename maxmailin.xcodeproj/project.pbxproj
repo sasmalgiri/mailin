@@ -40,6 +40,7 @@
 		B4F63BDE306576A6008C7D92 /* SMIMEGoldCaseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BDD306576A6008C7D92 /* SMIMEGoldCaseTests.swift */; };
 		B4F63BEC3065C16D008C7D92 /* ImportSurfaceWiringTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BEB3065C16D008C7D92 /* ImportSurfaceWiringTests.swift */; };
 		B4F63BEE3065C8C5008C7D92 /* RealMailboxEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BED3065C8C5008C7D92 /* RealMailboxEngineTests.swift */; };
+		06F74B69F94348368FBB87E7 /* ProfessionalGatingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9337FA5439084EAFBFC9AC16 /* ProfessionalGatingTests.swift */; };
 		B4F63BF23065D2A1008C7D92 /* SearchMatchFieldsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BF13065D2A1008C7D92 /* SearchMatchFieldsTests.swift */; };
 		C0DE0FF1CE20260807AB0002 /* V2CutoverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0FF1CE20260807AB0001 /* V2CutoverTests.swift */; };
 		CCBC602369234D07AA0FB6B8 /* DiskImageFaultTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FE5DC25F8324CD0840B7429 /* DiskImageFaultTests.swift */; };
@@ -112,6 +113,7 @@
 		B4F63BDD306576A6008C7D92 /* SMIMEGoldCaseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SMIMEGoldCaseTests.swift; sourceTree = "<group>"; };
 		B4F63BEB3065C16D008C7D92 /* ImportSurfaceWiringTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportSurfaceWiringTests.swift; sourceTree = "<group>"; };
 		B4F63BED3065C8C5008C7D92 /* RealMailboxEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealMailboxEngineTests.swift; sourceTree = "<group>"; };
+		9337FA5439084EAFBFC9AC16 /* ProfessionalGatingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfessionalGatingTests.swift; sourceTree = "<group>"; };
 		B4F63BF13065D2A1008C7D92 /* SearchMatchFieldsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchMatchFieldsTests.swift; sourceTree = "<group>"; };
 		C0DE0FF1CE20260807AB0001 /* V2CutoverTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = V2CutoverTests.swift; sourceTree = "<group>"; };
 		C22B5F6D42254ABB8DEC58EE /* HandoffRoundTripTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandoffRoundTripTests.swift; sourceTree = "<group>"; };
@@ -223,6 +225,7 @@
 				B4F63BDD306576A6008C7D92 /* SMIMEGoldCaseTests.swift */,
 				B4F63BEB3065C16D008C7D92 /* ImportSurfaceWiringTests.swift */,
 				B4F63BED3065C8C5008C7D92 /* RealMailboxEngineTests.swift */,
+				9337FA5439084EAFBFC9AC16 /* ProfessionalGatingTests.swift */,
 				C22B5F6D42254ABB8DEC58EE /* HandoffRoundTripTests.swift */,
 				54BC4D4E1CDE48DD8D0E0F20 /* ArchiveRelocationTests.swift */,
 				8FE5DC25F8324CD0840B7429 /* DiskImageFaultTests.swift */,
@@ -431,6 +434,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B4F63BEE3065C8C5008C7D92 /* RealMailboxEngineTests.swift in Sources */,
+				06F74B69F94348368FBB87E7 /* ProfessionalGatingTests.swift in Sources */,
 				9E22DA26BC42426D9554D677 /* HandoffRoundTripTests.swift in Sources */,
 				AC2C43A0B60149C6AC364F18 /* ArchiveRelocationTests.swift in Sources */,
 				CCBC602369234D07AA0FB6B8 /* DiskImageFaultTests.swift in Sources */,

@@ -146,6 +146,13 @@ final class ArchiveDataService {
         return try await sqlite.totalCount()
     }
 
+    /// User tags for a bounded id batch (F-4 exclusions).
+    func userTags(ids: [EmailID]) async throws -> [EmailID: Set<String>] {
+        guard let repo = repository as? EmailStoreRepository,
+              let sqlite = repo.store as? SQLiteEmailStore else { return [:] }
+        return try await sqlite.userTags(ids: ids)
+    }
+
     // MARK: - A2 sidebar aggregates (GROUP BY, never a corpus walk)
 
     /// Imported sources, newest first.

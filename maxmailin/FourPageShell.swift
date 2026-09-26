@@ -129,7 +129,7 @@ struct FourPageShell: View {
             // the page (its scope bar), not by inheriting Page 1's filter.
             AIInsightsPageView()
         case .professional:
-            WorkCenterView()
+            ProfessionalPageView()
         case .liveMail:
             PageNotBuiltView(
                 module: .liveMail,
