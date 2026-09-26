@@ -2845,6 +2845,13 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     // MARK: - Counts
 
+    #if DEBUG
+    /// Test-only: the schema version this file is at.
+    func userVersionForTesting() throws -> Int {
+        try scalarInt(try ensureDB(), "PRAGMA user_version;")
+    }
+    #endif
+
     func totalCount() throws -> Int {
         let db = try ensureDB()
         return try scalarInt(db, "SELECT COUNT(*) FROM emails;")

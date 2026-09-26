@@ -69,8 +69,11 @@ means the code is in the tree, builds, and has an executed test named here.
    backend remains for isolated tests. `StoreBackedCheckpointTests` (4) plus
    the existing checkpoint tests. The FTS reconciler still covers the
    store→index window, by design.
-8. **Per-email content_revision producers** — OPEN. The schema column exists;
-   no in-store content-edit path exists yet, so nothing bumps it.
+8. ~~Per-email content_revision producers~~ — **CLOSED 2026-09-27 (decision).** 3.0 has
+   no in-store content-edit path (redaction produces new artifacts, never rewrites a
+   stored message), so nothing legitimately bumps the column. It stays reserved for a
+   future edit path and is documented as such; adding a producer without an editor
+   would be a fabricated signal.
 9. ~~UI-convenience export writes~~ — **CLOSED 2026-08-07**: the ad-hoc
    CSV/JSON/EML/report exports in AIAssistantView surface write failures.
 
@@ -102,7 +105,9 @@ means the code is in the tree, builds, and has an executed test named here.
 
 ## UX round (2026-08-08, user feedback)
 
-14. **App-wide tooltip sweep** — PARTIAL. Inventory 2026-09-25: Settings
+14. ~~App-wide tooltip sweep~~ — **CLOSED 2026-09-27.** Every icon-only control added in the 3.0
+    pass carries `.help`; the remaining `Image(systemName:)` sites without one are decorative
+    icons beside text labels. Original inventory: Inventory 2026-09-25: Settings
     (10 icon sites, 29 `.help`) and the export menus (no icon-only controls)
     are covered; KnowledgeGraphExplorerView, EDiscoveryWorkflowView, the
     guided-search sheet, the comparison view and the export receipt card got
