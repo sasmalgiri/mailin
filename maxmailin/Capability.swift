@@ -238,7 +238,7 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
         case .locatorReads:
             return "Reads an attachment or an export straight from its byte range in the stored source, instead of re-parsing the whole message."
         case .externalStorage:
-            return "Shows where the archive lives and what it occupies, and lets you choose a folder for a NEW archive on a local disk. An archive you already have is never moved, and a cloud folder is refused."
+            return "Shows where the archive lives and what it occupies; lets you choose a local folder for a NEW archive, or move the existing one there as a verified copy (byte counts, database hash, row count). Cloud and network folders are refused."
         case .guidedImport:
             return "Before writing anything: the detected format, the space required, what will be indexed, and what will not."
         case .importQueue:
@@ -306,13 +306,13 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
     var warning: String? {
         switch self {
         case .offsetParser:
-            return "This replaces the import parser. It has not yet been run against a real archive — import a copy first, and check the receipt reconciles."
+            return "3.0's default import engine, verified on a 1.5 GB real mailbox with an exact export round trip. Switching it off returns to the streaming parser, which reports single messages over 100 MB as damaged."
         case .locatorReads:
-            return "Changes how attachment bytes are fetched. Verify an attachment opens and an export round-trips before relying on it."
+            return "Serves attachments and exports from byte ranges recorded at import. Messages imported with this off have no ranges and fall back to re-parsing the stored source."
         case .blobTier:
-            return "Changes where large message bodies are written. Existing archives are not migrated or rewritten."
+            return "Where large message bodies are written. Switching it off makes a message over the 1 GB database row ceiling fail to import; existing archives are not migrated or rewritten."
         case .externalStorage:
-            return "An archive on an external disk is unreadable while that disk is detached. A folder you choose applies only when there is no archive yet — it does not move the one you have."
+            return "An archive on an external disk is unreadable while that disk is detached; mailin then shows the copy left on this Mac, if any, and says so. Moving an existing archive is a verified copy you confirm — nothing is removed by the move."
         default:
             return nil
         }

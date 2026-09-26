@@ -69,6 +69,11 @@ enum ArchiveLayout {
     static let relocatedFolderName = "mailin-archive"
     static let sqliteFolder = "sqlite"
     static let ftsFolder = "fts5"
+    /// I4: the opt-in semantic index sits beside the store and follows it
+    /// when the archive is moved.
+    static let embeddingsFolder = "embeddings"
+
+    static func embeddingsDirectory(under root: URL) -> URL { root.appendingPathComponent(embeddingsFolder, isDirectory: true) }
 
     /// `<Application Support>/com.ecosanskriti.mailin`.
     static var defaultRoot: URL {

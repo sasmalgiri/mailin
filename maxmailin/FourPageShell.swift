@@ -101,6 +101,9 @@ struct FourPageShell: View {
         .onChange(of: modules.enabledModules) { _, _ in
             router.reconcile(with: modules)
         }
+        // I5: the one place a cloud AI request asks before anything leaves
+        // the device. Attached at the root so any page's request can ask.
+        .modifier(CloudAIConsentSheetModifier())
         .sheet(item: $pendingActivation) { module in
             PageActivationSheet(
                 module: module,
@@ -123,8 +126,8 @@ struct FourPageShell: View {
             ContentView()
         case .aiInsights:
             // Page 2's own scope is the whole archive; narrowing happens inside
-            // the page, not by inheriting Page 1's current filter.
-            AIAssistantView(archiveScope: .all)
+            // the page (its scope bar), not by inheriting Page 1's filter.
+            AIInsightsPageView()
         case .professional:
             WorkCenterView()
         case .liveMail:

@@ -107,15 +107,34 @@ final class CloudAIManager: ObservableObject {
 
     // MARK: - Chat Completion
 
+    /// I5: the per-request gate. Every byte that would leave the device is
+    /// described to the user first; a refusal is an error the caller shows,
+    /// never a silent fallback.
+    private func requireConsent(purpose: String, systemPrompt: String, userMessage: String) async throws {
+        let payload = systemPrompt + "\n" + userMessage
+        let request = CloudAIConsentRequest(
+            provider: selectedProvider.displayName,
+            model: selectedModel,
+            purpose: purpose,
+            bytesToSend: payload.utf8.count,
+            excerpt: String(userMessage.prefix(300)))
+        guard await CloudAIConsentCenter.shared.authorize(request) else {
+            logger.notice("cloud AI request refused by the user or by policy")
+            throw CloudAIError.consentDenied
+        }
+    }
+
     func sendMessage(
         systemPrompt: String,
         userMessage: String,
-        maxTokens: Int = 2048
+        maxTokens: Int = 2048,
+        purpose: String = "Cloud answer"
     ) async throws -> String {
         guard isReady else { throw CloudAIError.notConfigured }
 
         let key = apiKey
         guard !key.isEmpty else { throw CloudAIError.noAPIKey }
+        try await requireConsent(purpose: purpose, systemPrompt: systemPrompt, userMessage: userMessage)
 
         switch selectedProvider {
         case .openAI:
@@ -129,12 +148,14 @@ final class CloudAIManager: ObservableObject {
         systemPrompt: String,
         userMessage: String,
         maxTokens: Int = 2048,
+        purpose: String = "Cloud answer",
         onUpdate: @MainActor @Sendable @escaping (String) -> Void
     ) async throws -> String {
         guard isReady else { throw CloudAIError.notConfigured }
 
         let key = apiKey
         guard !key.isEmpty else { throw CloudAIError.noAPIKey }
+        try await requireConsent(purpose: purpose, systemPrompt: systemPrompt, userMessage: userMessage)
 
         switch selectedProvider {
         case .openAI:
@@ -325,9 +346,12 @@ enum CloudAIError: LocalizedError {
     case rateLimited
     case invalidResponse
     case httpError(Int)
+    /// I5: the user (or the organisation's policy) said no to this request.
+    case consentDenied
 
     var errorDescription: String? {
         switch self {
+        case .consentDenied: return "Not sent. Nothing left this Mac — you declined, or your organisation's policy forbids cloud AI."
         case .notConfigured: return "Cloud AI is not configured. Add an API key in Settings."
         case .noAPIKey: return "No API key found. Add your API key in Settings > AI."
         case .authenticationFailed: return "API key is invalid. Check your key in Settings > AI."

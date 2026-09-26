@@ -74,7 +74,8 @@ enum ArchiveRelocator {
     static func plan(sourceRoot: URL = ArchiveLayout.productionRoot, destinationVolume: URL) -> RelocationPlan {
         let sqlite = ArchiveLayout.sqliteDirectory(under: sourceRoot)
         let fts = ArchiveLayout.ftsDirectory(under: sourceRoot)
-        let (bytes, files) = measure([sqlite, fts])
+        let embeddings = ArchiveLayout.embeddingsDirectory(under: sourceRoot)
+        let (bytes, files) = measure([sqlite, fts, embeddings])
         let values = try? destinationVolume.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
         let free = Int64(values?.volumeAvailableCapacityForImportantUsage ?? 0)
         return RelocationPlan(sourceRoot: sourceRoot,
@@ -119,7 +120,9 @@ enum ArchiveRelocator {
         var copied: Int64 = 0
         var files = 0
         let total = plan.archiveBytes
-        for (from, to) in [(sourceSQLite, destinationSQLite), (sourceFTS, destinationFTS)] {
+        let sourceEmbeddings = ArchiveLayout.embeddingsDirectory(under: plan.sourceRoot)
+        let destinationEmbeddings = ArchiveLayout.embeddingsDirectory(under: plan.destinationRoot)
+        for (from, to) in [(sourceSQLite, destinationSQLite), (sourceFTS, destinationFTS), (sourceEmbeddings, destinationEmbeddings)] {
             guard fm.fileExists(atPath: from.path) else { continue }
             try copyTree(from: from, to: to) { bytes in
                 copied += bytes

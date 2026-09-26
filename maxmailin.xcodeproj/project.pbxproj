@@ -10,6 +10,7 @@
 		1D0190B9A4314C4F1E974268 /* SmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C03A43C05B823F769A9169F /* SmokeTests.swift */; };
 		33AF4556AF7E44BA8A8DE23A /* LargeMessageBlobTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BAC124E5B7340F79FCD9199 /* LargeMessageBlobTests.swift */; };
 		86A7BC7AEC2649109C6ED099 /* FormatMatrixTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30251AA72DEA429D850E9BF5 /* FormatMatrixTests.swift */; };
+		9E22DA26BC42426D9554D677 /* HandoffRoundTripTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C22B5F6D42254ABB8DEC58EE /* HandoffRoundTripTests.swift */; };
 		A1B2C3D4E5F60718293A4B5C /* V2DerivedStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5D /* V2DerivedStateTests.swift */; };
 		AB12CD34EF5601789ABCDE02 /* V2ExportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB12CD34EF5601789ABCDE01 /* V2ExportTests.swift */; };
 		AB12CD34EF5601789ABCDE04 /* V2SecurityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB12CD34EF5601789ABCDE03 /* V2SecurityTests.swift */; };
@@ -39,7 +40,6 @@
 		B4F63BDE306576A6008C7D92 /* SMIMEGoldCaseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BDD306576A6008C7D92 /* SMIMEGoldCaseTests.swift */; };
 		B4F63BEC3065C16D008C7D92 /* ImportSurfaceWiringTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BEB3065C16D008C7D92 /* ImportSurfaceWiringTests.swift */; };
 		B4F63BEE3065C8C5008C7D92 /* RealMailboxEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BED3065C8C5008C7D92 /* RealMailboxEngineTests.swift */; };
-		9E22DA26BC42426D9554D677 /* HandoffRoundTripTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C22B5F6D42254ABB8DEC58EE /* HandoffRoundTripTests.swift */; };
 		B4F63BF23065D2A1008C7D92 /* SearchMatchFieldsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F63BF13065D2A1008C7D92 /* SearchMatchFieldsTests.swift */; };
 		C0DE0FF1CE20260807AB0002 /* V2CutoverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0FF1CE20260807AB0001 /* V2CutoverTests.swift */; };
 		CCBC602369234D07AA0FB6B8 /* DiskImageFaultTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FE5DC25F8324CD0840B7429 /* DiskImageFaultTests.swift */; };
@@ -112,9 +112,9 @@
 		B4F63BDD306576A6008C7D92 /* SMIMEGoldCaseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SMIMEGoldCaseTests.swift; sourceTree = "<group>"; };
 		B4F63BEB3065C16D008C7D92 /* ImportSurfaceWiringTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportSurfaceWiringTests.swift; sourceTree = "<group>"; };
 		B4F63BED3065C8C5008C7D92 /* RealMailboxEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealMailboxEngineTests.swift; sourceTree = "<group>"; };
-		C22B5F6D42254ABB8DEC58EE /* HandoffRoundTripTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandoffRoundTripTests.swift; sourceTree = "<group>"; };
 		B4F63BF13065D2A1008C7D92 /* SearchMatchFieldsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchMatchFieldsTests.swift; sourceTree = "<group>"; };
 		C0DE0FF1CE20260807AB0001 /* V2CutoverTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = V2CutoverTests.swift; sourceTree = "<group>"; };
+		C22B5F6D42254ABB8DEC58EE /* HandoffRoundTripTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandoffRoundTripTests.swift; sourceTree = "<group>"; };
 		C3B67A602E2FE445009C208C /* ModelRunner.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = ModelRunner.xcodeproj; sourceTree = "<group>"; };
 		C3B687F12E2F3CE7009C208C /* ModelRunner.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = ModelRunner.xcodeproj; sourceTree = "<group>"; };
 		C3B6F5B12E2F3AD2009C208C /* ModelRunner.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; path = ModelRunner.xcodeproj; sourceTree = "<group>"; };

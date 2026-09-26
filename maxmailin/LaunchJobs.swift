@@ -36,6 +36,8 @@ enum LaunchJobs {
             purpose: "Repairs store/FTS drift after a crash between commits and collapses duplicate FTS rows; bounded, restartable."),
         Job(id: "digest.weekly", owner: .aiInsights, label: "Weekly saved-search digest",
             purpose: "At most one digest per week for opted-in saved searches."),
+        Job(id: "semantic.index", owner: .aiInsights, label: "Semantic index",
+            purpose: "Opt-in, resumable on-device sentence vectors for Ask; runs only with the switch on and Page 2 enabled."),
         Job(id: "workflow.seed", owner: .professional, label: "Seed built-in workflows",
             purpose: "Idempotent upsert of the shipped workflow recipes; runs only when Page 3 is on."),
         Job(id: "audit.launch", owner: .professional, label: "Audit-chain launch entry",
@@ -88,6 +90,9 @@ enum LaunchJobs {
 
         if modules.isEnabled(.aiInsights) {
             DigestScheduler.shared.checkAndDeliver()
+            // I4: resumes the opt-in semantic index where it stopped; a no-op
+            // when the switch is off. Registers itself as a Page-2 job.
+            SemanticIndexController.shared.resume(modules: modules)
         }
 
         if modules.isEnabled(.professional) {
