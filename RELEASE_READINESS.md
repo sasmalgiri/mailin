@@ -78,7 +78,7 @@ across a disabled period.
 | Archive feature (derived analysis/UI services) | ~9 | `ArchiveDerivedState` (×2), `ArchiveDerivedAnalysis`, `ArchiveAnalyticsService`, `ArchiveFullAnalytics`, `ArchiveAggregateService`, `ArchiveRetrievalService`, `ArchiveTimelineService`, `ArchiveDataService` |
 | AI Insights | ~8 | `BackgroundAnalysisManager`, `DigestScheduler`, `AIProvenance`, `AIMetrics`, `CloudAIProvider`, `CustomExpertManager`, `PredictiveCodingEngine`, `SmartAutoTagger` |
 | Professional | ~17 | `HMACChainAuditLog`, `ChainOfCustodyManager`, `CustodianManager`, `BatesNumberingManager`, `ForensicManager`, `ForensicReviewManager`, `ReviewStateService`, `ReviewBatchManager`, `CollaborationManager`, `CollaborativeReviewActivity`, `PersonaManager`, plus the five 2.1 studios (`ACHMatrixStudio`, `FactEvidenceMatrixStudio`, `EvidenceDesksStudio`, `ActionRegisterStudio`, `ReasoningStudio`) |
-| Live Mail / cloud (currently excluded by `OFFLINE_MODE`) | 5 | `GmailConnector` (×2), `OutlookConnector` (×2), `iCloudSyncManager` |
+| Live Mail / cloud (currently excluded by `NO_NETWORK_BUILD`) | 5 | `GmailConnector` (×2), `OutlookConnector` (×2), `iCloudSyncManager` |
 | AppShell / platform | ~6 | `MemoryPressureHandler`, `AppSelfAttestation`, `MaxmailinSelfTest`, `LegalComplianceManager`, `BiometricLockManager`, `FeedbackManager`, `ToolWindowPresenter`, `PluginManager`, `WidgetDataProvider`, `WorkspaceManager`, `WatchFolderManager`, `SpotlightIndexer`, `TriageQueueService`, `ThreadKeyService`, `EncryptedStorageManager` |
 
 P1 rule that follows from this: a `static let shared` on an optional-module
@@ -124,7 +124,7 @@ from DerivedData, left idle, sampled with `ps`/`lsof`, 2026-09-23.
 | Open FTS year-shard databases at idle | **20** (`email_search_0.db` + per-year shards) | each with `-wal` and `-shm` |
 | Main store open | `emails.db` + `-wal` + `-shm` | as expected |
 | Open regular files | **141** | |
-| **Network sockets** | **0** | zero-network baseline holds on the signed Release build (pre-3.0: `OFFLINE_MODE` excludes all connector code and the entitlements carry no `network.client`) |
+| **Network sockets** | **0** | zero-network baseline holds on the signed Release build (pre-3.0: `NO_NETWORK_BUILD` excludes all connector code and the entitlements carry no `network.client`) |
 | Graceful quit | **vetoed** — AppleScript quit returned `-128 User cancelled`; needed `SIGTERM` | a modal launch gate (terms or persona sheet) is the suspect; confirm during P1's launch rework |
 
 **This is an existing-library baseline, not a fresh-install baseline.** The 20

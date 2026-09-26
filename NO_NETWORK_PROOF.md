@@ -5,7 +5,7 @@ things that are true but are not proof.
 
 | Support | Why it is not proof |
 |---|---|
-| `OFFLINE_MODE` compilation condition in both configurations | A build setting. Changeable, and invisible in the artifact a reviewer receives. |
+| `NO_NETWORK_BUILD` compilation condition in both configurations | A build setting. Changeable, and invisible in the artifact a reviewer receives. |
 | A measured Release run showing 0 network sockets | One run. Absence of observed behaviour is not absence of capability. |
 
 What does survive a challenge is the **signed binary**: under the App Sandbox,
@@ -33,7 +33,7 @@ Four groups of checks, exiting non-zero on the first failure:
 | `com.apple.security.app-sandbox` present | entitlements are actually enforced for this build |
 | `com.apple.security.network.client` not granted | the process cannot make outgoing connections |
 | `com.apple.security.network.server` not granted | it cannot listen |
-| `mailin.offline.attested` in the binary's strings | `OFFLINE_MODE` was defined for **this** build, not merely for some build |
+| `mailin.offline.attested` in the binary's strings | `NO_NETWORK_BUILD` was defined for **this** build, not merely for some build |
 | `Network` / `CFNetwork` not linked directly | no transport stack was pulled in deliberately |
 | no `NSAppTransportSecurity` in `Info.plist` | no ATS exceptions were declared |
 
@@ -44,7 +44,7 @@ cannot be used. Calling that a failure would make the script cry wolf.
 ### 2. `maxmailin/NoNetworkAttestation.swift` — the in-app read
 
 - `buildMarker` — the string the script greps for. Compiled as
-  `mailin.offline.attested` only under `OFFLINE_MODE`, so its presence in a
+  `mailin.offline.attested` only under `NO_NETWORK_BUILD`, so its presence in a
   binary is evidence about that binary.
 - `verdict()` — reads **this process's own** signed entitlements via Code
   Signing Services (`SecCodeCopySelf` → `SecCodeCopyStaticCode` →
@@ -95,7 +95,7 @@ apply — hence the platform caveat above.
 - **A separate `NO_NETWORK_BUILD` configuration** was the original phrasing of
   D1. It is deliberately not implemented: a third configuration would need its
   own maintenance and would still be a build setting — the same class of
-  evidence `OFFLINE_MODE` already is. The entitlement check makes the extra
+  evidence `NO_NETWORK_BUILD` already is. The entitlement check makes the extra
   configuration unnecessary, because it constrains the artifact rather than
   the build. If a reviewer specifically wants a named configuration, adding
   one is a project-file change for the owner to make in Xcode.

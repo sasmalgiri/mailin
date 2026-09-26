@@ -4,7 +4,7 @@
 # network, from the artifact rather than from the source.
 #
 # Task D1. The claim "mailin never talks to the network" has until now rested
-# on two things that are true but not *proof*: the `OFFLINE_MODE` compilation
+# on two things that are true but not *proof*: the `NO_NETWORK_BUILD` compilation
 # condition, and a measured run showing zero network sockets. Neither survives
 # the obvious challenge — a build setting can be changed, and one run is one
 # run. What a reviewer (or a court) can check is the signed binary: if the
@@ -93,15 +93,15 @@ echo
 
 # ------------------------------------------ 2. the compile-time flag was on
 
-echo "2. OFFLINE_MODE compiled in"
+echo "2. NO_NETWORK_BUILD compiled in"
 
-# `NoNetworkAttestation` is compiled only when OFFLINE_MODE is defined and
+# `NoNetworkAttestation` is compiled only when NO_NETWORK_BUILD is defined and
 # carries this marker string, so finding it proves the flag was set for the
 # configuration that produced THIS binary.
 if strings "$BINARY" 2>/dev/null | grep -q 'mailin.offline.attested'; then
-    pass "offline attestation marker present (OFFLINE_MODE was defined)"
+    pass "offline attestation marker present (NO_NETWORK_BUILD was defined)"
 else
-    fail "offline attestation marker MISSING — this binary was built without OFFLINE_MODE"
+    fail "offline attestation marker MISSING — this binary was built without NO_NETWORK_BUILD"
 fi
 echo
 

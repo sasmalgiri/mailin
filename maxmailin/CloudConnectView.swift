@@ -1,4 +1,4 @@
-#if !OFFLINE_MODE
+#if !NO_NETWORK_BUILD
 import SwiftUI
 
 struct GmailConnectView: View {

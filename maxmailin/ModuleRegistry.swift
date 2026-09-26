@@ -292,6 +292,12 @@ final class ModuleRegistry {
     /// edition" instead of offering a switch that cannot work.
     private let excludedByBuild: Set<AppModule>
 
+    /// D2: managed configuration can arrive or change after launch. Bumped on
+    /// every UserDefaults change so observers of `activation` re-evaluate
+    /// the org policy without a relaunch.
+    private(set) var policyRevision = 0
+    private var policyObserver: NSObjectProtocol?
+
     init(store: ModuleStateStore = ModuleStateStore(url: ModuleStateStore.productionURL),
          excludedByBuild: Set<AppModule> = ModuleRegistry.buildExclusions,
          trapsOnMisuse: Bool = true) {
@@ -299,7 +305,14 @@ final class ModuleRegistry {
         self.excludedByBuild = excludedByBuild
         self.trapsOnMisuse = trapsOnMisuse
         self.state = store.load()
+        policyObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.policyRevision &+= 1 }
+            }
     }
+
+    /// Test/MDM hook: re-read the managed dictionary now.
+    func reloadPolicy() { policyRevision &+= 1 }
 
     /// Pages absent from this build. Live Mail and the cloud tiers are compiled
     /// out of the no-network edition, so they can never be switched on there.
@@ -314,6 +327,7 @@ final class ModuleRegistry {
     // MARK: Reading
 
     func activation(_ module: AppModule) -> ModuleActivation {
+        _ = policyRevision   // observation dependency: policy changes re-render
         if excludedByBuild.contains(module) {
             return .unavailable(reason: "not included in this edition")
         }

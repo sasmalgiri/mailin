@@ -5,13 +5,13 @@
 //  Task D1: make the offline claim checkable from the shipped artifact.
 //
 //  The claim had two supports, both true and neither sufficient as proof:
-//  the `OFFLINE_MODE` compilation condition (a build setting, changeable) and
+//  the `NO_NETWORK_BUILD` compilation condition (a build setting, changeable) and
 //  a measured run with zero network sockets (one run). What survives a
 //  challenge is the signed binary — under the App Sandbox, a process with no
 //  network entitlement cannot open a socket whatever the code asks for.
 //
 //  This file supplies the two things that proof needs:
-//   1. a marker string present in the binary ONLY when OFFLINE_MODE was
+//   1. a marker string present in the binary ONLY when NO_NETWORK_BUILD was
 //      defined, so `Scripts/verify-no-network.sh` can tell which
 //      configuration produced a given build;
 //   2. a runtime read of this process's OWN signed entitlements, so the app
@@ -34,9 +34,9 @@ import Security
 enum NoNetworkAttestation {
 
     /// The marker `Scripts/verify-no-network.sh` greps for. Present in the
-    /// binary only under `OFFLINE_MODE`, which is what makes it evidence
+    /// binary only under `NO_NETWORK_BUILD`, which is what makes it evidence
     /// about the build rather than about our intentions.
-    #if OFFLINE_MODE
+    #if NO_NETWORK_BUILD
     static let buildMarker = "mailin.offline.attested"
     static let offlineModeCompiledIn = true
     #else
@@ -68,12 +68,12 @@ enum NoNetworkAttestation {
         var summary: String {
             guard entitlementsAreEnforceable else {
                 return offlineModeCompiledIn
-                    ? "Built with OFFLINE_MODE: no networking code is compiled in. This platform grants network access to every app, so the build is the protection — not the sandbox."
+                    ? "Built with NO_NETWORK_BUILD: no networking code is compiled in. This platform grants network access to every app, so the build is the protection — not the sandbox."
                     : "This build has networking compiled in and this platform grants network access by default."
             }
             guard sandboxed else {
                 return "This build is NOT sandboxed, so no entitlement prevents a network connection"
-                    + (offlineModeCompiledIn ? " — only the OFFLINE_MODE build flag does." : ".")
+                    + (offlineModeCompiledIn ? " — only the NO_NETWORK_BUILD build flag does." : ".")
             }
             if networkIsStructurallyImpossible {
                 return "Sandboxed with no network entitlement: this process cannot open a network connection."

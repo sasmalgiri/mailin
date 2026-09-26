@@ -80,7 +80,7 @@ struct AIAssistantView: View {
         case appleAIMoE = "Apple AI MoE"
         case appleAI = "Apple AI"
         case hybrid = "Hybrid"
-        #if !OFFLINE_MODE
+        #if !NO_NETWORK_BUILD
         case cloudAI = "Cloud AI"
         #endif
         case nlp = "NLP"
@@ -182,7 +182,7 @@ struct AIAssistantView: View {
     }
 
     private var cloudAIAvailable: Bool {
-        #if !OFFLINE_MODE
+        #if !NO_NETWORK_BUILD
         CloudAIManager.shared.isReady && !forensicManager.isEnabled
         #else
         false
@@ -481,7 +481,7 @@ struct AIAssistantView: View {
                                 Label("Hybrid", systemImage: selectedEngine == .hybrid ? "checkmark" : "sparkles")
                             }
                         }
-                        #if !OFFLINE_MODE
+                        #if !NO_NETWORK_BUILD
                         if cloudAIAvailable {
                             Button { selectedEngine = .cloudAI } label: {
                                 Label("Cloud AI", systemImage: selectedEngine == .cloudAI ? "checkmark" : "cloud")
@@ -648,7 +648,7 @@ struct AIAssistantView: View {
                         Text("Apple AI").tag(AIEngine.appleAI)
                         Text("Hybrid").tag(AIEngine.hybrid)
                     }
-                    #if !OFFLINE_MODE
+                    #if !NO_NETWORK_BUILD
                     if cloudAIAvailable {
                         Text("Cloud AI").tag(AIEngine.cloudAI)
                     }
@@ -702,7 +702,7 @@ struct AIAssistantView: View {
         case .appleAIMoE: return "Apple AI with Mixture of Experts — maximum intelligence, on-device"
         case .appleAI: return "Direct Apple AI — fast single-session, on-device"
         case .hybrid: return "Enhanced NLP + Apple AI synthesis — best of both, on-device"
-        #if !OFFLINE_MODE
+        #if !NO_NETWORK_BUILD
         case .cloudAI:
             let mgr = CloudAIManager.shared
             return "\(mgr.selectedProvider.displayName) (\(mgr.selectedModel)) — cloud-powered analysis"
@@ -1591,7 +1591,7 @@ struct AIAssistantView: View {
             return "Analyzing \(count) email\(suffix) with Apple Intelligence (on-device)"
         case .hybrid:
             return "Analyzing \(count) email\(suffix) with Hybrid NLP + AI (on-device)"
-        #if !OFFLINE_MODE
+        #if !NO_NETWORK_BUILD
         case .cloudAI:
             let mgr = CloudAIManager.shared
             return "Analyzing \(count) email\(suffix) with \(mgr.selectedProvider.displayName) (\(mgr.selectedModel))"
@@ -1607,7 +1607,7 @@ struct AIAssistantView: View {
         case .appleAIMoE: return "Apple AI MoE — multi-session experts, fan-in synthesis, self-correction"
         case .appleAI: return "Apple AI — direct single-session, fast and private"
         case .hybrid: return "Hybrid — NLP foundation + RAG + MoE experts + cloud experts + dynamic fan-in synthesis"
-        #if !OFFLINE_MODE
+        #if !NO_NETWORK_BUILD
         case .cloudAI: return "Cloud AI — \(CloudAIManager.shared.selectedProvider.displayName) powered analysis with NLP + RAG"
         #endif
         case .nlp: return "NLP — pure semantic search + deterministic analysis, no AI"
@@ -1639,7 +1639,7 @@ struct AIAssistantView: View {
 
         // Complex but no Apple AI → Cloud AI if available, else NLP
         if isComplex && !hasAppleAI {
-            #if !OFFLINE_MODE
+            #if !NO_NETWORK_BUILD
             if hasCloudAI { return .cloudAI }
             #endif
             return .nlp
@@ -1655,7 +1655,7 @@ struct AIAssistantView: View {
             return .appleAI
         }
 
-        #if !OFFLINE_MODE
+        #if !NO_NETWORK_BUILD
         // Simple with cloud → Cloud AI
         if hasCloudAI {
             return .cloudAI
@@ -2306,7 +2306,7 @@ struct AIAssistantView: View {
                               fallbackUsed: usedFallback)
             }
 
-        #if !OFFLINE_MODE
+        #if !NO_NETWORK_BUILD
         // ━━━ Engine 4: Cloud AI (Enhanced with NLP + RAG) ━━━
         case .cloudAI:
             let priorCtxCloud = conversationHistory.suffix(3).map { "Q: \($0.query)\nA: \($0.answer)" }.joined(separator: "\n\n")
