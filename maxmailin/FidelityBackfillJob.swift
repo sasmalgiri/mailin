@@ -58,6 +58,10 @@ final class FidelityBackfillJob {
     static let headerPassKey = "mailin.fidelity.headerPassVersion"
     static let headerPassVersion = 1
 
+    /// How many repaired pages pass between progress notifications (v2.1
+    /// backlog #12). Five pages of 200 = a refresh every ~1,000 rows.
+    static let notifyEveryPages = 5
+
     struct Outcome: Sendable, Equatable {
         var repaired = 0
         var unrecoverable = 0
@@ -126,6 +130,12 @@ final class FidelityBackfillJob {
                 Self.logger.info("sender auto-detected from archive")
             }
 
+            // v2.1 backlog #12: a long repair used to post ONE notification at
+            // the very end, so the folder tree showed stale counts for the
+            // whole run. Post after every few pages instead; the final post
+            // below still covers the tail.
+            var pagesSinceNotify = 0
+            var repairedAtLastNotify = 0
             while true {
                 if Task.isCancelled { break }
                 let page = try await store.fidelityBackfillCandidates(limit: batchSize)
@@ -178,6 +188,12 @@ final class FidelityBackfillJob {
                 // converges; a page with ZERO forward progress (every apply
                 // failed) must stop instead of spinning on the same rows.
                 if pageProgress == 0 { break }
+                pagesSinceNotify += 1
+                if pagesSinceNotify >= Self.notifyEveryPages, outcome.repaired > repairedAtLastNotify {
+                    NotificationCenter.default.post(name: .fidelityBackfillCompleted, object: nil)
+                    pagesSinceNotify = 0
+                    repairedAtLastNotify = outcome.repaired
+                }
             }
 
             // Second pass: rows that already HAVE a type but no participants

@@ -115,8 +115,23 @@ final class ArchiveLifecycleService {
             await fm.bootstrapFromStore()
         }
 
-        // 3. Spotlight.
-        SpotlightIndexer.shared.removeAllIndexedEmails()
+        // 3. Spotlight. The domain delete takes every item, including the
+        //    held rows that are still in the archive; re-add those once the
+        //    delete has landed (v2.1 backlog #13 — they used to reappear only
+        //    on the next launch's full pass).
+        let heldForSpotlight = Array(held)
+        let spotlightStore = store
+        SpotlightIndexer.shared.removeAllIndexedEmails {
+            guard !heldForSpotlight.isEmpty else { return }
+            Task { @MainActor in
+                for start in stride(from: 0, to: heldForSpotlight.count, by: 200) {
+                    let page = Array(heldForSpotlight[start..<min(start + 200, heldForSpotlight.count)])
+                    if let emails = try? await spotlightStore.emails(withIDs: page), !emails.isEmpty {
+                        SpotlightIndexer.shared.indexEmails(emails)
+                    }
+                }
+            }
+        }
 
         // 4. Active import checkpoints — a fresh import must re-ingest.
         do { try await ImportCheckpointStore.shared.reset() }

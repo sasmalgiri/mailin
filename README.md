@@ -77,7 +77,7 @@ Import, search, analyze, and export email archives from Gmail, Outlook, Thunderb
 - Tamper-evident HMAC-chained audit log and chain-of-custody artifacts
 - Evidence tagging and examiner annotations
 - Server-reported SPF, DKIM and DMARC authentication status, with header analysis
-- S/MIME verification for opaque signatures (trusted/untrusted chains distinguished); detached signatures and encryption are detected and reported honestly as unverifiable
+- S/MIME verification for opaque and detached (`multipart/signed`) signatures, trusted/untrusted chains distinguished, tampering reported as invalid; encrypted messages are detected and reported honestly as unverifiable
 - Spoofing and phishing detection
 - MIME tree inspection and received chain analysis
 - Bates numbering and custodian management

@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 struct ParserFactory {
     static func parse(
@@ -31,6 +32,36 @@ struct ParserFactory {
             return all
         }
 
+        // Containers (ZIP / gzip): one member at a time to a scratch file,
+        // classified on its own bytes, parsed, deleted. Members that are not
+        // mail, are encrypted, or are themselves containers are skipped; the
+        // array path has no report to count them in, so they are logged.
+        if classification.format.isContainer {
+            let steps = try containerSteps(fileURL, format: classification.format)
+            let scratch = try containerScratchDirectory()
+            defer { try? FileManager.default.removeItem(at: scratch) }
+            var all: [MBOXParser.RawEmail] = []
+            var sawMail = false
+            for (index, step) in steps.enumerated() {
+                let dest = scratch.appendingPathComponent("\(index)-\(Self.safeMemberFileName(step.name))")
+                defer { try? FileManager.default.removeItem(at: dest) }
+                switch try containerMemberDisposition(step, extractingTo: dest) {
+                case .refused, .notMail, .nestedContainer:
+                    continue
+                case .mail:
+                    sawMail = true
+                    all += try parse(fileURL: dest, senderEmail: senderEmail) { fraction in
+                        onProgress?((Double(index) + fraction) / Double(steps.count))
+                    }
+                }
+            }
+            guard sawMail else {
+                throw ExtractionError.unsupportedFormat(
+                    reason: "\(classification.summary). No mailbox files were found inside it (\(steps.count) member\(steps.count == 1 ? "" : "s") examined).")
+            }
+            return all
+        }
+
         let ext = classification.format.parserToken
         switch ext {
         case "mbox", "eml", "":
@@ -46,12 +77,6 @@ struct ParserFactory {
             return try PSTParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
         case "nsf":
             return try NSFParser.parse(fileURL: fileURL, senderEmail: senderEmail, onProgress: onProgress)
-        case "zip":
-            // §7.6: no bounded ZIP extraction ships in v2.0 — an explicit,
-            // honest limitation instead of silently mis-parsing the archive
-            // as MBOX. (ZIP contents can be imported after manual extraction.)
-            throw ExtractionError.unsupportedFormat(
-                reason: "ZIP archives are not imported directly in this version. Unzip the archive and import the contained mailbox files (.mbox, .eml, …).")
         default:
             // §7.4: an unknown extension is an explicit error — never a
             // silent MBOX fallthrough that mis-parses binary data.
@@ -61,8 +86,89 @@ struct ParserFactory {
     }
 
     static let allSupportedExtensions: [String] = [
-        "mbox", "eml", "emlx", "msg", "pst", "ost", "nsf"
+        "mbox", "eml", "emlx", "msg", "pst", "ost", "nsf", "zip", "gz"
     ]
+
+    // MARK: - Containers (ZIP / gzip) — v2.1 backlog #1
+
+    /// One extractable member of a container. `extract` streams it to the
+    /// given scratch URL, verifying size and checksum, or throws.
+    struct ContainerStep {
+        let name: String
+        let extract: (URL) throws -> Void
+    }
+
+    enum ContainerMemberDisposition {
+        case mail
+        case notMail
+        case nestedContainer
+        case refused
+    }
+
+    private static let containerLog = Logger(subsystem: "com.ecosanskriti.mailin", category: "ContainerImport")
+
+    /// The members worth extracting, in archive order. Directory entries and
+    /// OS junk (`__MACOSX/`, `.DS_Store`, …) are dropped here; everything else
+    /// is extracted and judged on its bytes.
+    static func containerSteps(_ url: URL, format: SourceFormat) throws -> [ContainerStep] {
+        switch format {
+        case .gzip:
+            // gzip carries a single payload and no reliable member name; use
+            // the archive's own name minus the ".gz".
+            let name = url.pathExtension.lowercased() == "gz" || url.pathExtension.lowercased() == "gzip"
+                ? url.deletingPathExtension().lastPathComponent
+                : url.lastPathComponent
+            return [ContainerStep(name: name) { dest in try ZIPArchiveReader.gunzip(url, to: dest) }]
+        case .zip:
+            return try ZIPArchiveReader.members(of: url)
+                .filter { !$0.isDirectory && !$0.isJunk }
+                .map { member in
+                    ContainerStep(name: member.name) { dest in
+                        try ZIPArchiveReader.extract(member, from: url, to: dest)
+                    }
+                }
+        default:
+            return []
+        }
+    }
+
+    static func containerScratchDirectory() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-container-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// A member name flattened to one path component, so a crafted archive
+    /// path can never escape the scratch directory (zip-slip).
+    static func safeMemberFileName(_ name: String) -> String {
+        let base = (name as NSString).lastPathComponent
+            .replacingOccurrences(of: "..", with: "_")
+        return base.isEmpty ? "member" : base
+    }
+
+    /// Extracts one member and decides what it is. A refusal (encrypted,
+    /// damaged, would not fit on disk) is logged and does not stop the other
+    /// members; the scratch file is removed on anything but `.mail`.
+    static func containerMemberDisposition(_ step: ContainerStep, extractingTo dest: URL) throws -> ContainerMemberDisposition {
+        do {
+            try step.extract(dest)
+        } catch let error as ZIPArchiveReader.ReadError {
+            containerLog.error("container member refused: \(error.description, privacy: .private)")
+            return .refused
+        }
+        let inner = SourceFormatClassifier.classify(url: dest)
+        if inner.format.isContainer {
+            containerLog.notice("nested container skipped: \(step.name, privacy: .private)")
+            try? FileManager.default.removeItem(at: dest)
+            return .nestedContainer
+        }
+        guard inner.isSupported else {
+            try? FileManager.default.removeItem(at: dest)
+            return .notMail
+        }
+        return .mail
+    }
 
     /// Stable parser identity (type + version) for a file extension. Used to
     /// bind resume checkpoints and import receipts to the exact parser that
@@ -122,6 +228,10 @@ struct ParserFactory {
             return ("pst", PSTParser.parserVersion)
         case "nsf":
             return ("nsf", NSFParser.parserVersion)
+        case "zip", "gzip":
+            // The container's own identity; each member is still parsed by
+            // its own format's parser once extracted.
+            return ("container", ZIPArchiveReader.version)
         default:
             return ("unsupported", 0)
         }
@@ -164,6 +274,54 @@ struct ParserFactory {
             throw ExtractionError.unsupportedFormat(
                 reason: [classification.summary, classification.format.advice]
                     .compactMap { $0 }.joined(separator: " "))
+        }
+
+        // Containers stream member-by-member too: one member is extracted to
+        // scratch, drained through `onBatch`, and deleted before the next is
+        // touched, so peak memory AND scratch disk stay bounded by one member.
+        // Refused / non-mail / nested members are counted in the report's
+        // categories (not as failed messages — they are not messages).
+        if classification.format.isContainer {
+            let steps = try containerSteps(fileURL, format: classification.format)
+            let scratch = try containerScratchDirectory()
+            defer { try? FileManager.default.removeItem(at: scratch) }
+            var total = 0, parsed = 0, failed = 0
+            var categories: [String: Int] = [:]
+            var sawMail = false
+            for (index, step) in steps.enumerated() {
+                try Task.checkCancellation()
+                let dest = scratch.appendingPathComponent("\(index)-\(Self.safeMemberFileName(step.name))")
+                defer { try? FileManager.default.removeItem(at: dest) }
+                switch try containerMemberDisposition(step, extractingTo: dest) {
+                case .refused: categories["container_member_refused", default: 0] += 1
+                case .notMail: categories["container_member_not_mail", default: 0] += 1
+                case .nestedContainer: categories["container_nested_skipped", default: 0] += 1
+                case .mail:
+                    sawMail = true
+                    let report = try await parseStreamingCallback(
+                        fileURL: dest,
+                        senderEmail: senderEmail,
+                        batchSize: batchSize,
+                        envelopeProvider: envelopeProvider,
+                        retainAttachmentBytes: retainAttachmentBytes,
+                        onProgress: { fraction in
+                            onProgress?((Double(index) + fraction) / Double(steps.count))
+                        },
+                        onBatch: onBatch
+                    )
+                    total += report.totalMessages
+                    parsed += report.successfullyParsed
+                    failed += report.failed
+                    for (key, count) in report.errorCategories { categories[key, default: 0] += count }
+                }
+            }
+            guard sawMail else {
+                throw ExtractionError.unsupportedFormat(
+                    reason: "\(classification.summary). No mailbox files were found inside it (\(steps.count) member\(steps.count == 1 ? "" : "s") examined).")
+            }
+            return MBOXParser.ParseRecoveryReport(
+                totalMessages: total, successfullyParsed: parsed,
+                failed: failed, errorCategories: categories)
         }
 
         // Directory forms stream member-by-member: each file is drained

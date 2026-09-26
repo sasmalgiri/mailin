@@ -149,6 +149,11 @@ struct OffsetMBOXScanner: Sendable {
         /// Absolute offsets of every message start, discovered in order.
         var pendingStart: Int64?
         var ordinal = 0
+        /// True from a message's start until its first blank line. A
+        /// `From ` line inside the header block is NOT a separator — the same
+        /// rule as the streaming parser, so both engines agree on ordinals
+        /// (see `MBOXParser.parseStreamingCallback`).
+        var headerBlockOpen = false
 
         /// `carry` holds the bytes of the current window plus a tail from the
         /// previous one, so a separator spanning a window edge is still found.
@@ -199,10 +204,20 @@ struct OffsetMBOXScanner: Sendable {
                 let absoluteLineStart = carryOrigin + Int64(carry.distance(from: carry.startIndex,
                                                                           to: lineStartIndex))
 
-                if Self.isSeparatorLine(lineData) {
+                if Self.isSeparatorLine(lineData), pendingStart == nil || !headerBlockOpen {
                     // The previous message ends where this separator begins.
                     try await closeMessage(endingAt: absoluteLineStart)
                     pendingStart = absoluteLineStart
+                    headerBlockOpen = true
+                } else if pendingStart == nil, absoluteLineStart == 0, Self.looksLikeHeaderFieldLine(lineData) {
+                    // A bare message (.eml): the file opens with a header
+                    // field, so the message starts at byte 0 and its header
+                    // block is open — an envelope line further down the block
+                    // must not split it.
+                    pendingStart = 0
+                    headerBlockOpen = true
+                } else if headerBlockOpen, Self.isBlankLine(lineData) {
+                    headerBlockOpen = false
                 }
 
                 cursor = newline.upperBound
@@ -372,6 +387,24 @@ struct OffsetMBOXScanner: Sendable {
         guard line.count > 5 else { return false }
         guard line.starts(with: fromPrefix) else { return false }
         return containsFourDigitRun(line)
+    }
+
+    /// `Name:` at the start of a line — RFC 5322 field-name bytes (printable
+    /// ASCII except colon) followed by a colon. Mirrors
+    /// `MBOXParser.looksLikeHeaderField` on bytes.
+    static func looksLikeHeaderFieldLine(_ line: Data) -> Bool {
+        var sawName = false
+        for byte in line {
+            if byte == 0x3A { return sawName }            // ':'
+            guard byte >= 0x21, byte <= 0x7E else { return false }
+            sawName = true
+        }
+        return false
+    }
+
+    /// Empty, or only CR/whitespace — the header/body divider.
+    static func isBlankLine(_ line: Data) -> Bool {
+        line.allSatisfy { $0 == 0x0D || $0 == 0x20 || $0 == 0x09 }
     }
 
     static func startsWithSeparator(_ data: Data) -> Bool {

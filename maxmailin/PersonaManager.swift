@@ -9,6 +9,11 @@
 
 import SwiftUI
 
+extension Notification.Name {
+    /// Posted after `PersonaManager.switchPersona`; object is the new persona's rawValue.
+    static let personaDidChange = Notification.Name("mailin.personaDidChange")
+}
+
 @MainActor
 class PersonaManager: ObservableObject {
     static let shared = PersonaManager()
@@ -29,6 +34,9 @@ class PersonaManager: ObservableObject {
         guard persona != selectedPersona else { return }
         selectedPersona = persona
         applyPersonaDefaults()
+        // The list restores the filter set last used under this persona
+        // (v2.1 backlog #15 — "remember last filter set per persona").
+        NotificationCenter.default.post(name: .personaDidChange, object: persona.rawValue)
     }
 
     func completePersonaSelection() {

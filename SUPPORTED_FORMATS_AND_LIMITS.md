@@ -64,6 +64,15 @@ batch rather than by the whole mailbox. Maildir `tmp/` is deliberately skipped
 (it is delivery scratch space). A folder of `.emlx` is handed to `EMLXParser`
 whole, because that parser reads a directory natively.
 
+**Executed 2026-09-25** (`DirectorySourceImportTests`, synthetic layouts built
+to the structures above): Maildir with `cur`/`new`/`tmp` → 3 of 4 messages
+(the `tmp` one skipped); folder of four `.eml` plus a `README.txt` → 4; Apple
+Mail package with `mbox` + `mbox.toc` → 2; a Maildir with empty `cur`/`new`
+is refused rather than imported as zero. Each layout ran through BOTH parser
+entry points and both agreed. Running this found that the streaming path had
+never produced a message from a bare `.eml` (see the `eml` row below). A real
+client export (Apple Mail, Dovecot) has still not been run.
+
 ---
 
 ## 2. What each format delivers
@@ -71,15 +80,15 @@ whole, because that parser reads a directory natively.
 | Format | Parser | Streams? | What is extracted | Known caveats |
 |---|---|---|---|---|
 | mbox | `MBOXParser` | **Yes** — bounded memory, adaptive batches | Headers, MIME tree, bodies, attachments, Gmail labels → tags, thread links | Single messages above 100 MB are reported as damaged, not truncated (see §3) |
-| eml | `MBOXParser` | Yes | As mbox; a missing `From ` envelope is synthesised | — |
+| eml | `MBOXParser` | Yes | As mbox; a missing `From ` envelope is synthesised. **Fixed 2026-09-26:** an envelope line INSIDE the header block (real Gmail exports put it a dozen headers down) is no longer a separator, in both engines | **Fixed 2026-09-25:** the streaming path (the one imports use) began a message only on a `From ` line, so a bare `.eml` imported as ZERO messages with no failure reported. A first line that is a header field now starts one bare message. Pinned by `singleEMLStreams`; the reverse case (mbox preamble) by `mboxPreambleIsNotAMessage` |
 | emlx | `EMLXParser` | No | Per-file parse with a damaged-file report (`ParseResult.summary`) | Whole set materialises before draining |
 | msg | `MSGParser` | No | OLE2 → MAPI properties (sender, recipients, subject, bodies, attachments) | Refuses above 2 GB; one message per file |
 | pst / ost | `PSTParser` | No | In-house NDB reader: node + block B-trees, MAPI property contexts, attachment subnodes, OST `permute`/`cyclic` decode | Not executed above 50 GB (see §4); WIP-protected content is reported, not silently dropped |
 | nsf | `NSFParser` | No | Structured note records with LZSS decompression and LMBCS strings, attachments by item | Falls back to a **heuristic text scan** when the structured parse finds nothing — fidelity is lower on that path and it is not byte-exact |
 | Apple Mail package | `MBOXParser` per member | Yes | As mbox | Reports "nothing to import" when no `mbox` file is inside |
 | Maildir | `MBOXParser` per member | Yes | As eml, one message per file | `tmp/` skipped by design |
-| ZIP | — | — | **Refused** with advice to unzip first | No bounded extraction ships yet; mis-parsing the archive as mbox would be worse |
-| gzip | — | — | **Refused** with advice to decompress first | Same |
+| ZIP | `ZIPArchiveReader` → member's own parser | Yes | **Container (2.1):** each member streams to a scratch file (64 KiB window), is classified on its own bytes, parsed, and deleted before the next member is touched. Stored and deflate methods; ZIP64 records and extra fields honoured (Google Takeout > 4 GB). Size and CRC-32 verified per member | The only ceiling is the scratch volume's free space (+64 MiB margin) — there is no arbitrary member cap. Refused and counted, never imported: encrypted members, other compression methods, a member whose output exceeds or falls short of its declared size, CRC mismatch. Skipped and counted: non-mail members, nested archives, `__MACOSX/` and dot-files. Executed: `ContainerImportTests` (9) |
+| gzip | `ZIPArchiveReader.gunzip` → payload's parser | Yes | **Container (2.1):** RFC 1952 header parsed (FEXTRA/FNAME/FCOMMENT/FHCRC), raw deflate streamed, trailer CRC-32 and size verified | Single payload; name taken from the archive's own name minus `.gz` |
 
 Non-streaming parsers (`pst`, `ost`, `nsf`, `msg`, `emlx`) materialise the whole
 result before draining it in bounded chunks. The adaptive batch envelope's
@@ -168,7 +177,7 @@ Refused above 2 GB (`MSGParser.MSGError.fileTooLarge`). This is a mailin limit
 |---|---|
 | mbox | Round-trip verified: 526 messages exported → 526 re-parsed → 526, 94,929,888 bytes. Writes a real `From_` envelope (`MBOXRecordBuilder.envelopeLine(for:)`) and includes attachments as base64 MIME parts, marked `X-Mailin-Reconstructed` when the record was synthesised rather than byte-copied. |
 | mbox, partitioned | `ArchiveExportService.exportMBOXPartitions(...)` splits on a byte budget, never mid-message — for destinations such as exFAT with a 4 GB single-file limit |
-| PDF (Bates) | Stamp verified by PDFKit read-back in `BatesPDFReadBackTests` — **written, not yet executed** |
+| PDF (Bates) | Stamp verified by PDFKit read-back (`GoldCaseClosureTests`) — **executed 2026-09-25, pass** |
 
 Export of a *reconstructed* message is not byte-identical to the source and is
 labelled as such. Byte-exact export requires the original bytes, which is what
@@ -178,8 +187,9 @@ the offset-index work (S4/S5) exists to preserve.
 
 ## 6. What is NOT supported
 
-- **ZIP / gzip containers** — refused with instructions, not silently
-  mis-parsed.
+- **Encrypted ZIP members, and ZIP compression methods other than stored /
+  deflate** — refused by name and counted; the rest of the archive still
+  imports. Nested archives inside an archive are skipped, not recursed into.
 - **Encrypted PST/OST beyond the documented permute/cyclic obfuscation** —
   password-protected files are not decrypted.
 - **Live mail accounts** — Page 4 ships default-off and its features are

@@ -77,6 +77,38 @@ struct ArchiveListView: View {
         .onChange(of: scope) { _, _ in scheduleQuery() }
     }
 
+    private func moveSelection(by delta: Int) {
+        let ids = model.visibleOrderedIDs
+        guard !ids.isEmpty else { return }
+        let next: Int
+        if let selectedID, let current = ids.firstIndex(of: selectedID) {
+            next = min(max(current + delta, 0), ids.count - 1)
+        } else {
+            next = delta > 0 ? 0 : ids.count - 1
+        }
+        selectedID = ids[next]
+        if next >= ids.count - 5, model.hasMore { Task { await model.loadNextPage() } }
+    }
+
+    private func openSelectionInWindow() {
+        #if os(macOS)
+        guard let selectedID else { return }
+        Task { @MainActor in
+            guard let email = try? await ArchiveDataService.shared.fullEmails(ids: [selectedID]).first else { return }
+            let title = (email.headers["Subject"]?.isEmpty == false ? email.headers["Subject"]! : "(No Subject)")
+            ToolWindowPresenter.shared.open(title: title, size: CGSize(width: 900, height: 720)) {
+                AnyView(EmailDetailView(email: email).toolWindowFrame())
+            }
+        }
+        #endif
+    }
+
+    /// A7: built once per search string and shared by every row, so the
+    /// matched-field strip never re-tokenizes the query per row.
+    private var matchTerms: SearchMatchTerms {
+        SearchMatchTerms(searchText: searchText)
+    }
+
     /// Debounced query update. The model's queryRevision guard makes this safe
     /// even under rapid typing — debounce just avoids redundant fetches.
     private func scheduleQuery() {
@@ -86,7 +118,9 @@ struct ArchiveListView: View {
         searchTask = Task {
             try? await Task.sleep(nanoseconds: 250_000_000)
             if Task.isCancelled { return }
-            let query = EmailQuery(text: text.isEmpty ? nil : text, beforeDate: nil, afterDate: after)
+            // v2.1 backlog #6: the same compile step as the full list, so
+            // `from:alice` or `filename:pdf` means the same thing here.
+            let query = ArchiveBrowseState(searchText: text, afterDate: after).query()
             await model.setQuery(query)
         }
     }
@@ -115,7 +149,7 @@ struct ArchiveListView: View {
                 }
 
                 ForEach(model.summaries) { summary in
-                    ArchiveSummaryRow(summary: summary)
+                    ArchiveSummaryRow(summary: summary, matchTerms: matchTerms)
                         .tag(summary.id)
                         .onAppear {
                             if summary.id == model.summaries.last?.id && model.hasMore {
@@ -152,6 +186,12 @@ struct ArchiveListView: View {
                 }
             }
             .accessibilityIdentifier("archive.list")
+            // Keyboard-first browsing (v2.1 backlog #15), same keys as the
+            // full list: J/K step the selection, Return opens the selected
+            // message in its own window.
+            .onKeyPress(.init("j")) { moveSelection(by: 1); return .handled }
+            .onKeyPress(.init("k")) { moveSelection(by: -1); return .handled }
+            .onKeyPress(.return) { openSelectionInWindow(); return .handled }
             .overlay(alignment: .bottom) {
                 Text("\(model.totalCount) emails")
                     .font(.caption)
@@ -167,6 +207,13 @@ struct ArchiveListView: View {
 
 struct ArchiveSummaryRow: View {
     let summary: EmailSummary
+    /// The active search, read through the one compiler; nil or empty shows
+    /// no matched-field strip.
+    var matchTerms: SearchMatchTerms? = nil
+
+    private var matchedFields: [SearchMatchField] {
+        matchTerms?.matchedFields(in: summary) ?? []
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -183,6 +230,7 @@ struct ArchiveSummaryRow: View {
             }
             Text(summary.subject.isEmpty ? "(No Subject)" : summary.subject)
                 .font(.subheadline).lineLimit(1)
+            SearchMatchFieldChips(fields: matchedFields)
             if !summary.bodyPreview.isEmpty {
                 Text(summary.bodyPreview)
                     .font(.caption).foregroundStyle(.secondary).lineLimit(2)

@@ -593,7 +593,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     ///
     ///   v14 = raw-MIME blob tier (S3b)
     ///   v15 = message locators (S4/S5)
-    static let currentSchemaVersion = 16
+    static let currentSchemaVersion = 17
 
     private func migrateSchema(_ handle: OpaquePointer) throws {
         var v = try scalarInt(handle, "PRAGMA user_version;")
@@ -959,6 +959,146 @@ actor SQLiteEmailStore: EmailArchiveStore {
             }
             v = 16
         }
+        if v == 16 {
+            try inExclusiveTransaction(handle) {
+                // v17 (v2.1 backlog #7): import checkpoints move from a JSON
+                // file into the store, so a batch's rows and the ordinal that
+                // says "these are committed" are ONE transaction. With the
+                // file, a crash between the store commit and the checkpoint
+                // write left a batch persisted but unrecorded (re-imported and
+                // deduplicated on resume — safe, but a lie in the receipt's
+                // resume provenance). `import_sessions` = fully ingested
+                // sources; `import_progress` = mid-file ordinal, identity-bound
+                // exactly as the JSON schema v2 was.
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS import_sessions(
+                        sha256        TEXT PRIMARY KEY,
+                        source_name   TEXT NOT NULL,
+                        email_count   INTEGER NOT NULL,
+                        completed_at  INTEGER NOT NULL
+                    );
+                """)
+                try exec(handle, """
+                    CREATE TABLE IF NOT EXISTS import_progress(
+                        sha256            TEXT PRIMARY KEY,
+                        source_name       TEXT NOT NULL,
+                        schema_version    INTEGER NOT NULL,
+                        size_bytes        INTEGER NOT NULL,
+                        parser            TEXT NOT NULL,
+                        parser_version    INTEGER NOT NULL,
+                        messages_ingested INTEGER NOT NULL,
+                        updated_at        INTEGER NOT NULL
+                    );
+                """)
+                try exec(handle, "PRAGMA user_version = 17;")
+            }
+            v = 17
+        }
+    }
+
+    // MARK: - Import checkpoints (v17, v2.1 backlog #7)
+
+    /// Mid-file progress written INSIDE `insertBatch`'s transaction: the rows
+    /// and the ordinal that vouches for them commit together or not at all.
+    struct ImportProgressCheckpoint: Sendable, Equatable {
+        let sha256: String
+        let sourceName: String
+        let sizeBytes: Int
+        let parser: String
+        let parserVersion: Int
+        let schemaVersion: Int
+        /// Ordinal of the first message in the batch; the recorded value is
+        /// this plus the number of messages committed so far in the call.
+        let firstOrdinal: Int
+    }
+
+    func importCheckpointIsImported(sha256: String) throws -> Bool {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT 1 FROM import_sessions WHERE sha256 = ? LIMIT 1;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, sha256)
+        return try stepRow(stmt, db)
+    }
+
+    /// Leading messages already committed for this source, or 0 unless EVERY
+    /// identity field matches — a different size, parser, parser version or
+    /// checkpoint schema restarts the file rather than guessing.
+    func importCheckpointResumePoint(sha256: String, sizeBytes: Int, parser: String,
+                                     parserVersion: Int, schemaVersion: Int) throws -> Int {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT messages_ingested FROM import_progress
+            WHERE sha256 = ? AND schema_version = ? AND size_bytes = ? AND parser = ? AND parser_version = ?;
+            """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, sha256)
+        sqlite3_bind_int(stmt, 2, Int32(schemaVersion))
+        sqlite3_bind_int64(stmt, 3, Int64(sizeBytes))
+        bindText(stmt, 4, parser)
+        sqlite3_bind_int(stmt, 5, Int32(parserVersion))
+        guard try stepRow(stmt, db) else { return 0 }
+        return max(0, Int(sqlite3_column_int64(stmt, 0)))
+    }
+
+    /// Standalone progress write (own transaction) — for callers that could
+    /// not ride the batch insert.
+    func importCheckpointRecordProgress(_ checkpoint: ImportProgressCheckpoint, messagesIngested: Int) throws {
+        let db = try ensureDB()
+        try writeImportProgress(db, checkpoint, messagesIngested: messagesIngested)
+    }
+
+    private func writeImportProgress(_ db: OpaquePointer, _ cp: ImportProgressCheckpoint, messagesIngested: Int) throws {
+        let stmt = try prepare(db, """
+            INSERT OR REPLACE INTO import_progress(sha256, source_name, schema_version, size_bytes, parser, parser_version, messages_ingested, updated_at)
+            VALUES (?,?,?,?,?,?,?,?);
+            """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, cp.sha256)
+        bindText(stmt, 2, cp.sourceName)
+        sqlite3_bind_int(stmt, 3, Int32(cp.schemaVersion))
+        sqlite3_bind_int64(stmt, 4, Int64(cp.sizeBytes))
+        bindText(stmt, 5, cp.parser)
+        sqlite3_bind_int(stmt, 6, Int32(cp.parserVersion))
+        sqlite3_bind_int64(stmt, 7, Int64(messagesIngested))
+        sqlite3_bind_int64(stmt, 8, Int64(Date().timeIntervalSince1970))
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            throw SQLiteStoreError.schema("import_progress write failed: \(String(cString: sqlite3_errmsg(db)))")
+        }
+    }
+
+    /// A source fully ingested: recorded as a session, its in-progress row gone.
+    func importCheckpointRecord(sha256: String, sourceName: String, emailCount: Int) throws {
+        let db = try ensureDB()
+        try exec(db, "BEGIN TRANSACTION;")
+        do {
+            let stmt = try prepare(db, "INSERT OR REPLACE INTO import_sessions(sha256, source_name, email_count, completed_at) VALUES (?,?,?,?);")
+            defer { sqlite3_finalize(stmt) }
+            bindText(stmt, 1, sha256)
+            bindText(stmt, 2, sourceName)
+            sqlite3_bind_int64(stmt, 3, Int64(emailCount))
+            sqlite3_bind_int64(stmt, 4, Int64(Date().timeIntervalSince1970))
+            guard sqlite3_step(stmt) == SQLITE_DONE else {
+                throw SQLiteStoreError.schema("import_sessions write failed: \(String(cString: sqlite3_errmsg(db)))")
+            }
+            let clear = try prepare(db, "DELETE FROM import_progress WHERE sha256 = ?;")
+            defer { sqlite3_finalize(clear) }
+            bindText(clear, 1, sha256)
+            _ = sqlite3_step(clear)
+            try exec(db, "COMMIT;")
+        } catch {
+            try? exec(db, "ROLLBACK;")
+            throw error
+        }
+    }
+
+    func importCheckpointReset() throws {
+        let db = try ensureDB()
+        try exec(db, "DELETE FROM import_sessions; DELETE FROM import_progress;")
+    }
+
+    func importCheckpointSessionCount() throws -> Int {
+        let db = try ensureDB()
+        return try scalarInt(db, "SELECT COUNT(*) FROM import_sessions;")
     }
 
     /// v2 → v3 (§21): forensic state moves from whole-in-memory JSON maps to
@@ -1911,7 +2051,8 @@ actor SQLiteEmailStore: EmailArchiveStore {
         dedupPolicy: DedupPolicy,
         respectTombstones: Bool = true,
         batchSize: Int,
-        progress: ((Int, Int) -> Void)?
+        progress: ((Int, Int) -> Void)?,
+        progressCheckpoint: ImportProgressCheckpoint? = nil
     ) throws -> BatchInsertResult {
         let db = try ensureDB()
         let total = emails.count
@@ -2088,6 +2229,10 @@ actor SQLiteEmailStore: EmailArchiveStore {
                             }
                         }
                     }
+                }
+                // v17: the checkpoint commits WITH the rows it vouches for.
+                if let cp = progressCheckpoint {
+                    try writeImportProgress(db, cp, messagesIngested: cp.firstOrdinal + processed + chunk.count)
                 }
                 try exec(db, "COMMIT;")
             } catch {
@@ -3046,6 +3191,12 @@ actor SQLiteEmailStore: EmailArchiveStore {
         if let hasAttach = q.hasAttachments {
             sql.append("e.has_attach = \(hasAttach ? 1 : 0)")
         }
+        if let name = q.attachmentFilename?.trimmingCharacters(in: .whitespaces), !name.isEmpty {
+            // A7 `filename:`. A bare extension ("pdf") matches the suffix as
+            // well as a substring, so "filename:pdf" finds report.PDF.
+            sql.append("EXISTS (SELECT 1 FROM attachments at WHERE at.email_id = e.id AND instr(lower(at.filename), lower(?)) > 0)")
+            binds.append(.text(name))
+        }
         if let type = q.messageType, !type.isEmpty {
             sql.append("e.message_type = ?")
             binds.append(.text(type))
@@ -3469,19 +3620,41 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     /// IDs carrying a flag, newest-email first, paged — powers Trash /
     /// Pinned views without materializing archive-sized sets.
-    func reviewIDs(where flag: ReviewFlag, limit: Int, offset: Int) throws -> [UUID] {
+    /// A (date, id) keyset cursor for newest-first listings. Take it from the
+    /// last row of one page to fetch the next; `nil` starts at the top.
+    struct DateIDCursor: Sendable, Equatable {
+        let date: Date
+        let id: UUID
+    }
+
+    /// Review-flagged IDs newest first, keyset-paged (v2.1 backlog #10). With
+    /// LIMIT/OFFSET a restore or delete between two Trash pages shifted every
+    /// later row by one, so a page could skip a row or show one twice.
+    func reviewIDs(where flag: ReviewFlag, after cursor: DateIDCursor?, limit: Int) throws -> [(id: UUID, date: Date)] {
         let db = try ensureDB()
-        let stmt = try prepare(db, """
-            SELECT r.email_id FROM email_review_state r
+        var sql = """
+            SELECT r.email_id, e.date FROM email_review_state r
             JOIN emails e ON e.id = r.email_id
             WHERE r.\(flag.rawValue) = 1
-            ORDER BY e.date DESC, e.id DESC LIMIT ? OFFSET ?;
-        """)
+            """
+        if cursor != nil { sql += " AND (e.date < ? OR (e.date = ? AND e.id < ?))" }
+        sql += " ORDER BY e.date DESC, e.id DESC LIMIT ?;"
+        let stmt = try prepare(db, sql)
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_int(stmt, 1, Int32(limit))
-        sqlite3_bind_int(stmt, 2, Int32(offset))
-        var out: [UUID] = []
-        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append(id) } }
+        var idx: Int32 = 1
+        if let cursor {
+            let d = Int64(cursor.date.timeIntervalSince1970.rounded())
+            sqlite3_bind_int64(stmt, idx, d); idx += 1
+            sqlite3_bind_int64(stmt, idx, d); idx += 1
+            bindText(stmt, idx, cursor.id.uuidString); idx += 1
+        }
+        sqlite3_bind_int(stmt, idx, Int32(limit))
+        var out: [(UUID, Date)] = []
+        while try stepRow(stmt, db) {
+            if let id = columnUUID(stmt, 0) {
+                out.append((id, Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 1)))))
+            }
+        }
         return out
     }
 
@@ -3557,19 +3730,33 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return out
     }
 
-    func idsWithUserTag(_ tag: String, limit: Int, offset: Int) throws -> [UUID] {
+    /// IDs carrying a user tag, newest first, keyset-paged; see `reviewIDs`.
+    func idsWithUserTag(_ tag: String, after cursor: DateIDCursor?, limit: Int) throws -> [(id: UUID, date: Date)] {
         let db = try ensureDB()
-        let stmt = try prepare(db, """
-            SELECT t.email_id FROM email_user_tags t
+        var sql = """
+            SELECT t.email_id, e.date FROM email_user_tags t
             JOIN emails e ON e.id = t.email_id
-            WHERE t.tag = ? ORDER BY e.date DESC, e.id DESC LIMIT ? OFFSET ?;
-        """)
+            WHERE t.tag = ?
+            """
+        if cursor != nil { sql += " AND (e.date < ? OR (e.date = ? AND e.id < ?))" }
+        sql += " ORDER BY e.date DESC, e.id DESC LIMIT ?;"
+        let stmt = try prepare(db, sql)
         defer { sqlite3_finalize(stmt) }
-        bindText(stmt, 1, tag)
-        sqlite3_bind_int(stmt, 2, Int32(limit))
-        sqlite3_bind_int(stmt, 3, Int32(offset))
-        var out: [UUID] = []
-        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append(id) } }
+        var idx: Int32 = 1
+        bindText(stmt, idx, tag); idx += 1
+        if let cursor {
+            let d = Int64(cursor.date.timeIntervalSince1970.rounded())
+            sqlite3_bind_int64(stmt, idx, d); idx += 1
+            sqlite3_bind_int64(stmt, idx, d); idx += 1
+            bindText(stmt, idx, cursor.id.uuidString); idx += 1
+        }
+        sqlite3_bind_int(stmt, idx, Int32(limit))
+        var out: [(UUID, Date)] = []
+        while try stepRow(stmt, db) {
+            if let id = columnUUID(stmt, 0) {
+                out.append((id, Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 1)))))
+            }
+        }
         return out
     }
 
@@ -4157,6 +4344,41 @@ actor SQLiteEmailStore: EmailArchiveStore {
     }
 
     /// (attempted, pending) — powers the honest indexing-progress notice.
+    /// Attachment counts by family (A5(d), receipt coverage): what kinds of
+    /// attachments the archive holds, so "attachments seen" is not one number.
+    /// Families are derived from MIME type with the file extension as the
+    /// fallback; the mapping is the pure `attachmentFamily(mimeType:filename:)`.
+    func attachmentFamilyCounts() throws -> [(family: String, count: Int)] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT mime_type, filename, COUNT(*) FROM attachments GROUP BY mime_type, filename;")
+        defer { sqlite3_finalize(stmt) }
+        var out: [String: Int] = [:]
+        while try stepRow(stmt, db) {
+            let family = Self.attachmentFamily(mimeType: columnText(stmt, 0), filename: columnText(stmt, 1))
+            out[family, default: 0] += Int(sqlite3_column_int64(stmt, 2))
+        }
+        return out.map { (family: $0.key, count: $0.value) }
+            .sorted { $0.count != $1.count ? $0.count > $1.count : $0.family < $1.family }
+    }
+
+    nonisolated static func attachmentFamily(mimeType: String, filename: String) -> String {
+        let mime = mimeType.lowercased()
+        let ext = (filename as NSString).pathExtension.lowercased()
+        if mime.contains("pdf") || ext == "pdf" { return "PDF" }
+        if mime.hasPrefix("image/") || ["png", "jpg", "jpeg", "gif", "heic", "tiff", "tif", "bmp", "webp"].contains(ext) { return "Images" }
+        if mime.contains("word") || mime.contains("excel") || mime.contains("powerpoint") || mime.contains("officedocument")
+            || mime.contains("opendocument") || ["doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "rtf"].contains(ext) { return "Office documents" }
+        if mime.contains("zip") || mime.contains("compressed") || mime.contains("tar") || mime.contains("gzip")
+            || ["zip", "gz", "tgz", "7z", "rar", "tar"].contains(ext) { return "Archives" }
+        if mime.hasPrefix("text/") || ["txt", "csv", "md", "log", "json", "xml", "html", "htm"].contains(ext) { return "Text" }
+        if mime.contains("calendar") || ext == "ics" { return "Calendar" }
+        if mime.contains("vcard") || ext == "vcf" { return "Contacts" }
+        if mime.hasPrefix("audio/") || mime.hasPrefix("video/") { return "Media" }
+        if mime.contains("pkcs7") || mime.contains("signature") || ext == "p7s" || ext == "p7m" { return "Signatures" }
+        if mime.contains("message/") || ext == "eml" || ext == "msg" { return "Attached messages" }
+        return "Other"
+    }
+
     func attachmentTextProgress() throws -> (attempted: Int, pending: Int) {
         let db = try ensureDB()
         let attempted = try scalarInt(db, "SELECT COUNT(*) FROM attachment_text_state;")
@@ -4268,13 +4490,20 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return out
     }
 
-    /// All (email_id, tag) pairs, paged — bounded hydration/scan path.
-    func forensicTagsPage(limit: Int, offset: Int) throws -> [(id: UUID, tag: String, taggedAt: Date)] {
+    /// All (email_id, tag) pairs, keyset-paged by `email_id` — bounded
+    /// hydration/scan path. Pass the last row's id as `after` for the next
+    /// page; a row deleted or inserted between pages can no longer shift the
+    /// window and make a later page skip or repeat rows (v2.1 backlog #10).
+    func forensicTagsPage(after: UUID?, limit: Int) throws -> [(id: UUID, tag: String, taggedAt: Date)] {
         let db = try ensureDB()
-        let stmt = try prepare(db, "SELECT email_id, tag, tagged_at FROM forensic_evidence_tags ORDER BY email_id LIMIT ? OFFSET ?;")
+        let stmt = try prepare(db, """
+            SELECT email_id, tag, tagged_at FROM forensic_evidence_tags
+            WHERE (? IS NULL OR email_id > ?) ORDER BY email_id LIMIT ?;
+            """)
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_int(stmt, 1, Int32(limit))
-        sqlite3_bind_int(stmt, 2, Int32(offset))
+        bindTextOrNull(stmt, 1, after?.uuidString)
+        bindTextOrNull(stmt, 2, after?.uuidString)
+        sqlite3_bind_int(stmt, 3, Int32(limit))
         var out: [(UUID, String, Date)] = []
         while try stepRow(stmt, db) {
             guard let id = columnUUID(stmt, 0) else { continue }
@@ -4292,13 +4521,18 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return out
     }
 
-    func forensicIDs(withTag tag: String, limit: Int, offset: Int) throws -> [UUID] {
+    /// Keyset-paged by `email_id`; see `forensicTagsPage(after:limit:)`.
+    func forensicIDs(withTag tag: String, after: UUID?, limit: Int) throws -> [UUID] {
         let db = try ensureDB()
-        let stmt = try prepare(db, "SELECT email_id FROM forensic_evidence_tags WHERE tag = ? ORDER BY email_id LIMIT ? OFFSET ?;")
+        let stmt = try prepare(db, """
+            SELECT email_id FROM forensic_evidence_tags
+            WHERE tag = ? AND (? IS NULL OR email_id > ?) ORDER BY email_id LIMIT ?;
+            """)
         defer { sqlite3_finalize(stmt) }
         bindText(stmt, 1, tag)
-        sqlite3_bind_int(stmt, 2, Int32(limit))
-        sqlite3_bind_int(stmt, 3, Int32(offset))
+        bindTextOrNull(stmt, 2, after?.uuidString)
+        bindTextOrNull(stmt, 3, after?.uuidString)
+        sqlite3_bind_int(stmt, 4, Int32(limit))
         var out: [UUID] = []
         while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append(id) } }
         return out
@@ -4348,12 +4582,17 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return try scalarInt(db, "SELECT COUNT(*) FROM forensic_annotations;")
     }
 
-    func forensicAnnotationsPage(limit: Int, offset: Int) throws -> [(id: UUID, note: String, examiner: String, createdAt: Date)] {
+    /// Keyset-paged by `email_id`; see `forensicTagsPage(after:limit:)`.
+    func forensicAnnotationsPage(after: UUID?, limit: Int) throws -> [(id: UUID, note: String, examiner: String, createdAt: Date)] {
         let db = try ensureDB()
-        let stmt = try prepare(db, "SELECT email_id, note, examiner, created_at FROM forensic_annotations ORDER BY email_id LIMIT ? OFFSET ?;")
+        let stmt = try prepare(db, """
+            SELECT email_id, note, examiner, created_at FROM forensic_annotations
+            WHERE (? IS NULL OR email_id > ?) ORDER BY email_id LIMIT ?;
+            """)
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_int(stmt, 1, Int32(limit))
-        sqlite3_bind_int(stmt, 2, Int32(offset))
+        bindTextOrNull(stmt, 1, after?.uuidString)
+        bindTextOrNull(stmt, 2, after?.uuidString)
+        sqlite3_bind_int(stmt, 3, Int32(limit))
         var out: [(UUID, String, String, Date)] = []
         while try stepRow(stmt, db) {
             guard let id = columnUUID(stmt, 0) else { continue }

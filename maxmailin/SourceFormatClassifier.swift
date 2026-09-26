@@ -33,7 +33,8 @@ enum SourceFormat: String, Sendable, Equatable, CaseIterable {
     case pst
     case ost
     case nsf
-    /// Recognised but not importable directly.
+    /// Containers: imported member by member through `ZIPArchiveReader`
+    /// (streamed to a scratch file, one at a time; v2.1 backlog #1).
     case zip
     case gzip
     /// Directory forms.
@@ -45,12 +46,16 @@ enum SourceFormat: String, Sendable, Equatable, CaseIterable {
     var isSupported: Bool {
         switch self {
         case .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf,
-             .appleMailMailbox, .maildir, .emlFolder:
+             .appleMailMailbox, .maildir, .emlFolder, .zip, .gzip:
             return true
-        case .zip, .gzip, .unknown:
+        case .unknown:
             return false
         }
     }
+
+    /// ZIP and gzip: the messages are inside; each member is extracted to a
+    /// scratch file and classified on its own contents.
+    var isContainer: Bool { self == .zip || self == .gzip }
 
     /// The parser that handles this format, as an extension token the existing
     /// `ParserFactory` dispatch understands.
@@ -63,7 +68,9 @@ enum SourceFormat: String, Sendable, Equatable, CaseIterable {
         case .pst: return "pst"
         case .ost: return "ost"
         case .nsf: return "nsf"
-        case .zip, .gzip, .unknown: return ""
+        case .zip: return "zip"
+        case .gzip: return "gzip"
+        case .unknown: return ""
         }
     }
 
@@ -89,9 +96,9 @@ enum SourceFormat: String, Sendable, Equatable, CaseIterable {
     var advice: String? {
         switch self {
         case .zip:
-            return "Unzip it first, then import the mailbox files inside (.mbox, .eml, …)."
+            return "Each mailbox file inside will be imported; other files, encrypted members and nested archives are skipped and counted."
         case .gzip:
-            return "Decompress it first (for example `gunzip mail.mbox.gz`), then import the mailbox."
+            return "The compressed mailbox inside will be imported."
         case .unknown:
             return "This file does not look like any mail format mailin can read. Check that it is a mailbox export and not, for example, a database or a disk image."
         default:

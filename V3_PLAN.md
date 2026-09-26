@@ -18,7 +18,7 @@ claim must pass a behavioral check. Results of this round:
 | 4 | Concordance load file | Generated DAT: þ-delimited, 13 standard fields (DOCID…CUSTODIAN,TAG), row/header parity | ✅ PASS |
 | 5 | Legal hold blocks deletion | Held 1 of 3, attempted delete of all → held email blocked | ✅ PASS |
 | 6 | Person redaction (GDPR/share-safely) | Leak found → FIXED (token rules + case-insensitive + LAW-14 validator); re-verified: original text, lowercase text, dirty output all correct | ✅ PASS (was ❌, fixed 81c7184) |
-| 7 | S/MIME verification | Needs a signed sample email — gold-case work | ⬜ DEFERRED to gold cases |
+| 7 | S/MIME verification | Real OpenSSL self-signed fixtures through `CMSDecoder`: opaque `signed-data` → validUntrustedCert, tampered → never valid, truncated → unverifiable (`SMIMEGoldCaseTests`); detached `multipart/signed` → validUntrustedCert from LF and CRLF storage, one changed signed character → invalid (`SMIMEDetachedGoldCaseTests`). Executed 2026-09-25 | ✅ PASS |
 | 8 | Predictive coding ranking quality | Attempted in-process; snippet host blocks the main actor the trainer publishes on (harness deadlock, not an engine defect — training loop confirmed started). Needs an XCTest async host | ⬜ DEFERRED to gold cases (XCTest) |
 | 9 | Bates-stamped PDF (stamp visible on page) | Stamping is drawn in the page header inside the export path (EmailDetailView.exportBatesStampedPDF); full PDFKit read-back deferred to gold-case UI test | 🟡 code-path verified |
 | 10 | Anomaly detection statistics | Synthetic corpora: frequency spike ✅, unusual-hours ✅ (fires >5 late-night), new-domain ✅ at realistic scale (recent window = last 10%, needs ≥3 — cannot fire on tiny corpora, documented calibration) | ✅ PASS |

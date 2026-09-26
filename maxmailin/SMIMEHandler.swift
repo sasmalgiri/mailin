@@ -78,8 +78,10 @@ struct SMIMEHandler {
                 return .validUntrustedCert
             }
         case .needsDetachedContent:
-            // multipart/signed (detached): we don't reconstruct the
-            // canonicalized signed bytes, so the crypto check never ran.
+            // multipart/signed whose signed entity could NOT be reconstructed
+            // from the raw source (no boundary, no first part), so the crypto
+            // check never ran. When reconstruction succeeds the decoder
+            // reports .valid/.invalidSignature instead and never lands here.
             // Not "invalid" (that would falsely imply tampering).
             return .unverifiable
         case .invalidSignature:
@@ -142,6 +144,15 @@ struct SMIMEHandler {
             // Malformed CMS structure — parse failure.
             return VerificationResult(status: mapVerdict(parseError: true, decoderStatus: nil, trustResult: .unavailable, certsPresent: false, certExpired: false),
                                       signerName: nil, signerEmail: nil, certificateInfo: nil)
+        }
+
+        // multipart/signed carries the signature DETACHED from the content
+        // (v2.1 backlog #4). Hand the decoder the exact signed entity so the
+        // digest is actually checked; without this every detached signature
+        // reported "unverifiable" and a tampered one could never be caught.
+        if contentType.lowercased().contains("multipart/signed"),
+           let entity = detachedSignedEntity(rawSource: email.rawSource, contentType: contentType) {
+            _ = CMSDecoderSetDetachedContent(cmsDecoder, entity as CFData)
         }
 
         var numSigners: Int = 0
@@ -326,6 +337,64 @@ struct SMIMEHandler {
     }
     #endif
 
+    // MARK: - Detached signed entity (multipart/signed)
+
+    /// The bytes a detached S/MIME signature covers, per RFC 5751 §3.4.3 and
+    /// RFC 1847: the FIRST body part of the multipart/signed message — its own
+    /// header block, the blank line and its content — exactly as transmitted,
+    /// up to but NOT including the line break that precedes the next boundary
+    /// delimiter, in canonical CRLF form.
+    ///
+    /// Canonicalisation matters: mbox and many stores rewrite CRLF to LF, and
+    /// the signer computed the digest over CRLF. Every line ending is
+    /// normalised to CRLF, so a message that was stored with LF, CRLF or a
+    /// mixture verifies identically. Returns nil when there is no boundary or
+    /// no first part, in which case the caller lets the decoder report
+    /// `.needsDetachedContent` and the verdict stays honest at "unverifiable".
+    static func detachedSignedEntity(rawSource: String, contentType: String) -> Data? {
+        guard let boundary = boundaryParameter(in: contentType) else { return nil }
+
+        // Split lines keeping empty ones; tolerate LF, CRLF and stray CR.
+        let lines = rawSource
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+
+        // The body starts after the first blank line of the message headers.
+        guard let blank = lines.firstIndex(where: { $0.isEmpty }) else { return nil }
+        let body = lines[(blank + 1)...]
+
+        let delimiter = "--" + boundary
+        guard let open = body.firstIndex(where: { $0 == delimiter }) else { return nil }
+        let entityStart = open + 1
+        guard entityStart < body.endIndex else { return nil }
+        guard let close = body[entityStart...].firstIndex(where: { $0.hasPrefix(delimiter) }) else { return nil }
+
+        // multipart/signed has exactly two parts: the entity, then the
+        // signature. If the delimiter that ends the entity is the CLOSING one,
+        // there is no signature part after it — the structure is broken, and
+        // whatever we found is not "the signed content", so say nothing
+        // rather than hand the decoder the wrong bytes and report tampering.
+        guard body[close] == delimiter else { return nil }
+
+        let entityLines = body[entityStart..<close]
+        guard !entityLines.isEmpty else { return nil }
+        return Data(entityLines.joined(separator: "\r\n").utf8)
+    }
+
+    /// `boundary=` from a Content-Type value, quoted or bare, case-insensitive.
+    static func boundaryParameter(in contentType: String) -> String? {
+        guard let range = contentType.range(of: #"boundary\s*=\s*"?([^";\r\n]+)"?"#,
+                                            options: [.regularExpression, .caseInsensitive]) else { return nil }
+        let match = String(contentType[range])
+        guard let eq = match.firstIndex(of: "=") else { return nil }
+        let value = match[match.index(after: eq)...]
+            .trimmingCharacters(in: .whitespaces)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+        return value.isEmpty ? nil : value
+    }
+
     private static func findSignedData(in email: MBOXParser.RawEmail) -> Data? {
         for attachment in email.attachments {
             let mime = attachment.mimeType.lowercased()
@@ -360,6 +429,9 @@ struct SMIMEHandler {
     }
 
     private static func extractBase64Part(from raw: String) -> String? {
+        // A CRLF-stored message has no "\n\n" at all; normalise first so the
+        // blob is found regardless of how the store kept line endings.
+        let raw = raw.replacingOccurrences(of: "\r\n", with: "\n")
         let parts = raw.components(separatedBy: "\n\n")
         guard parts.count > 1 else { return nil }
         let bodyParts = parts.dropFirst()

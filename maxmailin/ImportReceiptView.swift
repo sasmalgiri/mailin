@@ -32,6 +32,17 @@ struct ImportReceiptView: View {
         var storeCount: Int?
         var ftsRows: Int?
         var checkedAt: Date
+        /// A5(d) attachment-family coverage, read from the live store: what
+        /// kinds of attachments exist and how far content indexing has got.
+        var attachmentFamilies: [AttachmentFamilyCount] = []
+        var attachmentTextAttempted: Int?
+        var attachmentTextPending: Int?
+
+        struct AttachmentFamilyCount: Equatable, Identifiable {
+            let family: String
+            let count: Int
+            var id: String { family }
+        }
 
         func drift(from receipt: ImportReceipt) -> String? {
             var notes: [String] = []
@@ -181,6 +192,18 @@ struct ImportReceiptView: View {
         section("Coverage") {
             row("Searchable (indexed this run)", receipt.indexed)
             row("Attachments seen", receipt.attachmentsSeen)
+            if let outcome = recheck {
+                // A5(d): attachment-family coverage, live from the store.
+                if !outcome.attachmentFamilies.isEmpty {
+                    row("Attachments by family (archive, now)",
+                        text: outcome.attachmentFamilies.map { "\($0.family) \($0.count)" }.joined(separator: " · "))
+                }
+                if let attempted = outcome.attachmentTextAttempted, let pending = outcome.attachmentTextPending {
+                    row("Attachment content indexed (messages)",
+                        text: pending == 0 ? "\(attempted) — complete"
+                                           : "\(attempted) done, \(pending) pending — `in:attachments` is partial until this reaches zero")
+                }
+            }
             row("Store rows before / after",
                  text: "\(countText(receipt.storeCountBefore)) → \(countText(receipt.storeCountAfter))")
             row("Index rows at finish", receipt.ftsRowCount)
@@ -292,7 +315,13 @@ struct ImportReceiptView: View {
         defer { isRechecking = false }
         let storeCount = try? await SQLiteEmailStore.shared.totalCount()
         let ftsRows = try? await FTSSearchIndex.shared.rowCount()
-        recheck = RecheckOutcome(storeCount: storeCount, ftsRows: ftsRows, checkedAt: Date())
+        let families = (try? await SQLiteEmailStore.shared.attachmentFamilyCounts()) ?? []
+        let progress = try? await SQLiteEmailStore.shared.attachmentTextProgress()
+        recheck = RecheckOutcome(
+            storeCount: storeCount, ftsRows: ftsRows, checkedAt: Date(),
+            attachmentFamilies: families.map { .init(family: $0.family, count: $0.count) },
+            attachmentTextAttempted: progress?.attempted,
+            attachmentTextPending: progress?.pending)
     }
 
     private func save() {
@@ -419,6 +448,12 @@ struct ImportReceiptView: View {
 /// this reads them from disk rather than depending on an import that is still
 /// in memory — reopening the app and asking "what did that import actually do"
 /// has to work.
+extension Notification.Name {
+    /// Posted by the receipt window's "Retry failed sources"; the object is
+    /// `[String]` of source file names. Handled by ContentView.
+    static let retryImportSources = Notification.Name("mailin.retryImportSources")
+}
+
 struct LatestImportReceiptView: View {
     @State private var receipt: ImportReceipt?
     @State private var loadError: String?
@@ -427,7 +462,11 @@ struct LatestImportReceiptView: View {
     var body: some View {
         Group {
             if let receipt {
-                ImportReceiptView(receipt: receipt)
+                // A5(d): Retry is offered because the main window can act on
+                // it — it re-imports the named sources that still resolve.
+                ImportReceiptView(receipt: receipt, onRetry: { names in
+                    NotificationCenter.default.post(name: .retryImportSources, object: names)
+                })
             } else if !loaded {
                 ProgressView().controlSize(.small)
             } else {

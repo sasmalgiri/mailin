@@ -328,6 +328,7 @@ means a large import on a small Mac is fighting the resting FTS cost too.
 | v1 JSON → SQLite migration timing | NOT MEASURED — needs a genuine v1 library fixture |
 | v1 JSON → SQLite migration timing | NOT MEASURED — needs a genuine v1 library fixture |
 | 2.x customer-library open timing | NOT MEASURED — needs a copy of a real 2.x library |
+| 1.5 GB import, production path, Debug | **MEASURED 2026-09-26** — 8,416 messages in 1,096 s (1.3 MiB/s), peak Δ 790 MiB, store 1.08× / FTS 0.026×, export round trip exact; offset engine 1,141 s (not faster); ZIP path 887 s. `SCALE_RESULTS.md` |
 | `HMACChainAuditLog.verifyChain()` cost vs chain length | NOT MEASURED — needs a long chain fixture |
 | Clean-build time, Release config, iOS build | NOT MEASURED |
 

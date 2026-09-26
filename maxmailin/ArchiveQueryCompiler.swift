@@ -8,6 +8,7 @@
 //    from:alice@x.com  to:bob@y.com  subject:report  has:attachment
 //    before:2024-01-31  after:2023-06-01  type:sent  tag:Important
 //    domain:example.com  evidence:Privileged  is:pinned  in:trash
+//    filename:invoice.pdf  (or attachment:pdf)  source:takeout.mbox
 //
 //  Remaining words become FTS free text (Boolean/NEAR are handled downstream
 //  by FTSQueryBuilder). Natural-language helpers should produce EmailQuery
@@ -55,6 +56,12 @@ enum ArchiveQueryCompiler {
                 query.messageType = value.lowercased()
             case "has":
                 if value.lowercased() == "attachment" || value.lowercased() == "attachments" {
+                    query.hasAttachments = true
+                } else { freeText.append(token) }
+            case "filename", "attachment":
+                // A7: attachment file name or extension contains.
+                if !value.isEmpty {
+                    query.attachmentFilename = value
                     query.hasAttachments = true
                 } else { freeText.append(token) }
             case "no":

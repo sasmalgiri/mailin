@@ -103,6 +103,54 @@ struct ContentView: View {
             .sheet(isPresented: $showFeatureGuide) {
                 FeatureGuideView(isPresented: $showFeatureGuide)
             }
+            // Drag a file ANYWHERE in the window to import it (v2.1 backlog
+            // #15). The pre-import hub has its own target; this one catches
+            // drops on the list, detail and sidebar once an archive is open.
+            .onDrop(of: [.fileURL, .emailMessage], isTargeted: nil) { providers in
+                handleDroppedProviders(providers)
+            }
+    }
+
+    /// One handler for every drop target: a dragged message (from Mail) is
+    /// saved as a temporary .eml and imported; a dragged file goes through the
+    /// same funnel as File ▸ Import. ZIP / gzip are containers the funnel
+    /// opens itself (ParserFactory → ZIPArchiveReader).
+    private func handleDroppedProviders(_ providers: [NSItemProvider]) -> Bool {
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier(UTType.emailMessage.identifier) {
+                provider.loadDataRepresentation(forTypeIdentifier: UTType.emailMessage.identifier) { data, _ in
+                    guard let data = data else { return }
+                    Task { @MainActor in
+                        let tempDir = FileManager.default.temporaryDirectory
+                        let tempFile = tempDir.appendingPathComponent("dropped_\(UUID().uuidString).eml")
+                        do {
+                            try data.write(to: tempFile, options: .atomic)
+                            resolveAndHandleSelectedFile(tempFile)
+                        } catch {
+                            viewModel.statusMessage = "Failed to save dropped email: \(error.localizedDescription)"
+                            viewModel.statusColor = .red
+                        }
+                    }
+                }
+                return true
+            }
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url = url else { return }
+                    let ext = url.pathExtension.lowercased()
+                    // Directories (Maildir, Apple Mail packages, .eml folders)
+                    // have no extension worth checking; the classifier decides.
+                    var isDirectory: ObjCBool = false
+                    let directory = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
+                    guard directory || ParserFactory.allSupportedExtensions.contains(ext) else { return }
+                    Task { @MainActor in
+                        resolveAndHandleSelectedFile(url)
+                    }
+                }
+                return true
+            }
+        }
+        return false
     }
 
     private var bodyContent: some View {
@@ -130,46 +178,7 @@ struct ContentView: View {
             }
         }
         .onDrop(of: [.fileURL, .emailMessage], isTargeted: nil) { providers in
-            for provider in providers {
-                if provider.hasItemConformingToTypeIdentifier(UTType.emailMessage.identifier) {
-                    provider.loadDataRepresentation(forTypeIdentifier: UTType.emailMessage.identifier) { data, _ in
-                        guard let data = data else { return }
-                        Task { @MainActor in
-                            let tempDir = FileManager.default.temporaryDirectory
-                            let tempFile = tempDir.appendingPathComponent("dropped_\(UUID().uuidString).eml")
-                            do {
-                                try data.write(to: tempFile, options: .atomic)
-                                resolveAndHandleSelectedFile(tempFile)
-                            } catch {
-                                viewModel.statusMessage = "Failed to save dropped email: \(error.localizedDescription)"
-                                viewModel.statusColor = .red
-                            }
-                        }
-                    }
-                    return true
-                }
-                if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-                    _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                        guard let url = url else { return }
-                        let ext = url.pathExtension.lowercased()
-                        guard ParserFactory.allSupportedExtensions.contains(ext) || ext == "zip" else { return }
-                        Task { @MainActor in
-                            if ext == "zip" {
-                                let extracted = await viewModel.extractMailFilesFromZipAsync(at: url)
-                                if extracted.isEmpty {
-                                    parseFailed = true
-                                } else {
-                                    handleMultipleFiles(extracted)
-                                }
-                            } else {
-                                resolveAndHandleSelectedFile(url)
-                            }
-                        }
-                    }
-                    return true
-                }
-            }
-            return false
+            handleDroppedProviders(providers)
         }
         .onChange(of: modelVM.isParsed) { handleParseStateChange() }
         .onChange(of: storeManager.isPremium) { handlePremiumChange() }
@@ -198,6 +207,9 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .dataClearedByUser)) { _ in handleDataCleared() }
         .onReceive(NotificationCenter.default.publisher(for: .detectMetadata)) { _ in viewModel.autoDetectMetadata() }
         .onReceive(NotificationCenter.default.publisher(for: .triggerFileImportFromShortcut)) { _ in openPanelFallback() }
+        .onReceive(NotificationCenter.default.publisher(for: .retryImportSources)) { notification in
+            retryImportSources(notification.object as? [String] ?? [])
+        }
         .onReceive(NotificationCenter.default.publisher(for: .importFileFromURL)) { notification in
             // "Open with mailin" from Finder/Files: mailinApp posts the file
             // URL here. Route it through the same handler as every other
@@ -409,7 +421,7 @@ struct ContentView: View {
     private func handleArchiveImportResult(_ result: Result<[URL], Error>) {
         switch result {
         case .success(let urls):
-            let resolved = resolveZipFiles(urls)
+            let resolved = urls   // containers (zip/gz) are opened by the import funnel itself
             if resolved.count == 1, let url = resolved.first {
                 resolveAndHandleSelectedFile(url)
             } else if resolved.count > 1 {
@@ -1578,7 +1590,7 @@ struct ContentView: View {
                         .background(AppColors.backgroundSecondary)
 
                         List(modelVM.visibleEmails, id: \.id, selection: $iPadSelectedEmailID) { email in
-                            EmailRowView(email: email, searchText: modelVM.searchText, showRiskIndicator: forensicManager.isEnabled)
+                            EmailRowView(email: email, searchText: modelVM.isNaturalLanguageMode ? "" : modelVM.searchText, showRiskIndicator: forensicManager.isEnabled)
                                 .padding(.vertical, Spacing.xxxSmall)
                                 .tag(email.id)
                                 .onAppear { modelVM.loadMoreIfNeeded(currentID: email.id) }
@@ -3498,7 +3510,7 @@ struct ContentView: View {
         if panel.runModal() == .OK {
             parseFailed = false
             let urls = panel.urls
-            let resolvedURLs = resolveZipFiles(urls)
+            let resolvedURLs = urls   // containers (zip/gz) are opened by the import funnel itself
             if resolvedURLs.count == 1, let url = resolvedURLs.first {
                 resolveAndHandleSelectedFile(url)
             } else if resolvedURLs.count > 1 {
@@ -3510,22 +3522,31 @@ struct ContentView: View {
         #endif
     }
 
-    private func resolveZipFiles(_ urls: [URL]) -> [URL] {
-        var resolved: [URL] = []
-        for url in urls {
-            if url.pathExtension.lowercased() == "zip" {
-                let extracted = viewModel.extractMailFilesFromZip(at: url)
-                if extracted.isEmpty {
-                    parseFailed = true
-                } else {
-                    resolved.append(contentsOf: extracted)
-                }
-            } else {
-                resolved.append(url)
-            }
+/// A5(d): "Retry failed sources" from the import receipt. The receipt knows
+/// file NAMES; the coordinator kept this run's URLs by name, so the ones
+/// still readable are re-imported through the ordinary funnel. Names that no
+/// longer resolve (a different launch, an ejected disk) are listed and the
+/// open panel is offered — never a silent no-op.
+private func retryImportSources(_ names: [String]) {
+    let known = viewModel.importCoordinator.lastRunSourceURLs
+    var resolved: [URL] = []
+    var missing: [String] = []
+    for name in names {
+        if let url = known[name], FileManager.default.isReadableFile(atPath: url.path) {
+            resolved.append(url)
+        } else {
+            missing.append(name)
         }
-        return resolved
     }
+    if !resolved.isEmpty {
+        handleMultipleFiles(resolved)
+    }
+    if !missing.isEmpty {
+        viewModel.statusMessage = "Could not reopen \(missing.joined(separator: ", ")) — choose the file(s) again to retry."
+        viewModel.statusColor = .orange
+        if resolved.isEmpty { openPanelFallback() }
+    }
+}
 
 private func handleMultipleFiles(_ urls: [URL]) {
         // NOTE: the extension filter here is a cheap pre-filter only. The
@@ -4472,8 +4493,6 @@ private func handleMultipleFiles(_ urls: [URL]) {
             modelVM.invalidateSearchCache()
             modelVM.refreshFromStore()
 
-            EmailSearchIndex.shared.clear()
-            EmailSearchIndex.shared.deleteDiskCache()
             AIAssistantView.invalidateNLPCache()
             AIAssistantView.invalidateNLPPrecomputation()
             appState.hasParsedEmails = outcome.heldKept > 0
@@ -5589,23 +5608,28 @@ struct V9UtilitySheetsModifier: ViewModifier {
 
 // MARK: - Archive Comparison Sheet Wrapper
 struct ArchiveComparisonSheetWrapper: View {
+    /// Kept for call-site compatibility; the comparison itself reads the
+    /// WHOLE current archive from the store (v2.1 backlog #3), not this
+    /// working set.
     let archiveA: [MBOXParser.RawEmail]
-    @State private var archiveB: [MBOXParser.RawEmail] = []
+    @State private var secondArchiveURL: URL?
+    @State private var secondArchiveIsScoped = false
     @State private var showFilePicker = false
-    @State private var isImporting = false
     @State private var importError: String?
-    @State private var hasImported = false
     @AppStorage("defaultSenderEmail") private var defaultSenderEmail = ""
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        if hasImported && !archiveB.isEmpty {
+        if let secondArchiveURL {
             ArchiveComparisonView(
-                archiveA: archiveA,
-                archiveB: archiveB,
+                secondArchiveURL: secondArchiveURL,
                 nameA: "Current Archive",
-                nameB: "Imported Archive"
+                nameB: secondArchiveURL.lastPathComponent,
+                senderEmail: defaultSenderEmail
             )
+            .onDisappear {
+                if secondArchiveIsScoped { secondArchiveURL.stopAccessingSecurityScopedResource() }
+            }
         } else {
             VStack(spacing: Spacing.large) {
                 Image(systemName: "doc.on.doc.fill")
@@ -5615,26 +5639,23 @@ struct ArchiveComparisonSheetWrapper: View {
                 Text("Archive Comparison")
                     .font(Typography.title2)
 
-                Text("Compare your current archive (\(archiveA.count) emails) with a second archive. Import a second .mbox file to compare.")
+                Text("Compare your whole current archive with a second mailbox file (.mbox, .eml, .pst, a ZIP of mailboxes, …). Nothing is imported; both sides are compared by Message-ID and by subject, sender and minute.")
                     .font(Typography.subheadline)
                     .foregroundColor(AppColors.secondary)
                     .multilineTextAlignment(.center)
-                    .frame(maxWidth: 400)
+                    .frame(maxWidth: 420)
 
-                if isImporting {
-                    ProgressView("Importing second archive...")
-                } else if let error = importError {
+                if let error = importError {
                     Text(error)
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.error)
                 }
 
                 HStack(spacing: Spacing.medium) {
-                    Button("Import Second Archive...") {
+                    Button("Choose Second Archive...") {
                         showFilePicker = true
                     }
                     .buttonStyle(PrimaryButtonStyle())
-                    .disabled(isImporting)
 
                     Button("Cancel") {
                         dismiss()
@@ -5648,47 +5669,20 @@ struct ArchiveComparisonSheetWrapper: View {
             #endif
             .fileImporter(
                 isPresented: $showFilePicker,
-                allowedContentTypes: [
-                    UTType(filenameExtension: "mbox"),
-                    UTType(filenameExtension: "eml"),
-                    UTType(filenameExtension: "emlx"),
-                    UTType(filenameExtension: "msg"),
-                    UTType(filenameExtension: "pst"),
-                    UTType(filenameExtension: "ost"),
-                    UTType(filenameExtension: "nsf")
-                ].compactMap { $0 },
+                allowedContentTypes: ParserFactory.allSupportedExtensions
+                    .compactMap { UTType(filenameExtension: $0) },
                 allowsMultipleSelection: false
             ) { result in
                 switch result {
                 case .success(let urls):
                     guard let url = urls.first else { return }
-                    importSecondArchive(url: url)
+                    // The scope stays open for the comparison's lifetime and
+                    // is released when the comparison view disappears.
+                    secondArchiveIsScoped = url.startAccessingSecurityScopedResource()
+                    importError = nil
+                    secondArchiveURL = url
                 case .failure(let error):
                     importError = "Failed to select file: \(error.localizedDescription)"
-                }
-            }
-        }
-    }
-
-    private func importSecondArchive(url: URL) {
-        isImporting = true
-        importError = nil
-        let accessing = url.startAccessingSecurityScopedResource()
-        let sender = defaultSenderEmail
-        Task.detached(priority: .userInitiated) {
-            do {
-                let emails = try MBOXParser.parse(fileURL: url, senderEmail: sender)
-                await MainActor.run {
-                    archiveB = emails
-                    hasImported = true
-                    isImporting = false
-                    if accessing { url.stopAccessingSecurityScopedResource() }
-                }
-            } catch {
-                await MainActor.run {
-                    importError = "Failed to parse file: \(error.localizedDescription)"
-                    isImporting = false
-                    if accessing { url.stopAccessingSecurityScopedResource() }
                 }
             }
         }

@@ -124,11 +124,12 @@ final class ArchiveDataService {
         try await sqlite.reviewSetFlag(.trashed, ids: ids, value: value)
     }
 
-    /// Trashed IDs, newest first (the Trash surface's read path).
-    func trashedIDs(limit: Int, offset: Int) async throws -> [EmailID] {
+    /// Trashed IDs, newest first, keyset-paged: pass the last row back as the
+    /// cursor for the next page.
+    func trashedIDs(after cursor: SQLiteEmailStore.DateIDCursor?, limit: Int) async throws -> [(id: EmailID, date: Date)] {
         guard let repo = repository as? EmailStoreRepository,
               let sqlite = repo.store as? SQLiteEmailStore else { return [] }
-        return try await sqlite.reviewIDs(where: .trashed, limit: limit, offset: offset)
+        return try await sqlite.reviewIDs(where: .trashed, after: cursor, limit: limit)
     }
 
     func trashedCount() async throws -> Int {

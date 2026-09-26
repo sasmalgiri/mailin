@@ -220,3 +220,206 @@ final class SMIMEGoldCaseTests: XCTestCase {
                         "opaque signing should embed the signed content")
     }
 }
+
+// MARK: - Detached signatures (multipart/signed) — v2.1 backlog #4
+
+/// Until 2.1, every `multipart/signed` message reported "unverifiable": the
+/// signature is detached from the content, and the handler never gave the
+/// decoder the signed bytes. That was honest but useless — the common form of
+/// S/MIME (Apple Mail, Outlook and OpenSSL all default to it) could never be
+/// confirmed good OR caught tampered.
+///
+/// Fixture generated 2026-09-25 with OpenSSL 3.5.1:
+///
+///     openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 3650 -nodes \
+///       -subj "/CN=Detached Signer/emailAddress=detached@example.com/O=mailin detached gold case" \
+///       -addext "keyUsage=digitalSignature" -addext "extendedKeyUsage=emailProtection"
+///     openssl smime -sign -in content.txt -signer cert.pem -inkey key.pem -out signed.eml \
+///       -from "Detached Signer <detached@example.com>" -to recipient@example.com \
+///       -subject "Detached S/MIME gold case"
+///
+/// `openssl smime -verify -noverify` reports "Verification successful". The
+/// content was written with CRLF and OpenSSL emitted the MIME wrapper with
+/// LF, so the stored message has MIXED line endings — exactly the shape that
+/// makes canonicalisation load-bearing. The certificate expires 2036-09-22.
+final class SMIMEDetachedGoldCaseTests: XCTestCase {
+
+    /// The message as stored (LF line endings throughout, as an mbox would
+    /// keep it). The signer digested the CRLF form.
+    private static let signedMessageLF = """
+        To: recipient@example.com
+        From: Detached Signer <detached@example.com>
+        Subject: Detached S/MIME gold case
+        MIME-Version: 1.0
+        Content-Type: multipart/signed; protocol="application/x-pkcs7-signature"; micalg="sha-256"; boundary="----C6F7F9FDCBE37C54A33FFF73F3A83033"
+
+        This is an S/MIME signed message
+
+        ------C6F7F9FDCBE37C54A33FFF73F3A83033
+        Content-Type: text/plain; charset=us-ascii
+        Content-Transfer-Encoding: 7bit
+
+        This is the detached-signed content of the mailin S/MIME gold case.
+        Second line, to make line-ending canonicalisation matter.
+
+        ------C6F7F9FDCBE37C54A33FFF73F3A83033
+        Content-Type: application/x-pkcs7-signature; name="smime.p7s"
+        Content-Transfer-Encoding: base64
+        Content-Disposition: attachment; filename="smime.p7s"
+
+        MIIGlgYJKoZIhvcNAQcCoIIGhzCCBoMCAQExDzANBglghkgBZQMEAgEFADALBgkq
+        hkiG9w0BBwGgggPNMIIDyTCCArGgAwIBAgIUSNDYflXkKqqN9/favnrD2C5v+zww
+        DQYJKoZIhvcNAQELBQAwYzEYMBYGA1UEAwwPRGV0YWNoZWQgU2lnbmVyMSMwIQYJ
+        KoZIhvcNAQkBFhRkZXRhY2hlZEBleGFtcGxlLmNvbTEiMCAGA1UECgwZbWFpbGlu
+        IGRldGFjaGVkIGdvbGQgY2FzZTAeFw0yNjA5MjUxNDA2MDFaFw0zNjA5MjIxNDA2
+        MDFaMGMxGDAWBgNVBAMMD0RldGFjaGVkIFNpZ25lcjEjMCEGCSqGSIb3DQEJARYU
+        ZGV0YWNoZWRAZXhhbXBsZS5jb20xIjAgBgNVBAoMGW1haWxpbiBkZXRhY2hlZCBn
+        b2xkIGNhc2UwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDTybUaQ5nl
+        fNPGd7m+tLhTnR8D7YZHqmY+sgu1MHLlYNoIXZIJ28bHwI5aRq5FkJ4g5YJ/MCLj
+        609NGAK1xZFnKS3AcygQ6fpB1ycjHgMN2Y1bITPpxRxTu0W8D/8KW1IlrrAPpEZp
+        acxojGsOsdZzyG647NqPzdhNox5mLHZac2dTBjp1+OjNI2azETGA5HVuD4R+hFqE
+        6sK/+naSGMtx+SCuKI/e4crQ4w+L5RSxYXGF97yRv53hF2VkHgpi84tFjTGI/Buj
+        T4RY1h0Ag3RQdtHBC0pY8/yh4p7JlGCbQY0nKTDHGhwqFn0n6M3VK8PRz1LF9tPv
+        q5tCy0Lj8m4ZAgMBAAGjdTBzMB0GA1UdDgQWBBSzDLPTRaB0++TbEaeuE1Oa/XD1
+        EjAfBgNVHSMEGDAWgBSzDLPTRaB0++TbEaeuE1Oa/XD1EjAPBgNVHRMBAf8EBTAD
+        AQH/MAsGA1UdDwQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDBDANBgkqhkiG9w0B
+        AQsFAAOCAQEAdrpVaZmvy71DvD1ldqJMW34/DPjVeu7hTggTGYqEuzVi8UnCxZq2
+        U0sp5qioOqEc2z8cgmVxXDoZ6P+QXkdlxuy+p5TXOM0aJ9HN693jHSvIwv/7NXNE
+        m7nWGSUBJmrI1M0xs0eld6HTqyYhEvcBQSl0LHVtRSlol0QM64kvO4aNgHuHp+oL
+        GtDRsx4BM0dP167Qm/0TVmiDh6POIrWvomKPDyG1LoQfHUMFk0hiVbDrNQ91vZFQ
+        VNeYghNVqagu2pI3AsFVIjNv8LrLtzjHuLrDph7lAk47ahieA5+ibgEdObHrDVYc
+        b5dPlg5BomA+h+UMHGUycExWAtvmTUCH0TGCAo0wggKJAgEBMHswYzEYMBYGA1UE
+        AwwPRGV0YWNoZWQgU2lnbmVyMSMwIQYJKoZIhvcNAQkBFhRkZXRhY2hlZEBleGFt
+        cGxlLmNvbTEiMCAGA1UECgwZbWFpbGluIGRldGFjaGVkIGdvbGQgY2FzZQIUSNDY
+        flXkKqqN9/favnrD2C5v+zwwDQYJYIZIAWUDBAIBBQCggeQwGAYJKoZIhvcNAQkD
+        MQsGCSqGSIb3DQEHATAcBgkqhkiG9w0BCQUxDxcNMjYwOTI1MTQwNjAxWjAvBgkq
+        hkiG9w0BCQQxIgQgBc+0ofl7C0HwD99iGgV2izzpBYmKeLkYckLNIx1BryMweQYJ
+        KoZIhvcNAQkPMWwwajALBglghkgBZQMEASowCwYJYIZIAWUDBAEWMAsGCWCGSAFl
+        AwQBAjAKBggqhkiG9w0DBzAOBggqhkiG9w0DAgICAIAwDQYIKoZIhvcNAwICAUAw
+        BwYFKw4DAgcwDQYIKoZIhvcNAwICASgwDQYJKoZIhvcNAQEBBQAEggEAxksfR+2R
+        bQjIpDrnYr7QtUAf92Vi7OCylvZJ9isvl8uoIwc8usUCwcUhA8lL0uYEroSt0fca
+        rfx88VOeUZR4lEhGHLhClc7WYTlSiismRcC1SefDA0J4Gpuvqdkr6e4BKB2Kdkep
+        wXQ8/8mFZPpGI+2Z3IJGKM+3Y+zdRPZ2swMbZMaPv4XTSYOQtQsOwB9ps0+gz/6R
+        d9rmdbPbXeRjiFYnonsgujuLvEAzkqUwdSfhpvAHUwh6Z75SClzQgJvNWyA6PF77
+        kbMjdMTJx61zOKVwHbVxKIt0Ueaj/HC8h3ztPv3Tw2lE8YMPuK0/SGXADev58+Vu
+        tOAKOBHtTWTAAw==
+
+        ------C6F7F9FDCBE37C54A33FFF73F3A83033--
+
+        """
+
+    private static let contentType =
+        "multipart/signed; protocol=\"application/x-pkcs7-signature\"; micalg=\"sha-256\"; boundary=\"----C6F7F9FDCBE37C54A33FFF73F3A83033\""
+
+    /// The bytes the signer digested: the first part, header block and
+    /// content, CRLF-canonical, without the line break before the closing
+    /// boundary.
+    private static let expectedEntity =
+        "Content-Type: text/plain; charset=us-ascii\r\n" +
+        "Content-Transfer-Encoding: 7bit\r\n" +
+        "\r\n" +
+        "This is the detached-signed content of the mailin S/MIME gold case.\r\n" +
+        "Second line, to make line-ending canonicalisation matter.\r\n"
+
+    private func email(raw: String) throws -> MBOXParser.RawEmail {
+        // Through the real parser, so the attachment list (which is where the
+        // handler finds the .p7s blob) is built the way an import builds it.
+        try MBOXParser.processRawMessage(raw, senderEmail: "")
+    }
+
+    // MARK: Reconstruction is exact and pure
+
+    func testSignedEntity_isTheFirstPartInCanonicalCRLFForm() {
+        let entity = SMIMEHandler.detachedSignedEntity(rawSource: Self.signedMessageLF,
+                                                       contentType: Self.contentType)
+        XCTAssertEqual(entity.map { String(decoding: $0, as: UTF8.self) }, Self.expectedEntity)
+    }
+
+    func testSignedEntity_storedWithCRLFYieldsTheSameBytes() {
+        let crlf = Self.signedMessageLF.replacingOccurrences(of: "\n", with: "\r\n")
+        let entity = SMIMEHandler.detachedSignedEntity(rawSource: crlf, contentType: Self.contentType)
+        XCTAssertEqual(entity.map { String(decoding: $0, as: UTF8.self) }, Self.expectedEntity,
+                       "CRLF and LF storage must canonicalise to identical bytes")
+    }
+
+    func testSignedEntity_isNilWithoutABoundaryOrFirstPart() {
+        XCTAssertNil(SMIMEHandler.detachedSignedEntity(rawSource: Self.signedMessageLF,
+                                                       contentType: "multipart/signed"),
+                     "no boundary parameter → nothing to reconstruct")
+        XCTAssertNil(SMIMEHandler.detachedSignedEntity(rawSource: "Subject: x\n\nno parts here\n",
+                                                       contentType: Self.contentType),
+                     "boundary never appears → nothing to reconstruct")
+        XCTAssertEqual(SMIMEHandler.boundaryParameter(in: "multipart/signed; boundary=bare-token; x=y"), "bare-token")
+        XCTAssertEqual(SMIMEHandler.boundaryParameter(in: "multipart/signed; BOUNDARY=\"Quoted Value\""), "Quoted Value")
+    }
+
+    // MARK: The gold case through the real decoder
+
+    /// A real detached signature over content stored with LF must verify:
+    /// cryptographically valid, chain untrusted (self-signed). Before this
+    /// change the same message read "unverifiable".
+    func testDetached_realSignedMessageIsValidButUntrusted() throws {
+        #if os(macOS)
+        let result = SMIMEHandler.verifySignature(of: try email(raw: Self.signedMessageLF))
+        XCTAssertEqual(result.status, .validUntrustedCert,
+                       "expected validUntrustedCert, got \(result.status.rawValue)")
+        XCTAssertEqual(result.signerEmail, "detached@example.com")
+        XCTAssertEqual(result.certificateInfo?.isSelfSigned, true)
+        #else
+        throw XCTSkip("CMSDecoder is macOS-only")
+        #endif
+    }
+
+    /// The same message stored with CRLF gives the same verdict.
+    func testDetached_crlfStorageVerifiesIdentically() throws {
+        #if os(macOS)
+        let crlf = Self.signedMessageLF.replacingOccurrences(of: "\n", with: "\r\n")
+        let result = SMIMEHandler.verifySignature(of: try email(raw: crlf))
+        XCTAssertEqual(result.status, .validUntrustedCert,
+                       "expected validUntrustedCert, got \(result.status.rawValue)")
+        #else
+        throw XCTSkip("CMSDecoder is macOS-only")
+        #endif
+    }
+
+    /// THE forensic case a detached signature exists to catch: one character
+    /// of the signed text changed after signing. The digest no longer matches,
+    /// and the verdict must be `invalid` — not "unverifiable", which would
+    /// hide the tampering behind a shrug.
+    func testDetached_tamperedContentIsInvalid() throws {
+        #if os(macOS)
+        let tampered = Self.signedMessageLF.replacingOccurrences(
+            of: "Second line, to make", with: "Second line, to fake")
+        XCTAssertNotEqual(tampered, Self.signedMessageLF, "the tamper must have applied")
+        let result = SMIMEHandler.verifySignature(of: try email(raw: tampered))
+        XCTAssertEqual(result.status, .invalid,
+                       "a changed signed byte must read invalid, got \(result.status.rawValue)")
+        #else
+        throw XCTSkip("CMSDecoder is macOS-only")
+        #endif
+    }
+
+    /// A multipart/signed message whose first part cannot be found still says
+    /// "unverifiable" — never "valid", never "invalid".
+    ///
+    /// The first draft of this test only removed the opening delimiter. That
+    /// left a message with ONE part (the signature), which reconstruction then
+    /// picked as "the entity", and the decoder correctly reported the digest
+    /// mismatch as `invalid`. A message with no part before the signature is
+    /// structurally broken, not tampered, so reconstruction now refuses when
+    /// the delimiter that ends the candidate entity is the closing one.
+    func testDetached_unreconstructableEntityStaysUnverifiable() throws {
+        #if os(macOS)
+        let broken = Self.signedMessageLF.replacingOccurrences(
+            of: "------C6F7F9FDCBE37C54A33FFF73F3A83033\nContent-Type: text/plain",
+            with: "Content-Type: text/plain")
+        XCTAssertNil(SMIMEHandler.detachedSignedEntity(rawSource: broken, contentType: Self.contentType),
+                     "a one-part multipart/signed has no signed entity to reconstruct")
+        let result = SMIMEHandler.verifySignature(of: try email(raw: broken))
+        XCTAssertEqual(result.status, .unverifiable,
+                       "no signed entity → no conclusion, got \(result.status.rawValue)")
+        #else
+        throw XCTSkip("CMSDecoder is macOS-only")
+        #endif
+    }
+}

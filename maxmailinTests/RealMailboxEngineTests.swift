@@ -355,3 +355,80 @@ final class RealMailboxEngineTests: XCTestCase {
         }
     }
 }
+
+// MARK: - Directory sources against REAL exports
+
+/// `RELEASE_NOTES_2_1.md` left one line open after the synthetic
+/// directory-source checks: "a real client export has not been run". Two are
+/// available on this machine — the owner's `~/Downloads/Mail` folder of `.eml`
+/// files, and the real `Sent.mbox`, which is what sits inside an Apple Mail
+/// package. Both skip by name when absent, as `RealMailboxEngineTests` does.
+final class RealDirectorySourceTests: XCTestCase {
+
+    private static var mailFolder: URL? {
+        let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Downloads/Mail", isDirectory: true)
+        var isDir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue ? url : nil
+    }
+
+    /// The real folder holds `.eml` files beside unrelated PDFs. The importer
+    /// must take every `.eml` and nothing else, through both entry points.
+    func testRealEMLFolder_importsEveryEMLAndNothingElse() async throws {
+        guard let folder = Self.mailFolder else {
+            throw XCTSkip("~/Downloads/Mail is not present on this machine")
+        }
+        let emlNames = try FileManager.default.contentsOfDirectory(atPath: folder.path)
+            .filter { $0.lowercased().hasSuffix(".eml") }
+        guard !emlNames.isEmpty else { throw XCTSkip("~/Downloads/Mail holds no .eml files") }
+
+        let classification = SourceFormatClassifier.classify(url: folder)
+        XCTAssertEqual(classification.format, .emlFolder, classification.summary)
+
+        let array = try ParserFactory.parse(fileURL: folder, senderEmail: "")
+        var streamed: [MBOXParser.RawEmail] = []
+        let report = try await ParserFactory.parseStreamingCallback(fileURL: folder, senderEmail: "", batchSize: 4) {
+            streamed += $0
+        }
+
+        XCTAssertEqual(array.count, emlNames.count, "array path: one message per .eml")
+        XCTAssertEqual(streamed.count, emlNames.count, "streaming path: one message per .eml — this was ZERO before 2026-09-25")
+        XCTAssertEqual(report.failed, 0)
+        XCTAssertTrue(streamed.allSatisfy { !($0.headers["From"] ?? "").isEmpty }, "every real message keeps its From header")
+        print("── Real .eml folder: \(emlNames.count) files → \(streamed.count) messages streamed, \(array.count) via array path ──")
+    }
+
+    /// An Apple Mail `.mbox` package is a directory whose payload is a file
+    /// named `mbox`. Wrapping the REAL `Sent.mbox` (90 MiB, CRLF, 526
+    /// messages) in that layout must yield exactly what parsing the file
+    /// directly yields.
+    func testRealMbox_asAppleMailPackage_matchesDirectParse() async throws {
+        guard let folder = Self.mailFolder else {
+            throw XCTSkip("~/Downloads/Mail is not present on this machine")
+        }
+        let sent = folder.appendingPathComponent("Sent.mbox")
+        guard FileManager.default.fileExists(atPath: sent.path) else {
+            throw XCTSkip("~/Downloads/Mail/Sent.mbox is not present on this machine")
+        }
+
+        let package = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RealSent-\(UUID().uuidString).mbox", isDirectory: true)
+        try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: package) }
+        // A link, not a copy: the package layout is what is under test.
+        try FileManager.default.createSymbolicLink(at: package.appendingPathComponent("mbox"), withDestinationURL: sent)
+        try "toc".write(to: package.appendingPathComponent("mbox.toc"), atomically: true, encoding: .utf8)
+
+        XCTAssertEqual(SourceFormatClassifier.classify(url: package).format, .appleMailMailbox)
+
+        var direct = 0
+        let directReport = try await ParserFactory.parseStreamingCallback(fileURL: sent, senderEmail: "", batchSize: 200) { direct += $0.count }
+        var viaPackage = 0
+        let packageReport = try await ParserFactory.parseStreamingCallback(fileURL: package, senderEmail: "", batchSize: 200) { viaPackage += $0.count }
+
+        XCTAssertGreaterThan(direct, 0)
+        XCTAssertEqual(viaPackage, direct, "the package must deliver exactly the messages of its inner mbox")
+        XCTAssertEqual(packageReport.totalMessages, directReport.totalMessages)
+        XCTAssertEqual(packageReport.failed, directReport.failed)
+        print("── Real Sent.mbox as Apple Mail package: \(viaPackage) messages (direct \(direct)) ──")
+    }
+}

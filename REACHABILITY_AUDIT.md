@@ -158,10 +158,15 @@ Recorded so the same ground is not re-swept:
 
 ## Still open
 
-- **AIMetrics has no reading surface.** Records persist to
-  `Application Support/mailin/metrics/ai-metrics.jsonl` and `summary(lastN:)`
-  works (tested), but no screen shows it yet. Routing fields and KG citations
-  are reported by no engine; `summary` states that rather than showing zeros.
+- **AIMetrics reading surface — closed.** `AIMetricsView` (AI Assistant
+  header ▸ chart button; own window on macOS, sheet on iOS) shows averages
+  with their sample counts, fallback/failure rates, a per-engine table and
+  the recent queries, over a window the user picks. It calls
+  `AIMetrics.loadPersisted()` so the file written by earlier launches is
+  read, not only this launch's records — an empty screen after a restart
+  would have been a false "no queries". Still true: routing fields and KG
+  citations are reported by no engine, and the screen says "not measured"
+  with the reason rather than showing zeros.
 - **Header-only imports record no part locators** — by design; they fall back
   to the whole-message read.
 
@@ -172,4 +177,14 @@ Recorded so the same ground is not re-swept:
   close → copy → reopen → verify count → only then delete.
 - **PST/OST/NSF/MSG have no fixtures.** A real PST would close those formats
   the way `Sent.mbox` closed the mbox path.
+- **Found 2026-09-25 by the same method, closed:** the streaming import path
+  produced zero messages for a bare `.eml` (no `From ` envelope line) and
+  reported no failure — the array parser handled it, the production path did
+  not. Nothing had ever imported a `.eml` through `parseStreamingCallback` in
+  a test. Fixed in `MBOXParser` (first line a header field ⇒ one bare
+  message); pinned by `singleEMLStreams` and `mboxPreambleIsNotAMessage`.
+- **Found 2026-09-25, closed:** `multipart/signed` S/MIME always read
+  "unverifiable" because the detached signed entity was never handed to the
+  decoder. Honest, but it meant the common S/MIME form could never be caught
+  tampered. Closed with a real detached fixture (`SMIMEDetachedGoldCaseTests`).
 - **Memory figures need a re-take** on a machine with disk headroom.

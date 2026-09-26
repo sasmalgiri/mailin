@@ -824,4 +824,613 @@ final class AIMetricsSummaryTests: XCTestCase {
         XCTAssertEqual(summary.elapsedMs.samples, 1)
         XCTAssertEqual(summary.elapsedMs.value, 100, accuracy: 0.001)
     }
+
+    // MARK: Reading surface (AIMetricsView) — the file from earlier launches
+
+    /// The screen reads the JSONL written by earlier launches. One corrupt
+    /// line must cost one record, not the file, and `reported` must survive
+    /// the round trip or every loaded record would count toward nothing.
+    func testDecodeRecordsSkipsMalformedLinesAndKeepsReportedGroups() throws {
+        let encoder = JSONEncoder()
+        let a = record("hybrid", elapsed: 500, findings: 7)
+        let b = record("nlp", elapsed: 50)
+        var file = Data()
+        file.append(try encoder.encode(a)); file.append(UInt8(ascii: "\n"))
+        file.append(Data("{not json".utf8));  file.append(UInt8(ascii: "\n"))
+        file.append(try encoder.encode(b));  file.append(UInt8(ascii: "\n"))
+
+        let decoded = AIMetrics.decodeRecords(from: file)
+        XCTAssertEqual(decoded.map(\.id), [a.id, b.id], "the bad line is skipped, order kept")
+        XCTAssertTrue(decoded[0].reported.contains(AIMetrics.QueryRecord.Group.findings))
+        XCTAssertEqual(AIMetrics.summarize(decoded).findings.samples, 1,
+                       "a loaded record must still count toward the groups it reported")
+    }
+
+    /// A record finalized this launch is also on disk: merging must not show
+    /// it twice, must keep newest first, and must respect the retention cap.
+    func testMergeDedupesByIDNewestFirstAndCaps() {
+        let shared = record("hybrid", elapsed: 1)
+        var older = record("nlp", elapsed: 2)
+        older = withTimestamp(older, offset: -3600)
+        var oldest = record("appleAI", elapsed: 3)
+        oldest = withTimestamp(oldest, offset: -7200)
+
+        let merged = AIMetrics.merge(persisted: [shared, older, oldest],
+                                     inMemory: [shared],
+                                     cap: 2)
+        XCTAssertEqual(merged.map(\.id), [shared.id, older.id],
+                       "shared appears once, newest first, oldest dropped by the cap")
+    }
+
+    /// The per-engine table averages time only over that engine's records
+    /// that reported timing, and counts fallbacks over all of its records.
+    func testEngineStatsAverageTimeOnlyOverRecordsThatReportedIt() {
+        var untimed = record("hybrid", elapsed: 9_999, fallback: true)
+        untimed.reported.remove(AIMetrics.QueryRecord.Group.timing)
+        let stats = AIMetricsView.engineStats([
+            record("hybrid", elapsed: 1_000),
+            record("hybrid", elapsed: 3_000, fallback: true),
+            untimed,
+            record("nlp", elapsed: 100),
+        ])
+        XCTAssertEqual(stats.map(\.engine), ["hybrid", "nlp"], "most-queried engine first")
+        let hybrid = stats[0]
+        XCTAssertEqual(hybrid.queries, 3)
+        XCTAssertEqual(hybrid.elapsed.samples, 2)
+        XCTAssertEqual(hybrid.elapsed.value, 2_000, accuracy: 0.001,
+                       "the untimed record must not drag the average to 4,666")
+        XCTAssertEqual(hybrid.fallbacks, 2, "fallback is recorded by every path")
+        XCTAssertEqual(AIMetricsView.displayName(for: "appleAIMoE"), "Apple AI MoE")
+        XCTAssertEqual(AIMetricsView.displayName(for: "unknownEngine"), "unknownEngine",
+                       "an unmapped engine shows its raw label rather than vanishing")
+    }
+
+    /// `timestamp` is `let`; shift it through the Codable round trip.
+    private func withTimestamp(_ record: AIMetrics.QueryRecord, offset: TimeInterval) -> AIMetrics.QueryRecord {
+        _withTimestamp(record, offset: offset)
+    }
+}
+
+// Shared by the metrics tests above; kept file-private so the helper does not
+// leak into the app's namespace.
+private func _withTimestamp(_ record: AIMetrics.QueryRecord, offset: TimeInterval) -> AIMetrics.QueryRecord {
+    guard var json = try? JSONSerialization.jsonObject(with: JSONEncoder().encode(record)) as? [String: Any] else {
+        XCTFail("encode"); return record
+    }
+    json["timestamp"] = record.timestamp.addingTimeInterval(offset).timeIntervalSinceReferenceDate
+    guard let data = try? JSONSerialization.data(withJSONObject: json),
+          let shifted = try? JSONDecoder().decode(AIMetrics.QueryRecord.self, from: data) else {
+        XCTFail("decode"); return record
+    }
+    return shifted
+}
+
+// MARK: - Streamed archive comparison (v2.1 backlog #3)
+
+/// The comparison used to hold two `[RawEmail]` arrays capped at 2,000 per
+/// side. `ArchiveComparisonEngine` reduces both sides to key rows in a scratch
+/// SQLite file and matches in SQL, so the whole archive is compared and the
+/// difference list is paged. These pin the matching rules, the paging, and
+/// the fact that the bound is gone.
+final class ArchiveComparisonEngineTests: XCTestCase {
+
+    private var root: URL!
+    private var service: ArchiveDataService!
+    private var store: SQLiteEmailStore!
+
+    override func setUp() async throws {
+        root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-compare-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        service = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+    }
+
+    override func tearDown() async throws {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    private func email(mid: String?, subject: String, from: String, day: Int) -> MBOXParser.RawEmail {
+        var headers = ["Subject": subject, "From": from, "To": "x@y.z",
+                       "Date": "Wed, \(String(format: "%02d", day)) Jan 2025 10:00:00 +0000"]
+        if let mid { headers["Message-ID"] = mid }
+        return MBOXParser.RawEmail(headers: headers, rawSource: "From a@b.com\nbody \(subject)",
+                                   messageType: "received", attachments: [],
+                                   timestamp: "2025-01-\(String(format: "%02d", day))T10:00:00Z",
+                                   domains: ["y.z"], plainBody: "body \(subject)", htmlBody: "")
+    }
+
+    /// Writes an mbox for side B from the given messages.
+    private func mbox(_ emails: [MBOXParser.RawEmail]) throws -> URL {
+        var text = ""
+        for e in emails {
+            text += "From sender@example.com Wed Jan 01 10:00:00 2025\n"
+            for (k, v) in e.headers.sorted(by: { $0.key < $1.key }) { text += "\(k): \(v)\n" }
+            text += "\n\(e.plainBody)\n\n"
+        }
+        let url = root.appendingPathComponent("second-\(UUID().uuidString).mbox")
+        try text.write(to: url, atomically: true, encoding: .utf8)
+        return url
+    }
+
+    private func seedA(_ emails: [MBOXParser.RawEmail]) async throws {
+        _ = try await store.insertBatch(emails, sourceFileHash: nil, accountID: nil, sourceID: nil,
+                                        firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 100, progress: nil)
+    }
+
+    /// Exact Message-ID first; fuzzy for the rest; one-to-one; the remainder
+    /// is "only in" its side.
+    func testMatchingRules_messageIDThenFuzzyThenOnlyIn() async throws {
+        try await seedA([
+            email(mid: "<shared@x>", subject: "Shared by ID", from: "a@x", day: 1),
+            email(mid: "<a-only@x>", subject: "A only", from: "a@x", day: 2),
+            email(mid: nil, subject: "Fuzzy twin", from: "f@x", day: 3),
+            email(mid: nil, subject: "Fuzzy twin", from: "f@x", day: 3),   // a second twin: only ONE may match
+        ])
+        let b = try mbox([
+            email(mid: "<shared@x>", subject: "Shared by ID (renamed on B)", from: "a@x", day: 1),
+            email(mid: nil, subject: "Fuzzy Twin", from: "F@X", day: 3),           // case-insensitive fuzzy
+            email(mid: "<b-only@x>", subject: "B only", from: "b@x", day: 4),
+        ])
+
+        let engine = try ArchiveComparisonEngine(dataService: service, scratchDirectory: root)
+        defer { engine.close() }
+        try await engine.indexCurrentArchive()
+        try await engine.indexSecondArchive(url: b, senderEmail: "")
+        let totals = try engine.match()
+
+        XCTAssertEqual(totals.countA, 4)
+        XCTAssertEqual(totals.countB, 3)
+        XCTAssertEqual(totals.byMessageID, 1, "the renamed subject must not defeat an exact Message-ID match")
+        XCTAssertEqual(totals.byFuzzy, 1, "two A twins, one B twin: exactly one fuzzy match")
+        XCTAssertEqual(totals.common, 2)
+        XCTAssertEqual(totals.onlyInA, 2, "A only + the unmatched twin")
+        XCTAssertEqual(totals.onlyInB, 1)
+
+        let common = try engine.page(filter: .common, after: nil, limit: 10)
+        XCTAssertEqual(Set(common.map(\.matchKind)), ["message-id", "fuzzy"])
+        XCTAssertEqual(common.first { $0.matchKind == "message-id" }?.matchedSubject, "Shared by ID (renamed on B)")
+
+        let stats = try engine.stats(.a)
+        XCTAssertEqual(stats.total, 4)
+        XCTAssertEqual(stats.uniqueSenders, 2)
+    }
+
+    /// The whole point: no 2,000-per-side bound. 5,000 A rows against 5,000 B
+    /// rows with a 1,000-row overlap, compared exactly, and paged.
+    func testWholeArchive_noBound_andKeysetPagingCoversEveryRowOnce() async throws {
+        let a = (0..<5_000).map { email(mid: "<m\($0)@x>", subject: "S\($0)", from: "s\($0 % 7)@x", day: 1 + $0 % 28) }
+        try await seedA(a)
+        let bEmails = (4_000..<9_000).map { email(mid: "<m\($0)@x>", subject: "S\($0)", from: "s\($0 % 7)@x", day: 1 + $0 % 28) }
+        let b = try mbox(bEmails)
+
+        let engine = try ArchiveComparisonEngine(dataService: service, scratchDirectory: root)
+        defer { engine.close() }
+        try await engine.indexCurrentArchive()
+        try await engine.indexSecondArchive(url: b, senderEmail: "")
+        let totals = try engine.match()
+
+        XCTAssertEqual(totals.countA, 5_000, "the old view would have stopped at 2,000")
+        XCTAssertEqual(totals.countB, 5_000)
+        XCTAssertEqual(totals.common, 1_000)
+        XCTAssertEqual(totals.onlyInA, 4_000)
+        XCTAssertEqual(totals.onlyInB, 4_000)
+
+        // Page the interleaved list to exhaustion; every row exactly once.
+        var seen = Set<String>()
+        var cursor: ArchiveComparisonEngine.Cursor? = nil
+        var pages = 0
+        while true {
+            let page = try engine.page(filter: nil, after: cursor, limit: 700)
+            if page.isEmpty { break }
+            pages += 1
+            for row in page { XCTAssertTrue(seen.insert(row.source.rawValue + row.id).inserted, "row repeated across pages") }
+            guard let last = page.last else { break }
+            cursor = ArchiveComparisonEngine.Cursor(date: last.date, id: last.id)
+            if page.count < 700 { break }
+        }
+        XCTAssertEqual(seen.count, 4_000 + 4_000 + 1_000)
+        XCTAssertGreaterThan(pages, 10)
+
+        // The side-B full-text sample stays bounded regardless of size.
+        XCTAssertEqual(engine.sampleB.count, ArchiveComparisonEngine.sampleCap)
+        XCTAssertLessThanOrEqual(try engine.onlyInBSample().count, ArchiveComparisonEngine.sampleCap)
+    }
+
+    /// Side B goes through the ordinary parser, so a ZIP of mailboxes works
+    /// as the second archive too.
+    func testSecondArchiveMayBeAContainer() async throws {
+        try await seedA([email(mid: "<z1@x>", subject: "Z1", from: "a@x", day: 1)])
+        let inner = try mbox([
+            email(mid: "<z1@x>", subject: "Z1", from: "a@x", day: 1),
+            email(mid: "<z2@x>", subject: "Z2", from: "a@x", day: 2),
+        ])
+        // A stored ZIP with one member, built by hand (see ContainerImportTests
+        // for the full writer; this only needs a single stored entry).
+        let payload = try Data(contentsOf: inner)
+        let name = Data("inner.mbox".utf8)
+        let crc = ZIPArchiveReader.CRC32.checksum(payload)
+        func le16(_ v: UInt16) -> Data { Data([UInt8(v & 0xFF), UInt8(v >> 8)]) }
+        func le32(_ v: UInt32) -> Data { Data((0..<4).map { UInt8((v >> (8 * $0)) & 0xFF) }) }
+        var zip = Data()
+        zip += le32(0x0403_4B50) + le16(20) + le16(0x0800) + le16(0) + le16(0) + le16(0)
+        zip += le32(crc) + le32(UInt32(payload.count)) + le32(UInt32(payload.count)) + le16(UInt16(name.count)) + le16(0)
+        zip += name + payload
+        let cdOffset = UInt32(zip.count)
+        var central = Data()
+        central += le32(0x0201_4B50) + le16(45) + le16(20) + le16(0x0800) + le16(0) + le16(0) + le16(0)
+        central += le32(crc) + le32(UInt32(payload.count)) + le32(UInt32(payload.count))
+        central += le16(UInt16(name.count)) + le16(0) + le16(0) + le16(0) + le16(0) + le32(0) + le32(0) + name
+        zip += central
+        zip += le32(0x0605_4B50) + le16(0) + le16(0) + le16(1) + le16(1) + le32(UInt32(central.count)) + le32(cdOffset) + le16(0)
+        let zipURL = root.appendingPathComponent("second.zip")
+        try zip.write(to: zipURL)
+
+        let engine = try ArchiveComparisonEngine(dataService: service, scratchDirectory: root)
+        defer { engine.close() }
+        try await engine.indexCurrentArchive()
+        try await engine.indexSecondArchive(url: zipURL, senderEmail: "")
+        let totals = try engine.match()
+        XCTAssertEqual(totals.common, 1)
+        XCTAssertEqual(totals.onlyInB, 1)
+    }
+
+    func testCloseRemovesTheScratchDatabase() throws {
+        let scratch = root.appendingPathComponent("scratch", isDirectory: true)
+        let engine = try ArchiveComparisonEngine(dataService: service, scratchDirectory: scratch)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: scratch.path).count, 1)
+        engine.close()
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: scratch.path).count, 0)
+    }
+}
+
+
+// MARK: - Export receipts (A8)
+
+/// Every bulk export ends in an `ExportReceipt`, including cancelled and
+/// failed runs. These pin the record's shape and the store's ordering.
+final class ExportReceiptTests: XCTestCase {
+
+    private func store() -> (ExportReceiptStore, URL) {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-export-receipts-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        return (ExportReceiptStore(directory: dir), dir)
+    }
+
+    func testRoundTripPreservesEveryField() throws {
+        let (store, _) = store()
+        let receipt = ExportReceipt(title: "mbox export", destination: "/tmp/out.mbox", isFolder: false,
+                                    requested: 526, written: 526, bytesWritten: 94_929_888,
+                                    outcome: .complete, sha256Hex: "abc123", signaturePath: "/tmp/out.mbox.sig",
+                                    errorMessage: nil, startedAt: Date(timeIntervalSince1970: 1_000),
+                                    completedAt: Date(timeIntervalSince1970: 1_012))
+        let url = try store.save(receipt)
+        let loaded = try store.load(url)
+        XCTAssertEqual(loaded, receipt)
+        XCTAssertEqual(loaded.durationSeconds, 12, accuracy: 0.001)
+        XCTAssertNil(loaded.shortfall, "a complete export has no shortfall")
+    }
+
+    func testOutcomesReadHonestly() {
+        let base = ExportReceipt(title: "CSV export", destination: "/tmp/x.csv", isFolder: false,
+                                 requested: 100, written: 40, outcome: .cancelled,
+                                 startedAt: Date(), completedAt: Date())
+        XCTAssertEqual(base.shortfall, 60)
+        XCTAssertTrue(base.verdictLine.hasPrefix("Cancelled — 40 written"))
+
+        var truncated = base; truncated.outcome = .truncated
+        XCTAssertTrue(truncated.verdictLine.contains("40 of 100"), truncated.verdictLine)
+
+        var failed = base; failed.outcome = .failed; failed.errorMessage = "disk full"
+        XCTAssertTrue(failed.plainText().contains("Error: disk full"))
+        XCTAssertTrue(failed.plainText().contains("Requested: 100"))
+    }
+
+    func testStoreListsNewestFirst() throws {
+        let (store, _) = store()
+        let older = ExportReceipt(title: "a", destination: "/a", isFolder: false, requested: nil, written: 1,
+                                  outcome: .complete, startedAt: Date(), completedAt: Date())
+        let olderURL = try store.save(older)
+        // Push the modification date back so ordering does not depend on timing.
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -60)], ofItemAtPath: olderURL.path)
+        let newer = ExportReceipt(title: "b", destination: "/b", isFolder: true, requested: nil, written: 2,
+                                  outcome: .complete, startedAt: Date(), completedAt: Date())
+        _ = try store.save(newer)
+        let listed = store.list()
+        XCTAssertEqual(listed.count, 2)
+        XCTAssertEqual(try store.load(listed[0]).title, "b")
+    }
+}
+
+// MARK: - Guided search composition (A7)
+
+final class GuidedSearchCompositionTests: XCTestCase {
+
+    private func compose(from: String = "", to: String = "", subject: String = "", phrase: String = "",
+                         any: String = "", none: String = "", attachment: String = "", source: String = "",
+                         tag: String = "", hasAttachments: Bool = false) -> String {
+        GuidedSearchView.compose(from: from, to: to, subject: subject, phrase: phrase, anyWords: any,
+                                 noneOfWords: none, attachmentName: attachment, sourceFile: source, tag: tag,
+                                 hasAttachments: hasAttachments, after: nil, before: nil)
+    }
+
+    func testEveryFieldBecomesAnOperatorTheCompilerUnderstands() {
+        let q = compose(from: "alice", subject: "quarterly report", attachment: "pdf", source: "takeout", tag: "Important")
+        XCTAssertEqual(q, "from:alice subject:\"quarterly report\" filename:pdf source:takeout tag:Important")
+        let compiled = ArchiveQueryCompiler.compile(q)
+        XCTAssertEqual(compiled.sender, "alice")
+        XCTAssertEqual(compiled.subjectContains, "quarterly report")
+        XCTAssertEqual(compiled.attachmentFilename, "pdf")
+        XCTAssertEqual(compiled.hasAttachments, true, "an attachment name implies has:attachment")
+        XCTAssertEqual(compiled.sourceFileName, "takeout")
+        XCTAssertEqual(compiled.userTag, "Important")
+        XCTAssertNil(compiled.text, "nothing leaked into free text")
+    }
+
+    func testPhraseAnyAndNotComposeToFTSBooleanGrammar() {
+        XCTAssertEqual(compose(phrase: "wire transfer", any: "invoice receipt", none: "newsletter"),
+                       "\"wire transfer\" AND (invoice OR receipt) NOT newsletter")
+        XCTAssertEqual(compose(any: "invoice"), "invoice")
+    }
+
+    func testNotWithoutAPositiveTermIsDropped() {
+        // FTS5 NOT is binary; "NOT x" alone is invalid. The sheet says so and
+        // the composer refuses to emit it.
+        XCTAssertEqual(compose(from: "alice", none: "spam"), "from:alice")
+    }
+
+    func testHasAttachmentIsRedundantWithAFilename() {
+        XCTAssertEqual(compose(attachment: "xlsx", hasAttachments: true), "filename:xlsx")
+        XCTAssertEqual(compose(hasAttachments: true), "has:attachment")
+    }
+}
+
+// MARK: - Filter memory per persona (v2.1 backlog #15)
+
+@MainActor
+final class FilterMemoryTests: XCTestCase {
+
+    private func makeVM() throws -> ParsedEmailListViewModel {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-filtermem-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        let archive = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+        return ParsedEmailListViewModel(viewModel: ContentViewModel(), archive: archive, pageSize: 10, maxRetained: 50)
+    }
+
+    private func clear(_ persona: String) {
+        ParsedEmailListViewModel.filterMemoryDefaults.removeObject(forKey: ParsedEmailListViewModel.filterMemoryKey(for: persona))
+    }
+
+    /// The memory suite is process-wide; a value saved under the REAL persona
+    /// here would be restored by every other view model built in this run
+    /// (it was, once — every paging test then saw an empty list). Start and
+    /// end with an empty suite.
+    private func wipeSuite() {
+        let suite = ParsedEmailListViewModel.filterMemoryDefaults
+        for key in suite.dictionaryRepresentation().keys where key.hasPrefix("mailin.filterMemory.") {
+            suite.removeObject(forKey: key)
+        }
+    }
+
+    override func setUp() async throws {
+        wipeSuite()
+        ParsedEmailListViewModel.filterMemoryEnabled = true    // opt in: off under XCTest by default
+    }
+    override func tearDown() async throws {
+        ParsedEmailListViewModel.filterMemoryEnabled = false
+        wipeSuite()
+    }
+
+    /// The memory applies the remembered choices and nothing else: free text
+    /// and sidebar selections are left as they were.
+    func testApplyRestoresTheRememberedChoicesOnly() throws {
+        let vm = try makeVM()
+        vm.restoreFilters(for: "test-persona-apply-\(UUID().uuidString)")   // never the real persona
+        vm.searchText = "keep me"
+        let memory = ParsedEmailListViewModel.FilterMemory(
+            sortBy: ParsedEmailListViewModel.SortOption.sizeDesc.rawValue,
+            hasAttachmentFilter: true,
+            reviewStateFilter: "trashed",
+            quickTypeFilter: "sent",
+            showPinnedOnly: true,
+            groupByThread: true)
+        ParsedEmailListViewModel.apply(memory, to: vm)
+        XCTAssertEqual(vm.sortBy, .sizeDesc)
+        XCTAssertTrue(vm.hasAttachmentFilter)
+        XCTAssertEqual(vm.reviewStateFilter.rawValue, "trashed")
+        XCTAssertEqual(vm.quickTypeFilter, "sent")
+        XCTAssertTrue(vm.showPinnedOnly)
+        XCTAssertTrue(vm.groupByThread)
+        XCTAssertEqual(vm.searchText, "keep me", "free text is a moment's search, not remembered state")
+        XCTAssertEqual(vm.currentFilterMemory, memory)
+    }
+
+    /// Changing a filter under persona A and switching to persona B and back
+    /// restores A's set; B, never used, keeps whatever was on screen.
+    func testMemoryIsPerPersonaAndSurvivesASwitch() throws {
+        let a = "test-persona-a-\(UUID().uuidString)", b = "test-persona-b-\(UUID().uuidString)"
+        defer { clear(a); clear(b) }
+        let vm = try makeVM()
+        vm.restoreFilters(for: a)             // start "under" persona A
+        vm.hasAttachmentFilter = true         // → applyFilters → remembered for A
+        vm.sortBy = .subjectAsc
+
+        let savedA = ParsedEmailListViewModel.filterMemoryDefaults.data(forKey: ParsedEmailListViewModel.filterMemoryKey(for: a))
+        XCTAssertNotNil(savedA, "a filter change under A must be saved for A")
+
+        vm.restoreFilters(for: b)             // B has no memory: screen unchanged
+        XCTAssertTrue(vm.hasAttachmentFilter)
+        vm.hasAttachmentFilter = false        // now B remembers "off"
+        vm.sortBy = .dateDesc
+
+        vm.restoreFilters(for: a)
+        XCTAssertTrue(vm.hasAttachmentFilter, "A's set comes back")
+        XCTAssertEqual(vm.sortBy, .subjectAsc)
+
+        vm.restoreFilters(for: b)
+        XCTAssertFalse(vm.hasAttachmentFilter, "B's set comes back")
+        XCTAssertEqual(vm.sortBy, .dateDesc)
+    }
+}
+
+// MARK: - Import checkpoints in the store (v17, v2.1 backlog #7)
+
+/// The JSON checkpoint file is replaced by two tables in the archive's own
+/// database, and the mid-file ordinal is written INSIDE the batch insert's
+/// transaction. These pin: same-transaction atomicity, identity-bound resume
+/// through the store backend, session completion clearing progress, and the
+/// one-time migration of a legacy file.
+final class StoreBackedCheckpointTests: XCTestCase {
+
+    private var root: URL!
+    private var store: SQLiteEmailStore!
+
+    override func setUp() async throws {
+        root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-ckpt-store-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+    }
+
+    override func tearDown() async throws {
+        ImportCheckpointStore.legacyJSONURLOverride = nil
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    private func fixture(_ i: Int) -> MBOXParser.RawEmail {
+        MBOXParser.RawEmail(
+            headers: ["Message-ID": "<ck-\(i)@t>", "Subject": "S\(i)", "From": "a@b.com", "To": "c@d.com",
+                      "Date": "Wed, \(String(format: "%02d", 1 + i % 28)) Jan 2025 10:00:00 +0000"],
+            rawSource: "raw \(i)", messageType: "email", attachments: [],
+            timestamp: "2025-01-01T10:00:00Z", domains: ["b.com"], plainBody: "b \(i)", htmlBody: "")
+    }
+
+    /// One `insertBatch` call, one checkpoint, and a fresh instance of the
+    /// store (crash simulation) sees BOTH the rows and the ordinal.
+    func testCheckpointCommitsWithTheRowsItVouchesFor() async throws {
+        let checkpoints = ImportCheckpointStore(store: store)
+        let identity = ImportCheckpointStore.ResumeIdentity(sha256: "src-1", sizeBytes: 4_096, parser: "mbox", parserVersion: 1)
+        let cp = await checkpoints.progressCheckpoint(identity: identity, sourceName: "big.mbox", firstOrdinal: 100, store: store)
+        XCTAssertNotNil(cp, "a store-backed checkpoint store hands out an atomic checkpoint for its own store")
+
+        _ = try await store.insertBatch((0..<7).map(fixture), sourceFileHash: "src-1", accountID: nil,
+                                        sourceID: nil, firstOrdinal: 100, dedupPolicy: .messageID,
+                                        batchSize: 3, progress: nil, progressCheckpoint: cp)
+
+        let reopened = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let reopenedCheckpoints = ImportCheckpointStore(store: reopened)
+        let resume = await reopenedCheckpoints.resumePoint(for: identity)
+        XCTAssertEqual(resume, 107, "first ordinal 100 + 7 committed rows, visible after reopen")
+        let rows = try await reopened.totalCount()
+        XCTAssertEqual(rows, 7)
+    }
+
+    /// A different store gets no atomic checkpoint: the coordinator must then
+    /// record progress separately, and does.
+    func testForeignStoreGetsNoAtomicCheckpoint() async throws {
+        let other = SQLiteEmailStore(directory: root.appendingPathComponent("other"))
+        let checkpoints = ImportCheckpointStore(store: store)
+        let identity = ImportCheckpointStore.ResumeIdentity(sha256: "x", sizeBytes: 1, parser: "mbox", parserVersion: 1)
+        let cp = await checkpoints.progressCheckpoint(identity: identity, sourceName: "f", firstOrdinal: 0, store: other)
+        XCTAssertNil(cp)
+        let json = ImportCheckpointStore(storeURL: root.appendingPathComponent("cp.json"))
+        let cpJSON = await json.progressCheckpoint(identity: identity, sourceName: "f", firstOrdinal: 0, store: store)
+        XCTAssertNil(cpJSON, "the JSON backend never rides the store's transaction")
+    }
+
+    /// Identity binding through the store backend, and completion semantics.
+    func testIdentityBoundResumeAndCompletionThroughTheStore() async throws {
+        let checkpoints = ImportCheckpointStore(store: store)
+        let identity = ImportCheckpointStore.ResumeIdentity(sha256: "abc", sizeBytes: 9_999, parser: "mbox", parserVersion: 1)
+        try await checkpoints.recordProgress(identity: identity, sourceName: "big.mbox", messagesIngested: 137)
+        var resume = await checkpoints.resumePoint(for: identity)
+        XCTAssertEqual(resume, 137)
+
+        var differentSize = identity; differentSize.sizeBytes = 10_000
+        var differentParser = identity; differentParser.parser = "pst"
+        var differentVersion = identity; differentVersion.parserVersion = 2
+        let r1 = await checkpoints.resumePoint(for: differentSize)
+        let r2 = await checkpoints.resumePoint(for: differentParser)
+        let r3 = await checkpoints.resumePoint(for: differentVersion)
+        XCTAssertEqual([r1, r2, r3], [0, 0, 0], "any identity mismatch restarts the file")
+
+        var imported = await checkpoints.isImported(sha256: "abc")
+        XCTAssertFalse(imported)
+        try await checkpoints.record(sha256: "abc", sourceName: "big.mbox", emailCount: 500)
+        imported = await checkpoints.isImported(sha256: "abc")
+        XCTAssertTrue(imported)
+        resume = await checkpoints.resumePoint(for: identity)
+        XCTAssertEqual(resume, 0, "completion clears the in-progress row")
+        let count = await checkpoints.importedCount()
+        XCTAssertEqual(count, 1)
+
+        try await checkpoints.reset()
+        let afterReset = await checkpoints.importedCount()
+        XCTAssertEqual(afterReset, 0)
+    }
+
+    /// An existing user's JSON file is read once, copied into the tables, and
+    /// renamed. Legacy schema-v1 progress rows are not carried over.
+    func testLegacyJSONFileMigratesIntoTheStoreOnce() async throws {
+        let legacy = root.appendingPathComponent("import_checkpoints.json")
+        let json = """
+        {"entries":{"done-1":{"sha256":"done-1","completedAt":0,"emailCount":42,"sourceName":"a.mbox"}},
+         "inProgress":{
+           "half":{"sha256":"half","sourceName":"b.mbox","lastUpdatedAt":0,"schemaVersion":2,"sizeBytes":777,"parser":"mbox","parserVersion":1,"messagesIngested":12},
+           "legacyhash":{"sha256":"legacyhash","sourceName":"old.mbox","batchesIngested":4,"lastUpdatedAt":0}}}
+        """
+        try Data(json.utf8).write(to: legacy)
+        ImportCheckpointStore.legacyJSONURLOverride = legacy
+
+        let checkpoints = ImportCheckpointStore(store: store)
+        let imported = await checkpoints.isImported(sha256: "done-1")
+        XCTAssertTrue(imported, "completed sessions migrate")
+        let half = await checkpoints.resumePoint(for: .init(sha256: "half", sizeBytes: 777, parser: "mbox", parserVersion: 1))
+        XCTAssertEqual(half, 12, "schema-v2 progress migrates with its identity")
+        let old = await checkpoints.resumePoint(for: .init(sha256: "legacyhash", sizeBytes: 0, parser: "mbox", parserVersion: 1))
+        XCTAssertEqual(old, 0, "batch-count checkpoints were never resumable and are not migrated")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacy.path), "the file is renamed so it is never read again")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacy.appendingPathExtension("migrated-v17").path))
+        let corrupt = await checkpoints.corruptionDetected()
+        XCTAssertFalse(corrupt)
+    }
+}
+
+// MARK: - Shared browse state (v2.1 backlog #6)
+
+final class ArchiveBrowseStateTests: XCTestCase {
+
+    func testDefaultStateIsTheUnfilteredArchive() {
+        let q = ArchiveBrowseState().query()
+        XCTAssertEqual(q, EmailQuery.all)
+        XCTAssertTrue(ArchiveBrowseState().isDefault)
+    }
+
+    /// Both lists now compile the search string the same way: an operator is
+    /// a field, not literal text.
+    func testSearchStringCompilesToOperatorsNotLiteralText() {
+        let q = ArchiveBrowseState(searchText: "from:alice filename:pdf budget").query()
+        XCTAssertEqual(q.sender, "alice")
+        XCTAssertEqual(q.attachmentFilename, "pdf")
+        XCTAssertEqual(q.text, "budget")
+    }
+
+    func testFieldsLayerOnTopOfTheSurfaceBase() {
+        let after = Date(timeIntervalSince1970: 1_700_000_000)
+        var base = EmailQuery.all
+        base.senders = ["a@x"]
+        base.pinnedOnly = true
+        let q = ArchiveBrowseState(searchText: "", afterDate: after, hasAttachments: true, sort: .subjectAZ).query(base: base)
+        XCTAssertEqual(q.senders, ["a@x"], "the surface's own predicates survive")
+        XCTAssertTrue(q.pinnedOnly)
+        XCTAssertEqual(q.afterDate, after)
+        XCTAssertEqual(q.hasAttachments, true)
+        XCTAssertEqual(q.sort, .subjectAZ)
+        XCTAssertNil(q.text)
+    }
 }

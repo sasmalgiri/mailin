@@ -266,10 +266,13 @@ class ForensicManager: ObservableObject {
             chainReady = true
             drainPendingActions()
             // Bounded tag/annotation hydration (display cache; SQL is exact).
-            var tagOffset = 0
+            // Keyset cursors (v2.1 backlog #10): a tag added or removed while
+            // this runs cannot shift a later page.
+            var tagsLoaded = 0
+            var tagCursor: UUID? = nil
             evidenceTags = [:]; tagTimestamps = [:]
-            while tagOffset < Self.tagHydrationCap {
-                let page = try await store.forensicTagsPage(limit: 2_000, offset: tagOffset)
+            while tagsLoaded < Self.tagHydrationCap {
+                let page = try await store.forensicTagsPage(after: tagCursor, limit: 2_000)
                 if page.isEmpty { break }
                 for row in page {
                     if let tag = EvidenceTag(rawValue: row.tag) {
@@ -277,18 +280,21 @@ class ForensicManager: ObservableObject {
                         tagTimestamps[row.id] = row.taggedAt
                     }
                 }
-                tagOffset += page.count
+                tagsLoaded += page.count
+                tagCursor = page.last?.id
                 if page.count < 2_000 { break }
             }
-            var noteOffset = 0
+            var notesLoaded = 0
+            var noteCursor: UUID? = nil
             annotations = [:]
-            while noteOffset < Self.tagHydrationCap {
-                let page = try await store.forensicAnnotationsPage(limit: 2_000, offset: noteOffset)
+            while notesLoaded < Self.tagHydrationCap {
+                let page = try await store.forensicAnnotationsPage(after: noteCursor, limit: 2_000)
                 if page.isEmpty { break }
                 for row in page {
                     annotations[row.id] = Annotation(text: row.note, examiner: row.examiner, timestamp: row.createdAt)
                 }
-                noteOffset += page.count
+                notesLoaded += page.count
+                noteCursor = page.last?.id
                 if page.count < 2_000 { break }
             }
         } catch {
@@ -330,17 +336,31 @@ class ForensicManager: ObservableObject {
             for (id, n) in notes {
                 annotations[id] = Annotation(text: n.note, examiner: n.examiner, timestamp: n.createdAt)
             }
+            // v2.1 backlog #11: the tag/annotation display caches used to grow
+            // for the whole session in a heavily-tagged archive. Same rule as
+            // the hashes — the bootstrap hydration cap is the ceiling, and the
+            // current window is always kept. SQL remains the exact source.
+            Self.trimWindow(&evidenceTags, keeping: ids, cap: Self.tagHydrationCap)
+            Self.trimWindow(&tagTimestamps, keeping: ids, cap: Self.tagHydrationCap)
+            Self.trimWindow(&annotations, keeping: ids, cap: Self.tagHydrationCap)
         } catch {
             forensicLog.error("forensic window prefetch failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
     private func trimHashWindow(keeping recent: [UUID]) {
-        guard perEmailHashes.count > Self.hashWindowCap else { return }
+        Self.trimWindow(&perEmailHashes, keeping: recent, cap: Self.hashWindowCap)
+    }
+
+    /// Evicts entries outside `recent` until the cache is back under `cap`.
+    /// Entries in the window are never evicted, so a window larger than the
+    /// cap is kept whole rather than half-dropped.
+    static func trimWindow<V>(_ cache: inout [UUID: V], keeping recent: [UUID], cap: Int) {
+        guard cache.count > cap else { return }
         let keep = Set(recent)
-        for key in perEmailHashes.keys where !keep.contains(key) {
-            perEmailHashes.removeValue(forKey: key)
-            if perEmailHashes.count <= Self.hashWindowCap { break }
+        for key in cache.keys where !keep.contains(key) {
+            cache.removeValue(forKey: key)
+            if cache.count <= cap { break }
         }
     }
 

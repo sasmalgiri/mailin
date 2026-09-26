@@ -123,9 +123,10 @@ final class ReviewStateService: ObservableObject {
         }
     }
 
-    /// Page of trashed email IDs (newest first) — the Trash view's read path.
-    func trashedIDs(limit: Int, offset: Int) async throws -> [UUID] {
-        try await store.reviewIDs(where: .trashed, limit: limit, offset: offset)
+    /// Page of trashed email IDs, newest first, keyset-paged: pass the last
+    /// row back as the cursor for the next page.
+    func trashedIDs(after cursor: SQLiteEmailStore.DateIDCursor?, limit: Int) async throws -> [(id: UUID, date: Date)] {
+        try await store.reviewIDs(where: .trashed, after: cursor, limit: limit)
     }
 
     func trashedCount() async throws -> Int {

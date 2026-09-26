@@ -145,142 +145,16 @@ class ContentViewModel: ObservableObject {
         subjectList.removeAll()
     }
 
-    // MARK: - Zip Import Support (sandbox-safe, no Process)
+    // MARK: - Zip import
+    //
+    // v2.1 backlog #1: ZIP and gzip archives are containers to the import
+    // funnel like any other source. `ParserFactory` extracts one member at a
+    // time to scratch through `ZIPArchiveReader` (streamed, size- and
+    // CRC-checked, deleted after parsing), so the whole-archive-in-memory
+    // extractor that used to live here — with its 500 MB "safety cap" and no
+    // checksum — is gone. Skipped and refused members are counted in the
+    // import report's categories.
 
-    /// Supported zip members that could not be written to the temp dir —
-    /// accumulated here so the next import surfaces them instead of silently
-    /// dropping evidence (Part B3).
-    private var pendingZipDroppedMembers = 0
-
-    /// Synchronous extraction. Records the temp dir for later cleanup.
-    func extractMailFilesFromZip(at zipURL: URL) -> [URL] {
-        let (files, tempDir, dropped) = Self.extractZipCore(at: zipURL)
-        pendingTempDirs.append(tempDir)
-        pendingZipDroppedMembers += dropped
-        return files
-    }
-
-    /// Off-main extraction — runs the heavy parse/inflate on a background
-    /// executor so a large zip doesn't block (beachball) the main thread.
-    func extractMailFilesFromZipAsync(at zipURL: URL) async -> [URL] {
-        let (files, tempDir, dropped) = await Task.detached { Self.extractZipCore(at: zipURL) }.value
-        pendingTempDirs.append(tempDir)
-        pendingZipDroppedMembers += dropped
-        return files
-    }
-
-    /// Drain the dropped-member tally as user-facing error strings.
-    private func drainZipExtractionErrors() -> [String] {
-        defer { pendingZipDroppedMembers = 0 }
-        guard pendingZipDroppedMembers > 0 else { return [] }
-        return ["\(pendingZipDroppedMembers) archive member(s) could not be extracted from the zip and were NOT imported."]
-    }
-
-    /// Pure, nonisolated extraction core so it can run off the main actor.
-    /// Returns the extracted files, the temp dir they were written to, and
-    /// how many supported members failed extraction (counted, not swallowed).
-    nonisolated static func extractZipCore(at zipURL: URL) -> (files: [URL], tempDir: URL, droppedMembers: Int) {
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("mailin_zip_\(UUID().uuidString)")
-        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-
-        guard let archive = try? Data(contentsOf: zipURL) else { return ([], tempDir, 0) }
-
-        var mailFiles: [URL] = []
-        var droppedMembers = 0
-        var offset = 0
-        let bytes = [UInt8](archive)
-
-        while offset + 30 <= bytes.count {
-            let sig = UInt32(bytes[offset]) | UInt32(bytes[offset+1]) << 8 | UInt32(bytes[offset+2]) << 16 | UInt32(bytes[offset+3]) << 24
-            guard sig == 0x04034b50 else { break }
-
-            let method = UInt16(bytes[offset+8]) | UInt16(bytes[offset+9]) << 8
-            let compressedSize = Int(UInt32(bytes[offset+18]) | UInt32(bytes[offset+19]) << 8 | UInt32(bytes[offset+20]) << 16 | UInt32(bytes[offset+21]) << 24)
-            let uncompressedSize = Int(UInt32(bytes[offset+22]) | UInt32(bytes[offset+23]) << 8 | UInt32(bytes[offset+24]) << 16 | UInt32(bytes[offset+25]) << 24)
-            let nameLen = Int(UInt16(bytes[offset+26]) | UInt16(bytes[offset+27]) << 8)
-            let extraLen = Int(UInt16(bytes[offset+28]) | UInt16(bytes[offset+29]) << 8)
-
-            let nameStart = offset + 30
-            guard nameStart + nameLen <= bytes.count else { break }
-            let nameData = Data(bytes[nameStart..<nameStart+nameLen])
-            let name = String(data: nameData, encoding: .utf8) ?? ""
-
-            let dataStart = nameStart + nameLen + extraLen
-            guard dataStart >= nameStart, dataStart + compressedSize <= bytes.count else { break }
-
-            let ext = (name as NSString).pathExtension.lowercased()
-            // Extract every archive format the app can parse — not just
-            // mbox/eml (the landing page advertises PST/OST/NSF/MSG too).
-            let supported: Set<String> = ["mbox", "eml", "emlx", "msg", "pst", "ost", "nsf"]
-            if supported.contains(ext) && !name.hasSuffix("/") {
-                let compressedData = Data(bytes[dataStart..<dataStart+compressedSize])
-                var fileData: Data?
-
-                if method == 0 {
-                    fileData = compressedData
-                } else if method == 8 {
-                    fileData = Self.decompressDeflate(compressedData, uncompressedSize: uncompressedSize)
-                }
-
-                if let data = fileData {
-                    // Flatten to the base filename, then verify the resolved
-                    // path stays inside tempDir (zip-slip defense).
-                    let safeName = (name as NSString).lastPathComponent
-                        .replacingOccurrences(of: "/", with: "_")
-                        .replacingOccurrences(of: "..", with: "_")
-                    let destURL = tempDir.appendingPathComponent(safeName)
-                    let resolved = destURL.standardizedFileURL.path
-                    if resolved.hasPrefix(tempDir.standardizedFileURL.path + "/") {
-                        do {
-                            try data.write(to: destURL)
-                            mailFiles.append(destURL)
-                        } catch {
-                            // A supported member failed to land on disk —
-                            // count it so the import surfaces the drop (B3).
-                            droppedMembers += 1
-                        }
-                    } else {
-                        droppedMembers += 1
-                    }
-                } else {
-                    // Supported member with undecodable payload — dropped.
-                    droppedMembers += 1
-                }
-            }
-
-            offset = dataStart + compressedSize
-        }
-
-        return (mailFiles, tempDir, droppedMembers)
-    }
-
-    nonisolated private static func decompressDeflate(_ data: Data, uncompressedSize: Int) -> Data? {
-        guard !data.isEmpty else { return nil }
-        let maxDecompressedSize = 500_000_000 // 500MB safety cap
-        guard uncompressedSize >= 0 && uncompressedSize <= maxDecompressedSize else { return nil }
-        let bufferSize = max(uncompressedSize, 65536)
-        var decompressed = Data(count: bufferSize)
-        let result = data.withUnsafeBytes { srcPtr -> Data? in
-            decompressed.withUnsafeMutableBytes { dstPtr -> Data? in
-                guard let srcBase = srcPtr.bindMemory(to: UInt8.self).baseAddress,
-                      let dstBase = dstPtr.bindMemory(to: UInt8.self).baseAddress else { return nil }
-                var stream = z_stream()
-                stream.next_in = UnsafeMutablePointer<UInt8>(mutating: srcBase)
-                stream.avail_in = UInt32(data.count)
-                stream.next_out = dstBase
-                stream.avail_out = UInt32(bufferSize)
-
-                guard inflateInit2_(&stream, -15, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK else { return nil }
-                defer { inflateEnd(&stream) }
-
-                let status = inflate(&stream, Z_FINISH)
-                guard status == Z_STREAM_END || status == Z_OK else { return nil }
-
-                return Data(dstPtr.prefix(Int(stream.total_out)))
-            }
-        }
-        return result
-    }
 
 // MARK: - Import (delegates to BulkImportCoordinator — the sole production engine)
 
@@ -399,9 +273,7 @@ class ContentViewModel: ObservableObject {
             } catch {
                 self.isParsing = false
                 self.stopMemoryMonitoring()
-                var errors = self.drainZipExtractionErrors()
-                errors.append(error.localizedDescription)
-                self.parseErrors = errors
+                self.parseErrors = [error.localizedDescription]
                 self.statusMessage = "Import failed: \(error.localizedDescription)"
                 self.statusColor = .red
                 self.isParsed = false
@@ -469,7 +341,6 @@ class ContentViewModel: ObservableObject {
             errors.append("\(summary.persistFailed) email(s) could not be saved to the archive and were not imported. Please retry; if this persists, free up disk space and check the log.")
             Self.importLogger.error("Import completed with \(summary.persistFailed, privacy: .public) unpersisted email(s)")
         }
-        errors.append(contentsOf: drainZipExtractionErrors())
         errors.append(contentsOf: summary.warnings)
         parseErrors = errors
 
@@ -484,10 +355,10 @@ class ContentViewModel: ObservableObject {
             let fileNames = urls.map { $0.lastPathComponent }.joined(separator: ", ")
             if summary.fileErrors.isEmpty {
                 let extensions = urls.map { $0.pathExtension.lowercased() }
-                let supported = Set(["mbox", "eml", "emlx", "msg", "pst", "ost", "nsf", "zip"])
+                let supported = Set(ParserFactory.allSupportedExtensions)
                 let unsupported = extensions.filter { !supported.contains($0) && !$0.isEmpty }
                 if !unsupported.isEmpty {
-                    statusMessage = "Unsupported format: .\(unsupported.first ?? "unknown"). Supported: .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, .zip"
+                    statusMessage = "Unsupported format: .\(unsupported.first ?? "unknown"). Supported: \(ParserFactory.allSupportedExtensions.map { ".\($0)" }.joined(separator: ", "))"
                 } else {
                     statusMessage = "No emails found in \(fileNames). The file may be empty or contain no recognizable email messages."
                 }

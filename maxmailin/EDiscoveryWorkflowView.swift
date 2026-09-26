@@ -498,6 +498,7 @@ struct EDiscoveryWorkflowView: View {
                     .imageScale(.large)
                     .foregroundColor(AppColors.secondary)
             }
+            .help("Export or print the summary, or reset the workflow")
             .accessibilityLabel("Workflow options menu")
 
             Button {
@@ -508,6 +509,7 @@ struct EDiscoveryWorkflowView: View {
                     .imageScale(.large)
             }
             .buttonStyle(.plain)
+            .help("Close — progress is kept")
             .accessibilityLabel("Close e-discovery workflow")
         }
         .padding(Spacing.medium)
@@ -1411,6 +1413,8 @@ struct EDiscoveryWorkflowView: View {
                         .imageScale(.large)
                 }
                 .buttonStyle(.plain)
+                .help("Close the tutorial")
+                .accessibilityLabel("Close tutorial")
             }
             .padding(Spacing.medium)
 

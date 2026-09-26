@@ -87,7 +87,7 @@ class ParsedEmailListViewModel: ObservableObject {
     @Published var selectedFromEmails: [String] = []
     @Published var selectedToEmails: [String] = []
     @Published var selectedTags: [String] = []
-    @Published var sortBy: SortOption = .dateDesc
+    @Published var sortBy: SortOption = .dateDesc { didSet { rememberFilters() } }
     @Published var searchText: String = ""
     @Published var isSearchFocused: Bool = false
     @Published var selectedEvidenceTag: ForensicManager.EvidenceTag? = nil
@@ -118,7 +118,7 @@ class ParsedEmailListViewModel: ObservableObject {
     @Published var nlIntent: NLSearchIntent? = nil
     @Published var isInterpretingNL: Bool = false
     private var nlInterpretTask: Task<Void, Never>? = nil
-    @Published var hasAttachmentFilter: Bool = false
+    @Published var hasAttachmentFilter: Bool = false { didSet { rememberFilters() } }
 
     // Topic cluster filter
     @Published var clusterFilterIDs: Set<UUID>? {
@@ -356,10 +356,30 @@ class ParsedEmailListViewModel: ObservableObject {
     /// plus the structured UI filter state. This is the same mapping the AI
     /// assistant scope uses (Part D precedent); feature views stream their own
     /// bounded working sets for this query instead of receiving email arrays.
-    var currentArchiveQuery: EmailQuery {
+    /// The browse state this list shares with the Simple list (v2.1 backlog
+    /// #6): search text, date bounds, the attachment toggle and the sort.
+    var browseState: ArchiveBrowseState {
+        ArchiveBrowseState(
+            searchText: searchText,
+            afterDate: startDate > .distantPast ? startDate : nil,
+            beforeDate: endDate < .distantFuture ? endDate : nil,
+            hasAttachments: hasAttachmentFilter ? true : nil,
+            includeTrashed: false,
+            sort: {
+                switch sortBy {
+                case .dateDesc: return .dateDesc
+                case .dateAsc: return .dateAsc
+                case .subjectAsc: return .subjectAZ
+                case .sizeDesc: return .sizeDesc
+                case .priorityDesc: return .priorityDesc
+                }
+            }())
+    }
+
+    /// This list's OWN predicates — sidebar selections, quick chips, review
+    /// flags — which the shared state is layered on top of.
+    private var surfaceBaseQuery: EmailQuery {
         var base = EmailQuery.all
-        if startDate > .distantPast { base.afterDate = startDate }
-        if endDate < .distantFuture { base.beforeDate = endDate }
         // v1 parity: EVERY sidebar checkbox selection compiles to SQL, so the
         // filters apply to the whole archive — not just the resident window.
         base.senders = selectedFromEmails
@@ -368,7 +388,6 @@ class ParsedEmailListViewModel: ObservableObject {
         base.subjects = selectedSubjects
         base.tags = selectedTags
         if let evidence = selectedEvidenceTag, evidence != .none { base.evidenceTag = evidence.rawValue }
-        if hasAttachmentFilter { base.hasAttachments = true }
         if let quickType = quickTypeFilter { base.messageType = quickType }
         if minReplyCount > 0 { base.minSenderMessages = minReplyCount }
         if let minPriority = quickMinPriority { base.minPriority = minPriority }
@@ -376,21 +395,22 @@ class ParsedEmailListViewModel: ObservableObject {
         if quickNegativeOnly { base.sentimentBelow = -0.4 }
         if quickNewsletterOnly { base.classifications = ["newsletter", "promotional"] }
         if showPinnedOnly { base.pinnedOnly = true }
-        switch sortBy {
-        case .dateDesc: base.sort = .dateDesc
-        case .dateAsc: base.sort = .dateAsc
-        case .subjectAsc: base.sort = .subjectAZ
-        case .sizeDesc: base.sort = .sizeDesc
-        case .priorityDesc: base.sort = .priorityDesc
-        }
+        return base
+    }
+
+    var currentArchiveQuery: EmailQuery {
+        let state = browseState
         if isNaturalLanguageMode {
             // The raw sentence is NOT an FTS/operator query — the interpreted
             // intent is. While interpretation is in flight (or yielded
             // nothing) show the unnarrowed base rather than garbage matches.
+            var base = ArchiveBrowseState(searchText: "", afterDate: state.afterDate, beforeDate: state.beforeDate,
+                                          hasAttachments: state.hasAttachments, includeTrashed: state.includeTrashed,
+                                          sort: state.sort).query(base: surfaceBaseQuery)
+            base.text = nil
             return nlIntent?.apply(to: base) ?? base
         }
-        return ArchiveQueryCompiler.compile(
-            searchText.trimmingCharacters(in: .whitespacesAndNewlines), base: base)
+        return state.query(base: surfaceBaseQuery)
     }
     @Published var aiPinnedIDs: Set<UUID>? = nil
     @Published var emailThreads: [EmailThread] = []
@@ -430,7 +450,7 @@ class ParsedEmailListViewModel: ObservableObject {
     /// Quick-chip type filter (Sent/Received) — compiles to SQL messageType
     /// so the chips filter the WHOLE archive, including header-recovered
     /// rows that have flags but no re-parsable metadata.
-    @Published var quickTypeFilter: String? = nil
+    @Published var quickTypeFilter: String? = nil { didSet { rememberFilters() } }
     /// AI-chip filters — compile to SQL over the persisted `derived` table
     /// (archive-wide). Unanalyzed rows don't match; the coverage notice says
     /// so honestly and the background analysis is kicked to close the gap.
@@ -477,6 +497,13 @@ class ParsedEmailListViewModel: ObservableObject {
         self.archive = archive
         self.pager = ArchiveListViewModel(archive: archive, pageSize: pageSize, maxRetained: maxRetained)
         loadSavedSearches()
+        // v2.1 backlog #15: the last filter set used under the current persona
+        // comes back on launch, and switching persona swaps it.
+        restoreFilters(for: PersonaManager.shared.selectedPersona.rawValue)
+        personaObserver = NotificationCenter.default.publisher(for: .personaDidChange)
+            .compactMap { $0.object as? String }
+            .receive(on: RunLoop.main)
+            .sink { [weak self] persona in self?.restoreFilters(for: persona) }
         // Views observe this VM — forward review-state changes (pin/read/tag
         // badges) so rows re-render without observing the service directly.
         reviewChangeForwarder = review.objectWillChange.sink { [weak self] _ in
@@ -919,7 +946,102 @@ class ParsedEmailListViewModel: ObservableObject {
     /// resident window. Free-text/Boolean matches are verified through FTS5
     /// (`matchingSubset` over the window ids); regex uses BoundedRegexSearch;
     /// proximity compiles to a native FTS5 NEAR — no in-RAM corpus engine.
+    // MARK: - Filter memory per persona (v2.1 backlog #15)
+
+    /// The filter choices worth carrying between sessions and between
+    /// personas: the ones a persona sets once and expects to stay. Sidebar
+    /// multi-selections and free text are deliberately NOT remembered — they
+    /// describe a moment's search, not a way of working.
+    struct FilterMemory: Codable, Equatable {
+        var sortBy: String
+        var hasAttachmentFilter: Bool
+        var reviewStateFilter: String
+        var quickTypeFilter: String?
+        var showPinnedOnly: Bool
+        var groupByThread: Bool
+    }
+
+    private var personaObserver: AnyCancellable?
+    private var isRestoringFilters = false
+    private var rememberedPersona: String?
+
+    static func filterMemoryKey(for persona: String) -> String { "mailin.filterMemory.\(persona)" }
+
+    nonisolated static var isRunningUnderXCTest: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
+    }
+
+    /// Memory is ON in the app and OFF under XCTest unless a test opts in.
+    /// The test host IS the app, and every view model in a test process would
+    /// otherwise inherit whatever filter the previous test set — which is the
+    /// feature working as designed, and exactly wrong for isolated tests (it
+    /// emptied the list-paging tests on this machine until this switch).
+    nonisolated(unsafe) static var filterMemoryEnabled: Bool = !isRunningUnderXCTest
+
+    /// Where the memory lives. Production: the app's defaults. Under XCTest:
+    /// a throwaway suite, emptied at process start.
+    nonisolated(unsafe) static var filterMemoryDefaults: UserDefaults = {
+        if isRunningUnderXCTest {
+            // Start every test process with an EMPTY suite: whatever a
+            // previous run left behind must not shape this one's lists.
+            let suite = "com.ecosanskriti.mailin.filterMemory.tests"
+            let defaults = UserDefaults(suiteName: suite) ?? .standard
+            defaults.removePersistentDomain(forName: suite)
+            return defaults
+        }
+        return .standard
+    }()
+
+    var currentFilterMemory: FilterMemory {
+        FilterMemory(sortBy: sortBy.rawValue,
+                     hasAttachmentFilter: hasAttachmentFilter,
+                     reviewStateFilter: reviewStateFilter.rawValue,
+                     quickTypeFilter: quickTypeFilter,
+                     showPinnedOnly: showPinnedOnly,
+                     groupByThread: groupByThread)
+    }
+
+    /// Saves the current memory under the persona it belongs to. Cheap: a
+    /// small JSON blob, written only when it changed.
+    private func rememberFilters() {
+        guard Self.filterMemoryEnabled, !isRestoringFilters, !isResettingFilters else { return }
+        let persona = rememberedPersona ?? PersonaManager.shared.selectedPersona.rawValue
+        let key = Self.filterMemoryKey(for: persona)
+        guard let data = try? JSONEncoder().encode(currentFilterMemory) else { return }
+        let defaults = Self.filterMemoryDefaults
+        if defaults.data(forKey: key) != data {
+            defaults.set(data, forKey: key)
+        }
+    }
+
+    /// Applies the memory saved for `persona`, if any. Absent memory leaves
+    /// the current filters alone — a persona used for the first time inherits
+    /// what is on screen rather than being reset.
+    func restoreFilters(for persona: String) {
+        rememberedPersona = persona
+        guard Self.filterMemoryEnabled, let data = Self.filterMemoryDefaults.data(forKey: Self.filterMemoryKey(for: persona)),
+              let memory = try? JSONDecoder().decode(FilterMemory.self, from: data) else { return }
+        Self.apply(memory, to: self)
+    }
+
+    /// Pure application step, separated so it can be tested without defaults.
+    static func apply(_ memory: FilterMemory, to vm: ParsedEmailListViewModel) {
+        vm.isRestoringFilters = true
+        vm.isResettingFilters = true
+        if let sort = SortOption(rawValue: memory.sortBy) { vm.sortBy = sort }
+        vm.hasAttachmentFilter = memory.hasAttachmentFilter
+        if let review = ReviewStateFilter(rawValue: memory.reviewStateFilter) { vm.reviewStateFilter = review }
+        vm.quickTypeFilter = memory.quickTypeFilter
+        vm.showPinnedOnly = memory.showPinnedOnly
+        vm.groupByThread = memory.groupByThread
+        vm.isResettingFilters = false
+        vm.isRestoringFilters = false
+        vm.applyFilters()
+    }
+
     func applyFilters() {
+        rememberFilters()
         // Part U: sidebar selections / sort COMPILE into the pager query —
         // when it changed, kick an archive re-page AND still refine the
         // current residents below for instant feedback (the reload re-runs

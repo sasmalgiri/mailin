@@ -1313,3 +1313,96 @@ final class PartLocatorEndToEndTests: XCTestCase {
         XCTAssertTrue(cleared.isEmpty)
     }
 }
+
+// MARK: - An envelope line INSIDE a header block is not a separator
+
+/// Found 2026-09-25 by running the directory-source import over the owner's
+/// real Gmail-exported `.eml` files: each file opens with `From:` … headers,
+/// then carries its mbox envelope line (`From 1274…@xxx Tue Jul 08 … 2008`)
+/// a dozen header lines down, then more headers, then the body. Both engines
+/// treated that line as a message boundary and produced two half-messages —
+/// one with headers and no body, one with a body and no `From:`. The array
+/// parser got it right only by accident (it drops the first match).
+///
+/// The rule now, in both engines: a `From ` line is a separator only when no
+/// message is in progress or the current message's header block has ended
+/// (a blank line has been seen). RFC 4155 puts the envelope before the
+/// headers, never among them, so nothing legitimate is lost.
+final class EnvelopeInsideHeaderBlockTests: XCTestCase {
+
+    private let realShape = """
+    From: sender@example.com\r
+    To: recipient@example.com\r
+    Date: Tue,  8 Jul 2008 08:51:33 +0530\r
+    Message-ID: <inside-header@example.com>\r
+    Received: from ?1.2.3.4? by mx.example.com; Mon, 07 Jul 2008 20:24:19 -0700 (PDT)\r
+    From 1274530980847543437@xxx Tue Jul 08 03: 24:21 +0000 2008\r
+    MIME-Version: 1.0\r
+    Content-Type: text/plain; charset=utf-8\r
+    Subject: Envelope inside the header block\r
+    \r
+    Body line one.\r
+    From the archive desk — a body line that begins with "From " but has no year.\r
+    \r
+
+    """
+
+    private func write(_ text: String, ext: String) throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("inside-\(UUID().uuidString).\(ext)")
+        try text.write(to: url, atomically: true, encoding: .utf8)
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        return url
+    }
+
+    func testStreamingParser_keepsTheMessageWhole() async throws {
+        let url = try write(realShape, ext: "eml")
+        var messages: [MBOXParser.RawEmail] = []
+        let report = try await MBOXParser.parseStreamingCallback(fileURL: url, senderEmail: "", batchSize: 10) {
+            messages += $0
+        }
+        XCTAssertEqual(report.totalMessages, 1, "one file, one message — not two halves")
+        XCTAssertEqual(messages.count, 1)
+        XCTAssertEqual(messages.first?.headers["From"], "sender@example.com")
+        XCTAssertEqual(messages.first?.headers["Subject"], "Envelope inside the header block")
+        XCTAssertTrue(messages.first?.plainBody.contains("Body line one") == true)
+    }
+
+    func testOffsetScanner_agreesWithTheStreamingParser() async throws {
+        let url = try write(realShape, ext: "eml")
+        var locators: [MessageLocator] = []
+        _ = try await OffsetMBOXScanner().scan(fileURL: url, collect: true, onLocator: { locator, _ in
+            locators.append(locator)
+        })
+        XCTAssertEqual(locators.count, 1, "the offset engine must not split on the in-header envelope either")
+        XCTAssertEqual(locators.first?.messageRange.offset, 0, "the message starts at the first header byte, not at the envelope")
+    }
+
+    /// The other direction still holds: in a real mbox the envelope line
+    /// follows a blank line, and IS a separator.
+    func testRealMboxSeparatorsStillSplit() async throws {
+        let mbox = """
+        From a@x Tue Mar 14 09:41:00 2017
+        From: a@x
+        Subject: One
+
+        body one
+
+        From b@x Wed Mar 15 10:00:00 2017
+        From: b@x
+        Subject: Two
+
+        body two
+
+        """
+        let url = try write(mbox, ext: "mbox")
+        var subjects: [String] = []
+        _ = try await MBOXParser.parseStreamingCallback(fileURL: url, senderEmail: "", batchSize: 10) {
+            subjects += $0.map { $0.headers["Subject"] ?? "" }
+        }
+        XCTAssertEqual(subjects, ["One", "Two"])
+
+        var count = 0
+        _ = try await OffsetMBOXScanner().scan(fileURL: url, collect: false, onLocator: { _, _ in count += 1 })
+        XCTAssertEqual(count, 2)
+    }
+}

@@ -1439,10 +1439,66 @@ struct ParsedEmailListView: View {
                         }
                         pageWindowFooter
                     }
+                    // Keyboard-first browsing (v2.1 backlog #15): J/K move the
+                    // selection, Return opens the selection in its own window,
+                    // "/" focuses search, and typing a letter starts a search
+                    // with that letter — no mouse trip to the search field.
+                    .onKeyPress(.init("j")) { moveSelection(by: 1, in: emails); return .handled }
+                    .onKeyPress(.init("k")) { moveSelection(by: -1, in: emails); return .handled }
+                    .onKeyPress(.return) { openSelectionInWindow(in: emails); return .handled }
+                    .onKeyPress(.init("/")) { isSearchFieldFocused = true; return .handled }
+                    .onKeyPress(characters: .alphanumerics, phases: .down) { press in
+                        // Letters used above are navigation, not search.
+                        guard !["j", "k"].contains(press.characters.lowercased()) else { return .ignored }
+                        beginTypeToFilter(press.characters)
+                        return .handled
+                    }
                 }
                 #endif
             }
         }
+    }
+
+    // MARK: - Keyboard-first browsing (v2.1 backlog #15)
+
+    /// J/K: step the single selection through the visible order; with no
+    /// selection, J selects the first row and K the last.
+    private func moveSelection(by delta: Int, in emails: [MBOXParser.RawEmail]) {
+        guard !emails.isEmpty else { return }
+        let ids = emails.map(\.id)
+        let currentIndex = selectedEmailIDs.count == 1 ? ids.firstIndex(of: selectedEmailIDs.first!) : nil
+        let next: Int
+        if let currentIndex {
+            next = min(max(currentIndex + delta, 0), ids.count - 1)
+        } else {
+            next = delta > 0 ? 0 : ids.count - 1
+        }
+        selectedEmailIDs = [ids[next]]
+        if next >= ids.count - 5 { model.loadMoreIfNeeded(currentID: ids[next]) }
+    }
+
+    /// Return: the selected email in its own window (macOS), so the list stays
+    /// where it is. With several selected, nothing happens — opening N windows
+    /// from one keypress would be a surprise, not a shortcut.
+    private func openSelectionInWindow(in emails: [MBOXParser.RawEmail]) {
+        guard selectedEmailIDs.count == 1, let id = selectedEmailIDs.first,
+              let email = emails.first(where: { $0.id == id }) else { return }
+        #if os(macOS)
+        let title = (email.headers["Subject"]?.isEmpty == false ? email.headers["Subject"]! : "(No Subject)")
+        ToolWindowPresenter.shared.open(title: title, size: CGSize(width: 900, height: 720)) {
+            AnyView(EmailDetailView(email: email).toolWindowFrame())
+        }
+        #endif
+    }
+
+    /// Typing while the list has focus starts a search with what was typed.
+    private func beginTypeToFilter(_ characters: String) {
+        if model.isNaturalLanguageMode == false {
+            model.searchText = characters
+        } else {
+            model.searchText += characters
+        }
+        isSearchFieldFocused = true
     }
 
     // MARK: - Page window affordances (Part S — bounded window paging)
@@ -2337,7 +2393,7 @@ struct ParsedEmailListView: View {
 
     #if os(iOS)
     private func iOSEmailRow(for email: MBOXParser.RawEmail) -> some View {
-        EmailRowView(email: email, searchText: model.searchText, showRiskIndicator: forensicManager.isEnabled || personaManager.selectedPersona == .legal)
+        EmailRowView(email: email, searchText: model.isNaturalLanguageMode ? "" : model.searchText, showRiskIndicator: forensicManager.isEnabled || personaManager.selectedPersona == .legal)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .contextMenu {
@@ -2451,7 +2507,7 @@ struct ParsedEmailListView: View {
                     .help("Medium priority")
             }
 
-            EmailRowView(email: email, searchText: model.searchText, showRiskIndicator: forensicManager.isEnabled || personaManager.selectedPersona == .legal)
+            EmailRowView(email: email, searchText: model.isNaturalLanguageMode ? "" : model.searchText, showRiskIndicator: forensicManager.isEnabled || personaManager.selectedPersona == .legal)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if let label = predictiveEngine.predictionLabel(for: email.id) {
@@ -3237,6 +3293,17 @@ struct EmailRowView: View {
         showRiskIndicator ? ForensicManager.assessRisk(for: email).score : 0
     }
 
+    /// A7: the search read through the one compiler, so highlighting and the
+    /// matched-field strip attribute `from:alice report` the way the store
+    /// executed it — not by looking for the literal whole string.
+    private var matchTerms: SearchMatchTerms {
+        SearchMatchTerms(searchText: searchText)
+    }
+
+    private var matchedFields: [SearchMatchField] {
+        matchTerms.matchedFields(in: email)
+    }
+
     var body: some View {
         #if os(iOS)
         iOSRow
@@ -3259,6 +3326,8 @@ struct EmailRowView: View {
                 .font(.subheadline)
                 .foregroundColor(.primary)
                 .lineLimit(2)
+
+            SearchMatchFieldChips(fields: matchedFields)
 
             // Row 3: Preview
             if showPreviews {
@@ -3317,7 +3386,7 @@ struct EmailRowView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack {
-                    Text(highlightedText(senderName))
+                    Text(highlightedText(senderName, field: .sender))
                         .font(.footnote)
                         .fontWeight(.semibold)
                         .lineLimit(1)
@@ -3340,16 +3409,18 @@ struct EmailRowView: View {
                         .foregroundColor(AppColors.secondary)
                 }
 
-                Text(highlightedText(email.headers["Subject"] ?? "(No Subject)"))
+                Text(highlightedText(email.headers["Subject"] ?? "(No Subject)", field: .subject))
                     .font(.footnote)
                     .foregroundColor(.primary.opacity(0.85))
                     .lineLimit(1)
+
+                SearchMatchFieldChips(fields: matchedFields)
 
                 if showPreviews && sizeClass != .compact {
                     let previewSource = email.isBodyCompacted ? email.bodyPreview : String(email.plainBody.prefix(100))
                     let preview = previewSource.replacingOccurrences(of: "\n", with: " ")
                     if !preview.trimmingCharacters(in: .whitespaces).isEmpty {
-                        Text(highlightedText(preview))
+                        Text(highlightedText(preview, field: .body))
                             .font(.caption)
                             .foregroundColor(AppColors.secondary)
                             .lineLimit(1)
@@ -3362,21 +3433,24 @@ struct EmailRowView: View {
         .accessibilityLabel("\(email.headers["Subject"] ?? "No Subject"), from \(senderName)")
     }
 
-    private func highlightedText(_ text: String) -> AttributedString {
+    /// Highlights every term the search asks of `field` (its operator value
+    /// plus the free-text terms). Case-insensitive, non-overlapping per term.
+    private func highlightedText(_ text: String, field: SearchMatchField) -> AttributedString {
         var result = AttributedString(text)
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return result }
+        let terms = matchTerms.highlightTerms(for: field)
+        guard !terms.isEmpty else { return result }
         let lowered = text.lowercased()
-        let queryLowered = query.lowercased()
-        var searchStart = lowered.startIndex
-        while let range = lowered.range(of: queryLowered, range: searchStart..<lowered.endIndex) {
-            let attrStart = AttributedString.Index(range.lowerBound, within: result)
-            let attrEnd = AttributedString.Index(range.upperBound, within: result)
-            if let attrStart, let attrEnd {
-                result[attrStart..<attrEnd].backgroundColor = .yellow.opacity(0.4)
-                result[attrStart..<attrEnd].foregroundColor = .primary
+        for term in terms where !term.isEmpty {
+            var searchStart = lowered.startIndex
+            while let range = lowered.range(of: term, range: searchStart..<lowered.endIndex) {
+                let attrStart = AttributedString.Index(range.lowerBound, within: result)
+                let attrEnd = AttributedString.Index(range.upperBound, within: result)
+                if let attrStart, let attrEnd {
+                    result[attrStart..<attrEnd].backgroundColor = .yellow.opacity(0.4)
+                    result[attrStart..<attrEnd].foregroundColor = .primary
+                }
+                searchStart = range.upperBound
             }
-            searchStart = range.upperBound
         }
         return result
     }

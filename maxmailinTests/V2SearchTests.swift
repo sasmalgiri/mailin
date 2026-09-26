@@ -318,3 +318,60 @@ final class V2SearchTests: XCTestCase {
         XCTAssertEqual(result, all.intersection(preview), "subset == reference ∩ preview")
     }
 }
+
+// MARK: - A7 `filename:` operator, archive-wide in SQL
+
+final class AttachmentFilenameSearchTests: XCTestCase {
+
+    func testFilenameOperatorMatchesAttachmentNamesArchiveWide() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mailin-filename-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        let archive = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+
+        func email(_ i: Int, attachments: [AttachmentMetadata]) -> MBOXParser.RawEmail {
+            MBOXParser.RawEmail(
+                headers: ["Message-ID": "<fn-\(i)@t>", "Subject": "S\(i)", "From": "a@b.com", "To": "c@d.com",
+                          "Date": "Wed, \(String(format: "%02d", 1 + i)) Jan 2025 12:00:00 +0000"],
+                rawSource: "raw \(i)", messageType: "email", attachments: attachments,
+                timestamp: "2025-01-\(String(format: "%02d", 1 + i))T12:00:00Z", domains: ["b.com"],
+                plainBody: "body \(i)", htmlBody: "")
+        }
+        let fixtures = [
+            email(1, attachments: [AttachmentMetadata(filename: "Contract-Final.PDF", mimeType: "application/pdf", size: 10)]),
+            email(2, attachments: [AttachmentMetadata(filename: "figures.xlsx", mimeType: "application/vnd.ms-excel", size: 10)]),
+            email(3, attachments: [AttachmentMetadata(filename: "scan.pdf", mimeType: "application/pdf", size: 10),
+                                   AttachmentMetadata(filename: "notes.txt", mimeType: "text/plain", size: 10)]),
+            email(4, attachments: []),
+        ]
+        try await store.insertBatch(fixtures, batchSize: 100)
+        try await fts.indexBatch(fixtures)
+
+        // Compiler: the operator lands in the query, not in free text.
+        let pdf = ArchiveQueryCompiler.compile("filename:pdf")
+        XCTAssertEqual(pdf.attachmentFilename, "pdf")
+        XCTAssertEqual(pdf.hasAttachments, true)
+        XCTAssertNil(pdf.text)
+
+        // SQL: case-insensitive substring over the attachments table.
+        let pdfIDs = Set(try await archive.page(query: pdf, limit: 50).summaries.map(\.id))
+        XCTAssertEqual(pdfIDs, [fixtures[0].id, fixtures[2].id], "both PDFs, whatever the case of the extension")
+        let pdfCount = try await archive.count(query: pdf)
+        XCTAssertEqual(pdfCount, 2)
+
+        let contract = ArchiveQueryCompiler.compile("attachment:contract")
+        let contractIDs = Set(try await archive.page(query: contract, limit: 50).summaries.map(\.id))
+        XCTAssertEqual(contractIDs, [fixtures[0].id])
+
+        let nothing = ArchiveQueryCompiler.compile("filename:zip")
+        let nothingCount = try await archive.count(query: nothing)
+        XCTAssertEqual(nothingCount, 0)
+
+        // Combines with other predicates like any operator.
+        let combined = ArchiveQueryCompiler.compile("filename:pdf subject:S3")
+        let combinedIDs = Set(try await archive.page(query: combined, limit: 50).summaries.map(\.id))
+        XCTAssertEqual(combinedIDs, [fixtures[2].id])
+    }
+}

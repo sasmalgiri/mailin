@@ -220,6 +220,9 @@ final class BulkImportCoordinator {
     var lastReceipt: ImportReceipt?
     /// Full accounting for the most recent run.
     var lastRunSummary: RunSummary?
+    /// Source URLs of the most recent run keyed by file name, for the
+    /// receipt's Retry (A5(d)). Cleared by nothing: a later run replaces it.
+    private(set) var lastRunSourceURLs: [String: URL] = [:]
     private var task: Task<Void, Never>?
 
     /// Thrown internally when the free-tier cap is reached mid-parse.
@@ -324,6 +327,10 @@ final class BulkImportCoordinator {
         let batchSize = max(1, min(options.batchSize, 10_000))
         var summary = RunSummary()
         let startedAt = Date()
+        // A5(d): the receipt records failures by file NAME (it must stay
+        // readable without this app); "Retry failed sources" resolves those
+        // names back to the URLs of this run while the app is still open.
+        lastRunSourceURLs = Dictionary(urls.map { ($0.lastPathComponent, $0) }, uniquingKeysWith: { first, _ in first })
 
         // 0. (1d) Storage-authority gate: never write SQLite against
         //    unresolved storage. Fail explicitly — silently skipping persist
@@ -540,6 +547,12 @@ final class BulkImportCoordinator {
                         let batchBytes = pending.reduce(0) {
                             $0 + max($1.rawSource.utf8.count, $1.plainBody.utf8.count)
                         }
+                        // v17 (backlog #7): when the checkpoint store writes
+                        // into THIS store, the ordinal rides the insert's
+                        // transaction — rows and checkpoint commit together.
+                        let atomicCheckpoint = await checkpoints.progressCheckpoint(
+                            identity: identity, sourceName: sourceName,
+                            firstOrdinal: batchStart + range.lowerBound, store: store)
                         do {
                             insertResult = try await store.insertBatch(
                                 pending,
@@ -549,7 +562,8 @@ final class BulkImportCoordinator {
                                 firstOrdinal: batchStart + range.lowerBound,
                                 dedupPolicy: options.dedupPolicy,
                                 batchSize: batchSize,
-                                progress: nil
+                                progress: nil,
+                                progressCheckpoint: atomicCheckpoint
                             )
                         } catch {
                             summary.persistFailed += pending.count
@@ -597,11 +611,15 @@ final class BulkImportCoordinator {
                         // persists. `recordProgress` throws on write failure,
                         // which fail-stops the whole import.
                         committedOrdinal = batchStart + range.lowerBound + pending.count
-                        try await checkpoints.recordProgress(
-                            identity: identity,
-                            sourceName: sourceName,
-                            messagesIngested: committedOrdinal
-                        )
+                        if atomicCheckpoint == nil {
+                            // JSON-backed (isolated tests / legacy): the
+                            // separate write is the commit point.
+                            try await checkpoints.recordProgress(
+                                identity: identity,
+                                sourceName: sourceName,
+                                messagesIngested: committedOrdinal
+                            )
+                        }
 
                         // (1e) Bounded preview + (C1) forensic coverage over
                         // committed batches.

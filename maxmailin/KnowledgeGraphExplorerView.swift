@@ -282,6 +282,8 @@ struct KnowledgeGraphExplorerView: View {
                         .foregroundColor(.secondary)
                 }
                 .buttonStyle(.plain)
+                .help("Clear search")
+                .accessibilityLabel("Clear search")
             }
         }
         .padding(Spacing.small)

@@ -53,6 +53,40 @@ persona catalogues.
   base64 MIME parts, marked `X-Mailin-Reconstructed` where the record was
   synthesised rather than byte-copied. Partitioned export splits on a byte
   budget and never mid-message.
+- **ZIP and gzip import** (2026-09-25): a Google Takeout archive or a `.gz`
+  mailbox imports directly. Members stream one at a time to scratch, are
+  checked against their declared size and CRC-32, parsed by their own format's
+  parser, and deleted. Encrypted or damaged members are refused and counted;
+  non-mail members and nested archives are skipped and counted. ZIP64 is
+  supported. Executed: `ContainerImportTests` (9).
+- **Detached S/MIME** (2026-09-25): `multipart/signed` messages are now
+  cryptographically verified (see Verification below); before this every one
+  read "unverifiable".
+- **Bare `.eml` import fix** (2026-09-25): the streaming import path produced
+  zero messages for a `.eml` with no mbox envelope line. Fixed and pinned.
+- **Import receipt: Retry and attachment coverage** (2026-09-26): "Retry
+  failed sources" re-imports the named sources that still resolve and says
+  which do not; Recheck shows attachments by family and how far attachment
+  content indexing has got.
+- **Export receipts** (2026-09-26): every bulk export ends in a receipt —
+  requested / written / outcome (complete, truncated, cancelled, failed) /
+  SHA-256 / destination — shown in place of the progress bar and saved under
+  Application Support/mailin/exports/receipts. `ExportReceiptTests`.
+- **Advanced search** (2026-09-26): the guided sheet adds exact phrase, any /
+  none-of words (FTS5 Boolean), attachment name or type (`filename:` operator,
+  archive-wide in SQL), source file and tag; the composed query is shown so the
+  syntax is learnable. `GuidedSearchCompositionTests`, `AttachmentFilenameSearchTests`.
+- **Keyboard-first list, drop-anywhere import, filter memory per persona**
+  (2026-09-26): see `V2_1_BACKLOG.md` #15.
+- **Import checkpoints in the store** (2026-09-26, schema v17): rows and their
+  resume checkpoint commit in one transaction. See `V2_1_BACKLOG.md` #7.
+- **Envelope-inside-header fix** (2026-09-26): real Gmail `.eml` exports no
+  longer split into two half-messages. See `V2_1_BACKLOG.md`, "Found while closing".
+- **Whole-archive comparison** (2026-09-25): Archive Comparison no longer
+  stops at 2,000 messages per side. Both sides are reduced to key rows in a
+  scratch database, matched by Message-ID and then by subject, sender and
+  minute, and the differences are paged. The second side may be any supported
+  file, including a ZIP. Executed: `ArchiveComparisonEngineTests` (4).
 
 ---
 
@@ -82,23 +116,33 @@ This is the part the earlier notes got wrong, so it is stated plainly.
 | Format classification / size policy | `SourceFormatClassifierTests`, `SourceSizePolicyTests` |
 | Module gating, page routing, batch control, blob store, index coverage, import verdict | The corresponding unit-test suites |
 
-### Written, not yet executed
+### Executed 2026-09-25 (previously "written, not yet executed")
 
-| Check | File |
-|---|---|
-| One behavioural test per studio (5 studios, 13 tests) | `maxmailinTests/StudioBehaviourTests.swift` |
-| Gold case #9 — Bates stamp visible on every page, via PDFKit read-back | `maxmailinTests/GoldCaseClosureTests.swift` |
-| Gold case #8 — predictive-coding ranking (relevant outranks irrelevant) | same |
-| Defect V3-D1 regression + validator | same |
+| Check | File | Result |
+|---|---|---|
+| One behavioural test per studio (5 classes, 16 tests) | `maxmailinTests/StudioBehaviourTests.swift` | 16 pass |
+| Gold case #9 — Bates stamp visible on every page, via PDFKit read-back | `maxmailinTests/GoldCaseClosureTests.swift` | pass |
+| Gold case #8 — predictive-coding ranking (relevant outranks irrelevant) | same | pass |
+| Defect V3-D1 regression + validator | same | pass |
+| **S/MIME gold case, opaque** — real OpenSSL self-signed `signed-data` through `CMSDecoder`: `validUntrustedCert`; tampered → never valid; truncated → unverifiable | `maxmailinTests/SMIMEGoldCaseTests.swift` | 4 pass |
+| **S/MIME gold case, detached** (`multipart/signed`, the common form) — real OpenSSL detached signature verifies from LF- and CRLF-stored copies; one changed signed character → `invalid`; one-part message → `unverifiable` | same, `SMIMEDetachedGoldCaseTests` | 7 pass |
+| **Directory sources** — Maildir (`cur`+`new`, `tmp` skipped), folder of `.eml`, Apple Mail `.mbox` package, empty Maildir refused; each through both parser entry points | `maxmailinTests/SourceFormatClassifierTests.swift`, `DirectorySourceImportTests` | 6 pass |
+
+Running the directory-source check found a defect the code-read had missed:
+the streaming import path returned **zero messages for any bare `.eml`**, with
+no failure reported. Fixed and pinned (`singleEMLStreams`). See
+`V2_1_BACKLOG.md`, "Found while closing".
 
 ### Still open
 
-- **S/MIME gold case** — needs a self-signed sample message to exercise
-  `SMIMEHandler`'s verdict path. Not written.
 - **PST / OST / NSF / MSG import** — code paths exist; no executed fixture run
-  is recorded. See `SUPPORTED_FORMATS_AND_LIMITS.md` §7.
-- **Directory sources** (Apple Mail package, Maildir, `.eml` folder) —
-  implemented on 2026-09-24, not yet run against a real export.
+  is recorded. A real PST would close those formats the way `Sent.mbox`
+  closed the mbox path. See `SUPPORTED_FORMATS_AND_LIMITS.md` §7.
+- **Directory sources against a real client export** — executed 2026-09-26
+  against the owner's real Gmail-exported `.eml` folder (10 files → 10
+  messages, both parser paths) and the real 526-message `Sent.mbox` wrapped
+  as an Apple Mail package (`RealDirectorySourceTests`, skip-if-absent). A
+  Dovecot Maildir export has not been run; none is available on this machine.
 
 ---
 
@@ -106,8 +150,8 @@ This is the part the earlier notes got wrong, so it is stated plainly.
 
 Nothing in the store description, the website, or the whitepaper may assert a
 capability unless it has a **Present** matrix row **and** an executed check.
-On today's evidence that means: the studios may be described by **what they
-do** and **what they refuse**, because that behaviour is in the code and
-pinned by tests — but the phrase "behaviourally verified" is not available
-until `StudioBehaviourTests` and `GoldCaseClosureTests` have actually run and
-passed.
+As of 2026-09-25 the studio behaviour tests and both gold-case files have run
+and passed, so "behaviourally verified" is available for the five studios,
+person redaction, Bates stamping, predictive-coding ranking and S/MIME
+verification (opaque and detached, self-signed fixtures). It is NOT available
+for PST/OST/NSF/MSG import.

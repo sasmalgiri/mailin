@@ -219,11 +219,16 @@ class SpotlightIndexer: NSObject, CSSearchableIndexDelegate {
 
     // MARK: - Removal
 
-    func removeAllIndexedEmails() {
+    /// Removes every indexed email. `completion` runs on the main actor once
+    /// the index has processed the deletion, so a caller that must re-index
+    /// survivors (legal-hold rows after a clear) can do so without the
+    /// deletion racing the re-add.
+    func removeAllIndexedEmails(completion: (@MainActor () -> Void)? = nil) {
         searchableIndex.deleteSearchableItems(withDomainIdentifiers: ["com.ecosanskriti.mailin.emails"]) { [weak self] _ in
             Task { @MainActor in
                 self?.aiSummaries.removeAll()
                 self?.aiPriorities.removeAll()
+                completion?()
             }
         }
     }

@@ -637,15 +637,10 @@ final class V2VerificationTests: XCTestCase {
             "limit = Int.max",
             "fetchLimit: Int.max",
             "fetchLimit = Int.max",
-            // Part F: the legacy in-RAM corpus index must never be (re)built
-            // or reloaded in production — FTS5/repository is the only corpus
-            // search authority.
-            "EmailSearchIndex.shared.build",
-            "EmailSearchIndex.shared.loadFromDisk",
-            "EmailSearchIndex.shared.hybridSearch",
-            "EmailSearchIndex.shared.chunkSearch",
-            "EmailSearchIndex.shared.expandByThread",
-            "EmailSearchIndex.shared.semanticSearch",
+            // Part F: the legacy in-RAM corpus index (`EmailSearchIndex`) was
+            // deleted outright (v2.1 backlog #5); any spelling of it coming
+            // back is a whole-corpus in-RAM index coming back.
+            "EmailSearchIndex",
         ]
         var violations: [String] = []
         for f in items where f.pathExtension == "swift" {
@@ -658,23 +653,6 @@ final class V2VerificationTests: XCTestCase {
             }
         }
         XCTAssertTrue(violations.isEmpty, "Forbidden production pattern(s) reintroduced:\n" + violations.joined(separator: "\n"))
-    }
-
-    /// The legacy in-RAM `EmailSearchIndex` must stay STRUCTURALLY bounded: no
-    /// matter how many emails a caller passes, it indexes at most
-    /// `maxInMemoryDocuments`. This is the guarantee that lets the legacy list
-    /// coexist with the v2 bounded path without reintroducing a whole-corpus
-    /// in-RAM index. Feeds 3× the cap and asserts the resident count is capped.
-    func testEmailSearchIndexIsStructurallyBounded() {
-        let cap = EmailSearchIndex.maxInMemoryDocuments
-        let overflow = cap + cap / 2   // 1.5× the cap
-        let emails = (0..<overflow).map {
-            makeEmail(mid: "<cap-\($0)@test>", subject: "S\($0)", body: "bounded token \($0)")
-        }
-        EmailSearchIndex.shared.build(from: emails)
-        XCTAssertLessThanOrEqual(EmailSearchIndex.shared.indexedCount, cap,
-            "in-RAM index must never exceed maxInMemoryDocuments regardless of input size")
-        EmailSearchIndex.shared.clear()
     }
 
     // MARK: - Part U — extended guard family (source scans)
@@ -1656,6 +1634,11 @@ final class V2VerificationTests: XCTestCase {
     func testFullAnalytics_streamingEqualsArrayOracle() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-fana-\(UUID().uuidString)", isDirectory: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        // Pure-NLP language detection for the duration of this test; see the
+        // note at the language assertion below.
+        let savedGate = EmailNLPEngine.modelLanguageFallbackGate
+        EmailNLPEngine.modelLanguageFallbackGate = nil
+        addTeardownBlock { EmailNLPEngine.modelLanguageFallbackGate = savedGate }
         let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
         let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
         let svc = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
@@ -1710,10 +1693,12 @@ final class V2VerificationTests: XCTestCase {
         // every low-confidence snippet, and these synthetic "word0 word0"
         // bodies are all low confidence. The model is not deterministic.
         //
-        // The model path is now gated by `EmailNLPEngine
-        // .modelLanguageFallbackGate`, which is nil in tests, so detection is
-        // pure NLP and the streaming/array equivalence this test exists to
-        // check is actually checkable.
+        // The model path is gated by `EmailNLPEngine.modelLanguageFallbackGate`.
+        // It is NOT reliably nil in tests: the test host is the app, and
+        // `CapabilityWiring` installs the gate whenever the AI Insights page is
+        // switched on in this machine's defaults — which made this comparison
+        // fail again on 2026-09-25 with model-invented labels ("Unclear",
+        // "unknown"). The gate is cleared explicitly at the top of this test.
         XCTAssertEqual(streamed.languages.count, oracle.languages.count)
         XCTAssertEqual(Set(streamed.languages.map { "\($0.language):\($0.count)" }),
                        Set(oracle.languages.map { "\($0.language):\($0.count)" }),
@@ -2834,6 +2819,42 @@ final class V2ReviewStateTests: XCTestCase {
 
     // §19.1: trash is soft — hidden from browse pages/counts, restorable,
     // and NEVER physical. Permanent delete is the separate explicit op.
+    /// v2.1 backlog #10. With LIMIT/OFFSET, restoring a row from page 1 before
+    /// fetching page 2 shifted every later row up by one, so page 2 skipped
+    /// the row that had moved into page 1's slot. A keyset cursor pages by
+    /// (date, id), so a change to earlier rows cannot move later ones.
+    func testTrash_keysetPagingDoesNotSkipAfterRestoreBetweenPages() async throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root)
+        let emails = (0..<6).map(fixture)
+        _ = try await store.insertBatch(emails, sourceFileHash: nil, accountID: nil,
+            sourceID: nil, firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 10, progress: nil)
+        try await store.reviewSetFlag(.trashed, ids: emails.map(\.id), value: true)
+
+        let all = try await store.reviewIDs(where: .trashed, after: nil, limit: 10)
+        XCTAssertEqual(all.count, 6)
+
+        let page1 = try await store.reviewIDs(where: .trashed, after: nil, limit: 2)
+        XCTAssertEqual(page1.map(\.id), Array(all.prefix(2).map(\.id)))
+
+        // Restore one row from page 1 between the two page reads.
+        try await store.reviewSetFlag(.trashed, ids: [page1[0].id], value: false)
+
+        let cursor = SQLiteEmailStore.DateIDCursor(date: page1[1].date, id: page1[1].id)
+        var seen = page1.map(\.id)
+        var next = cursor
+        while true {
+            let page = try await store.reviewIDs(where: .trashed, after: next, limit: 2)
+            if page.isEmpty { break }
+            seen += page.map(\.id)
+            guard let last = page.last else { break }
+            next = SQLiteEmailStore.DateIDCursor(date: last.date, id: last.id)
+        }
+        XCTAssertEqual(seen, all.map(\.id),
+                       "every trashed row appears exactly once; OFFSET paging would have skipped the third")
+    }
+
     func testTrash_hiddenRestorable_permanentDeleteSeparate() async throws {
         let root = tempRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -2850,7 +2871,7 @@ final class V2ReviewStateTests: XCTestCase {
         XCTAssertEqual(physical, 4, "trash must NOT destroy the row")
         let page = try await store.summaryPage(after: nil, before: nil, cursorDate: nil, cursorID: nil, limit: 10)
         XCTAssertFalse(page.contains { $0.id == emails[0].id }, "trashed row hidden from pages")
-        let trashedIDs = try await store.reviewIDs(where: .trashed, limit: 10, offset: 0)
+        let trashedIDs = try await store.reviewIDs(where: .trashed, after: nil, limit: 10).map(\.id)
         XCTAssertEqual(trashedIDs, [emails[0].id])
 
         // Restore: fully visible again.

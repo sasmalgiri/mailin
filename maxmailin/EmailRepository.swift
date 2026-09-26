@@ -99,6 +99,10 @@ struct EmailQuery: Sendable, Equatable {
     /// Exact forensic evidence tag (`forensic_evidence_tags`).
     var evidenceTag: String? = nil
     var hasAttachments: Bool? = nil
+    /// Attachment file name or extension contains (case-insensitive) — the
+    /// `filename:` operator (A7). Matches the `attachments` table, so it is
+    /// archive-wide and needs no attachment content to have been indexed.
+    var attachmentFilename: String? = nil
     /// Exact message type ("sent"/"received"/parser value).
     var messageType: String? = nil
     /// Only pinned rows (review state).

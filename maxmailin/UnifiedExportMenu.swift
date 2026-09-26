@@ -180,7 +180,7 @@ struct UnifiedExportSections: View {
         #endif
     }
 
-    private func run(_ title: String,
+    private func run(_ title: String, destination: URL? = nil, isFolder: Bool = false,
                      _ body: @escaping @MainActor (ArchiveExportService) async throws -> Void) {
         guard gate() else { return }
         ExportRunCenter.shared.run(title: title) {
@@ -188,28 +188,50 @@ struct UnifiedExportSections: View {
                 try await body(ArchiveExportService.shared)
             } catch {
                 errorMessage = "\(title) failed: \(error.localizedDescription)"
+                // A8: a thrown error still ends in a receipt that says so.
+                ExportRunCenter.shared.recordFailure(destination: destination, isFolder: isFolder,
+                                                     requested: nil, message: error.localizedDescription)
             }
         }
     }
 
     /// Free-tier honesty: when the cap truncated the export, say exactly how
-    /// much was written and open the paywall.
+    /// much was written and open the paywall. A8: every outcome — complete,
+    /// truncated, cancelled — is recorded as an `ExportReceipt` with the
+    /// requested count, what was written and the artifact hash.
     @MainActor
-    private func handleCap(written: Int, cancelled: Bool, what: String,
+    private func handleCap(result: ArchiveExportResult? = nil,
+                           written: Int, cancelled: Bool, what: String,
                            scope: ArchiveSelectionScope, deliver: URL?) async {
+        let requested = try? await ArchiveDataService.shared.count(scope: scope)
+        var outcome: ExportReceipt.Outcome = .complete
         if cancelled {
             errorMessage = "\(what) export cancelled — partial output removed."
-            return
+            outcome = .cancelled
+        } else if let cap, let requested, requested > cap {
+            storeManager.showPaywall = true
+            errorMessage = "Exported \(written) of \(requested) emails. Upgrade to Pro for unlimited export."
+            outcome = .truncated
+        } else if let requested, written < requested, result?.completed == false {
+            outcome = .failed
         }
-        if let cap {
-            let total = (try? await ArchiveDataService.shared.count(scope: scope)) ?? written
-            if total > cap {
-                storeManager.showPaywall = true
-                errorMessage = "Exported \(written) of \(total) emails. Upgrade to Pro for unlimited export."
-            }
-        }
+        var isFolder: ObjCBool = false
+        if let deliver { _ = FileManager.default.fileExists(atPath: deliver.path, isDirectory: &isFolder) }
+        ExportRunCenter.shared.record(ExportReceipt(
+            title: "\(what) export",
+            destination: deliver?.path ?? "—",
+            isFolder: isFolder.boolValue,
+            requested: requested,
+            written: written,
+            bytesWritten: result?.bytesWritten,
+            outcome: outcome,
+            sha256Hex: result?.sha256Hex,
+            signaturePath: result?.signatureURL?.path,
+            errorMessage: outcome == .failed ? "The writer stopped before every requested message was written." : nil,
+            startedAt: ExportRunCenter.shared.startedAt,
+            completedAt: Date()))
         #if os(iOS)
-        if let deliver { share(deliver) }
+        if let deliver, !cancelled { share(deliver) }
         #else
         _ = deliver
         #endif
@@ -224,7 +246,7 @@ struct UnifiedExportSections: View {
             let result = try await service.exportWordArchive(
                 scope: scope, to: url, limit: cap,
                 onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
+            await handleCap(result: result, written: result.recordsWritten, cancelled: result.cancelled,
                             what: "Word", scope: scope, deliver: url)
         }
     }
@@ -236,7 +258,7 @@ struct UnifiedExportSections: View {
             let result = try await service.exportDetailedCSV(
                 scope: scope, to: url, limit: cap,
                 onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
+            await handleCap(result: result, written: result.recordsWritten, cancelled: result.cancelled,
                             what: "CSV", scope: scope, deliver: url)
         }
     }
@@ -248,7 +270,7 @@ struct UnifiedExportSections: View {
             let result = try await service.exportJSONArchive(
                 scope: scope, to: url, limit: cap,
                 onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
+            await handleCap(result: result, written: result.recordsWritten, cancelled: result.cancelled,
                             what: "JSON", scope: scope, deliver: url)
         }
     }
@@ -260,7 +282,7 @@ struct UnifiedExportSections: View {
             let result = try await service.exportBatchPrintText(
                 scope: scope, to: url,
                 onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
+            await handleCap(result: result, written: result.recordsWritten, cancelled: result.cancelled,
                             what: "Print text", scope: scope, deliver: url)
         }
     }
@@ -273,7 +295,7 @@ struct UnifiedExportSections: View {
             let result = try await service.exportEMLFiles(
                 scope: scope, to: folder, limit: cap, render: render,
                 onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
+            await handleCap(result: result, written: result.recordsWritten, cancelled: result.cancelled,
                             what: "EML", scope: scope, deliver: folder)
         }
     }
@@ -286,7 +308,7 @@ struct UnifiedExportSections: View {
             let result = try await service.exportPDFFiles(
                 scope: scope, to: folder, limit: cap,
                 onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
+            await handleCap(result: result, written: result.recordsWritten, cancelled: result.cancelled,
                             what: "PDF", scope: scope, deliver: folder)
         }
     }
@@ -299,7 +321,7 @@ struct UnifiedExportSections: View {
             let result = try await service.exportTIFFFiles(
                 scope: scope, to: folder, limit: cap,
                 onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
+            await handleCap(result: result, written: result.recordsWritten, cancelled: result.cancelled,
                             what: "TIFF", scope: scope, deliver: folder)
         }
     }
@@ -313,7 +335,7 @@ struct UnifiedExportSections: View {
             let result = try await service.exportPortableHTML(
                 scope: scope, to: folder, limit: cap,
                 onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
+            await handleCap(result: result, written: result.recordsWritten, cancelled: result.cancelled,
                             what: "HTML", scope: scope, deliver: folder)
         }
     }
@@ -325,7 +347,7 @@ struct UnifiedExportSections: View {
             let result = try await service.exportMarkdownArchive(
                 scope: scope, to: url, limit: cap,
                 onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
+            await handleCap(result: result, written: result.recordsWritten, cancelled: result.cancelled,
                             what: "Markdown", scope: scope, deliver: url)
         }
     }
@@ -337,7 +359,7 @@ struct UnifiedExportSections: View {
             let result = try await service.exportHeadersCSV(
                 scope: scope, to: url, limit: cap,
                 onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
+            await handleCap(result: result, written: result.recordsWritten, cancelled: result.cancelled,
                             what: "Headers CSV", scope: scope, deliver: url)
         }
     }
@@ -349,7 +371,7 @@ struct UnifiedExportSections: View {
             let result = try await service.exportMBOXArchive(
                 scope: scope, to: url, limit: cap,
                 onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
+            await handleCap(result: result, written: result.recordsWritten, cancelled: result.cancelled,
                             what: "mbox", scope: scope, deliver: url)
         }
     }
@@ -362,7 +384,7 @@ struct UnifiedExportSections: View {
             let result = try await service.exportMSGFiles(
                 scope: scope, to: folder, limit: cap,
                 onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(written: result.recordsWritten, cancelled: result.cancelled,
+            await handleCap(result: result, written: result.recordsWritten, cancelled: result.cancelled,
                             what: "MSG", scope: scope, deliver: folder)
         }
     }
@@ -371,12 +393,12 @@ struct UnifiedExportSections: View {
         guard let url = documentDestination(timestampName("mailin_contacts", ext: "vcf"), type: .vCard) else { return }
         let scope = scope()
         run("Exporting contacts") { service in
-            _ = try await service.exportVCard(
+            // Derived extract: the writer reports a count, not a full result.
+            let written = try await service.exportVCard(
                 scope: scope, to: url,
                 onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            #if os(iOS)
-            share(url)
-            #endif
+            await handleCap(written: written, cancelled: Task.isCancelled,
+                            what: "Contacts", scope: scope, deliver: url)
         }
     }
 
@@ -384,12 +406,11 @@ struct UnifiedExportSections: View {
         guard let url = documentDestination(timestampName("mailin_events", ext: "ics"), type: UTType(filenameExtension: "ics")) else { return }
         let scope = scope()
         run("Exporting calendar events") { service in
-            _ = try await service.exportICS(
+            let written = try await service.exportICS(
                 scope: scope, to: url,
                 onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            #if os(iOS)
-            share(url)
-            #endif
+            await handleCap(written: written, cancelled: Task.isCancelled,
+                            what: "Calendar", scope: scope, deliver: url)
         }
     }
 }

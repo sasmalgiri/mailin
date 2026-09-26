@@ -332,6 +332,13 @@ struct AIAssistantView: View {
             .frame(minWidth: 520, minHeight: 600)
             #endif
         }
+        #if os(iOS)
+        .sheet(isPresented: $showMetricsSheet) {
+            NavigationStack {
+                AIMetricsView(onClose: { showMetricsSheet = false })
+            }
+        }
+        #endif
     }
 
     // MARK: - LLM Status Banners
@@ -433,6 +440,26 @@ struct AIAssistantView: View {
                     }
                     .buttonStyle(.borderless)
                     .disabled(conversationHistory.isEmpty)
+                    // Reading surface for AIMetrics: what queries actually
+                    // cost and produced, per engine, with honest "not
+                    // measured" where an engine cannot see a figure.
+                    Button {
+                        #if os(macOS)
+                        ToolWindowPresenter.shared.open(title: "AI Metrics",
+                                                        size: CGSize(width: 820, height: 720)) {
+                            AnyView(NavigationStack {
+                                AIMetricsView(onClose: { ToolWindowPresenter.shared.close(title: "AI Metrics") })
+                            }
+                            .toolWindowFrame())
+                        }
+                        #else
+                        showMetricsSheet = true
+                        #endif
+                    } label: {
+                        Image(systemName: "chart.bar.xaxis")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("AI query metrics — timing, citations and outcomes per engine")
                     TutorialHelpButton(showTutorial: $showTutorial)
                     Button("Done") { dismiss() }
                         .fontWeight(.semibold)
@@ -1024,6 +1051,7 @@ struct AIAssistantView: View {
     @State private var expandedResultSet: Set<Int> = []
     @State private var showActionToast: String?
     @State private var showProvenanceSheet: Bool = false
+    @State private var showMetricsSheet: Bool = false
     @ObservedObject private var provenanceStore = AIProvenanceStore.shared
 
     private func renderedMarkdown(_ text: String, isStreaming: Bool, relatedEmailIDs: [UUID] = []) -> some View {

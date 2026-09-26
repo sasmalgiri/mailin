@@ -22,6 +22,10 @@
 //  Routing (expertsRun / subQueryCount / toolsUsed) and knowledge-graph
 //  citations are reported by no engine yet, and `summary` says so.
 //
+//  Read by `AIMetricsView` (AI Assistant header ▸ chart button), which calls
+//  `loadPersisted()` so the window covers earlier launches, not only the
+//  queries made since this one started.
+//
 //  HOW A ZERO STAYS HONEST. Engines see different things — the NLP path knows
 //  its findings counts; the streaming Apple AI path does not, and its expert
 //  pipeline runs inside a call this view cannot inspect. So each record
@@ -157,7 +161,9 @@ final class AIMetrics: ObservableObject {
 
     // MARK: - Persistence
 
-    private var storeURL: URL? {
+    /// Where records are appended, one JSON object per line. Internal so the
+    /// reading surface can reveal the file; nothing outside this class writes it.
+    var storeURL: URL? {
         guard let dir = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true) else {
             return nil
         }
@@ -184,6 +190,55 @@ final class AIMetrics: ObservableObject {
                 try? data.write(to: url)
             }
         }
+    }
+
+    // MARK: - Loading earlier launches
+
+    /// True once the on-disk history has been merged into `recent`. Until
+    /// then an empty `recent` means "not read yet", not "no queries".
+    @Published private(set) var hasLoadedPersisted = false
+    private var loadRequested = false
+
+    /// Merges the records persisted by earlier launches into `recent`.
+    ///
+    /// `recent` alone would show only the queries made since this launch and
+    /// read as "no queries yet" after a restart — a false statement about a
+    /// file that may hold hundreds. Reading happens off the main actor; the
+    /// merge dedupes by id (a record finalized this launch is also on disk),
+    /// keeps newest first and respects `maxRetained`.
+    func loadPersisted() {
+        guard !loadRequested else { return }
+        loadRequested = true
+        guard let url = storeURL else { hasLoadedPersisted = true; return }
+        let cap = maxRetained
+        queue.async { [weak self] in
+            let data = (try? Data(contentsOf: url)) ?? Data()
+            let persisted = Self.decodeRecords(from: data)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.recent = Self.merge(persisted: persisted, inMemory: self.recent, cap: cap)
+                self.hasLoadedPersisted = true
+            }
+        }
+    }
+
+    /// One record per line; a line that does not decode is skipped rather than
+    /// discarding the whole file. Pure so it can be tested without touching
+    /// Application Support.
+    nonisolated static func decodeRecords(from data: Data) -> [QueryRecord] {
+        let decoder = JSONDecoder()
+        return data.split(separator: UInt8(ascii: "\n")).compactMap { line in
+            try? decoder.decode(QueryRecord.self, from: Data(line))
+        }
+    }
+
+    /// Newest first, deduped by id, capped. Pure for the same reason.
+    nonisolated static func merge(persisted: [QueryRecord],
+                                  inMemory: [QueryRecord],
+                                  cap: Int) -> [QueryRecord] {
+        var seen = Set<UUID>()
+        let combined = (inMemory + persisted).filter { seen.insert($0.id).inserted }
+        return Array(combined.sorted { $0.timestamp > $1.timestamp }.prefix(cap))
     }
 
     // MARK: - Aggregate views

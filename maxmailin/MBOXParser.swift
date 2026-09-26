@@ -237,8 +237,10 @@ struct MBOXParser {
             errorCategories: errorCategories
         )
 
-        let summary = summarize(emails: messages)
-        try saveSessionJSON(exportable: ExportableParsedMBOXFile(emails: messages.map { $0.asExportable() }, summary: summary))
+        // A `parsed_session.json` used to be written here on every array
+        // parse. Nothing read it (checked 2026-09-26: no loader anywhere), it
+        // put message content into Application Support as a side effect of
+        // parsing, and two parallel parses raced on its temp file. Removed.
         return (messages, report)
     }
 
@@ -369,10 +371,35 @@ struct MBOXParser {
             }
         }
 
+        var isFirstLine = true
+        // True from the start of a message until its first blank line. An
+        // envelope-shaped line INSIDE a header block is not a separator: RFC
+        // 4155 puts `From ` before the headers, never among them. A real
+        // Gmail-exported .eml carried its envelope line after the first few
+        // headers, and splitting there produced two half-messages — one with
+        // headers and no body, one with a body and no From (found 2026-09-25
+        // by the real-export test). The offset engine applies the same rule.
+        var headerBlockOpen = false
         while let line = try nextLine() {
             try Task.checkCancellation()
-            let isFromLine = line.hasPrefix("From ") && line.count > 5
+            let envelopeShaped = line.hasPrefix("From ") && line.count > 5
                 && line.range(of: #"\d{4}"#, options: .regularExpression) != nil
+            let isFromLine = envelopeShaped && (!inMessage || !headerBlockOpen)
+            if isFirstLine {
+                isFirstLine = false
+                // §7.3, streaming path: a bare RFC-822 message — a .eml file,
+                // or one member of a Maildir / folder of .eml — has no "From "
+                // envelope line. `parse` and `processRawMessage` both handle
+                // that with a synthetic envelope; this loop did not, and
+                // returned ZERO messages for every such file while reporting
+                // no failure (found 2026-09-25 by the directory-source test).
+                // A file whose first line is a header field is one bare
+                // message; the envelope is added by `processRawMessage`.
+                if !isFromLine, Self.looksLikeHeaderField(line) {
+                    inMessage = true
+                    headerBlockOpen = true
+                }
+            }
             if isFromLine {
                 if inMessage {
                     flushCurrentMessage()
@@ -380,7 +407,11 @@ struct MBOXParser {
                     try await flushBatchIfFull()
                 }
                 inMessage = true
+                headerBlockOpen = true
             } else if inMessage {
+                if headerBlockOpen, line.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "\r", with: "").isEmpty {
+                    headerBlockOpen = false
+                }
                 // §7.2 per-message ceiling: stop buffering an oversized
                 // message; it is flushed as one damaged record.
                 if !oversized {
@@ -500,19 +531,11 @@ struct MBOXParser {
         )
     }
 
-    static func saveSessionJSON(exportable parsed: ExportableParsedMBOXFile) throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(parsed)
-
-        guard let supportDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
-            throw NSError(domain: "MBOXParser", code: 1, userInfo: [NSLocalizedDescriptionKey: "Application Support directory not found"])
-        }
-        let folder = supportDir.appendingPathComponent("mailin", isDirectory: true)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-
-        let output = folder.appendingPathComponent("parsed_session.json")
-        try FileUtils.writeData(data, to: output.path)
+    /// `Name:` at the start of a line, RFC 5322 field-name grammar (printable
+    /// ASCII except colon). Used only to decide whether a file that does not
+    /// open with an mbox envelope is a bare message rather than preamble.
+    static func looksLikeHeaderField(_ line: String) -> Bool {
+        line.range(of: #"^[!-9;-~]+:"#, options: .regularExpression) != nil
     }
 
     static func summarize(emails: [RawEmail]) -> SummaryMetadata {
