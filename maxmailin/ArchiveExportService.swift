@@ -55,8 +55,13 @@ enum ArchiveExportError: LocalizedError {
 final class ArchiveExportService {
     static let shared = ArchiveExportService(archive: .shared)
 
-    private let archive: ArchiveDataService
+    let archive: ArchiveDataService
     init(archive: ArchiveDataService) { self.archive = archive }
+
+    /// Phase C-1 boundary: ArchiveCore does not know the forensic risk model.
+    /// The app installs a scorer when Professional Workflows is on; nil means
+    /// the detailed CSV writes "—" in that column.
+    nonisolated(unsafe) static var riskScoreProvider: (@Sendable (MBOXParser.RawEmail) -> Int)?
 
     /// Stream-export `scope` in `format` to `url`, writing incrementally.
     /// `onProgress` is called after each bounded batch. Returns a receipt.
@@ -352,7 +357,7 @@ final class ArchiveExportService {
         return directory.appendingPathComponent("\(base)-\(UUID().uuidString).\(ext)")
     }
 
-    private func boundedTotal(scope: ArchiveSelectionScope, limit: Int?) async throws -> Int {
+    func boundedTotal(scope: ArchiveSelectionScope, limit: Int?) async throws -> Int {
         let count = try await archive.count(scope: scope)
         if let limit { return min(count, limit) }
         return count
@@ -451,75 +456,17 @@ final class ArchiveExportService {
             return "\"" + sanitized + "\""
         }
         let cc = email.headers["Cc"] ?? email.headers["CC"] ?? ""
-        let risk = ForensicManager.assessRisk(for: email)
+        // The Risk Score column is Professional's number. The app layer
+        // installs the scorer (`ArchiveExportService+Professional`); with Page
+        // 3 off the column reads "—" rather than a fabricated zero.
+        let risk = Self.riskScoreProvider.map { "\($0(email))" } ?? "—"
         let row = [email.headers["Date"] ?? "", email.headers["From"] ?? "",
                    email.headers["To"] ?? "", cc, email.headers["Subject"] ?? "",
                    email.messageType, email.tags.joined(separator: "; "),
                    email.attachments.isEmpty ? "No" : "Yes", String(email.attachments.count),
-                   "\(risk.score)", String(email.plainBody.prefix(200))]
+                   risk, String(email.plainBody.prefix(200))]
             .map(esc).joined(separator: ",")
         return row + "\n"
-    }
-
-    /// Forensic CSV — signed (Ed25519 over the streamed SHA-256).
-    @discardableResult
-    func exportForensicCSV(scope: ArchiveSelectionScope, to url: URL,
-                           batesPrefix: String = "MAIL",
-                           limit: Int? = nil,
-                           onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
-        let forensic = ForensicManager.shared
-        return try await exportTextDocument(
-            scope: scope, to: url, limit: limit, signed: true,
-            header: { _ in ForensicManager.forensicCSVHeader },
-            onProgress: onProgress
-        ) { email, index in
-            forensic.forensicCSVRow(email, bates: ForensicManager.batesNumber(prefix: batesPrefix, index: index + 1))
-        }
-    }
-
-    /// Concordance .dat load file — signed.
-    @discardableResult
-    func exportConcordanceDAT(scope: ArchiveSelectionScope, to url: URL,
-                              batesPrefix: String = "MAIL",
-                              onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
-        let forensic = ForensicManager.shared
-        return try await exportTextDocument(
-            scope: scope, to: url, signed: true,
-            header: { _ in ForensicManager.concordanceDATHeader },
-            onProgress: onProgress
-        ) { email, index in
-            forensic.concordanceDATRow(email, bates: ForensicManager.batesNumber(prefix: batesPrefix, index: index + 1))
-        }
-    }
-
-    /// Hash manifest CSV — signed.
-    @discardableResult
-    func exportHashManifest(scope: ArchiveSelectionScope, to url: URL,
-                            onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
-        let forensic = ForensicManager.shared
-        return try await exportTextDocument(
-            scope: scope, to: url, signed: true,
-            header: { _ in ForensicManager.hashManifestHeader },
-            onProgress: onProgress
-        ) { email, _ in
-            forensic.hashManifestRow(email)
-        }
-    }
-
-    /// Relativity load file — signed.
-    @discardableResult
-    func exportRelativityCSV(scope: ArchiveSelectionScope, to url: URL,
-                             batesPrefix: String = "MAIL",
-                             custodianName: String = "", caseNumber: String = "",
-                             onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
-        try await exportTextDocument(
-            scope: scope, to: url, signed: true,
-            header: { _ in ExportManager.relativityLoadFileHeader + "\r\n" },
-            onProgress: onProgress
-        ) { email, index in
-            ExportManager.relativityRow(email: email, index: index, batesPrefix: batesPrefix,
-                                        custodianName: custodianName, caseNumber: caseNumber) + "\r\n"
-        }
     }
 
     /// Headers-only CSV.
@@ -689,10 +636,7 @@ final class ArchiveExportService {
         let raw = email.rawSource.isEmpty
             ? MBOXRecordBuilder.synthesizeMIME(for: email)
             : email.rawSource
-        // mbox framing: `>From ` quoting anywhere a body line would otherwise
-        // look like a separator.
-        let quoted = raw.replacingOccurrences(of: "\nFrom ", with: "\n>From ")
-        return MBOXRecordBuilder.envelopeLine(for: email) + quoted + "\n\n"
+        return MBOXRecordBuilder.envelopeLine(for: email) + MBOXRecordBuilder.quoteFromLines(raw) + "\n\n"
     }
 
     /// Streams the scope into mbox **partitions** of at most `partitionBytes`,
@@ -846,28 +790,6 @@ final class ArchiveExportService {
             onProgress?(emailsDone, total)
         }
         return (saved, false)
-    }
-
-    /// Streaming integrity verification — same math as
-    /// `ForensicManager.batchVerifyAllEmails`, but over a bounded stream.
-    func verifyIntegrity(scope: ArchiveSelectionScope,
-                         onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> (passed: Int, failed: Int, unverified: Int) {
-        let forensic = ForensicManager.shared
-        var passed = 0, failed = 0, unverified = 0, done = 0
-        let total = try await archive.count(scope: scope)
-        for try await batch in archive.streamSelected(scope: scope) {
-            try Task.checkCancellation()
-            for email in batch {
-                let result = forensic.verifyEmailIntegrity(email)
-                if forensic.perEmailHashes[email.id] == nil { unverified += 1 }
-                else if result.passed { passed += 1 }
-                else { failed += 1 }
-            }
-            done += batch.count
-            onProgress?(done, total)
-        }
-        forensic.logAction("Batch Verification", detail: "\(passed) passed, \(failed) failed, \(unverified) unverified")
-        return (passed, failed, unverified)
     }
 
     // MARK: - PST (streaming, uncapped)

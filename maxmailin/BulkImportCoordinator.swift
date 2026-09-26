@@ -40,7 +40,7 @@
 
 import Foundation
 import CryptoKit
-import SwiftUI
+import Observation
 import os
 
 @MainActor

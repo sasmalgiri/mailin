@@ -433,6 +433,12 @@ final class ModuleRegistry {
         for capability in Capability.all(for: module) {
             CapabilityWiring.apply(capability, isOn: isOn(capability))
         }
+        // C-1 boundary: Page 3's hooks into Archive-owned surfaces follow the
+        // page's switch, so a Page-1-only install never runs forensic code
+        // through an export.
+        if module == .professional {
+            ArchiveExportService.installProfessionalHooks(enabled: isEnabled(.professional))
+        }
     }
 
     /// Every capability of a page that is currently running — the honest

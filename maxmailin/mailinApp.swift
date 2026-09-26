@@ -224,24 +224,6 @@ struct mailinApp: App {
                         // and the read cutover gate on `isActive`. Idempotent —
                         // a fast no-op once active.
                         let storageState = await StorageActivationCoordinator.shared.activate()
-                        // §3.3 R6: the audit chain is Professional-owned. On a
-                        // Page-1-only launch it stays silent; Archive's import
-                        // and export receipts carry Page 1's provenance. When
-                        // Professional is later enabled, the chain's genesis
-                        // entry declares that it begins at enablement.
-                        if modules.isEnabled(.professional) {
-                            _ = try? HMACChainAuditLog.shared.append(
-                                action: "v2.storage.activation",
-                                detail: "SQLite activation state: \(storageState.rawValue)"
-                            )
-                        }
-
-                        // Repair archives imported by pre-full-fidelity builds:
-                        // re-extract message type / attachments / labels /
-                        // domains from the stored raw MIME (bounded pages;
-                        // O(1) no-op once nothing is pending). Fixes empty
-                        // folder buckets + type/attachment filters on old
-                        // archives without a re-import.
                         // UI-test harness: "--uitest" launches into a clean,
                         // deterministic state — onboarding suppressed, demo
                         // archive imported — so XCUITests can click through
@@ -250,58 +232,15 @@ struct mailinApp: App {
                            ProcessInfo.processInfo.arguments.contains("--uitest") {
                             UITestSupport.prepareForUITests()
                         }
-                        if storageState == .active {
-                            let sender = UserDefaults.standard.string(forKey: "defaultSenderEmail") ?? ""
-                            FidelityBackfillJob.shared.kickIfNeeded(senderEmail: sender)
-                            // Attachment-content index (in:attachments searches
-                            // file CONTENTS): bounded background extraction;
-                            // O(1) no-op once everything is indexed. A3: the
-                            // import sheet's choice can switch it off.
-                            if ImportChoices.indexAttachmentTextDefault() {
-                                AttachmentTextIndexJob.shared.kickIfNeeded()
-                            }
-                            // Weekly saved-search digest (opt-in; ≤1/week).
-                            // §3.3 R2: digests belong to AI Insights.
-                            if modules.isEnabled(.aiInsights) {
-                                DigestScheduler.shared.checkAndDeliver()
-                            }
-                            // Ship-ready workflows: the built-in recipes are
-                            // seeded so they're usable immediately — no
-                            // create/configure step. Idempotent upsert.
-                            // §3.3 R2 + directive §1: no workflow-catalog work
-                            // at all on a Professional-disabled launch, so this
-                            // moves to first activation of Page 3.
-                            if modules.isEnabled(.professional) {
-                                Task { await WorkflowService.seedBuiltins() }
-                            }
-                        }
-
-                        // Repair any store↔FTS drift (a crash between the
-                        // store commit and the FTS commit can leave a row in
-                        // the store but unsearchable). Only runs when drift is
-                        // detected; bounded so it can't load an unbounded
-                        // archive into memory.
-                        Task.detached(priority: .utility) {
-                            // Reconcile against the ACTIVE authority. Once SQLite
-                            // is active (Stage 5A), it is the canonical store the
-                            // FTS index must match; before activation, fall back
-                            // to the SwiftData store.
-                            let active = await StorageActivationCoordinator.shared.isActive
-                            let store: any EmailArchiveStore = active ? SQLiteEmailStore.shared : EmailStore.shared
-                            let storeCount = (try? await store.totalCount()) ?? 0
-                            let ftsCount = (try? await FTSSearchIndex.shared.rowCount()) ?? 0
-                            if storeCount > ftsCount {
-                                // Bounded, paged, restartable — no archive-wide
-                                // Set<UUID>, no 100k ceiling. Best-effort at
-                                // launch; a failure just retries next launch.
-                                _ = try? await FTSReconciler.reconcile(store: store, fts: .shared)
-                            }
-                            // Collapse any duplicate FTS rows left by a pre-
-                            // idempotent build (registry-masked, so the reconcile
-                            // above can't see them). Bounded per year-shard; a
-                            // no-op once clean.
-                            _ = try? await FTSSearchIndex.shared.dedupeShards()
-                        }
+                        // C-2: every launch-time job — fidelity repair,
+                        // attachment-text index, store↔FTS reconcile, weekly
+                        // digest, workflow seed, audit-chain launch entry —
+                        // runs through ONE inventory, gated by its owning page
+                        // and registered in `modules.jobs` while it runs
+                        // (§3.3 R2/R6). See `LaunchJobs.inventory`.
+                        LaunchJobs.run(modules: modules,
+                                       storageActive: storageState == .active,
+                                       storageStateLabel: storageState.rawValue)
 
                         // Self-test exercises the v2 storage + search +
                         // import pipeline against the bundled sample once
