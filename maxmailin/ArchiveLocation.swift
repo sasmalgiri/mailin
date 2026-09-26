@@ -198,10 +198,10 @@ struct ArchiveLocationStore: Sendable {
     /// would use the chosen location while nothing read the stored value at
     /// all — the claim is now true as written.
     static let moveIsNotAutomated = """
-        Choosing a new location does not move your existing archive, and mailin will keep using \
-        the archive you already have. A location you pick here is used only when there is no \
-        archive yet. To move what you already have, quit mailin, copy the archive folder to the \
-        new location, and relaunch.
+        Choosing a folder before any archive exists makes it the home of the archive you import \
+        next. With an archive already here, choosing a folder proposes a verified move — see \
+        “Move the existing archive” below; nothing moves until you confirm it, and the copy on \
+        this Mac stays until you delete it.
         """
 
     func load() -> ArchiveLocation? {

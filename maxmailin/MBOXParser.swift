@@ -180,6 +180,11 @@ struct MBOXParser {
     /// A single RFC-822 message above this ceiling is counted as damaged
     /// (category "oversized_message") and skipped with a clean report —
     /// never silently truncated, never an OOM.
+    ///
+    /// 3.0: applies to the STREAMING parser only, which is now the fallback
+    /// engine (`Capability.offsetParser` is on by default and archives such
+    /// messages instead). Scheduled for removal with the streaming parser in
+    /// 3.1 — see `SIZE_LIMITS_DESIGN.md` §S4.
     static let maxMessageBytes = 100 * 1024 * 1024
 
     static func parse(

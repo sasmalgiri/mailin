@@ -68,23 +68,13 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// `ArchiveLocationView` telling the user "mailin will use the new
     /// location for archives created from now on" was simply false. It is now
     /// true as written: new archives go there, existing ones do not move.
+    ///
+    /// 3.0 (B5): the rules live in `ArchiveLayout.resolveRoot`, shared with
+    /// the FTS shards so the database and the index always sit under ONE
+    /// root. A verified `ArchiveRelocator` move is honoured when its
+    /// destination is reachable; otherwise the copy on this Mac is used.
     static var productionDirectory: URL {
-        let fallback = defaultProductionDirectory
-        guard let chosen = ArchiveLocationStore(url: ArchiveLocationStore.productionURL).load()
-        else { return fallback }
-
-        // An archive already at the default path wins, always.
-        if FileManager.default.fileExists(
-            atPath: fallback.appendingPathComponent("emails.db").path) {
-            return fallback
-        }
-        // The chosen volume must be present and writable right now; a detached
-        // external disk falls back rather than creating a second empty archive
-        // somewhere unexpected.
-        let target = chosen.url.appendingPathComponent("mailin-archive", isDirectory: true)
-            .appendingPathComponent("sqlite", isDirectory: true)
-        guard ArchiveLocationPolicy.verdict(for: chosen.url).isUsable else { return fallback }
-        return target
+        ArchiveLayout.sqliteDirectory(under: ArchiveLayout.productionRoot)
     }
 
     /// Isolated on-disk store under `directory` (harness/test), or the shared

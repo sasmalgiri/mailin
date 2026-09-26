@@ -147,14 +147,19 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
         switch self {
         // The engines added in this release cycle. None has been run against a
         // real archive yet, so none of them changes behaviour on install.
-        case .offsetParser, .locatorReads:
-            return .experimental
-        case .blobTier, .externalStorage:
+        case .externalStorage:
             return .preview
-        // Everything that shipped in 2.x / 2.1 and has been used — plus the
-        // A3/A4 import surfaces, which are Page 1's default import flow in 3.0
-        // (owner decision 2026-09-27; exercised in the Phase J runs).
-        case .guidedImport, .importQueue,
+        // S4 verdict (owner, 2026-09-27): the offset engine is 3.0's default
+        // import engine — equal throughput to the streaming parser on the
+        // 1.5 GB real-content run, imports the >100 MB messages the streaming
+        // parser refuses, peak independent of message size, and the only
+        // producer of the locators S5's per-part reads need. The blob tier is
+        // its storage prerequisite, so it ships on with it. The streaming
+        // parser stays as the fallback engine for one release (3.1 removes it
+        // together with `MBOXParser.maxMessageBytes`).
+        // A3/A4 import surfaces are Page 1's default import flow in 3.0.
+        case .offsetParser, .locatorReads, .blobTier,
+             .guidedImport, .importQueue,
              .searchCoverageBadge, .aiAssistant, .aiDigest, .anomalyDetection,
              .smartAutoTagger, .topicClusters, .threadSummarizer, .smartAlerts,
              .keywordMonitor, .predictiveCoding, .custodianPanel,

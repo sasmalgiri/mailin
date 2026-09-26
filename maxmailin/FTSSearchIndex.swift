@@ -1257,12 +1257,9 @@ actor FTSSearchIndex {
             return override
         }
         #endif
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first ?? FileManager.default.temporaryDirectory
-        return appSupport
-            .appendingPathComponent("com.ecosanskriti.mailin", isDirectory: true)
-            .appendingPathComponent("fts5", isDirectory: true)
+        // B5: the shards follow the store — one root for both, resolved by
+        // `ArchiveLayout` (chosen location, verified relocation, fallback).
+        return ArchiveLayout.ftsDirectory(under: ArchiveLayout.productionRoot)
     }
 
     private func shardURL(year: Int) throws -> URL {

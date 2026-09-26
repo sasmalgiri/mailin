@@ -292,6 +292,28 @@ final class BulkImportCoordinator {
         }
     }
 
+    /// B5 unplug-before-write: a batch never starts against a store whose
+    /// volume has gone. If the archive directory is not reachable (external
+    /// disk detached, disk image ejected) the run pauses with that reason and
+    /// polls until it is back or the run is cancelled. SQLite would otherwise
+    /// report the loss as a generic I/O error mid-transaction.
+    private func waitForStoreVolume() async {
+        let directory = store.storeDirectory
+        var announced = false
+        while !Task.isCancelled && !FileManager.default.fileExists(atPath: directory.path) {
+            if !announced {
+                batchPauseReason = "Archive volume detached — reconnect \(directory.deletingLastPathComponent().lastPathComponent) to continue"
+                Self.logger.notice("Import paused: archive directory unreachable at \(directory.path, privacy: .public)")
+                announced = true
+            }
+            try? await Task.sleep(for: .seconds(2))
+        }
+        if announced {
+            batchPauseReason = nil
+            Self.logger.notice("Import resumed: archive directory reachable again")
+        }
+    }
+
     /// Thrown inside a file when `skipCurrentSource` was requested.
     struct SkipSourceSignal: Error {}
 
@@ -609,8 +631,9 @@ final class BulkImportCoordinator {
                         try Task.checkCancellation()
                         // A4: a user pause holds here, between batches, so the
                         // rows already committed are exactly what the
-                        // checkpoint says.
+                        // checkpoint says. B5: so does a detached volume.
                         await self.waitWhilePaused()
+                        await self.waitForStoreVolume()
                         try Task.checkCancellation()
 
                         let batchStart = parsedInFile

@@ -573,9 +573,20 @@ Not measured: import **throughput** offset versus streaming. Memory was the
 question the design rested on; speed is a separate claim and is not asserted
 anywhere.
 
-Shipped as `Capability.offsetParser`, **Experimental, OFF by default**. The
-streaming parser is untouched and remains the default path, so this is a
-switch rather than a migration.
+Shipped in 2.1 as `Capability.offsetParser`, Experimental, OFF by default.
+
+**3.0 verdict (owner, 2026-09-27): ON by default.** `offsetParser`,
+`locatorReads` and their storage prerequisite `blobTier` are Stable in 3.0,
+so a fresh install imports through the offset engine. Grounds: equal
+throughput to the streaming parser on the 1.5 GB real-content run (1.3 MiB/s
+both, `SCALE_RESULTS.md`), it imports the >100 MB messages the streaming
+parser reports as damaged, its peak is independent of message size, and it
+is the only producer of the `message_locators` / `part_locators` that S5's
+per-part reads depend on. The streaming parser remains the fallback engine
+for one release and is removed in 3.1 together with
+`MBOXParser.maxMessageBytes`. Executed at 3.0's Phase J: the 1 GB format
+matrix and the >1 GB single-message run (S3b/S6) run through the offset
+engine as the default.
 
 Three deviations from the plan above, each deliberate:
 

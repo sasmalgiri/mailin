@@ -29,12 +29,20 @@ struct ArchiveLocationView: View {
     /// no way to find that out after the import that created them. The receipt
     /// reports it per run; this reports it for the archive as it stands.
     @State private var deferredBodies: Int?
+    // B5: the automated move.
+    @State private var relocationPlan: RelocationPlan?
+    @State private var relocationProgress: (done: Int64, total: Int64)?
+    @State private var relocationReceipt: RelocationReceipt?
+    @State private var relocationError: String?
+    @State private var isRelocating = false
+    @State private var confirmDeleteRetired = false
+    @State private var retiredCopy: URL?
+    @State private var retiredBytes: Int64 = 0
 
     private let store = ArchiveLocationStore(url: ArchiveLocationStore.productionURL)
 
-    private var currentDirectory: URL {
-        chosen?.url ?? SQLiteEmailStore.productionDirectory.deletingLastPathComponent()
-    }
+    /// The root actually in use — chosen, relocated or default.
+    private var currentDirectory: URL { ArchiveLayout.productionRoot }
 
     var body: some View {
         Form {
@@ -42,6 +50,12 @@ struct ArchiveLocationView: View {
 
             if modules.isOn(.externalStorage) {
                 chooseSection
+                if relocationPlan != nil || isRelocating || relocationReceipt != nil || relocationError != nil {
+                    moveSection
+                }
+                if retiredCopy != nil {
+                    retiredSection
+                }
             } else {
                 Section {
                     Label("Switch on “Archive on another volume” in Settings ▸ Modules ▸ Features to choose a different location.",
@@ -68,6 +82,18 @@ struct ArchiveLocationView: View {
             }
             Button("Show in Finder") { revealInFinder() }
                 .controlSize(.small)
+
+            if ArchiveLayout.isShowingFallbackCopy {
+                Label("""
+                    The archive was moved to another volume that is not connected right now. \
+                    You are seeing the copy left on this Mac, which may be behind. Reconnect the \
+                    volume and relaunch to use the moved archive.
+                    """, systemImage: "externaldrive.badge.exclamationmark")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("archive.location.fallbackBanner")
+            }
 
             if let footprint {
                 LabeledContent("Total", value: bytes(footprint.total))
@@ -148,6 +174,82 @@ struct ArchiveLocationView: View {
         }
     }
 
+    // MARK: Move (B5)
+
+    private var moveSection: some View {
+        Section {
+            if let plan = relocationPlan, relocationReceipt == nil {
+                LabeledContent("Archive", value: bytes(plan.archiveBytes) + " in \(plan.fileCount) files")
+                LabeledContent("Free there", value: bytes(plan.freeBytes))
+                LabeledContent("Destination") {
+                    Text(plan.destinationRoot.path)
+                        .font(.system(.caption, design: .monospaced))
+                        .lineLimit(2).truncationMode(.middle)
+                }
+                if let why = plan.refusalReason {
+                    Label(why, systemImage: "xmark.octagon")
+                        .font(.caption).foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if ImportQueue.shared.isActive {
+                    Label("An import is running. Let it finish or cancel it before moving the archive.", systemImage: "clock")
+                        .font(.caption).foregroundStyle(.orange)
+                } else if isRelocating, let progress = relocationProgress {
+                    ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1)))
+                    Text("\(bytes(progress.done)) of \(bytes(progress.total)) copied — verifying follows")
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                } else {
+                    Button("Move the archive there now") { Task { await relocate(plan) } }
+                        .buttonStyle(.borderedProminent)
+                        .help("Copies the database, message bodies and search index, verifies every file and the row count, then records the new location. The copy on this Mac stays until you delete it.")
+                        .accessibilityIdentifier("archive.location.moveNow")
+                }
+            }
+            if let receipt = relocationReceipt {
+                Label(receipt.summary, systemImage: "checkmark.seal.fill")
+                    .font(.caption).foregroundStyle(.green)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("archive.location.moveReceipt")
+            }
+            if let relocationError {
+                Label(relocationError, systemImage: "xmark.octagon")
+                    .font(.caption).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        } header: {
+            Text("Move the existing archive").font(.headline)
+        } footer: {
+            Text("""
+                The move is a verified copy: byte counts for every file, the database hash, and \
+                a fresh open of the copy that must report the same number of messages. Nothing on \
+                this Mac is removed by the move. If the new volume is ever disconnected, mailin \
+                falls back to the copy here and says so.
+                """)
+            .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var retiredSection: some View {
+        Section {
+            Text("A copy of the archive from before the move is still on this Mac (\(bytes(retiredBytes))). The moved archive is the one in use.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Delete the copy on this Mac…", role: .destructive) { confirmDeleteRetired = true }
+                .controlSize(.small)
+                .accessibilityIdentifier("archive.location.deleteRetired")
+                .confirmationDialog("Delete the copy on this Mac?", isPresented: $confirmDeleteRetired, titleVisibility: .visible) {
+                    Button("Delete \(bytes(retiredBytes))", role: .destructive) {
+                        do { try ArchiveRelocator.deleteRetiredCopy() } catch { relocationError = error.localizedDescription }
+                        refresh()
+                    }
+                    Button("Keep it", role: .cancel) {}
+                } message: {
+                    Text("Only the moved archive will remain. If its volume is disconnected, mailin will have nothing to show until it is reconnected.")
+                }
+        } header: {
+            Text("Copy on this Mac").font(.headline)
+        }
+    }
+
     // MARK: Actions
 
     private func handle(_ result: Result<[URL], Error>) {
@@ -160,13 +262,46 @@ struct ArchiveLocationView: View {
             path: directory.path,
             bookmark: ArchiveLocationStore.bookmark(for: directory),
             recordedAt: Date())
-        store.save(location)
+        // With an archive already here, choosing a folder proposes the move
+        // rather than silently recording a location that would only apply to
+        // a NEW archive.
+        if ArchiveLayout.hasArchive(at: ArchiveLayout.productionRoot) {
+            relocationReceipt = nil
+            relocationError = nil
+            relocationPlan = ArchiveRelocator.plan(destinationVolume: directory)
+        } else {
+            store.save(location)
+        }
         chosen = location
         refresh()
     }
 
+    private func relocate(_ plan: RelocationPlan) async {
+        isRelocating = true
+        relocationError = nil
+        relocationProgress = (0, plan.archiveBytes)
+        defer { isRelocating = false }
+        do {
+            let receipt = try await ArchiveRelocator.perform(plan, store: SQLiteEmailStore.shared, fts: .shared,
+                                                             progress: { done, total in
+                                                                 Task { @MainActor in relocationProgress = (done, total) }
+                                                             })
+            relocationReceipt = receipt
+            relocationPlan = nil
+            refresh()
+        } catch {
+            relocationError = error.localizedDescription
+        }
+    }
+
     private func refresh() {
         chosen = store.load()
+        retiredCopy = ArchiveRelocator.retiredCopyOnThisMac()
+        if let retiredCopy {
+            let measured = ArchiveRelocator.measure([ArchiveLayout.sqliteDirectory(under: retiredCopy),
+                                                     ArchiveLayout.ftsDirectory(under: retiredCopy)])
+            retiredBytes = measured.bytes
+        }
         let directory = SQLiteEmailStore.productionDirectory
         Task.detached(priority: .utility) {
             let measured = StoragePlanner.archiveFootprint(storeDirectory: directory)
