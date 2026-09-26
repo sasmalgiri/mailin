@@ -202,6 +202,14 @@ struct ContentView: View {
             modules: modules,
             coordinator: viewModel.importCoordinator,
             onStart: { choices in startImport(choices) }))
+        // H3/H4: mail-client handoff sheets, same type-checker reasoning.
+        .modifier(HandoffSurfacesModifier(
+            showImport: $appState.showHandoffImport,
+            showExport: $appState.showHandoffExport,
+            viewModel: viewModel,
+            exportScope: { modelVM.showParsedList ? filteredScope : .query(.all, exclusions: []) },
+            exportScopeLabel: { modelVM.showParsedList && !modelVM.searchText.isEmpty ? "The current filter" : "The whole archive" },
+            onImport: { urls in handleMultipleFiles(urls) }))
         .onChange(of: viewModel.parseErrors) { _, errors in
             // Surface a friendly error sheet when parsing fails. Apple App
             // Review specifically tests corrupt/unsupported inputs.

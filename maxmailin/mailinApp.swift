@@ -383,6 +383,11 @@ struct mailinApp: App {
             }
             .keyboardShortcut("o", modifiers: .command)
 
+            // H3: the guided route from a mail client's own export.
+            Button("Import from Apple Mail or Thunderbird...") {
+                appState.showHandoffImport = true
+            }
+
             Divider()
 
             // A5: the receipt is the answer to "did that import actually get
@@ -418,6 +423,12 @@ struct mailinApp: App {
 
             Button("Export Headers Only (CSV)...") {
                 appState.triggerExportHeadersCSV = true
+            }
+            .disabled(!appState.hasParsedEmails)
+
+            // H4: verified mbox handoff with the client's import steps.
+            Button("Export to Apple Mail or Thunderbird...") {
+                appState.showHandoffExport = true
             }
             .disabled(!appState.hasParsedEmails)
 
@@ -1020,6 +1031,9 @@ class AppStateManager {
     var showAllAttachmentsGallery = false
     var showIOCExtractor = false
     var showGuidedSearch = false
+    /// H3/H4: guided handoff to and from Apple Mail / Thunderbird.
+    var showHandoffImport = false
+    var showHandoffExport = false
     var showExportProgress = false
     var exportProgressValue: Double = 0
     var exportProgressMessage: String = ""
