@@ -37,8 +37,15 @@ struct ExportReceipt: Codable, Identifiable, Sendable, Equatable {
     var errorMessage: String?
     var startedAt: Date
     var completedAt: Date
+    /// A8 resume: for an interrupted run whose format keeps its partial output,
+    /// the request that continues it from where it stopped. Optional and
+    /// defaulted, so receipts written before this field decode unchanged.
+    var resumeRequest: ExportRequest? = nil
 
     var durationSeconds: Double { completedAt.timeIntervalSince(startedAt) }
+
+    /// True when Resume can pick this export up.
+    var isResumable: Bool { resumeRequest != nil && outcome != .complete }
 
     var destinationURL: URL { URL(fileURLWithPath: destination) }
 
@@ -56,9 +63,13 @@ struct ExportReceipt: Codable, Identifiable, Sendable, Equatable {
         case .truncated:
             return "Truncated — \(written) of \(requested ?? written) written (free-tier limit)"
         case .cancelled:
-            return "Cancelled — \(written) written before the stop; partial output removed where the writer could"
+            return resumeRequest != nil
+                ? "Cancelled — \(written) written before the stop; partial output kept, Resume continues from there"
+                : "Cancelled — \(written) written before the stop; partial output removed where the writer could"
         case .failed:
-            return "Failed — \(written) written before the error"
+            return resumeRequest != nil
+                ? "Failed — \(written) written before the error; partial output kept, Resume continues from there"
+                : "Failed — \(written) written before the error"
         }
     }
 
@@ -75,6 +86,7 @@ struct ExportReceipt: Codable, Identifiable, Sendable, Equatable {
         if let sha256Hex { lines.append("SHA-256: \(sha256Hex)") }
         if let signaturePath { lines.append("Signature: \(signaturePath)") }
         if let errorMessage { lines.append("Error: \(errorMessage)") }
+        if let resumeRequest { lines.append("Resumable: yes — continues at message \(resumeRequest.skipFirst + 1)") }
         lines.append("Started: \(startedAt.formatted(date: .abbreviated, time: .standard))")
         lines.append("Finished: \(completedAt.formatted(date: .abbreviated, time: .standard)) (\(String(format: "%.1f", durationSeconds)) s)")
         lines.append("Receipt id: \(id.uuidString)")

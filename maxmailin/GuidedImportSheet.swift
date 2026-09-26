@@ -71,15 +71,39 @@ struct ImportPlan: Sendable {
     }
 }
 
+/// What the user decided on the sheet. Everything the import needs beyond the
+/// files themselves.
+struct ImportChoices: Sendable {
+    var urls: [URL]
+    var dedupPolicy: DedupPolicy
+    var copiesOriginals: Bool
+    /// Run the attachment-content indexer after the import (`in:attachments`
+    /// searches file contents). Stored under `indexAttachmentTextKey` so the
+    /// launch-time kick honours the last choice.
+    var indexAttachmentText: Bool
+
+    static let indexAttachmentTextKey = "indexAttachmentTextAfterImport"
+
+    static func indexAttachmentTextDefault(_ defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: indexAttachmentTextKey) == nil ? true : defaults.bool(forKey: indexAttachmentTextKey)
+    }
+}
+
 struct GuidedImportSheet: View {
     let urls: [URL]
     let dedupPolicy: DedupPolicy
     let copiesOriginals: Bool
-    let onStart: ([URL]) -> Void
+    let onStart: (ImportChoices) -> Void
     let onCancel: () -> Void
 
     @Environment(ModuleRegistry.self) private var modules
     @State private var plan: ImportPlan?
+    // A3: the choices the plan asks for, made on the sheet rather than
+    // inherited silently from Settings.
+    @State private var chosenDedup: DedupPolicy = .messageID
+    @State private var chosenCopiesOriginals = true
+    @State private var chosenIndexAttachmentText = ImportChoices.indexAttachmentTextDefault()
+    @State private var didSeedChoices = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -89,6 +113,7 @@ struct GuidedImportSheet: View {
                 VStack(alignment: .leading, spacing: 18) {
                     if let plan {
                         whatItIs(plan)
+                        choices
                         whatItCosts(plan)
                         whatMayBeLost(plan)
                         whatHappensNext(plan)
@@ -104,10 +129,42 @@ struct GuidedImportSheet: View {
             footer
         }
         .frame(minWidth: 540, minHeight: 460)
-        .task { await build() }
+        .onAppear {
+            guard !didSeedChoices else { return }
+            chosenDedup = dedupPolicy
+            chosenCopiesOriginals = copiesOriginals
+            didSeedChoices = true
+        }
+        // The space requirement depends on copy-vs-reference, so the plan is
+        // rebuilt when that choice changes.
+        .task(id: chosenCopiesOriginals) { await build() }
     }
 
     // MARK: Sections
+
+    /// A3: duplicate policy, originals, indexing — chosen here, before Start.
+    private var choices: some View {
+        section("Choices", systemImage: "slider.horizontal.3") {
+            Picker("Duplicates", selection: $chosenDedup) {
+                Text("Skip messages already in the archive").tag(DedupPolicy.messageID)
+                Text("Skip duplicates, including re-encoded copies").tag(DedupPolicy.messageIDOrCanonicalFingerprint)
+                Text("Keep every copy").tag(DedupPolicy.preserveAll)
+            }
+            .help("Skip compares Message-IDs against the archive; Keep every copy imports each occurrence, which is what a forensic intake usually wants")
+            .accessibilityIdentifier("import.sheet.duplicates")
+            Picker("Originals", selection: $chosenCopiesOriginals) {
+                Text("Copy into the archive").tag(true)
+                Text("Reference where they are").tag(false)
+            }
+            .help("Copying doubles the source's contribution to the space requirement; referencing keeps one copy and needs the source to stay where it is")
+            .accessibilityIdentifier("import.sheet.originals")
+            Toggle("Index attachment contents after import", isOn: $chosenIndexAttachmentText)
+                .help("Extracts text from attachments in the background so in:attachments finds words inside PDFs and documents; off saves time and disk")
+                .accessibilityIdentifier("import.sheet.attachmentText")
+        }
+        .pickerStyle(.menu)
+        .controlSize(.small)
+    }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -215,12 +272,15 @@ struct GuidedImportSheet: View {
             row("Engine", modules.isOn(.offsetParser)
                 ? "Offset parser (no message size limit)"
                 : "Streaming parser")
-            row("Duplicates", dedupPolicy == .preserveAll
+            row("Duplicates", chosenDedup == .preserveAll
                 ? "Keep every copy"
                 : "Skip messages already in the archive")
-            row("Originals", copiesOriginals
+            row("Originals", chosenCopiesOriginals
                 ? "Copied into the archive"
                 : "Referenced where they are")
+            row("Attachments", chosenIndexAttachmentText
+                ? "Contents indexed in the background after import"
+                : "Stored and exported; contents not indexed")
             row("Large bodies", modules.isOn(.blobTier)
                 ? "Stored beside the database above 8 MB"
                 : "Stored inside the database")
@@ -239,7 +299,10 @@ struct GuidedImportSheet: View {
             Button("Cancel", role: .cancel) { onCancel() }
                 .keyboardShortcut(.cancelAction)
             Button("Start import") {
-                onStart(plan?.supported.map(\.url) ?? urls)
+                onStart(ImportChoices(urls: plan?.supported.map(\.url) ?? urls,
+                                      dedupPolicy: chosenDedup,
+                                      copiesOriginals: chosenCopiesOriginals,
+                                      indexAttachmentText: chosenIndexAttachmentText))
             }
             .keyboardShortcut(.defaultAction)
             .buttonStyle(.borderedProminent)
@@ -258,7 +321,7 @@ struct GuidedImportSheet: View {
     private func build() async {
         let destination = SQLiteEmailStore.productionDirectory
         let sources = urls
-        let copies = copiesOriginals
+        let copies = chosenCopiesOriginals
         let built = await Task.detached(priority: .userInitiated) {
             ImportPlan.build(urls: sources, destination: destination, copiesOriginals: copies)
         }.value

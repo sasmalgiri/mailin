@@ -155,6 +155,10 @@ final class BulkImportCoordinator {
         /// Bounded preview of committed emails (never more than previewCap
         /// total across the run) so the legacy in-RAM UI keeps working (1e).
         var onPreviewBatch: (@MainActor ([MBOXParser.RawEmail]) -> Void)? = nil
+        /// A4: asked before each file for which of the remaining sources to
+        /// take next, so the queue's order (after the user reorders it) is the
+        /// order the run follows. nil or an unknown URL = the next in line.
+        var nextSource: (@MainActor ([URL]) -> URL?)? = nil
         /// Every batch that was committed to the store this run — for
         /// forensic hash registration over the persisted corpus (C1).
         var onCommittedBatch: (@MainActor ([MBOXParser.RawEmail]) -> Void)? = nil
@@ -212,9 +216,85 @@ final class BulkImportCoordinator {
         /// False when the receipt could not be written to disk (surfaced,
         /// never `try?`-swallowed).
         var receiptPersisted = false
+        /// A4: files the user stopped mid-way (checkpoint kept).
+        var stoppedByUser: [StoppedSource] = []
+    }
+
+    struct StoppedSource: Equatable, Sendable {
+        let filename: String
+        let messagesCommitted: Int
     }
 
     var status: Status = .idle
+
+    // MARK: - A4 live control and statistics
+
+    /// Per-run, per-file figures the import queue shows: stage, throughput,
+    /// batch envelope, indexed fraction, ETA-as-estimate. Updated on the main
+    /// actor at file and batch boundaries only.
+    struct LiveStats: Equatable, Sendable {
+        var currentFile: String?
+        var currentPath: String?
+        var fileIndex = 0
+        var fileCount = 0
+        var fileBytes: Int64 = 0
+        var fileFraction: Double = 0
+        var fileStartedAt: Date?
+        var messagesThisFile = 0
+        var bytesCommittedThisFile = 0
+        var persistedThisRun = 0
+        var indexedThisRun = 0
+        var envelope: BatchEnvelope?
+        var indexBacklog = false
+
+        /// Bytes per second over this file so far, from committed batches.
+        var throughputBytesPerSecond: Double? {
+            guard let fileStartedAt, bytesCommittedThisFile > 0 else { return nil }
+            let elapsed = Date().timeIntervalSince(fileStartedAt)
+            return elapsed > 0.5 ? Double(bytesCommittedThisFile) / elapsed : nil
+        }
+        /// Seconds left for this file at the current rate — an estimate.
+        var estimatedSecondsRemaining: Double? {
+            guard let rate = throughputBytesPerSecond, rate > 0, fileBytes > 0 else { return nil }
+            let remaining = Double(fileBytes) * max(0, 1 - fileFraction)
+            return remaining / rate
+        }
+        var indexedFraction: Double? {
+            guard persistedThisRun > 0 else { return nil }
+            return Double(indexedThisRun) / Double(persistedThisRun)
+        }
+    }
+    private(set) var live = LiveStats()
+
+    /// True while the user has paused the run. Distinct from the controller's
+    /// pressure pause, which clears by itself.
+    private(set) var isPausedByUser = false
+    private var skipCurrentSourceRequested = false
+
+    /// Why nothing is moving, if nothing is: the user's pause or the
+    /// controller's pressure reason. nil while running.
+    var pauseReason: String? {
+        isPausedByUser ? "Paused by you" : batchPauseReason
+    }
+
+    func pause() { isPausedByUser = true }
+    func resume() { isPausedByUser = false }
+
+    /// Stop the file currently importing after its batch commits; the run
+    /// continues with the next file. The file keeps its checkpoint, so
+    /// importing it again resumes where it stopped.
+    func skipCurrentSource() { skipCurrentSourceRequested = true }
+
+    /// Blocks at a batch boundary while the user's pause is on.
+    private func waitWhilePaused() async {
+        while isPausedByUser && !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(300))
+        }
+    }
+
+    /// Thrown inside a file when `skipCurrentSource` was requested.
+    struct SkipSourceSignal: Error {}
+
     var lastFinishedAt: Date?
     /// The signed receipt from the most recent import run (Phase 12).
     var lastReceipt: ImportReceipt?
@@ -304,6 +384,8 @@ final class BulkImportCoordinator {
                     Self.logger.notice("Import resumed: pressure cleared")
                     batchPauseReason = nil
                 }
+                live.envelope = envelope
+                live.indexBacklog = indexBacklog
                 return envelope
             case .pause(let reason):
                 if batchPauseReason != reason {
@@ -396,9 +478,36 @@ final class BulkImportCoordinator {
         var sources: [ImportReceipt.SourceRecord] = []
         var previewRemaining = max(0, options.previewCap)
 
-        fileLoop: for (fileIndex, url) in urls.enumerated() {
+        // A4: the run pulls its next source from what remains, so a reorder in
+        // the queue takes effect for every file not yet started.
+        var remaining = urls
+        var nextFileIndex = 0
+        isPausedByUser = false
+        skipCurrentSourceRequested = false
+        live = LiveStats(fileCount: urls.count)
+
+        fileLoop: while !remaining.isEmpty {
             try Task.checkCancellation()
+            await waitWhilePaused()
+            let url: URL
+            if let pick = callbacks.nextSource,
+               let chosen = await MainActor.run(body: { pick(remaining) }),
+               let at = remaining.firstIndex(of: chosen) {
+                url = remaining.remove(at: at)
+            } else {
+                url = remaining.removeFirst()
+            }
+            let fileIndex = nextFileIndex
+            nextFileIndex += 1
             let sourceName = url.lastPathComponent
+            live.currentFile = sourceName
+            live.currentPath = url.path
+            live.fileIndex = fileIndex
+            live.fileBytes = Int64((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+            live.fileFraction = 0
+            live.fileStartedAt = Date()
+            live.messagesThisFile = 0
+            live.bytesCommittedThisFile = 0
 
             // Per-file parse/persist state, visible to the batch closure.
             var parsedInFile = 0            // parsed-message ordinal within this file
@@ -498,6 +607,11 @@ final class BulkImportCoordinator {
                     let persistBatch: ([MBOXParser.RawEmail]) async throws -> Void = { [weak self] batch in
                         guard let self else { return }
                         try Task.checkCancellation()
+                        // A4: a user pause holds here, between batches, so the
+                        // rows already committed are exactly what the
+                        // checkpoint says.
+                        await self.waitWhilePaused()
+                        try Task.checkCancellation()
 
                         let batchStart = parsedInFile
                         parsedInFile += batch.count
@@ -579,6 +693,13 @@ final class BulkImportCoordinator {
                         )
                         summary.persistAttempted += pending.count
                         summary.blockedByTombstone += insertResult.blockedByTombstoneIDs.count
+                        let committedCount = pending.count
+                        let persistedSoFar = summary.persistAttempted
+                        await MainActor.run {
+                            self.live.messagesThisFile += committedCount
+                            self.live.bytesCommittedThisFile += batchBytes
+                            self.live.persistedThisRun = persistedSoFar
+                        }
 
                         try Task.checkCancellation()
 
@@ -601,6 +722,8 @@ final class BulkImportCoordinator {
                                 try await fts.indexBatch(toIndex)
                             }
                             summary.indexed += toIndex.count
+                            let indexedSoFar = summary.indexed
+                            await MainActor.run { self.live.indexedThisRun = indexedSoFar }
                         } catch {
                             summary.ftsDegraded = true
                             summary.ftsFailedBatchCount += 1
@@ -672,6 +795,12 @@ final class BulkImportCoordinator {
                         }
 
                         if capped { throw CapReachedSignal() }
+                        // A4: "Stop this source" takes effect here, after the
+                        // batch and its checkpoint are committed.
+                        if await MainActor.run(body: { self.skipCurrentSourceRequested }) {
+                            await MainActor.run { self.skipCurrentSourceRequested = false }
+                            throw SkipSourceSignal()
+                        }
                         // pending falls out of scope here — its storage is
                         // released before the next batch begins.
                     }
@@ -695,7 +824,8 @@ final class BulkImportCoordinator {
                             envelopeProvider: envelopeProvider,
                             sourceDigest: hash,
                             onProgress: { prog in
-                                Task { @MainActor in
+                                Task { @MainActor [weak self] in
+                                    self?.live.fileFraction = prog
                                     callbacks.onFileProgress?(sourceName, fileIndex, urls.count, prog)
                                 }
                             }
@@ -716,7 +846,8 @@ final class BulkImportCoordinator {
                             batchSize: batchSize,
                             envelopeProvider: envelopeProvider,
                             onProgress: { prog in
-                                Task { @MainActor in
+                                Task { @MainActor [weak self] in
+                                    self?.live.fileFraction = prog
                                     callbacks.onFileProgress?(sourceName, fileIndex, urls.count, prog)
                                 }
                             },
@@ -765,6 +896,12 @@ final class BulkImportCoordinator {
                     filename: sourceName,
                     message: "Could not save emails to the archive: \(error.underlying.localizedDescription)"
                 ))
+            } catch is SkipSourceSignal {
+                // A4: stopped by the user after a committed batch. Not an
+                // error — the checkpoint stays, so importing the file again
+                // resumes exactly here. The run moves on to the next file.
+                summary.stoppedByUser.append(StoppedSource(filename: sourceName, messagesCommitted: committedOrdinal))
+                summary.warnings.append("\(sourceName) was stopped by you after \(committedOrdinal) messages; import it again to resume from there.")
             } catch {
                 summary.fileErrors.append(FileError(
                     filename: sourceName,

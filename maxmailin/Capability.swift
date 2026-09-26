@@ -149,10 +149,13 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
         // real archive yet, so none of them changes behaviour on install.
         case .offsetParser, .locatorReads:
             return .experimental
-        case .blobTier, .externalStorage, .guidedImport, .importQueue:
+        case .blobTier, .externalStorage:
             return .preview
-        // Everything that shipped in 2.x / 2.1 and has been used.
-        case .searchCoverageBadge, .aiAssistant, .aiDigest, .anomalyDetection,
+        // Everything that shipped in 2.x / 2.1 and has been used — plus the
+        // A3/A4 import surfaces, which are Page 1's default import flow in 3.0
+        // (owner decision 2026-09-27; exercised in the Phase J runs).
+        case .guidedImport, .importQueue,
+             .searchCoverageBadge, .aiAssistant, .aiDigest, .anomalyDetection,
              .smartAutoTagger, .topicClusters, .threadSummarizer, .smartAlerts,
              .keywordMonitor, .predictiveCoding, .custodianPanel,
              .reviewBatches, .auditTrail, .eDiscovery, .batesNumbering,

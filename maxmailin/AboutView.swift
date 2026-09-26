@@ -61,6 +61,15 @@ struct AboutView: View {
                 // maxmailin SwiftData status — confirms the v2 storage layer
                 // is wired and reachable from the UI.
                 swiftDataStatusBadge
+                // A11: Release-safe import measurement — the only way to get
+                // Release-configuration throughput numbers for a real file.
+                NavigationLink(destination: ImportMeasurementView()) {
+                    Label("Measure an import…", systemImage: "gauge.with.dots.needle.33percent")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .help("Import a file of your choosing into a temporary archive and read throughput, memory and on-disk numbers")
+                .accessibilityIdentifier("about.measureImport")
             }
             .padding(.top, Spacing.xLarge)
             .padding(.bottom, Spacing.large)

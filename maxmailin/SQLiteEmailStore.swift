@@ -2881,6 +2881,9 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// the (date,id) keyset plan intact (review-state rows are sparse).
     static let notTrashedPredicate =
         "NOT EXISTS (SELECT 1 FROM email_review_state r WHERE r.email_id = e.id AND r.trashed = 1)"
+    /// The Trash mailbox's positive form of the same predicate.
+    static let trashedPredicate =
+        "EXISTS (SELECT 1 FROM email_review_state r WHERE r.email_id = e.id AND r.trashed = 1)"
 
     // MARK: - Aggregates (DB-side; never stream bodies to count metadata)
 
@@ -3204,7 +3207,10 @@ actor SQLiteEmailStore: EmailArchiveStore {
         if q.pinnedOnly {
             sql.append("EXISTS (SELECT 1 FROM email_review_state rv WHERE rv.email_id = e.id AND rv.pinned = 1)")
         }
-        if !q.includeTrashed {
+        if q.trashedOnly {
+            // A2 Trash mailbox: only rows the user moved to Trash.
+            sql.append(trashedPredicate)
+        } else if !q.includeTrashed {
             sql.append(notTrashedPredicate)
         }
         return (sql, binds)

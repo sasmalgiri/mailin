@@ -182,7 +182,8 @@ class ContentViewModel: ObservableObject {
     /// import — the adjacent button — behaved correctly. The wrapper is gone
     /// and this now has exactly one production caller; keep it that way, or
     /// the capability switches stop meaning anything for the new route.
-    func parseSelectedFiles(_ urls: [URL], removeDuplicates: Bool = true, maxEmails: Int? = nil) {
+    func parseSelectedFiles(_ urls: [URL], removeDuplicates: Bool = true, maxEmails: Int? = nil,
+                            copiesOriginals: Bool = true) {
         guard !isParsing else { return }
 
         statusMessage = "Parsing files..."
@@ -214,7 +215,10 @@ class ContentViewModel: ObservableObject {
                 let totalFiles = Double(max(1, count))
                 self.loadingProgress = (Double(idx) + prog) / totalFiles
                 self.loadingText = "Importing \(name): \(Int(prog * 100))%"
-                let sizeBytes = idx < urls.count ? self.fileSize(at: urls[idx]) : 0
+                // A4: the run may take files out of order (queue reordering),
+                // so the file is found by name, not by position.
+                let fileURL = urls.first { $0.lastPathComponent == name }
+                let sizeBytes = fileURL.map { self.fileSize(at: $0) } ?? 0
                 ImportProgressNotifier.shared.updateProgress(
                     filename: name,
                     current: idx + 1,
@@ -228,10 +232,12 @@ class ContentViewModel: ObservableObject {
                 // capability described "pending, running and finished imports,
                 // each with its verdict". Keyed by path because the queue may
                 // hold several entries with the same filename.
-                if idx < urls.count {
-                    ImportQueue.shared.markRunning(path: urls[idx].path, fraction: prog)
+                if let fileURL {
+                    ImportQueue.shared.markRunning(path: fileURL.path, fraction: prog)
                 }
             }
+            // A4: the queue's order is the run's order for files not yet started.
+            callbacks.nextSource = { remaining in ImportQueue.shared.preferredNext(among: remaining) }
             // (C1) Forensic email hashes over every COMMITTED batch, so hash
             // coverage matches the persisted corpus, not just the preview.
             if forensicEnabled {
@@ -251,6 +257,7 @@ class ContentViewModel: ObservableObject {
                 senderEmail: self.senderEmail,
                 maxEmails: maxEmails,
                 dedupPolicy: removeDuplicates ? .messageID : .preserveAll,
+                copiesOriginals: copiesOriginals,
                 useOffsetEngine: useOffsetEngine,
                 // Locators are only produced by the offset engine, so
                 // recording them without it would silently do nothing.
@@ -304,6 +311,8 @@ class ContentViewModel: ObservableObject {
         // and everything else takes the run verdict. That is stated in the
         // queue UI rather than implied.
         let failedNames = Set(summary.fileErrors.map(\.filename))
+        let stoppedByUser = Dictionary(summary.stoppedByUser.map { ($0.filename, $0.messagesCommitted) },
+                                       uniquingKeysWith: { first, _ in first })
         let runVerdict = summary.receipt.map(ImportReconciler.verdict(for:))
         for url in urls {
             if failedNames.contains(url.lastPathComponent) {
@@ -311,6 +320,9 @@ class ContentViewModel: ObservableObject {
                     .first { $0.filename == url.lastPathComponent }?.message
                     ?? "This file could not be imported."
                 ImportQueue.shared.markFailed(path: url.path, reason: reason)
+            } else if let committed = stoppedByUser[url.lastPathComponent] {
+                // A4: stopped by the user — not a failure, checkpoint kept.
+                ImportQueue.shared.markStopped(path: url.path, messages: committed)
             } else if let runVerdict {
                 ImportQueue.shared.markFinished(path: url.path, verdict: runVerdict,
                                                 messages: summary.persistAttempted)
@@ -324,6 +336,11 @@ class ContentViewModel: ObservableObject {
         }
         // Anything still pending after the run ended never started.
         ImportQueue.shared.markRemainingCancelled()
+
+        // A3: the sheet's indexing choice takes effect now, not at next launch.
+        if ImportChoices.indexAttachmentTextDefault() {
+            AttachmentTextIndexJob.shared.kickIfNeeded()
+        }
 
         // Post the import document: the run's number for custody logs and
         // intake references (IMP-2026-0001).

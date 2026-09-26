@@ -62,7 +62,7 @@ enum EmailSortOrder: String, Sendable, Codable, CaseIterable {
 /// §13: a resolvable query — never a materialized archive. Every field maps
 /// to a shipping filter; NO field is silently ignored (the store either
 /// compiles it into SQL or the repository routes it explicitly).
-struct EmailQuery: Sendable, Equatable {
+struct EmailQuery: Sendable, Equatable, Codable {
     var text: String? = nil          // FTS free-text / Boolean / (NEAR handled upstream)
     var beforeDate: Date? = nil
     var afterDate: Date? = nil
@@ -109,6 +109,8 @@ struct EmailQuery: Sendable, Equatable {
     var pinnedOnly = false
     /// Trash surfaces set this; every other surface excludes trashed rows.
     var includeTrashed = false
+    /// A2: the Trash mailbox — ONLY trashed rows. Implies `includeTrashed`.
+    var trashedOnly = false
     var sort: EmailSortOrder = .dateDesc
 
     static let all = EmailQuery()
@@ -117,7 +119,7 @@ struct EmailQuery: Sendable, Equatable {
     var hasStructuredFilters: Bool {
         sender != nil || recipient != nil || subjectContains != nil || domain != nil
             || userTag != nil || sourceFileName != nil || evidenceTag != nil || hasAttachments != nil
-            || messageType != nil || pinnedOnly || includeTrashed || sort != .dateDesc
+            || messageType != nil || pinnedOnly || includeTrashed || trashedOnly || sort != .dateDesc
             || !senders.isEmpty || !recipients.isEmpty || !subjects.isEmpty
             || !domains.isEmpty || !tags.isEmpty
             || minPriority != nil || phishingOnly || sentimentBelow != nil || !classifications.isEmpty

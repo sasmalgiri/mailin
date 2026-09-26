@@ -40,7 +40,25 @@ final class ExportRunCenter {
     /// Set by the export body when it knows its outcome; consulted by finish().
     private var pendingReceipt: ExportReceipt?
 
+    /// A8: a request waiting for the user's pre-flight confirmation. The
+    /// overlay presents it as a sheet; Start hands it to `ExportJobRunner`.
+    var pendingPreflight: ExportRequest?
+
     private init() {}
+
+    /// Every export enters here: show the pre-flight sheet for `request`.
+    /// Refused while a run is active, like `run`.
+    func requestPreflight(_ request: ExportRequest) {
+        guard !isActive else { return }
+        pendingPreflight = request
+    }
+
+    /// Resume an interrupted export from its receipt (Resume button).
+    func resume(_ receipt: ExportReceipt) {
+        guard let request = receipt.resumeRequest, !isActive else { return }
+        showReceipt = false
+        pendingPreflight = request
+    }
 
     var fraction: Double {
         total > 0 ? min(1, Double(done) / Double(total)) : 0
@@ -80,7 +98,8 @@ final class ExportRunCenter {
     }
 
     /// A failure the body did not turn into a receipt itself (thrown error).
-    func recordFailure(destination: URL?, isFolder: Bool, requested: Int?, message: String) {
+    func recordFailure(destination: URL?, isFolder: Bool, requested: Int?, message: String,
+                       resume: ExportRequest? = nil) {
         pendingReceipt = ExportReceipt(
             title: title,
             destination: destination?.path ?? "—",
@@ -90,7 +109,8 @@ final class ExportRunCenter {
             outcome: .failed,
             errorMessage: message,
             startedAt: startedAt,
-            completedAt: Date())
+            completedAt: Date(),
+            resumeRequest: resume)
     }
 
     func dismissReceipt() {
@@ -124,7 +144,10 @@ struct ExportProgressOverlayView: View {
     @State private var copied = false
 
     var body: some View {
-        Group {
+        ZStack(alignment: .bottom) {
+            // An always-present anchor so the pre-flight sheet can be
+            // presented even when neither card is showing.
+            Color.clear.frame(width: 1, height: 1).allowsHitTesting(false)
             if center.isActive {
                 progressCard
             } else if center.showReceipt, let receipt = center.lastReceipt {
@@ -133,6 +156,16 @@ struct ExportProgressOverlayView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: center.isActive)
         .animation(.easeInOut(duration: 0.2), value: center.showReceipt)
+        // A8: every export passes through the pre-flight sheet.
+        .sheet(item: Binding(get: { center.pendingPreflight },
+                             set: { center.pendingPreflight = $0 })) { request in
+            ExportPreflightSheet(request: request,
+                                 onStart: { confirmed in
+                                     center.pendingPreflight = nil
+                                     ExportJobRunner.shared.start(confirmed)
+                                 },
+                                 onCancel: { center.pendingPreflight = nil })
+        }
     }
 
     private var progressCard: some View {
@@ -230,6 +263,16 @@ struct ExportProgressOverlayView: View {
             }
 
             HStack(spacing: 8) {
+                if receipt.isResumable {
+                    Button {
+                        center.resume(receipt)
+                    } label: {
+                        Label("Resume", systemImage: "arrow.clockwise")
+                    }
+                    .font(.system(size: 11))
+                    .help("Continue this export from message \((receipt.resumeRequest?.skipFirst ?? 0) + 1); what was written stays")
+                    .accessibilityIdentifier("export.receipt.resume")
+                }
                 #if os(macOS)
                 if receipt.destination != "—" {
                     Button("Reveal") {

@@ -22,7 +22,9 @@ struct ImportSurfacesModifier: ViewModifier {
     @Binding var showQueue: Bool
     let dedupPolicy: DedupPolicy
     let modules: ModuleRegistry
-    let onStart: ([URL]) -> Void
+    /// The run in progress, for the queue's live figures and controls.
+    var coordinator: BulkImportCoordinator? = nil
+    let onStart: (ImportChoices) -> Void
 
     func body(content: Content) -> some View {
         content
@@ -34,9 +36,9 @@ struct ImportSurfacesModifier: ViewModifier {
                         urls: urls,
                         dedupPolicy: dedupPolicy,
                         copiesOriginals: true,
-                        onStart: { accepted in
+                        onStart: { choices in
                             pendingURLs = nil
-                            onStart(accepted)
+                            onStart(choices)
                         },
                         onCancel: { pendingURLs = nil })
                         .environment(modules)
@@ -44,7 +46,7 @@ struct ImportSurfacesModifier: ViewModifier {
             }
             // A4: the session import queue.
             .sheet(isPresented: $showQueue) {
-                ImportQueueView()
+                ImportQueueView(coordinator: coordinator)
                     .environment(modules)
             }
     }

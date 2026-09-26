@@ -11,7 +11,7 @@
 
 import Foundation
 
-enum ArchiveSelectionScope: Sendable, Equatable {
+enum ArchiveSelectionScope: Sendable, Equatable, Codable {
     case none
     /// A small, explicitly user-selected set of ids.
     case explicit(Set<EmailID>)
@@ -54,7 +54,9 @@ extension ArchiveDataService {
         case .none:
             return AsyncThrowingStream { $0.finish() }
         case .explicit(let ids):
-            let idList = Array(ids)
+            // A8: a stable order, so an export resumed from a receipt skips
+            // exactly the messages the interrupted run already wrote.
+            let idList = ids.sorted { $0.uuidString < $1.uuidString }
             return AsyncThrowingStream { continuation in
                 let task = Task {
                     do {

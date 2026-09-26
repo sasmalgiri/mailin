@@ -255,8 +255,11 @@ struct mailinApp: App {
                             FidelityBackfillJob.shared.kickIfNeeded(senderEmail: sender)
                             // Attachment-content index (in:attachments searches
                             // file CONTENTS): bounded background extraction;
-                            // O(1) no-op once everything is indexed.
-                            AttachmentTextIndexJob.shared.kickIfNeeded()
+                            // O(1) no-op once everything is indexed. A3: the
+                            // import sheet's choice can switch it off.
+                            if ImportChoices.indexAttachmentTextDefault() {
+                                AttachmentTextIndexJob.shared.kickIfNeeded()
+                            }
                             // Weekly saved-search digest (opt-in; ≤1/week).
                             // §3.3 R2: digests belong to AI Insights.
                             if modules.isEnabled(.aiInsights) {

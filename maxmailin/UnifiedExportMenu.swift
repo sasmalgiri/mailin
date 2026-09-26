@@ -9,11 +9,14 @@
 //  single-email rendition of a format (the detail view's Word/CSV/PDF/TIFF/
 //  plain-text buttons) omit the overlapping entries instead of duplicating.
 //
-//  Every export streams the scope through ArchiveExportService (bounded
-//  memory at any archive size), runs in the ExportRunCenter with progress,
-//  caps the free tier at StoreManager.freeEmailLimit with an honest
-//  "Exported X of Y" notice + paywall, and reports failures through the
-//  host's error binding (menus can't host alerts themselves).
+//  A8: a format button only picks the destination and builds an
+//  `ExportRequest`. The request goes to the run center's pre-flight sheet
+//  (folder layout, attachments, collision rule, size estimate against the
+//  destination's free space); Start hands it to `ExportJobRunner`, which
+//  streams the scope through ArchiveExportService (bounded memory at any
+//  archive size), caps the free tier at StoreManager.freeEmailLimit with an
+//  honest "Exported X of Y" notice + paywall, and ends every run — complete,
+//  truncated, cancelled or failed — in an `ExportReceipt`.
 //
 
 import SwiftUI
@@ -22,7 +25,7 @@ import AppKit
 #endif
 import UniformTypeIdentifiers
 
-enum UnifiedExportFormat: CaseIterable {
+enum UnifiedExportFormat: String, Codable, CaseIterable, Sendable {
     case word, csv, json, printText, markdown, headersCSV, mbox   // single documents
     case emlFiles, pdfFiles, tiffFiles, msgFiles                  // one file per email
     case portableHTML                    // folder with index.html viewer
@@ -180,237 +183,101 @@ struct UnifiedExportSections: View {
         #endif
     }
 
-    private func run(_ title: String, destination: URL? = nil, isFolder: Bool = false,
-                     _ body: @escaping @MainActor (ArchiveExportService) async throws -> Void) {
+    /// Build the request and send it to the pre-flight sheet. The runner is
+    /// given this host's renderer, share sheet, error binding and store so a
+    /// later Resume behaves the same way.
+    private func request(_ format: UnifiedExportFormat, title: String, destination: URL, isFolder: Bool) {
         guard gate() else { return }
-        ExportRunCenter.shared.run(title: title) {
-            do {
-                try await body(ArchiveExportService.shared)
-            } catch {
-                errorMessage = "\(title) failed: \(error.localizedDescription)"
-                // A8: a thrown error still ends in a receipt that says so.
-                ExportRunCenter.shared.recordFailure(destination: destination, isFolder: isFolder,
-                                                     requested: nil, message: error.localizedDescription)
-            }
-        }
-    }
-
-    /// Free-tier honesty: when the cap truncated the export, say exactly how
-    /// much was written and open the paywall. A8: every outcome — complete,
-    /// truncated, cancelled — is recorded as an `ExportReceipt` with the
-    /// requested count, what was written and the artifact hash.
-    @MainActor
-    private func handleCap(result: ArchiveExportResult? = nil,
-                           written: Int, cancelled: Bool, what: String,
-                           scope: ArchiveSelectionScope, deliver: URL?) async {
-        let requested = try? await ArchiveDataService.shared.count(scope: scope)
-        var outcome: ExportReceipt.Outcome = .complete
-        if cancelled {
-            errorMessage = "\(what) export cancelled — partial output removed."
-            outcome = .cancelled
-        } else if let cap, let requested, requested > cap {
-            storeManager.showPaywall = true
-            errorMessage = "Exported \(written) of \(requested) emails. Upgrade to Pro for unlimited export."
-            outcome = .truncated
-        } else if let requested, written < requested, result?.completed == false {
-            outcome = .failed
-        }
-        var isFolder: ObjCBool = false
-        if let deliver { _ = FileManager.default.fileExists(atPath: deliver.path, isDirectory: &isFolder) }
-        ExportRunCenter.shared.record(ExportReceipt(
-            title: "\(what) export",
-            destination: deliver?.path ?? "—",
-            isFolder: isFolder.boolValue,
-            requested: requested,
-            written: written,
-            bytesWritten: result?.bytesWritten,
-            outcome: outcome,
-            sha256Hex: result?.sha256Hex,
-            signaturePath: result?.signatureURL?.path,
-            errorMessage: outcome == .failed ? "The writer stopped before every requested message was written." : nil,
-            startedAt: ExportRunCenter.shared.startedAt,
-            completedAt: Date()))
-        #if os(iOS)
-        if let deliver, !cancelled { share(deliver) }
-        #else
-        _ = deliver
-        #endif
+        let runner = ExportJobRunner.shared
+        runner.emlRender = emlRender
+        runner.share = share
+        runner.storeManager = storeManager
+        runner.onError = { message in errorMessage = message }
+        ExportRunCenter.shared.requestPreflight(ExportRequest(
+            format: format,
+            title: title,
+            scope: scope(),
+            destination: destination.path,
+            isFolder: isFolder,
+            cap: cap,
+            emailCountHint: emailCount))
     }
 
     // MARK: - Formats
 
     private func exportWord() {
         guard let url = documentDestination(timestampName("mailin_emails", ext: "doc"), type: nil) else { return }
-        let scope = scope(), cap = cap
-        run("Exporting Word document") { service in
-            let result = try await service.exportWordArchive(
-                scope: scope, to: url, limit: cap,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(result: result, written: result.recordsWritten, cancelled: result.cancelled,
-                            what: "Word", scope: scope, deliver: url)
-        }
+        request(.word, title: "Exporting Word document", destination: url, isFolder: false)
     }
 
     private func exportCSV() {
         guard let url = documentDestination(timestampName("mailin_emails", ext: "csv"), type: .commaSeparatedText) else { return }
-        let scope = scope(), cap = cap
-        run("Exporting CSV") { service in
-            let result = try await service.exportDetailedCSV(
-                scope: scope, to: url, limit: cap,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(result: result, written: result.recordsWritten, cancelled: result.cancelled,
-                            what: "CSV", scope: scope, deliver: url)
-        }
+        request(.csv, title: "Exporting CSV", destination: url, isFolder: false)
     }
 
     private func exportJSON() {
         guard let url = documentDestination(timestampName("mailin_emails", ext: "json"), type: .json) else { return }
-        let scope = scope(), cap = cap
-        run("Exporting JSON") { service in
-            let result = try await service.exportJSONArchive(
-                scope: scope, to: url, limit: cap,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(result: result, written: result.recordsWritten, cancelled: result.cancelled,
-                            what: "JSON", scope: scope, deliver: url)
-        }
+        request(.json, title: "Exporting JSON", destination: url, isFolder: false)
     }
 
     private func exportPrintText() {
         guard let url = documentDestination(timestampName("mailin_print", ext: "txt"), type: .plainText) else { return }
-        let scope = scope()
-        run("Exporting print text") { service in
-            let result = try await service.exportBatchPrintText(
-                scope: scope, to: url,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(result: result, written: result.recordsWritten, cancelled: result.cancelled,
-                            what: "Print text", scope: scope, deliver: url)
-        }
+        request(.printText, title: "Exporting print text", destination: url, isFolder: false)
     }
 
     private func exportEML() {
         guard let folder = folderDestination(message: "Select a folder to save .eml files",
                                              fallbackName: "eml_export_\(UUID().uuidString)") else { return }
-        let scope = scope(), cap = cap, render = emlRender
-        run("Exporting emails as EML") { service in
-            let result = try await service.exportEMLFiles(
-                scope: scope, to: folder, limit: cap, render: render,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(result: result, written: result.recordsWritten, cancelled: result.cancelled,
-                            what: "EML", scope: scope, deliver: folder)
-        }
+        request(.emlFiles, title: "Exporting emails as EML", destination: folder, isFolder: true)
     }
 
     private func exportPDFs() {
         guard let folder = folderDestination(message: "Select a folder to save PDF files",
                                              fallbackName: "pdf_export_\(UUID().uuidString)") else { return }
-        let scope = scope(), cap = cap
-        run("Exporting PDFs") { service in
-            let result = try await service.exportPDFFiles(
-                scope: scope, to: folder, limit: cap,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(result: result, written: result.recordsWritten, cancelled: result.cancelled,
-                            what: "PDF", scope: scope, deliver: folder)
-        }
+        request(.pdfFiles, title: "Exporting PDFs", destination: folder, isFolder: true)
     }
 
     private func exportTIFFs() {
         guard let folder = folderDestination(message: "Select a folder to save TIFF images",
                                              fallbackName: "tiff_export_\(UUID().uuidString)") else { return }
-        let scope = scope(), cap = cap
-        run("Exporting TIFF images") { service in
-            let result = try await service.exportTIFFFiles(
-                scope: scope, to: folder, limit: cap,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(result: result, written: result.recordsWritten, cancelled: result.cancelled,
-                            what: "TIFF", scope: scope, deliver: folder)
-        }
+        request(.tiffFiles, title: "Exporting TIFF images", destination: folder, isFolder: true)
     }
 
     private func exportHTML() {
         guard let base = folderDestination(message: "Select a folder for the portable HTML export",
                                            fallbackName: "html_export_\(UUID().uuidString)") else { return }
         let folder = base.appendingPathComponent("mailin_html_export")
-        let scope = scope(), cap = cap
-        run("Exporting portable HTML") { service in
-            let result = try await service.exportPortableHTML(
-                scope: scope, to: folder, limit: cap,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(result: result, written: result.recordsWritten, cancelled: result.cancelled,
-                            what: "HTML", scope: scope, deliver: folder)
-        }
+        request(.portableHTML, title: "Exporting portable HTML", destination: folder, isFolder: true)
     }
 
     private func exportMarkdown() {
         guard let url = documentDestination(timestampName("mailin_emails", ext: "md"), type: .plainText) else { return }
-        let scope = scope(), cap = cap
-        run("Exporting Markdown") { service in
-            let result = try await service.exportMarkdownArchive(
-                scope: scope, to: url, limit: cap,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(result: result, written: result.recordsWritten, cancelled: result.cancelled,
-                            what: "Markdown", scope: scope, deliver: url)
-        }
+        request(.markdown, title: "Exporting Markdown", destination: url, isFolder: false)
     }
 
     private func exportHeadersOnly() {
         guard let url = documentDestination(timestampName("mailin_headers", ext: "csv"), type: .commaSeparatedText) else { return }
-        let scope = scope(), cap = cap
-        run("Exporting headers CSV") { service in
-            let result = try await service.exportHeadersCSV(
-                scope: scope, to: url, limit: cap,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(result: result, written: result.recordsWritten, cancelled: result.cancelled,
-                            what: "Headers CSV", scope: scope, deliver: url)
-        }
+        request(.headersCSV, title: "Exporting headers CSV", destination: url, isFolder: false)
     }
 
     private func exportMBOX() {
         guard let url = documentDestination(timestampName("mailin_emails", ext: "mbox"), type: nil) else { return }
-        let scope = scope(), cap = cap
-        run("Exporting mbox") { service in
-            let result = try await service.exportMBOXArchive(
-                scope: scope, to: url, limit: cap,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(result: result, written: result.recordsWritten, cancelled: result.cancelled,
-                            what: "mbox", scope: scope, deliver: url)
-        }
+        request(.mbox, title: "Exporting mbox", destination: url, isFolder: false)
     }
 
     private func exportMSGs() {
         guard let folder = folderDestination(message: "Select a folder to save .msg files",
                                              fallbackName: "msg_export_\(UUID().uuidString)") else { return }
-        let scope = scope(), cap = cap
-        run("Exporting Outlook messages") { service in
-            let result = try await service.exportMSGFiles(
-                scope: scope, to: folder, limit: cap,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(result: result, written: result.recordsWritten, cancelled: result.cancelled,
-                            what: "MSG", scope: scope, deliver: folder)
-        }
+        request(.msgFiles, title: "Exporting Outlook messages", destination: folder, isFolder: true)
     }
 
     private func exportVCard() {
         guard let url = documentDestination(timestampName("mailin_contacts", ext: "vcf"), type: .vCard) else { return }
-        let scope = scope()
-        run("Exporting contacts") { service in
-            // Derived extract: the writer reports a count, not a full result.
-            let written = try await service.exportVCard(
-                scope: scope, to: url,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(written: written, cancelled: Task.isCancelled,
-                            what: "Contacts", scope: scope, deliver: url)
-        }
+        request(.vcard, title: "Exporting contacts", destination: url, isFolder: false)
     }
 
     private func exportICS() {
         guard let url = documentDestination(timestampName("mailin_events", ext: "ics"), type: UTType(filenameExtension: "ics")) else { return }
-        let scope = scope()
-        run("Exporting calendar events") { service in
-            let written = try await service.exportICS(
-                scope: scope, to: url,
-                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
-            await handleCap(written: written, cancelled: Task.isCancelled,
-                            what: "Calendar", scope: scope, deliver: url)
-        }
+        request(.ics, title: "Exporting calendar events", destination: url, isFolder: false)
     }
 }

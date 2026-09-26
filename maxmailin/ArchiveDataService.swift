@@ -138,6 +138,37 @@ final class ArchiveDataService {
         return try await sqlite.reviewCount(of: .trashed)
     }
 
+    /// A6: every stored row, trashed included — the denominator index
+    /// coverage is measured against (trashed rows stay indexed for Restore).
+    func storedTotalCount() async throws -> Int {
+        guard let repo = repository as? EmailStoreRepository,
+              let sqlite = repo.store as? SQLiteEmailStore else { return try await count(query: .all) }
+        return try await sqlite.totalCount()
+    }
+
+    // MARK: - A2 sidebar aggregates (GROUP BY, never a corpus walk)
+
+    /// Imported sources, newest first.
+    func sources() async throws -> [SQLiteEmailStore.StoredSource] {
+        guard let repo = repository as? EmailStoreRepository,
+              let sqlite = repo.store as? SQLiteEmailStore else { return [] }
+        return try await sqlite.sources()
+    }
+
+    /// Parser labels (Gmail labels, Maildir/PST folders) with counts.
+    func parserTagCounts(limit: Int) async throws -> [AggregateBucket] {
+        guard let repo = repository as? EmailStoreRepository,
+              let sqlite = repo.store as? SQLiteEmailStore else { return [] }
+        return try await sqlite.parserTagCounts(limit: limit)
+    }
+
+    /// sent / received / other counts.
+    func messageTypeCounts() async throws -> [String: Int] {
+        guard let repo = repository as? EmailStoreRepository,
+              let sqlite = repo.store as? SQLiteEmailStore else { return [:] }
+        return try await sqlite.messageTypeCounts()
+    }
+
     // MARK: - Bounded streaming (for derived jobs)
 
     /// Stream every matching summary in keyset pages of `batchSize`. Only one

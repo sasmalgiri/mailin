@@ -11,6 +11,10 @@
 //  No `RawEmail` is required to render a row; a full email is fetched only when
 //  a row is opened.
 //
+//  A2: the list itself is `ArchiveListPane`, shared by this two-pane view
+//  (iPhone, compact hosts) and by `ArchiveThreePaneView` (sidebar / list /
+//  detail), so both page the same rows with the same keys.
+//
 
 import SwiftUI
 
@@ -45,7 +49,11 @@ struct ArchiveListView: View {
 
     var body: some View {
         NavigationSplitView {
-            listPane
+            ArchiveListPane(model: model,
+                            detail: detail,
+                            selectedID: $selectedID,
+                            matchTerms: SearchMatchTerms(searchText: searchText),
+                            isSearching: !searchText.trimmingCharacters(in: .whitespaces).isEmpty)
                 .navigationTitle("Archive")
                 .searchable(text: $searchText, prompt: "Search subject, sender, body…")
                 .toolbar {
@@ -77,6 +85,133 @@ struct ArchiveListView: View {
         .onChange(of: scope) { _, _ in scheduleQuery() }
     }
 
+    /// Debounced query update. The model's queryRevision guard makes this safe
+    /// even under rapid typing — debounce just avoids redundant fetches.
+    private func scheduleQuery() {
+        searchTask?.cancel()
+        let text = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let after = scope.after
+        searchTask = Task {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            if Task.isCancelled { return }
+            // v2.1 backlog #6: the same compile step as the full list, so
+            // `from:alice` or `filename:pdf` means the same thing here.
+            let query = ArchiveBrowseState(searchText: text, afterDate: after).query()
+            await model.setQuery(query)
+        }
+    }
+}
+
+// MARK: - List pane (shared by the two- and three-pane shells)
+
+struct ArchiveListPane: View {
+    @ObservedObject var model: ArchiveListViewModel
+    @ObservedObject var detail: ArchiveDetailViewModel
+    @Binding var selectedID: EmailID?
+    /// A7: built once per search string and shared by every row, so the
+    /// matched-field strip never re-tokenizes the query per row.
+    var matchTerms: SearchMatchTerms? = nil
+    /// True while a search string is active — decides which empty state shows.
+    var isSearching: Bool = false
+
+    @StateObject private var coverage = SearchCoverageModel()
+
+    var body: some View {
+        Group {
+            if model.isLoading && model.summaries.isEmpty {
+                ProgressView("Loading archive…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityIdentifier("archive.list.initialLoading")
+            } else if let error = model.error, model.summaries.isEmpty {
+                ArchiveLoadFailureView(message: error.localizedDescription) {
+                    Task { await model.reload() }
+                }
+            } else if model.summaries.isEmpty {
+                if isSearching || !model.query.isEmpty {
+                    // A6: a search with no hits never reads as a bare zero — it
+                    // says what the index covered when it answered.
+                    ArchiveNoResultsState(coverage: coverage.snapshot)
+                        .task { await coverage.refresh() }
+                } else {
+                    ArchiveEmptyState()
+                }
+            } else {
+                list
+            }
+        }
+    }
+
+    private var list: some View {
+        List(selection: $selectedID) {
+            if isSearching, let snapshot = coverage.snapshot, snapshot.isPartial {
+                SearchCoverageLine(coverage: snapshot)
+                    .listRowSeparator(.hidden)
+            }
+            if model.hasPrevious {
+                Button {
+                    Task { await model.loadPreviousPage() }
+                } label: {
+                    Label("Load earlier", systemImage: "chevron.up")
+                }
+                .accessibilityIdentifier("archive.list.loadPrevious")
+            }
+
+            ForEach(model.summaries) { summary in
+                ArchiveSummaryRow(summary: summary, matchTerms: matchTerms)
+                    .tag(summary.id)
+                    .onAppear {
+                        if summary.id == model.summaries.last?.id && model.hasMore {
+                            Task { await model.loadNextPage() }
+                        }
+                    }
+                    .contextMenu {
+                        Button(role: .destructive) {
+                            Task { await model.delete([summary.id]); detail.invalidate(summary.id) }
+                        } label: { Label("Move to Trash", systemImage: "trash") }
+
+                        // Offered only on a trash-inclusive query (`in:trash`
+                        // or the Trash mailbox), because that is the only way
+                        // a trashed row reaches this list — elsewhere nothing
+                        // here is restorable, and an always-present Restore
+                        // would be a no-op that looked like an action.
+                        if model.query.includeTrashed || model.query.trashedOnly {
+                            Button {
+                                Task { await model.restore([summary.id]); detail.invalidate(summary.id) }
+                            } label: { Label("Restore from Trash", systemImage: "arrow.uturn.backward") }
+                        }
+                    }
+                    #if os(iOS)
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) {
+                            Task { await model.delete([summary.id]); detail.invalidate(summary.id) }
+                        } label: { Label("Move to Trash", systemImage: "trash") }
+                    }
+                    #endif
+            }
+
+            if model.hasMore {
+                ArchiveListLoadingFooter()
+            }
+        }
+        .accessibilityIdentifier("archive.list")
+        // Keyboard-first browsing (v2.1 backlog #15), same keys as the
+        // full list: J/K step the selection, Return opens the selected
+        // message in its own window.
+        .onKeyPress(.init("j")) { moveSelection(by: 1); return .handled }
+        .onKeyPress(.init("k")) { moveSelection(by: -1); return .handled }
+        .onKeyPress(.return) { openSelectionInWindow(); return .handled }
+        .overlay(alignment: .bottom) {
+            Text("\(model.totalCount) emails")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(6)
+                .accessibilityIdentifier("archive.list.count")
+        }
+        .task(id: isSearching) {
+            if isSearching { await coverage.refresh() }
+        }
+    }
+
     private func moveSelection(by delta: Int) {
         let ids = model.visibleOrderedIDs
         guard !ids.isEmpty else { return }
@@ -101,105 +236,6 @@ struct ArchiveListView: View {
             }
         }
         #endif
-    }
-
-    /// A7: built once per search string and shared by every row, so the
-    /// matched-field strip never re-tokenizes the query per row.
-    private var matchTerms: SearchMatchTerms {
-        SearchMatchTerms(searchText: searchText)
-    }
-
-    /// Debounced query update. The model's queryRevision guard makes this safe
-    /// even under rapid typing — debounce just avoids redundant fetches.
-    private func scheduleQuery() {
-        searchTask?.cancel()
-        let text = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let after = scope.after
-        searchTask = Task {
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            if Task.isCancelled { return }
-            // v2.1 backlog #6: the same compile step as the full list, so
-            // `from:alice` or `filename:pdf` means the same thing here.
-            let query = ArchiveBrowseState(searchText: text, afterDate: after).query()
-            await model.setQuery(query)
-        }
-    }
-
-    @ViewBuilder
-    private var listPane: some View {
-        if model.isLoading && model.summaries.isEmpty {
-            ProgressView("Loading archive…")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .accessibilityIdentifier("archive.list.initialLoading")
-        } else if let error = model.error, model.summaries.isEmpty {
-            ArchiveLoadFailureView(message: error.localizedDescription) {
-                Task { await model.reload() }
-            }
-        } else if model.summaries.isEmpty {
-            ArchiveEmptyState()
-        } else {
-            List(selection: $selectedID) {
-                if model.hasPrevious {
-                    Button {
-                        Task { await model.loadPreviousPage() }
-                    } label: {
-                        Label("Load earlier", systemImage: "chevron.up")
-                    }
-                    .accessibilityIdentifier("archive.list.loadPrevious")
-                }
-
-                ForEach(model.summaries) { summary in
-                    ArchiveSummaryRow(summary: summary, matchTerms: matchTerms)
-                        .tag(summary.id)
-                        .onAppear {
-                            if summary.id == model.summaries.last?.id && model.hasMore {
-                                Task { await model.loadNextPage() }
-                            }
-                        }
-                        .contextMenu {
-                            Button(role: .destructive) {
-                                Task { await model.delete([summary.id]); detail.invalidate(summary.id) }
-                            } label: { Label("Move to Trash", systemImage: "trash") }
-
-                            // Offered only on a trash-inclusive query (`in:trash`),
-                            // because that is the only way a trashed row reaches
-                            // this list — elsewhere nothing here is restorable, and
-                            // an always-present Restore would be a no-op that
-                            // looked like an action.
-                            if model.query.includeTrashed {
-                                Button {
-                                    Task { await model.restore([summary.id]); detail.invalidate(summary.id) }
-                                } label: { Label("Restore from Trash", systemImage: "arrow.uturn.backward") }
-                            }
-                        }
-                        #if os(iOS)
-                        .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) {
-                                Task { await model.delete([summary.id]); detail.invalidate(summary.id) }
-                            } label: { Label("Move to Trash", systemImage: "trash") }
-                        }
-                        #endif
-                }
-
-                if model.hasMore {
-                    ArchiveListLoadingFooter()
-                }
-            }
-            .accessibilityIdentifier("archive.list")
-            // Keyboard-first browsing (v2.1 backlog #15), same keys as the
-            // full list: J/K step the selection, Return opens the selected
-            // message in its own window.
-            .onKeyPress(.init("j")) { moveSelection(by: 1); return .handled }
-            .onKeyPress(.init("k")) { moveSelection(by: -1); return .handled }
-            .onKeyPress(.return) { openSelectionInWindow(); return .handled }
-            .overlay(alignment: .bottom) {
-                Text("\(model.totalCount) emails")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(6)
-                    .accessibilityIdentifier("archive.list.count")
-            }
-        }
     }
 }
 
@@ -278,6 +314,27 @@ struct ArchiveEmptyState: View {
             description: Text("Import an archive to get started.")
         )
         .accessibilityIdentifier("archive.list.empty")
+    }
+}
+
+/// A6: the no-results state for an active query. Never a bare "0": it says
+/// how much of the archive the index covered when it answered.
+struct ArchiveNoResultsState: View {
+    var coverage: SearchCoverageSnapshot?
+
+    var body: some View {
+        ContentUnavailableView {
+            Label("No matching emails", systemImage: "magnifyingglass")
+        } description: {
+            if let coverage, coverage.isPartial {
+                Text("Searched the \(coverage.indexedMessages.formatted()) of \(coverage.storedMessages.formatted()) messages indexed so far — \(coverage.pendingMessages.formatted()) still indexing. Results may change as indexing finishes.")
+            } else if let coverage, coverage.partiallyIndexedMessages > 0 {
+                Text("Searched every message. \(coverage.partiallyIndexedMessages.formatted()) very large messages are indexed only in their first \(coverage.budgetLabel).")
+            } else {
+                Text("Nothing in the archive matches this search.")
+            }
+        }
+        .accessibilityIdentifier("archive.list.noResults")
     }
 }
 

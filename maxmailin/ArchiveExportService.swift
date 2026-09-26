@@ -137,6 +137,7 @@ final class ArchiveExportService {
         batchSize: Int = 200,
         limit: Int? = nil,
         signed: Bool = false,
+        write options: ExportWriteOptions = ExportWriteOptions(),
         header: @MainActor (Int) -> String = { _ in "" },
         footer: @MainActor (Int) -> String = { _ in "" },
         onProgress: (@MainActor (Int, Int) -> Void)? = nil,
@@ -144,10 +145,18 @@ final class ArchiveExportService {
     ) async throws -> ArchiveExportResult {
         let total = try await boundedTotal(scope: scope, limit: limit)
 
-        FileManager.default.createFile(atPath: url.path, contents: nil)
+        // A8 resume: appending continues the interrupted artifact; the first
+        // `skipFirst` positions of the scope are stepped over, not rewritten.
+        let fm = FileManager.default
+        let appending = options.append && options.skipFirst > 0 && fm.fileExists(atPath: url.path)
+        if !appending { fm.createFile(atPath: url.path, contents: nil) }
         let handle = try FileHandle(forWritingTo: url)
+        if appending { try handle.seekToEnd() }
         var digest = SHA256()
-        var records = 0, bytes = 0, cancelled = false
+        // `position` is the index within the scope (what the receipt reports as
+        // written, cumulatively across resumes); `bytes` is this run's output.
+        var position = 0, bytes = 0, cancelled = false
+        let skip = appending ? options.skipFirst : 0
 
         func write(_ s: String) throws {
             guard !s.isEmpty else { return }
@@ -158,33 +167,45 @@ final class ArchiveExportService {
         }
         func abort() {
             try? handle.close()
-            try? FileManager.default.removeItem(at: url)
+            try? fm.removeItem(at: url)
+        }
+        /// Cancel or error with `keepPartialOnCancel`: the artifact stays on
+        /// disk so a later run can append to it.
+        func keepPartial() {
+            try? handle.close()
         }
 
         do {
-            try write(header(total))
+            if !appending { try write(header(total)) }
             stream: for try await batch in archive.streamSelected(scope: scope, batchSize: batchSize) {
                 if Task.isCancelled { cancelled = true; break }
                 for email in batch {
-                    if let limit, records >= limit { break stream }
-                    try write(try row(email, records))
-                    records += 1
+                    if let limit, position >= limit { break stream }
+                    if position >= skip { try write(try row(email, position)) }
+                    position += 1
                 }
-                onProgress?(records, total)
-                if let limit, records >= limit { break }
+                onProgress?(position, total)
+                if let limit, position >= limit { break }
             }
             if cancelled || Task.isCancelled {
+                if options.keepPartialOnCancel {
+                    keepPartial()
+                    return ArchiveExportResult(recordsWritten: position, bytesWritten: bytes, completed: false, cancelled: true)
+                }
                 abort()
-                return ArchiveExportResult(recordsWritten: records, bytesWritten: 0, completed: false, cancelled: true)
+                return ArchiveExportResult(recordsWritten: position, bytesWritten: 0, completed: false, cancelled: true)
             }
-            try write(footer(records))
+            try write(footer(position))
             try handle.close()
         } catch {
-            abort()
+            if options.keepPartialOnCancel { keepPartial() } else { abort() }
             throw error
         }
 
-        let finished = digest.finalize()
+        // The hash always covers the WHOLE artifact. A resumed run's incremental
+        // digest only saw its own bytes, so it re-reads the file in bounded
+        // chunks; a fresh run keeps the streamed digest.
+        let finished: SHA256Digest = appending ? try Self.sha256(ofFile: url) : digest.finalize()
         let hex = finished.map { String(format: "%02x", $0) }.joined()
         var sigURL: URL? = nil
         if signed {
@@ -197,9 +218,20 @@ final class ArchiveExportService {
                 throw error
             }
         }
-        return ArchiveExportResult(recordsWritten: records, bytesWritten: bytes,
+        return ArchiveExportResult(recordsWritten: position, bytesWritten: bytes,
                                    completed: true, cancelled: false,
                                    sha256Hex: hex, signatureURL: sigURL)
+    }
+
+    /// SHA-256 of a file in 1 MiB chunks — never the whole file in memory.
+    nonisolated static func sha256(ofFile url: URL) throws -> SHA256Digest {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var digest = SHA256()
+        while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty {
+            digest.update(data: chunk)
+        }
+        return digest.finalize()
     }
 
     // MARK: - Part O shared core 2: one file per message into a folder
@@ -214,6 +246,7 @@ final class ArchiveExportService {
         to folder: URL,
         batchSize: Int = 200,
         limit: Int? = nil,
+        write options: ExportWriteOptions = ExportWriteOptions(),
         onProgress: (@MainActor (Int, Int) -> Void)? = nil,
         content: @MainActor (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)?
     ) async throws -> ArchiveExportResult {
@@ -223,12 +256,18 @@ final class ArchiveExportService {
         let createdFolder = !fm.fileExists(atPath: folder.path)
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
 
-        // Only filenames are retained for cleanup — bounded metadata, never bodies.
+        // Only relative paths are retained for cleanup — bounded metadata, never bodies.
         var written: [String] = []
-        var records = 0, skipped = 0, bytes = 0, cancelled = false
+        var createdSubfolders: [URL] = []
+        // A8 resume: `records` continues the interrupted run's numbering so the
+        // per-message filenames stay one unbroken sequence.
+        var records = options.skipFirst, skipped = 0, bytes = 0, cancelled = false
+        var seen = 0
 
         func cleanup() {
+            guard !options.keepPartialOnCancel else { return }
             for name in written { try? fm.removeItem(at: folder.appendingPathComponent(name)) }
+            for sub in createdSubfolders.reversed() { try? fm.removeItem(at: sub) }
             if createdFolder { try? fm.removeItem(at: folder) }
         }
 
@@ -237,10 +276,42 @@ final class ArchiveExportService {
                 if Task.isCancelled { cancelled = true; break }
                 for email in batch {
                     if let limit, records + skipped >= limit { break stream }
+                    // Step over what the interrupted run already wrote.
+                    if seen < options.skipFirst { seen += 1; continue }
+                    seen += 1
                     guard let file = try content(email, records) else { skipped += 1; continue }
-                    let target = folder.appendingPathComponent(file.filename)
+
+                    // Folder layout: flat, or one subfolder per message year.
+                    var directory = folder
+                    var relative = file.filename
+                    if options.layout == .byYear {
+                        let year = Self.yearFolderName(for: email)
+                        directory = folder.appendingPathComponent(year, isDirectory: true)
+                        relative = year + "/" + file.filename
+                        if !fm.fileExists(atPath: directory.path) {
+                            try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+                            createdSubfolders.append(directory)
+                        }
+                    }
+                    var target = directory.appendingPathComponent(file.filename)
+
+                    // Collision rule for a destination that already has files.
+                    if fm.fileExists(atPath: target.path) {
+                        switch options.collision {
+                        case .skipExisting:
+                            records += 1
+                            continue
+                        case .overwrite:
+                            break
+                        case .keepBoth:
+                            target = Self.uniqueURL(for: target)
+                            relative = options.layout == .byYear
+                                ? Self.yearFolderName(for: email) + "/" + target.lastPathComponent
+                                : target.lastPathComponent
+                        }
+                    }
                     try file.data.write(to: target, options: .atomic)
-                    written.append(file.filename)
+                    written.append(relative)
                     bytes += file.data.count
                     records += 1
                 }
@@ -253,9 +324,32 @@ final class ArchiveExportService {
         }
         if cancelled || Task.isCancelled {
             cleanup()
-            return ArchiveExportResult(recordsWritten: records, bytesWritten: 0, completed: false, cancelled: true)
+            return ArchiveExportResult(recordsWritten: records,
+                                       bytesWritten: options.keepPartialOnCancel ? bytes : 0,
+                                       completed: false, cancelled: true)
         }
         return ArchiveExportResult(recordsWritten: records, bytesWritten: bytes, completed: true, cancelled: false)
+    }
+
+    /// `2019`, or `undated` when the Date header is missing or unparseable.
+    nonisolated static func yearFolderName(for email: MBOXParser.RawEmail) -> String {
+        guard let date = MBOXParser.parseDate(email.headers["Date"]) else { return "undated" }
+        return String(Calendar(identifier: .gregorian).component(.year, from: date))
+    }
+
+    /// `name (2).ext`, `name (3).ext`, … — the first that does not exist yet.
+    nonisolated static func uniqueURL(for url: URL) -> URL {
+        let fm = FileManager.default
+        let base = url.deletingPathExtension().lastPathComponent
+        let ext = url.pathExtension
+        let directory = url.deletingLastPathComponent()
+        var n = 2
+        while n < 10_000 {
+            let candidate = directory.appendingPathComponent(ext.isEmpty ? "\(base) (\(n))" : "\(base) (\(n)).\(ext)")
+            if !fm.fileExists(atPath: candidate.path) { return candidate }
+            n += 1
+        }
+        return directory.appendingPathComponent("\(base)-\(UUID().uuidString).\(ext)")
     }
 
     private func boundedTotal(scope: ArchiveSelectionScope, limit: Int?) async throws -> Int {
@@ -282,8 +376,9 @@ final class ArchiveExportService {
     func exportEMLFiles(scope: ArchiveSelectionScope, to folder: URL,
                         limit: Int? = nil,
                         render: (@MainActor (MBOXParser.RawEmail) -> String)? = nil,
+                        write options: ExportWriteOptions = ExportWriteOptions(),
                         onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
-        try await exportMessageFiles(scope: scope, to: folder, limit: limit, onProgress: onProgress) { email, index in
+        try await exportMessageFiles(scope: scope, to: folder, limit: limit, write: options, onProgress: onProgress) { email, index in
             let eml = render?(email) ?? (email.rawSource.isEmpty
                 ? "Subject: \(email.headers["Subject"] ?? "")\n\n\(email.plainBody)"
                 : email.rawSource)
@@ -296,8 +391,9 @@ final class ArchiveExportService {
     @discardableResult
     func exportMSGFiles(scope: ArchiveSelectionScope, to folder: URL,
                         limit: Int? = nil,
+                        write options: ExportWriteOptions = ExportWriteOptions(),
                         onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
-        try await exportMessageFiles(scope: scope, to: folder, limit: limit, onProgress: onProgress) { email, index in
+        try await exportMessageFiles(scope: scope, to: folder, limit: limit, write: options, onProgress: onProgress) { email, index in
             guard let data = MSGWriter.write(email: email) else { return nil }
             return (Self.messageFilename(index: index, subject: email.headers["Subject"], ext: "msg"), data)
         }
@@ -307,8 +403,9 @@ final class ArchiveExportService {
     @discardableResult
     func exportTIFFFiles(scope: ArchiveSelectionScope, to folder: URL,
                          limit: Int? = nil,
+                         write options: ExportWriteOptions = ExportWriteOptions(),
                          onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
-        try await exportMessageFiles(scope: scope, to: folder, limit: limit, onProgress: onProgress) { email, index in
+        try await exportMessageFiles(scope: scope, to: folder, limit: limit, write: options, onProgress: onProgress) { email, index in
             guard let data = ExportManager.exportAsTIFF(email: email) else { return nil }
             return (Self.messageFilename(index: index, subject: email.headers["Subject"], ext: "tiff"), data)
         }
@@ -318,8 +415,9 @@ final class ArchiveExportService {
     @discardableResult
     func exportPDFFiles(scope: ArchiveSelectionScope, to folder: URL,
                         limit: Int? = nil,
+                        write options: ExportWriteOptions = ExportWriteOptions(),
                         onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
-        try await exportMessageFiles(scope: scope, to: folder, limit: limit, onProgress: onProgress) { email, index in
+        try await exportMessageFiles(scope: scope, to: folder, limit: limit, write: options, onProgress: onProgress) { email, index in
             let data = ExportManager.generateSinglePDFData(email: email)
             guard !data.isEmpty else { return nil }
             return (Self.messageFilename(index: index, subject: email.headers["Subject"], ext: "pdf"), data)
@@ -330,9 +428,10 @@ final class ArchiveExportService {
     @discardableResult
     func exportDetailedCSV(scope: ArchiveSelectionScope, to url: URL,
                            limit: Int? = nil,
+                           write options: ExportWriteOptions = ExportWriteOptions(),
                            onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
         try await exportTextDocument(
-            scope: scope, to: url, limit: limit,
+            scope: scope, to: url, limit: limit, write: options,
             header: { _ in "Date,From,To,CC,Subject,Type,Labels,Has Attachments,Attachment Count,Risk Score,Body Preview\n" },
             onProgress: onProgress
         ) { email, _ in
@@ -427,9 +526,10 @@ final class ArchiveExportService {
     @discardableResult
     func exportHeadersCSV(scope: ArchiveSelectionScope, to url: URL,
                           limit: Int? = nil,
+                          write options: ExportWriteOptions = ExportWriteOptions(),
                           onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
         try await exportTextDocument(
-            scope: scope, to: url, limit: limit,
+            scope: scope, to: url, limit: limit, write: options,
             header: { _ in ExportManager.headersOnlyCSVHeaderRow() },
             onProgress: onProgress
         ) { email, _ in
@@ -440,10 +540,11 @@ final class ArchiveExportService {
     /// Batch print text — one continuous printable text file, streamed.
     @discardableResult
     func exportBatchPrintText(scope: ArchiveSelectionScope, to url: URL,
+                              write options: ExportWriteOptions = ExportWriteOptions(),
                               onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
         var total = 0
         return try await exportTextDocument(
-            scope: scope, to: url,
+            scope: scope, to: url, write: options,
             header: { t in total = t; return "" },
             onProgress: onProgress
         ) { email, index in
@@ -567,9 +668,10 @@ final class ArchiveExportService {
     @discardableResult
     func exportMBOXArchive(scope: ArchiveSelectionScope, to url: URL,
                            limit: Int? = nil,
+                           write options: ExportWriteOptions = ExportWriteOptions(),
                            onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
         try await exportTextDocument(
-            scope: scope, to: url, limit: limit,
+            scope: scope, to: url, limit: limit, write: options,
             onProgress: onProgress
         ) { email, _ in
             Self.mboxRecord(for: email)
@@ -647,9 +749,10 @@ final class ArchiveExportService {
     @discardableResult
     func exportMarkdownArchive(scope: ArchiveSelectionScope, to url: URL,
                                limit: Int? = nil,
+                               write options: ExportWriteOptions = ExportWriteOptions(),
                                onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
         try await exportTextDocument(
-            scope: scope, to: url, limit: limit,
+            scope: scope, to: url, limit: limit, write: options,
             header: { total in "# mailin email export — \(total) email(s)\n\n" },
             onProgress: onProgress
         ) { email, index in
