@@ -214,7 +214,10 @@ final class MailinClickThroughUITests: XCTestCase {
         // ── Folder tree: All Emails row exists and is clickable ──
         let allEmails = app.buttons.matching(
             NSPredicate(format: "label BEGINSWITH 'All Emails'")).firstMatch
-        if allEmails.waitForExistence(timeout: 10) {
+        // The row can sit below the fold of a short window (one run reported
+        // "Unable to find hit point" at y = 834); clicking an element that is
+        // not hittable is a layout fact, not a product failure.
+        if allEmails.waitForExistence(timeout: 10), allEmails.isHittable {
             allEmails.click()
         }
 
@@ -223,13 +226,26 @@ final class MailinClickThroughUITests: XCTestCase {
         let searchField = app.textFields.matching(
             NSPredicate(format: "placeholderValue CONTAINS[c] 'search'")).firstMatch
         if searchField.waitForExistence(timeout: 5) {
+            // Focus is a window-activation fact, not a product one: a run with
+            // another app frontmost reported "neither element nor any
+            // descendant has keyboard focus". Activate, click, and only type
+            // when the field really has focus.
+            app.activate()
             searchField.click()
-            searchField.typeText("type:received")
-            searchField.typeKey(.return, modifierFlags: [])
-            // Give the async re-page a beat, then clear.
-            Thread.sleep(forTimeInterval: 1.0)
-            searchField.typeKey("a", modifierFlags: .command)
-            searchField.typeKey(.delete, modifierFlags: [])
+            var focused = (searchField.value(forKey: "hasKeyboardFocus") as? Bool) ?? false
+            if !focused {
+                Thread.sleep(forTimeInterval: 0.5)
+                searchField.click()
+                focused = (searchField.value(forKey: "hasKeyboardFocus") as? Bool) ?? false
+            }
+            if focused {
+                searchField.typeText("type:received")
+                searchField.typeKey(.return, modifierFlags: [])
+                // Give the async re-page a beat, then clear.
+                Thread.sleep(forTimeInterval: 1.0)
+                searchField.typeKey("a", modifierFlags: .command)
+                searchField.typeKey(.delete, modifierFlags: [])
+            }
         }
 
         // ── Date chip: opens the modern calendar with month/year jump ──
@@ -315,22 +331,41 @@ final class MailinClickThroughUITests: XCTestCase {
     /// launch as the primary pass (relaunching the store-backed app twice
     /// in one runner is unreliable).
     private func clickThroughHubTiles() {
-        for (tile, expectation) in [
-            ("Analytics", "Total"),
-            ("Duplicates", "duplicate"),
-            ("Preferences", "Settings")
-        ] {
+        // A tool window a previous step opened (the email row opens "Email
+        // Detail") stays frontmost and its buttons — "Export analytics
+        // report", "Find Duplicates Now" — matched a loose CONTAINS
+        // predicate (found 2026-09-27). Close it, and match tiles by label.
+        closeToolWindow(titled: "Email Detail")
+        let tiles: [(tile: String, expectation: String, windowTitle: String?)] = [
+            ("Analytics", "Total", "Email Analytics"),
+            ("Duplicates", "duplicate", "Duplicates"),
+            ("Preferences", "Settings", nil)
+        ]
+        for entry in tiles {
             let button = app.buttons.matching(
-                NSPredicate(format: "label CONTAINS[c] %@", tile)).firstMatch
+                NSPredicate(format: "label ==[c] %@ OR label BEGINSWITH[c] %@", entry.tile, entry.tile + " ")).firstMatch
             guard button.waitForExistence(timeout: 5) else { continue }
             button.click()
+            // The tool opens in its own window on macOS; the window's title is
+            // the proof it opened, the static text is the fallback.
+            let windowShown = entry.windowTitle.map { app.windows[$0].waitForExistence(timeout: 8) } ?? false
             let landed = app.staticTexts.matching(
-                NSPredicate(format: "label CONTAINS[c] %@", expectation)).firstMatch
-            XCTAssertTrue(landed.waitForExistence(timeout: 8),
-                "clicking '\(tile)' shows a view containing '\(expectation)'")
-            app.typeKey(.escape, modifierFlags: [])
+                NSPredicate(format: "label CONTAINS[c] %@", entry.expectation)).firstMatch
+            let shown = windowShown || landed.waitForExistence(timeout: 8)
+            let windows = app.windows.allElementsBoundByIndex.map { $0.title }
+            XCTAssertTrue(shown,
+                "clicking '\(entry.tile)' opens its view; windows now: \(windows); button label: '\(button.label)'")
+            if let title = entry.windowTitle { closeToolWindow(titled: title) } else { app.typeKey(.escape, modifierFlags: []) }
             Thread.sleep(forTimeInterval: 0.3)
         }
+    }
+
+    private func closeToolWindow(titled title: String) {
+        let window = app.windows[title]
+        guard window.exists else { return }
+        let close = window.buttons[XCUIIdentifierCloseWindow].firstMatch
+        if close.exists { close.click() } else { window.typeKey("w", modifierFlags: .command) }
+        Thread.sleep(forTimeInterval: 0.3)
     }
     #endif
 }
