@@ -119,8 +119,12 @@ enum ArchiveRelocator {
 
         var copied: Int64 = 0
         var files = 0
-        let total = plan.archiveBytes
         let sourceEmbeddings = ArchiveLayout.embeddingsDirectory(under: plan.sourceRoot)
+        // The plan measured the archive BEFORE the checkpoint (WAL included),
+        // which is the right, conservative number for the free-space check.
+        // Progress must be reported against what is actually copied, so
+        // measure again now that the WAL has been folded into the main file.
+        let (total, _) = measure([sourceSQLite, sourceFTS, sourceEmbeddings])
         let destinationEmbeddings = ArchiveLayout.embeddingsDirectory(under: plan.destinationRoot)
         for (from, to) in [(sourceSQLite, destinationSQLite), (sourceFTS, destinationFTS), (sourceEmbeddings, destinationEmbeddings)] {
             guard fm.fileExists(atPath: from.path) else { continue }

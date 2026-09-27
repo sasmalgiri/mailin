@@ -4,7 +4,10 @@ import CryptoKit
 struct MBOXParser {
     /// Bump when message splitting/ordering changes — invalidates mid-file
     /// resume checkpoints bound to the previous version (Part B5).
-    static let parserVersion = 1
+    /// 2 (2026-09-27): mbox records have their RFC 4155 mboxrd `>From `
+    /// escaping undone on read, so `rawSource` bytes changed for messages
+    /// that carried such lines; resume checkpoints from version 1 retire.
+    static let parserVersion = 2
 
     struct RawEmail: Identifiable, Codable, Sendable {
         let id: UUID
@@ -295,6 +298,11 @@ struct MBOXParser {
         var currentLines: [String] = []
         var currentBytes = 0
         var oversized = false
+        // True when the current message began at a real `From ` envelope
+        // line, i.e. it is an mbox RECORD and its `>From ` lines are the
+        // container's escaping (RFC 4155 mboxrd), to be undone on read. A
+        // bare .eml that this loop also accepts has no such escaping.
+        var currentHadEnvelope = false
         var inMessage = false
         var totalParsed = 0
         var skippedCount = 0
@@ -350,14 +358,16 @@ struct MBOXParser {
         }
 
         func flushCurrentMessage() {
-            defer { currentBytes = 0; oversized = false }
+            let hadEnvelope = currentHadEnvelope
+            defer { currentBytes = 0; oversized = false; currentHadEnvelope = false }
             if oversized {
                 skippedCount += 1
                 errorCategories["oversized_message", default: 0] += 1
                 return
             }
             guard !currentLines.isEmpty else { return }
-            let raw = currentLines.joined(separator: "\n")
+            let joined = currentLines.joined(separator: "\n")
+            let raw = hadEnvelope ? MBOXRecordBuilder.unquoteFromLines(joined) : joined
             do {
                 let email = try processRawMessage(
                     raw, senderEmail: senderEmail,
@@ -413,6 +423,7 @@ struct MBOXParser {
                 }
                 inMessage = true
                 headerBlockOpen = true
+                currentHadEnvelope = true
             } else if inMessage {
                 if headerBlockOpen, line.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "\r", with: "").isEmpty {
                     headerBlockOpen = false

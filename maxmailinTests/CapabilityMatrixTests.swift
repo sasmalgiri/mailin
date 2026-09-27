@@ -79,15 +79,30 @@ final class CapabilityMatrixTests: XCTestCase {
     // MARK: - Rule 2: new and unproven ships OFF
 
     /// The point of the whole exercise: installing this build must not change
-    /// how an archive behaves until someone asks.
+    /// how an archive behaves until someone asks — for anything still
+    /// unproven. In 3.0 the owner's S4 verdict (SIZE_LIMITS_DESIGN.md,
+    /// 2026-09-26) promoted the offset engine, locator reads and the blob tier
+    /// to the default, and the guided import sheet and import queue shipped
+    /// as the one import path (A-4/A-5); the streaming parser stays as the
+    /// fallback. External storage is still opt-in.
     func testUnprovenEnginesAreOffByDefault() {
         let registry = freshRegistry()
-        for capability in [Capability.offsetParser, .locatorReads, .blobTier,
-                           .externalStorage, .guidedImport, .importQueue] {
+        for capability in [Capability.externalStorage] {
             XCTAssertFalse(capability.defaultsOn,
                            "\(capability.rawValue) is unproven and must default off")
             XCTAssertFalse(registry.isOn(capability),
                            "\(capability.rawValue) must be off on a fresh install")
+        }
+    }
+
+    /// The 3.0 defaults, pinned so a change is a decision and not an accident.
+    func testThreePointZeroEnginesAreOnByDefault() {
+        let registry = freshRegistry()
+        for capability in [Capability.offsetParser, .locatorReads, .blobTier, .guidedImport, .importQueue] {
+            XCTAssertTrue(capability.defaultsOn,
+                          "\(capability.rawValue) is the 3.0 default (S4 verdict)")
+            XCTAssertTrue(registry.isOn(capability),
+                          "\(capability.rawValue) must be on for a fresh 3.0 install")
         }
     }
 
@@ -249,9 +264,12 @@ final class CapabilityMatrixTests: XCTestCase {
         XCTAssertTrue(registry.isEnabled(.professional))
         XCTAssertFalse(registry.isEnabled(.liveMail))
         // With no stored capability choices every capability is at its
-        // default — exactly the behaviour the v1 build had.
+        // default. In 3.0 that default includes the offset engine (S4
+        // verdict): an upgrading archive gets the new engine, and the
+        // streaming parser remains available as the fallback.
         XCTAssertTrue(registry.isOn(.batesNumbering))
-        XCTAssertFalse(registry.isOn(.offsetParser))
+        XCTAssertTrue(registry.isOn(.offsetParser))
+        XCTAssertFalse(registry.isOn(.externalStorage))
     }
 
     /// A capability added by a LATER build must arrive at its own default, not

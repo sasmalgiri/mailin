@@ -143,6 +143,8 @@ final class ArchiveExportService {
         limit: Int? = nil,
         signed: Bool = false,
         write options: ExportWriteOptions = ExportWriteOptions(),
+        startAt: Int = 0,
+        maxBytes: Int? = nil,
         header: @MainActor (Int) -> String = { _ in "" },
         footer: @MainActor (Int) -> String = { _ in "" },
         onProgress: (@MainActor (Int, Int) -> Void)? = nil,
@@ -152,6 +154,9 @@ final class ArchiveExportService {
 
         // A8 resume: appending continues the interrupted artifact; the first
         // `skipFirst` positions of the scope are stepped over, not rewritten.
+        // Partitioned exports use `startAt` the same way for a fresh file, and
+        // `maxBytes` closes the file once the cap is reached (the record that
+        // crosses the cap is written whole; a partition is never cut mid-record).
         let fm = FileManager.default
         let appending = options.append && options.skipFirst > 0 && fm.fileExists(atPath: url.path)
         if !appending { fm.createFile(atPath: url.path, contents: nil) }
@@ -161,7 +166,7 @@ final class ArchiveExportService {
         // `position` is the index within the scope (what the receipt reports as
         // written, cumulatively across resumes); `bytes` is this run's output.
         var position = 0, bytes = 0, cancelled = false
-        let skip = appending ? options.skipFirst : 0
+        let skip = appending ? options.skipFirst : startAt
 
         func write(_ s: String) throws {
             guard !s.isEmpty else { return }
@@ -188,6 +193,7 @@ final class ArchiveExportService {
                     if let limit, position >= limit { break stream }
                     if position >= skip { try write(try row(email, position)) }
                     position += 1
+                    if let maxBytes, bytes >= maxBytes { break stream }
                 }
                 onProgress?(position, total)
                 if let limit, position >= limit { break }
@@ -561,7 +567,28 @@ final class ArchiveExportService {
         let raw = email.rawSource.isEmpty
             ? MBOXRecordBuilder.synthesizeMIME(for: email)
             : email.rawSource
-        return MBOXRecordBuilder.envelopeLine(for: email) + MBOXRecordBuilder.quoteFromLines(raw) + "\n\n"
+        // The stored raw carries the mbox framing it was parsed with: an
+        // envelope line (the source's own, or the parser's synthetic
+        // `From MAILER-DAEMON …`). That line is container metadata, not the
+        // message — it must not be quoted into the body as `>From …`. Strip
+        // it, write one correct envelope, and close the record with exactly
+        // one blank line (RFC 4155), whatever the stored text ended with.
+        let message = MBOXRecordBuilder.strippingEnvelopeLine(raw)
+        let body = MBOXRecordBuilder.quoteFromLines(message)
+        let separator: String
+        if body.hasSuffix("\n\n") || body.hasSuffix("\r\n\r\n") { separator = "" }
+        else if body.hasSuffix("\n") { separator = "\n" }
+        else { separator = "\n\n" }
+        // A real envelope the source carried (offset engine) is written back
+        // verbatim; the streaming parser's MAILER-DAEMON/1970 placeholder is
+        // replaced by one built from the message's own sender and date.
+        let envelope: String
+        if let stored = MBOXRecordBuilder.envelopeLine(in: raw), !stored.contains("MAILER-DAEMON") {
+            envelope = stored.hasSuffix("\n") ? stored : stored + "\n"
+        } else {
+            envelope = MBOXRecordBuilder.envelopeLine(for: email)
+        }
+        return envelope + body + separator
     }
 
     /// Streams the scope into mbox **partitions** of at most `partitionBytes`,
@@ -585,7 +612,9 @@ final class ArchiveExportService {
         var exhausted = false
 
         // Each partition is a normal streamed mbox export with its own receipt
-        // and its own hash, so a partition can be verified independently.
+        // and its own hash, so a partition can be verified independently. It
+        // starts where the previous one stopped and closes when it reaches
+        // `partitionBytes` (the record crossing the cap is written whole).
         while !exhausted {
             let name = String(format: "%@-%04d.mbox", baseName, partition)
             let target = directory.appendingPathComponent(name)
@@ -594,19 +623,24 @@ final class ArchiveExportService {
             let result = try await exportTextDocument(
                 scope: scope, to: target,
                 limit: limit,
+                startAt: written,
+                maxBytes: partitionBytes,
                 onProgress: onProgress
-            ) { email, index in
-                // Skip what earlier partitions already wrote.
-                guard index >= written else { return "" }
-                let record = Self.mboxRecord(for: email)
+            ) { email, _ in
                 recordsThisPartition += 1
-                return record
+                return Self.mboxRecord(for: email)
             }
 
+            if recordsThisPartition == 0 {
+                // The scope ended exactly on the previous cap: nothing to
+                // write, so no empty file is left for a mail client to trip on.
+                try? FileManager.default.removeItem(at: target)
+                break
+            }
             results.append(result)
             written += recordsThisPartition
-            // A partition that wrote nothing means the scope is exhausted.
-            exhausted = recordsThisPartition == 0 || result.bytesWritten < partitionBytes
+            // Under the cap means the scope ran out before the file filled.
+            exhausted = result.bytesWritten < partitionBytes
             partition += 1
             if partition > 10_000 { break }   // pathological guard
         }

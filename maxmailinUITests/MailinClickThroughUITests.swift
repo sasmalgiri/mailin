@@ -275,7 +275,11 @@ final class MailinClickThroughUITests: XCTestCase {
             let guideTitle = app.staticTexts["Feature Guide"].firstMatch
             XCTAssertTrue(guideTitle.waitForExistence(timeout: 5),
                 "Feature Guide sheet opens")
-            let guideSearch = app.searchFields.firstMatch
+            // The 3.0 three-pane shell has its own toolbar search field, so
+            // `searchFields.firstMatch` is the ARCHIVE search, not the guide's.
+            // Pick the guide's by its placeholder.
+            let guideSearch = app.searchFields.matching(
+                NSPredicate(format: "placeholderValue CONTAINS[c] 'feature'")).firstMatch
             if guideSearch.waitForExistence(timeout: 3) {
                 guideSearch.click()
                 guideSearch.typeText("duplicate")

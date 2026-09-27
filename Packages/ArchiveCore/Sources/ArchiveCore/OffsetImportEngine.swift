@@ -45,7 +45,9 @@ struct OffsetImportEngine: Sendable {
     /// `MBOXParser.parserVersion`, tracked separately because this engine's
     /// ordering is genuinely different (see `ParserFactory
     /// .offsetParserIdentity()`).
-    static let engineVersion = 1
+    /// 2 (2026-09-27): mboxrd `>From ` unescaping on read, in step with
+    /// `MBOXParser.parserVersion` 2.
+    static let engineVersion = 2
 
     /// Messages at or below this size take the existing full-fidelity path.
     /// Set to the old hard ceiling, so the change is purely additive: every
@@ -200,10 +202,29 @@ struct OffsetImportEngine: Sendable {
                        reader: LocatorReader) throws -> Imported {
 
         if locator.byteCount <= fullParseCeilingBytes {
-            // The proven path, byte-identical to the streaming parser.
+            // The proven path: the record's exact bytes, including the
+            // mailbox's real `From_` envelope line (the streaming parser
+            // substitutes a MAILER-DAEMON placeholder — pinned by
+            // `testOffsetEnginePreservesTheRealEnvelopeLine`). Exporters must
+            // treat that first line as container framing, not message text:
+            // `ArchiveExportService.mboxRecord` reuses it as the envelope
+            // instead of quoting it into the body (found 2026-09-27 by the
+            // executed round trip).
             let data = try reader.read(locator.messageRange, from: locator.sourcePath)
-            let raw = String(data: data, encoding: .utf8)
+            let text = String(data: data, encoding: .utf8)
                 ?? String(data: data, encoding: .isoLatin1) ?? ""
+            // RFC 4155 mboxrd: a record that came with an envelope has its
+            // `>From ` lines unescaped, exactly as the streaming parser does;
+            // the envelope line itself is kept verbatim.
+            let raw: String
+            if let envelope = locator.envelopeRange, envelope.offset == locator.messageRange.offset,
+               MBOXRecordBuilder.envelopeLine(in: text) != nil {
+                let rest = MBOXRecordBuilder.strippingEnvelopeLine(text)
+                let envelopeBytes = Array(text.utf8).prefix(text.utf8.count - rest.utf8.count)
+                raw = String(decoding: envelopeBytes, as: UTF8.self) + MBOXRecordBuilder.unquoteFromLines(rest)
+            } else {
+                raw = text
+            }
             let email = try MBOXParser.processRawMessage(
                 raw, senderEmail: senderEmail,
                 retainAttachmentBytes: retainAttachmentBytes)

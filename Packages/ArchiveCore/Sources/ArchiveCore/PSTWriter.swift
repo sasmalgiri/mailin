@@ -224,12 +224,12 @@ final class PSTStreamWriter {
 
         let nbtRoot = try writeBTree(
             leafEntries: sortedNodes.map { nbtLeafEntry($0) },
-            leafPerPage: 15, leafType: 0x81, branchType: 0x80,
+            leafPerPage: 15, leafType: 0x81, branchType: 0x81,   // ptypeNBT at every level (MS-PST §2.2.2.7.7)
             keyFor: { sortedNodes[$0].nid }
         )
         let bbtRoot = try writeBTree(
             leafEntries: sortedBlocks.map { bbtLeafEntry($0) },
-            leafPerPage: 20, leafType: 0x82, branchType: 0x83,
+            leafPerPage: 20, leafType: 0x80, branchType: 0x80,   // ptypeBBT at every level; leaf vs branch is cLevel
             keyFor: { UInt32(truncatingIfNeeded: sortedBlocks[$0].bid) }
         )
 

@@ -181,9 +181,22 @@ struct PSTReader {
         let version = pstReadUInt16(data, offset: 10)
         self.isUnicode = version >= 23
 
+        // bCryptMethod applies to PST and OST alike (MS-PST §2.2.2.6): 0 =
+        // none, 1 = permutation (Outlook's default "compressible
+        // encryption"), 2 = cyclic. Data blocks are obfuscated; pages and
+        // internal (XBLOCK / subnode) blocks are not. The old check only
+        // looked at OST files and never decoded a PST, so every default
+        // Outlook export parsed as garbage and yielded zero messages (found
+        // 2026-09-27 by the first executed PST import, Apache Tika fixture).
         self.encType = data[513]
-        if isOST && encType != 0x00 && encType != 0x01 && encType != 0x02 {
-            throw PSTError.invalidFormat("Unsupported OST encryption type: \(encType)")
+        switch encType {
+        case 0x00, 0x01:
+            break
+        case 0x02:
+            throw PSTError.invalidFormat(
+                "This \(isOST ? "OST" : "PST") file uses cyclic encoding (bCryptMethod 2), which mailin does not decode yet. Re-save it from Outlook with compressible encryption or none.")
+        default:
+            throw PSTError.invalidFormat("Unsupported \(isOST ? "OST" : "PST") encryption type: \(encType)")
         }
     }
 
@@ -237,14 +250,25 @@ struct PSTReader {
         return readNodeBTreePage(at: rootOffset, depth: 0)
     }
 
+    /// MS-PST §2.2.2.7.7: a BTPAGE's leaf-or-branch nature is `cLevel`
+    /// (byte 491), NOT `ptype` — every page of the node tree is ptypeNBT
+    /// (0x81) and every page of the block tree is ptypeBBT (0x80). The
+    /// first version switched on ptype, so the root of any tree with more
+    /// than one level was read as a leaf and its BTENTRYs came out as
+    /// garbage node ids: zero messages from every real PST (found
+    /// 2026-09-27). Files written by earlier mailin exports used private
+    /// ptype values (0x80 branch / 0x82, 0x83 block pages); reading by
+    /// `cLevel` keeps those importable too.
     private func readNodeBTreePage(at offset: Int, depth: Int) -> [NodeEntry] {
         guard depth < Self.maxBTreeDepth else { return [] }
         guard offset >= 0 && offset + 512 <= data.count else { return [] }
 
         let pageType = data[offset + 496]
+        guard (0x80...0x83).contains(pageType) else { return [] }
+        let level = data[offset + 491]
         let entryCount = min(Int(data[offset + 488]), 40)
 
-        if pageType == 0x81 {
+        if level == 0 {
             var entries: [NodeEntry] = []
             entries.reserveCapacity(entryCount)
             for i in 0..<entryCount {
@@ -263,7 +287,7 @@ struct PSTReader {
                 }
             }
             return entries
-        } else if pageType == 0x80 {
+        } else {
             var entries: [NodeEntry] = []
             for i in 0..<entryCount {
                 let childOffset: Int
@@ -280,7 +304,6 @@ struct PSTReader {
             }
             return entries
         }
-        return []
     }
 
     private func readBlockBTree() throws -> [UInt64: BlockEntry] {
@@ -305,9 +328,11 @@ struct PSTReader {
         guard offset >= 0 && offset + 512 <= data.count else { return [] }
 
         let pageType = data[offset + 496]
+        guard (0x80...0x83).contains(pageType) else { return [] }
+        let level = data[offset + 491]
         let entryCount = min(Int(data[offset + 488]), 40)
 
-        if pageType == 0x82 {
+        if level == 0 {
             var entries: [BlockEntry] = []
             entries.reserveCapacity(entryCount)
             for i in 0..<entryCount {
@@ -328,7 +353,7 @@ struct PSTReader {
                 }
             }
             return entries
-        } else if pageType == 0x83 {
+        } else {
             var entries: [BlockEntry] = []
             for i in 0..<entryCount {
                 let childOffset: Int
@@ -345,7 +370,6 @@ struct PSTReader {
             }
             return entries
         }
-        return []
     }
 
     // MARK: - Read Message (Full MAPI property set)
@@ -481,8 +505,12 @@ struct PSTReader {
     /// blocks are concatenated in order. Everything else is a plain block.
     private func readNodeData(bid: UInt64, blockEntries: [UInt64: BlockEntry], depth: Int = 0) -> Data {
         guard depth < 3, let block = blockEntries[bid] else { return Data() }
-        let raw = readBlockData(block)
-        guard (bid & 0x2) != 0, raw.count >= 8, raw[raw.startIndex] == 0x01 else {
+        // Only leaf DATA blocks are obfuscated (MS-PST §2.2.2.8.3.1); internal
+        // blocks (bid bit 1) — XBLOCK, XXBLOCK, subnode tables — are stored
+        // in the clear.
+        let isInternal = (bid & 0x2) != 0
+        let raw = readBlockData(block, decode: !isInternal)
+        guard isInternal, raw.count >= 8, raw[raw.startIndex] == 0x01 else {
             return raw
         }
         let count = Int(pstReadUInt16(raw, offset: 2))
@@ -495,22 +523,15 @@ struct PSTReader {
         return out
     }
 
-    private func readBlockData(_ block: BlockEntry) -> Data {
+    private func readBlockData(_ block: BlockEntry, decode: Bool = true) -> Data {
         let offset = Int(block.offset)
         let size = Int(block.size)
         guard offset >= 0 && size >= 0 && offset + size <= data.count else { return Data() }
 
-        var blockData = data[offset..<(offset + size)]
-
-        if isOST {
-            if encType == 0x01 {
-                blockData = Data(blockData.map { decodePermute($0) })
-            } else if encType == 0x02 {
-                blockData = Data(blockData.map { decodeCyclic($0) })
-            }
-        }
-
-        return Data(blockData)
+        let blockData = data[offset..<(offset + size)]
+        guard decode, encType == 0x01 else { return Data(blockData) }
+        // Permutation decoding, PST and OST alike (bCryptMethod 1).
+        return Data(blockData.map { decodePermute($0) })
     }
 
     // MARK: - Property Context Parser

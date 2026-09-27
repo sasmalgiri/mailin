@@ -97,14 +97,20 @@ enum HandoffRoundTripHarness {
         var identities = Set<String>()
         var attachments = Set<HandoffRoundTripReport.AttachmentIdentity>()
         var rawHashes: [String: String] = [:]
+        // Identity → row id, so a mismatch can fetch its original afterwards
+        // and NAME the first divergence instead of just counting it.
+        var rowIDs: [String: UUID] = [:]
         for try await batch in archive.streamSelected(scope: .query(.all, exclusions: []), batchSize: 200) {
             for email in batch {
                 let id = identity(of: email)
                 identities.insert(id)
+                rowIDs[id] = email.id
                 for att in email.attachments {
                     attachments.insert(.init(messageID: id, filename: att.filename, size: att.size))
                 }
-                if !email.rawSource.isEmpty { rawHashes[id] = sha256Hex(email.rawSource) }
+                if !email.rawSource.isEmpty {
+                    rawHashes[id] = messageHash(email.rawSource)
+                }
             }
         }
 
@@ -128,6 +134,7 @@ enum HandoffRoundTripHarness {
         var seen = Set<String>()
         var attachmentsAfter = Set<HandoffRoundTripReport.AttachmentIdentity>()
         var hashesMatched = 0
+        var mismatchedRaw: [(id: String, roundTripped: String)] = []
         for partition in partitionFiles {
             let report = try await ParserFactory.parseStreamingCallback(fileURL: partition, senderEmail: "", batchSize: 200) { emails in
                 for email in emails {
@@ -137,12 +144,24 @@ enum HandoffRoundTripHarness {
                     for att in email.attachments {
                         attachmentsAfter.insert(.init(messageID: id, filename: att.filename, size: att.size))
                     }
-                    if let original = rawHashes[id], !email.rawSource.isEmpty, sha256Hex(email.rawSource) == original {
-                        hashesMatched += 1
+                    if let original = rawHashes[id], !email.rawSource.isEmpty {
+                        if messageHash(email.rawSource) == original {
+                            hashesMatched += 1
+                        } else if mismatchedRaw.count < 3 {
+                            mismatchedRaw.append((id, email.rawSource))
+                        }
                     }
                 }
             }
             reparseFailed += report.failed
+        }
+
+        // Name the first divergences, fetching each original back from the
+        // archive by row id.
+        for mismatch in mismatchedRaw {
+            guard let rowID = rowIDs[mismatch.id],
+                  let original = try? await archive.fullEmail(id: rowID), !original.rawSource.isEmpty else { continue }
+            notes.append(firstDivergence(original: original.rawSource, roundTripped: mismatch.roundTripped, id: mismatch.id))
         }
 
         let missing = identities.subtracting(seen)
@@ -185,5 +204,43 @@ enum HandoffRoundTripHarness {
 
     static func sha256Hex(_ text: String) -> String {
         SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Hash of the MESSAGE, not of its mbox framing. The stored raw carries
+    /// whatever envelope line the parser saw (the source's own or a synthetic
+    /// `From MAILER-DAEMON …`) and whatever trailing separator the container
+    /// used; both are container metadata that a different container may
+    /// legitimately write differently. Everything from the first header byte
+    /// to the last body byte must match exactly.
+    /// "First raw divergence <id>: line N — original «…» vs round-tripped «…»",
+    /// on the framing-normalised texts the hash is taken over.
+    static func firstDivergence(original: String, roundTripped: String, id: String) -> String {
+        // Bytes, not Characters: Swift folds CRLF into one Character and a
+        // Character split on "\n" sees a CRLF message as a single line.
+        let a = messageBytes(original), b = messageBytes(roundTripped)
+        var i = 0
+        while i < a.count, i < b.count, a[i] == b[i] { i += 1 }
+        if i == a.count, i == b.count { return "First raw divergence \(id): normalised bytes identical (\(a.count)) — hash inputs differ elsewhere" }
+        func window(_ bytes: [UInt8]) -> String {
+            let lo = max(0, i - 80), hi = min(bytes.count, i + 80)
+            return String(decoding: bytes[lo..<hi], as: UTF8.self)
+                .replacingOccurrences(of: "\r", with: "␍").replacingOccurrences(of: "\n", with: "␊")
+        }
+        let line = a[0..<min(i, a.count)].filter { $0 == 0x0A }.count + 1
+        return "First raw divergence \(id): byte \(i) (line \(line)) of \(a.count)/\(b.count) — original «\(window(a))» vs round-tripped «\(window(b))»"
+    }
+
+    static func messageHash(_ raw: String) -> String {
+        SHA256.hash(data: Data(messageBytes(raw))).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The message's bytes with mbox framing removed: no envelope line, no
+    /// trailing CR/LF run. Trimmed at the BYTE level — `hasSuffix("\n")` is
+    /// false for a String ending in CRLF, because Swift treats CRLF as one
+    /// Character (found 2026-09-27 by the executed round trip).
+    static func messageBytes(_ raw: String) -> [UInt8] {
+        var bytes = Array(MBOXRecordBuilder.strippingEnvelopeLine(raw).utf8)
+        while let last = bytes.last, last == 0x0A || last == 0x0D { bytes.removeLast() }
+        return bytes
     }
 }

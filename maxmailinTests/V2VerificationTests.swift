@@ -729,9 +729,10 @@ final class V2VerificationTests: XCTestCase {
             "AIAssistantView regrew a corpus-array initializer:\n" + violations.joined(separator: "\n"))
     }
 
-    /// OFFLINE_MODE gate integrity (structural, per-file): any production file
+    /// NO_NETWORK_BUILD gate integrity (structural, per-file; the flag was
+    /// named OFFLINE_MODE before 3.0 Phase P): any production file
     /// that references a network-connector symbol must contain the
-    /// `#if !OFFLINE_MODE` compile gate, so the offline build provably cannot
+    /// `#if !NO_NETWORK_BUILD` compile gate, so the offline build provably cannot
     /// link connector code paths. Comment-only mentions are ignored.
     private func offlineGateViolations() throws -> [String] {
         let connectorSymbols = [
@@ -741,11 +742,11 @@ final class V2VerificationTests: XCTestCase {
         var violations: [String] = []
         for f in try productionSwiftFiles() {
             guard let text = try? String(contentsOf: f, encoding: .utf8) else { continue }
-            guard !text.contains("#if !OFFLINE_MODE") else { continue }   // gated file — OK
+            guard !text.contains("#if !NO_NETWORK_BUILD") else { continue }   // gated file — OK
             for (i, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
                 if line.contains("//") { continue }
                 for sym in connectorSymbols where line.contains(sym) {
-                    violations.append("\(f.lastPathComponent):\(i + 1)  \(sym) referenced without #if !OFFLINE_MODE")
+                    violations.append("\(f.lastPathComponent):\(i + 1)  \(sym) referenced without #if !NO_NETWORK_BUILD")
                 }
             }
         }
@@ -755,7 +756,7 @@ final class V2VerificationTests: XCTestCase {
     func testArchitectureGuards_offlineModeGateIntegrity() throws {
         let violations = try offlineGateViolations()
         XCTAssertTrue(violations.isEmpty,
-            "Connector symbol referenced in a file with no #if !OFFLINE_MODE gate:\n"
+            "Connector symbol referenced in a file with no #if !NO_NETWORK_BUILD gate:\n"
             + violations.joined(separator: "\n"))
     }
 
@@ -820,7 +821,7 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertTrue(violations.isEmpty, "Network access in the on-device bounded layer:\n" + violations.joined(separator: "\n"))
 
         // W1 — offline gate integrity across the WHOLE production tree:
-        // connector symbols only in #if !OFFLINE_MODE-gated files.
+        // connector symbols only in #if !NO_NETWORK_BUILD-gated files.
         let gateViolations = try offlineGateViolations()
         XCTAssertTrue(gateViolations.isEmpty,
             "Connector symbol outside an OFFLINE_MODE-gated file:\n" + gateViolations.joined(separator: "\n"))
