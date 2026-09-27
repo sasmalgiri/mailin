@@ -76,6 +76,61 @@ failed**. Every message that went in came back out.
 | PST / OST / NSF / MSG at any size | NOT TESTED — no real fixtures on this machine (see `RELEASE_NOTES_2_1.md`) |
 | Low-disk, external-volume disconnect, force-quit mid-import | NOT TESTED at this size |
 
+## Executed 2026-09-27 — 3.0 Phase J-3: the 1 GB format matrix
+
+Fixtures: `make_format_fixtures.py Sent.mbox ~/Downloads/Mail/Scale` — the
+owner's real Sent.mbox replicated 11× (Message-ID `.cN` suffix, Date shifted)
+into each container form under `~/Downloads/Mail/Scale/formats/`. Every row
+is 5,786 real messages (≈1.04 GB) unless stated; the mixed row is four
+disjoint quarters. Path: `ProductionImportRun` → `BulkImportCoordinator`
+(offset engine + locators for line-structured sources, `ParserFactory` for
+directory forms) into disposable storage, Debug configuration, this Mac
+(21 GiB free, other suites running earlier in the same process for some rows,
+which is what the RSS baseline shows). Test: `FormatMatrixScaleTests`
+(`MAILIN_SCALE=1`).
+
+Two production defects were found by these rows before any number could be
+recorded, both fixed the same day (commit b06edb8 and its follow-up):
+`BulkImportCoordinator` hashed every source through a file handle, so a
+folder source (EML folder, Maildir, Apple Mail package, EMLX folder) failed
+before parsing with "the file doesn't exist" and produced ZERO messages — no
+folder import through the production path had ever worked; and the PST
+parser read zero messages from every real PST (B-tree pages by `ptype`
+instead of `cLevel`, private block-page types, no `bCryptMethod` decoding for
+PST files).
+
+| Row | discovered / parsed / damaged | inserted / duplicates | stored = FTS rows | wall | throughput | RSS baseline → after |
+|---|---|---|---|---|---|---|
+| gzip (`mbox-1gb.mbox.gz`, 739,584,855 B compressed → 1.04 GB) | 5,786 / 5,786 / 0 | 5,786 / 0 | 5,786 | 762.9 s | 1.3 MiB/s · 7.6 msg/s | 192 → 759 MiB |
+| Apple Mail package (`applemail-1gb.mbox/`) | 5,786 / 5,786 / 0 | 5,786 / 0 | 5,786 | 549.1 s | 1.8 MiB/s · 10.5 msg/s | 153 → 814 MiB |
+| EML folder (5,786 files) | 5,786 / 5,786 / 0 | 5,786 / 0 | 5,786 | 1,850.3 s | 0.54 MiB/s · 3.1 msg/s | 814 → 514 MiB |
+| EMLX folder (5,786 files, `EMLXParser` batch path) | 5,786 / 5,786 / 0 | 5,786 / 0 | 5,786 | 740.0 s | 1.35 MiB/s · 7.8 msg/s | 514 → 830 MiB |
+| Maildir (`cur/`, 5,786 files) | 5,786 / 5,786 / 0 | 5,786 / 0 | 5,786 | 1,844.6 s | 0.54 MiB/s · 3.1 msg/s | 829 → 354 MiB |
+| mixed: mbox + EML folder + ZIP + Maildir, disjoint IDs (4,208 msgs, 759,198,114 B) | 4,208 / 4,208 / 0 | 4,208 / **0 duplicates** | 4,208 | 951.0 s | 0.76 MiB/s · 4.4 msg/s | 354 → 520 MiB |
+| **1.1 GB single message** (`LargeMessageBlobTests`: one 1,153,445,255-byte mbox record, base64 attachment above SQLite's 1 GB row ceiling) | 1 / 1 / 0 (header-only import, `bodiesNotDecoded` 1, locator recorded) | 1 / 0 | 1 | import 6.7 s | — | — |
+
+The 1.1 GB row's export: `exportMBOXArchive` wrote **1 record, 1,153,445,255
+bytes — exactly the fixture's size** — by streaming the located bytes from
+the source in 1 MiB chunks (`MBOXStreamingExport`). The first pass wrote a
+427-byte headers-only stub, because the exporter had no path for a message
+whose bytes are located rather than stored; that was the missing half of the
+S3b/S5 claim and is now executed.
+
+### What the numbers say so far
+
+- **Every container form now reconciles exactly** (discovered = parsed,
+  zero damaged, zero persist failures, store = FTS, dedup keeps every
+  distinct copy).
+- **Per-file sources are 3.4× slower than a single-file source of the same
+  bytes** (EML folder 1,850 s vs package 549 s). The log shows why: 2,369
+  "Evicted idle FTS shards under memory pressure" events during the EML row
+  — each member file is a separate parse whose batch re-opens the year
+  shards the previous member's eviction closed. That is an FTS import-mode
+  tuning item (open-shard budget per SOURCE, not per member), recorded in
+  the tracker as a 3.1 performance item, not a correctness one.
+- Throughput in Debug is 1.3–1.8 MiB/s for single-file sources, in line with
+  the 1.5 GB rows above.
+
 ## Earlier results
 
 `V2_SCALE_RESULTS.md` (synthetic tiny-message corpora up to 1,000,000

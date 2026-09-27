@@ -18,15 +18,20 @@ import Foundation
 
 extension MBOXRecordBuilder {
 
-    private static let lf: UInt8 = 0x0A
-    private static let cr: UInt8 = 0x0D
+    static let lf: UInt8 = 0x0A
+    static let cr: UInt8 = 0x0D
 
     /// Quote every line that begins with `From ` (and lines already quoted,
     /// `>From `, `>>From `…, so unquoting on import stays reversible). Line
     /// endings are preserved: LF, CRLF and bare CR all count as boundaries.
     static func quoteFromLines(_ raw: String) -> String {
         guard !raw.isEmpty else { return raw }
-        let bytes = Array(raw.utf8)
+        return String(decoding: quoteFromLines(bytes: Array(raw.utf8)), as: UTF8.self)
+    }
+
+    /// Byte-level form; `bytes` must start at a line boundary.
+    static func quoteFromLines(bytes: [UInt8]) -> [UInt8] {
+        guard !bytes.isEmpty else { return bytes }
         var out = [UInt8]()
         out.reserveCapacity(bytes.count + 64)
         var index = 0
@@ -47,7 +52,7 @@ extension MBOXRecordBuilder {
             out.append(contentsOf: bytes[index..<terminatorEnd])
             index = terminatorEnd
         }
-        return String(decoding: out, as: UTF8.self)
+        return out
     }
 
     /// The inverse of `quoteFromLines` — RFC 4155 mboxrd reading: every line

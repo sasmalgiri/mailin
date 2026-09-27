@@ -58,6 +58,15 @@ final class ArchiveDataService {
         try await repository.fullEmails(ids: ids)
     }
 
+    /// S5: where a message's bytes ARE when they are located rather than
+    /// stored (the offset engine's header-only import). Nil for rows with
+    /// stored raw MIME, rows imported before locators existed, and stores
+    /// that have no locator table.
+    func messageLocator(for id: EmailID) async throws -> MessageLocator? {
+        guard let sqlite = (repository as? EmailStoreRepository)?.store as? SQLiteEmailStore else { return nil }
+        return try await sqlite.locator(forEmailID: id)
+    }
+
     /// Which of the given ids exist.
     func exists(ids: [EmailID]) async throws -> Set<EmailID> {
         try await repository.exists(ids: ids)

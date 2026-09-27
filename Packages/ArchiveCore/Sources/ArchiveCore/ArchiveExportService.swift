@@ -148,6 +148,7 @@ final class ArchiveExportService {
         header: @MainActor (Int) -> String = { _ in "" },
         footer: @MainActor (Int) -> String = { _ in "" },
         onProgress: (@MainActor (Int, Int) -> Void)? = nil,
+        rawStream: (@MainActor (MBOXParser.RawEmail) async throws -> RawStreamPlan?)? = nil,
         row: @MainActor (MBOXParser.RawEmail, Int) throws -> String
     ) async throws -> ArchiveExportResult {
         let total = try await boundedTotal(scope: scope, limit: limit)
@@ -168,12 +169,15 @@ final class ArchiveExportService {
         var position = 0, bytes = 0, cancelled = false
         let skip = appending ? options.skipFirst : startAt
 
-        func write(_ s: String) throws {
-            guard !s.isEmpty else { return }
-            let d = Data(s.utf8)
+        func writeData(_ d: Data) throws {
+            guard !d.isEmpty else { return }
             try handle.write(contentsOf: d)
             digest.update(data: d)
             bytes += d.count
+        }
+        func write(_ s: String) throws {
+            guard !s.isEmpty else { return }
+            try writeData(Data(s.utf8))
         }
         func abort() {
             try? handle.close()
@@ -191,7 +195,16 @@ final class ArchiveExportService {
                 if Task.isCancelled { cancelled = true; break }
                 for email in batch {
                     if let limit, position >= limit { break stream }
-                    if position >= skip { try write(try row(email, position)) }
+                    if position >= skip {
+                        // S5: a located-not-stored message streams from its
+                        // source; everything else renders through `row`.
+                        if let rawStream, let plan = try await rawStream(email) {
+                            try write(plan.prefix)
+                            try Self.streamRecord(plan, write: writeData)
+                        } else {
+                            try write(try row(email, position))
+                        }
+                    }
                     position += 1
                     if let maxBytes, bytes >= maxBytes { break stream }
                 }
@@ -550,7 +563,8 @@ final class ArchiveExportService {
                            onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
         try await exportTextDocument(
             scope: scope, to: url, limit: limit, write: options,
-            onProgress: onProgress
+            onProgress: onProgress,
+            rawStream: { [self] email in try await self.locatorStreamPlan(for: email) }
         ) { email, _ in
             Self.mboxRecord(for: email)
         }
@@ -625,7 +639,8 @@ final class ArchiveExportService {
                 limit: limit,
                 startAt: written,
                 maxBytes: partitionBytes,
-                onProgress: onProgress
+                onProgress: onProgress,
+                rawStream: { [self] email in try await self.locatorStreamPlan(for: email) }
             ) { email, _ in
                 recordsThisPartition += 1
                 return Self.mboxRecord(for: email)

@@ -46,25 +46,54 @@ final class DiskImageFaultTests: XCTestCase {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["MAILIN_SCALE"] == "1", "fault rows are opt-in: MAILIN_SCALE=1")
         try XCTSkipUnless(Self.volume != nil, "attach the fault volume first: fault_volume.sh create && fault_volume.sh attach")
         try XCTSkipUnless(Self.fixture != nil, "~/Downloads/Mail/Sent.mbox not present")
+        print("ENOSPC-STEP setUp complete volume=\(Self.volume?.path ?? "nil")")
     }
 
     /// Fill the volume: the 95 MB fixture replicated until the 512 MB image
     /// cannot hold the archive. Whatever stops the run must be named, and the
     /// store left behind must be consistent.
+    /// Wraps one preparatory step so a thrown error names the step: an
+    /// `async throws` test reports a thrown error at `<unknown>:0`.
+    private func step<T>(_ name: String, _ body: () throws -> T) throws -> T {
+        print("ENOSPC-STEP begin \(name)")
+        do { let value = try body(); print("ENOSPC-STEP done \(name)"); return value }
+        catch { throw StepError(step: name, underlying: error) }
+    }
+    private struct StepError: Error, CustomStringConvertible {
+        let step: String; let underlying: Error
+        var description: String { "step '\(step)' failed: \(String(reflecting: underlying))" }
+        var localizedDescription: String { description }
+    }
+
     func testENOSPC_onFaultVolume_isNamedAndLeavesAConsistentStore() async throws {
+        print("ENOSPC-STEP body entered")
         let volume = try XCTUnwrap(Self.volume)
         let fixture = try XCTUnwrap(Self.fixture)
+        print("ENOSPC-STEP unwrapped volume=\(volume.path) fixture=\(fixture.path)")
+        // The ARCHIVE goes on the small volume; the replicated sources stay in
+        // the sandbox's temporary directory so the volume is filled by the
+        // import, not by the fixtures.
         let root = volume.appendingPathComponent("enospc-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        try MailinStorageEnvironment.assertNotProduction(root)
+        let sourceRoot = FileManager.default.temporaryDirectory.appendingPathComponent("enospc-src-\(UUID().uuidString)", isDirectory: true)
+        try step("create archive root on the volume") {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        }
+        try step("create source root in temp") {
+            try FileManager.default.createDirectory(at: sourceRoot, withIntermediateDirectories: true)
+        }
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: sourceRoot)
+        }
+        try step("assertNotProduction") { try MailinStorageEnvironment.assertNotProduction(root) }
 
-        // Eight copies with unique Message-IDs ≈ 760 MB of source → > 512 MB.
+        // Eight copies with unique Message-IDs ≈ 760 MB of source → the store
+        // alone (~1.08× source) cannot fit in 512 MB.
         let copies = 8
         var sources: [URL] = []
         for n in 0..<copies {
-            let copy = root.appendingPathComponent("copy-\(n).mbox")
-            try Self.replicate(fixture, to: copy, suffix: n)
+            let copy = sourceRoot.appendingPathComponent("copy-\(n).mbox")
+            try step("replicate copy \(n)") { try Self.replicate(fixture, to: copy, suffix: n) }
             sources.append(copy)
         }
 

@@ -525,7 +525,7 @@ final class BulkImportCoordinator {
             live.currentFile = sourceName
             live.currentPath = url.path
             live.fileIndex = fileIndex
-            live.fileBytes = Int64((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+            live.fileBytes = Int64(Self.sourceByteSize(of: url))
             live.fileFraction = 0
             live.fileStartedAt = Date()
             live.messagesThisFile = 0
@@ -541,7 +541,7 @@ final class BulkImportCoordinator {
                 self.status = .hashing(file: sourceName)
                 callbacks.onFileProgress?(sourceName, fileIndex, urls.count, 0)
                 let hash = try await Self.sha256(of: url)
-                let sizeBytes: Int = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+                let sizeBytes: Int = Self.sourceByteSize(of: url)
                 // The identity of the engine that will ACTUALLY run, not the
                 // one the filename implies. Two reasons, both load-bearing:
                 //
@@ -1075,17 +1075,69 @@ final class BulkImportCoordinator {
 
     // MARK: - File hashing
 
+    /// Chain-of-custody digest of a source. A FILE hashes its bytes. A
+    /// DIRECTORY-form source (EML folder, Maildir, Apple Mail package, EMLX
+    /// folder) hashes `"<relative path>\n<member sha256>\n"` for every regular
+    /// file, sorted by relative path, so the same tree hashes the same anywhere
+    /// and one changed member changes the digest. The first version opened
+    /// every source with a file handle, which fails on a directory — every
+    /// folder import through the production path ended with "the file doesn't
+    /// exist" and zero messages (found 2026-09-27 by the 1 GB format rows).
     private static func sha256(of url: URL) async throws -> String {
         try await Task.detached(priority: .utility) {
-            let handle = try FileHandle(forReadingFrom: url)
-            defer { try? handle.close() }
-            var hasher = SHA256()
-            while true {
-                let chunk = try handle.read(upToCount: 1_048_576) ?? Data()
-                if chunk.isEmpty { break }
-                hasher.update(data: chunk)
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {
+                return try directoryDigest(url)
             }
-            return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+            return try fileDigest(url)
         }.value
+    }
+
+    private nonisolated static func fileDigest(_ url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while true {
+            let chunk = try handle.read(upToCount: 1_048_576) ?? Data()
+            if chunk.isEmpty { break }
+            hasher.update(data: chunk)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    private nonisolated static func directoryDigest(_ root: URL) throws -> String {
+        var hasher = SHA256()
+        for (relative, member) in try regularFiles(under: root) {
+            hasher.update(data: Data("\(relative)\n".utf8))
+            hasher.update(data: Data("\(try fileDigest(member))\n".utf8))
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Regular files under `root`, sorted by relative path; hidden files
+    /// skipped (Finder's `.DS_Store` is not evidence).
+    nonisolated static func regularFiles(under root: URL) throws -> [(relative: String, url: URL)] {
+        guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey],
+                                                          options: [.skipsHiddenFiles]) else { return [] }
+        var files: [(String, URL)] = []
+        for case let item as URL in walker {
+            guard (try? item.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
+            let relative = item.standardizedFileURL.path.dropFirst(root.standardizedFileURL.path.count)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            files.append((relative, item))
+        }
+        return files.sorted { $0.0 < $1.0 }
+    }
+
+    /// Bytes of a source: the file's size, or the sum over a directory form.
+    nonisolated static func sourceByteSize(of url: URL) -> Int {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else { return 0 }
+        if !isDirectory.boolValue {
+            return (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+        }
+        return ((try? regularFiles(under: url)) ?? []).reduce(0) {
+            $0 + ((try? $1.url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+        }
     }
 }
