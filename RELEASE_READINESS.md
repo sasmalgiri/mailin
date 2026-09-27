@@ -320,14 +320,13 @@ means a large import on a small Mac is fighting the resting FTS cost too.
 
 | Metric | Status |
 |---|---|
-| Fresh-install cold launch, idle RSS, footprint | NOT MEASURED — needs a clean container (see above) |
-| Launch-to-usable timing | NOT MEASURED — needs signpost instrumentation, added to P1 |
-| Release-configuration timing of any measurement test | NOT MEASURABLE this way — `@testable import maxmailin` needs `ENABLE_TESTABILITY`, which Release correctly does not set. Route Release timing through the in-app `StressHarness` (Release-safe by design) extended to accept a real file — task A11 |
-| Production-path (`BulkImportCoordinator`) import of the fixture | NOT MEASURED — the coordinator is `@MainActor` and bound to the shared singletons; needs the repository injection in task A10 |
-| Signed-entitlement dump (`codesign -d --entitlements`) | NOT VERIFIED — the tooling call kept timing out in this environment; source entitlements are known (§1 B6), signed-binary confirmation still owed |
-| v1 JSON → SQLite migration timing | NOT MEASURED — needs a genuine v1 library fixture |
-| v1 JSON → SQLite migration timing | NOT MEASURED — needs a genuine v1 library fixture |
-| 2.x customer-library open timing | NOT MEASURED — needs a copy of a real 2.x library |
+| Cold launch, idle RSS, footprint — **Release build, 3.0, macOS 27, this Mac (2026-09-27, J-5)** | **MEASURED**: at idle after 60 s, `ps` RSS 273 MiB, `footprint` phys_footprint **145 MB** (peak 253 MB during launch), CPU **0.0 %**, **0 network sockets** open (`lsof`). Container: the existing test-host container, NOT a fresh install (TCC blocks resetting an app container from the shell). **The first measurement found the app at ~100 % CPU at idle**: `ModuleRegistry.policyRevision` was bumped on every `UserDefaults` change, so any `@AppStorage` write during a render re-invalidated every view that reads module activation and `ContentView.body` re-evaluated ~25×/s for ever. Fixed in 7f6b3a5 (the revision moves only when the managed-policy dictionary changes); the figures above are after the fix |
+| Launch-to-usable timing | NOT RELIABLY MEASURED — the shell-side window probe (System Events window count) reported 23.9 s but includes automation-permission overhead; the process was alive within 0.5 s. Needs the in-app signpost (P1) |
+| Release-configuration timing of any measurement test | Route Release timing through the in-app harness (`About ▸ Measure an import…`, A-8), which is Release-safe by design; not run in this pass |
+| Production-path (`BulkImportCoordinator`) import of the fixture | **MEASURED 2026-09-26/27** — repository injection landed (A-7); the 1.5 GB rows and the seven 1 GB format-matrix rows in `SCALE_RESULTS.md` all run through the production coordinator |
+| Signed-entitlement dump (`codesign -d --entitlements`) | **VERIFIED 2026-09-27** — `Scripts/verify-no-network.sh` on the signed macOS Release app: PASS 8/8 (app sandbox on; `network.client` and `network.server` not granted; `NO_NETWORK_BUILD` marker present; no direct Network/CFNetwork link; no undefined URLSession symbols; no ATS exceptions). The marker check failed on the first Release build because the unreferenced `static let` was folded away; it is now carried in the About verdict text |
+| v1 JSON → SQLite migration timing | **MEASURED 2026-09-27 on a SYNTHETIC v1 library** authored from the owner's real Sent.mbox (`LegacyLibraryMigrationTests`): 526 messages, 6,317,591 B JSON, load 0.03 s, migrate into SQLite 0.08 s, 526 stored. A genuine customer v1 file is still owed by the owner; this proves the code against a library shaped like v1, not against a customer's file |
+| 2.x customer-library open timing | **MEASURED 2026-09-27 on a SYNTHETIC 2.x-shaped library** (current-schema store written, closed, reopened cold): 526 rows, cold open 0.001 s, schema v18. A real customer 2.x library is still owed |
 | 1.5 GB import, production path, Debug | **MEASURED 2026-09-26** — 8,416 messages in 1,096 s (1.3 MiB/s), peak Δ 790 MiB, store 1.08× / FTS 0.026×, export round trip exact; offset engine 1,141 s (not faster); ZIP path 887 s. `SCALE_RESULTS.md` |
 | `HMACChainAuditLog.verifyChain()` cost vs chain length | NOT MEASURED — needs a long chain fixture |
 | Clean-build time, Release config, iOS build | NOT MEASURED |

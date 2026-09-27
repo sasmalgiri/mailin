@@ -73,17 +73,29 @@ entry points and both agreed. Running this found that the streaming path had
 never produced a message from a bare `.eml` (see the `eml` row below). A real
 client export (Apple Mail, Dovecot) has still not been run.
 
+**Executed 2026-09-27 at 1 GB per form** (`FormatMatrixScaleTests`, real
+messages replicated from the owner's mailbox — `SCALE_RESULTS.md`): EML folder,
+Maildir, Apple Mail package and `.emlx` folder each import 5,786 of 5,786 and
+reconcile exactly; the mixed row (mbox + EML folder + ZIP + Maildir) imports
+4,208 with zero duplicates. **This run found that no folder source had ever
+imported through the production path**: `BulkImportCoordinator` hashed every
+source through a file handle for chain of custody, which fails on a directory,
+so every folder import ended with "the file doesn't exist" and zero messages
+before a parser was reached. Directory sources now get a digest over their
+sorted members. Per-file sources are ~3.4× slower than a single file of the
+same bytes (FTS shard eviction thrash between members) — a 3.1 tuning item.
+
 ---
 
 ## 2. What each format delivers
 
 | Format | Parser | Streams? | What is extracted | Known caveats |
 |---|---|---|---|---|
-| mbox | `MBOXParser` | **Yes** — bounded memory, adaptive batches | Headers, MIME tree, bodies, attachments, Gmail labels → tags, thread links | Single messages above 100 MB are reported as damaged, not truncated (see §3) |
+| mbox | `MBOXParser` (streaming fallback) / `OffsetImportEngine` (3.0 default) | **Yes** — bounded memory, adaptive batches | Headers, MIME tree, bodies, attachments, Gmail labels → tags, thread links; mboxrd `>From ` escaping undone on read (parser/engine version 2, 2026-09-27) | With the offset engine (default since 3.0) a single message above the full-parse ceiling is imported from its headers with a byte locator, read back and **exported byte-for-byte by streaming from the source** (executed: 1,153,445,255-byte message, `LargeMessageBlobTests`). The streaming fallback still reports such a message as damaged rather than truncating it (see §3) |
 | eml | `MBOXParser` | Yes | As mbox; a missing `From ` envelope is synthesised. **Fixed 2026-09-26:** an envelope line INSIDE the header block (real Gmail exports put it a dozen headers down) is no longer a separator, in both engines | **Fixed 2026-09-25:** the streaming path (the one imports use) began a message only on a `From ` line, so a bare `.eml` imported as ZERO messages with no failure reported. A first line that is a header field now starts one bare message. Pinned by `singleEMLStreams`; the reverse case (mbox preamble) by `mboxPreambleIsNotAMessage` |
 | emlx | `EMLXParser` | No | Per-file parse with a damaged-file report (`ParseResult.summary`) | Whole set materialises before draining |
 | msg | `MSGParser` | No | OLE2 → MAPI properties (sender, recipients, subject, bodies, attachments) | Refuses above 2 GB; one message per file |
-| pst / ost | `PSTParser` | No | In-house NDB reader: node + block B-trees, MAPI property contexts, attachment subnodes, OST `permute`/`cyclic` decode | Not executed above 50 GB (see §4); WIP-protected content is reported, not silently dropped |
+| pst / ost | `PSTParser` | No | In-house NDB reader: node + block B-trees (leaf vs branch by `cLevel`, MS-PST §2.2.2.7.7), MAPI property contexts, attachment subnodes, `bCryptMethod` 1 (permute) decoding for PST and OST | **First executed PST import 2026-09-27** (Apache Tika `testPST.pst`): the parser read ZERO messages from every real PST before that day — it decided leaf/branch pages by `ptype` instead of `cLevel`, expected private block-page types (0x82/0x83), and decoded `bCryptMethod` for OST only. Fixed; the Tika file now yields its messages and reconciles. `bCryptMethod` 2 (cyclic) is refused with a message rather than decoded (§6). Not executed above 50 GB (see §4); WIP-protected content is reported, not silently dropped |
 | nsf | `NSFParser` | No | Structured note records with LZSS decompression and LMBCS strings, attachments by item | Falls back to a **heuristic text scan** when the structured parse finds nothing — fidelity is lower on that path and it is not byte-exact |
 | Apple Mail package | `MBOXParser` per member | Yes | As mbox | Reports "nothing to import" when no `mbox` file is inside |
 | Maildir | `MBOXParser` per member | Yes | As eml, one message per file | `tmp/` skipped by design |
@@ -190,8 +202,12 @@ the offset-index work (S4/S5) exists to preserve.
 - **Encrypted ZIP members, and ZIP compression methods other than stored /
   deflate** — refused by name and counted; the rest of the archive still
   imports. Nested archives inside an archive are skipped, not recursed into.
-- **Encrypted PST/OST beyond the documented permute/cyclic obfuscation** —
-  password-protected files are not decrypted.
+- **PST/OST with `bCryptMethod` 2 (cyclic encoding)** — refused with a message
+  naming the reason (the decoder tables are not implemented; re-save from
+  Outlook with compressible encryption or none). `bCryptMethod` 1 (permute,
+  Outlook's default) is decoded for both PST and OST.
+- **Encrypted PST/OST beyond that obfuscation** — password-protected files are
+  not decrypted.
 - **Live mail accounts** — Page 4 ships default-off and its features are
   `.notInThisBuild` in this release.
 - **Anything hosted in iCloud as the active store** — Apple's rule is explicit
@@ -208,9 +224,10 @@ Honest split, because "supported" and "tested" are different claims:
 |---|---|
 | mbox import, search, export | **Executed** — 526-message archive: attachment 298,901/298,901 bytes recovered, 50 of 526 search hits, 526 → 526 → 526 export round-trip |
 | Growth coefficients | **Measured** on that archive (1.243 × / 0.044 × / 1.286 ×) |
-| Zero network activity | **Measured** — 0 network sockets in a Release run; `OFFLINE_MODE` in both configurations and no network entitlement |
+| Zero network activity | **Measured and verified 2026-09-27** — 0 network sockets at idle in the Release build; `Scripts/verify-no-network.sh` on the signed Release app PASS 8/8 (sandbox on, no network entitlement, `NO_NETWORK_BUILD` marker present, no direct Network/CFNetwork link, no ATS exceptions) |
 | Format classification | Unit-tested (`SourceFormatClassifierTests`) |
 | Size policy verdicts | Unit-tested (`SourceSizePolicyTests`) |
-| Directory-source import (Apple Mail package, Maildir, `.eml` folder) | **Implemented, not yet executed against a real export** |
-| PST / OST / NSF / MSG import | Code paths exist; **no executed fixture run is recorded** |
+| Directory-source import (Apple Mail package, Maildir, `.eml` folder, `.emlx` folder) | **Executed 2026-09-27 at 1 GB each** through the production coordinator, exact reconciliation (`SCALE_RESULTS.md`). Real content, synthetic layout: a genuine Apple Mail / Dovecot export has still not been run |
+| PST / MSG import | **Executed 2026-09-27** on the Apache Tika fixtures: `testPST.pst` (Unicode, `bCryptMethod` 1) and three `.msg` files import and reconcile through the production path (`RealBinaryFixtureTests`). The PST fixture yields one message; the fixture's true count has not been independently verified with another reader |
+| OST / NSF import | **Not executed on a real file** — no fixture exists; synthetic headers exercise classification and honest refusal only (`SyntheticBinaryFormatTests`) |
 | PST above 50 GB, NSF above 64 GB | **Never executed.** The warnings say so. |

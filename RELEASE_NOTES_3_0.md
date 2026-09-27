@@ -51,8 +51,12 @@ is built on the `live-mail` feature branch and is not part of this release. Ever
 
 ## Architecture and safety
 
-- ArchiveCore boundary enforced by `Scripts/check_archive_core_boundary.sh` (31 files; no UI import,
-  no app-layer type), run on Xcode Cloud. Professional exports moved out of the core file set.
+- **ArchiveCore is a Swift package** (`Packages/ArchiveCore`, 53 files): store, index, parsers,
+  import, export, receipts, layout. The compiler is the boundary; `Scripts/check_archive_core_boundary.sh`
+  scans the package as the second line, run on Xcode Cloud. The package's own test target runs
+  unsandboxed (`swift test`) for the fault-injection rows the sandboxed app cannot host.
+- **Private SKU:** bundle id `com.ecosanskriti.mailin.enterprise` (Apple Business Manager Custom App);
+  In-App Purchase code compiled out of `ENTERPRISE_EDITION`, kept for the public line.
 - iCloud Overflow prototype: content-addressed, hash-verified segments with a bounded local cache,
   proven against a local-folder transport; the iCloud transport waits on the container identifier.
 - Documents added: `PAGE_WINDOW_MATRIX.md`, `ADAPTIVE_IMPORT_DESIGN.md`, `IMPORT_RECEIPT_SPEC.md`,
@@ -60,10 +64,39 @@ is built on the `live-mail` feature branch and is not part of this release. Ever
   `LIVE_MAIL_PROVIDER_MATRIX.md`, `LIVE_MAIL_MULTI_ACCOUNT_TESTS.md`, `WORKFLOW_INVENTORY.md`,
   `STORE_LISTING_3_0.md`.
 
+## Found and fixed by the Phase J verification (2026-09-27)
+
+Every claim below was tested against real mail before release; these are the defects the tests
+found, all fixed in this release:
+
+- **PST import read zero messages from every real PST** (B-tree pages read by type instead of
+  level, private block-page types, no `bCryptMethod` decoding for PST files). The first executed
+  PST import (Apache Tika fixture) now reconciles.
+- **No folder source had ever imported through the production path** (EML folder, Maildir, Apple
+  Mail package, `.emlx` folder): the chain-of-custody hash opened the folder as a file. Folder sources
+  now get a digest over their sorted members; all four forms executed at 1 GB, exact reconciliation.
+- **A message above the full-parse ceiling exported as a 427-byte stub**: the exporter had no path
+  for a message whose bytes are located rather than stored. It now streams them; the executed 1.1 GB
+  message exports byte-for-byte.
+- **mbox export was not byte-identical on re-import**: the stored envelope line was quoted into the
+  body as `>From`, mboxrd `>From ` escaping was never undone on read, partitioned export never split,
+  and CRLF mail was invisible to the quoter. The real-mailbox round trip is now 526 of 526 byte-identical.
+- **The Release app sat at 100 % CPU at idle**: an observed revision bumped on every UserDefaults
+  change re-rendered the main view continuously. Idle is now 0 % CPU, 145 MB footprint.
+- **Cancel did not reach a paused import**, and **the disk reserve was a flat 5 GiB** (no volume under
+  10 GiB could import). Cancel is universal; the reserve scales with the volume.
+- **After an external volume was unplugged and reconnected, every write failed**: handles pointed at
+  the old mount. The importer re-opens them and retries the interrupted batch.
+
 ## Known limits, stated
 
-- Largest executed import is 1.52 GB of real mail; larger sizes are not tested (`SCALE_RESULTS.md`).
-- PST and MSG have their first executed fixtures (Apache Tika) in Phase J; OST and NSF have none.
-- The physical SwiftPM extraction of ArchiveCore is deferred to a pass in which tests run between
-  steps; the boundary is enforced now.
-- Per-source search coverage is archive-wide, not per source.
+- Largest executed import is 1.52 GB of real mail in one file and 1.04 GB per container form;
+  larger sizes are not tested (`SCALE_RESULTS.md`).
+- PST and MSG have executed fixtures (Apache Tika); the PST fixture yields one message and its true
+  count is not independently verified. OST and NSF have no real fixture.
+- An unplug that lands DURING a SQLite write terminates the process (WAL's memory-mapped index);
+  recovery is WAL + the import checkpoint on relaunch. An unplug between batches pauses and resumes.
+- `bCryptMethod` 2 (cyclic) PST/OST files are refused with a message, not decoded.
+- Per-file sources (EML folder, Maildir) import ~3.4× slower than a single file of the same bytes.
+- Genuine customer v1 / 2.x libraries, a real Apple Mail export and OST/NSF files are still owed by
+  the owner; the migration and handoff rows ran on synthetic stand-ins built from real mail.

@@ -104,7 +104,8 @@ file in the same process**, where the engine is the only variable.
 | Running jobs | **0** |
 | `isArchiveOnlyClean` | **true** |
 | Process footprint | 193 MiB (test host; context, not attribution) |
-| Network sockets (Release) | **0** |
+| **Release app at idle, 60 s after launch (2026-09-27, J-5)** | **phys_footprint 145 MB** (peak 253 MB at launch), `ps` RSS 273 MiB, **CPU 0.0 %**. The first measurement showed ~100 % CPU: `ModuleRegistry.policyRevision` was bumped on every UserDefaults change and re-rendered the main view continuously — fixed the same day (7f6b3a5). A Page-1-only launch now rests |
+| Network sockets (Release) | **0** (re-measured 2026-09-27 with `lsof`) |
 
 ### Per-page activation cost
 

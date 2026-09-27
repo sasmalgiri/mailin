@@ -116,6 +116,43 @@ the source in 1 MiB chunks (`MBOXStreamingExport`). The first pass wrote a
 whose bytes are located rather than stored; that was the missing half of the
 S3b/S5 claim and is now executed.
 
+### Fault injection on a disk image (B-2 / B-5) — executed 2026-09-27
+
+`fault_volume.sh create 512m && attach` → a 512 MiB APFS image at
+`/Volumes/MailinFault`. Run UNSANDBOXED as the package test
+`FaultVolumeTests` (`xcrun swift test --package-path Packages/ArchiveCore`):
+the app-hosted test bundle inherits the app sandbox, which cannot write to
+any mounted volume (FileManager reports the denial as a `DecodingError`).
+
+| Row | What happened | Verdict |
+|---|---|---|
+| ENOSPC: 8 × Sent.mbox (760 MB of source, unique Message-IDs) into a store on the 512 MiB image, storage preflight OFF | The import committed **1,592 messages** (2,015 in an earlier pass), then the live disk guard paused it with the reason *"Paused: less than 134.2 MB of disk space is free, which the archive needs for the database, index and temporary files."* — 133,738,496 bytes were still free; the volume was never filled to the wall. The watchdog cancelled after 180 s as a user would; the run ended with `CancellationError` (a named outcome, not a clean completion); the store **reopened with 1,592 rows, FTS 1,592** — consistent | PASS |
+| Unplug mid-import (at a batch boundary — the "unplug-before-write" the design guards): 2 × Sent.mbox into the image; after 319 messages the run is paused, the image is force-detached (`hdiutil detach -force`, what pulling the cable does), the run resumed, the image re-attached | Pause named **18.6 s** after the detach: *"Archive volume detached — reconnect … to continue"*. After the re-attach the run **finished by itself**: 1,051 inserted + 1 recorded duplicate = the 1,052 messages of both sources (copy 0 carries the fixture's own IDs; one message without a Message-ID is identical in both copies), `persistFailed` 0, no file errors, **FTS 1,051 = store 1,051** | PASS |
+
+What the unplug row found before it passed: the handles opened before the
+eject pointed at the OLD mount, so after the reconnect every write failed
+with "disk I/O error" and one batch's index write was lost. The coordinator
+now re-opens the store connection and the FTS shards when the volume returns,
+and an insert or index write that fails while the directory is unreachable
+waits for the volume and retries once (the v17 checkpoint rides the insert's
+transaction, so the retry writes exactly the same rows).
+
+**Known limit, stated plainly:** an unplug that lands DURING a SQLite write
+terminates the process. WAL mode memory-maps the `-shm` index, and touching a
+mapped page of a removed volume is a bus error the OS delivers as SIGBUS
+(observed once in this row before the eject was moved to a batch boundary).
+This is the same for any application whose database is on the removed disk.
+What holds then is WAL recovery plus the v17 checkpoint on relaunch
+(`ResumeTests`); it cannot be exercised in-process.
+
+Two defects this row found before it could pass: `BulkImportCoordinator.cancel()`
+cancelled only the `startImport` task, so a run started through `runImport`
+(the production UI path wraps it in its own Task) parked in a pause loop could
+never be stopped by the coordinator; and the live disk reserve was a flat
+5 GiB with "healthy" at twice that, so any volume under 10 GiB — or any Mac
+with less than 10 GiB free — could not import one message. The reserve is
+now 1 % of the volume clamped to 128 MiB–2.5 GiB (healthy above twice that).
+
 ### What the numbers say so far
 
 - **Every container form now reconciles exactly** (discovered = parsed,
