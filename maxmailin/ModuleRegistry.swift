@@ -298,6 +298,13 @@ final class ModuleRegistry {
     /// the org policy without a relaunch.
     private(set) var policyRevision = 0
     private var policyObserver: NSObjectProtocol?
+    /// The managed dictionary as last seen, so `policyRevision` moves only
+    /// when the ORG POLICY changes. Bumping it on every UserDefaults change
+    /// made every view that reads `activation` re-render whenever any view
+    /// wrote an `@AppStorage` value — including writes made while rendering —
+    /// and the app sat at 100 % CPU at idle (found 2026-09-27 by the J-5
+    /// idle-footprint measurement of the Release build).
+    private var lastManagedPolicy: [String: Any]?
 
     init(store: ModuleStateStore = ModuleStateStore(url: ModuleStateStore.productionURL),
          excludedByBuild: Set<AppModule> = ModuleRegistry.buildExclusions,
@@ -306,9 +313,17 @@ final class ModuleRegistry {
         self.excludedByBuild = excludedByBuild
         self.trapsOnMisuse = trapsOnMisuse
         self.state = store.load()
+        self.lastManagedPolicy = UserDefaults.standard.dictionary(forKey: ManagedConfig.managedDefaultsKey)
         policyObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.policyRevision &+= 1 }
+                Task { @MainActor in
+                    guard let self else { return }
+                    let now = UserDefaults.standard.dictionary(forKey: ManagedConfig.managedDefaultsKey)
+                    let unchanged = NSDictionary(dictionary: self.lastManagedPolicy ?? [:]).isEqual(to: now ?? [:])
+                    guard !unchanged else { return }
+                    self.lastManagedPolicy = now
+                    self.policyRevision &+= 1
+                }
             }
     }
 
