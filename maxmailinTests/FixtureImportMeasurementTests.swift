@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  FixtureImportMeasurementTests.swift
 //  maxmailinTests

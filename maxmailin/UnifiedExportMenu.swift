@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  UnifiedExportMenu.swift
 //  maxmailin
@@ -25,12 +26,6 @@ import AppKit
 #endif
 import UniformTypeIdentifiers
 
-enum UnifiedExportFormat: String, Codable, CaseIterable, Sendable {
-    case word, csv, json, printText, markdown, headersCSV, mbox   // single documents
-    case emlFiles, pdfFiles, tiffFiles, msgFiles                  // one file per email
-    case portableHTML                    // folder with index.html viewer
-    case vcard, ics                      // derived extracts
-}
 
 struct UnifiedExportSections: View {
     /// Scope resolved at CLICK time (current filtered query / this email).

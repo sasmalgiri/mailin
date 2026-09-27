@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  AIInsightsPageView.swift
 //  maxmailin

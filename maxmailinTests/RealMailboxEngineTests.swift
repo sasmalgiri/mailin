@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  RealMailboxEngineTests.swift
 //  maxmailinTests

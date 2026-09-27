@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  ProfessionalPageView.swift
 //  maxmailin

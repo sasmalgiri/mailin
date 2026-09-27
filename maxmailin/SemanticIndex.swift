@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  SemanticIndex.swift
 //  maxmailin

@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  ImportSurfaceWiringTests.swift
 //  maxmailinTests

@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  mailinApp.swift
 //  mailin
@@ -56,6 +57,13 @@ struct mailinApp: App {
     @State private var showLaunchAnimation = false
     @Environment(\.openWindow) private var openWindow
     @Environment(\.scenePhase) private var scenePhase
+
+    init() {
+        // C-1: the engine lives in the ArchiveCore package; hand it the app's
+        // store, storage authority and memory-pressure reader before any
+        // property wrapper above touches a repository.
+        ArchiveCoreBridge.install()
+    }
 
     // MARK: - Scene Configuration
     var body: some Scene {

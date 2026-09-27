@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  ThreadStoryView.swift
 //  maxmailin

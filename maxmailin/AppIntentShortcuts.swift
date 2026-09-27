@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import AppIntents
 import Foundation
 

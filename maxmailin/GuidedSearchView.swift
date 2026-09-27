@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import SwiftUI
 
 /// A7: the advanced-search sheet. Every field compiles to an operator the

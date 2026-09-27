@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import Foundation
 import Compression
 import os.log

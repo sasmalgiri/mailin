@@ -92,7 +92,7 @@ enum FTSReconciler {
     @discardableResult
     static func reconcile(pageSize: Int = 5_000, maxPages: Int? = nil) async throws -> ReconcileResult {
         try await reconcileCore(
-            store: EmailStore.shared, fts: .shared, pageSize: pageSize, maxPages: maxPages,
+            store: ArchiveCoreDefaults.defaultStoreProvider(), fts: .shared, pageSize: pageSize, maxPages: maxPages,
             initialDate: loadCursorDate(), initialID: loadCursorID(),
             onAdvance: { saveCursor(date: $0, id: $1) },
             onComplete: { clearCursor() }

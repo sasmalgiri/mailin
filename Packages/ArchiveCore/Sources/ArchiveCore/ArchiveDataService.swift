@@ -162,6 +162,13 @@ final class ArchiveDataService {
         return try await sqlite.sources()
     }
 
+    /// A6: per-source index coverage (committed vs indexed), keyed by source id.
+    func sourceCoverage() async throws -> [Int64: SQLiteEmailStore.SourceCoverage] {
+        guard let repo = repository as? EmailStoreRepository,
+              let sqlite = repo.store as? SQLiteEmailStore else { return [:] }
+        return Dictionary(uniqueKeysWithValues: try await sqlite.sourceCoverage().map { ($0.sourceID, $0) })
+    }
+
     /// Parser labels (Gmail labels, Maildir/PST folders) with counts.
     func parserTagCounts(limit: Int) async throws -> [AggregateBucket] {
         guard let repo = repository as? EmailStoreRepository,

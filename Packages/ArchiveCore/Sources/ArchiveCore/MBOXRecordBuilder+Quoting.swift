@@ -1,6 +1,6 @@
 //
 //  MBOXRecordBuilder+Quoting.swift
-//  maxmailin
+//  ArchiveCore
 //
 //  H1: mbox `>From ` quoting that survives every line ending and a message
 //  whose very first line starts with "From ". The previous rule replaced

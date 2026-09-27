@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  WorkCenterModel.swift
 //  maxmailin

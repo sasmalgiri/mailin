@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 #if !NO_NETWORK_BUILD
 import Foundation
 import SwiftUI

@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import Foundation
 
 // MARK: - Feedback-Driven Expert Routing (v3.2.1)

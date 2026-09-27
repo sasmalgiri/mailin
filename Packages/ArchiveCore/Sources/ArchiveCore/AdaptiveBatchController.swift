@@ -144,14 +144,9 @@ enum LivePressureSampler {
     /// sample is not.
     @MainActor
     static func currentPressure() -> PressureSample.MemoryPressure {
-        guard let observed = MemoryPressureHandler.shared.lastObservedLevel,
-              MemoryPressureHandler.shared.isUnderRecentPressure(window: 30) else {
-            return .nominal
-        }
-        switch observed {
-        case .critical: return .critical
-        case .warning, .thermal: return .warning
-        }
+        // The OS pressure observer is app-level (main-actor UI plumbing); the
+        // app installs a reader through `ArchiveCoreDefaults`.
+        ArchiveCoreDefaults.observedMemoryPressure()
     }
 
     static func sample(storeDirectory: URL,

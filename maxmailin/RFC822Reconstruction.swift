@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  RFC822Reconstruction.swift
 //  maxmailin

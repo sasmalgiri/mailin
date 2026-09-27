@@ -12,8 +12,10 @@ xcuserdata/
 ._*
 
 # Swift Package Manager
+# (Packages/ holds our own local packages — ArchiveCore — and IS tracked;
+#  only build products inside them are ignored.)
 .build/
-Packages/
+Packages/*/.build/
 Package.resolved
 
 # Python (development artifacts)

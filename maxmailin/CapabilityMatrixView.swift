@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  CapabilityMatrixView.swift
 //  mailin

@@ -188,7 +188,7 @@ struct EmailStoreRepository: EmailRepository {
     let store: any EmailArchiveStore
     let fts: FTSSearchIndex
 
-    init(store: any EmailArchiveStore = EmailStore.shared, fts: FTSSearchIndex = .shared) {
+    init(store: any EmailArchiveStore = ArchiveCoreDefaults.defaultStoreProvider(), fts: FTSSearchIndex = .shared) {
         self.store = store
         self.fts = fts
     }

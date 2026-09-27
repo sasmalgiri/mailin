@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import Foundation
 import SwiftUI
 // Combine stays ONLY for the ObservableObject objectWillChange forwarder in

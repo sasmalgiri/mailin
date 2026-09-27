@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import SwiftUI
 #if os(macOS)
 import AppKit

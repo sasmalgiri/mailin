@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  MBOXParserTests.swift
 //  mailin Tests

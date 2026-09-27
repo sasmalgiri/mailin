@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  LaunchJobs.swift
 //  maxmailin

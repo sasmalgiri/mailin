@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  BatesNumberingManager.swift
 //  mailin

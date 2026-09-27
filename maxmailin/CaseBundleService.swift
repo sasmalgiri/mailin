@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import Foundation
 import CryptoKit
 import os.log

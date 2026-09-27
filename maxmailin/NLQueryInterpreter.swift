@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  NLQueryInterpreter.swift
 //  maxmailin

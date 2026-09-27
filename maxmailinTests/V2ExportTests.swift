@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import XCTest
 import CryptoKit
 @testable import maxmailin

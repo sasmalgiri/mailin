@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 import SwiftUI
 
 /// Compares the WHOLE current archive with a second mailbox file.

@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  EmailPersistence+Testing.swift
 //  maxmailin

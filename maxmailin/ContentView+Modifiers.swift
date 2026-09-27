@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  ContentView+Modifiers.swift
 //  maxmailin

@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  FormatMatrixTests.swift
 //  maxmailinTests

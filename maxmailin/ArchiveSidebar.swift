@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  ArchiveSidebar.swift
 //  maxmailin
@@ -133,6 +134,8 @@ final class ArchiveSidebarModel: ObservableObject {
     @Published private(set) var pinnedCount = 0
     @Published private(set) var trashedCount = 0
     @Published private(set) var sources: [SQLiteEmailStore.StoredSource] = []
+    /// A6: per-source committed vs indexed, so a source still indexing says so.
+    @Published private(set) var coverage: [Int64: SQLiteEmailStore.SourceCoverage] = [:]
     @Published private(set) var labels: [AggregateBucket] = []
     @Published private(set) var lastRefresh: Date?
 
@@ -158,6 +161,7 @@ final class ArchiveSidebarModel: ObservableObject {
             receivedCount = types["received"] ?? 0
         }
         sources = (try? await archive.sources()) ?? sources
+        coverage = (try? await archive.sourceCoverage()) ?? coverage
         labels = (try? await archive.parserTagCounts(limit: Self.labelLimit)) ?? labels
         lastRefresh = Date()
     }
@@ -193,15 +197,25 @@ struct ArchiveSidebarView: View {
             if !model.sources.isEmpty {
                 Section("Sources", isExpanded: $sourcesExpanded) {
                     ForEach(model.sources, id: \.sourceID) { source in
+                        let cov = model.coverage[source.sourceID]
                         Label {
-                            Text(source.filename)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
+                            HStack(spacing: 4) {
+                                Text(source.filename)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                if let cov, cov.pending > 0 {
+                                    // A6: this source is not fully searchable yet.
+                                    Image(systemName: "text.magnifyingglass")
+                                        .font(.caption2)
+                                        .foregroundStyle(.orange)
+                                        .accessibilityLabel("\(cov.indexed) of \(cov.committed) messages searchable")
+                                }
+                            }
                         } icon: {
                             Image(systemName: icon(forParser: source.parser))
                         }
                         .tag(ArchiveSidebarSelection.source(source.filename))
-                        .help("\(source.filename) — \(source.parser), \(ByteCountFormatter.string(fromByteCount: Int64(source.byteSize), countStyle: .file)), imported \(source.importedAt.formatted(date: .abbreviated, time: .shortened))")
+                        .help(sourceHelp(source, cov))
                         .accessibilityIdentifier("archive.sidebar.source")
                     }
                 }
@@ -283,6 +297,16 @@ struct ArchiveSidebarView: View {
         }
         .tag(target)
         .accessibilityLabel("\(title), \(count) messages")
+    }
+
+    private func sourceHelp(_ source: SQLiteEmailStore.StoredSource, _ cov: SQLiteEmailStore.SourceCoverage?) -> String {
+        var text = "\(source.filename) — \(source.parser), \(ByteCountFormatter.string(fromByteCount: Int64(source.byteSize), countStyle: .file)), imported \(source.importedAt.formatted(date: .abbreviated, time: .shortened))"
+        if let cov {
+            text += cov.pending > 0
+                ? ". Search covers \(cov.indexed.formatted()) of \(cov.committed.formatted()) messages from this source — \(cov.pending.formatted()) still indexing"
+                : ". Every one of its \(cov.committed.formatted()) messages is searchable"
+        }
+        return text
     }
 
     private func icon(forParser parser: String) -> String {

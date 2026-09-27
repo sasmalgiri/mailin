@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  ArchiveFullAnalytics.swift
 //  maxmailin

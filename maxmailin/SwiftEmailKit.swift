@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //  SwiftEmailKit.swift
 //  mailin
 //  Pythonic .mbox/.eml RFC822 Email Parser & Composer for Swift

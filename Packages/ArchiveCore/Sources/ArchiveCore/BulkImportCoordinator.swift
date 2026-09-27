@@ -472,7 +472,7 @@ final class BulkImportCoordinator {
         indexBacklog = false
 
         if requiresStorageActivation {
-            guard await StorageActivationCoordinator.shared.isActive else {
+            guard await ArchiveCoreDefaults.storageAuthorityIsActive() else {
                 Self.logger.fault("Import blocked: storage authority is not active.")
                 throw MaxmailinError.persistence(.containerUnavailable,
                     detail: "Storage is not ready yet. The import was blocked (not skipped) — retry once activation completes.")
@@ -747,6 +747,12 @@ final class BulkImportCoordinator {
                             summary.indexed += toIndex.count
                             let indexedSoFar = summary.indexed
                             await MainActor.run { self.live.indexedThisRun = indexedSoFar }
+                            // A6: per-source coverage record — committed and
+                            // indexed counts for THIS source, so the sidebar can
+                            // say "N of M searchable" per file. Best effort: a
+                            // failure here never fails an import that has
+                            // already committed its rows.
+                            try? await store.recordSourceCoverage(sourceID: sourceID, committed: insertedSet.count, indexed: toIndex.count)
                         } catch {
                             summary.ftsDegraded = true
                             summary.ftsFailedBatchCount += 1

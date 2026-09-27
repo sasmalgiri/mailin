@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  AttachmentTextIndexJob.swift
 //  maxmailin

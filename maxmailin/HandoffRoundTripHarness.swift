@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  HandoffRoundTripHarness.swift
 //  maxmailin

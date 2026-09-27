@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  PersonaManager.swift
 //  mailin

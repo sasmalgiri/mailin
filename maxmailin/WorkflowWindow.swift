@@ -1,3 +1,4 @@
+@testable import ArchiveCore
 //
 //  WorkflowWindow.swift
 //  maxmailin

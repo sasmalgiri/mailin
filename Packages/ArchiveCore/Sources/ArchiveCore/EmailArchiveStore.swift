@@ -87,6 +87,5 @@ extension EmailArchiveStore {
     }
 }
 
-// EmailStore already exposes exactly this surface (its actor-isolated
-// synchronous methods witness the async requirements).
-extension EmailStore: EmailArchiveStore {}
+// The app's legacy SwiftData `EmailStore` conforms in the app target
+// (EmailStore+ArchiveCore.swift); the package does not know that type.

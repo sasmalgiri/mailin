@@ -583,7 +583,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     ///
     ///   v14 = raw-MIME blob tier (S3b)
     ///   v15 = message locators (S4/S5)
-    static let currentSchemaVersion = 17
+    static let currentSchemaVersion = 18
 
     private func migrateSchema(_ handle: OpaquePointer) throws {
         var v = try scalarInt(handle, "PRAGMA user_version;")
@@ -984,6 +984,68 @@ actor SQLiteEmailStore: EmailArchiveStore {
             }
             v = 17
         }
+        if v < 18 {
+            // v18 (3.0 A6): per-source index coverage. The FTS registry lives
+            // in the shard databases, so "how many of THIS source's messages
+            // are searchable" cannot be joined in SQL; the coordinator records
+            // it here as each batch commits and is indexed, and the sidebar
+            // reads it in one query. `committed` counts rows the store took
+            // from the source; `indexed` counts rows the FTS index accepted.
+            try exec(handle, """
+                CREATE TABLE IF NOT EXISTS source_coverage(
+                    source_id   INTEGER PRIMARY KEY,
+                    committed   INTEGER NOT NULL DEFAULT 0,
+                    indexed     INTEGER NOT NULL DEFAULT 0,
+                    updated_at  INTEGER NOT NULL
+                );
+            """)
+            try exec(handle, "PRAGMA user_version = 18;")
+            v = 18
+        }
+    }
+
+    // MARK: - Per-source index coverage (v18, 3.0 A6)
+
+    struct SourceCoverage: Sendable, Equatable {
+        let sourceID: Int64
+        let committed: Int
+        let indexed: Int
+        var pending: Int { max(0, committed - indexed) }
+    }
+
+    /// Adds one batch's figures to a source's running totals.
+    func recordSourceCoverage(sourceID: Int64, committed: Int, indexed: Int) throws {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            INSERT INTO source_coverage(source_id, committed, indexed, updated_at)
+            VALUES(?, ?, ?, ?)
+            ON CONFLICT(source_id) DO UPDATE SET
+                committed = committed + excluded.committed,
+                indexed = indexed + excluded.indexed,
+                updated_at = excluded.updated_at;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, sourceID)
+        sqlite3_bind_int64(stmt, 2, Int64(committed))
+        sqlite3_bind_int64(stmt, 3, Int64(indexed))
+        sqlite3_bind_int64(stmt, 4, Int64(Date().timeIntervalSince1970))
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            throw SQLiteStoreError.step("source_coverage upsert: \(String(cString: sqlite3_errmsg(db)))")
+        }
+    }
+
+    /// Every source's coverage, one row each.
+    func sourceCoverage() throws -> [SourceCoverage] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT source_id, committed, indexed FROM source_coverage;")
+        defer { sqlite3_finalize(stmt) }
+        var out: [SourceCoverage] = []
+        while try stepRow(stmt, db) {
+            out.append(SourceCoverage(sourceID: sqlite3_column_int64(stmt, 0),
+                                      committed: Int(sqlite3_column_int64(stmt, 1)),
+                                      indexed: Int(sqlite3_column_int64(stmt, 2))))
+        }
+        return out
     }
 
     // MARK: - Import checkpoints (v17, v2.1 backlog #7)

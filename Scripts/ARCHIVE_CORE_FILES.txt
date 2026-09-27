@@ -1,40 +1,56 @@
-# ArchiveCore — files that form the future package (Phase C-1).
-# Rule: no SwiftUI/AppKit/UIKit/Combine import, no page-owned or app-shell type.
-# Checked by Scripts/check_archive_core_boundary.sh.
-
-# Store and index
-SQLiteEmailStore.swift
-EmailArchiveStore.swift
-EmailRepository.swift
-FTSSearchIndex.swift
-BlobStore.swift
-ArchiveLayout.swift
-ArchiveRelocator.swift
-MailinStorageEnvironment.swift
-StoragePlanner.swift
-
-# Parsers and classification
-MBOXParser.swift
-EmailParserProtocol.swift
-EmailBodyExtractor.swift
-OffsetMBOXScanner.swift
-OffsetImportEngine.swift
-MIMEPartScanner.swift
-SourceFormatClassifier.swift
-ZIPArchiveReader.swift
-
-# Import
-BulkImportCoordinator.swift
+# ArchiveCore package inventory — regenerated 2026-09-27 from Packages/ArchiveCore/Sources/ArchiveCore
+# The package directory is the truth; this list is the human-readable
+# inventory the boundary script cross-checks (every entry must exist).
 AdaptiveBatchController.swift
+ArchiveAggregateService.swift
+ArchiveBrowseState.swift
+ArchiveCoreDefaults.swift
+ArchiveDataService.swift
+ArchiveDerivedState.swift
+ArchiveExportService.swift
+ArchiveLayout.swift
+ArchiveLocation.swift
+ArchiveQueryCompiler.swift
+ArchiveRelocator.swift
+ArchiveSelectionScope.swift
+AttachmentHydrator.swift
+BlobStore.swift
+BulkImportCoordinator.swift
+DocumentNumberFormat.swift
+EMLXParser.swift
+EmailArchiveStore.swift
+EmailBodyExtractor.swift
+EmailParserProtocol.swift
+EmailRepository.swift
+ExportReceipt.swift
+ExportRequest.swift
+ExportSigner.swift
+ExtractionError.swift
+FTSSearchIndex.swift
+FileUtils.swift
 ImportCheckpointStore.swift
 ImportReceipt.swift
-ImportReconciler.swift
-
-# Query, selection, export
-ArchiveQueryCompiler.swift
-ArchiveBrowseState.swift
-ArchiveSelectionScope.swift
-ArchiveDataService.swift
-ArchiveExportService.swift
-ExportReceipt.swift
+ImportVerdict.swift
+MBOXParser.swift
+MBOXRecordBuilder+Quoting.swift
+MBOXRecordBuilder.swift
+MIMEParser.swift
+MIMEPart.swift
+MIMEPartScanner.swift
+MSGParser.swift
+MSGWriter.swift
+MaxmailinError.swift
+MessageLocator.swift
+NSFParser.swift
+OffsetImportEngine.swift
+OffsetMBOXScanner.swift
+ProcessFootprint.swift
+PSTParser.swift
+PSTWriter.swift
+QuotedPrintableDecoder.swift
+SQLiteEmailStore.swift
 SearchMatchFields.swift
+SourceFormatClassifier.swift
+SourceSizePolicy.swift
+StoragePlanner.swift
+ZIPArchiveReader.swift

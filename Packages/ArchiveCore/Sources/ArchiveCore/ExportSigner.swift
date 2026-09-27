@@ -65,6 +65,13 @@ final class ExportSigner {
 
     // MARK: - Signing
 
+    /// Atomic write with the strongest available file-protection class (the
+    /// same rule as the app's `PrivacyHardening.write`; on macOS the
+    /// protection class is a harmless no-op under FileVault).
+    private func protectedWrite(_ data: Data, to url: URL) throws {
+        try data.write(to: url, options: [.atomic, .completeFileProtection])
+    }
+
     /// Sign arbitrary bytes. Returns 64-byte Ed25519 signature.
     func sign(_ data: Data) throws -> Data {
         let key = try privateKey()
@@ -77,7 +84,7 @@ final class ExportSigner {
         let data = try Data(contentsOf: url)
         let signature = try sign(data)
         let sigURL = url.appendingPathExtension("sig")
-        try PrivacyHardening.write(signature, to: sigURL)
+        try protectedWrite(signature, to: sigURL)
         logger.info("Signed export: \(url.lastPathComponent) → \(sigURL.lastPathComponent)")
         return sigURL
     }
@@ -92,9 +99,9 @@ final class ExportSigner {
     func signStreamedDigest(_ digest: Data, hex: String, for url: URL) throws -> URL {
         let signature = try sign(digest)
         let sigURL = url.appendingPathExtension("sig")
-        try PrivacyHardening.write(signature, to: sigURL)
+        try protectedWrite(signature, to: sigURL)
         let digestURL = url.appendingPathExtension("sha256")
-        try PrivacyHardening.write(Data(hex.utf8), to: digestURL)
+        try protectedWrite(Data(hex.utf8), to: digestURL)
         logger.info("Signed streamed export: \(url.lastPathComponent) → \(sigURL.lastPathComponent) (digest-based)")
         return sigURL
     }
