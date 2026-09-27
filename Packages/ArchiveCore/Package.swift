@@ -13,6 +13,12 @@ let package = Package(
     targets: [
         .target(name: "ArchiveCore",
                 path: "Sources/ArchiveCore",
-                swiftSettings: [.unsafeFlags(["-enable-testing"])])
+                swiftSettings: [.unsafeFlags(["-enable-testing"])]),
+        // Runs UNSANDBOXED under `swift test` (no host app), which is what the
+        // fault-injection rows need: the sandboxed app cannot write to a
+        // mounted disk image at all.
+        .testTarget(name: "ArchiveCoreTests",
+                    dependencies: ["ArchiveCore"],
+                    path: "Tests/ArchiveCoreTests")
     ]
 )

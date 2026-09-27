@@ -287,7 +287,7 @@ final class BulkImportCoordinator {
 
     /// Blocks at a batch boundary while the user's pause is on.
     private func waitWhilePaused() async {
-        while isPausedByUser && !Task.isCancelled {
+        while isPausedByUser && !isStopping {
             try? await Task.sleep(for: .milliseconds(300))
         }
     }
@@ -300,7 +300,7 @@ final class BulkImportCoordinator {
     private func waitForStoreVolume() async {
         let directory = store.storeDirectory
         var announced = false
-        while !Task.isCancelled && !FileManager.default.fileExists(atPath: directory.path) {
+        while !isStopping && !FileManager.default.fileExists(atPath: directory.path) {
             if !announced {
                 batchPauseReason = "Archive volume detached — reconnect \(directory.deletingLastPathComponent().lastPathComponent) to continue"
                 Self.logger.notice("Import paused: archive directory unreachable at \(directory.path, privacy: .public)")
@@ -347,8 +347,18 @@ final class BulkImportCoordinator {
         }
     }
 
-    /// Cooperative cancellation. Safe to call at any point.
+    /// Set by `cancel()`. `runImport` callers own their own Task, so cancelling
+    /// only `task` (the `startImport` one) reached nothing for them and a run
+    /// parked in a pause loop could never be stopped (found 2026-09-27 by the
+    /// ENOSPC row: the low-disk pause ignored the test's cancel for ever).
+    /// Every wait loop and batch boundary checks this flag as well.
+    private var cancelRequested = false
+    private var isStopping: Bool { Task.isCancelled || cancelRequested }
+
+    /// Cooperative cancellation. Safe to call at any point, however the run
+    /// was started.
     func cancel() {
+        cancelRequested = true
         task?.cancel()
         task = nil
     }
@@ -395,7 +405,7 @@ final class BulkImportCoordinator {
         guard let controller = batchController else {
             return BatchEnvelope(maxMessages: 500, maxBytes: Int.max)
         }
-        while !Task.isCancelled {
+        while !isStopping {
             let sample = LivePressureSampler.sample(
                 storeDirectory: storeDirectory,
                 indexBacklog: indexBacklog,
@@ -429,6 +439,7 @@ final class BulkImportCoordinator {
         // in chunked Array operations downstream; absurdly large values
         // defeat the streaming-pipeline memory bound.
         let batchSize = max(1, min(options.batchSize, 10_000))
+        cancelRequested = false
         var summary = RunSummary()
         let startedAt = Date()
         // A5(d): the receipt records failures by file NAME (it must stay
@@ -510,7 +521,9 @@ final class BulkImportCoordinator {
 
         fileLoop: while !remaining.isEmpty {
             try Task.checkCancellation()
+            if cancelRequested { throw CancellationError() }
             await waitWhilePaused()
+            if cancelRequested { throw CancellationError() }
             let url: URL
             if let pick = callbacks.nextSource,
                let chosen = await MainActor.run(body: { pick(remaining) }),
@@ -629,12 +642,14 @@ final class BulkImportCoordinator {
                     let persistBatch: ([MBOXParser.RawEmail]) async throws -> Void = { [weak self] batch in
                         guard let self else { return }
                         try Task.checkCancellation()
+                        if self.cancelRequested { throw CancellationError() }
                         // A4: a user pause holds here, between batches, so the
                         // rows already committed are exactly what the
                         // checkpoint says. B5: so does a detached volume.
                         await self.waitWhilePaused()
                         await self.waitForStoreVolume()
                         try Task.checkCancellation()
+                        if self.cancelRequested { throw CancellationError() }
 
                         let batchStart = parsedInFile
                         parsedInFile += batch.count

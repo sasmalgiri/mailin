@@ -135,9 +135,24 @@ enum LivePressureSampler {
     /// browsing, typing, search or export (directive §3, work fairness).
     static let memoryBudgetFraction = 0.25
 
-    /// Bytes that must stay free for the database, WAL, FTS, extracted text and
-    /// export temp. A starting value — P3/P9 measurements replace it.
+    /// Upper bound on the bytes that must stay free for the database, WAL,
+    /// FTS, extracted text and export temp. The live reserve scales with the
+    /// volume (see `diskReserve(forVolumeCapacity:)`): a fixed 5 GiB reserve
+    /// — and `isDiskHealthy`'s 2× of it — meant no volume under 10 GiB, and no
+    /// Mac with less than 10 GiB free, could import a single message; the
+    /// import parked in "low disk" for ever (found 2026-09-27 by the ENOSPC
+    /// row on a 512 MiB image). That was an artificial cap, not a limit of
+    /// the device or the format.
     static let diskReserveBytes: UInt64 = 5 * 1024 * 1_048_576   // 5 GiB
+    static let maximumDiskReserveBytes: UInt64 = 2_560 * 1_048_576   // 2.5 GiB → healthy above 5 GiB free
+    static let minimumDiskReserveBytes: UInt64 = 128 * 1_048_576     // 128 MiB → healthy above 256 MiB free
+
+    /// 1 % of the volume, clamped: `isDiskHealthy` requires twice this, so
+    /// the effective floor is 2 % of the volume between 256 MiB and 5 GiB.
+    static func diskReserve(forVolumeCapacity capacity: UInt64?) -> UInt64 {
+        guard let capacity, capacity > 0 else { return maximumDiskReserveBytes }
+        return min(max(capacity / 100, minimumDiskReserveBytes), maximumDiskReserveBytes)
+    }
 
     /// The OS memory-pressure reading. Separate because
     /// `MemoryPressureHandler` is main-actor isolated, while the rest of the
@@ -156,14 +171,17 @@ enum LivePressureSampler {
         let budget = UInt64(Double(physical) * memoryBudgetFraction)
 
         let free: UInt64
+        let reserve: UInt64
         if let values = try? storeDirectory.resourceValues(
-            forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
+            forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeTotalCapacityKey]),
            let important = values.volumeAvailableCapacityForImportantUsage {
             free = UInt64(max(0, important))
+            reserve = diskReserve(forVolumeCapacity: values.volumeTotalCapacity.map { UInt64(max(0, $0)) })
         } else {
             // Unknown free space is treated as "just above the reserve" rather
             // than as infinite: an unreadable volume must not unlock growth.
-            free = diskReserveBytes + 1
+            reserve = maximumDiskReserveBytes
+            free = reserve + 1
         }
 
         return PressureSample(
@@ -171,7 +189,7 @@ enum LivePressureSampler {
             memoryBudgetBytes: budget,
             memoryPressure: observedPressure,
             freeDiskBytes: free,
-            diskReserveBytes: diskReserveBytes,
+            diskReserveBytes: reserve,
             thermalState: ProcessInfo.processInfo.thermalState,
             lastCommitSeconds: nil,
             indexBacklog: indexBacklog
