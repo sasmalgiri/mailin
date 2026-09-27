@@ -204,9 +204,58 @@ struct ArchiveLocationStore: Sendable {
         this Mac stays until you delete it.
         """
 
+    /// The recorded location with sandbox access RESTORED: the bookmark is
+    /// resolved with security scope and access is started (and kept open for
+    /// the app's lifetime). Until 2026-09-27 the bookmark was written but
+    /// never read back — the app reopened the chosen folder by its plain path,
+    /// which the sandbox denies for an external volume after relaunch, so a
+    /// real SSD would have shown the fallback copy on every launch. (The disk
+    /// image rows did not catch it: they run unsandboxed.) A stale bookmark
+    /// or a renamed volume is re-recorded from the resolved URL.
     func load() -> ArchiveLocation? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(ArchiveLocation.self, from: data)
+        guard let data = try? Data(contentsOf: url),
+              var location = try? JSONDecoder().decode(ArchiveLocation.self, from: data) else { return nil }
+        guard let resolved = Self.restoreAccess(to: location) else { return location }
+        if resolved.path != location.path || resolved.refreshedBookmark != nil {
+            location.path = resolved.path
+            if let fresh = resolved.refreshedBookmark { location.bookmark = fresh }
+            save(location)
+        }
+        return location
+    }
+
+    /// Scopes started this process, keyed by path, so each is started once
+    /// and never stopped while the archive is in use.
+    nonisolated(unsafe) private static var openScopes: [String: URL] = [:]
+    private static let scopesLock = NSLock()
+
+    /// Resolves the bookmark and starts security-scoped access. Returns the
+    /// resolved path and, when the bookmark was stale, a fresh one to record.
+    static func restoreAccess(to location: ArchiveLocation) -> (path: String, refreshedBookmark: Data?)? {
+        guard let bookmark = location.bookmark else { return nil }
+        var isStale = false
+        #if os(macOS)
+        let options: URL.BookmarkResolutionOptions = [.withSecurityScope]
+        #else
+        let options: URL.BookmarkResolutionOptions = []
+        #endif
+        guard let resolved = try? URL(resolvingBookmarkData: bookmark, options: options,
+                                      relativeTo: nil, bookmarkDataIsStale: &isStale) else {
+            locationLog.error("archive location bookmark could not be resolved for \(location.path, privacy: .public)")
+            return nil
+        }
+        scopesLock.lock()
+        defer { scopesLock.unlock() }
+        if openScopes[resolved.path] == nil {
+            if resolved.startAccessingSecurityScopedResource() {
+                openScopes[resolved.path] = resolved   // held for the process lifetime
+                locationLog.info("archive location access restored: \(resolved.path, privacy: .public)")
+            } else {
+                locationLog.notice("archive location is not security-scoped (same container or unsandboxed): \(resolved.path, privacy: .public)")
+            }
+        }
+        let refreshed = isStale ? Self.bookmark(for: resolved) : nil
+        return (resolved.path, refreshed)
     }
 
     func save(_ location: ArchiveLocation) {

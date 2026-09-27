@@ -91,9 +91,13 @@ enum ArchiveLayout {
     /// The root the running app uses. Resolved from the recorded location,
     /// the relocation record and what is actually on disk right now.
     static var productionRoot: URL {
-        resolveRoot(defaultRoot: defaultRoot,
-                    chosen: ArchiveLocationStore(url: ArchiveLocationStore.productionURL).load(),
-                    relocation: RelocationRecordStore.production.load())
+        // The chosen location is loaded FIRST: loading it restores the
+        // sandbox scope for the external volume, which the relocation
+        // record's destination (a folder inside that volume) relies on.
+        let chosen = ArchiveLocationStore(url: ArchiveLocationStore.productionURL).load()
+        return resolveRoot(defaultRoot: defaultRoot,
+                           chosen: chosen,
+                           relocation: RelocationRecordStore.production.load())
     }
 
     /// Pure resolution over the four rules above; testable with temp roots.

@@ -64,6 +64,27 @@ final class ArchiveLayoutResolutionTests: XCTestCase {
                        volume.appendingPathComponent(ArchiveLayout.relocatedFolderName, isDirectory: true).standardizedFileURL)
     }
 
+    /// The recorded location must come back through its BOOKMARK, not its
+    /// plain path: that is what keeps an external volume reachable after a
+    /// relaunch under the sandbox.
+    func testChosenLocationIsRestoredThroughItsBookmark() throws {
+        let chosen = try tempRoot("chosen-volume"); defer { try? FileManager.default.removeItem(at: chosen) }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("location-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let store = ArchiveLocationStore(url: file)
+        let bookmark = try XCTUnwrap(ArchiveLocationStore.bookmark(for: chosen), "a bookmark must be made for a reachable folder")
+        store.save(ArchiveLocation(path: chosen.path, bookmark: bookmark, recordedAt: Date()))
+
+        let loaded = try XCTUnwrap(store.load())
+        XCTAssertEqual(loaded.url.standardizedFileURL.resolvingSymlinksInPath(),
+                       chosen.standardizedFileURL.resolvingSymlinksInPath())
+        XCTAssertNotNil(loaded.bookmark)
+        // Resolution is what proves access, not the path string.
+        let access = try XCTUnwrap(ArchiveLocationStore.restoreAccess(to: loaded))
+        XCTAssertEqual(URL(fileURLWithPath: access.path).standardizedFileURL.resolvingSymlinksInPath(),
+                       chosen.standardizedFileURL.resolvingSymlinksInPath())
+    }
+
     func testSQLiteAndFTSShareOneRoot() {
         let root = URL(fileURLWithPath: "/tmp/anywhere", isDirectory: true)
         XCTAssertEqual(ArchiveLayout.sqliteDirectory(under: root).deletingLastPathComponent(),
