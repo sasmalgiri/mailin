@@ -476,6 +476,15 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     deinit { if let db { sqlite3_close(db) } }
 
+    /// B5: after the archive's volume was detached and re-attached, the open
+    /// handle still points at the OLD mount and every statement fails with
+    /// "disk I/O error". Close it; the next call re-opens lazily against the
+    /// re-mounted file (SQLite's WAL recovery makes that safe).
+    func reopenConnection() {
+        if let db { sqlite3_close(db) }
+        db = nil
+    }
+
     // MARK: - Open / schema
 
     private func ensureDB() throws -> OpaquePointer {

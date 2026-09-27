@@ -309,8 +309,33 @@ final class BulkImportCoordinator {
             try? await Task.sleep(for: .seconds(2))
         }
         if announced {
+            // The handles opened before the eject point at the old mount; a
+            // re-attached volume is a new one. Drop them so the next statement
+            // re-opens against the files that are back (found 2026-09-27 by
+            // the automated eject row: "disk I/O error" on every write after
+            // the reconnect).
+            await store.reopenConnection()
+            _ = await fts.sweepIdleShards(ttl: .zero)
             batchPauseReason = nil
             Self.logger.notice("Import resumed: archive directory reachable again")
+        }
+    }
+
+    /// B5 unplug DURING a batch: the insert fails with an I/O error because
+    /// the volume is gone. When the store directory is unreachable, wait for
+    /// it to return (re-opening the handles), then retry once. The v17
+    /// checkpoint rides the insert's transaction, so a failed batch left
+    /// nothing half-committed and the retry writes exactly the same rows.
+    private func retryingAfterVolumeLoss<T>(_ body: () async throws -> T) async throws -> T {
+        do {
+            return try await body()
+        } catch {
+            guard !FileManager.default.fileExists(atPath: store.storeDirectory.path) else { throw error }
+            Self.logger.notice("Persist hit an unreachable archive volume (\(error.localizedDescription, privacy: .public)); waiting for it to return")
+            await waitForStoreVolume()
+            try Task.checkCancellation()
+            if cancelRequested { throw CancellationError() }
+            return try await body()
         }
     }
 
@@ -706,7 +731,8 @@ final class BulkImportCoordinator {
                             identity: identity, sourceName: sourceName,
                             firstOrdinal: batchStart + range.lowerBound, store: store)
                         do {
-                            insertResult = try await store.insertBatch(
+                            insertResult = try await self.retryingAfterVolumeLoss {
+                              try await self.store.insertBatch(
                                 pending,
                                 sourceFileHash: hash,
                                 accountID: options.accountID,
@@ -716,7 +742,8 @@ final class BulkImportCoordinator {
                                 batchSize: batchSize,
                                 progress: nil,
                                 progressCheckpoint: atomicCheckpoint
-                            )
+                              )
+                            }
                         } catch {
                             summary.persistFailed += pending.count
                             Self.logger.fault("Persist failed for \(sourceName, privacy: .public): \(error.localizedDescription, privacy: .public)")
@@ -757,7 +784,10 @@ final class BulkImportCoordinator {
                         let toIndex = pending.filter { insertedSet.contains($0.id) }
                         do {
                             if !toIndex.isEmpty {
-                                try await fts.indexBatch(toIndex)
+                                // B5: an unplug between the insert and the
+                                // index write must not leave this batch
+                                // unsearchable until the next launch.
+                                try await self.retryingAfterVolumeLoss { try await self.fts.indexBatch(toIndex) }
                             }
                             summary.indexed += toIndex.count
                             let indexedSoFar = summary.indexed
