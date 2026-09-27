@@ -250,7 +250,7 @@ struct ParsedEmailListView: View {
         .sheet(isPresented: $showAnalyticsSheet) {
             EmailAnalyticsView(query: model.currentArchiveQuery)
         }
-        #if !DEBUG
+        #if !DEBUG && !ENTERPRISE_EDITION
         .sheet(isPresented: $showAIPaywall) {
             PaywallView()
                 .environmentObject(storeManager)
@@ -486,7 +486,7 @@ struct ParsedEmailListView: View {
                 .presentationDetents([.large])
         }
         #endif
-        #if !DEBUG
+        #if !DEBUG && !ENTERPRISE_EDITION
         .sheet(isPresented: $showAIPaywall) {
             PaywallView()
                 .environmentObject(storeManager)

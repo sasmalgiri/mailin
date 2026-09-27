@@ -254,7 +254,11 @@ private struct ModuleCard: View {
                         .font(Typography.caption2)
                         .foregroundColor(.purple)
                     Button("Upgrade", action: onUpgrade)
+                        #if os(macOS)
                         .buttonStyle(.link)
+                        #else
+                        .buttonStyle(.plain)
+                        #endif
                         .controlSize(.small)
                 }
             }

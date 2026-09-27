@@ -54,6 +54,12 @@ enum NoNetworkAttestation {
         /// False when the platform gives no way to read or withhold the
         /// network entitlement, so the other flags are intent, not proof.
         var entitlementsAreEnforceable: Bool
+        /// `NoNetworkAttestation.buildMarker`, carried into the summary text
+        /// so the literal is REFERENCED and therefore present in the shipped
+        /// binary for `Scripts/verify-no-network.sh` to find. An unreferenced
+        /// `static let` was folded away and the Release verification failed
+        /// on the marker check (found 2026-09-27, J-4).
+        var buildMarker: String = NoNetworkAttestation.buildMarker
 
         /// True only when the platform can be relied on to refuse a
         /// connection. A build flag alone does not qualify.
@@ -67,22 +73,23 @@ enum NoNetworkAttestation {
         /// One line for the About panel and the assurance pack. States what is
         /// enforced and by what — and says so plainly when nothing enforces it.
         var summary: String {
+            let marker = " Build marker: \(buildMarker)."
             guard entitlementsAreEnforceable else {
-                return offlineModeCompiledIn
+                return (offlineModeCompiledIn
                     ? "Built with NO_NETWORK_BUILD: no networking code is compiled in. This platform grants network access to every app, so the build is the protection — not the sandbox."
-                    : "This build has networking compiled in and this platform grants network access by default."
+                    : "This build has networking compiled in and this platform grants network access by default.") + marker
             }
             guard sandboxed else {
                 return "This build is NOT sandboxed, so no entitlement prevents a network connection"
-                    + (offlineModeCompiledIn ? " — only the NO_NETWORK_BUILD build flag does." : ".")
+                    + (offlineModeCompiledIn ? " — only the NO_NETWORK_BUILD build flag does." : ".") + marker
             }
             if networkIsStructurallyImpossible {
-                return "Sandboxed with no network entitlement: this process cannot open a network connection."
+                return "Sandboxed with no network entitlement: this process cannot open a network connection." + marker
             }
             var granted: [String] = []
             if networkClientGranted { granted.append("outgoing") }
             if networkServerGranted { granted.append("incoming") }
-            return "Sandboxed, but the network entitlement is GRANTED for \(granted.joined(separator: " and ")) connections."
+            return "Sandboxed, but the network entitlement is GRANTED for \(granted.joined(separator: " and ")) connections." + marker
         }
     }
 
