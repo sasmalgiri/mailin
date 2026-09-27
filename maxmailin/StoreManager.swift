@@ -1,6 +1,8 @@
 @testable import ArchiveCore
 import Foundation
+#if !ENTERPRISE_EDITION
 import StoreKit
+#endif
 
 enum PurchaseTier: Int, Comparable {
     case free = 0
@@ -89,7 +91,9 @@ class StoreManager: ObservableObject {
 
     // MARK: - Published State
 
+    #if !ENTERPRISE_EDITION
     @Published private(set) var products: [Product] = []
+    #endif
     @Published private(set) var currentTier: PurchaseTier = .free
     @Published private(set) var purchaseInProgress = false
     @Published private(set) var purchasePending = false
@@ -119,7 +123,9 @@ class StoreManager: ObservableObject {
     var isSubscribed: Bool { currentTier >= .personal }
     #endif
 
+    #if !ENTERPRISE_EDITION
     private var transactionListener: Task<Void, Error>?
+    #endif
 
     // MARK: - Lifecycle
 
@@ -135,8 +141,15 @@ class StoreManager: ObservableObject {
     }
 
     deinit {
+        #if !ENTERPRISE_EDITION
         transactionListener?.cancel()
+        #endif
     }
+
+    // P-5: everything that talks to StoreKit is compiled only into the public
+    // line. The enterprise edition (ABM Custom App) has no products, purchases,
+    // restores or subscription management.
+    #if !ENTERPRISE_EDITION
 
     // MARK: - Load Products
 
@@ -240,6 +253,8 @@ class StoreManager: ObservableObject {
         #endif
     }
 
+    #endif
+
     // MARK: - Feature Gating
 
     func requirePremium() -> Bool {
@@ -265,6 +280,8 @@ class StoreManager: ObservableObject {
     func featureLocked(_ feature: ProFeature) -> Bool {
         return currentTier < tierRequired(for: feature)
     }
+
+    #if !ENTERPRISE_EDITION
 
     // MARK: - Product Helpers
 
@@ -325,6 +342,8 @@ class StoreManager: ObservableObject {
             }
         }
     }
+
+    #endif
 
     enum StoreError: Error {
         case verificationFailed

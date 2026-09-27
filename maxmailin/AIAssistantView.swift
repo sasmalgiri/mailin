@@ -278,7 +278,7 @@ struct AIAssistantView: View {
             currentTask = nil
             saveConversation()
         }
-        #if !DEBUG
+        #if !DEBUG && !ENTERPRISE_EDITION
         .sheet(isPresented: $showUpgradePaywall) {
             PaywallView()
                 .environmentObject(storeManager)

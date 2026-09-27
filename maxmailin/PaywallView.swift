@@ -1,5 +1,11 @@
 @testable import ArchiveCore
 import SwiftUI
+
+// P-5 (owner decision 2026-09-27): the paywall is kept for the public mailin
+// line and compiled out of the enterprise edition (ABM Custom App: every
+// Professional feature is included, no in-app purchases exist). Only the
+// tier badge and gate modifier below stay in both editions.
+#if !ENTERPRISE_EDITION
 import StoreKit
 
 struct PaywallView: View {
@@ -576,6 +582,12 @@ struct PaywallView: View {
     }
 }
 
+#Preview {
+    PaywallView()
+        .environmentObject(StoreManager())
+}
+#endif
+
 // MARK: - Feature Locked Badge (pre-action visibility)
 
 struct FeatureLockedBadge: View {
@@ -617,9 +629,4 @@ extension View {
     func featureGate(_ tier: PurchaseTier) -> some View {
         modifier(FeatureGateModifier(requiredTier: tier))
     }
-}
-
-#Preview {
-    PaywallView()
-        .environmentObject(StoreManager())
 }

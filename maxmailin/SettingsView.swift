@@ -454,13 +454,13 @@ struct SettingsView: View {
                     }
                 }
 
+                #if !ENTERPRISE_EDITION
                 if storeManager.isPremium && !storeManager.isLifetimePurchase {
                     Button("Manage Subscription") {
                         Task { await storeManager.manageSubscriptions() }
                     }
                 }
 
-                #if !ENTERPRISE_EDITION
                 Button("Restore Purchases") {
                     Task { await storeManager.restorePurchases() }
                 }
@@ -581,6 +581,7 @@ struct SettingsView: View {
                     }
                 }
 
+                #if !ENTERPRISE_EDITION
                 if storeManager.isPremium && !storeManager.isLifetimePurchase {
                     Button("Manage Subscription") {
                         Task { await storeManager.manageSubscriptions() }
@@ -588,7 +589,6 @@ struct SettingsView: View {
                     .accessibilityLabel("Manage or cancel subscription")
                 }
 
-                #if !ENTERPRISE_EDITION
                 Button("Restore Purchases") {
                     Task { await storeManager.restorePurchases() }
                 }

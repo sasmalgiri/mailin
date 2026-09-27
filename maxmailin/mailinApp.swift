@@ -290,9 +290,11 @@ struct mailinApp: App {
                     }
                     .onChange(of: scenePhase) { _, newPhase in
                         biometricLock.handleScenePhaseChange(newPhase)
+                        #if !ENTERPRISE_EDITION
                         if newPhase == .active {
                             Task { await storeManager.checkEntitlements() }
                         }
+                        #endif
                         #if os(iOS)
                         if newPhase == .background {
                             EmailPersistence.flushPendingSaves()
