@@ -312,6 +312,9 @@ struct ContentView: View {
         .onChange(of: appState.showAnalytics) { _, shown in
             guard shown else { return }
             appState.showAnalytics = false
+            // §3.3 R1: Email Analytics is a Page 2 tool; a stale shortcut
+            // (⇧⌘G) must not open it while AI Insights is off.
+            guard modules.isEnabled(.aiInsights) else { return }
             ToolWindowPresenter.shared.open(title: "Email Analytics") { AnyView(Group {
             EmailAnalyticsView(query: modelVM.currentArchiveQuery)
                 #if os(macOS)
@@ -751,22 +754,29 @@ struct ContentView: View {
         }
     }
 
+    /// §3.3 R1: a tool row appears only while the page that owns the tool is
+    /// on. Archive-owned rows always show. (Owner, 2026-09-28: the sidebar
+    /// listed every tool regardless of page state, so Email Analytics was
+    /// reachable with AI Insights off.)
+    @ViewBuilder
     private func sidebarRow(_ dest: HubDestination, _ title: String, _ icon: String) -> some View {
-        let isLocked = storeManager.currentTier < dest.requiredTier
-        return NavigationLink(value: dest) {
-            HStack(spacing: Spacing.xSmall) {
-                Label(title, systemImage: icon)
-                if isLocked {
-                    Spacer()
-                    Image(systemName: "lock.fill")
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                        .accessibilityLabel("Requires \(dest.requiredTier.displayName)")
+        if dest.owner == .archive || modules.isEnabled(dest.owner) {
+            let isLocked = storeManager.currentTier < dest.requiredTier
+            NavigationLink(value: dest) {
+                HStack(spacing: Spacing.xSmall) {
+                    Label(title, systemImage: icon)
+                    if isLocked {
+                        Spacer()
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                            .accessibilityLabel("Requires \(dest.requiredTier.displayName)")
+                    }
                 }
             }
+            .help(dest.caption)
+            .accessibilityHint(dest.caption)
         }
-        .help(dest.caption)
-        .accessibilityHint(dest.caption)
     }
 
     // MARK: - Hub Navigation
@@ -789,6 +799,13 @@ struct ContentView: View {
     }
 
     private func handleHubNavigation(_ destination: HubDestination) {
+        // §3.3 R1: a tool whose page is off is not opened, whoever asked
+        // (tile, workflow step, palette, shortcut).
+        guard destination.owner == .archive || modules.isEnabled(destination.owner) else {
+            viewModel.statusMessage = "\(destination.owner.displayName) is off. Turn it on in Settings ▸ Modules to use this tool."
+            viewModel.statusColor = .orange
+            return
+        }
         recordRecentTool(destination)
         switch destination {
         case .settings:
@@ -853,8 +870,34 @@ struct ContentView: View {
         ArchiveWorkingSetView(query: modelVM.currentArchiveQuery, content: content)
     }
 
+    /// §3.3 R1: a destination whose page is off is never built — not from a
+    /// stale sidebar selection, a restored window, a workflow launch or a
+    /// keyboard shortcut. It shows which page to turn on instead.
     @ViewBuilder
     private func hubDestinationView(for destination: HubDestination) -> some View {
+        if destination.owner == .archive || modules.isEnabled(destination.owner) {
+            hubDestinationContent(for: destination)
+        } else {
+            VStack(spacing: Spacing.small) {
+                Image(systemName: "switch.2")
+                    .font(.largeTitle)
+                    .foregroundColor(AppColors.secondary)
+                Text("\(destination.owner.displayName) is off")
+                    .font(Typography.title3)
+                Text("\(destination.caption) This tool belongs to the \(destination.owner.displayName) page. Turn the page on in Settings ▸ Modules to use it.")
+                    .font(Typography.callout)
+                    .foregroundColor(AppColors.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 420)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding()
+            .accessibilityIdentifier("hub.destination.pageOff")
+        }
+    }
+
+    @ViewBuilder
+    private func hubDestinationContent(for destination: HubDestination) -> some View {
         switch destination {
         case .emailInbox:
             emailInboxDestination
@@ -1230,8 +1273,10 @@ struct ContentView: View {
                                 } label: {
                                     Label("Subjects", systemImage: "list.bullet.rectangle.portrait")
                                 }
-                                Button { appState.showAnalytics = true } label: {
-                                    Label("Analytics", systemImage: "chart.bar")
+                                if modules.isEnabled(.aiInsights) {
+                                    Button { appState.showAnalytics = true } label: {
+                                        Label("Analytics", systemImage: "chart.bar")
+                                    }
                                 }
                                 Button {
                                     if forensicManager.isEnabled || storeManager.requireProfessional() {
@@ -1571,10 +1616,12 @@ struct ContentView: View {
                                 Image(systemName: "sparkles")
                             }
                             .accessibilityLabel("AI Assistant")
-                            Button { appState.showAnalytics = true } label: {
-                                Image(systemName: "chart.bar")
+                            if modules.isEnabled(.aiInsights) {
+                                Button { appState.showAnalytics = true } label: {
+                                    Image(systemName: "chart.bar")
+                                }
+                                .accessibilityLabel("Analytics")
                             }
-                            .accessibilityLabel("Analytics")
                             Button {
                                 if forensicManager.isEnabled || storeManager.requireProfessional() {
                                     forensicManager.isEnabled.toggle()
@@ -2304,7 +2351,9 @@ struct ContentView: View {
                         if modules.isEnabled(.aiInsights) {
                             compactToolIcon("sparkles", color: .purple) { appState.showAIAssistant = true }
                         }
-                        compactToolIcon("chart.bar", color: .blue) { appState.showAnalytics = true }
+                        if modules.isEnabled(.aiInsights) {
+                            compactToolIcon("chart.bar", color: .blue) { appState.showAnalytics = true }
+                        }
                         compactToolIcon("circle.grid.3x3", color: .teal) {
                             withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? nil : .topics }
                         }
@@ -2389,8 +2438,10 @@ struct ContentView: View {
                                     appState.showAIAssistant = true
                                 }
                             }
-                            detailToolButton(title: "Analytics", icon: "chart.bar", color: .blue) {
-                                appState.showAnalytics = true
+                            if modules.isEnabled(.aiInsights) {
+                                detailToolButton(title: "Analytics", icon: "chart.bar", color: .blue) {
+                                    appState.showAnalytics = true
+                                }
                             }
                             if modules.isEnabled(.aiInsights) {
                                 detailToolButton(title: "Topics", icon: "circle.grid.3x3", color: appState.dockedBottomPanel == .topics ? .teal.opacity(0.5) : .teal) {

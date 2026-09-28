@@ -65,6 +65,15 @@ struct ModuleGatingTests {
         #expect(HubDestination.personaHub.owner == .professional)
     }
 
+    @Test("Email Analytics (sentiment + NLP passes) belongs to AI Insights")
+    func emailAnalyticsOwnedByAIInsights() {
+        #expect(HubDestination.emailAnalytics.owner == .aiInsights)
+        // The pure-count tools stay with the archive.
+        for dest in [HubDestination.timeline, .communicationPatterns, .relationshipGraph, .duplicateManager] {
+            #expect(dest.owner == .archive, "\(dest.rawValue)")
+        }
+    }
+
     @Test("A disabled page never yields a feature host")
     func hostRefusedWhileDisabled() {
         let (registry, _) = makeRegistry()

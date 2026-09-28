@@ -50,6 +50,12 @@ struct mailinApp: App {
     @ObservedObject private var compliance = LegalComplianceManager.shared
     @ObservedObject private var biometricLock = BiometricLockManager.shared
     @AppStorage("enableAIFeatures") private var enableAIFeatures = true
+
+    /// §3.3 R1 for menu items: true when the page that owns `dest` is off, so
+    /// the item is disabled rather than opening a tool of an inactive page.
+    private func pageOff(_ dest: HubDestination) -> Bool {
+        dest.owner != .archive && !modules.isEnabled(dest.owner)
+    }
     @AppStorage("hasSeenLaunchAnimation") private var hasSeenLaunchAnimation = false
     #if os(macOS)
     @AppStorage("menuBarSearchEnabled") private var menuBarSearchEnabled = true
@@ -497,6 +503,9 @@ struct mailinApp: App {
         // Mail menu (Compose / Connect / Fetch) removed in v2 — mailin is
         // strictly offline by design.
 
+        // §3.3 R1: a menu item whose tool belongs to a page that is off is
+        // disabled (owner, 2026-09-28 — Visual Analytics opened with AI
+        // Insights off). Archive-owned items only need an open archive.
         CommandMenu("Analysis") {
             Button("Reply Statistics...") {
                 appState.showReplyStats = true
@@ -508,13 +517,13 @@ struct mailinApp: App {
                 appState.showAIAssistant = true
             }
             .keyboardShortcut("k", modifiers: .command)
-            .disabled(!appState.hasParsedEmails || !enableAIFeatures)
+            .disabled(!appState.hasParsedEmails || !enableAIFeatures || pageOff(.aiAssistant))
 
             Button("Visual Analytics...") {
                 appState.showAnalytics = true
             }
             .keyboardShortcut("g", modifiers: [.command, .shift])
-            .disabled(!appState.hasParsedEmails)
+            .disabled(!appState.hasParsedEmails || pageOff(.emailAnalytics))
 
             Divider()
 
@@ -529,7 +538,7 @@ struct mailinApp: App {
             Button("Topic Clusters") {
                 withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? nil : .topics }
             }
-            .disabled(!appState.hasParsedEmails)
+            .disabled(!appState.hasParsedEmails || pageOff(.topicClusters))
 
             Button("Email Subjects") {
                 withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .subjects ? nil : .subjects }
@@ -544,7 +553,7 @@ struct mailinApp: App {
             Button("Predictive Coding (TAR)...") {
                 appState.showPredictiveCoding = true
             }
-            .disabled(!appState.hasParsedEmails)
+            .disabled(!appState.hasParsedEmails || pageOff(.predictiveCoding))
 
             Button("Attachment Browser...") {
                 appState.showAttachmentGrid = true
@@ -593,7 +602,7 @@ struct mailinApp: App {
             Button("IOC Extractor...") {
                 appState.showIOCExtractor = true
             }
-            .disabled(!appState.hasParsedEmails)
+            .disabled(!appState.hasParsedEmails || pageOff(.iocExtractor))
 
             Button("Guided Search...") {
                 appState.showGuidedSearch = true
@@ -603,12 +612,12 @@ struct mailinApp: App {
             Button("Thread Summary...") {
                 appState.showThreadSummarizer = true
             }
-            .disabled(!appState.hasParsedEmails)
+            .disabled(!appState.hasParsedEmails || pageOff(.threadSummarizer))
 
             Button("Smart Alerts...") {
                 appState.showSmartAlerts = true
             }
-            .disabled(!appState.hasParsedEmails)
+            .disabled(!appState.hasParsedEmails || pageOff(.smartAlerts))
 
             Divider()
 
@@ -620,17 +629,17 @@ struct mailinApp: App {
             Button("Anomaly Detection...") {
                 appState.showAnomalyDetection = true
             }
-            .disabled(!appState.hasParsedEmails)
+            .disabled(!appState.hasParsedEmails || pageOff(.anomalyDetection))
 
             Button("Smart Auto-Tagger...") {
                 appState.showSmartAutoTagger = true
             }
-            .disabled(!appState.hasParsedEmails)
+            .disabled(!appState.hasParsedEmails || pageOff(.smartAutoTagger))
 
             Button("Email Digest...") {
                 appState.showAIDigest = true
             }
-            .disabled(!appState.hasParsedEmails)
+            .disabled(!appState.hasParsedEmails || pageOff(.aiDigest))
 
             Divider()
 
@@ -647,12 +656,12 @@ struct mailinApp: App {
             Button("Keyword Monitor...") {
                 appState.showKeywordMonitor = true
             }
-            .disabled(!appState.hasParsedEmails)
+            .disabled(!appState.hasParsedEmails || pageOff(.keywordMonitor))
 
             Button("Report Builder...") {
                 appState.showReportBuilder = true
             }
-            .disabled(!appState.hasParsedEmails)
+            .disabled(!appState.hasParsedEmails || pageOff(.reportBuilder))
         }
 
         CommandMenu("Export") {

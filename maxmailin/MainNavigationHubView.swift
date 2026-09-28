@@ -54,7 +54,7 @@ extension HubDestination: Identifiable {
     /// `AppStateManager.OwnedFeature` carry the same owner.
     var owner: AppModule {
         switch self {
-        case .emailInbox, .workCenter, .emailAnalytics, .timeline, .communicationPatterns,
+        case .emailInbox, .workCenter, .timeline, .communicationPatterns,
              .relationshipGraph, .duplicateManager, .nearDuplicates, .attachmentGallery,
              .executiveDashboard, .archiveComparison, .batchOperations, .automationRules,
              .workspaceManager, .pluginManager, .settings,
@@ -62,7 +62,11 @@ extension HubDestination: Identifiable {
             return .archive
         case .aiAssistant, .aiDigest, .smartAutoTagger, .customExperts, .knowledgeGraphExplorer,
              .aiVisualizations, .backgroundFindings, .predictiveInsights, .topicClusters,
-             .threadSummarizer, .anomalyDetection, .smartAlerts, .keywordMonitor, .predictiveCoding:
+             .threadSummarizer, .anomalyDetection, .smartAlerts, .keywordMonitor, .predictiveCoding,
+             // Email Analytics runs sentiment and NLP passes over the mail, so
+             // it is a Page 2 tool, not archive statistics (owner, 2026-09-28:
+             // it was still reachable with AI Insights off).
+             .emailAnalytics:
             return .aiInsights
         case .eDiscovery, .gdprCompliance, .iocExtractor, .chainOfCustody, .phishingTriage,
              .reviewDashboard, .storyFile, .reportBuilder, .forensicReview, .investigationReport,

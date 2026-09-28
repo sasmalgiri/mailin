@@ -356,8 +356,10 @@ struct ParsedEmailListView: View {
                         Label("Export…", systemImage: "square.and.arrow.up")
                     }
                 }
-                Button { showAnalyticsSheet = true } label: {
-                    Label("Analytics", systemImage: "chart.bar.xaxis")
+                if modules.isEnabled(.aiInsights) {
+                    Button { showAnalyticsSheet = true } label: {
+                        Label("Analytics", systemImage: "chart.bar.xaxis")
+                    }
                 }
                 Button { showPIIReport = true } label: {
                     Label("PII Report", systemImage: "person.text.rectangle")
@@ -423,6 +425,8 @@ struct ParsedEmailListView: View {
                             .accessibilityLabel("Export filtered emails")
                         }
 
+                        // §3.3 R1: Email Analytics (sentiment + NLP) is a Page 2 tool.
+                        if modules.isEnabled(.aiInsights) {
                         Button {
                             showAnalyticsSheet = true
                         } label: {
@@ -444,6 +448,7 @@ struct ParsedEmailListView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Email analytics")
+                        }
 
                         if modules.isEnabled(.professional) {
                             Button {
