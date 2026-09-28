@@ -341,7 +341,7 @@ parser is off by default was wrong — it is on — so F02/F03/F05 applied to ev
 | Wave | Findings | Status |
 |---|---|---|
 | 1 — data loss or misrepresentation on the default path | F01 relocation self-deletion; F02/F03/F05 deferred-message locator, copy claim, empty exports; F06 F07 F09 F10 F17 F18 correctness; F08 export resume | **FIXED 2026-09-28**, commits 815e8d4 · 91d51eb · b1b57b7 · ca6dc9e; regression rows: ArchiveRelocatorTests (+8), ArchiveCoreTests/AuditWave1Tests (14), DeferredMessageIntegrityTests (7), ExportResumeTests (4), CaseBundleTests (+2), BatesPDFReadBackTests (+2), BlobTierWiringTests (+1), V2ExportTests (+1), `verify-no-network-selftest.sh` 6/6 |
-| 2 — real defects, no data loss on the default path | F04 source identity on export; F11 audit-chain head; F12 policy hard-off teardown; F13 semantic-index cursor; F14 report scope/cap; F15 evidence label | **OPEN — 3.0.1** unless pulled into 3.0 (owner decision) |
+| 2 — real defects, no data loss on the default path | F04 source identity on export; F11 audit-chain head; F12 policy hard-off teardown; F13 semantic-index cursor; F14 report scope/cap; F15 evidence label | **FIXED 2026-09-28 in 3.0** (owner pulled Wave 2 forward), commit 3080009; regression rows: DeferredMessageIntegrityTests (+2, source edit refused; ledger once per run), HMACChainHeadTests (7), ModuleGatingTests (+3: policy teardown, semantic catch-up + deleted sweep, report query/coverage) |
 | 3 — documentation / 3.1 | F16 per-format memory (documented above in `SUPPORTED_FORMATS_AND_LIMITS.md` §2); real copy-into-archive; snapshot-based export selection | documented / 3.1 |
 
 ---

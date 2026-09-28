@@ -142,10 +142,25 @@ each with a regression test that reproduces the original defect:
 - **The "skip re-encoded duplicates" import choice was silently downgraded** to plain Message-ID
   matching on its way to the store. The chosen policy now arrives unchanged.
 
-Confirmed findings that do not lose or misrepresent data on the default path — source-identity
-verification on export, the audit chain's missing trusted head, a live policy hard-off not stopping
-running work, the semantic index missing later imports, report scope and the 5,000-message cap, and
-the "verified" evidence label — are scheduled for 3.0.1 (`MAILIN_3_0_AUDIT_FIXES.md`, Wave 2).
+The remaining confirmed findings — real defects that did not lose data on the default path — are
+also fixed in this release (owner decision, 2026-09-28):
+
+- **Exports did not check that the source file was still the imported file.** Each export run now
+  verifies every source it streams from against the digest recorded at import, once per file; a
+  changed or swapped file refuses the export instead of producing a fresh, valid-looking hash.
+- **The audit chain accepted truncation.** Any valid prefix of the chain, including an empty log,
+  verified. The chain now keeps an anchor (count and newest HMAC) in the Keychain; a shorter,
+  replaced or missing log is reported as broken, an unreadable log is quarantined rather than
+  overwritten, and the next chain opens with an entry recording the loss.
+- **A managed hard-off left the page's work running.** A policy change now goes through the same
+  teardown as switching the page off: jobs cancelled, feature host released, wiring reapplied.
+- **The semantic index never revisited later imports.** A completed walk now clears its cursor,
+  the next run embeds only what is missing, and vectors of deleted messages are removed.
+- **Summaries and Reports ignored the page scope, and Reports capped before filtering.** Both tabs
+  now read the scope shown in the bar; the report applies its date range in the query, states
+  exactly how many matching messages it covered, and fails visibly if the read stops early.
+- **"Cited evidence (verified)" overstated the check.** The label now says what is true: each
+  citation resolves to a retrieved message; the statements themselves are not fact-checked.
 
 ## Known limits, stated
 
