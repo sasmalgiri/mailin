@@ -100,7 +100,60 @@ from 78.7 s to 1.0 s in Release (86 MiB/s), and the 1 GB format rows 7–19×
 faster. Every count, the byte-identical round trip and the full test suite
 were unchanged at each step (`SCALE_RESULTS.md`).
 
+## Found and fixed by the external source audit (2026-09-28)
+
+An independent source audit of the release candidate (18 findings) was re-checked line by line;
+fifteen were confirmed and the ten that affect stored or exported data are fixed in this release,
+each with a regression test that reproduces the original defect:
+
+- **Moving the archive could delete it.** Choosing the volume the archive already lived on resolved
+  the destination to the archive itself, which was removed before the copy started; a destination
+  holding someone else's archive was removed the same way; and the old copy could be deleted before
+  the relaunch that switches to the new one. The relocator now refuses the same, nested or aliased
+  folder and any folder that already holds an archive, copies into a staging folder that is renamed
+  into place only after verification, and offers the old copy for deletion only once the running
+  store has opened at the new root.
+- **A message above the 100 MiB ceiling could lose its only content reference.** Its locator was
+  written after the row committed, with failures only logged, and was skipped entirely when the
+  "byte-range reads" switch was off. The locator now commits in the same transaction as the row,
+  whenever the offset engine runs.
+- **Such a message exported as an empty stub from EML export, production and the sealed case
+  bundle**, and the bundle sealed a hash of nothing. All three now read the message's bytes from
+  the original file through one shared path, proven byte-identical to what a full parse stores;
+  a message whose original is gone fails the export or is withheld with the reason, never sealed.
+- **"Copy into the archive" copied nothing.** The import sheet now states what happens: messages up
+  to 100 MiB are stored in the archive; larger ones are read from the original file, which must
+  stay where it is. A real copy is a 3.1 item.
+- **Two attachments with the same filename hydrated as the same file.** The ordinal is now the
+  identity; the filename only a cross-check; an ambiguous match returns nothing rather than the
+  wrong file.
+- **Quoted-printable binary attachments were corrupted** (decoded as text, re-encoded as UTF-8).
+  The transfer decode is now byte-level.
+- **Production could release withheld documents and count PDFs that were never written.** A
+  tag-read failure now stops the run; a document counts as produced only when its PDF exists; the
+  manifest carries the PDF's own hash; a stopped run publishes nothing and says so.
+- **A malformed ZIP64 archive could crash the app** (unchecked 64-bit conversions). It is now an
+  import error naming the field.
+- **Resuming an interrupted export could duplicate records.** A kept partial artifact now ends at
+  the last reported batch, and a resume is refused when the archive changed in between.
+- **The offline verification script accepted a build with the sandbox switched off** (it checked
+  the key, not the value). It now checks values, and a self-test runs it against six entitlement
+  shapes.
+- **The "skip re-encoded duplicates" import choice was silently downgraded** to plain Message-ID
+  matching on its way to the store. The chosen policy now arrives unchanged.
+
+Confirmed findings that do not lose or misrepresent data on the default path — source-identity
+verification on export, the audit chain's missing trusted head, a live policy hard-off not stopping
+running work, the semantic index missing later imports, report scope and the 5,000-message cap, and
+the "verified" evidence label — are scheduled for 3.0.1 (`MAILIN_3_0_AUDIT_FIXES.md`, Wave 2).
+
 ## Known limits, stated
+
+- Originals are referenced, not copied: a message above the 100 MiB full-parse ceiling is read from
+  the file it was imported from whenever it is opened or exported. Move or delete that file and the
+  message's content is unavailable (the app says so; it never substitutes an empty message).
+- Production (Bates PDF) withholds such messages with the reason in `excluded.csv`; export them as
+  MBOX or EML, which stream them byte for byte.
 
 - Largest executed import is 1.52 GB of real mail in one file and 1.04 GB per container form;
   larger sizes are not tested (`SCALE_RESULTS.md`).

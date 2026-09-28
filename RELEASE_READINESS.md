@@ -331,6 +331,19 @@ means a large import on a small Mac is fighting the resting FTS cost too.
 | `HMACChainAuditLog.verifyChain()` cost vs chain length | NOT MEASURED — needs a long chain fixture |
 | Clean-build time, Release config, iOS build | NOT MEASURED |
 
+### External source audit (2026-09-28)
+
+An independent audit of `v3-architecture` @ 17009fc reported 18 findings. Each was re-traced to
+its statement (`~/Downloads/MAILIN_3_0_AUDIT_FIXES.md`, "Root-cause confirmation"): 15 confirmed,
+2 partly (F03 narrower, F16 documentation), 1 labelling (F15). The audit's premise that the offset
+parser is off by default was wrong — it is on — so F02/F03/F05 applied to every install.
+
+| Wave | Findings | Status |
+|---|---|---|
+| 1 — data loss or misrepresentation on the default path | F01 relocation self-deletion; F02/F03/F05 deferred-message locator, copy claim, empty exports; F06 F07 F09 F10 F17 F18 correctness; F08 export resume | **FIXED 2026-09-28**, commits 815e8d4 · 91d51eb · b1b57b7 · ca6dc9e; regression rows: ArchiveRelocatorTests (+8), ArchiveCoreTests/AuditWave1Tests (14), DeferredMessageIntegrityTests (7), ExportResumeTests (4), CaseBundleTests (+2), BatesPDFReadBackTests (+2), BlobTierWiringTests (+1), V2ExportTests (+1), `verify-no-network-selftest.sh` 6/6 |
+| 2 — real defects, no data loss on the default path | F04 source identity on export; F11 audit-chain head; F12 policy hard-off teardown; F13 semantic-index cursor; F14 report scope/cap; F15 evidence label | **OPEN — 3.0.1** unless pulled into 3.0 (owner decision) |
+| 3 — documentation / 3.1 | F16 per-format memory (documented above in `SUPPORTED_FORMATS_AND_LIMITS.md` §2); real copy-into-archive; snapshot-based export selection | documented / 3.1 |
+
 ---
 
 ## Owner / Apple gates (not engineering)

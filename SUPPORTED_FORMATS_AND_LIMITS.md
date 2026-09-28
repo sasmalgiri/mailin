@@ -108,6 +108,19 @@ result before draining it in bounded chunks. The adaptive batch envelope's
 messages already exist by then. Wiring those parsers to the envelope is tracked
 as P3.2.
 
+### Memory behaviour by format (audit F16, stated rather than implied)
+
+| Format | Import memory | Measured |
+|---|---|---|
+| mbox, eml, gzip/ZIP of those | **Bounded**: peak does not grow with the file. Offset engine: headers per batch, bodies parsed per batch; streaming parser: one batch resident | 1.5 GB mbox: peak Δ 450–790 MiB (`SCALE_RESULTS.md` rows 1–3); 1 GB format rows executed |
+| EML folder, Maildir, Apple Mail package, `.emlx` folder | **Bounded per file**; the member list (paths only) is resident | 1 GB rows executed |
+| pst, ost, nsf, msg | **Proportional to the file**: the parser materialises the whole result before batching, so peak ≈ file size × decode expansion. There is no product cap; the ceiling is the Mac's memory | 1 GB PST/MSG rows executed; larger files are **not tested** and are not claimed |
+| ZIP container itself | Central directory resident (≈ 80 bytes per member); each member streams to a scratch file | `ContainerImportTests` |
+
+"Bounded memory" in this document therefore means the first two rows. A
+terabyte claim exists for none of them: the largest executed import is in
+`SCALE_RESULTS.md`, and anything larger is stated as untested.
+
 ---
 
 ## 3. mailin's own limits
@@ -115,6 +128,7 @@ as P3.2.
 | Limit | Value | Where | Consequence |
 |---|---|---|---|
 | Single message on the non-streaming path | 100 MB | `MBOXParser.maxMessageBytes` | Counted as damaged (`oversized_message`) and skipped with a clean report — never truncated, never an OOM. **Removing this is task S4.** |
+| Single message on the offset engine (3.0 default) | 100 MiB full-parse ceiling | `OffsetImportEngine.fullParseCeilingBytes` | Imported from its headers with a byte locator that **commits in the same transaction as the row** (audit F02). Its content is **read from the original file** when opened or exported — MBOX and EML exports stream it byte-identically to a full parse (`DeferredMessageIntegrityTests`); production withholds it with the reason; its text is not searchable. Originals are referenced, never copied in 3.0 (audit F03): keep the file where it was imported from. A missing original is an error the app states, never an empty message (audit F05) |
 | Indexed text per message | 4 MiB | `FTSSearchIndex.indexedTextBudgetBytes` | Text beyond the budget is **searchable only up to the budget**. Coverage is recorded per message (`indexed_text_bytes` / `total_text_bytes`) and reported, replacing a silent 50,000-character truncation. |
 | Inline blob threshold | 8 MiB | `BlobStore.inlineThresholdBytes` | Above it, content goes to the content-addressed store instead of a row |
 | Source file size | **none** | — | The streaming path is bounded by the batch envelope, not by file size |
