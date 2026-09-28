@@ -316,24 +316,31 @@ final class ArchiveRelocatorTests: XCTestCase {
                        otherHash)
     }
 
-    /// A stale partial copy (no emails.db) at the destination IS replaced —
-    /// by a verified copy, published only after verification.
-    func testRelocate_replacesOnlyAStalePartialCopy() async throws {
-        let f = try await makeFixture("stale"); defer { try? FileManager.default.removeItem(at: f.base) }
-        let stale = f.volume.appendingPathComponent(ArchiveLayout.relocatedFolderName, isDirectory: true)
-        let junk = ArchiveLayout.sqliteDirectory(under: stale).appendingPathComponent("junk.partial")
-        try FileManager.default.createDirectory(at: junk.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data("half a copy".utf8).write(to: junk)
+    /// Recheck R8: a pre-existing destination folder with ANY content is not
+    /// ours to remove, whether or not it looks like an archive. Only an empty
+    /// folder may be replaced.
+    func testRelocate_refusesAnOccupiedDestinationFolder_andReplacesOnlyAnEmptyOne() async throws {
+        let f = try await makeFixture("occupied-folder"); defer { try? FileManager.default.removeItem(at: f.base) }
+        let destination = f.volume.appendingPathComponent(ArchiveLayout.relocatedFolderName, isDirectory: true)
+        let sentinel = destination.appendingPathComponent("notes.txt")
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        try Data("someone else's file".utf8).write(to: sentinel)
 
         let plan = ArchiveRelocator.plan(sourceRoot: f.home, destinationVolume: f.volume)
         XCTAssertFalse(plan.destinationHoldsArchive)
-        XCTAssertNil(plan.refusalReason, plan.refusalReason ?? "")
-        let receipt = try await ArchiveRelocator.perform(plan, store: f.store, fts: f.fts,
+        XCTAssertTrue(plan.destinationIsOccupied)
+        try await assertRefused(plan, f)
+        XCTAssertEqual(try String(contentsOf: sentinel, encoding: .utf8), "someone else's file", "not a byte of the foreign folder is touched")
+
+        // An EMPTY pre-existing folder is fine.
+        try FileManager.default.removeItem(at: sentinel)
+        let again = ArchiveRelocator.plan(sourceRoot: f.home, destinationVolume: f.volume)
+        XCTAssertFalse(again.destinationIsOccupied)
+        XCTAssertNil(again.refusalReason, again.refusalReason ?? "")
+        let receipt = try await ArchiveRelocator.perform(again, store: f.store, fts: f.fts,
                                                          recordStore: f.recordStore, locationStore: f.locationStore)
         XCTAssertEqual(receipt.verifiedRows, 20)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: junk.path), "the stale partial copy is gone")
-        XCTAssertTrue(ArchiveLayout.hasArchive(at: stale))
-        // No staging folder is left beside the destination.
+        XCTAssertTrue(ArchiveLayout.hasArchive(at: destination))
         let siblings = try FileManager.default.contentsOfDirectory(atPath: f.volume.path)
         XCTAssertEqual(siblings, [ArchiveLayout.relocatedFolderName], "staging folder must not remain: \(siblings)")
     }

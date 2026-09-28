@@ -95,7 +95,7 @@ final class HMACChainHeadTests: XCTestCase {
         XCTAssertEqual(log.integrityState, .verified(entryCount: 0))
         for i in 0..<3 { try log.append(action: "test", detail: "entry \(i)") }
         XCTAssertTrue(log.verifyChain())
-        XCTAssertEqual(anchors.loadHead(), ChainHead(count: 3, hmac: log.entries.last!.hmac))
+        XCTAssertEqual(try anchors.loadHead(), ChainHead(count: 3, hmac: log.entries.last!.hmac))
     }
 
     func testRemovingTheLastEntryIsDetected() throws {
@@ -166,14 +166,48 @@ final class HMACChainHeadTests: XCTestCase {
         XCTAssertTrue(reopened.verifyChain())
     }
 
+    /// Recheck R3: appending to a truncated prefix must not re-anchor it.
+    func testAppendAfterTruncationIsRefusedAndTheBreakStaysVisible() throws {
+        let (log, url, anchors) = makeLog()
+        for i in 0..<3 { try log.append(action: "test", detail: "entry \(i)") }
+        try PrivacyHardening.writeJSON(Array(log.entries.dropLast()), to: url)
+        let reopened = reopen(url, anchors: anchors)
+        XCTAssertEqual(reopened.entries.count, 2)
+        // Append WITHOUT verifying first — the path that used to erase the trace.
+        XCTAssertThrowsError(try reopened.append(action: "test", detail: "after truncation")) { error in
+            guard case HMACChainAuditLog.ChainError.chainInconsistentWithAnchor = error else { return XCTFail("\(error)") }
+        }
+        XCTAssertEqual(reopened.entries.count, 2, "nothing was appended")
+        XCTAssertEqual(try anchors.loadHead()?.count, 3, "the anchor still records the lost entry")
+        XCTAssertFalse(reopened.verifyChain(), "the truncation is still detectable")
+        // And after a verify that reported broken, append is still refused.
+        XCTAssertThrowsError(try reopened.append(action: "test", detail: "still refused"))
+    }
+
+    func testUnreadableAnchorRefusesAppendAndReportsBroken() throws {
+        struct AnchorDown: Error {}
+        let base = ChainAnchors.inMemory()
+        let (log, url, _) = makeLog(anchors: base)
+        for i in 0..<2 { try log.append(action: "test", detail: "entry \(i)") }
+        let down = ChainAnchors(loadKey: base.loadKey, saveKey: base.saveKey,
+                                loadHead: { throw AnchorDown() }, saveHead: base.saveHead)
+        let reopened = reopen(url, anchors: down)
+        XCTAssertEqual(reopened.entries.count, 2, "the entries are still readable")
+        XCTAssertFalse(reopened.verifyChain(), "an unreadable anchor is not a verified chain")
+        XCTAssertThrowsError(try reopened.append(action: "test", detail: "x")) { error in
+            guard case HMACChainAuditLog.ChainError.anchorUnavailable = error else { return XCTFail("\(error)") }
+        }
+        XCTAssertEqual(reopened.entries.count, 2)
+    }
+
     func testPreAnchorLogIsAdoptedOnFirstVerify() throws {
         // A log written before anchors existed: entries on disk, no head.
         let (log, url, anchors) = makeLog(anchors: ChainAnchors.inMemory())
         for i in 0..<3 { try log.append(action: "test", detail: "entry \(i)") }
-        anchors.saveHead(nil)   // simulate "no anchor was ever recorded"
+        try anchors.saveHead(nil)   // simulate "no anchor was ever recorded"
         let reopened = reopen(url, anchors: anchors)
-        XCTAssertNil(anchors.loadHead())
+        XCTAssertNil(try anchors.loadHead())
         XCTAssertTrue(reopened.verifyChain(), "adopt the chain as found")
-        XCTAssertEqual(anchors.loadHead()?.count, 3, "and anchor it from now on")
+        XCTAssertEqual(try anchors.loadHead()?.count, 3, "and anchor it from now on")
     }
 }

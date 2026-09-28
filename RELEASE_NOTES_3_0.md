@@ -162,6 +162,34 @@ also fixed in this release (owner decision, 2026-09-28):
 - **"Cited evidence (verified)" overstated the check.** The label now says what is true: each
   citation resolves to a retrieved message; the statements themselves are not fact-checked.
 
+### Second audit pass (2026-09-28, against the fixed build)
+
+The auditor re-read the fixed branch and reported nine remaining paths, two of them new defects
+introduced by the first fix wave. All nine are fixed in this release:
+
+- The whole-message attachment fallback still returned the first of two same-named attachments;
+  it now resolves by ordinal like the located path.
+- An export's selection fingerprint was taken when the run stopped, not when it started, and a
+  resume without one was allowed; the partial file's length was not checked. A run now binds to
+  its selection before writing, a resume without a fingerprint or with a changed or missing partial
+  file is refused, and a partial that cannot be cut back cleanly is removed rather than offered.
+- Appending to a truncated audit chain re-anchored it. An append now requires the chain to end at
+  its anchor; an unreadable anchor or a failed quarantine refuses the append.
+- The two legacy EML loops streamed located messages without verifying the source, and the ledger
+  cached by path alone. Every located write now verifies; the cache key carries the expected digest
+  and the file's size and modification date; unverifiable sources are counted on the receipt.
+- PDF, TIFF and MSG exports rendered header-only stubs for messages above the ceiling. Those formats
+  now withhold such messages, count them, and report the run as partial.
+- The sealed case bundle re-encoded located bytes as UTF-8 before hashing. Format 2 carries the
+  exact bytes separately and hashes those; the text is a view.
+- The streaming quoter and unquoter lost line-start state on lines above 1 MiB and could add or
+  remove a byte mid-line. Both are now a byte state machine with bounded memory, proven equal to
+  the whole-text functions for every chunking, including 1.1 MiB lines.
+- The relocator still removed a pre-existing destination folder that lacked an archive database.
+  Only an empty folder may be replaced; any other content refuses the move.
+- Report and digest date pickers replaced the page's date bounds instead of narrowing them. They
+  now intersect.
+
 ## Known limits, stated
 
 - Originals are referenced, not copied: a message above the 100 MiB full-parse ceiling is read from

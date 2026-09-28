@@ -52,32 +52,21 @@ struct RawMessageResult: Sendable, Equatable {
 
 extension MBOXRecordBuilder {
 
-    /// Chunk-wise mboxrd UNquoting — the inverse of `StreamingQuoter`, with
-    /// the same line-boundary carry so a `>From ` split across two reads is
-    /// still seen at its line start.
+    /// Chunk-wise mboxrd UNquoting — the inverse of `StreamingQuoter`, built
+    /// on the same byte state machine (`StreamingFromLineFilter`), so a
+    /// `>From ` is recognised only at a real line start whatever the chunking
+    /// and however long the line (recheck R7).
     struct StreamingUnquoter {
         let enabled: Bool
-        private var carry: [UInt8] = []
+        private var filter: StreamingFromLineFilter
 
-        init(enabled: Bool) { self.enabled = enabled }
-
-        mutating func process(_ chunk: Data) -> Data {
-            guard enabled else { return chunk }
-            let buffer = carry + Array(chunk)
-            var cut = buffer.count
-            while cut > 0, buffer[cut - 1] != MBOXRecordBuilder.lf, buffer[cut - 1] != MBOXRecordBuilder.cr { cut -= 1 }
-            if cut > 0, buffer[cut - 1] == MBOXRecordBuilder.cr { cut -= 1 }
-            if cut == 0, buffer.count > 1_048_576 { cut = buffer.count }
-            let complete = Array(buffer[..<cut])
-            carry = Array(buffer[cut...])
-            return Data(MBOXRecordBuilder.unquoteFromLines(bytes: complete))
+        init(enabled: Bool) {
+            self.enabled = enabled
+            self.filter = StreamingFromLineFilter(mode: .unquote, enabled: enabled)
         }
 
-        mutating func finish() -> Data {
-            let out = enabled ? MBOXRecordBuilder.unquoteFromLines(bytes: carry) : carry
-            carry = []
-            return Data(out)
-        }
+        mutating func process(_ chunk: Data) -> Data { filter.process(chunk) }
+        mutating func finish() -> Data { filter.finish() }
     }
 }
 
@@ -88,7 +77,9 @@ extension MBOXRecordBuilder {
 /// silently, each with a fresh, valid artifact hash. One ledger lives for one
 /// export run; the hash is computed off the main actor.
 final class SourceVerificationLedger: @unchecked Sendable {
+    private var verifiedKeys: Set<String> = []
     private var verified: Set<String> = []
+    private var unverified: Set<String> = []
     private let lock = NSLock()
 
     init() {}
@@ -99,28 +90,78 @@ final class SourceVerificationLedger: @unchecked Sendable {
         return verified
     }
 
+    /// Paths that could NOT be verified because their locator carries no
+    /// digest (imported before digests were recorded). Reported, never
+    /// silently treated as verified (recheck R4).
+    var unverifiedPaths: Set<String> {
+        lock.lock(); defer { lock.unlock() }
+        return unverified
+    }
+
+    /// Recheck R4: the cache key is the file's canonical identity PLUS the
+    /// digest the locator expects PLUS the file's current size and
+    /// modification date. Two locators that recorded different digests for
+    /// the same path each get their own verification, and a file modified
+    /// after a verification is re-verified because its key changed.
+    static func cacheKey(for locator: MessageLocator) -> String {
+        let path = ArchiveRelocator.canonicalPath(URL(fileURLWithPath: locator.sourcePath))
+        let attributes = try? FileManager.default.attributesOfItem(atPath: locator.sourcePath)
+        let size = (attributes?[.size] as? NSNumber)?.int64Value ?? -1
+        let modified = (attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1
+        return "\(path)|\(locator.sourceDigest ?? "")|\(size)|\(modified)"
+    }
+
     /// Throws `LocatorReadError.digestMismatch` when the source has changed
-    /// since import, `.sourceMissing` when it is gone. A locator that carries
-    /// no digest (imported before digests were recorded) cannot be verified
-    /// and passes — `MessageLocator.hasVerifiableSource` tells the two apart.
+    /// since import, `.sourceMissing` when it is gone. A locator without a
+    /// digest is recorded in `unverifiedPaths` and passes.
     func verify(_ locator: MessageLocator) async throws {
-        guard locator.hasVerifiableSource else { return }
+        guard locator.hasVerifiableSource else { noteUnverifiable(locator); return }
+        let key = Self.cacheKey(for: locator)
         lock.lock()
-        let done = verified.contains(locator.sourcePath)
+        let done = verifiedKeys.contains(key)
         lock.unlock()
         if done { return }
         try await Task.detached(priority: .userInitiated) {
             try LocatorReader().verifySource(locator)
         }.value
+        record(key, locator)
+    }
+
+    /// Same contract, on the calling thread — for the synchronous legacy
+    /// paths (`RawMessageFile`), which run off the main actor.
+    func verifySync(_ locator: MessageLocator) throws {
+        guard locator.hasVerifiableSource else { noteUnverifiable(locator); return }
+        let key = Self.cacheKey(for: locator)
         lock.lock()
+        let done = verifiedKeys.contains(key)
+        lock.unlock()
+        if done { return }
+        try LocatorReader().verifySource(locator)
+        record(key, locator)
+    }
+
+    private func record(_ key: String, _ locator: MessageLocator) {
+        lock.lock()
+        verifiedKeys.insert(key)
         verified.insert(locator.sourcePath)
+        lock.unlock()
+    }
+
+    private func noteUnverifiable(_ locator: MessageLocator) {
+        lock.lock()
+        unverified.insert(locator.sourcePath)
         lock.unlock()
     }
 }
 
 /// Synchronous located-message writer, for the two legacy UI export loops
 /// that cannot await. Reads the locator on its own read-only connection.
+/// Every write verifies the source first (R4) through a process-wide ledger
+/// whose key includes the file's size and modification date, so a run over
+/// many located messages hashes each unchanged source once.
 enum RawMessageFile {
+
+    nonisolated(unsafe) static let ledger = SourceVerificationLedger()
 
     /// The message's original bytes, if it has any: stored raw MIME, or a
     /// locator whose source file is present. Nil means an export must fail or
@@ -137,7 +178,9 @@ enum RawMessageFile {
     /// unquoted — what a full parse stores). On failure the partial file is
     /// removed.
     @discardableResult
-    static func write(located locator: MessageLocator, to url: URL, chunkSize: Int = 1_048_576) throws -> RawMessageResult {
+    static func write(located locator: MessageLocator, to url: URL, chunkSize: Int = 1_048_576,
+                      verifying ledger: SourceVerificationLedger? = RawMessageFile.ledger) throws -> RawMessageResult {
+        if let ledger { try ledger.verifySync(locator) }
         FileManager.default.createFile(atPath: url.path, contents: nil)
         let handle = try FileHandle(forWritingTo: url)
         var succeeded = false

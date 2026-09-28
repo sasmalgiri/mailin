@@ -38,20 +38,22 @@ struct ChainHead: Codable, Equatable {
 struct ChainAnchors {
     var loadKey: () throws -> SymmetricKey?
     var saveKey: (SymmetricKey) throws -> Void
-    var loadHead: () -> ChainHead?
-    var saveHead: (ChainHead?) -> Void
+    /// nil = no anchor was ever recorded; a THROW = an anchor may exist but
+    /// cannot be read (recheck R3: absent and unreadable are different).
+    var loadHead: () throws -> ChainHead?
+    var saveHead: (ChainHead?) throws -> Void
 
     static func keychain(tag: String) -> ChainAnchors {
         ChainAnchors(
             loadKey: { try KeychainItem.load(account: tag).map { SymmetricKey(data: $0) } },
             saveKey: { key in try KeychainItem.save(account: tag, data: key.withUnsafeBytes { Data($0) }) },
             loadHead: {
-                guard let data = try? KeychainItem.load(account: tag + ".head") else { return nil }
-                return try? JSONDecoder().decode(ChainHead.self, from: data)
+                guard let data = try KeychainItem.load(account: tag + ".head") else { return nil }
+                return try JSONDecoder().decode(ChainHead.self, from: data)
             },
             saveHead: { head in
-                if let head, let data = try? JSONEncoder().encode(head) {
-                    try? KeychainItem.save(account: tag + ".head", data: data)
+                if let head {
+                    try KeychainItem.save(account: tag + ".head", data: try JSONEncoder().encode(head))
                 } else {
                     KeychainItem.delete(account: tag + ".head")
                 }
@@ -124,6 +126,26 @@ final class HMACChainAuditLog: ObservableObject {
     /// log was lost or unreadable. Its detail says what was lost.
     static let historyUnavailableAction = "audit.history.unavailable"
 
+    /// Recheck R3: why an append was refused. A broken chain is preserved as
+    /// evidence until an explicit, recorded recovery — appending to a
+    /// truncated prefix would re-anchor it and erase the trace of the loss.
+    enum ChainError: LocalizedError, Equatable {
+        case chainInconsistentWithAnchor(String)
+        case anchorUnavailable(String)
+        case quarantineFailed(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .chainInconsistentWithAnchor(let why):
+                return "The audit chain does not match its recorded anchor (\(why)); nothing was appended so the discrepancy stays visible."
+            case .anchorUnavailable(let why):
+                return "The audit chain's anchor could not be read (\(why)); nothing was appended."
+            case .quarantineFailed(let why):
+                return "The unreadable audit log could not be moved aside (\(why)); nothing was written over it."
+            }
+        }
+    }
+
     private let logger = Logger(subsystem: "com.ecosanskriti.mailin",
                                 category: "HMACChainAudit")
     private static let productionKeychainTag = "com.ecosanskriti.mailin.hmac-chain.v1"
@@ -135,6 +157,9 @@ final class HMACChainAuditLog: ObservableObject {
     /// Set when the log on disk was missing or unreadable while an anchor
     /// said entries existed. The next `append` writes it into the new chain.
     private(set) var pendingLossNote: String?
+    /// Set when the unreadable log could not be quarantined: the file must not
+    /// be written over, so appends are refused (R3).
+    private(set) var quarantineFailure: String?
 
     enum IntegrityState: Equatable {
         case unknown
@@ -171,16 +196,32 @@ final class HMACChainAuditLog: ObservableObject {
     /// that want to reference it (e.g. cross-reference with an export).
     @discardableResult
     func append(action: String, detail: String) throws -> Entry {
+        if let quarantineFailure { throw ChainError.quarantineFailed(quarantineFailure) }
         // A chain that starts after a loss records the loss first, so the
-        // gap is inside the evidence rather than only in a log message.
+        // gap is inside the evidence rather than only in a log message. This
+        // is the ONE transition that may move the anchor away from a chain
+        // it no longer describes, and it records why.
         if entries.isEmpty, let note = pendingLossNote {
             pendingLossNote = nil
-            _ = try appendEntry(action: Self.historyUnavailableAction, detail: note)
+            _ = try appendEntry(action: Self.historyUnavailableAction, detail: note, recoveringFromLoss: true)
         }
-        return try appendEntry(action: action, detail: detail)
+        return try appendEntry(action: action, detail: detail, recoveringFromLoss: false)
     }
 
-    private func appendEntry(action: String, detail: String) throws -> Entry {
+    /// R3: the chain in memory must END at the recorded anchor before
+    /// anything is appended to it. A decoded valid prefix (truncation) or a
+    /// replaced log therefore cannot be re-anchored by the next append.
+    private func requireConsistentWithAnchor() throws {
+        let head: ChainHead?
+        do { head = try anchors.loadHead() } catch { throw ChainError.anchorUnavailable(error.localizedDescription) }
+        guard let head else { return }   // never anchored: adopted on first verify/append
+        guard head.count == entries.count, head.hmac == entries.last?.hmac else {
+            throw ChainError.chainInconsistentWithAnchor("recorded head is entry \(head.count) (\(head.hmac.prefix(12))…), \(entries.count) present")
+        }
+    }
+
+    private func appendEntry(action: String, detail: String, recoveringFromLoss: Bool) throws -> Entry {
+        if !recoveringFromLoss { try requireConsistentWithAnchor() }
         let key = try fetchOrCreateKey()
         let prev = entries.last?.hmac
         let id = UUID()
@@ -201,8 +242,10 @@ final class HMACChainAuditLog: ObservableObject {
         )
         entries.append(entry)
         try saveToDisk()
-        // The anchor moves only after the file holds the entry.
-        anchors.saveHead(ChainHead(count: entries.count, hmac: macHex))
+        // The anchor moves only after the file holds the entry. A failed
+        // anchor write is an error the caller sees — the entry IS on disk,
+        // and the next verify will report the mismatch.
+        try anchors.saveHead(ChainHead(count: entries.count, hmac: macHex))
         return entry
     }
 
@@ -234,7 +277,16 @@ final class HMACChainAuditLog: ObservableObject {
             }
 
             // F11: the chain must END where the anchor says it ends.
-            if let head = anchors.loadHead() {
+            let head: ChainHead?
+            do { head = try anchors.loadHead() } catch {
+                integrityState = .broken(atIndex: -1, reason: "anchor unreadable: \(error.localizedDescription)")
+                return false
+            }
+            if let quarantineFailure {
+                integrityState = .broken(atIndex: -1, reason: quarantineFailure)
+                return false
+            }
+            if let head {
                 guard head.count == entries.count, head.hmac == entries.last?.hmac else {
                     let reason: String
                     if entries.count < head.count {
@@ -250,7 +302,10 @@ final class HMACChainAuditLog: ObservableObject {
             } else if !entries.isEmpty {
                 // First verification after the anchor was introduced: adopt
                 // the chain as found. From here on, truncation is detectable.
-                anchors.saveHead(ChainHead(count: entries.count, hmac: entries.last!.hmac))
+                do { try anchors.saveHead(ChainHead(count: entries.count, hmac: entries.last!.hmac)) } catch {
+                    integrityState = .broken(atIndex: -1, reason: "anchor could not be written: \(error.localizedDescription)")
+                    return false
+                }
             }
             if let note = pendingLossNote {
                 integrityState = .broken(atIndex: -1, reason: note)
@@ -276,12 +331,20 @@ final class HMACChainAuditLog: ObservableObject {
     func reloadFromDisk() {
         entries = []
         pendingLossNote = nil
+        quarantineFailure = nil
         integrityState = .unknown
         loadFromDisk()
     }
 
     private func loadFromDisk() {
-        let head = anchors.loadHead()
+        let head: ChainHead?
+        do { head = try anchors.loadHead() } catch {
+            // Unreadable anchor: nothing is trusted, nothing is appended
+            // (`requireConsistentWithAnchor` rethrows) until it is readable.
+            head = nil
+            integrityState = .broken(atIndex: -1, reason: "anchor unreadable: \(error.localizedDescription)")
+            logger.error("HMAC audit anchor unreadable: \(error.localizedDescription, privacy: .public)")
+        }
         guard FileManager.default.fileExists(atPath: storeURL.path) else {
             if let head {
                 pendingLossNote = "audit log file missing; the recorded head was entry \(head.count) (\(head.hmac.prefix(12))…)"
@@ -299,7 +362,16 @@ final class HMACChainAuditLog: ObservableObject {
             let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
             let quarantine = storeURL.deletingLastPathComponent()
                 .appendingPathComponent("hmac_audit_chain.corrupt-\(stamp).json")
-            try? FileManager.default.moveItem(at: storeURL, to: quarantine)
+            do {
+                try FileManager.default.moveItem(at: storeURL, to: quarantine)
+            } catch let moveError {
+                // R3: never write over a file that could not be moved aside.
+                quarantineFailure = "audit log unreadable and could not be quarantined (\(moveError.localizedDescription)); appends refused"
+                entries = []
+                integrityState = .broken(atIndex: -1, reason: quarantineFailure!)
+                logger.error("HMAC audit log unreadable and quarantine failed: \(moveError.localizedDescription, privacy: .public)")
+                return
+            }
             entries = []
             var note = "audit log unreadable (\(error.localizedDescription)); quarantined as \(quarantine.lastPathComponent)"
             if let head { note += "; the recorded head was entry \(head.count) (\(head.hmac.prefix(12))…)" }

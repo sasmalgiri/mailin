@@ -321,7 +321,7 @@ final class DeferredMessageIntegrityTests: XCTestCase {
         XCTAssertEqual(ok.recordsWritten, 1)
     }
 
-    func testLedger_verifiesEachSourceOncePerRun() async throws {
+    func testLedger_verifiesEachSourceOncePerRun_andReverifiesAfterAnEdit() async throws {
         let f = try makeFixture("once"); defer { try? FileManager.default.removeItem(at: f.root) }
         _ = try await importFixture(f, ceiling: Self.ceiling)
         let big = try await email(subject: "Big one", in: f)
@@ -329,20 +329,109 @@ final class DeferredMessageIntegrityTests: XCTestCase {
         let locator = try XCTUnwrap(storedLocator)
         let ledger = SourceVerificationLedger()
         try await ledger.verify(locator)
+        try await ledger.verify(locator)   // same file identity → cached, no second hash
         XCTAssertEqual(ledger.verifiedPaths, [f.mbox.path])
-        // Editing the file AFTER the first verification is not caught within
-        // the same run — that is the stated limit (modification during export).
+
+        // Recheck R4: the cache key carries the file's size and modification
+        // date, so an edit AFTER the first verification is re-verified by the
+        // SAME ledger and refused — not served from the cache.
         var bytes = try Data(contentsOf: f.mbox)
         bytes[bytes.count / 2] = bytes[bytes.count / 2] == 0x20 ? 0x2E : 0x20
+        try? FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(5)], ofItemAtPath: f.mbox.path)
         try bytes.write(to: f.mbox)
-        try await ledger.verify(locator)   // cached
-        // A new run sees it.
+        do {
+            try await ledger.verify(locator)
+            XCTFail("an edited source must not ride the earlier verification")
+        } catch let error as LocatorReadError {
+            guard case .digestMismatch = error else { return XCTFail("\(error)") }
+        }
+        // And a fresh ledger sees it too.
         do {
             try await SourceVerificationLedger().verify(locator)
             XCTFail()
         } catch let error as LocatorReadError {
             guard case .digestMismatch = error else { return XCTFail("\(error)") }
         }
+    }
+
+    // MARK: Recheck R4 — the ledger key is path + expected digest + file identity
+
+    func testLedgerKey_distinguishesDigestsAtTheSamePath_andSeesEdits() async throws {
+        let f = try makeFixture("key"); defer { try? FileManager.default.removeItem(at: f.root) }
+        _ = try await importFixture(f, ceiling: Self.ceiling)
+        let big = try await email(subject: "Big one", in: f)
+        let storedLocator = try await f.store.locator(forEmailID: big.id)
+        let locator = try XCTUnwrap(storedLocator)
+        let ledger = SourceVerificationLedger()
+        try await ledger.verify(locator)
+
+        // A second locator recording a DIFFERENT digest for the same path is
+        // its own verification — and fails, because the file is not that.
+        var other = locator
+        other.sourceDigest = String(repeating: "0", count: 64)
+        do {
+            try await ledger.verify(other)
+            XCTFail("a different expected digest must not ride the first verification")
+        } catch let error as LocatorReadError {
+            guard case .digestMismatch = error else { return XCTFail("\(error)") }
+        }
+
+        // Editing the file changes its size/mtime, so the SAME locator is
+        // re-verified within the same run and the edit is caught.
+        var bytes = try Data(contentsOf: f.mbox)
+        bytes[bytes.count / 2] = bytes[bytes.count / 2] == 0x20 ? 0x2E : 0x20
+        try? FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(5)], ofItemAtPath: f.mbox.path)
+        try bytes.write(to: f.mbox)
+        do {
+            try await ledger.verify(locator)
+            XCTFail("an edited file must be re-verified, not served from the cache")
+        } catch let error as LocatorReadError {
+            guard case .digestMismatch = error else { return XCTFail("\(error)") }
+        }
+
+        // A locator without a digest is reported as unverified, not passed off as verified.
+        var undigested = locator
+        undigested.sourceDigest = nil
+        let fresh = SourceVerificationLedger()
+        try await fresh.verify(undigested)
+        XCTAssertEqual(fresh.unverifiedPaths, [f.mbox.path])
+        XCTAssertTrue(fresh.verifiedPaths.isEmpty)
+    }
+
+    /// The synchronous legacy writer verifies too (R4).
+    func testRawMessageFile_refusesAnEditedSource() async throws {
+        let f = try makeFixture("sync-verify"); defer { try? FileManager.default.removeItem(at: f.root) }
+        _ = try await importFixture(f, ceiling: Self.ceiling)
+        let big = try await email(subject: "Big one", in: f)
+        let locator = try XCTUnwrap(RawMessageFile.locator(for: big, storeDirectory: f.store.storeDirectory))
+        var bytes = try Data(contentsOf: f.mbox)
+        bytes[bytes.count / 2] = bytes[bytes.count / 2] == 0x20 ? 0x2E : 0x20
+        try bytes.write(to: f.mbox)
+        let out = f.root.appendingPathComponent("edited.eml")
+        XCTAssertThrowsError(try RawMessageFile.write(located: locator, to: out, verifying: SourceVerificationLedger())) { error in
+            guard case LocatorReadError.digestMismatch = error else { return XCTFail("\(error)") }
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: out.path))
+    }
+
+    // MARK: Recheck R5 — every per-file format withholds undecoded content
+
+    func testMessageFilesExport_withoutRawStreaming_withholdsDeferredMessages() async throws {
+        let f = try makeFixture("withheld"); defer { try? FileManager.default.removeItem(at: f.root) }
+        _ = try await importFixture(f, ceiling: Self.ceiling)
+        let service = await ArchiveExportService(archive: f.archive)
+        let folder = f.root.appendingPathComponent("pdf-like", isDirectory: true)
+        var rendered: [String] = []
+        // A renderer like PDF/TIFF/MSG: it reads the decoded body and would
+        // happily produce a header-only document for a deferred message.
+        let result = try await service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder) { email, index in
+            rendered.append(email.headers["Subject"] ?? "")
+            return ("\(index).txt", Data((email.headers["Subject"] ?? "").utf8))
+        }
+        XCTAssertEqual(result.withheld, 1, "the deferred message is withheld, not rendered as a stub")
+        XCTAssertEqual(result.recordsWritten, 2)
+        XCTAssertFalse(rendered.contains("Big one"), "the renderer never sees the undecoded message")
+        XCTAssertEqual(Set(rendered), ["Small one", "Last one"])
     }
 
     // MARK: Streaming unquoter
@@ -365,5 +454,91 @@ final class DeferredMessageIntegrityTests: XCTestCase {
         }
         var off = MBOXRecordBuilder.StreamingUnquoter(enabled: false)
         XCTAssertEqual(off.process(Data(text.utf8)), Data(text.utf8))
+    }
+
+    // MARK: Recheck R7 — a `From ` inside a line longer than a chunk is not a line start
+
+    private func chunked(_ bytes: [UInt8], sizes: [Int]) -> [Data] {
+        var out: [Data] = []
+        var i = 0, k = 0
+        while i < bytes.count {
+            let size = sizes[k % sizes.count]
+            out.append(Data(bytes[i..<min(i + size, bytes.count)]))
+            i += size; k += 1
+        }
+        return out
+    }
+
+    func testStreamingFilters_longLines_matchWholeTextForAnyChunking() {
+        // Two 1.1 MiB runs, then `>From ` exactly at what used to be an
+        // emergency-flush boundary, then real line starts of every shape.
+        var bytes = [UInt8](repeating: UInt8(ascii: "A"), count: 1_100_000)
+        bytes += Array(">From inside-long-line\n".utf8)
+        bytes += [UInt8](repeating: UInt8(ascii: "B"), count: 1_100_000)
+        bytes += Array("From inside-too\r\n>From real start\n>>From twice\nFrom real start 2\n".utf8)
+        bytes += [UInt8](repeating: UInt8(ascii: ">"), count: 3_000) + Array("From long quote run\n".utf8)
+        bytes += Array("tail without newline >From x".utf8)
+
+        let wholeUnquoted = MBOXRecordBuilder.unquoteFromLines(bytes: bytes)
+        let wholeQuoted = MBOXRecordBuilder.quoteFromLines(bytes: bytes)
+        XCTAssertEqual(wholeUnquoted.count, bytes.count - 3, "three real `>From` line starts lose one byte each")
+        XCTAssertEqual(wholeQuoted.count, bytes.count + 4, "four real From/`>From` line starts gain one byte each")
+
+        for sizes in [[1_048_576], [1_100_000], [7], [1], [4096, 1], [1_100_022, 3]] {
+            var unquoter = MBOXRecordBuilder.StreamingUnquoter(enabled: true)
+            var quoter = MBOXRecordBuilder.StreamingQuoter(enabled: true)
+            var u = Data(), q = Data()
+            for chunk in chunked(bytes, sizes: sizes) {
+                u.append(unquoter.process(chunk))
+                q.append(quoter.process(chunk))
+            }
+            u.append(unquoter.finish())
+            q.append(quoter.finish())
+            XCTAssertEqual([UInt8](u), wholeUnquoted, "unquote, chunk sizes \(sizes)")
+            XCTAssertEqual([UInt8](q), wholeQuoted, "quote, chunk sizes \(sizes)")
+        }
+    }
+
+    // MARK: Recheck R1 — the whole-message fallback resolves by ordinal too
+
+    func testAttachmentFallback_sameNameTwice_returnsTheRequestedOne() throws {
+        let first = Data("FIRST-PAYLOAD-bytes".utf8).base64EncodedString()
+        let second = Data("SECOND-PAYLOAD-other".utf8).base64EncodedString()
+        let raw = """
+        From: a@example.com
+        To: b@example.com
+        Subject: Two invoices
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="bnd"
+
+        --bnd
+        Content-Type: text/plain
+
+        see attached
+        --bnd
+        Content-Type: application/pdf; name="invoice.pdf"
+        Content-Disposition: attachment; filename="invoice.pdf"
+        Content-Transfer-Encoding: base64
+
+        \(first)
+        --bnd
+        Content-Type: application/pdf; name="invoice.pdf"
+        Content-Disposition: attachment; filename="invoice.pdf"
+        Content-Transfer-Encoding: base64
+
+        \(second)
+        --bnd--
+        """
+        let email = MBOXParser.RawEmail(
+            headers: ["Subject": "Two invoices", "Message-ID": "<two@x>"], rawSource: raw, messageType: "email",
+            attachments: [AttachmentMetadata(filename: "invoice.pdf", mimeType: "application/pdf", size: 19),
+                          AttachmentMetadata(filename: "invoice.pdf", mimeType: "application/pdf", size: 20)],
+            timestamp: "", domains: [], plainBody: "see attached", htmlBody: "")
+        // No part locators (legacy row): the whole-message fallback is the path.
+        let a = try XCTUnwrap(AttachmentHydrator.data(for: email.attachments[0], index: 0, email: email))
+        let b = try XCTUnwrap(AttachmentHydrator.data(for: email.attachments[1], index: 1, email: email))
+        XCTAssertEqual(a, Data("FIRST-PAYLOAD-bytes".utf8))
+        XCTAssertEqual(b, Data("SECOND-PAYLOAD-other".utf8), "the second same-named attachment is the second payload")
+        XCTAssertNotEqual(a, b)
     }
 }

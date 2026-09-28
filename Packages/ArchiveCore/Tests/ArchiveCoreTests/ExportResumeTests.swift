@@ -138,6 +138,47 @@ final class ExportResumeTests: XCTestCase {
         XCTAssertEqual(Set(all).count, 500)
     }
 
+    // MARK: Recheck R2 — the partial artifact must be exactly what the receipt recorded
+
+    func testResume_refusesAChangedOrMissingPartialArtifact() async throws {
+        let env = try await makeEnv(count: 60); defer { try? FileManager.default.removeItem(at: env.root) }
+        let url = env.root.appendingPathComponent("rows.txt")
+        var kept = ExportWriteOptions(); kept.keepPartialOnCancel = true
+        do {
+            _ = try await env.service.exportTextDocument(scope: .query(.all, exclusions: []), to: url, batchSize: 20, write: kept) { _, position in
+                if position == 45 { throw Injected() }
+                return "row \(position)\n"
+            }
+            XCTFail()
+        } catch is Injected {}
+        let recorded = UInt64((try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.uint64Value ?? 0)
+        XCTAssertGreaterThan(recorded, 0)
+
+        // Someone edits the partial file: appending would corrupt it.
+        try Data("tampered\n".utf8).write(to: url, options: .atomic)
+        var resume = ExportWriteOptions(); resume.skipFirst = 40; resume.append = true; resume.keepPartialOnCancel = true
+        resume.expectedAppendOffset = recorded
+        do {
+            _ = try await env.service.exportTextDocument(scope: .query(.all, exclusions: []), to: url, batchSize: 20, write: resume) { _, p in "row \(p)\n" }
+            XCTFail("a changed partial must be refused")
+        } catch let error as ArchiveExportError {
+            guard case .partialArtifactChanged(_, let expected, let actual) = error else { return XCTFail("\(error)") }
+            XCTAssertEqual(expected, recorded)
+            XCTAssertEqual(actual, 9)
+        }
+
+        // The partial is gone: nothing to append to — refused, never recreated
+        // as a file that starts at position 40.
+        try FileManager.default.removeItem(at: url)
+        do {
+            _ = try await env.service.exportTextDocument(scope: .query(.all, exclusions: []), to: url, batchSize: 20, write: resume) { _, p in "row \(p)\n" }
+            XCTFail("a missing partial must be refused")
+        } catch let error as ArchiveExportError {
+            guard case .partialArtifactMissing = error else { return XCTFail("\(error)") }
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "no file is created by a refused resume")
+    }
+
     // MARK: Selection fingerprint
 
     func testSelectionFingerprint_isStable_changesWhenTheSelectionChanges_andIgnoresSetOrder() async throws {

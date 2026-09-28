@@ -31,51 +31,33 @@ struct RawStreamPlan: Sendable {
 extension MBOXRecordBuilder {
 
     /// Chunk-wise mboxrd quoting with exactly the result `quoteFromLines`
-    /// gives on the whole text. A partial last line is carried to the next
-    /// chunk so a `From ` split across two reads is still seen at its line
-    /// start; a trailing CR is held back in case its LF arrives next.
+    /// gives on the whole text, over any chunk boundaries and any line length
+    /// (recheck R7: the previous carry-and-flush version lost line-start
+    /// state on lines above 1 MiB). A thin wrapper over
+    /// `StreamingFromLineFilter` that adds the record-terminator decision.
     struct StreamingQuoter {
         let enabled: Bool
-        private var carry: [UInt8] = []
-        /// The last four bytes emitted, for the record-terminator decision.
-        private(set) var tail: [UInt8] = []
+        private var filter: StreamingFromLineFilter
 
-        init(enabled: Bool) { self.enabled = enabled }
-
-        mutating func process(_ chunk: Data) -> Data {
-            guard enabled else { remember(chunk); return chunk }
-            let buffer = carry + Array(chunk)
-            var cut = buffer.count
-            while cut > 0, buffer[cut - 1] != MBOXRecordBuilder.lf, buffer[cut - 1] != MBOXRecordBuilder.cr { cut -= 1 }
-            if cut > 0, buffer[cut - 1] == MBOXRecordBuilder.cr { cut -= 1 }
-            // A line longer than a whole chunk cannot begin with `From ` past
-            // its first bytes; flush it rather than grow the carry unbounded.
-            if cut == 0, buffer.count > 1_048_576 { cut = buffer.count }
-            let complete = Array(buffer[..<cut])
-            carry = Array(buffer[cut...])
-            let out = MBOXRecordBuilder.quoteFromLines(bytes: complete)
-            remember(out)
-            return Data(out)
+        init(enabled: Bool) {
+            self.enabled = enabled
+            self.filter = StreamingFromLineFilter(mode: .quote, enabled: enabled)
         }
 
-        mutating func finish() -> Data {
-            let out = enabled ? MBOXRecordBuilder.quoteFromLines(bytes: carry) : carry
-            carry = []
-            remember(out)
-            return Data(out)
-        }
+        mutating func process(_ chunk: Data) -> Data { filter.process(chunk) }
+        mutating func finish() -> Data { filter.finish() }
+
+        /// The last four bytes emitted.
+        var tail: [UInt8] { filter.tail }
 
         /// What the record must be followed by so that it ends with exactly
         /// one blank line (RFC 4155): nothing, one newline, or two.
         var recordTerminator: Data {
             let lf = MBOXRecordBuilder.lf, cr = MBOXRecordBuilder.cr
+            let tail = filter.tail
             if tail.suffix(2) == [lf, lf] || tail == [cr, lf, cr, lf] { return Data() }
             if tail.last == lf { return Data([lf]) }
             return Data([lf, lf])
-        }
-
-        private mutating func remember<C: Collection>(_ bytes: C) where C.Element == UInt8 {
-            tail = Array((tail + Array(bytes.suffix(4))).suffix(4))
         }
     }
 }

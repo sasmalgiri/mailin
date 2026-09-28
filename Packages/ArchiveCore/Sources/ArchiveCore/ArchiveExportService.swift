@@ -37,16 +37,32 @@ struct ArchiveExportResult: Sendable, Equatable {
     var sha256Hex: String? = nil
     /// Companion `.sig` written by `ExportSigner` (signed exports only).
     var signatureURL: URL? = nil
+    /// Recheck R5: messages in scope that this format could not produce
+    /// honestly — content not decoded at import and no raw-bytes path for
+    /// the format (PDF, TIFF, MSG) — and were withheld rather than rendered as
+    /// header-only stubs. A run with any is `partial`, never `complete`.
+    var withheld: Int = 0
+    /// Recheck R4: source files streamed from whose locators carry no digest,
+    /// so their identity could not be verified. Reported on the receipt.
+    var unverifiedSources: Int = 0
 }
 
 enum ArchiveExportError: LocalizedError {
     case emptySelection
     case nothingToExport(String)
+    /// Recheck R2: a resume asked to append to a partial artifact that is gone.
+    case partialArtifactMissing(String)
+    /// Recheck R2: the partial artifact is not the length the receipt recorded.
+    case partialArtifactChanged(path: String, expected: UInt64, actual: UInt64)
 
     var errorDescription: String? {
         switch self {
         case .emptySelection: return "Nothing selected to export."
         case .nothingToExport(let what): return "No \(what) found to export."
+        case .partialArtifactMissing(let path):
+            return "The partial export at \(path) is no longer there, so it cannot be continued. Start the export again."
+        case .partialArtifactChanged(let path, let expected, let actual):
+            return "The partial export at \(path) is \(actual) bytes but the receipt recorded \(expected); it was changed after the run stopped and cannot be continued. Start the export again."
         }
     }
 }
@@ -169,10 +185,23 @@ final class ArchiveExportService {
         // `maxBytes` closes the file once the cap is reached (the record that
         // crosses the cap is written whole; a partition is never cut mid-record).
         let fm = FileManager.default
-        let appending = options.append && options.skipFirst > 0 && fm.fileExists(atPath: url.path)
+        let resuming = options.append && options.skipFirst > 0
+        // Recheck R2: a resume must find the partial artifact it was told
+        // about, at exactly the length the receipt recorded. Anything else is
+        // refused rather than appended to.
+        if resuming, !fm.fileExists(atPath: url.path) {
+            throw ArchiveExportError.partialArtifactMissing(url.path)
+        }
+        let appending = resuming
         if !appending { fm.createFile(atPath: url.path, contents: nil) }
         let handle = try FileHandle(forWritingTo: url)
-        if appending { try handle.seekToEnd() }
+        if appending {
+            let end = try handle.seekToEnd()
+            if let expected = options.expectedAppendOffset, end != expected {
+                try? handle.close()
+                throw ArchiveExportError.partialArtifactChanged(path: url.path, expected: expected, actual: end)
+            }
+        }
         var digest = SHA256()
         // `position` is the index within the scope (what the receipt reports as
         // written, cumulatively across resumes); `bytes` is this run's output.
@@ -203,10 +232,17 @@ final class ArchiveExportService {
         /// Cancel or error with `keepPartialOnCancel`: the artifact stays on
         /// disk, cut back to the last reported batch boundary, so a later run
         /// appends after exactly the records the receipt says were written —
-        /// never after ten unreported rows and half a record.
+        /// never after ten unreported rows and half a record. If the cut
+        /// itself fails, the file is removed: a partial that cannot be
+        /// trusted must not be offered for resume (R2).
         func keepPartial() {
-            try? handle.truncate(atOffset: committedOffset)
-            try? handle.close()
+            do {
+                try handle.truncate(atOffset: committedOffset)
+                try? handle.close()
+            } catch {
+                try? handle.close()
+                try? fm.removeItem(at: url)
+            }
         }
 
         do {
@@ -267,7 +303,8 @@ final class ArchiveExportService {
         }
         return ArchiveExportResult(recordsWritten: position, bytesWritten: bytes,
                                    completed: true, cancelled: false,
-                                   sha256Hex: hex, signatureURL: sigURL)
+                                   sha256Hex: hex, signatureURL: sigURL,
+                                   unverifiedSources: sourceLedger.unverifiedPaths.count)
     }
 
     /// SHA-256 of a file in 1 MiB chunks — never the whole file in memory.
@@ -323,6 +360,7 @@ final class ArchiveExportService {
         // records the receipt counts and a resume rewrites nothing twice.
         var writtenAtBoundary = 0
         var recordsAtBoundary = records
+        var withheld = 0
 
         func cleanup() {
             guard !options.keepPartialOnCancel else {
@@ -345,20 +383,30 @@ final class ArchiveExportService {
                     seen += 1
                     // A located message streams from its source (data nil);
                     // everything else renders through `content`.
+                    // Recheck R5: the content check runs for EVERY per-file
+                    // format, not only the one that can stream raw bytes. A
+                    // message with no decoded content is either streamed
+                    // (EML), withheld and counted (PDF/TIFF/MSG cannot render
+                    // undecoded bytes), or — with no source either — a failure.
                     var located = false
-                    if let _ = locatedRawExtension, email.rawSource.isEmpty {
+                    if email.rawSource.isEmpty, email.plainBody.isEmpty, email.htmlBody.isEmpty {
                         switch await archive.rawMessageSource(for: email) {
                         case .located(let locator):
-                            // F04: the source is proven to be the imported
-                            // file before a byte of it is exported.
-                            try await sourceLedger.verify(locator)
-                            located = true
-                        case .unavailable(let why) where email.plainBody.isEmpty && email.htmlBody.isEmpty:
+                            if locatedRawExtension != nil {
+                                // F04: the source is proven to be the imported
+                                // file before a byte of it is exported.
+                                try await sourceLedger.verify(locator)
+                                located = true
+                            } else {
+                                withheld += 1
+                                continue
+                            }
+                        case .unavailable(let why):
                             // Nothing to render and nothing to stream: the
                             // export fails here rather than writing a stub.
                             throw RawMessageError.contentUnavailable(subject: email.headers["Subject"] ?? "(no subject)", reason: why)
-                        default:
-                            break   // a legacy row with body text renders as before
+                        case .stored:
+                            break
                         }
                     }
                     let file: (filename: String, data: Data?)
@@ -423,9 +471,11 @@ final class ArchiveExportService {
             cleanup()
             return ArchiveExportResult(recordsWritten: options.keepPartialOnCancel ? recordsAtBoundary : records,
                                        bytesWritten: options.keepPartialOnCancel ? bytes : 0,
-                                       completed: false, cancelled: true)
+                                       completed: false, cancelled: true, withheld: withheld,
+                                       unverifiedSources: sourceLedger.unverifiedPaths.count)
         }
-        return ArchiveExportResult(recordsWritten: records, bytesWritten: bytes, completed: true, cancelled: false)
+        return ArchiveExportResult(recordsWritten: records, bytesWritten: bytes, completed: true, cancelled: false,
+                                   withheld: withheld, unverifiedSources: sourceLedger.unverifiedPaths.count)
     }
 
     /// `2019`, or `undated` when the Date header is missing or unparseable.

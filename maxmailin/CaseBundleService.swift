@@ -19,7 +19,10 @@ import os.log
 //   ones, labelled with the exporting examiner (E4 merge attribution).
 
 struct CaseBundle: Codable {
-    var formatVersion: Int = 1
+    /// 2 (2026-09-28, recheck R6): `BundledEmail.rawSourceBase64` carries the
+    /// exact bytes of a message read from its original file, so non-UTF-8
+    /// evidence is sealed byte for byte. Version-1 readers ignore the field.
+    var formatVersion: Int = 2
     var caseTitle: String
     var exportedBy: String
     var orgName: String?
@@ -31,8 +34,22 @@ struct CaseBundle: Codable {
     struct BundledEmail: Codable {
         var messageID: String?
         var subject: String
+        /// The message as text. For a message whose exact bytes are in
+        /// `rawSourceBase64` this is a readable VIEW (invalid UTF-8 replaced)
+        /// and is not what `sha256Hex` covers.
         var rawSource: String
+        /// Hex SHA-256 of the evidence bytes: `rawSourceBase64` when present,
+        /// otherwise the UTF-8 of `rawSource`.
         var sha256Hex: String
+        /// Recheck R6: the exact original bytes when the message was read
+        /// from its source file. Nil for messages the archive holds as text.
+        var rawSourceBase64: String? = nil
+
+        /// The bytes `sha256Hex` was computed over.
+        var evidenceBytes: Data {
+            if let rawSourceBase64, let exact = Data(base64Encoded: rawSourceBase64) { return exact }
+            return Data(rawSource.utf8)
+        }
     }
     var emails: [BundledEmail] = []
 
@@ -103,6 +120,9 @@ enum CaseBundleService {
     ) async throws {
         var resolved: [MBOXParser.RawEmail] = []
         resolved.reserveCapacity(emails.count)
+        // R6: the exact bytes travel separately from the text view, so a
+        // non-UTF-8 message is sealed as it was, not as Swift re-encodes it.
+        var exactBytes: [UUID: Data] = [:]
         // F04: one ledger for the bundle — each source file is proven to be
         // the imported file before its bytes are sealed as evidence.
         let ledger = SourceVerificationLedger()
@@ -110,6 +130,7 @@ enum CaseBundleService {
             if email.rawSource.isEmpty {
                 do {
                     let bytes = try await archive.rawMessageData(for: email, ledger: ledger)
+                    exactBytes[email.id] = bytes
                     email.rawSource = String(decoding: bytes, as: UTF8.self)
                 } catch let error as RawMessageError {
                     if case .contentUnavailable(let subject, let reason) = error {
@@ -120,7 +141,7 @@ enum CaseBundleService {
             }
             resolved.append(email)
         }
-        try export(caseTitle: caseTitle, emails: resolved, note: note, to: url)
+        try export(caseTitle: caseTitle, emails: resolved, note: note, exactBytes: exactBytes, to: url)
     }
 
     /// Builds a sealed bundle from a set of emails + all current studio
@@ -135,6 +156,7 @@ enum CaseBundleService {
         actionRegisters: [ActionRegisterModel]? = nil,
         evidenceDesks: [EvidenceDeskModel]? = nil,
         reasoningCases: [ReasoningCaseModel]? = nil,
+        exactBytes: [UUID: Data] = [:],
         to url: URL
     ) throws {
         // F05: refuse before anything is written. An empty rawSource would be
@@ -152,12 +174,17 @@ enum CaseBundleService {
             note: note
         )
         bundle.emails = emails.map { email in
-            let digest = SHA256.hash(data: Data(email.rawSource.utf8))
+            // R6: hash the EXACT bytes when the message came from its source;
+            // the text is only a view of them.
+            let exact = exactBytes[email.id]
+            let evidence = exact ?? Data(email.rawSource.utf8)
+            let digest = SHA256.hash(data: evidence)
             return CaseBundle.BundledEmail(
                 messageID: email.headers["Message-ID"] ?? email.headers["Message-Id"],
                 subject: email.headers["Subject"] ?? "",
                 rawSource: email.rawSource,
-                sha256Hex: digest.map { String(format: "%02x", $0) }.joined()
+                sha256Hex: digest.map { String(format: "%02x", $0) }.joined(),
+                rawSourceBase64: exact?.base64EncodedString()
             )
         }
         bundle.achMatrices = achMatrices ?? ACHMatrixStore.shared.matrices

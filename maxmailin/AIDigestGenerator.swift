@@ -67,10 +67,14 @@ struct AIDigestGenerator {
         // period narrows it further.
         var query = baseQuery
         if period == .custom {
+            // Recheck R9: the custom dates narrow the base scope, never widen it.
             let calendar = Calendar.current
-            if let s = customStart { query.afterDate = calendar.startOfDay(for: s) }
-            if let e = customEnd {
-                query.beforeDate = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: e))
+            if let s = customStart {
+                let lower = calendar.startOfDay(for: s)
+                query.afterDate = query.afterDate.map { max($0, lower) } ?? lower
+            }
+            if let e = customEnd, let upper = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: e)) {
+                query.beforeDate = query.beforeDate.map { min($0, upper) } ?? upper
             }
         }
         let recent = await ArchiveDataService.shared.workingSet(query: query, cap: 1000)

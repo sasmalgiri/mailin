@@ -75,23 +75,41 @@ final class V2ExportTests: XCTestCase {
         let fresh = try await ExportJobRunner.resumeIsCurrent(request, archive: env.archive)
         XCTAssertTrue(fresh, "a first run has nothing to compare")
 
-        let stoppedOrNil = await ExportJobRunner.resumeRequest(for: request, written: 10, archive: env.archive)
-        let stopped = try XCTUnwrap(stoppedOrNil)
+        // Recheck R2: the run binds itself to the selection BEFORE writing;
+        // the resume request carries THAT fingerprint, not one taken later.
+        let bound = try await ExportJobRunner.bindSelection(request, archive: env.archive)
+        let boundFingerprint = try XCTUnwrap(bound.selectionFingerprint)
+        // A partial artifact of a known length exists when the run stops.
+        try Data("partial".utf8).write(to: URL(fileURLWithPath: bound.destination))
+        let stopped = try XCTUnwrap(ExportJobRunner.resumeRequest(for: bound, written: 10))
         XCTAssertEqual(stopped.skipFirst, 10)
-        XCTAssertNotNil(stopped.selectionFingerprint)
+        XCTAssertEqual(stopped.selectionFingerprint, boundFingerprint, "the start-time fingerprint travels unchanged")
+        XCTAssertEqual(stopped.resumeArtifactBytes, 7)
+        XCTAssertEqual(stopped.writeOptions.expectedAppendOffset, 7)
         let unchanged = try await ExportJobRunner.resumeIsCurrent(stopped, archive: env.archive)
         XCTAssertTrue(unchanged)
 
-        // The archive gains a message → the positions no longer line up.
+        // The archive gains a message → the positions no longer line up, even
+        // though a fingerprint taken NOW would match itself.
         let store = SQLiteEmailStore(directory: env.root.appendingPathComponent("store"))
         try await store.insertBatch([makeEmail(i: 777)], batchSize: 10)
         let changed = try await ExportJobRunner.resumeIsCurrent(stopped, archive: env.archive)
         XCTAssertFalse(changed, "a positional resume over a changed selection must be refused")
 
+        // A resume with no recorded fingerprint is refused, not waved through.
+        var unbound = stopped
+        unbound.selectionFingerprint = nil
+        let refused = try await ExportJobRunner.resumeIsCurrent(unbound, archive: env.archive)
+        XCTAssertFalse(refused, "fail closed")
+        XCTAssertNil(ExportJobRunner.resumeRequest(for: unbound, written: 10), "an unbound run offers no resume")
+
+        // No partial artifact on disk → nothing to continue.
+        try FileManager.default.removeItem(at: URL(fileURLWithPath: bound.destination))
+        XCTAssertNil(ExportJobRunner.resumeRequest(for: bound, written: 10))
+
         // Non-resumable formats never carry a resume request.
         request.format = .json
-        let none = await ExportJobRunner.resumeRequest(for: request, written: 10, archive: env.archive)
-        XCTAssertNil(none)
+        XCTAssertNil(ExportJobRunner.resumeRequest(for: request, written: 10))
     }
 
     func testCSVQueryScopeWithExclusionsExactlyOnce() async throws {

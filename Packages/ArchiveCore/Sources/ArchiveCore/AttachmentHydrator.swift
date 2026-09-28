@@ -124,9 +124,11 @@ enum AttachmentHydrator {
         let list = hydratedAttachments(for: email, cache: cache)
         guard !list.isEmpty else { return nil }
 
-        let match = list.first { !$0.filename.isEmpty && $0.filename == attachment.filename }
-            ?? (index < list.count ? list[index] : nil)
-        guard let match else { return nil }
+        // Recheck R1: the same identity rule as the part-locator route —
+        // ordinal first, filename as a cross-check, ambiguity → nil. The
+        // previous "first matching filename" returned the FIRST of two
+        // same-named attachments whichever one was asked for.
+        guard let match = selectHydrated(for: attachment, index: index, among: list) else { return nil }
 
         if let url = match.fileURL, let data = try? Data(contentsOf: url) { return data }
         if let base64 = match.base64,
@@ -194,6 +196,19 @@ enum AttachmentHydrator {
         if name.isEmpty { return atIndex }
         if let atIndex, atIndex.filename == name { return atIndex }
         let byName = attachments.filter { $0.filename == name }
+        if byName.count == 1 { return byName[0] }
+        return nil
+    }
+
+    /// `selectPart`'s rule for the whole-message fallback list (recheck R1).
+    static func selectHydrated(for attachment: AttachmentMetadata,
+                               index: Int,
+                               among list: [AttachmentMetadata]) -> AttachmentMetadata? {
+        let name = attachment.filename
+        let atIndex = index < list.count ? list[index] : nil
+        if name.isEmpty { return atIndex }
+        if let atIndex, atIndex.filename == name { return atIndex }
+        let byName = list.filter { $0.filename == name }
         if byName.count == 1 { return byName[0] }
         return nil
     }

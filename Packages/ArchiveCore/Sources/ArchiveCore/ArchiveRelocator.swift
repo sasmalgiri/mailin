@@ -52,6 +52,9 @@ struct RelocationPlan: Equatable, Sendable {
         if destinationHoldsArchive {
             return "A mailin archive already exists at \(destinationRoot.path). Choose a folder that does not contain one; mailin never replaces an existing archive."
         }
+        if destinationIsOccupied {
+            return "The folder \(destinationRoot.path) already exists and is not empty. mailin never removes files it did not write; move or rename that folder first."
+        }
         if freeBytes < requiredBytes {
             return "Not enough space there: the archive needs about \(ByteCountFormatter.string(fromByteCount: requiredBytes, countStyle: .file)), \(ByteCountFormatter.string(fromByteCount: freeBytes, countStyle: .file)) is free."
         }
@@ -81,6 +84,15 @@ struct RelocationPlan: Equatable, Sendable {
     /// archive (an `emails.db`). A folder without one — a stale, unverified
     /// partial copy — is the only thing the relocator may replace.
     var destinationHoldsArchive: Bool { ArchiveLayout.hasArchive(at: destinationRoot) }
+
+    /// Recheck R8: a pre-existing destination folder with ANY content is
+    /// somebody's — the absence of `emails.db` is not evidence that it was a
+    /// staging copy of ours (our staging folders are siblings with unique
+    /// names, never the destination itself). Only an empty folder may be
+    /// replaced.
+    var destinationIsOccupied: Bool {
+        ArchiveRelocator.isNonEmptyDirectory(destinationRoot)
+    }
 }
 
 struct RelocationReceipt: Codable, Equatable, Sendable {
@@ -199,12 +211,12 @@ enum ArchiveRelocator {
                 throw RelocationError.verificationFailed("emails.db hash differs")
             }
 
-            // Publish. The destination may hold a stale partial copy from an
-            // earlier attempt (no `emails.db` — anything with one was refused
-            // above); that, and only that, is replaced.
+            // Publish. Only an EMPTY pre-existing destination folder may be
+            // replaced (R8): anything with content is not ours to remove,
+            // whether or not it looks like an archive.
             if fm.fileExists(atPath: plan.destinationRoot.path) {
-                guard !ArchiveLayout.hasArchive(at: plan.destinationRoot) else {
-                    throw RelocationError.refused("A mailin archive appeared at \(plan.destinationRoot.path) while copying. Nothing was replaced.")
+                guard !isNonEmptyDirectory(plan.destinationRoot) else {
+                    throw RelocationError.refused("The folder \(plan.destinationRoot.path) gained content while copying. Nothing was replaced.")
                 }
                 try fm.removeItem(at: plan.destinationRoot)
             }
@@ -283,6 +295,17 @@ enum ArchiveRelocator {
     }
 
     // MARK: Helpers
+
+    /// True for an existing directory (or file) at `url` that has any entry
+    /// at all, hidden files included. A missing path is not occupied.
+    static func isNonEmptyDirectory(_ url: URL) -> Bool {
+        let fm = FileManager.default
+        var isDirectory: ObjCBool = false
+        guard fm.fileExists(atPath: url.path, isDirectory: &isDirectory) else { return false }
+        guard isDirectory.boolValue else { return true }   // a file in the way is "occupied" too
+        let entries = (try? fm.contentsOfDirectory(atPath: url.path)) ?? []
+        return !entries.isEmpty
+    }
 
     /// One path for one place: standardized, symlinks resolved, no trailing
     /// slash. A path that does not exist yet is canonicalised through its

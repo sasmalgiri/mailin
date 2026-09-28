@@ -270,21 +270,41 @@ final class ExportJobRunner {
         }
     }
 
+    /// Recheck R2: a resumable run binds itself to the selection BEFORE it
+    /// writes anything. The fingerprint is taken here, once, and travels with
+    /// the request into its receipt; a resume compares against this value,
+    /// not against a fingerprint taken after the archive may have changed
+    /// during the run. A selection that cannot be fingerprinted cannot be
+    /// resumed safely, so the run does not start.
+    static func bindSelection(_ request: ExportRequest, archive: ArchiveDataService = .shared) async throws -> ExportRequest {
+        guard request.isResumable, request.selectionFingerprint == nil else { return request }
+        var bound = request
+        bound.selectionFingerprint = try await archive.selectionFingerprint(scope: request.scope)
+        return bound
+    }
+
     /// True when `request` may continue positionally: it is not a resume, or
-    /// the selection still fingerprints as it did when the run stopped.
+    /// the selection still fingerprints as it did when the run started. A
+    /// resume without a recorded fingerprint is refused (R2: fail closed).
     static func resumeIsCurrent(_ request: ExportRequest, archive: ArchiveDataService = .shared) async throws -> Bool {
-        guard request.skipFirst > 0, let recorded = request.selectionFingerprint else { return true }
+        guard request.skipFirst > 0 else { return true }
+        guard let recorded = request.selectionFingerprint else { return false }
         return try await archive.selectionFingerprint(scope: request.scope) == recorded
     }
 
     /// The request a receipt should carry so the stopped run can continue:
-    /// positions written so far, and the selection's fingerprint now.
-    static func resumeRequest(for request: ExportRequest, written: Int,
-                              archive: ArchiveDataService = .shared) async -> ExportRequest? {
-        guard request.isResumable else { return nil }
+    /// positions written so far, the fingerprint the run was bound to at its
+    /// start, and — for a single document — the partial artifact's length.
+    /// Nil when the format cannot resume or the run was never bound.
+    static func resumeRequest(for request: ExportRequest, written: Int) -> ExportRequest? {
+        guard request.isResumable, request.selectionFingerprint != nil else { return nil }
         var resume = request
         resume.skipFirst = written
-        resume.selectionFingerprint = try? await archive.selectionFingerprint(scope: request.scope)
+        if !request.isFolder {
+            let size = (try? FileManager.default.attributesOfItem(atPath: request.destination)[.size] as? NSNumber)?.uint64Value
+            guard let size else { return nil }   // no partial artifact → nothing to continue
+            resume.resumeArtifactBytes = size
+        }
         return resume
     }
 
@@ -292,7 +312,9 @@ final class ExportJobRunner {
         let center = ExportRunCenter.shared
         center.run(title: request.title) { [weak self] in
             guard let self else { return }
+            var request = request
             do {
+                request = try await Self.bindSelection(request)
                 guard try await Self.resumeIsCurrent(request) else { throw ResumeError.selectionChanged }
                 try await self.execute(request, service: service)
             } catch {
@@ -303,8 +325,8 @@ final class ExportJobRunner {
                 // offers no further resume: the positions no longer mean
                 // anything.
                 var resume: ExportRequest? = nil
-                if !(error is ResumeError) {
-                    resume = await Self.resumeRequest(for: request, written: center.done)
+                if !(error is ResumeError), !(error is ArchiveExportError) {
+                    resume = Self.resumeRequest(for: request, written: center.done)
                 }
                 center.recordFailure(destination: request.destinationURL, isFolder: request.isFolder,
                                      requested: request.emailCountHint, message: error.localizedDescription,
@@ -411,6 +433,7 @@ final class ExportJobRunner {
                         written: Int, cancelled: Bool, what: String) async {
         let requested = try? await ArchiveDataService.shared.count(scope: request.scope)
         var outcome: ExportReceipt.Outcome = .complete
+        var note: String? = nil
         if cancelled {
             onError?("\(what) export cancelled\(request.isResumable ? " — partial output kept; Resume continues it." : " — partial output removed.")")
             outcome = .cancelled
@@ -420,11 +443,21 @@ final class ExportJobRunner {
             outcome = .truncated
         } else if let requested, written < requested, result?.completed == false {
             outcome = .failed
+        } else if let withheld = result?.withheld, withheld > 0 {
+            // R5: messages this format could not produce honestly.
+            outcome = .partial
+            note = "\(withheld) message\(withheld == 1 ? "" : "s") withheld: content not decoded at import (above the full-parse ceiling) — export \(withheld == 1 ? "it" : "them") as MBOX or EML, which stream the original bytes"
+            onError?("\(what) export: \(note!).")
+        }
+        if let unverified = result?.unverifiedSources, unverified > 0 {
+            // R4: an unverifiable source is stated, never passed off as verified.
+            let line = "\(unverified) source file\(unverified == 1 ? "" : "s") could not be verified against an import digest (imported before digests were recorded)"
+            note = note.map { $0 + "; " + line } ?? line
         }
 
         var resume: ExportRequest? = nil
         if outcome == .cancelled || outcome == .failed {
-            resume = await Self.resumeRequest(for: request, written: written)
+            resume = Self.resumeRequest(for: request, written: written)
         }
 
         var isFolder: ObjCBool = false
@@ -439,7 +472,7 @@ final class ExportJobRunner {
             outcome: outcome,
             sha256Hex: result?.sha256Hex,
             signaturePath: result?.signatureURL?.path,
-            errorMessage: outcome == .failed ? "The writer stopped before every requested message was written." : nil,
+            errorMessage: outcome == .failed ? "The writer stopped before every requested message was written." : note,
             startedAt: ExportRunCenter.shared.startedAt,
             completedAt: Date(),
             resumeRequest: resume))

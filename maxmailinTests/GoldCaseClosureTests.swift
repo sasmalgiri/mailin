@@ -406,9 +406,42 @@ final class CaseBundleTests: XCTestCase {
         try await CaseBundleService.exportResolvingSources(caseTitle: "Matter 42", emails: [fromArchive], archive: archive, to: url)
         let (bundle, _) = try CaseBundleService.open(url: url)
         XCTAssertEqual(bundle.emails.count, 1)
-        XCTAssertEqual(Data(bundle.emails[0].rawSource.utf8), bytes, "the bundle carries the source bytes")
+        XCTAssertEqual(bundle.emails[0].evidenceBytes, bytes, "the bundle carries the exact source bytes")
+        XCTAssertEqual(Data(bundle.emails[0].rawSource.utf8), bytes, "and, for ASCII, the text view is the same")
         let expected = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
         XCTAssertEqual(bundle.emails[0].sha256Hex, expected)
+        XCTAssertEqual(bundle.formatVersion, 2)
+
+        // Recheck R6: a NON-UTF-8 message (8-bit Latin-1 body) is sealed byte
+        // for byte; the text view carries a replacement character, the
+        // evidence bytes and the hash do not.
+        let latin = root.appendingPathComponent("latin.eml")
+        var latinBytes = Data("From: a@example.com\r\nSubject: Latin\r\nContent-Transfer-Encoding: 8bit\r\n\r\ncaf".utf8)
+        latinBytes.append(0xE9)
+        latinBytes.append(contentsOf: Data("\r\n".utf8))
+        try latinBytes.write(to: latin)
+        var latinEmail = bundledEmail()
+        latinEmail.headers["Subject"] = "Latin"
+        latinEmail.headers["Message-ID"] = "<latin@example.com>"
+        latinEmail.rawSource = ""
+        latinEmail.plainBody = ""
+        let latinLocator = MessageLocator(id: latinEmail.id, sourceDigest: nil, sourcePath: latin.path,
+                                          messageRange: ByteRange(offset: 0, length: Int64(latinBytes.count)), envelopeRange: nil,
+                                          headerRange: ByteRange(offset: 0, length: 70),
+                                          bodyRange: ByteRange(offset: 70, length: Int64(latinBytes.count) - 70), ordinal: 0)
+        _ = try await store.insertBatch([latinEmail], sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil,
+                                        dedupPolicy: .messageID, batchSize: 10, progress: nil,
+                                        locators: [latinEmail.id: .init(locator: latinLocator, bodyDecoded: false)])
+        let latinReadBack = try await archive.fullEmail(id: latinEmail.id)
+        let latinFromArchive = try XCTUnwrap(latinReadBack)
+        let url3 = root.appendingPathComponent("latin.mailincase")
+        try await CaseBundleService.exportResolvingSources(caseTitle: "Matter 42", emails: [latinFromArchive], archive: archive, to: url3)
+        let (latinBundle, _) = try CaseBundleService.open(url: url3)
+        XCTAssertEqual(latinBundle.emails[0].evidenceBytes, latinBytes, "the E9 byte survives; no EF BF BD substitution")
+        XCTAssertEqual(latinBundle.emails[0].sha256Hex,
+                       SHA256.hash(data: latinBytes).map { String(format: "%02x", $0) }.joined())
+        XCTAssertNotEqual(Data(latinBundle.emails[0].rawSource.utf8), latinBytes, "the text view is only a view")
+        XCTAssertTrue(latinBundle.emails[0].rawSource.contains("caf"))
 
         // Source gone → refused, nothing written.
         try FileManager.default.removeItem(at: source)

@@ -753,9 +753,13 @@ struct ReportBuilderView: View {
     static func reportQuery(scope: EmailQuery?, useDateRange: Bool, from: Date, to: Date) -> EmailQuery {
         var query = scope ?? .all
         if useDateRange {
+            // Recheck R9: the report's own dates NARROW the page scope, never
+            // widen it — the intersection of the two ranges.
             let calendar = Calendar.current
-            query.afterDate = calendar.startOfDay(for: from)
-            query.beforeDate = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: to))
+            let lower = calendar.startOfDay(for: from)
+            let upper = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: to)) ?? to
+            query.afterDate = query.afterDate.map { max($0, lower) } ?? lower
+            query.beforeDate = query.beforeDate.map { min($0, upper) } ?? upper
         }
         return query
     }

@@ -195,6 +195,21 @@ struct ModuleGatingTests {
         let whole = ReportBuilderView.reportQuery(scope: nil, useDateRange: false, from: from, to: to)
         #expect(whole == .all)
 
+        // Recheck R9: the report's dates NARROW a page scope, never widen it.
+        var lastWeek = EmailQuery.all
+        lastWeek.afterDate = Calendar.current.date(from: DateComponents(year: 2019, month: 3, day: 20))
+        lastWeek.beforeDate = Calendar.current.date(from: DateComponents(year: 2019, month: 3, day: 27))
+        let wider = ReportBuilderView.reportQuery(scope: lastWeek, useDateRange: true,
+                                                  from: Calendar.current.date(from: DateComponents(year: 2018, month: 1, day: 1))!,
+                                                  to: Calendar.current.date(from: DateComponents(year: 2020, month: 12, day: 31))!)
+        #expect(wider.afterDate == lastWeek.afterDate, "a wider report range cannot reach before the page scope")
+        #expect(wider.beforeDate == lastWeek.beforeDate, "nor after it")
+        let narrower = ReportBuilderView.reportQuery(scope: lastWeek, useDateRange: true,
+                                                     from: Calendar.current.date(from: DateComponents(year: 2019, month: 3, day: 22))!,
+                                                     to: Calendar.current.date(from: DateComponents(year: 2019, month: 3, day: 23))!)
+        #expect(narrower.afterDate == Calendar.current.date(from: DateComponents(year: 2019, month: 3, day: 22)))
+        #expect(narrower.beforeDate == Calendar.current.date(from: DateComponents(year: 2019, month: 3, day: 24)))
+
         #expect(ReportBuilderView.coverageNote(matching: 120, processed: 120).hasPrefix("All 120"))
         #expect(ReportBuilderView.coverageNote(matching: 12_000, processed: 5_000).contains("newest 5,000 of 12,000"))
     }

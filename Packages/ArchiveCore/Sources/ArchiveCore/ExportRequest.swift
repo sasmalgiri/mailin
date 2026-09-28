@@ -53,6 +53,10 @@ struct ExportWriteOptions: Codable, Equatable, Sendable {
     var keepPartialOnCancel: Bool = false
     var layout: ExportFolderLayout = .flat
     var collision: ExportCollisionRule = .overwrite
+    /// Recheck R2: for a single-document resume, the byte length the partial
+    /// artifact must have (recorded when the run stopped). A different length
+    /// means the file was changed and the resume is refused.
+    var expectedAppendOffset: UInt64? = nil
 }
 
 /// The user's pre-flight choices.
@@ -85,6 +89,10 @@ struct ExportRequest: Codable, Equatable, Identifiable, Sendable {
     /// A resume recomputes it and refuses to continue over a changed
     /// selection, since "skip the first N" would then skip or repeat mail.
     var selectionFingerprint: String? = nil
+    /// Resume (recheck R2): the partial single-document artifact's byte
+    /// length when the run stopped; the resume refuses a file of any other
+    /// length. Nil for folder formats.
+    var resumeArtifactBytes: UInt64? = nil
     /// Count known when the request was built (menu headline); nil = unknown.
     var emailCountHint: Int?
 
@@ -107,7 +115,8 @@ struct ExportRequest: Codable, Equatable, Identifiable, Sendable {
                            append: skipFirst > 0,
                            keepPartialOnCancel: isResumable,
                            layout: options.layout,
-                           collision: options.collision)
+                           collision: options.collision,
+                           expectedAppendOffset: skipFirst > 0 ? resumeArtifactBytes : nil)
     }
 }
 
