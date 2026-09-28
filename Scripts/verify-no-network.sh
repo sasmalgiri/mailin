@@ -18,8 +18,8 @@
 #   Scripts/verify-no-network.sh /path/to/mailin.app
 #   Scripts/verify-no-network.sh                 # finds the newest Release build
 #
-# NOT YET EXECUTED. Written before any build under an explicit
-# implement-first instruction.
+# Self-test of the entitlement checks (mocked codesign/plutil, no app needed):
+#   Scripts/verify-no-network-selftest.sh
 
 set -u
 
@@ -71,10 +71,19 @@ ENTITLEMENTS=$(codesign -d --entitlements - --xml "$APP" 2>/dev/null \
 if [ -z "$ENTITLEMENTS" ]; then
     fail "could not read entitlements — is the app signed?"
 else
-    if echo "$ENTITLEMENTS" | grep -q 'com.apple.security.app-sandbox'; then
+    # The VALUE of each key, not its presence (audit F17): an entitlements
+    # plist can carry app-sandbox with <false/>, and a build signed that way is
+    # not sandboxed. Whitespace is stripped first so the match does not depend
+    # on plutil's line layout.
+    entitlement_value() {   # $1 = key → "true" | "false" | "" (absent)
+        printf '%s' "$ENTITLEMENTS" | tr -d '\n\r\t ' \
+            | sed -n "s|.*<key>$1</key><\([a-z]*\)/>.*|\1|p" | head -1
+    }
+
+    if [ "$(entitlement_value 'com.apple.security.app-sandbox')" = "true" ]; then
         pass "app sandbox is enabled (entitlements are enforced)"
     else
-        fail "app sandbox is NOT enabled — entitlements do not constrain this build"
+        fail "app sandbox is NOT enabled (value: '$(entitlement_value 'com.apple.security.app-sandbox')') — entitlements do not constrain this build"
     fi
 
     for key in \
@@ -82,7 +91,7 @@ else
         'com.apple.security.network.server'
     do
         # A key present but false is fine; present and true is not.
-        if echo "$ENTITLEMENTS" | grep -A1 "$key" | grep -q '<true/>'; then
+        if [ "$(entitlement_value "$key")" = "true" ]; then
             fail "$key is GRANTED — this build can reach the network"
         else
             pass "$key is not granted"

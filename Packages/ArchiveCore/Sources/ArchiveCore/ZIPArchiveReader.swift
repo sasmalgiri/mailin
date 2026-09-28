@@ -118,19 +118,21 @@ struct ZIPArchiveReader {
                   tail[locatorStart..<locatorStart + 4].elementsEqual([0x50, 0x4B, 0x06, 0x07]) else {
                 throw ReadError.malformed("ZIP64 fields present but no ZIP64 locator")
             }
-            let zip64Offset = Int64(u64(tail, locatorStart + 8))
-            guard zip64Offset >= 0, zip64Offset + 56 <= fileSize else { throw ReadError.truncated("ZIP64 end-of-central-directory record") }
+            let zip64Offset = try i64(u64(tail, locatorStart + 8), "ZIP64 locator offset")
+            guard zip64Offset >= 0, try checkedSum(zip64Offset, 56, "ZIP64 record end") <= fileSize else {
+                throw ReadError.truncated("ZIP64 end-of-central-directory record")
+            }
             try handle.seek(toOffset: UInt64(zip64Offset))
             let z = try handle.read(upToCount: 56) ?? Data()
             guard z.count == 56, z.prefix(4).elementsEqual([0x50, 0x4B, 0x06, 0x06]) else {
                 throw ReadError.malformed("ZIP64 end-of-central-directory signature")
             }
-            entryCount = Int64(u64(z, 32))
-            cdSize = Int64(u64(z, 40))
-            cdOffset = Int64(u64(z, 48))
+            entryCount = try i64(u64(z, 32), "ZIP64 entry count")
+            cdSize = try i64(u64(z, 40), "ZIP64 central directory size")
+            cdOffset = try i64(u64(z, 48), "ZIP64 central directory offset")
         }
 
-        guard cdOffset >= 0, cdSize >= 0, cdOffset + cdSize <= fileSize else {
+        guard cdOffset >= 0, cdSize >= 0, try checkedSum(cdOffset, cdSize, "central directory end") <= fileSize else {
             throw ReadError.truncated("central directory")
         }
         try handle.seek(toOffset: UInt64(cdOffset))
@@ -169,15 +171,22 @@ struct ZIPArchiveReader {
                 var e = extraStart
                 let extraEnd = extraStart + extraLength
                 while e + 4 <= extraEnd {
-                    let id = u16(directory, e), len = Int(u16(directory, e + 2))
+                    let id = u16(directory, e), declared = Int(u16(directory, e + 2))
+                    // Audit F10: a declared field length is untrusted — it is
+                    // bounded by the extra region that actually exists, not
+                    // the other way round.
+                    guard e + 4 + declared <= extraEnd else {
+                        throw ReadError.malformed("\(name): extra field 0x\(String(id, radix: 16)) declares \(declared) bytes, \(extraEnd - e - 4) present")
+                    }
+                    let fieldEnd = e + 4 + declared
                     var f = e + 4
                     if id == 0x0001 {
-                        if uncompressed == 0xFFFF_FFFF, f + 8 <= e + 4 + len { uncompressed = Int64(u64(directory, f)); f += 8 }
-                        if compressed == 0xFFFF_FFFF, f + 8 <= e + 4 + len { compressed = Int64(u64(directory, f)); f += 8 }
-                        if localOffset == 0xFFFF_FFFF, f + 8 <= e + 4 + len { localOffset = Int64(u64(directory, f)); f += 8 }
+                        if uncompressed == 0xFFFF_FFFF, f + 8 <= fieldEnd { uncompressed = try i64(u64(directory, f), "\(name): ZIP64 size"); f += 8 }
+                        if compressed == 0xFFFF_FFFF, f + 8 <= fieldEnd { compressed = try i64(u64(directory, f), "\(name): ZIP64 compressed size"); f += 8 }
+                        if localOffset == 0xFFFF_FFFF, f + 8 <= fieldEnd { localOffset = try i64(u64(directory, f), "\(name): ZIP64 offset"); f += 8 }
                         break
                     }
-                    e += 4 + len
+                    e = fieldEnd
                 }
             }
 
@@ -221,7 +230,8 @@ struct ZIPArchiveReader {
         // Local file header: 30 fixed bytes, then name and extra (whose
         // lengths may differ from the central directory's — always read the
         // local ones).
-        guard member.localHeaderOffset >= 0, member.localHeaderOffset + 30 <= fileSize else {
+        guard member.localHeaderOffset >= 0, member.compressedSize >= 0, member.uncompressedSize >= 0,
+              try checkedSum(member.localHeaderOffset, 30, "\(member.name): local header end") <= fileSize else {
             throw ReadError.truncated("\(member.name): local header")
         }
         try handle.seek(toOffset: UInt64(member.localHeaderOffset))
@@ -230,7 +240,7 @@ struct ZIPArchiveReader {
             throw ReadError.malformed("\(member.name): local header signature")
         }
         let dataStart = member.localHeaderOffset + 30 + Int64(u16(local, 26)) + Int64(u16(local, 28))
-        guard dataStart + member.compressedSize <= fileSize else {
+        guard try checkedSum(dataStart, member.compressedSize, "\(member.name): member data end") <= fileSize else {
             throw ReadError.truncated("\(member.name): member data")
         }
         try handle.seek(toOffset: UInt64(dataStart))
@@ -434,6 +444,23 @@ struct ZIPArchiveReader {
     }
     private static func u64(_ d: Data, _ i: Data.Index) -> UInt64 {
         UInt64(u32(d, i)) | UInt64(u32(d, i + 4)) << 32
+    }
+
+    /// Audit F10: every 64-bit field in a ZIP is untrusted input. `Int64(_:)`
+    /// on a value above `Int64.max` traps; this throws instead, naming the
+    /// field, so a malformed archive is an import error and not a crash.
+    private static func i64(_ value: UInt64, _ what: String) throws -> Int64 {
+        guard let v = Int64(exactly: value) else {
+            throw ReadError.malformed("\(what) \(value) is out of range")
+        }
+        return v
+    }
+
+    /// Offset + length with overflow reported as a malformed archive.
+    private static func checkedSum(_ a: Int64, _ b: Int64, _ what: String) throws -> Int64 {
+        let (sum, overflow) = a.addingReportingOverflow(b)
+        guard !overflow else { throw ReadError.malformed("\(what) overflows") }
+        return sum
     }
 
     /// CRC-32 (IEEE 802.3), the checksum ZIP and gzip both carry.

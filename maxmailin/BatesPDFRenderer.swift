@@ -22,6 +22,31 @@ enum BatesPDFRenderer {
         var md5Hash: String? = nil
     }
 
+    enum RenderError: LocalizedError {
+        case noOutput(batesNumber: String, path: String)
+        var errorDescription: String? {
+            switch self {
+            case .noOutput(let bates, let path):
+                return "The PDF for \(bates) could not be written at \(path)."
+            }
+        }
+    }
+
+    /// `render` that refuses to report success without a file: throws when the
+    /// PDF context could not be created, produced no pages, or left no file
+    /// behind. Production uses this so a document is counted as produced only
+    /// when its PDF exists (audit F09b, 2026-09-28). Returns the page count
+    /// and the SHA-256 of the PDF artifact itself.
+    static func renderVerified(lines: [String], metadata: Metadata, to url: URL) throws -> (pages: Int, sha256Hex: String) {
+        let pages = render(lines: lines, metadata: metadata, to: url)
+        guard pages > 0, FileManager.default.fileExists(atPath: url.path) else {
+            try? FileManager.default.removeItem(at: url)
+            throw RenderError.noOutput(batesNumber: metadata.batesNumber, path: url.path)
+        }
+        let digest = try ArchiveExportService.sha256(ofFile: url)
+        return (pages, digest.map { String(format: "%02x", $0) }.joined())
+    }
+
     /// Renders `lines` into a Letter-size PDF at `url`, stamping the Bates
     /// number (+ page x of y) in every page header. Returns the page count.
     @discardableResult

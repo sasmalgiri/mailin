@@ -185,6 +185,35 @@ class ContentViewModel: ObservableObject {
     /// the capability switches stop meaning anything for the new route.
     func parseSelectedFiles(_ urls: [URL], removeDuplicates: Bool = true, maxEmails: Int? = nil,
                             copiesOriginals: Bool = true) {
+        parseSelectedFiles(urls, dedupPolicy: removeDuplicates ? .messageID : .preserveAll,
+                           maxEmails: maxEmails, copiesOriginals: copiesOriginals)
+    }
+
+    /// The import options, built from the user's choices and the capability
+    /// switches. Pure and static so the wiring is testable without a run:
+    /// audit F18 found the sheet's dedup choice collapsed to a Boolean on the
+    /// way here, and F02 found locator recording tied to a READ switch.
+    nonisolated static func importOptions(dedupPolicy: DedupPolicy,
+                                          copiesOriginals: Bool,
+                                          maxEmails: Int?,
+                                          senderEmail: String,
+                                          useOffsetEngine: Bool) -> BulkImportCoordinator.Options {
+        BulkImportCoordinator.Options(
+            batchSize: 500,
+            senderEmail: senderEmail,
+            maxEmails: maxEmails,
+            dedupPolicy: dedupPolicy,
+            copiesOriginals: copiesOriginals,
+            useOffsetEngine: useOffsetEngine,
+            // Locators are the only content a message above the full-parse
+            // ceiling has, so they are recorded whenever the offset engine
+            // runs. The `locatorReads` switch gates READS only (audit F02).
+            recordLocators: useOffsetEngine
+        )
+    }
+
+    func parseSelectedFiles(_ urls: [URL], dedupPolicy: DedupPolicy, maxEmails: Int? = nil,
+                            copiesOriginals: Bool = true) {
         guard !isParsing else { return }
 
         statusMessage = "Parsing files..."
@@ -247,23 +276,14 @@ class ContentViewModel: ObservableObject {
                 }
             }
 
-            // S4/S5: the engine choice is the matrix switch, read here because
-            // the coordinator is not main-actor. Both default OFF, so an
-            // install that has not opted in imports exactly as 2.1 did.
+            // S4: the engine choice is the matrix switch, read here because
+            // the coordinator is not main-actor (on by default in 3.0).
             let useOffsetEngine = self.isCapabilityOn?(.offsetParser) ?? false
-            let recordLocators = self.isCapabilityOn?(.locatorReads) ?? false
-
-            let options = BulkImportCoordinator.Options(
-                batchSize: 500,
-                senderEmail: self.senderEmail,
-                maxEmails: maxEmails,
-                dedupPolicy: removeDuplicates ? .messageID : .preserveAll,
-                copiesOriginals: copiesOriginals,
-                useOffsetEngine: useOffsetEngine,
-                // Locators are only produced by the offset engine, so
-                // recording them without it would silently do nothing.
-                recordLocators: recordLocators && useOffsetEngine
-            )
+            let options = Self.importOptions(dedupPolicy: dedupPolicy,
+                                             copiesOriginals: copiesOriginals,
+                                             maxEmails: maxEmails,
+                                             senderEmail: self.senderEmail,
+                                             useOffsetEngine: useOffsetEngine)
 
             do {
                 let summary = try await self.importCoordinator.runImport(

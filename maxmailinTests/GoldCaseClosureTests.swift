@@ -47,6 +47,29 @@ final class BatesPDFReadBackTests: XCTestCase {
     /// The claim was that a Bates-stamped PDF shows the number on the page.
     /// Only the code path had ever been inspected; PDFKit read-back is what
     /// actually proves it.
+    /// Audit F09b: a production must not count a document whose PDF was never
+    /// written. `renderVerified` throws instead of returning 0 pages.
+    func testRenderVerified_throwsWhenNoFileCanBeWritten() {
+        let missingFolder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("no-such-folder-\(UUID().uuidString)", isDirectory: true)
+        let out = missingFolder.appendingPathComponent("MAILIN000009.pdf")
+        XCTAssertThrowsError(try BatesPDFRenderer.renderVerified(
+            lines: ["Subject: x"], metadata: .init(batesNumber: "MAILIN000009"), to: out)) { error in
+            XCTAssertTrue(error is BatesPDFRenderer.RenderError, "\(error)")
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: out.path))
+    }
+
+    func testRenderVerified_returnsPageCountAndArtifactHash() throws {
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("bates-verified-\(UUID().uuidString).pdf")
+        defer { try? FileManager.default.removeItem(at: out) }
+        let result = try BatesPDFRenderer.renderVerified(
+            lines: ["Subject: Exhibit B", "", "body"], metadata: .init(batesNumber: "MAILIN000010"), to: out)
+        XCTAssertEqual(result.pages, 1)
+        let onDisk = try ArchiveExportService.sha256(ofFile: out).map { String(format: "%02x", $0) }.joined()
+        XCTAssertEqual(result.sha256Hex, onDisk, "the manifest hash is the hash of the PDF that was written")
+    }
+
     func testBatesStamp_isVisibleOnPageOne() throws {
         let stamp = "MAILIN000001"
         let out = FileManager.default.temporaryDirectory

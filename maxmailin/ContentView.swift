@@ -3641,8 +3641,11 @@ private func handleMultipleFiles(_ urls: [URL]) {
             ImportQueue.shared.enqueue(urls: choices.urls)
         }
         let cap = storeManager.isPremium ? nil : StoreManager.freeEmailLimit
+        // Audit F18: the policy the sheet offered is the policy the store
+        // gets — including the canonical-fingerprint choice, which a Boolean
+        // cannot carry.
         viewModel.parseSelectedFiles(choices.urls,
-                                     removeDuplicates: choices.dedupPolicy != .preserveAll,
+                                     dedupPolicy: choices.dedupPolicy,
                                      maxEmails: cap,
                                      copiesOriginals: choices.copiesOriginals)
     }

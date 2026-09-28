@@ -156,16 +156,8 @@ enum AttachmentHydrator {
         guard !parts.isEmpty else { return nil }
 
         let attachments = parts.filter(\.isAttachment)
-        let match: PartLocator?
-        if !attachment.filename.isEmpty,
-           let byName = attachments.first(where: { $0.filename == attachment.filename }) {
-            match = byName
-        } else if index < attachments.count {
-            match = attachments[index]
-        } else {
-            match = nil
-        }
-        guard let part = match, part.contentRange.length > 0 else { return nil }
+        guard let part = selectPart(for: attachment, index: index, among: attachments),
+              part.contentRange.length > 0 else { return nil }
 
         do {
             let raw = try LocatorReader().read(part.contentRange,
@@ -181,26 +173,49 @@ enum AttachmentHydrator {
         }
     }
 
+    /// Which located part `attachment` (the `index`-th attachment of the
+    /// message) refers to — or nil when that cannot be said with confidence.
+    ///
+    /// Audit F06 (2026-09-28): the previous rule took the FIRST part with a
+    /// matching filename before looking at the ordinal, so the second of two
+    /// `invoice.pdf` attachments hydrated as the first. The ordinal is the
+    /// identity; the filename is only a cross-check:
+    ///   1. the part at `index` whose filename agrees → that part;
+    ///   2. otherwise exactly ONE part carries the filename → that part
+    ///      (the attachment list and the part list disagree on order);
+    ///   3. otherwise, with no filename to check, the part at `index`;
+    ///   4. anything else is ambiguous → nil, and the caller falls back to the
+    ///      whole-message read, which cannot hand back the wrong file.
+    static func selectPart(for attachment: AttachmentMetadata,
+                           index: Int,
+                           among attachments: [PartLocator]) -> PartLocator? {
+        let name = attachment.filename
+        let atIndex = index < attachments.count ? attachments[index] : nil
+        if name.isEmpty { return atIndex }
+        if let atIndex, atIndex.filename == name { return atIndex }
+        let byName = attachments.filter { $0.filename == name }
+        if byName.count == 1 { return byName[0] }
+        return nil
+    }
+
     /// Decodes a part's content from its declared transfer encoding.
     ///
     /// An unrecognised encoding returns the bytes unchanged rather than nil:
     /// 7bit, 8bit and binary are all identity, and guessing wrong on an
     /// unknown label should not make a recoverable attachment unrecoverable.
-    private static func decode(_ data: Data, encoding: String?) -> Data? {
+    /// Both decoders work on bytes: no character set is ever applied to an
+    /// attachment's payload (audit F07).
+    static func decode(_ data: Data, encoding: String?) -> Data? {
         switch (encoding ?? "").lowercased() {
         case "base64":
             // Line breaks inside base64 are expected; `.ignoreUnknownCharacters`
             // is what makes a wrapped payload decode.
-            guard let text = String(data: data, encoding: .utf8)
-                    ?? String(data: data, encoding: .isoLatin1),
-                  let decoded = Data(base64Encoded: text, options: .ignoreUnknownCharacters),
+            guard let decoded = Data(base64Encoded: data, options: .ignoreUnknownCharacters),
                   !decoded.isEmpty else { return nil }
             return decoded
         case "quoted-printable":
-            guard let text = String(data: data, encoding: .utf8)
-                    ?? String(data: data, encoding: .isoLatin1) else { return nil }
-            let decoded = QuotedPrintableDecoder.decode(text)
-            return decoded.data(using: .utf8) ?? Data(decoded.utf8)
+            let decoded = QuotedPrintableDecoder.decodeBytes(data)
+            return decoded.isEmpty ? nil : decoded
         default:
             return data
         }

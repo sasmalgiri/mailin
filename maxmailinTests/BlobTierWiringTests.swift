@@ -37,6 +37,27 @@ final class BlobTierWiringTests: XCTestCase {
     // held handles. Temp directories are reclaimed by the OS; a flaky teardown
     // is worse than a few megabytes.
 
+    // MARK: - Import options wiring (audit F18 / F02)
+
+    /// The sheet's duplicate policy reaches the coordinator unchanged — the
+    /// canonical-fingerprint choice used to collapse into a Boolean — and
+    /// locators are recorded whenever the offset engine runs, independent of
+    /// the READ switch.
+    func testImportOptions_carryDedupPolicyAndRecordLocatorsWithTheEngine() {
+        for policy in [DedupPolicy.messageID, .messageIDOrCanonicalFingerprint, .preserveAll] {
+            let options = ContentViewModel.importOptions(dedupPolicy: policy, copiesOriginals: false,
+                                                         maxEmails: 7, senderEmail: "me@example.com",
+                                                         useOffsetEngine: true)
+            XCTAssertEqual(options.dedupPolicy, policy)
+            XCTAssertTrue(options.recordLocators, "offset engine on ⇒ locators recorded")
+            XCTAssertEqual(options.maxEmails, 7)
+            XCTAssertFalse(options.copiesOriginals)
+        }
+        let streaming = ContentViewModel.importOptions(dedupPolicy: .messageID, copiesOriginals: true,
+                                                       maxEmails: nil, senderEmail: "", useOffsetEngine: false)
+        XCTAssertFalse(streaming.recordLocators, "the streaming parser produces no locators to record")
+    }
+
     // MARK: - Fixtures
 
     /// Raw MIME comfortably above `BlobStore.inlineThresholdBytes` (8 MiB), so

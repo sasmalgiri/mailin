@@ -398,10 +398,12 @@ public class AttachmentSaver {
                 return body.data(using: .isoLatin1)
             }
             else if enc == "quoted-printable" {
-                // Your QP decoder, then fallback
-                let decoded = QuotedPrintableDecoder.decode(body, isHeader: false)
-                if let d = decoded.data(using: .utf8), !d.isEmpty { return d }
-                return decoded.data(using: .isoLatin1)
+                // Byte-level transfer decode (audit F07): quoted-printable is
+                // 7-bit by definition, so the String's UTF-8 IS the encoded
+                // byte stream, and the decoded bytes are the attachment —
+                // never re-interpreted through a character set.
+                let d = QuotedPrintableDecoder.decodeBytes(Data(body.utf8))
+                return d.isEmpty ? nil : d
             }
             else {
                 // No encoding: treat as raw binary (for 7bit, 8bit, binary, or bad encodings)

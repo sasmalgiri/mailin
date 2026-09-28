@@ -17,36 +17,7 @@ public struct QuotedPrintableDecoder {
         }
         #endif
         var input = input
-        let output: [UInt8] = input.withUTF8 { bytes in
-            var out = [UInt8]()
-            out.reserveCapacity(bytes.count)
-            let count = bytes.count
-            var i = 0
-            while i < count {
-                let byte = bytes[i]
-                if byte == UInt8(ascii: "=") {
-                    // Soft line break: "=\r\n" or "=\n".
-                    if i + 2 < count, bytes[i + 1] == 0x0D, bytes[i + 2] == 0x0A { i += 3; continue }
-                    if i + 1 < count, bytes[i + 1] == 0x0A { i += 2; continue }
-                    if i + 2 < count, let hi = hexValue(bytes[i + 1]), let lo = hexValue(bytes[i + 2]) {
-                        out.append(hi << 4 | lo)
-                        i += 3
-                        continue
-                    }
-                    // Trailing `=` at the end of the text is a soft break too.
-                    if i + 1 >= count { i += 1; continue }
-                    out.append(byte)
-                    i += 1
-                } else if isHeader, byte == UInt8(ascii: "_") {
-                    out.append(0x20)
-                    i += 1
-                } else {
-                    out.append(byte)
-                    i += 1
-                }
-            }
-            return out
-        }
+        let output: [UInt8] = input.withUTF8 { bytes in decodeBytes(bytes, isHeader: isHeader) }
         let data = Data(output)
         if let charset = charset?.lowercased(), charset != "utf-8",
            let str = String(data: data, encoding: stringEncoding(for: charset)) {
@@ -55,6 +26,48 @@ public struct QuotedPrintableDecoder {
         if let str = String(data: data, encoding: .utf8) { return str }
         if let str = String(data: data, encoding: .isoLatin1) { return str }
         return String(decoding: data, as: UTF8.self)
+    }
+
+    /// The transfer decode itself: quoted-printable bytes in, the original
+    /// bytes out, with NO character-set interpretation. This is the entry
+    /// point for attachment payloads (audit F07, 2026-09-28): routing a binary
+    /// part through `decode(_:)` turned every byte ≥ 0x80 into its two-byte
+    /// UTF-8 spelling (`FF 00 80` → `C3 BF 00 C2 80`).
+    public static func decodeBytes(_ data: Data, isHeader: Bool = false) -> Data {
+        data.withUnsafeBytes { raw -> Data in
+            Data(decodeBytes(raw.bindMemory(to: UInt8.self), isHeader: isHeader))
+        }
+    }
+
+    static func decodeBytes(_ bytes: UnsafeBufferPointer<UInt8>, isHeader: Bool) -> [UInt8] {
+        var out = [UInt8]()
+        out.reserveCapacity(bytes.count)
+        let count = bytes.count
+        var i = 0
+        while i < count {
+            let byte = bytes[i]
+            if byte == UInt8(ascii: "=") {
+                // Soft line break: "=\r\n" or "=\n".
+                if i + 2 < count, bytes[i + 1] == 0x0D, bytes[i + 2] == 0x0A { i += 3; continue }
+                if i + 1 < count, bytes[i + 1] == 0x0A { i += 2; continue }
+                if i + 2 < count, let hi = hexValue(bytes[i + 1]), let lo = hexValue(bytes[i + 2]) {
+                    out.append(hi << 4 | lo)
+                    i += 3
+                    continue
+                }
+                // Trailing `=` at the end of the text is a soft break too.
+                if i + 1 >= count { i += 1; continue }
+                out.append(byte)
+                i += 1
+            } else if isHeader, byte == UInt8(ascii: "_") {
+                out.append(0x20)
+                i += 1
+            } else {
+                out.append(byte)
+                i += 1
+            }
+        }
+        return out
     }
 
     @inline(__always)

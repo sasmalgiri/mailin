@@ -166,6 +166,18 @@ struct ProductionWindowView: View {
 
 // MARK: - Engine
 
+enum ProductionError: LocalizedError {
+    /// Tags or holds could not be read, so exclusions could not be applied.
+    case exclusionMetadataUnavailable(underlying: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .exclusionMetadataUnavailable(let why):
+            return "Exclusion tags could not be read (\(why)); the production was stopped rather than risk releasing a withheld document."
+        }
+    }
+}
+
 enum ProductionEngine {
 
     static func attachmentFamily(_ filename: String) -> String {
@@ -199,15 +211,24 @@ enum ProductionEngine {
         var number = bates.startNumber
         var assignments: [UUID: String] = [:]
 
-        var manifest = "BatesNumber,EmailID,MessageID,Date,From,Subject,Attachments,SHA256\n"
+        var manifest = "BatesNumber,EmailID,MessageID,Date,From,Subject,Attachments,SHA256,PDFSHA256\n"
         var exclusions = "EmailID,MessageID,Subject,Reason\n"
         func csv(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
 
         let holds = CustodianManager.shared.legalHolds
         var done = 0
+        do {
         for try await batch in archive.streamSelected(scope: scope, batchSize: 100) {
             try Task.checkCancellation()
-            let tagsByID = (try? await archive.userTags(ids: batch.map(\.id))) ?? [:]
+            // Audit F09a: exclusion metadata that cannot be read fails the run.
+            // Substituting "no tags" would release documents the tag was
+            // meant to withhold.
+            let tagsByID: [UUID: Set<String>]
+            do {
+                tagsByID = try await archive.userTags(ids: batch.map(\.id))
+            } catch {
+                throw ProductionError.exclusionMetadataUnavailable(underlying: error.localizedDescription)
+            }
             for email in batch {
                 done += 1
                 let messageID = email.headers["Message-ID"] ?? ""
@@ -242,15 +263,28 @@ enum ProductionEngine {
                 let raw = email.rawSource.isEmpty ? email.plainBody : email.rawSource
                 let hash = SHA256.hash(data: Data(raw.utf8)).map { String(format: "%02x", $0) }.joined()
                 let pdfURL = pdfFolder.appendingPathComponent("\(batesNumber).pdf")
-                pages += BatesPDFRenderer.render(lines: lines,
-                                                 metadata: .init(batesNumber: batesNumber, caseNumber: caseNumber, examiner: "", md5Hash: nil),
-                                                 to: pdfURL)
+                // Audit F09b: a document is "included" only when its PDF was
+                // written. A render that yields nothing fails the run — the
+                // receipt must never say complete over a missing file.
+                let rendered = try BatesPDFRenderer.renderVerified(
+                    lines: lines,
+                    metadata: .init(batesNumber: batesNumber, caseNumber: caseNumber, examiner: "", md5Hash: nil),
+                    to: pdfURL)
+                pages += rendered.pages
                 for att in email.attachments { families[attachmentFamily(att.filename), default: 0] += 1 }
                 manifest += [batesNumber, email.id.uuidString, messageID, email.headers["Date"] ?? "", email.headers["From"] ?? "",
-                             subject, String(email.attachments.count), hash].map(csv).joined(separator: ",") + "\n"
+                             subject, String(email.attachments.count), hash, rendered.sha256Hex].map(csv).joined(separator: ",") + "\n"
                 included += 1
             }
             onProgress?(done, requested)
+        }
+        } catch {
+            // Fail closed: no manifest, no production record, no numbered
+            // document, and a receipt that says so. Whatever PDFs were written
+            // stay in the folder for inspection, named by an unpublished run.
+            ExportRunCenter.shared.recordFailure(destination: folder, isFolder: true, requested: requested,
+                                                 message: "Production stopped after \(included) document\(included == 1 ? "" : "s"): \(error.localizedDescription). Nothing was published.")
+            throw error
         }
 
         try manifest.write(to: folder.appendingPathComponent("manifest.csv"), atomically: true, encoding: .utf8)
