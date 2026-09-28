@@ -359,6 +359,20 @@ final class ModuleRegistry {
         activation(module).mayRunWork
     }
 
+    /// True when the page is compiled out of this edition. Such a page can
+    /// never be switched on here, so the shell does not show a tab for it
+    /// (owner, 2026-09-28 — a locked Live Mail tab in the no-network build
+    /// looked like a broken page rather than an absent one). An org-policy
+    /// lock is different: the page exists and stays visible, locked.
+    func isExcludedByBuild(_ module: AppModule) -> Bool {
+        excludedByBuild.contains(module)
+    }
+
+    /// The pages this edition ships, in tab order.
+    var shippedModules: [AppModule] {
+        AppModule.allCases.filter { !isExcludedByBuild($0) }
+    }
+
     /// An organization may hard-off a page through managed configuration; the
     /// user cannot re-enable it from the UI (EnterpriseConfig's policy rule).
     private func orgDisabledReason(_ module: AppModule) -> String? {

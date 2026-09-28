@@ -57,7 +57,7 @@ extension HubDestination: Identifiable {
         case .emailInbox, .workCenter, .emailAnalytics, .timeline, .communicationPatterns,
              .relationshipGraph, .duplicateManager, .nearDuplicates, .attachmentGallery,
              .executiveDashboard, .archiveComparison, .batchOperations, .automationRules,
-             .workspaceManager, .pluginManager, .personaHub, .settings,
+             .workspaceManager, .pluginManager, .settings,
              .personalOrganizer, .generalExplorer:
             return .archive
         case .aiAssistant, .aiDigest, .smartAutoTagger, .customExperts, .knowledgeGraphExplorer,
@@ -68,7 +68,9 @@ extension HubDestination: Identifiable {
              .reviewDashboard, .storyFile, .reportBuilder, .forensicReview, .investigationReport,
              .batesNumbering, .redaction, .reviewBatches, .custodianPanel, .legalWorkspace,
              .itAdminDashboard, .journalistWorkbench, .achMatrix, .factMatrix, .actionRegister,
-             .evidenceDesks, .reasoningStudio:
+             .evidenceDesks, .reasoningStudio,
+             // The persona home hub is Page 3's front door (owner, 2026-09-28).
+             .personaHub:
             return .professional
         }
     }

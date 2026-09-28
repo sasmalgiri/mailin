@@ -5,8 +5,10 @@
 //
 //  Plan tasks A1/A2 — the top-level four-page frame (directive §0–§6).
 //
-//  Shape (owner decision, 2026-09-24): all four tabs are always visible, so the
-//  app's structure is discoverable, and Archive is the page shown by default.
+//  Shape (owner decision, 2026-09-24): every page the edition ships has a tab
+//  that is always visible, so the app's structure is discoverable, and Archive
+//  is the page shown by default. (Owner, 2026-09-28: a page compiled out of the
+//  edition gets no tab — the no-network build shows three.)
 //  Clicking an INACTIVE tab does not switch to it — it opens that page's
 //  feature matrix and asks whether to turn the page on. Nothing about an
 //  inactive page runs until the user agrees (§3.3 R2), so a visible tab costs
@@ -79,11 +81,13 @@ struct FourPageShell: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // All four tabs are always visible, so the app's shape is
+            // Every page this edition ships has a tab, so the app's shape is
             // discoverable. An inactive tab does not switch to its page: it
-            // asks first, showing that page's feature matrix.
+            // asks first, showing that page's feature matrix. A page compiled
+            // out of the edition (Live Mail in the no-network build) has no
+            // tab at all — nothing behind it exists to turn on.
             PageSwitcher(
-                pages: AppModule.allCases,
+                pages: modules.shippedModules,
                 selection: router.selection,
                 isEnabled: { modules.isEnabled($0) },
                 isLocked: { !modules.activation($0).isUserSwitchable },

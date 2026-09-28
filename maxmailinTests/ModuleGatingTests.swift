@@ -40,6 +40,31 @@ struct ModuleGatingTests {
         #expect(registry.enabledModules == [.archive])
     }
 
+    @Test("A page compiled out of the edition has no tab; an org lock keeps its tab")
+    func buildExcludedPagesHaveNoTab() {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("moduletests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("modules.v1.json")
+        let noNetwork = ModuleRegistry(store: ModuleStateStore(url: url),
+                                       excludedByBuild: [.liveMail], trapsOnMisuse: false)
+        #expect(noNetwork.isExcludedByBuild(.liveMail))
+        #expect(noNetwork.shippedModules == [.archive, .aiInsights, .professional])
+        #expect(noNetwork.activation(.liveMail) == .unavailable(reason: "not included in this edition"))
+
+        // (Whether THIS build excludes Live Mail is EnterpriseDeploymentTests'
+        // job — the flag is defined on the app target, not the test bundle.)
+
+        // A page that merely is not enabled still has a tab (it asks first).
+        let (full, _) = makeRegistry()
+        #expect(full.shippedModules == AppModule.allCases)
+        #expect(!full.isExcludedByBuild(.liveMail))
+    }
+
+    @Test("Persona home hub belongs to Professional Workflows")
+    func personaHubOwnedByProfessional() {
+        #expect(HubDestination.personaHub.owner == .professional)
+    }
+
     @Test("A disabled page never yields a feature host")
     func hostRefusedWhileDisabled() {
         let (registry, _) = makeRegistry()

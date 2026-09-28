@@ -57,6 +57,8 @@ Legend for states: **idle · loading · empty · populated · running · paused 
 
 | Surface | Reachable from | Notes |
 |---|---|---|
-| Page switcher | top of window | all four tabs always visible; inactive tab asks before enabling; Page-1-only install shows no chrome |
+| Page switcher | top of window | one tab per page the edition ships (the no-network build shows Archive, AI Insights, Professional — Live Mail is compiled out and has no tab); inactive tab asks before enabling |
+| Persona home / Home button / Tools button | Archive sidebar, inbox header, three-pane toolbar | Professional Workflows only; with Page 3 off the archive list is home (owner, 2026-09-28) |
+| NL search switch | Archive search field | AI Insights only; mode resets to keyword when Page 2 is off |
 | Feature Guide | ? toolbar button, ⇧⌘/ | searchable |
 | Command palette | ⌘K | executes destinations incl. Guided search |

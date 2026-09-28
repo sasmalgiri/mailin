@@ -292,6 +292,9 @@ struct ParsedEmailListView: View {
                             model.isSearchFocused = false
                         }
                     }
+                    .onChange(of: modules.isEnabled(.aiInsights), initial: true) { _, aiOn in
+                        if !aiOn && model.isNaturalLanguageMode { model.isNaturalLanguageMode = false }
+                    }
                 if !model.searchText.isEmpty {
                     Button {
                         model.searchText = ""
@@ -317,8 +320,12 @@ struct ParsedEmailListView: View {
             }
 
             Menu {
-                Button { model.isNaturalLanguageMode.toggle() } label: {
-                    Label(model.isNaturalLanguageMode ? "Keyword Search" : "Natural Language", systemImage: model.isNaturalLanguageMode ? "text.magnifyingglass" : "brain")
+                // Natural-language search is an AI Insights feature; the
+                // Archive-only page keeps keyword search.
+                if modules.isEnabled(.aiInsights) {
+                    Button { model.isNaturalLanguageMode.toggle() } label: {
+                        Label(model.isNaturalLanguageMode ? "Keyword Search" : "Natural Language", systemImage: model.isNaturalLanguageMode ? "text.magnifyingglass" : "brain")
+                    }
                 }
                 Button { model.groupByThread.toggle() } label: {
                     Label(model.groupByThread ? "Ungroup Threads" : "Group by Thread", systemImage: "bubble.left.and.bubble.right")
@@ -639,7 +646,14 @@ struct ParsedEmailListView: View {
                             model.isSearchFocused = false
                         }
                     }
+                    // Natural-language mode belongs to AI Insights: when that
+                    // page is off the switch is hidden and the mode cannot stay
+                    // on (owner, 2026-09-28 — "NL" showed on Archive-only).
+                    .onChange(of: modules.isEnabled(.aiInsights), initial: true) { _, aiOn in
+                        if !aiOn && model.isNaturalLanguageMode { model.isNaturalLanguageMode = false }
+                    }
 
+                if modules.isEnabled(.aiInsights) {
                 Button {
                     model.isNaturalLanguageMode.toggle()
                     if !model.searchText.isEmpty {
@@ -664,6 +678,7 @@ struct ParsedEmailListView: View {
                 .help(model.isNaturalLanguageMode ? "Switch to keyword search" : "Switch to natural language search")
                 #endif
                 .accessibilityLabel(model.isNaturalLanguageMode ? "Natural language mode active" : "Enable natural language mode")
+                }
 
                 if !model.searchText.isEmpty {
                     Button {

@@ -501,14 +501,19 @@ struct ContentView: View {
                 if !modelVM.showParsedList {
                     WelcomeHubView(onOpenArchive: { openPanelFallback() }, onBrowseFiles: { openPanelFallback() })
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let dest = sidebarSelection {
+                } else if let dest = sidebarSelection,
+                          dest != .personaHub || modules.isEnabled(.professional) {
                     hubDestinationView(for: dest)
-                } else {
+                } else if modules.isEnabled(.professional) {
                     // §3.3 R1: the persona home belongs to Page 3, not Archive.
                     PersonaPickerHomeView(onSelectPersona: { persona in
                         personaManager.switchPersona(to: persona)
                         sidebarSelection = .personaHub
                     })
+                } else {
+                    // Archive-only: there is no persona home; the archive
+                    // itself is home (owner, 2026-09-28).
+                    emailInboxDestination
                 }
             }
         }
@@ -592,11 +597,15 @@ struct ContentView: View {
 
     private var hubSidebar: some View {
         List(selection: $sidebarSelection) {
-            Section {
-                Button { sidebarSelection = nil } label: {
-                    Label("Home", systemImage: "house")
+            // The persona home is a Professional Workflows surface; the
+            // Archive-only page opens straight into the archive.
+            if modules.isEnabled(.professional) {
+                Section {
+                    Button { sidebarSelection = nil } label: {
+                        Label("Home", systemImage: "house")
+                    }
+                    .foregroundColor(sidebarSelection == nil ? personaManager.selectedPersona.accentColor : .primary)
                 }
-                .foregroundColor(sidebarSelection == nil ? personaManager.selectedPersona.accentColor : .primary)
             }
 
             Section("Persona") {
@@ -805,9 +814,10 @@ struct ContentView: View {
              .predictiveInsights, .pluginManager,
              .itAdminDashboard, .journalistWorkbench, .actionRegister, .reasoningStudio:
             if storeManager.requirePremium() { goToDestination(destination) }
+        case .personaHub:
+            if modules.isEnabled(.professional) { goToDestination(destination) }
         case .emailInbox, .customExperts, .workspaceManager,
-             .personalOrganizer, .generalExplorer,
-             .personaHub:
+             .personalOrganizer, .generalExplorer:
             goToDestination(destination)
         }
     }
@@ -1083,7 +1093,7 @@ struct ContentView: View {
         if preferSimpleList {
             // A2: the three-pane archive shell — sidebar / list / detail, all
             // repository-paged. Import / Search / Export live in its chrome.
-            ArchiveThreePaneView(onHome: { sidebarSelection = nil },
+            ArchiveThreePaneView(onHome: modules.isEnabled(.professional) ? { sidebarSelection = nil } : nil,
                                  onImport: { openPanelFallback() })
         } else {
             advancedInboxDestination
@@ -1094,19 +1104,21 @@ struct ContentView: View {
         HSplitView {
             VStack(spacing: 0) {
                 HStack(spacing: 6) {
-                    Button {
-                        sidebarSelection = nil
-                    } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: "house.fill")
-                                .font(.system(size: 13))
-                            Text("Home")
-                                .font(.system(size: 12, weight: .semibold))
+                    if modules.isEnabled(.professional) {
+                        Button {
+                            sidebarSelection = nil
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: "house.fill")
+                                    .font(.system(size: 13))
+                                Text("Home")
+                                    .font(.system(size: 12, weight: .semibold))
+                            }
+                            .foregroundColor(personaManager.selectedPersona.accentColor)
                         }
-                        .foregroundColor(personaManager.selectedPersona.accentColor)
+                        .buttonStyle(.plain)
+                        .help("Return to the home hub with all tools and settings")
                     }
-                    .buttonStyle(.plain)
-                    .help("Return to the home hub with all tools and settings")
 
                     Spacer()
                 }
