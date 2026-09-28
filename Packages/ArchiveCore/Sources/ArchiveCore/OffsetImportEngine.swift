@@ -86,6 +86,11 @@ struct OffsetImportEngine: Sendable {
     /// Returns the same source-scoped recovery report shape as the streaming
     /// parser, so the coordinator, the receipt and the reconciler need no
     /// special case for which engine ran.
+    /// Parsers per batch: one per core less one for the writer, at most 8.
+    /// The scan (sequential I/O) and the store (single writer) stay serial;
+    /// only the CPU-bound parse of each batch fans out.
+    static let parseWorkers = max(1, min(ProcessInfo.processInfo.activeProcessorCount - 1, 8))
+
     @discardableResult
     func importMessages(
         fileURL: URL,
@@ -93,6 +98,7 @@ struct OffsetImportEngine: Sendable {
         batchSize: Int = 200,
         envelopeProvider: (@Sendable () async -> BatchEnvelope)? = nil,
         retainAttachmentBytes: Bool = true,
+        materializeAttachments: Bool = true,
         sourceDigest: String? = nil,
         onProgress: ((Double) -> Void)? = nil,
         onBatch: ([Imported]) async throws -> Void
@@ -101,14 +107,74 @@ struct OffsetImportEngine: Sendable {
         var envelope = await envelopeProvider?()
             ?? BatchEnvelope(maxMessages: batchSize, maxBytes: Int.max)
 
-        var batch: [Imported] = []
-        batch.reserveCapacity(batchSize)
-        var batchBytes = 0
+        // Locators of the batch being assembled. Parsing happens per batch on
+        // several cores (`parseWorkers`), results are put back in ordinal
+        // order, and the batch is handed on — so the ordering the checkpoints
+        // depend on is exactly what the serial engine produced.
+        var pending: [(locator: MessageLocator, headers: [String: String])] = []
+        pending.reserveCapacity(batchSize)
+        var pendingBytes = 0
         var total = 0
         var parsed = 0
         var failed = 0
         var categories: [String: Int] = [:]
         let reader = LocatorReader()   // same file, same run — no provenance claim needed
+        let workers = Self.parseWorkers
+
+        func flushPending() async throws {
+            guard !pending.isEmpty else { return }
+            try Task.checkCancellation()
+            let work = pending
+            pending.removeAll(keepingCapacity: true)
+            pendingBytes = 0
+
+            var results = [Result<Imported, Error>?](repeating: nil, count: work.count)
+            await withTaskGroup(of: (Int, Result<Imported, Error>).self) { group in
+                var next = 0
+                func start(_ index: Int) {
+                    let item = work[index]
+                    group.addTask {
+                        (index, Result {
+                            try self.build(locator: item.locator, headers: item.headers,
+                                           senderEmail: senderEmail,
+                                           retainAttachmentBytes: retainAttachmentBytes,
+                                           materializeAttachments: materializeAttachments,
+                                           reader: reader)
+                        })
+                    }
+                }
+                while next < min(workers, work.count) { start(next); next += 1 }
+                for await (index, result) in group {
+                    results[index] = result
+                    if next < work.count { start(next); next += 1 }
+                }
+            }
+
+            var batch: [Imported] = []
+            batch.reserveCapacity(work.count)
+            for (index, item) in work.enumerated() {
+                switch results[index] {
+                case .success(let imported)?:
+                    batch.append(imported)
+                    parsed += 1
+                case .failure(let error)?:
+                    // Counted, categorised, returned — never silently dropped.
+                    failed += 1
+                    categories["offset parse error", default: 0] += 1
+                    offsetImportLog.error("""
+                        message \(item.locator.ordinal) at \(item.locator.messageRange.offset) failed: \
+                        \(error.localizedDescription, privacy: .public)
+                        """)
+                case nil:
+                    failed += 1
+                    categories["offset parse error", default: 0] += 1
+                }
+            }
+            if !batch.isEmpty { try await onBatch(batch) }
+            // Re-ask after every flush, so pressure appearing mid-file
+            // shrinks the NEXT batch rather than the next file.
+            if let envelopeProvider { envelope = await envelopeProvider() }
+        }
 
         // The scanner awaits this callback, so the scan cannot outrun the
         // consumer and locators are never accumulated for the whole file.
@@ -120,49 +186,23 @@ struct OffsetImportEngine: Sendable {
                 total += 1
                 var locator = rawLocator
                 locator.sourceDigest = sourceDigest
-
-                do {
-                    let imported = try build(locator: locator,
-                                             headers: headers,
-                                             senderEmail: senderEmail,
-                                             retainAttachmentBytes: retainAttachmentBytes,
-                                             reader: reader)
-                    batch.append(imported)
-                    // Saturating add: a single message can exceed Int.max on
-                    // no real platform, but the batch bound must not wrap.
-                    batchBytes = batchBytes.addingReportingOverflow(
-                        Int(clamping: locator.byteCount)).partialValue
-                    parsed += 1
-                } catch {
-                    // Counted, categorised, returned — never silently dropped.
-                    failed += 1
-                    categories["offset parse error", default: 0] += 1
-                    offsetImportLog.error("""
-                        message \(locator.ordinal) at \(locator.messageRange.offset) failed: \
-                        \(error.localizedDescription, privacy: .public)
-                        """)
-                }
-
-                if batch.count >= envelope.maxMessages || batchBytes >= envelope.maxBytes {
-                    try await onBatch(batch)
-                    batch.removeAll(keepingCapacity: true)
-                    batchBytes = 0
-                    // Re-ask after every flush, so pressure appearing mid-file
-                    // shrinks the NEXT batch rather than the next file.
-                    if let envelopeProvider { envelope = await envelopeProvider() }
+                pending.append((locator, headers))
+                // Saturating add: a single message can exceed Int.max on
+                // no real platform, but the batch bound must not wrap.
+                pendingBytes = pendingBytes.addingReportingOverflow(
+                    Int(clamping: locator.byteCount)).partialValue
+                if pending.count >= envelope.maxMessages || pendingBytes >= envelope.maxBytes {
+                    try await flushPending()
                 }
             }, onProgress: onProgress)
         } catch {
             scanError = error
         }
 
-        // Whatever was already batched is real mail and is delivered before
+        // Whatever was already located is real mail and is delivered before
         // the error is rethrown, so a mid-file I/O failure yields a PARTIAL
         // import with an accurate count rather than nothing at all.
-        if !batch.isEmpty {
-            try await onBatch(batch)
-            batch.removeAll(keepingCapacity: true)
-        }
+        try await flushPending()
 
         if let scanError { throw scanError }
 
@@ -199,6 +239,7 @@ struct OffsetImportEngine: Sendable {
                        headers: [String: String],
                        senderEmail: String,
                        retainAttachmentBytes: Bool,
+                       materializeAttachments: Bool = true,
                        reader: LocatorReader) throws -> Imported {
 
         if locator.byteCount <= fullParseCeilingBytes {
@@ -227,7 +268,8 @@ struct OffsetImportEngine: Sendable {
             }
             let email = try MBOXParser.processRawMessage(
                 raw, senderEmail: senderEmail,
-                retainAttachmentBytes: retainAttachmentBytes)
+                retainAttachmentBytes: retainAttachmentBytes,
+                materializeAttachments: materializeAttachments)
 
             // Part ranges come from `data` — the ORIGINAL bytes — not from
             // `raw`. Re-encoding the String would shift every offset whenever

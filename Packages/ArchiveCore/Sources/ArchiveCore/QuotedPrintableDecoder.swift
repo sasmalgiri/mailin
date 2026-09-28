@@ -1,6 +1,14 @@
 import Foundation
 
 public struct QuotedPrintableDecoder {
+    /// RFC 2045 §6.7 quoted-printable, decoded over UTF-8 BYTES. The previous
+    /// version walked the text Character by Character with
+    /// `index(_:offsetBy:)` — a grapheme walk per step — and showed up in the
+    /// import profile as `Substring.index(offsetBy:)` (2026-09-28). Same
+    /// rules as before: `=\r\n` and `=\n` are soft breaks and vanish; `=XX`
+    /// with two hex digits is one byte; a lone `=` at the very end is dropped;
+    /// any other `=` is literal; in header mode `_` is a space; every other
+    /// byte passes through unchanged (non-ASCII UTF-8 sequences included).
     public static func decode(_ input: String, isHeader: Bool = false, charset: String? = nil) -> String {
         #if canImport(SwiftEmailKit)
         if let kit = SwiftEmailKit.QuotedPrintableDecoder as AnyObject?,
@@ -8,52 +16,57 @@ public struct QuotedPrintableDecoder {
             return method(input, isHeader, charset)
         }
         #endif
-        var cleaned = input.replacingOccurrences(of: "=\r\n", with: "")
-                           .replacingOccurrences(of: "=\n", with: "")
-        if isHeader { cleaned = cleaned.replacingOccurrences(of: "_", with: " ") }
-        var output = Data()
-        var i = cleaned.startIndex
-        let end = cleaned.endIndex
-        while i < end {
-            let char = cleaned[i]
-            if char == "=" {
-                let hex1 = cleaned.index(i, offsetBy: 1, limitedBy: end)
-                let hex2 = cleaned.index(i, offsetBy: 2, limitedBy: end)
-                if let h1 = hex1, let h2 = hex2, h2 < end {
-                    let hex = String(cleaned[h1...h2])
-                    if let byte = UInt8(hex, radix: 16) {
-                        output.append(byte)
-                        i = cleaned.index(i, offsetBy: 3)
+        var input = input
+        let output: [UInt8] = input.withUTF8 { bytes in
+            var out = [UInt8]()
+            out.reserveCapacity(bytes.count)
+            let count = bytes.count
+            var i = 0
+            while i < count {
+                let byte = bytes[i]
+                if byte == UInt8(ascii: "=") {
+                    // Soft line break: "=\r\n" or "=\n".
+                    if i + 2 < count, bytes[i + 1] == 0x0D, bytes[i + 2] == 0x0A { i += 3; continue }
+                    if i + 1 < count, bytes[i + 1] == 0x0A { i += 2; continue }
+                    if i + 2 < count, let hi = hexValue(bytes[i + 1]), let lo = hexValue(bytes[i + 2]) {
+                        out.append(hi << 4 | lo)
+                        i += 3
                         continue
                     }
-                }
-                // Trailing `=` at EOF is a soft line break — skip it
-                if hex1 == nil || hex1 == end {
-                    i = cleaned.index(after: i)
-                    continue
-                }
-                output.append(UInt8(ascii: "="))
-                i = cleaned.index(after: i)
-            } else {
-                if let ascii = char.asciiValue {
-                    output.append(ascii)
+                    // Trailing `=` at the end of the text is a soft break too.
+                    if i + 1 >= count { i += 1; continue }
+                    out.append(byte)
+                    i += 1
+                } else if isHeader, byte == UInt8(ascii: "_") {
+                    out.append(0x20)
+                    i += 1
                 } else {
-                    let charStr = String(char)
-                    if let utf8Data = charStr.data(using: .utf8) {
-                        output.append(contentsOf: utf8Data)
-                    }
+                    out.append(byte)
+                    i += 1
                 }
-                i = cleaned.index(after: i)
             }
+            return out
         }
+        let data = Data(output)
         if let charset = charset?.lowercased(), charset != "utf-8",
-           let str = String(data: output, encoding: stringEncoding(for: charset)) {
+           let str = String(data: data, encoding: stringEncoding(for: charset)) {
             return str
         }
-        if let str = String(data: output, encoding: .utf8) { return str }
-        if let str = String(data: output, encoding: .isoLatin1) { return str }
-        return String(decoding: output, as: UTF8.self)
+        if let str = String(data: data, encoding: .utf8) { return str }
+        if let str = String(data: data, encoding: .isoLatin1) { return str }
+        return String(decoding: data, as: UTF8.self)
     }
+
+    @inline(__always)
+    private static func hexValue(_ byte: UInt8) -> UInt8? {
+        switch byte {
+        case UInt8(ascii: "0")...UInt8(ascii: "9"): return byte - UInt8(ascii: "0")
+        case UInt8(ascii: "a")...UInt8(ascii: "f"): return byte - UInt8(ascii: "a") + 10
+        case UInt8(ascii: "A")...UInt8(ascii: "F"): return byte - UInt8(ascii: "A") + 10
+        default: return nil
+        }
+    }
+
     public static func isQuotedPrintable(_ text: String) -> Bool {
         text.range(of: "=[0-9A-Fa-f]{2}", options: .regularExpression) != nil
     }

@@ -262,6 +262,7 @@ struct ParserFactory {
         batchSize: Int = 200,
         envelopeProvider: (@Sendable () async -> BatchEnvelope)? = nil,
         retainAttachmentBytes: Bool = true,
+        materializeAttachments: Bool = true,
         onProgress: ((Double) -> Void)? = nil,
         onBatch: ([MBOXParser.RawEmail]) async throws -> Void
     ) async throws -> MBOXParser.ParseRecoveryReport {
@@ -304,6 +305,7 @@ struct ParserFactory {
                         batchSize: batchSize,
                         envelopeProvider: envelopeProvider,
                         retainAttachmentBytes: retainAttachmentBytes,
+                        materializeAttachments: materializeAttachments,
                         onProgress: { fraction in
                             onProgress?((Double(index) + fraction) / Double(steps.count))
                         },
@@ -342,6 +344,7 @@ struct ParserFactory {
                     batchSize: batchSize,
                     envelopeProvider: envelopeProvider,
                     retainAttachmentBytes: retainAttachmentBytes,
+                    materializeAttachments: materializeAttachments,
                     onProgress: { fraction in
                         onProgress?((Double(index) + fraction) / Double(members.count))
                     },
@@ -366,6 +369,7 @@ struct ParserFactory {
                 batchSize: batchSize,
                 envelopeProvider: envelopeProvider,
                 retainAttachmentBytes: retainAttachmentBytes,
+                materializeAttachments: materializeAttachments,
                 onProgress: onProgress,
                 onBatch: onBatch
             )

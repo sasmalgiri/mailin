@@ -896,6 +896,7 @@ final class BulkImportCoordinator {
                             senderEmail: options.senderEmail,
                             batchSize: batchSize,
                             envelopeProvider: envelopeProvider,
+                            materializeAttachments: false,   // bulk import: no temp copy per attachment
                             sourceDigest: hash,
                             onProgress: { prog in
                                 Task { @MainActor [weak self] in
@@ -919,6 +920,7 @@ final class BulkImportCoordinator {
                             senderEmail: options.senderEmail,
                             batchSize: batchSize,
                             envelopeProvider: envelopeProvider,
+                            materializeAttachments: false,   // bulk import: no temp copy per attachment
                             onProgress: { prog in
                                 Task { @MainActor [weak self] in
                                     self?.live.fileFraction = prog

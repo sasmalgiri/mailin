@@ -284,6 +284,7 @@ struct MBOXParser {
         batchSize: Int = 200,
         envelopeProvider: (@Sendable () async -> BatchEnvelope)? = nil,
         retainAttachmentBytes: Bool = true,
+        materializeAttachments: Bool = true,
         onProgress: ((Double) -> Void)? = nil,
         onBatch: ([RawEmail]) async throws -> Void
     ) async throws -> ParseRecoveryReport {
@@ -371,7 +372,8 @@ struct MBOXParser {
             do {
                 let email = try processRawMessage(
                     raw, senderEmail: senderEmail,
-                    retainAttachmentBytes: retainAttachmentBytes)
+                    retainAttachmentBytes: retainAttachmentBytes,
+                    materializeAttachments: materializeAttachments)
                 batchBytes += raw.utf8.count
                 batch.append(email)
             } catch {
@@ -468,10 +470,13 @@ struct MBOXParser {
     ///   lives in per-message allocator churn, not in retained structures — see
     ///   `RELEASE_READINESS.md` §P0.2 and plan task P3.5. Kept only as the hook
     ///   for a future compaction that has an actual measured benefit.
+    /// - Parameter materializeAttachments: write each decoded attachment to a
+    ///   temp file (same-session Quick Look). The bulk import passes `false`.
     static func processRawMessage(
         _ raw: String,
         senderEmail: String,
-        retainAttachmentBytes: Bool = true
+        retainAttachmentBytes: Bool = true,
+        materializeAttachments: Bool = true
     ) throws -> RawEmail {
         // §7.3: a bare RFC-822 message (e.g. a .eml whose first line is a
         // "From:" HEADER) gets a synthetic envelope on its OWN line — gluing
@@ -484,7 +489,7 @@ struct MBOXParser {
         let extraction: (plainBody: String, htmlBody: String, attachments: [AttachmentMetadata])
         do {
             // One MIME pass: the tree parsed above is what the extractor walks.
-            extraction = try EmailBodyExtractor.extractContents(parts: mimeParts)
+            extraction = try EmailBodyExtractor.extractContents(parts: mimeParts, materializeAttachments: materializeAttachments)
         } catch {
             let bodyLines = fullRaw.components(separatedBy: "\n")
             let blankIdx = bodyLines.firstIndex(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) ?? 0

@@ -88,6 +88,18 @@ found, all fixed in this release:
 - **After an external volume was unplugged and reconnected, every write failed**: handles pointed at
   the old mount. The importer re-opens them and retries the interrupted batch.
 
+## Import speed (2026-09-28)
+
+Profiling the shipping build showed the import was bound by the parser, not
+by the database. Six fixes — a byte-level base64 cleanup, one MIME pass per
+message instead of two, a byte-level MIME split with compiled-once regexes
+and a byte-level quoted-printable decoder, parsing each batch on several
+cores, no temp copy of every attachment during import, and a larger
+search-index shard budget for folder sources — took the real 95 MB mailbox
+from 78.7 s to 1.0 s in Release (86 MiB/s), and the 1 GB format rows 7–19×
+faster. Every count, the byte-identical round trip and the full test suite
+were unchanged at each step (`SCALE_RESULTS.md`).
+
 ## Known limits, stated
 
 - Largest executed import is 1.52 GB of real mail in one file and 1.04 GB per container form;

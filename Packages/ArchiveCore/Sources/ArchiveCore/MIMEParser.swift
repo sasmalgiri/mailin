@@ -39,13 +39,16 @@ public class MIMEParser {
         }
         #endif
         // ---- Legacy fallback parsing ----
-        let separator = rawEmail.contains("\r\n\r\n") ? "\r\n\r\n" : "\n\n"
-        let components = rawEmail.components(separatedBy: separator)
-        guard components.count >= 2 else {
+        // Byte-level split at the first blank line (CRLF CRLF when the text
+        // has one anywhere, else LF LF — the same rule the String version
+        // applied). `components(separatedBy:)` over the whole message went
+        // through Foundation's UTF-16 bridge and was the largest single cost
+        // in the import profile after the base64 fix (2026-09-28).
+        guard let split = ByteSplit.headerAndBody(of: rawEmail) else {
             return (headers: [:], parts: [])
         }
-        let headerBlock = components[0]
-        let bodyBlock = components.dropFirst().joined(separator: separator)
+        let headerBlock = split.head
+        let bodyBlock = split.rest
         let headers = parseHeaders(from: headerBlock)
         let contentType = headers["Content-Type"] ?? "text/plain"
         let boundary = extractBoundary(contentType)
@@ -92,9 +95,16 @@ public class MIMEParser {
         }
         return headers
     }
+    // Compiled once: `NSRegularExpression.init` (an ICU compile) showed up in
+    // the import profile because these were rebuilt for every MIME part.
+    private static let boundaryRegex = try? NSRegularExpression(pattern: #"boundary="?([^";\r\n]+)"?"#, options: .caseInsensitive)
+    private static let charsetRegex = try? NSRegularExpression(pattern: #"charset="?([^";\r\n]+)"?"#, options: .caseInsensitive)
+    private static let filenameStarRegex = try? NSRegularExpression(pattern: #"filename\*\s*=\s*(?:[\w-]+'[\w-]*')?([^;"]+)"#, options: .caseInsensitive)
+    private static let filenameQuotedRegex = try? NSRegularExpression(pattern: #"filename\s*=\s*"([^"]+)""#, options: .caseInsensitive)
+    private static let filenameBareRegex = try? NSRegularExpression(pattern: #"filename\s*=\s*([^;\s]+)"#, options: .caseInsensitive)
+
     public static func extractBoundary(_ contentType: String) -> String? {
-        let regex = try? NSRegularExpression(pattern: #"boundary="?([^";\r\n]+)"?"#, options: .caseInsensitive)
-        if let regex = regex,
+        if let regex = boundaryRegex,
            let match = regex.firstMatch(in: contentType, range: NSRange(contentType.startIndex..., in: contentType)),
            let range = Range(match.range(at: 1), in: contentType) {
             return String(contentType[range])
@@ -102,8 +112,7 @@ public class MIMEParser {
         return nil
     }
     public static func extractCharset(_ contentType: String) -> String {
-        let regex = try? NSRegularExpression(pattern: #"charset="?([^";\r\n]+)"?"#, options: .caseInsensitive)
-        if let regex = regex,
+        if let regex = charsetRegex,
            let match = regex.firstMatch(in: contentType, range: NSRange(contentType.startIndex..., in: contentType)),
            let range = Range(match.range(at: 1), in: contentType) {
             return String(contentType[range]).lowercased()
@@ -115,17 +124,15 @@ public class MIMEParser {
     private static func buildRecursiveParts(_ body: String, boundary: String, defaultContentType: String, depth: Int) -> [MIMEPart] {
         guard depth < maxRecursionDepth else { return [] }
         guard !boundary.isEmpty else { return [] }
-        let marker = "--\(boundary)"
-        let segments = body.components(separatedBy: marker)
+        // Segments between `--boundary` markers, split and trimmed at the
+        // byte level; each part's header/body split likewise.
+        let segments = ByteSplit.segments(of: body, separatedBy: "--\(boundary)")
         var parts: [MIMEPart] = []
         for segment in segments {
             autoreleasepool {
-                let trimmed = segment.trimmingCharacters(in: .whitespacesAndNewlines)
-                if trimmed.isEmpty || trimmed.hasPrefix("--") { return }
-                let partSeparator = trimmed.contains("\r\n\r\n") ? "\r\n\r\n" : "\n\n"
-                let sections = trimmed.components(separatedBy: partSeparator)
-                let headerSection = sections.first ?? ""
-                let rawBody = sections.dropFirst().joined(separator: partSeparator)
+                guard let trimmedSection = ByteSplit.trimmedPart(segment) else { return }
+                let headerSection = trimmedSection.head
+                let rawBody = trimmedSection.rest
                 let headers = parseHeaders(from: headerSection)
                 let contentType = headers["Content-Type"] ?? defaultContentType
                 let charset = extractCharset(contentType)
@@ -168,25 +175,30 @@ public class MIMEParser {
                 }
             }
             #endif
-            let filtered = trimmed.filter { !$0.isWhitespace }
-            if let data = Data(base64Encoded: filtered) {
+            // The decoder skips whitespace itself; the Character-level filter
+            // that preceded it walked every grapheme of the body.
+            if let data = Data(base64Encoded: trimmed, options: [.ignoreUnknownCharacters]) {
                 return decodeData(data, charset: charset)
             }
             return trimmed
         case "quoted-printable":
             return QuotedPrintableDecoder.decode(trimmed, isHeader: false, charset: charset)
         case "7bit", "8bit", "binary":
-            if let data = trimmed.data(using: .utf8) {
-                if let decoded = String(data: data, encoding: stringEncoding(for: charset)) {
-                    return decoded
-                }
+            // A Swift String is already valid UTF-8: re-decoding it as UTF-8
+            // is the identity and cost two copies of every text body.
+            let encoding = stringEncoding(for: charset)
+            if encoding == .utf8 { return trimmed }
+            if let data = trimmed.data(using: .utf8),
+               let decoded = String(data: data, encoding: encoding) {
+                return decoded
             }
             return trimmed
         default:
-            if let data = trimmed.data(using: .utf8) {
-                if let decoded = String(data: data, encoding: stringEncoding(for: charset)) {
-                    return decoded
-                }
+            let encoding = stringEncoding(for: charset)
+            if encoding == .utf8 { return trimmed }
+            if let data = trimmed.data(using: .utf8),
+               let decoded = String(data: data, encoding: encoding) {
+                return decoded
             }
             return trimmed
         }
@@ -241,24 +253,122 @@ public class MIMEParser {
         guard let header = header, !header.isEmpty else { return nil }
         let headerRange = NSRange(header.startIndex..., in: header)
 
-        if let regex = try? NSRegularExpression(pattern: #"filename\*\s*=\s*(?:[\w-]+'[\w-]*')?([^;"]+)"#, options: .caseInsensitive),
+        if let regex = filenameStarRegex,
            let match = regex.firstMatch(in: header, range: headerRange),
            let range = Range(match.range(at: 1), in: header) {
             return header[range].removingPercentEncoding?.trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
-        if let regex = try? NSRegularExpression(pattern: #"filename\s*=\s*"([^"]+)""#, options: .caseInsensitive),
+        if let regex = filenameQuotedRegex,
            let match = regex.firstMatch(in: header, range: headerRange),
            let range = Range(match.range(at: 1), in: header) {
             return String(header[range])
         }
 
-        if let regex = try? NSRegularExpression(pattern: #"filename\s*=\s*([^;\s]+)"#, options: .caseInsensitive),
+        if let regex = filenameBareRegex,
            let match = regex.firstMatch(in: header, range: headerRange),
            let range = Range(match.range(at: 1), in: header) {
             return String(header[range]).trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
+        return nil
+    }
+}
+
+// MARK: - Byte-level splitting
+
+/// The String-shaped splits the MIME parser needs, done over UTF-8 bytes.
+/// Every boundary this parser looks for is ASCII (`\r\n\r\n`, `\n\n`,
+/// `--boundary`), and in UTF-8 an ASCII byte never occurs inside a multi-byte
+/// sequence, so byte search is exact. Results come back as Strings decoded
+/// from byte slices of a String that was valid UTF-8 to begin with, so the
+/// text is unchanged — only the walk is different.
+enum ByteSplit {
+    private static let crlfcrlf: [UInt8] = [0x0D, 0x0A, 0x0D, 0x0A]
+    private static let lflf: [UInt8] = [0x0A, 0x0A]
+
+    /// Header block and the rest, split at the FIRST blank line. CRLF CRLF
+    /// is the separator when the text contains one anywhere (the rule the
+    /// String version used), otherwise LF LF. Nil when there is no blank line.
+    static func headerAndBody(of text: String) -> (head: String, rest: String)? {
+        var text = text
+        return text.withUTF8 { bytes -> (String, String)? in
+            let separator: [UInt8]
+            if firstIndex(of: crlfcrlf, in: bytes, from: 0) != nil { separator = crlfcrlf } else { separator = lflf }
+            guard let at = firstIndex(of: separator, in: bytes, from: 0) else { return nil }
+            let head = String(decoding: UnsafeBufferPointer(rebasing: bytes[0..<at]), as: UTF8.self)
+            let rest = String(decoding: UnsafeBufferPointer(rebasing: bytes[(at + separator.count)...]), as: UTF8.self)
+            return (head, rest)
+        }
+    }
+
+    /// The pieces between occurrences of `marker`, like
+    /// `components(separatedBy:)`: the text before the first marker, between
+    /// markers, and after the last. Each piece is returned as its own String.
+    static func segments(of text: String, separatedBy marker: String) -> [String] {
+        let needle = Array(marker.utf8)
+        guard !needle.isEmpty else { return [text] }
+        var text = text
+        return text.withUTF8 { bytes -> [String] in
+            var out: [String] = []
+            var start = 0
+            while let at = firstIndex(of: needle, in: bytes, from: start) {
+                out.append(String(decoding: UnsafeBufferPointer(rebasing: bytes[start..<at]), as: UTF8.self))
+                start = at + needle.count
+            }
+            out.append(String(decoding: UnsafeBufferPointer(rebasing: bytes[start...]), as: UTF8.self))
+            return out
+        }
+    }
+
+    /// One MIME part's segment, trimmed, then split into its header section
+    /// and raw body at the first blank line. Nil when the trimmed segment is
+    /// empty or is the closing `--` of the boundary. A segment with no blank
+    /// line is all headers and an empty body, as before.
+    static func trimmedPart(_ segment: String) -> (head: String, rest: String)? {
+        // Trim: ASCII whitespace at the byte level; if a non-ASCII byte sits
+        // at either edge, defer to the String rule for exactness (rare).
+        var trimmed = segment
+        var edgeIsNonASCII = false
+        trimmed.withUTF8 { bytes in
+            if let f = bytes.first, f >= 0x80 { edgeIsNonASCII = true }
+            if let l = bytes.last, l >= 0x80 { edgeIsNonASCII = true }
+        }
+        if edgeIsNonASCII {
+            trimmed = segment.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            trimmed = trimmed.withUTF8 { bytes -> String in
+                var first = 0, last = bytes.count
+                while first < last, isSpace(bytes[first]) { first += 1 }
+                while last > first, isSpace(bytes[last - 1]) { last -= 1 }
+                if first == 0, last == bytes.count { return segment }
+                return String(decoding: UnsafeBufferPointer(rebasing: bytes[first..<last]), as: UTF8.self)
+            }
+        }
+        if trimmed.isEmpty || trimmed.hasPrefix("--") { return nil }
+        if let split = headerAndBody(of: trimmed) { return split }
+        return (trimmed, "")
+    }
+
+    @inline(__always)
+    private static func isSpace(_ b: UInt8) -> Bool {
+        b == 0x20 || b == 0x09 || b == 0x0A || b == 0x0D || b == 0x0B || b == 0x0C
+    }
+
+    static func firstIndex(of needle: [UInt8], in haystack: UnsafeBufferPointer<UInt8>, from start: Int) -> Int? {
+        let n = needle.count, h = haystack.count
+        guard n > 0, h >= n, start <= h - n else { return nil }
+        let first = needle[0]
+        var i = start
+        let limit = h - n
+        while i <= limit {
+            if haystack[i] == first {
+                var j = 1
+                while j < n, haystack[i + j] == needle[j] { j += 1 }
+                if j == n { return i }
+            }
+            i += 1
+        }
         return nil
     }
 }

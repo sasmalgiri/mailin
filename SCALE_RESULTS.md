@@ -176,13 +176,54 @@ configuration, so the optimised build is measurable without the app). Same
 file (the owner's real Sent.mbox, 94,915,160 B, 526 attachment-heavy
 messages), same Mac, production coordinator into disposable storage.
 
-| Build | Engine | Before | After fix 1 | After fix 2 | Speed-up |
-|---|---|---|---|---|---|
-| Release | offset engine (3.0 default) | 78.7 s · 1.15 MiB/s | 35.8 s · 2.53 MiB/s | **16.8 s · 5.40 MiB/s · 31 msg/s** | **4.7×** |
-| Release | streaming parser | 63.5 s · 1.43 MiB/s | 45.1 s · 2.01 MiB/s | **10.0 s · 9.04 MiB/s · 52 msg/s** | **6.4×** |
-| Debug | offset engine | 174.3 s · 0.52 MiB/s | — | — | — |
+| Build | Engine | Before | Fix 1 | Fix 2 | Fix 3 | Fixes 4–6 | Speed-up |
+|---|---|---|---|---|---|---|---|
+| Release | offset engine (3.0 default) | 78.7 s · 1.15 MiB/s | 35.8 s | 16.8 s · 5.4 MiB/s | 2.4 s · 37 MiB/s | **1.0 s · 86.6 MiB/s · 503 msg/s** | **≈ 75×** |
+| Release | streaming parser | 63.5 s · 1.43 MiB/s | 45.1 s | 10.0 s · 9.0 MiB/s | 3.2 s · 28 MiB/s | **2.3 s · 40 MiB/s · 233 msg/s** | **≈ 28×** |
+| Debug | offset engine | 174.3 s · 0.52 MiB/s | — | — | — | — | — |
 
-Counts were identical in every run (526 stored, 526 indexed, 0 damaged).
+Counts were identical in every run (526 stored, 526 indexed, 0 damaged); the
+handoff round trip stayed 526 of 526 byte-identical after every step; the
+full unit suite (484 tests) was green after fix 3 and again after fixes 4–6,
+and itself now runs in 4–6 minutes instead of 24.
+
+- **Fix 3 — byte-level MIME split, compiled-once regexes, byte-level
+  quoted-printable.** `MIMEParser` split the whole message and every part
+  with `components(separatedBy:)` (Foundation, UTF-16 bridged), rebuilt five
+  `NSRegularExpression`s per part, and the quoted-printable decoder stepped
+  Characters with `index(_:offsetBy:)`. All three are now one pass over
+  UTF-8 (`ByteSplit`, static regexes, byte QP). 16.8 s → 2.4 s.
+- **Fix 4 — parse on several cores.** The offset engine's scan (sequential
+  I/O) and the store (one writer) stay serial; each batch's messages are
+  parsed on up to `activeProcessorCount − 1` (≤ 8) cores and put back in
+  ordinal order, so checkpoints see the same sequence as before.
+- **Fix 5 — no temp file per attachment during bulk import.** Every decoded
+  attachment was written to the temp directory (a second copy of the whole
+  mailbox's attachments, gone at relaunch); the import passes
+  `materializeAttachments: false` and readers fall back to decoding from the
+  stored message, as they do after a relaunch anyway.
+- **Fix 6 — FTS import-mode shard cap 4 → 20**, so a per-file source no
+  longer reopens the shards the previous file evicted (2,369 evictions in
+  the EML-folder row → 146).
+- Also: "is the body empty" is a byte scan instead of a whole-body
+  `trimmingCharacters` through ICU.
+
+### The 1 GB rows, re-run after the fixes (Debug, 2026-09-28)
+
+| Row | Before (Debug) | After (Debug) | Speed-up |
+|---|---|---|---|
+| gzip | 762.9 s | 89.7 s | 8.5× |
+| Apple Mail package | 549.1 s | 76.1 s | 7.2× |
+| EML folder (5,786 files) | 1,850.3 s | 96.5 s | 19× |
+| EMLX folder | 740.0 s | 55.3 s | 13× |
+| Maildir | 1,844.6 s | 97.1 s | 19× |
+| mixed four formats (4,208 msgs) | 951.0 s | 85.8 s | 11× |
+| 1.1 GB single message (import + byte-exact export) | 6.7 s | 5.7 s | — |
+
+Same counts, same reconciliation, same byte-exact export. These are Debug
+figures because `xcodebuild test` builds Debug; the Release package test
+above is the shipping-speed number. The folder penalty is now ≈ 1.3×
+instead of 3.4×.
 
 **The first finding was that Release was NOT faster than Debug** (1.15 vs the
 1.3 MiB/s recorded above): the optimiser was not the problem, the algorithm
@@ -213,18 +254,20 @@ items, each an order of magnitude smaller than the two above.
 
 ### The table the owner asked for, restated with the measured Release rate
 
-At 5.4 MiB/s (offset engine, Release, this MacBook Air; folder sources ≈ 3.4×
-slower until the FTS shard budget is per source):
+At 86 MiB/s (offset engine, Release, this MacBook Air, 95 MB real mailbox) —
+and, more conservatively, at the ≈ 12 MiB/s the 1 GB rows reached in DEBUG:
 
-| Source | Single file | Folder of files |
-|---|---|---|
-| 1 GB | ≈ 3 min | ≈ 11 min |
-| 10 GB | ≈ 32 min | ≈ 1.8 h |
-| 100 GB | ≈ 5.3 h | ≈ 18 h |
-| 200 GB | ≈ 10.5 h | ≈ 1.5 days |
+| Source | Single file at 86 MiB/s (Release) | Single file at 12 MiB/s (Debug 1 GB rows) | Folder of files (≈ 1.3× slower) |
+|---|---|---|---|
+| 1 GB | ≈ 12 s | ≈ 1.5 min | ≈ 2 min |
+| 10 GB | ≈ 2 min | ≈ 15 min | ≈ 20 min |
+| 100 GB | ≈ 20 min | ≈ 2.5 h | ≈ 3.2 h |
+| 200 GB | ≈ 40 min | ≈ 5 h | ≈ 6.5 h |
 
-Extrapolated from a 95 MB run; the 1 GB rows above were measured before
-these fixes and will be re-run.
+The true shipping figure lies between the two columns and will be set by
+disk speed on the customer's Mac rather than by the parser once the source
+is read faster than 86 MiB/s; nothing above 1.5 GB in one file has been
+executed, and the claim wording ("verified up to 1.5 GB") stands.
 
 ## Earlier results
 

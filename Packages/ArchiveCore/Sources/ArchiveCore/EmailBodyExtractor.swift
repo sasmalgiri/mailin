@@ -85,7 +85,8 @@ public class EmailBodyExtractor {
     /// `extractContents(from:)`, which parsed the whole text a second time —
     /// two full MIME passes per message (profiled 2026-09-28). Callers that
     /// hold the parts pass them here.
-    public static func extractContents(parts: [MIMEPart]) throws -> (
+    public static func extractContents(parts: [MIMEPart],
+                                       materializeAttachments: Bool = true) throws -> (
         plainBody: String,
         htmlBody: String,
         attachments: [AttachmentMetadata]
@@ -100,7 +101,8 @@ public class EmailBodyExtractor {
                 into: &plainBodies,
                 htmlBodies: &htmlBodies,
                 attachments: &attachments,
-                depth: 0
+                depth: 0,
+                materialize: materializeAttachments
             )
         }
 
@@ -117,7 +119,8 @@ public class EmailBodyExtractor {
         into plainBodies: inout [String],
         htmlBodies: inout [String],
         attachments: inout [AttachmentMetadata],
-        depth: Int
+        depth: Int,
+        materialize: Bool = true
     ) {
         guard depth < maxDepth else { return }
 
@@ -126,14 +129,14 @@ public class EmailBodyExtractor {
         // RFC822 or nested message
         if lower.hasPrefix("message/rfc822") {
             if part.isAttachment {
-                if let md = extractAttachment(from: part, forceFilename: "attached.eml") {
+                if let md = extractAttachment(from: part, forceFilename: "attached.eml", materialize: materialize) {
                     attachments.append(md)
                 }
                 return
-            } else if !part.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            } else if !isBlank(part.body) {
                 let (_, nested) = MIMEParser.parseEmail(rawEmail: part.body)
                 for sub in nested {
-                    processPart(sub, into: &plainBodies, htmlBodies: &htmlBodies, attachments: &attachments, depth: depth + 1)
+                    processPart(sub, into: &plainBodies, htmlBodies: &htmlBodies, attachments: &attachments, depth: depth + 1, materialize: materialize)
                 }
                 return
             }
@@ -142,13 +145,15 @@ public class EmailBodyExtractor {
         // Multipart: recursively process subparts
         if lower.hasPrefix("multipart/") {
             for sub in part.subparts {
-                processPart(sub, into: &plainBodies, htmlBodies: &htmlBodies, attachments: &attachments, depth: depth + 1)
+                processPart(sub, into: &plainBodies, htmlBodies: &htmlBodies, attachments: &attachments, depth: depth + 1, materialize: materialize)
             }
             return
         }
 
-        // Ignore empty bodies
-        if part.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        // Ignore empty bodies. (A byte scan, not `trimmingCharacters` — that
+        // walked every multi-megabyte attachment body through ICU just to
+        // answer "is it empty".)
+        if isBlank(part.body) {
             return
         }
 
@@ -165,14 +170,29 @@ public class EmailBodyExtractor {
 
         // Attachments (files, images, PDFs, inline images, etc)
         if part.filename != nil || part.isAttachment || part.isInlineImage || lower.hasPrefix("image/") || lower == "application/pdf" {
-            if let md = extractAttachment(from: part) {
+            if let md = extractAttachment(from: part, materialize: materialize) {
                 attachments.append(md)
             }
         }
     }
 
+    /// True when `text` is empty or all ASCII whitespace. A non-ASCII byte
+    /// defers to the Unicode rule (rare, and then the text is not blank in
+    /// the common case anyway).
+    static func isBlank(_ text: String) -> Bool {
+        var text = text
+        let verdict: Bool? = text.withUTF8 { bytes in
+            for b in bytes {
+                if b >= 0x80 { return nil }
+                if b != 0x20 && b != 0x09 && b != 0x0A && b != 0x0D && b != 0x0B && b != 0x0C { return false }
+            }
+            return true
+        }
+        return verdict ?? text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     /// Extracts an attachment, decodes, and saves as needed (no double decoding)
-    private static func extractAttachment(from part: MIMEPart, forceFilename: String? = nil) -> AttachmentMetadata? {
+    private static func extractAttachment(from part: MIMEPart, forceFilename: String? = nil, materialize: Bool = true) -> AttachmentMetadata? {
         do {
             let dispName = parseParam("filename", in: part.headers["Content-Disposition"])
             let typeName = parseParam("name", in: part.headers["Content-Type"])
@@ -184,7 +204,8 @@ public class EmailBodyExtractor {
                 body: part.body,
                 encoding: part.transferEncoding,
                 mimeType: part.mimeType,
-                suggestedFilename: suggestedName
+                suggestedFilename: suggestedName,
+                materializeToTemp: materialize
             ).withInlineInfo(
                 isInline: part.isInlineImage,
                 contentID: contentID
@@ -215,17 +236,29 @@ public class EmailBodyExtractor {
         }
     }
 
+    /// Compiled once per pattern: an ICU regex compile per attachment showed
+    /// in the import profile.
+    private static let paramRegexLock = NSLock()
+    nonisolated(unsafe) private static var paramRegexes: [String: NSRegularExpression] = [:]
+    private static func paramRegex(_ pattern: String) -> NSRegularExpression? {
+        paramRegexLock.lock(); defer { paramRegexLock.unlock() }
+        if let cached = paramRegexes[pattern] { return cached }
+        guard let made = try? NSRegularExpression(pattern: pattern) else { return nil }
+        paramRegexes[pattern] = made
+        return made
+    }
+
     /// Helper for param extraction (RFC-compliant)
     private static func parseParam(_ key: String, in header: String?) -> String? {
         guard let h = header else { return nil }
         // Try RFC2231 first
         let rfc2231 = #"(?i)\b\#(key)\*\s*=\s*(?:[\w-]+'[\w-]*')?([^";]+)"#
-        if let re = try? NSRegularExpression(pattern: rfc2231), let m = re.firstMatch(in: h, range: NSRange(location: 0, length: (h as NSString).length)), m.numberOfRanges > 1, m.range(at: 1).location != NSNotFound {
+        if let re = paramRegex(rfc2231), let m = re.firstMatch(in: h, range: NSRange(location: 0, length: (h as NSString).length)), m.numberOfRanges > 1, m.range(at: 1).location != NSNotFound {
             return (h as NSString).substring(with: m.range(at: 1)).removingPercentEncoding
         }
         // Try standard
         let pattern = #"(?i)\b\#(key)=["]?([^";]+)["]?"#
-        if let re = try? NSRegularExpression(pattern: pattern), let m = re.firstMatch(in: h, range: NSRange(location: 0, length: (h as NSString).length)), m.numberOfRanges > 1, m.range(at: 1).location != NSNotFound {
+        if let re = paramRegex(pattern), let m = re.firstMatch(in: h, range: NSRange(location: 0, length: (h as NSString).length)), m.numberOfRanges > 1, m.range(at: 1).location != NSNotFound {
             return (h as NSString).substring(with: m.range(at: 1))
         }
         return nil
@@ -330,11 +363,19 @@ public class AttachmentSaver {
     }
 
     /// Saves the decoded data from email attachment to a temp file (with fallback for raw binary/nonstandard)
+    /// - Parameter materializeToTemp: write the decoded bytes to a temp file
+    ///   and return its URL (what the detail view and Quick Look use in the
+    ///   same session). The BULK IMPORT passes `false`: a 100 GB import wrote
+    ///   every attachment to the temp directory a second time — twice the
+    ///   I/O and gigabytes of temp — for URLs that do not survive relaunch;
+    ///   readers fall back to decoding from the stored message
+    ///   (`AttachmentHydrator`), which is what they do after a relaunch anyway.
     public static func saveAttachment(
         body: String,
         encoding: String?,
         mimeType: String?,
-        suggestedFilename: String?
+        suggestedFilename: String?,
+        materializeToTemp: Bool = true
     ) throws -> AttachmentMetadata {
         // Step 1: Robust decode (base64, QP, binary fallback)
         let data: Data? = {
@@ -382,10 +423,13 @@ public class AttachmentSaver {
             .replacingOccurrences(of: "\\", with: "_")
             .replacingOccurrences(of: "..", with: "_")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let tempURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString + "_" + safeName)
-
-        try finalData.write(to: tempURL, options: .atomic)
+        var tempURL: URL? = nil
+        if materializeToTemp {
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString + "_" + safeName)
+            try finalData.write(to: url, options: .atomic)
+            tempURL = url
+        }
 
         return AttachmentMetadata(
             filename: safeName,

@@ -878,7 +878,13 @@ actor FTSSearchIndex {
     /// touched — a 2007–2025 corpus opened 19 connections, each with its own
     /// page cache, and that cost accumulates independently of batch size. A
     /// tighter cap during import trades a few reopens for bounded memory.
-    private static let importMaxOpenShards = 4
+    /// Raised from 4 to 20 (2026-09-28): with a 19-year corpus and a cap of
+    /// 4, every batch re-opened the shards the previous batch had evicted —
+    /// 2,369 evictions in the 1 GB EML-folder row, which ran 3.4× slower than
+    /// the same bytes as one file. The memory argument is carried by the
+    /// per-shard cache (2 MB in import mode → ≤ 40 MB for 20 shards), and OS
+    /// memory pressure still evicts through `evictIdleShards`.
+    private static let importMaxOpenShards = 20
     private var maxOpenShards = FTSSearchIndex.interactiveMaxOpenShards
 
     /// Page cache per shard connection, in KB. SQLite's default (~2 MB) times
