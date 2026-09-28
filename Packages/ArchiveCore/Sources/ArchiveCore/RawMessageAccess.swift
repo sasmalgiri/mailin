@@ -81,6 +81,43 @@ extension MBOXRecordBuilder {
     }
 }
 
+/// Audit F04 (2026-09-28): an export that streams bytes from a source file
+/// proves, once per source per run, that the file on disk is the file that
+/// was imported — its SHA-256 matches the digest recorded on the locator.
+/// Without this a same-length edit to the source changed later exports
+/// silently, each with a fresh, valid artifact hash. One ledger lives for one
+/// export run; the hash is computed off the main actor.
+final class SourceVerificationLedger: @unchecked Sendable {
+    private var verified: Set<String> = []
+    private let lock = NSLock()
+
+    init() {}
+
+    /// Paths this run has verified so far (for receipts and tests).
+    var verifiedPaths: Set<String> {
+        lock.lock(); defer { lock.unlock() }
+        return verified
+    }
+
+    /// Throws `LocatorReadError.digestMismatch` when the source has changed
+    /// since import, `.sourceMissing` when it is gone. A locator that carries
+    /// no digest (imported before digests were recorded) cannot be verified
+    /// and passes — `MessageLocator.hasVerifiableSource` tells the two apart.
+    func verify(_ locator: MessageLocator) async throws {
+        guard locator.hasVerifiableSource else { return }
+        lock.lock()
+        let done = verified.contains(locator.sourcePath)
+        lock.unlock()
+        if done { return }
+        try await Task.detached(priority: .userInitiated) {
+            try LocatorReader().verifySource(locator)
+        }.value
+        lock.lock()
+        verified.insert(locator.sourcePath)
+        lock.unlock()
+    }
+}
+
 /// Synchronous located-message writer, for the two legacy UI export loops
 /// that cannot await. Reads the locator on its own read-only connection.
 enum RawMessageFile {
@@ -157,9 +194,11 @@ extension ArchiveDataService {
 
     /// Streams the original bytes of `email` through `sink` and returns their
     /// count and SHA-256. Throws `RawMessageError.contentUnavailable` rather
-    /// than yielding an empty message.
+    /// than yielding an empty message. With a `ledger`, a located message's
+    /// source is verified against its recorded digest first (F04).
     func streamRawMessage(for email: MBOXParser.RawEmail,
                           chunkSize: Int = 1_048_576,
+                          ledger: SourceVerificationLedger? = nil,
                           sink: (Data) throws -> Void) async throws -> RawMessageResult {
         let subject = email.headers["Subject"] ?? "(no subject)"
         var digest = SHA256()
@@ -171,6 +210,7 @@ extension ArchiveDataService {
             total = data.count
             try sink(data)
         case .located(let locator):
+            if let ledger { try await ledger.verify(locator) }
             try RawMessageFile.stream(located: locator, chunkSize: chunkSize) { chunk in
                 digest.update(data: chunk)
                 total += chunk.count
@@ -185,15 +225,16 @@ extension ArchiveDataService {
     /// The whole message in memory. For a located message this is the
     /// message's own size; callers that can stream should use
     /// `streamRawMessage` or `writeRawMessage` instead.
-    func rawMessageData(for email: MBOXParser.RawEmail) async throws -> Data {
+    func rawMessageData(for email: MBOXParser.RawEmail, ledger: SourceVerificationLedger? = nil) async throws -> Data {
         var out = Data()
-        _ = try await streamRawMessage(for: email) { out.append($0) }
+        _ = try await streamRawMessage(for: email, ledger: ledger) { out.append($0) }
         return out
     }
 
     /// Writes the message's original bytes to `url`; a failure leaves no file.
     @discardableResult
-    func writeRawMessage(for email: MBOXParser.RawEmail, to url: URL) async throws -> RawMessageResult {
+    func writeRawMessage(for email: MBOXParser.RawEmail, to url: URL,
+                         ledger: SourceVerificationLedger? = nil) async throws -> RawMessageResult {
         FileManager.default.createFile(atPath: url.path, contents: nil)
         let handle = try FileHandle(forWritingTo: url)
         var succeeded = false
@@ -201,7 +242,7 @@ extension ArchiveDataService {
             try? handle.close()
             if !succeeded { try? FileManager.default.removeItem(at: url) }
         }
-        let result = try await streamRawMessage(for: email) { try handle.write(contentsOf: $0) }
+        let result = try await streamRawMessage(for: email, ledger: ledger) { try handle.write(contentsOf: $0) }
         succeeded = true
         return result
     }

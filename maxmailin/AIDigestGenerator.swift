@@ -60,9 +60,12 @@ struct AIDigestGenerator {
     static func generateDigest(
         period: TimePeriod,
         customStart: Date? = nil,
-        customEnd: Date? = nil
+        customEnd: Date? = nil,
+        baseQuery: EmailQuery = .all
     ) async -> [DigestSection] {
-        var query = EmailQuery.all
+        // F14: the caller's scope (Page 2 source/date) is the base; the
+        // period narrows it further.
+        var query = baseQuery
         if period == .custom {
             let calendar = Calendar.current
             if let s = customStart { query.afterDate = calendar.startOfDay(for: s) }

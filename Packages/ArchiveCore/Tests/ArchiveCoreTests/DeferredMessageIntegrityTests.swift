@@ -266,6 +266,85 @@ final class DeferredMessageIntegrityTests: XCTestCase {
         XCTAssertNil(RawMessageFile.locator(for: big, storeDirectory: f.store.storeDirectory))
     }
 
+    // MARK: F04 — a changed source is refused, not exported with a fresh hash
+
+    func testEditedSource_sameLength_isRefusedByEveryStreamingExport() async throws {
+        let f = try makeFixture("edited"); defer { try? FileManager.default.removeItem(at: f.root) }
+        _ = try await importFixture(f, ceiling: Self.ceiling)
+        let big = try await email(subject: "Big one", in: f)
+        let storedLocator = try await f.store.locator(forEmailID: big.id)
+        let locator = try XCTUnwrap(storedLocator)
+        XCTAssertTrue(locator.hasVerifiableSource, "the offset engine records the source digest")
+
+        // Same-length edit inside the big message's body.
+        var bytes = try Data(contentsOf: f.mbox)
+        let marker = Data("Line 60 of a message".utf8)
+        let at = try XCTUnwrap(bytes.range(of: marker)?.lowerBound)
+        bytes[at + 5] = UInt8(ascii: "7")   // "Line 60" → "Line 70"
+        try bytes.write(to: f.mbox)
+
+        let service = await ArchiveExportService(archive: f.archive)
+        // EML (per-file) export.
+        let folder = f.root.appendingPathComponent("eml", isDirectory: true)
+        do {
+            _ = try await service.exportEMLFiles(scope: .explicit([big.id]), to: folder)
+            XCTFail("an edited source must be refused")
+        } catch let error as LocatorReadError {
+            guard case .digestMismatch(_, let path) = error else { return XCTFail("\(error)") }
+            XCTAssertEqual(path, f.mbox.path)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.path), "nothing is left behind")
+
+        // MBOX (single document) export goes through the same ledger.
+        let mbox = f.root.appendingPathComponent("out.mbox")
+        do {
+            _ = try await service.exportMBOXArchive(scope: .explicit([big.id]), to: mbox)
+            XCTFail("an edited source must be refused")
+        } catch let error as LocatorReadError {
+            guard case .digestMismatch = error else { return XCTFail("\(error)") }
+        }
+
+        // The shared reader with a ledger refuses too; without one it reads
+        // (the ledger is the caller's choice, and every export passes one).
+        do {
+            _ = try await f.archive.rawMessageData(for: big, ledger: SourceVerificationLedger())
+            XCTFail()
+        } catch let error as LocatorReadError {
+            guard case .digestMismatch = error else { return XCTFail("\(error)") }
+        }
+        _ = try await f.archive.rawMessageData(for: big, ledger: nil)
+
+        // The small (stored) message is unaffected: its bytes are in the archive.
+        let small = try await email(subject: "Small one", in: f)
+        let smallFolder = f.root.appendingPathComponent("eml-small", isDirectory: true)
+        let ok = try await service.exportEMLFiles(scope: .explicit([small.id]), to: smallFolder)
+        XCTAssertEqual(ok.recordsWritten, 1)
+    }
+
+    func testLedger_verifiesEachSourceOncePerRun() async throws {
+        let f = try makeFixture("once"); defer { try? FileManager.default.removeItem(at: f.root) }
+        _ = try await importFixture(f, ceiling: Self.ceiling)
+        let big = try await email(subject: "Big one", in: f)
+        let storedLocator = try await f.store.locator(forEmailID: big.id)
+        let locator = try XCTUnwrap(storedLocator)
+        let ledger = SourceVerificationLedger()
+        try await ledger.verify(locator)
+        XCTAssertEqual(ledger.verifiedPaths, [f.mbox.path])
+        // Editing the file AFTER the first verification is not caught within
+        // the same run — that is the stated limit (modification during export).
+        var bytes = try Data(contentsOf: f.mbox)
+        bytes[bytes.count / 2] = bytes[bytes.count / 2] == 0x20 ? 0x2E : 0x20
+        try bytes.write(to: f.mbox)
+        try await ledger.verify(locator)   // cached
+        // A new run sees it.
+        do {
+            try await SourceVerificationLedger().verify(locator)
+            XCTFail()
+        } catch let error as LocatorReadError {
+            guard case .digestMismatch = error else { return XCTFail("\(error)") }
+        }
+    }
+
     // MARK: Streaming unquoter
 
     func testStreamingUnquoter_matchesWholeTextAcrossChunkBoundaries() {

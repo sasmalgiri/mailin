@@ -157,6 +157,57 @@ actor EmbeddingStore {
         try exec("DELETE FROM meta;")
     }
 
+    /// Which of `ids` already have a vector (audit F13: a catch-up walk skips
+    /// these instead of re-embedding the whole archive).
+    func existingIDs(among ids: [UUID]) throws -> Set<UUID> {
+        guard !ids.isEmpty else { return [] }
+        let db = try handle()
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_prepare_v2(db, "SELECT 1 FROM vectors WHERE email_id = ?;", -1, &stmt, nil) == SQLITE_OK else { return [] }
+        var found = Set<UUID>()
+        for id in ids {
+            sqlite3_reset(stmt)
+            sqlite3_bind_text(stmt, 1, id.uuidString, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            if sqlite3_step(stmt) == SQLITE_ROW { found.insert(id) }
+        }
+        return found
+    }
+
+    /// A page of stored ids, for the deleted-message sweep.
+    func ids(offset: Int, limit: Int) throws -> [UUID] {
+        let db = try handle()
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_prepare_v2(db, "SELECT email_id FROM vectors ORDER BY email_id LIMIT ? OFFSET ?;", -1, &stmt, nil) == SQLITE_OK else { return [] }
+        sqlite3_bind_int64(stmt, 1, Int64(limit))
+        sqlite3_bind_int64(stmt, 2, Int64(offset))
+        var out: [UUID] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let c = sqlite3_column_text(stmt, 0), let id = UUID(uuidString: String(cString: c)) { out.append(id) }
+        }
+        return out
+    }
+
+    func delete(ids: [UUID]) throws {
+        guard !ids.isEmpty else { return }
+        let db = try handle()
+        try exec("BEGIN;")
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_prepare_v2(db, "DELETE FROM vectors WHERE email_id = ?;", -1, &stmt, nil) == SQLITE_OK else {
+            try exec("ROLLBACK;"); throw EmbeddingError.sql(String(cString: sqlite3_errmsg(db)))
+        }
+        for id in ids {
+            sqlite3_reset(stmt)
+            sqlite3_bind_text(stmt, 1, id.uuidString, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            guard sqlite3_step(stmt) == SQLITE_DONE else {
+                try exec("ROLLBACK;"); throw EmbeddingError.sql(String(cString: sqlite3_errmsg(db)))
+            }
+        }
+        try exec("COMMIT;")
+    }
+
     func close() {
         if let db { sqlite3_close(db) }
         db = nil
@@ -248,7 +299,7 @@ final class SemanticIndexController {
                               cancel: { [weak self] in self?.pause() })
         task = Task { [weak self] in
             guard let self else { return }
-            await self.run()
+            await self.run(modules: modules)
             await MainActor.run {
                 self.isRunning = false
                 self.task = nil
@@ -269,7 +320,15 @@ final class SemanticIndexController {
     }
 
     /// Resumable walk: newest → oldest by keyset, cursor persisted per page.
-    private func run() async {
+    ///
+    /// Audit F13 (2026-09-28): the cursor used to survive a COMPLETED walk,
+    /// so a later run resumed below the oldest message and never saw mail
+    /// imported afterwards. Now a walk that reaches the end clears its
+    /// cursor; the next run starts from the newest message again and embeds
+    /// only ids the store does not have (`existingIDs`), so a catch-up costs
+    /// page reads, not re-embedding. The page's switch is checked per page,
+    /// so a policy hard-off stops the walk without a relaunch (F12).
+    private func run(modules: ModuleRegistry) async {
         do {
             total = try await archive.storedTotalCount()
             indexed = try await store.count()
@@ -278,28 +337,56 @@ final class SemanticIndexController {
                let seconds = Double(dateText), let id = UUID(uuidString: idText) {
                 cursor = EmailPageCursor(beforeDate: Date(timeIntervalSince1970: seconds), beforeID: id)
             }
+            var reachedEnd = false
             while !Task.isCancelled {
+                guard modules.isEnabled(.aiInsights), modules.isOn(.aiAssistant) else { break }
                 let page = try await archive.page(query: .all, cursor: cursor, limit: Self.pageSize)
-                if page.summaries.isEmpty { break }
+                if page.summaries.isEmpty { reachedEnd = true; break }
+                let already = try await store.existingIDs(among: page.summaries.map(\.id))
                 var rows: [(id: UUID, vector: [Float])] = []
-                for summary in page.summaries {
+                for summary in page.summaries where !already.contains(summary.id) {
                     if Task.isCancelled { break }
                     let text = SentenceEmbedder.text(for: summary)
                     if !text.isEmpty, let vector = SentenceEmbedder.embed(text) { rows.append((summary.id, vector)) }
                 }
                 if Task.isCancelled { break }
-                try await store.upsert(rows)
+                if !rows.isEmpty { try await store.upsert(rows) }
                 if let last = page.summaries.last {
                     try await store.setMeta(Self.cursorDateKey, String(last.date.timeIntervalSince1970))
                     try await store.setMeta(Self.cursorIDKey, last.id.uuidString)
                 }
                 indexed = try await store.count()
-                guard let next = page.nextCursor else { break }
+                guard let next = page.nextCursor else { reachedEnd = true; break }
                 cursor = next
                 await Task.yield()
             }
+            if reachedEnd, !Task.isCancelled {
+                // The walk is complete: forget the cursor so the next run
+                // revisits from the newest message, and drop vectors for
+                // messages the archive no longer has.
+                try await store.setMeta(Self.cursorDateKey, nil)
+                try await store.setMeta(Self.cursorIDKey, nil)
+                try await sweepDeleted()
+                indexed = try await store.count()
+                total = try await archive.storedTotalCount()
+            }
         } catch {
             lastError = error.localizedDescription
+        }
+    }
+
+    /// Removes vectors whose message is gone from the archive, one bounded
+    /// page of stored ids at a time.
+    private func sweepDeleted() async throws {
+        var offset = 0
+        while !Task.isCancelled {
+            let ids = try await store.ids(offset: offset, limit: 500)
+            if ids.isEmpty { break }
+            let present = try await archive.exists(ids: ids)
+            let gone = ids.filter { !present.contains($0) }
+            if !gone.isEmpty { try await store.delete(ids: gone) }
+            // Deleted rows shift the window back by the number removed.
+            offset += ids.count - gone.count
         }
     }
 

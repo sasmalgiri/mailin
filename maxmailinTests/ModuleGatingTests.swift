@@ -10,6 +10,7 @@
 
 import Testing
 import Foundation
+import NaturalLanguage
 @testable import maxmailin
 
 @MainActor
@@ -63,6 +64,139 @@ struct ModuleGatingTests {
     @Test("Persona home hub belongs to Professional Workflows")
     func personaHubOwnedByProfessional() {
         #expect(HubDestination.personaHub.owner == .professional)
+    }
+
+    // MARK: Audit F12 — a managed hard-off stops running work
+
+    @Test("A managed hard-off cancels the page's jobs, drops its host and rewires — without a relaunch")
+    func policyHardOffTearsDownRunningWork() throws {
+        let defaults = UserDefaults.standard
+        let original = defaults.dictionary(forKey: ManagedConfig.managedDefaultsKey)
+        defer {
+            if let original { defaults.set(original, forKey: ManagedConfig.managedDefaultsKey) }
+            else { defaults.removeObject(forKey: ManagedConfig.managedDefaultsKey) }
+        }
+        defaults.removeObject(forKey: ManagedConfig.managedDefaultsKey)
+
+        let (registry, _) = makeRegistry()
+        try registry.enable(.aiInsights)
+        final class Host {}
+        registry.register(.aiInsights) { Host() }
+        _ = try registry.host(for: .aiInsights)
+        var cancelled = false
+        registry.jobs.register(id: "test.job", module: .aiInsights, label: "test") { cancelled = true }
+        #expect(registry.hasLiveHost(.aiInsights))
+        #expect(registry.jobs.jobs(for: .aiInsights).count == 1)
+
+        // Policy arrives while the page is running.
+        defaults.set(["disabledModules": ["aiInsights"]], forKey: ManagedConfig.managedDefaultsKey)
+        registry.reloadPolicy()
+
+        #expect(!registry.isEnabled(.aiInsights))
+        #expect(cancelled, "the running job was cancelled by the policy change")
+        #expect(registry.jobs.jobs(for: .aiInsights).isEmpty)
+        #expect(!registry.hasLiveHost(.aiInsights), "the feature host was released")
+
+        // Policy lifts: the page is enabled again (the user's on survived) and
+        // a host can be built afresh.
+        defaults.removeObject(forKey: ManagedConfig.managedDefaultsKey)
+        registry.reloadPolicy()
+        #expect(registry.isEnabled(.aiInsights))
+        _ = try registry.host(for: .aiInsights)
+        #expect(registry.hasLiveHost(.aiInsights))
+    }
+
+    // MARK: Audit F13 — the semantic index catches up after a completed walk
+
+    private func semanticEmail(_ i: Int, date: String) -> MBOXParser.RawEmail {
+        MBOXParser.RawEmail(
+            headers: ["Message-ID": "<sem-\(i)-\(UUID().uuidString)@test>", "Subject": "Semantic subject \(i)",
+                      "From": "a@example.com", "To": "b@example.com", "Date": date],
+            rawSource: "Subject: Semantic subject \(i)\n\nA sentence about topic number \(i) for the embedder.\n",
+            messageType: "email", attachments: [], timestamp: "", domains: ["example.com"],
+            plainBody: "A sentence about topic number \(i) for the embedder.", htmlBody: "")
+    }
+
+    private func waitUntilIdle(_ controller: SemanticIndexController) async {
+        for _ in 0..<300 {
+            if !controller.isRunning { return }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
+    @Test("A completed walk clears its cursor; the next run embeds later imports and drops deleted messages")
+    func semanticIndexCatchesUpAfterCompletion() async throws {
+        guard NLEmbedding.sentenceEmbedding(for: .english) != nil else { return }   // no on-device model here
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: SemanticIndexController.enabledKey)
+        defer {
+            if let previous { defaults.set(previous, forKey: SemanticIndexController.enabledKey) }
+            else { defaults.removeObject(forKey: SemanticIndexController.enabledKey) }
+        }
+        defaults.set(true, forKey: SemanticIndexController.enabledKey)
+
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("semantic-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store", isDirectory: true))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts", isDirectory: true))
+        let first = [semanticEmail(1, date: "Wed, 01 Jan 2020 10:00:00 +0000"),
+                     semanticEmail(2, date: "Thu, 02 Jan 2020 10:00:00 +0000"),
+                     semanticEmail(3, date: "Fri, 03 Jan 2020 10:00:00 +0000")]
+        try await store.insertBatch(first, batchSize: 10)
+        let archive = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+        let vectors = EmbeddingStore(directory: root.appendingPathComponent("embeddings", isDirectory: true))
+        let controller = SemanticIndexController(archive: archive, store: vectors)
+        let (registry, _) = makeRegistry()
+        try registry.enable(.aiInsights)
+
+        controller.resume(modules: registry)
+        await waitUntilIdle(controller)
+        #expect(controller.lastError == nil, Comment(rawValue: controller.lastError ?? ""))
+        let afterFirst = try await vectors.count()
+        #expect(afterFirst == 3)
+        let cursor = try await vectors.meta(SemanticIndexController.cursorDateKey)
+        #expect(cursor == nil, "a completed walk forgets its cursor")
+
+        // Later imports: one NEWER and one OLDER than anything indexed —
+        // the case the old cursor could never reach.
+        let later = [semanticEmail(4, date: "Sat, 04 Jan 2021 10:00:00 +0000"),
+                     semanticEmail(5, date: "Tue, 01 Jan 2019 10:00:00 +0000")]
+        try await store.insertBatch(later, batchSize: 10)
+        // And one message deleted from the archive.
+        try await archive.delete(ids: [first[0].id])
+
+        controller.resume(modules: registry)
+        await waitUntilIdle(controller)
+        #expect(controller.lastError == nil, Comment(rawValue: controller.lastError ?? ""))
+        let afterSecond = try await vectors.count()
+        #expect(afterSecond == 4, "2 + 2 later imports, minus the deleted one")
+        let present = try await vectors.existingIDs(among: later.map(\.id) + [first[0].id])
+        #expect(present.contains(later[0].id) && present.contains(later[1].id))
+        #expect(!present.contains(first[0].id), "the deleted message's vector is swept")
+        #expect(controller.pending == 0)
+    }
+
+    // MARK: Audit F14 — reports read the scoped corpus
+
+    @Test("The report query carries the Page 2 scope and applies the date range before any cap")
+    func reportQueryCarriesScopeAndDates() {
+        let scope = ArchiveQueryCompiler.compile("source:Sent.mbox")
+        let from = Calendar.current.date(from: DateComponents(year: 2019, month: 3, day: 1))!
+        let to = Calendar.current.date(from: DateComponents(year: 2019, month: 3, day: 31))!
+        let query = ReportBuilderView.reportQuery(scope: scope, useDateRange: true, from: from, to: to)
+        #expect(query.afterDate == Calendar.current.startOfDay(for: from))
+        #expect(query.beforeDate == Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: to)))
+        // The scope's own filter survives the date narrowing.
+        var expected = scope
+        expected.afterDate = query.afterDate
+        expected.beforeDate = query.beforeDate
+        #expect(query == expected)
+
+        let whole = ReportBuilderView.reportQuery(scope: nil, useDateRange: false, from: from, to: to)
+        #expect(whole == .all)
+
+        #expect(ReportBuilderView.coverageNote(matching: 120, processed: 120).hasPrefix("All 120"))
+        #expect(ReportBuilderView.coverageNote(matching: 12_000, processed: 5_000).contains("newest 5,000 of 12,000"))
     }
 
     @Test("Email Analytics (sentiment + NLP passes) belongs to AI Insights")

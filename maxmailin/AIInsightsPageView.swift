@@ -48,6 +48,10 @@ struct AIInsightsPageView: View {
         return parts.joined(separator: " ")
     }
 
+    /// Audit F14: the same scope as a typed query, so Summaries and Reports
+    /// read the corpus their label names — not the whole archive.
+    private var scopeQuery: EmailQuery { ArchiveQueryCompiler.compile(scopeContext) }
+
     private var scopeLabel: String {
         var label = selectedSource ?? "Whole archive"
         if dateScope != .all { label += " · \(dateScope.rawValue)" }
@@ -140,9 +144,11 @@ struct AIInsightsPageView: View {
             AIAssistantView(archiveScope: .all, searchContext: scopeContext)
                 .id(scopeContext)   // a new scope is a new conversation context
         case .summaries:
-            AIDigestView()
+            AIDigestView(scope: scopeQuery)
+                .id(scopeContext)
         case .reports:
-            ReportBuilderView()
+            ReportBuilderView(scope: scopeQuery)
+                .id(scopeContext)
         }
     }
 }

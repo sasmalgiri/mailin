@@ -103,10 +103,13 @@ enum CaseBundleService {
     ) async throws {
         var resolved: [MBOXParser.RawEmail] = []
         resolved.reserveCapacity(emails.count)
+        // F04: one ledger for the bundle — each source file is proven to be
+        // the imported file before its bytes are sealed as evidence.
+        let ledger = SourceVerificationLedger()
         for var email in emails {
             if email.rawSource.isEmpty {
                 do {
-                    let bytes = try await archive.rawMessageData(for: email)
+                    let bytes = try await archive.rawMessageData(for: email, ledger: ledger)
                     email.rawSource = String(decoding: bytes, as: UTF8.self)
                 } catch let error as RawMessageError {
                     if case .contentUnavailable(let subject, let reason) = error {

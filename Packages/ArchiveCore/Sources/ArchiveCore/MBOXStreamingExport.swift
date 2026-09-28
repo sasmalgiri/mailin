@@ -123,6 +123,9 @@ extension ArchiveExportService {
     func locatorStreamPlan(for email: MBOXParser.RawEmail) async throws -> RawStreamPlan? {
         guard email.rawSource.isEmpty,
               let locator = try await archive.messageLocator(for: email.id) else { return nil }
+        // Audit F04: the source is verified against its recorded digest once
+        // per export run before any of its bytes are streamed.
+        try await sourceLedger.verify(locator)
         // The source's own envelope line when it has one, else one built
         // from the message's sender and date.
         var prefix = MBOXRecordBuilder.envelopeLine(for: email)

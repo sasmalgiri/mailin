@@ -162,13 +162,16 @@ enum AIGroundingGate {
         var gated = stripInvalidCitations(from: answer, evidence: evidence)
 
         if !verified.isEmpty {
-            gated += "\n\n---\n**Cited evidence (verified):**\n"
+            // Audit F15: what this check IS — every citation below resolves to
+            // a message that was actually retrieved — and what it is NOT: the
+            // statements themselves are not fact-checked against that message.
+            gated += "\n\n---\n**Cited evidence** (each citation resolves to a retrieved message; the statements are not fact-checked against it):\n"
             for ref in verified.prefix(8) {
                 gated += "- \(ref.subject.isEmpty ? "(No Subject)" : ref.subject) — \(ref.sender)\n"
             }
         } else if !evidence.isEmpty {
-            gated += "\n\n---\n*No statement above could be tied to specific retrieved evidence — "
-            gated += "treat specifics as unverified inference.*\n**Retrieved evidence (not directly cited):**\n"
+            gated += "\n\n---\n*No statement above cites a specific retrieved message — "
+            gated += "treat specifics as unverified inference.*\n**Retrieved evidence (not cited):**\n"
             for ref in evidence.prefix(3) {
                 gated += "- \(ref.subject.isEmpty ? "(No Subject)" : ref.subject) — \(ref.sender)\n"
             }

@@ -58,6 +58,13 @@ final class ArchiveExportService {
     let archive: ArchiveDataService
     init(archive: ArchiveDataService) { self.archive = archive }
 
+    /// Audit F04: the per-run proof that every source file streamed from is
+    /// the file that was imported. A new ledger begins with each export
+    /// entry point, so each source is hashed once per run, not per message.
+    private(set) var sourceLedger = SourceVerificationLedger()
+
+    private func beginSourceLedger() { sourceLedger = SourceVerificationLedger() }
+
     /// Phase C-1 boundary: ArchiveCore does not know the forensic risk model.
     /// The app installs a scorer when Professional Workflows is on; nil means
     /// the detailed CSV writes "—" in that column.
@@ -151,6 +158,9 @@ final class ArchiveExportService {
         rawStream: (@MainActor (MBOXParser.RawEmail) async throws -> RawStreamPlan?)? = nil,
         row: @MainActor (MBOXParser.RawEmail, Int) throws -> String
     ) async throws -> ArchiveExportResult {
+        // A partition continues the run's ledger (startAt > 0); a fresh
+        // export starts a new one.
+        if startAt == 0 { beginSourceLedger() }
         let total = try await boundedTotal(scope: scope, limit: limit)
 
         // A8 resume: appending continues the interrupted artifact; the first
@@ -294,6 +304,7 @@ final class ArchiveExportService {
         onProgress: (@MainActor (Int, Int) -> Void)? = nil,
         content: @MainActor (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)?
     ) async throws -> ArchiveExportResult {
+        beginSourceLedger()
         let total = try await boundedTotal(scope: scope, limit: limit)
 
         let fm = FileManager.default
@@ -337,7 +348,10 @@ final class ArchiveExportService {
                     var located = false
                     if let _ = locatedRawExtension, email.rawSource.isEmpty {
                         switch await archive.rawMessageSource(for: email) {
-                        case .located:
+                        case .located(let locator):
+                            // F04: the source is proven to be the imported
+                            // file before a byte of it is exported.
+                            try await sourceLedger.verify(locator)
                             located = true
                         case .unavailable(let why) where email.plainBody.isEmpty && email.htmlBody.isEmpty:
                             // Nothing to render and nothing to stream: the
@@ -390,7 +404,7 @@ final class ArchiveExportService {
                         try data.write(to: target, options: .atomic)
                         bytes += data.count
                     } else {
-                        let streamed = try await archive.writeRawMessage(for: email, to: target)
+                        let streamed = try await archive.writeRawMessage(for: email, to: target, ledger: sourceLedger)
                         bytes += streamed.bytes
                     }
                     written.append(relative)

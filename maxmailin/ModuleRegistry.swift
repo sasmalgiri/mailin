@@ -305,6 +305,11 @@ final class ModuleRegistry {
     /// and the app sat at 100 % CPU at idle (found 2026-09-27 by the J-5
     /// idle-footprint measurement of the Release build).
     private var lastManagedPolicy: [String: Any]?
+    /// The pages that were effectively on the last time this registry looked
+    /// (F12). A policy change is diffed against THIS, not against a fresh
+    /// read — the managed dictionary has already changed by the time the
+    /// observer runs, so a fresh "before" would equal "after".
+    private var lastEffectiveModules: Set<AppModule> = []
 
     init(store: ModuleStateStore = ModuleStateStore(url: ModuleStateStore.productionURL),
          excludedByBuild: Set<AppModule> = ModuleRegistry.buildExclusions,
@@ -314,6 +319,7 @@ final class ModuleRegistry {
         self.trapsOnMisuse = trapsOnMisuse
         self.state = store.load()
         self.lastManagedPolicy = UserDefaults.standard.dictionary(forKey: ManagedConfig.managedDefaultsKey)
+        self.lastEffectiveModules = Set(AppModule.allCases.filter { isEnabled($0) })
         policyObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in
@@ -322,13 +328,37 @@ final class ModuleRegistry {
                     let unchanged = NSDictionary(dictionary: self.lastManagedPolicy ?? [:]).isEqual(to: now ?? [:])
                     guard !unchanged else { return }
                     self.lastManagedPolicy = now
-                    self.policyRevision &+= 1
+                    self.applyPolicyChange()
                 }
             }
     }
 
     /// Test/MDM hook: re-read the managed dictionary now.
-    func reloadPolicy() { policyRevision &+= 1 }
+    func reloadPolicy() { applyPolicyChange() }
+
+    /// Audit F12 (2026-09-28): a managed hard-off used to update only the
+    /// gates the UI reads, so a page's running jobs and its feature host
+    /// stayed alive. A policy change now goes through the same transitions
+    /// as an explicit `disable`: the effective activation of every page is
+    /// compared before and after, and a page that went off has its jobs
+    /// cancelled, its host released and its wiring reapplied — without a
+    /// relaunch. A page that came back on has its wiring reapplied too.
+    private func applyPolicyChange() {
+        let before = lastEffectiveModules
+        policyRevision &+= 1
+        let after = Set(AppModule.allCases.filter { isEnabled($0) })
+        lastEffectiveModules = after
+        for module in before.subtracting(after) {
+            jobs.cancelAll(for: module)
+            hosts[module] = nil
+            applyWiring(forPage: module)
+            moduleLog.info("policy switched off \(module.rawValue, privacy: .public): jobs cancelled, host released")
+        }
+        for module in after.subtracting(before) {
+            applyWiring(forPage: module)
+            moduleLog.info("policy allows \(module.rawValue, privacy: .public) again")
+        }
+    }
 
     /// Pages absent from this build. Live Mail and the cloud tiers are compiled
     /// out of the no-network edition, so they can never be switched on there.
@@ -517,6 +547,7 @@ final class ModuleRegistry {
         state.set(module, enabled: true)
         store.save(state)
         applyWiring(forPage: module)
+        lastEffectiveModules = Set(AppModule.allCases.filter { isEnabled($0) })
         moduleLog.info("enabled \(module.rawValue, privacy: .public)")
     }
 
@@ -530,6 +561,7 @@ final class ModuleRegistry {
         state.set(module, enabled: false)
         store.save(state)
         applyWiring(forPage: module)
+        lastEffectiveModules = Set(AppModule.allCases.filter { isEnabled($0) })
         moduleLog.info("""
             disabled \(module.rawValue, privacy: .public) \
             (retention: \(retention.rawValue, privacy: .public))
@@ -625,6 +657,7 @@ final class ModuleRegistry {
         }
         if legacyAIEnabled { state.set(.aiInsights, enabled: true) }
         if legacyPersonaCompleted { state.set(.professional, enabled: true) }
+        lastEffectiveModules = Set(AppModule.allCases.filter { isEnabled($0) })
         moduleLog.info("""
             mapped 2.x state — ai: \(legacyAIEnabled, privacy: .public), \
             professional: \(legacyPersonaCompleted, privacy: .public), liveMail: false

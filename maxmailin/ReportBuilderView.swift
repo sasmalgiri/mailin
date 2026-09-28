@@ -37,7 +37,8 @@ struct ReportGenerator {
         author: String,
         sections: [ReportSection],
         emails: [MBOXParser.RawEmail],
-        dateRange: ClosedRange<Date>?
+        dateRange: ClosedRange<Date>?,
+        coverageNote: String? = nil
     ) -> Data {
         let enabledSections = sections.filter(\.isEnabled)
         let pageWidth: CGFloat = 612
@@ -96,7 +97,13 @@ struct ReportGenerator {
 
         drawText(context: context, text: "\(scopedEmails.count) emails analyzed", x: margin, y: y, width: contentWidth,
                  font: NSFont.systemFont(ofSize: 11, weight: .medium), color: .gray, alignment: .center)
-        y -= 50
+        y -= 20
+        if let coverageNote {
+            // F14: the report states exactly what it covered.
+            drawText(context: context, text: coverageNote, x: margin, y: y, width: contentWidth,
+                     font: NSFont.systemFont(ofSize: 9, weight: .regular), color: .gray, alignment: .center)
+        }
+        y -= 30
 
         // Table of contents
         drawText(context: context, text: "Report Sections", x: margin, y: y, width: contentWidth,
@@ -432,7 +439,14 @@ struct ReportBuilderView: View {
     @State private var workingSet: [MBOXParser.RawEmail] = []
     @State private var archiveTotal = 0
     var isPresented: Binding<Bool>?
+    /// Audit F14: the Page 2 scope (source / date) the report is built over;
+    /// nil means the whole archive, as the standalone tool window uses it.
+    var scope: EmailQuery? = nil
     @Environment(\.dismiss) private var envDismiss
+
+    /// What the report actually covered, stated in the PDF and the view.
+    @State private var coverageNote: String?
+    @State private var reportError: String?
 
     @State private var reportTitle = "Email Archive Report"
     @State private var authorName = ""
@@ -624,6 +638,23 @@ struct ReportBuilderView: View {
                     }
                     .buttonStyle(SecondaryButtonStyle())
                 }
+
+                // F14: what the report covered, and any read failure — never
+                // a success-looking PDF over a shorter corpus than asked for.
+                if let coverageNote {
+                    Label(coverageNote, systemImage: "info.circle")
+                        .font(Typography.caption1)
+                        .foregroundColor(AppColors.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("report.coverage")
+                }
+                if let reportError {
+                    Label(reportError, systemImage: "xmark.octagon")
+                        .font(Typography.caption1)
+                        .foregroundColor(AppColors.error)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("report.error")
+                }
             }
             .padding(Spacing.medium)
         }
@@ -709,29 +740,76 @@ struct ReportBuilderView: View {
 
     // MARK: - Actions
 
+    /// The report's working-set ceiling. Reports are aggregate PDFs over an
+    /// in-memory working set; the ceiling keeps that bounded. What is NOT
+    /// acceptable is applying it before the scope: the cap is taken over the
+    /// scoped query, newest first, and the coverage is stated.
+    static let workingSetCap = 5_000
+
+    /// Audit F14: the query the report reads. The Page 2 scope (or the whole
+    /// archive) narrowed by the date range IN THE QUERY, so the cap below is
+    /// taken over matching messages — an older range no longer comes back
+    /// empty because its messages fell outside the newest 5,000.
+    static func reportQuery(scope: EmailQuery?, useDateRange: Bool, from: Date, to: Date) -> EmailQuery {
+        var query = scope ?? .all
+        if useDateRange {
+            let calendar = Calendar.current
+            query.afterDate = calendar.startOfDay(for: from)
+            query.beforeDate = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: to))
+        }
+        return query
+    }
+
+    /// The sentence the PDF and the view carry about coverage.
+    static func coverageNote(matching: Int, processed: Int) -> String {
+        if processed >= matching {
+            return "All \(matching.formatted()) matching messages were analyzed."
+        }
+        return "Analyzed the newest \(processed.formatted()) of \(matching.formatted()) matching messages; older messages beyond that ceiling are not in this report."
+    }
+
     private func generateReport() {
         isGenerating = true
+        reportError = nil
+        coverageNote = nil
         let title = reportTitle
         let author = authorName
         let sectionsCopy = sections
         let range: ClosedRange<Date>? = useDateRange ? dateFrom...dateTo : nil
+        let query = Self.reportQuery(scope: scope, useDateRange: useDateRange, from: dateFrom, to: dateTo)
+        let cap = Self.workingSetCap
 
         Task.detached {
-            // Bounded working set from the store (report covers up to 5000 recent).
-            var emailsCopy: [MBOXParser.RawEmail] = []
-            let stream = await ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
-            do { for try await b in stream { emailsCopy.append(contentsOf: b); if emailsCopy.count >= 5000 { break } } } catch { }
-            emailsCopy = Array(emailsCopy.prefix(5000))
-            let pdf = ReportGenerator.generatePDF(
-                title: title,
-                author: author,
-                sections: sectionsCopy,
-                emails: emailsCopy,
-                dateRange: range
-            )
-            await MainActor.run {
-                generatedPDF = pdf
-                isGenerating = false
+            do {
+                let matching = try await ArchiveDataService.shared.count(scope: .query(query, exclusions: []))
+                var emailsCopy: [MBOXParser.RawEmail] = []
+                let stream = await ArchiveDataService.shared.streamFullEmails(query: query, batchSize: 200)
+                // A read failure is an error, not a shorter report.
+                for try await batch in stream {
+                    emailsCopy.append(contentsOf: batch)
+                    if emailsCopy.count >= cap { break }
+                }
+                emailsCopy = Array(emailsCopy.prefix(cap))
+                let note = Self.coverageNote(matching: matching, processed: emailsCopy.count)
+                let pdf = ReportGenerator.generatePDF(
+                    title: title,
+                    author: author,
+                    sections: sectionsCopy,
+                    emails: emailsCopy,
+                    dateRange: range,
+                    coverageNote: note
+                )
+                await MainActor.run {
+                    generatedPDF = pdf
+                    coverageNote = note
+                    isGenerating = false
+                }
+            } catch {
+                await MainActor.run {
+                    generatedPDF = nil
+                    reportError = "The report was not generated: reading the archive stopped early (\(error.localizedDescription))."
+                    isGenerating = false
+                }
             }
         }
     }

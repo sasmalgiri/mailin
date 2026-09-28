@@ -13,6 +13,9 @@ struct AIDigestView: View {
     // of the selected period from the SQLite store — the view never receives
     // or holds an archive array.
     var isPresented: Binding<Bool>?
+    /// Audit F14: the Page 2 scope (source / date) the digest is built over;
+    /// nil means the whole archive, as the standalone tool window uses it.
+    var scope: EmailQuery? = nil
     @State private var selectedPeriod: AIDigestGenerator.TimePeriod = .lastWeek
     @State private var sections: [AIDigestGenerator.DigestSection] = []
     @State private var isGenerating = false
@@ -206,12 +209,14 @@ struct AIDigestView: View {
         let period = selectedPeriod
         let start = customStart
         let end = customEnd
+        let base = scope ?? .all
 
         Task.detached {
             let results = await AIDigestGenerator.generateDigest(
                 period: period,
                 customStart: period == .custom ? start : nil,
-                customEnd: period == .custom ? end : nil
+                customEnd: period == .custom ? end : nil,
+                baseQuery: base
             )
             await MainActor.run {
                 sections = results
