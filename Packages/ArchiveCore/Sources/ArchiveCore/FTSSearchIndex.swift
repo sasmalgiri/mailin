@@ -884,7 +884,7 @@ actor FTSSearchIndex {
     /// the same bytes as one file. The memory argument is carried by the
     /// per-shard cache (2 MB in import mode → ≤ 40 MB for 20 shards), and OS
     /// memory pressure still evicts through `evictIdleShards`.
-    private static let importMaxOpenShards = 20
+    static let importMaxOpenShards = 20
     private var maxOpenShards = FTSSearchIndex.interactiveMaxOpenShards
 
     /// Page cache per shard connection, in KB. SQLite's default (~2 MB) times

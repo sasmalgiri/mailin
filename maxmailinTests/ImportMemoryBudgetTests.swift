@@ -84,8 +84,14 @@ struct ImportMemoryBudgetTests {
 
         await fts.beginImportMode()
         let during = await fts.shardBudget
-        #expect(during.cap == 4, "import mode must cap concurrent shard handles")
-        #expect(during.open <= during.cap, "handles above the new cap are evicted immediately")
+        // The import cap was 4 until the 2026-09-28 speed pass measured that
+        // per-file folder sources thrashed shard handles at that number
+        // (3.4× slower); it is now `importMaxOpenShards` (20). This row pins
+        // the constant, not a literal, and that import mode never opens MORE
+        // than interactive mode allows.
+        #expect(during.cap == FTSSearchIndex.importMaxOpenShards, "import mode must cap concurrent shard handles")
+        #expect(during.cap <= before.cap, "import mode never allows more open shards than interactive mode")
+        #expect(during.open <= during.cap, "handles above the cap are evicted immediately")
         #expect(during.cacheKB < before.cacheKB, "and each remaining handle holds less cache")
 
         // Data survives the eviction: a swept shard reopens on demand.
