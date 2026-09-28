@@ -10,6 +10,7 @@
 //
 
 import Foundation
+import CryptoKit
 
 enum ArchiveSelectionScope: Sendable, Equatable, Codable {
     case none
@@ -49,6 +50,34 @@ extension ArchiveDataService {
 
     /// Stream the selected full emails in bounded pages — the safe basis for
     /// export/delete/review over a whole-query "Select All" at any scale.
+    /// Audit F08: what a resumed export must match. A positional resume
+    /// ("skip the first N") is only correct while the selection has the same
+    /// members in the same order; this fingerprints the ids in export order
+    /// so a receipt can refuse to resume over a changed archive. Ids only —
+    /// the summaries page is read, never the bodies.
+    func selectionFingerprint(scope: ArchiveSelectionScope) async throws -> String {
+        var digest = SHA256()
+        var count = 0
+        func add(_ id: EmailID) {
+            withUnsafeBytes(of: id.uuid) { digest.update(bufferPointer: $0) }
+            count += 1
+        }
+        switch scope {
+        case .none:
+            break
+        case .explicit(let ids):
+            for id in ids.sorted(by: { $0.uuidString < $1.uuidString }) { add(id) }
+        case .query(let query, let exclusions):
+            var cursor: EmailPageCursor? = nil
+            repeat {
+                let page = try await self.page(query: query, cursor: cursor, limit: 1_000)
+                for summary in page.summaries where !exclusions.contains(summary.id) { add(summary.id) }
+                cursor = page.nextCursor
+            } while cursor != nil
+        }
+        return "\(count):" + digest.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
     func streamSelected(scope: ArchiveSelectionScope, batchSize: Int = 200) -> AsyncThrowingStream<[MBOXParser.RawEmail], Error> {
         switch scope {
         case .none:

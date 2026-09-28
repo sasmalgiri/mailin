@@ -81,6 +81,10 @@ struct ExportRequest: Codable, Equatable, Identifiable, Sendable {
     var options: ExportOptions = ExportOptions()
     /// Resume: positions already written by the interrupted run.
     var skipFirst: Int = 0
+    /// Resume (audit F08): the selection's fingerprint when the run stopped.
+    /// A resume recomputes it and refuses to continue over a changed
+    /// selection, since "skip the first N" would then skip or repeat mail.
+    var selectionFingerprint: String? = nil
     /// Count known when the request was built (menu headline); nil = unknown.
     var emailCountHint: Int?
 

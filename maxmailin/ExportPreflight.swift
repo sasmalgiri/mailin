@@ -262,20 +262,49 @@ final class ExportJobRunner {
 
     private init() {}
 
+    /// Audit F08: why a resume was refused.
+    enum ResumeError: LocalizedError {
+        case selectionChanged
+        var errorDescription: String? {
+            "The archive changed since this export stopped, so it cannot be continued from where it was. Start the export again."
+        }
+    }
+
+    /// True when `request` may continue positionally: it is not a resume, or
+    /// the selection still fingerprints as it did when the run stopped.
+    static func resumeIsCurrent(_ request: ExportRequest, archive: ArchiveDataService = .shared) async throws -> Bool {
+        guard request.skipFirst > 0, let recorded = request.selectionFingerprint else { return true }
+        return try await archive.selectionFingerprint(scope: request.scope) == recorded
+    }
+
+    /// The request a receipt should carry so the stopped run can continue:
+    /// positions written so far, and the selection's fingerprint now.
+    static func resumeRequest(for request: ExportRequest, written: Int,
+                              archive: ArchiveDataService = .shared) async -> ExportRequest? {
+        guard request.isResumable else { return nil }
+        var resume = request
+        resume.skipFirst = written
+        resume.selectionFingerprint = try? await archive.selectionFingerprint(scope: request.scope)
+        return resume
+    }
+
     func start(_ request: ExportRequest, service: ArchiveExportService = .shared) {
         let center = ExportRunCenter.shared
         center.run(title: request.title) { [weak self] in
             guard let self else { return }
             do {
+                guard try await Self.resumeIsCurrent(request) else { throw ResumeError.selectionChanged }
                 try await self.execute(request, service: service)
             } catch {
                 self.onError?("\(request.title) failed: \(error.localizedDescription)")
                 // A thrown error still ends in a receipt — and, when the
-                // format kept its partial output, one that can be resumed.
+                // format kept its partial output (cut back to the last
+                // reported batch), one that can be resumed. A refused resume
+                // offers no further resume: the positions no longer mean
+                // anything.
                 var resume: ExportRequest? = nil
-                if request.isResumable {
-                    resume = request
-                    resume?.skipFirst = center.done
+                if !(error is ResumeError) {
+                    resume = await Self.resumeRequest(for: request, written: center.done)
                 }
                 center.recordFailure(destination: request.destinationURL, isFolder: request.isFolder,
                                      requested: request.emailCountHint, message: error.localizedDescription,
@@ -394,9 +423,8 @@ final class ExportJobRunner {
         }
 
         var resume: ExportRequest? = nil
-        if (outcome == .cancelled || outcome == .failed) && request.isResumable {
-            resume = request
-            resume?.skipFirst = written
+        if outcome == .cancelled || outcome == .failed {
+            resume = await Self.resumeRequest(for: request, written: written)
         }
 
         var isFolder: ObjCBool = false

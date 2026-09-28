@@ -168,6 +168,13 @@ final class ArchiveExportService {
         // written, cumulatively across resumes); `bytes` is this run's output.
         var position = 0, bytes = 0, cancelled = false
         let skip = appending ? options.skipFirst : startAt
+        // Audit F08: the durable record boundary. `onProgress` reports once per
+        // batch, and a resume skips exactly that many positions — so a kept
+        // partial file must END at that batch boundary. These track the file
+        // offset and position at the last reported batch; a failure inside the
+        // next batch truncates back to them.
+        var committedOffset: UInt64 = appending ? try handle.offset() : 0
+        var committedPosition = skip
 
         func writeData(_ d: Data) throws {
             guard !d.isEmpty else { return }
@@ -184,13 +191,17 @@ final class ArchiveExportService {
             try? fm.removeItem(at: url)
         }
         /// Cancel or error with `keepPartialOnCancel`: the artifact stays on
-        /// disk so a later run can append to it.
+        /// disk, cut back to the last reported batch boundary, so a later run
+        /// appends after exactly the records the receipt says were written —
+        /// never after ten unreported rows and half a record.
         func keepPartial() {
+            try? handle.truncate(atOffset: committedOffset)
             try? handle.close()
         }
 
         do {
             if !appending { try write(header(total)) }
+            committedOffset = try handle.offset()
             stream: for try await batch in archive.streamSelected(scope: scope, batchSize: batchSize) {
                 if Task.isCancelled { cancelled = true; break }
                 for email in batch {
@@ -209,12 +220,14 @@ final class ArchiveExportService {
                     if let maxBytes, bytes >= maxBytes { break stream }
                 }
                 onProgress?(position, total)
+                committedOffset = try handle.offset()
+                committedPosition = position
                 if let limit, position >= limit { break }
             }
             if cancelled || Task.isCancelled {
                 if options.keepPartialOnCancel {
                     keepPartial()
-                    return ArchiveExportResult(recordsWritten: position, bytesWritten: bytes, completed: false, cancelled: true)
+                    return ArchiveExportResult(recordsWritten: committedPosition, bytesWritten: bytes, completed: false, cancelled: true)
                 }
                 abort()
                 return ArchiveExportResult(recordsWritten: position, bytesWritten: 0, completed: false, cancelled: true)
@@ -294,9 +307,18 @@ final class ArchiveExportService {
         // per-message filenames stay one unbroken sequence.
         var records = options.skipFirst, skipped = 0, bytes = 0, cancelled = false
         var seen = 0
+        // Audit F08: files written after the last reported batch boundary are
+        // removed on a kept-partial stop, so the folder holds exactly the
+        // records the receipt counts and a resume rewrites nothing twice.
+        var writtenAtBoundary = 0
+        var recordsAtBoundary = records
 
         func cleanup() {
-            guard !options.keepPartialOnCancel else { return }
+            guard !options.keepPartialOnCancel else {
+                for name in written[writtenAtBoundary...] { try? fm.removeItem(at: folder.appendingPathComponent(name)) }
+                written.removeSubrange(writtenAtBoundary...)
+                return
+            }
             for name in written { try? fm.removeItem(at: folder.appendingPathComponent(name)) }
             for sub in createdSubfolders.reversed() { try? fm.removeItem(at: sub) }
             if createdFolder { try? fm.removeItem(at: folder) }
@@ -375,6 +397,8 @@ final class ArchiveExportService {
                     records += 1
                 }
                 onProgress?(records, total)
+                writtenAtBoundary = written.count
+                recordsAtBoundary = records
                 if let limit, records + skipped >= limit { break }
             }
         } catch {
@@ -383,7 +407,7 @@ final class ArchiveExportService {
         }
         if cancelled || Task.isCancelled {
             cleanup()
-            return ArchiveExportResult(recordsWritten: records,
+            return ArchiveExportResult(recordsWritten: options.keepPartialOnCancel ? recordsAtBoundary : records,
                                        bytesWritten: options.keepPartialOnCancel ? bytes : 0,
                                        completed: false, cancelled: true)
         }

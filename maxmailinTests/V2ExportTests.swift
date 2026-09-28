@@ -64,6 +64,36 @@ final class V2ExportTests: XCTestCase {
 
     /// A "Select All minus deselected" CSV export contains EVERY matching id
     /// EXACTLY once — no drops, no duplicates, exclusions honored.
+    /// Audit F08: a resume is refused when the selection changed since the
+    /// run stopped; a fresh request, or one whose fingerprint still matches,
+    /// proceeds.
+    func testResumeIsCurrent_refusesAChangedSelection() async throws {
+        let env = try await makeEnv(count: 30)
+        let scope = ArchiveSelectionScope.query(.all, exclusions: [])
+        var request = ExportRequest(format: .csv, title: "CSV", scope: scope,
+                                    destination: env.root.appendingPathComponent("x.csv").path, isFolder: false, cap: nil)
+        let fresh = try await ExportJobRunner.resumeIsCurrent(request, archive: env.archive)
+        XCTAssertTrue(fresh, "a first run has nothing to compare")
+
+        let stoppedOrNil = await ExportJobRunner.resumeRequest(for: request, written: 10, archive: env.archive)
+        let stopped = try XCTUnwrap(stoppedOrNil)
+        XCTAssertEqual(stopped.skipFirst, 10)
+        XCTAssertNotNil(stopped.selectionFingerprint)
+        let unchanged = try await ExportJobRunner.resumeIsCurrent(stopped, archive: env.archive)
+        XCTAssertTrue(unchanged)
+
+        // The archive gains a message → the positions no longer line up.
+        let store = SQLiteEmailStore(directory: env.root.appendingPathComponent("store"))
+        try await store.insertBatch([makeEmail(i: 777)], batchSize: 10)
+        let changed = try await ExportJobRunner.resumeIsCurrent(stopped, archive: env.archive)
+        XCTAssertFalse(changed, "a positional resume over a changed selection must be refused")
+
+        // Non-resumable formats never carry a resume request.
+        request.format = .json
+        let none = await ExportJobRunner.resumeRequest(for: request, written: 10, archive: env.archive)
+        XCTAssertNil(none)
+    }
+
     func testCSVQueryScopeWithExclusionsExactlyOnce() async throws {
         let env = try await makeEnv()
         let excluded = Set(env.fixtures.prefix(10).map(\.id))
