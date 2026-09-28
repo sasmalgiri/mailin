@@ -107,25 +107,31 @@ struct WelcomeHubView: View {
                 .font(Typography.title3)
                 .foregroundStyle(persona.accentColor)
 
-            Button {
-                showPersonaSwitcher = true
-            } label: {
-                HStack(spacing: Spacing.xxSmall) {
-                    Image(systemName: persona.icon)
-                    Text(persona.displayName)
-                    Image(systemName: "chevron.down")
-                        .font(.caption2)
+            // §3.3 R1 (owner, 2026-09-28): personas re-shape the app around
+            // Page 3 work (forensic, legal, journalist, researcher). With only
+            // the Archive page on there is nothing for a persona to switch,
+            // so the chooser appears once Professional Workflows is enabled.
+            if modules.isEnabled(.professional) {
+                Button {
+                    showPersonaSwitcher = true
+                } label: {
+                    HStack(spacing: Spacing.xxSmall) {
+                        Image(systemName: persona.icon)
+                        Text(persona.displayName)
+                        Image(systemName: "chevron.down")
+                            .font(.caption2)
+                    }
+                    .font(Typography.caption1)
+                    .foregroundStyle(persona.accentColor)
+                    .padding(.horizontal, Spacing.small)
+                    .padding(.vertical, Spacing.xxSmall)
+                    .background(persona.accentColor.opacity(0.1))
+                    .clipShape(Capsule())
                 }
-                .font(Typography.caption1)
-                .foregroundStyle(persona.accentColor)
-                .padding(.horizontal, Spacing.small)
-                .padding(.vertical, Spacing.xxSmall)
-                .background(persona.accentColor.opacity(0.1))
-                .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .sheet(isPresented: $showPersonaSwitcher) {
-                personaSwitcherSheet
+                .buttonStyle(.plain)
+                .sheet(isPresented: $showPersonaSwitcher) {
+                    personaSwitcherSheet
+                }
             }
 
             // Discoverable upgrade entry — the paywall was previously only

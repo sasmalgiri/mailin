@@ -12,6 +12,10 @@ struct ParsedEmailListView: View {
     @ObservedObject private var predictiveEngine = PredictiveCodingEngine.shared
     @ObservedObject private var custodianManager = CustodianManager.shared
     @AppStorage("enableAIFeatures") private var enableAIFeatures = true
+    /// §3.3 R1: the AI labels toggle, the AI window, the Pro toggle and the
+    /// PII report belong to Pages 2 and 3; the Archive list shows them only
+    /// when those pages are on (owner, 2026-09-28).
+    @Environment(ModuleRegistry.self) private var modules
     @FocusState private var isSearchFieldFocused: Bool
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -434,17 +438,19 @@ struct ParsedEmailListView: View {
                         .buttonStyle(.plain)
                         .accessibilityLabel("Email analytics")
 
-                        Button {
-                            showPIIReport = true
-                        } label: {
-                            Label("PII", systemImage: "person.text.rectangle")
-                                .font(Typography.caption1)
+                        if modules.isEnabled(.professional) {
+                            Button {
+                                showPIIReport = true
+                            } label: {
+                                Label("PII", systemImage: "person.text.rectangle")
+                                    .font(Typography.caption1)
+                            }
+                            .controlSize(.small)
+                            .help("Scan the current filter for personally identifiable information — emails, phones, cards, SSNs, IPs — with a CSV export")
+                            .accessibilityLabel("PII report")
                         }
-                        .controlSize(.small)
-                        .help("Scan the current filter for personally identifiable information — emails, phones, cards, SSNs, IPs — with a CSV export")
-                        .accessibilityLabel("PII report")
 
-                        if enableAIFeatures {
+                        if enableAIFeatures, modules.isEnabled(.aiInsights) {
                             AIWindowButton(model: model)
                                 .environmentObject(storeManager)
                         }
@@ -909,6 +915,7 @@ struct ParsedEmailListView: View {
                     .frame(width: 300)
                 }
 
+                if modules.isEnabled(.aiInsights) {
                 Button {
                     aiTagsApplied.toggle()
                     Task { await AIToggleTip.filtersUsed.donate() }
@@ -941,7 +948,9 @@ struct ParsedEmailListView: View {
                       ? "AI labels are ON — every email shows what the AI thinks it is (category, mood, priority, phishing). Click to show plain facts only."
                       : "Turn ON AI labels — the on-device AI marks each email's category, mood, priority and phishing risk. Analysis is saved on this Mac; nothing goes online.")
                 #endif
+                }
 
+                if modules.isEnabled(.professional) {
                 Button {
                     showAdvancedFeatures.toggle()
                     Task { await ProToggleTip.filtersUsed.donate() }
@@ -963,6 +972,7 @@ struct ParsedEmailListView: View {
                 #if os(macOS)
                 .help(showAdvancedFeatures ? "Advanced features visible — click to simplify" : "Show forensic, legal & advanced features")
                 #endif
+                }
 
                 addFilterMenu
 

@@ -1040,7 +1040,8 @@ struct ContentView: View {
                 },
                 onOpenArchive: { openPanelFallback() },
                 onNewImport: { showNewImportConfirmation = true },
-                onSettings: { openSettingsAction() }
+                onSettings: { openSettingsAction() },
+                isModuleEnabled: { modules.isEnabled($0) }
             )
             .navigationTitle("\(personaManager.selectedPersona.shortLabel) Hub")
         case .reviewBatches:
@@ -2358,14 +2359,21 @@ struct ContentView: View {
                             GridItem(.flexible()), GridItem(.flexible()),
                             GridItem(.flexible()), GridItem(.flexible())
                         ], spacing: Spacing.small) {
-                            detailToolButton(title: "AI Assistant", icon: "sparkles", color: .purple) {
-                                appState.showAIAssistant = true
+                            // §3.3 R1: AI Assistant and topic clustering are
+                            // Page 2 (AI Insights) work — shown only when that
+                            // page is on (owner, 2026-09-28).
+                            if modules.isEnabled(.aiInsights) {
+                                detailToolButton(title: "AI Assistant", icon: "sparkles", color: .purple) {
+                                    appState.showAIAssistant = true
+                                }
                             }
                             detailToolButton(title: "Analytics", icon: "chart.bar", color: .blue) {
                                 appState.showAnalytics = true
                             }
-                            detailToolButton(title: "Topics", icon: "circle.grid.3x3", color: appState.dockedBottomPanel == .topics ? .teal.opacity(0.5) : .teal) {
-                                withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? nil : .topics }
+                            if modules.isEnabled(.aiInsights) {
+                                detailToolButton(title: "Topics", icon: "circle.grid.3x3", color: appState.dockedBottomPanel == .topics ? .teal.opacity(0.5) : .teal) {
+                                    withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? nil : .topics }
+                                }
                             }
                             detailToolButton(title: "Subjects", icon: "list.bullet.rectangle.portrait", color: appState.dockedBottomPanel == .subjects ? .orange.opacity(0.5) : .orange) {
                                 withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .subjects ? nil : .subjects }
@@ -2806,7 +2814,8 @@ struct ContentView: View {
                 multiToggleList(items: modelVM.allTags, selection: $modelVM.selectedTags, helpVerb: "labeled")
             }
 
-            if !modelVM.smartTagCounts.isEmpty {
+            // AI-detected tags are Page 2 output; the section follows the page.
+            if !modelVM.smartTagCounts.isEmpty, modules.isEnabled(.aiInsights) {
                 SidebarSectionHeader(title: "Smart Tags", icon: "tag.fill", color: .purple, helpText: "Filter by AI-detected category, priority, sentiment, or forensic tag")
                 VStack(alignment: .leading, spacing: Spacing.xxSmall) {
                     ForEach(modelVM.smartTagCounts, id: \.tag) { entry in

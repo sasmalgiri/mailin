@@ -46,6 +46,32 @@ enum HubDestination: String, Hashable {
 
 extension HubDestination: Identifiable {
     var id: String { rawValue }
+
+    /// §3.3 R1: the page that owns a hub tile. Archive-owned tiles are always
+    /// shown; a tile owned by AI Insights or Professional Workflows appears
+    /// only while that page is on (owner, 2026-09-28 — the hub showed AI and
+    /// forensic tools with only the Archive page enabled). Names shared with
+    /// `AppStateManager.OwnedFeature` carry the same owner.
+    var owner: AppModule {
+        switch self {
+        case .emailInbox, .workCenter, .emailAnalytics, .timeline, .communicationPatterns,
+             .relationshipGraph, .duplicateManager, .nearDuplicates, .attachmentGallery,
+             .executiveDashboard, .archiveComparison, .batchOperations, .automationRules,
+             .workspaceManager, .pluginManager, .personaHub, .settings,
+             .personalOrganizer, .generalExplorer:
+            return .archive
+        case .aiAssistant, .aiDigest, .smartAutoTagger, .customExperts, .knowledgeGraphExplorer,
+             .aiVisualizations, .backgroundFindings, .predictiveInsights, .topicClusters,
+             .threadSummarizer, .anomalyDetection, .smartAlerts, .keywordMonitor, .predictiveCoding:
+            return .aiInsights
+        case .eDiscovery, .gdprCompliance, .iocExtractor, .chainOfCustody, .phishingTriage,
+             .reviewDashboard, .storyFile, .reportBuilder, .forensicReview, .investigationReport,
+             .batesNumbering, .redaction, .reviewBatches, .custodianPanel, .legalWorkspace,
+             .itAdminDashboard, .journalistWorkbench, .achMatrix, .factMatrix, .actionRegister,
+             .evidenceDesks, .reasoningStudio:
+            return .professional
+        }
+    }
 }
 
 // MARK: - Main Navigation Hub
@@ -58,6 +84,12 @@ struct MainNavigationHubView: View {
     let onOpenArchive: () -> Void
     let onNewImport: () -> Void
     let onSettings: () -> Void
+    /// Page gate for the tiles (installed by the shell; previews see everything).
+    var isModuleEnabled: (AppModule) -> Bool = { _ in true }
+
+    private func isVisible(_ tile: HubTile) -> Bool {
+        tile.dest.owner == .archive || isModuleEnabled(tile.dest.owner)
+    }
 
     @Environment(\.windowSizeClass) private var sizeClass
     /// The guided workflow to run, presented as a sheet (same pattern as
@@ -385,7 +417,7 @@ struct MainNavigationHubView: View {
         var seen: Set<HubDestination> = [.emailInbox, heroDestination]
         var out: [ToolSection] = []
         for raw in rawSections {
-            let tiles = raw.tiles.filter { seen.insert($0.dest).inserted }
+            let tiles = raw.tiles.filter { isVisible($0) && seen.insert($0.dest).inserted }
             if !tiles.isEmpty {
                 out.append(ToolSection(title: raw.title, icon: raw.icon, color: raw.color, tiles: tiles))
             }
@@ -397,8 +429,9 @@ struct MainNavigationHubView: View {
 
     /// Every tool tile the app knows about, for looking up a recent dest.
     private var allTiles: [HubTile] {
-        coreSection.tiles + analysisSection.tiles + securitySection.tiles
-            + legalForensicSection.tiles + exportSection.tiles + aiSection.tiles
+        (coreSection.tiles + analysisSection.tiles + securitySection.tiles
+            + legalForensicSection.tiles + exportSection.tiles + aiSection.tiles)
+            .filter(isVisible)
     }
 
     private var recentTools: [HubTile] {
