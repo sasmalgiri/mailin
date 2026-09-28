@@ -20,6 +20,11 @@ struct ExportReceipt: Codable, Identifiable, Sendable, Equatable {
     enum Outcome: String, Codable, Sendable {
         case complete
         case truncated      // the free-tier cap wrote fewer than requested
+        /// The run finished, but some requested messages could not be
+        /// produced as promised and were withheld with a stated reason (audit
+        /// F05/F09: a production whose input had no readable content). Never
+        /// reported as `complete`.
+        case partial
         case cancelled
         case failed
     }
@@ -62,6 +67,8 @@ struct ExportReceipt: Codable, Identifiable, Sendable, Equatable {
             return "Complete — \(written) written"
         case .truncated:
             return "Truncated — \(written) of \(requested ?? written) written (free-tier limit)"
+        case .partial:
+            return "Partial — \(written) of \(requested ?? written) produced; the rest withheld, see the error line"
         case .cancelled:
             return resumeRequest != nil
                 ? "Cancelled — \(written) written before the stop; partial output kept, Resume continues from there"

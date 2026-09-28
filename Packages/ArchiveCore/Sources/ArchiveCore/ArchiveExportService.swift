@@ -264,6 +264,12 @@ final class ArchiveExportService {
     /// if needed). On cancellation or failure every file written so far is
     /// removed (and the folder, if this call created it), so no partial
     /// artifact survives. `content` returns nil to skip a message.
+    ///
+    /// `locatedRawExtension` (audit F05): when set, a message whose bytes are
+    /// located rather than stored is streamed from its source into
+    /// `<n>_<subject>.<ext>` instead of being handed to `content`, which could
+    /// only render a header-only stub for it. A located message whose source
+    /// is gone fails the export — never a stub.
     @discardableResult
     func exportMessageFiles(
         scope: ArchiveSelectionScope,
@@ -271,6 +277,7 @@ final class ArchiveExportService {
         batchSize: Int = 200,
         limit: Int? = nil,
         write options: ExportWriteOptions = ExportWriteOptions(),
+        locatedRawExtension: String? = nil,
         onProgress: (@MainActor (Int, Int) -> Void)? = nil,
         content: @MainActor (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)?
     ) async throws -> ArchiveExportResult {
@@ -303,7 +310,30 @@ final class ArchiveExportService {
                     // Step over what the interrupted run already wrote.
                     if seen < options.skipFirst { seen += 1; continue }
                     seen += 1
-                    guard let file = try content(email, records) else { skipped += 1; continue }
+                    // A located message streams from its source (data nil);
+                    // everything else renders through `content`.
+                    var located = false
+                    if let _ = locatedRawExtension, email.rawSource.isEmpty {
+                        switch await archive.rawMessageSource(for: email) {
+                        case .located:
+                            located = true
+                        case .unavailable(let why) where email.plainBody.isEmpty && email.htmlBody.isEmpty:
+                            // Nothing to render and nothing to stream: the
+                            // export fails here rather than writing a stub.
+                            throw RawMessageError.contentUnavailable(subject: email.headers["Subject"] ?? "(no subject)", reason: why)
+                        default:
+                            break   // a legacy row with body text renders as before
+                        }
+                    }
+                    let file: (filename: String, data: Data?)
+                    if located, let ext = locatedRawExtension {
+                        file = (Self.messageFilename(index: records, subject: email.headers["Subject"], ext: ext), nil)
+                    } else if let rendered = try content(email, records) {
+                        file = (rendered.filename, rendered.data)
+                    } else {
+                        skipped += 1
+                        continue
+                    }
 
                     // Folder layout: flat, or one subfolder per message year.
                     var directory = folder
@@ -334,9 +364,14 @@ final class ArchiveExportService {
                                 : target.lastPathComponent
                         }
                     }
-                    try file.data.write(to: target, options: .atomic)
+                    if let data = file.data {
+                        try data.write(to: target, options: .atomic)
+                        bytes += data.count
+                    } else {
+                        let streamed = try await archive.writeRawMessage(for: email, to: target)
+                        bytes += streamed.bytes
+                    }
                     written.append(relative)
-                    bytes += file.data.count
                     records += 1
                 }
                 onProgress?(records, total)
@@ -396,13 +431,16 @@ final class ArchiveExportService {
 
     /// EML: one .eml per message. `render` defaults to raw source (or a minimal
     /// reconstruction); callers may pass `ContentViewModel.exportEmailAsEML`.
+    /// A located message (header-only import above the ceiling) is streamed
+    /// from its source, byte for byte, whatever `render` would have made of it.
     @discardableResult
     func exportEMLFiles(scope: ArchiveSelectionScope, to folder: URL,
                         limit: Int? = nil,
                         render: (@MainActor (MBOXParser.RawEmail) -> String)? = nil,
                         write options: ExportWriteOptions = ExportWriteOptions(),
                         onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
-        try await exportMessageFiles(scope: scope, to: folder, limit: limit, write: options, onProgress: onProgress) { email, index in
+        try await exportMessageFiles(scope: scope, to: folder, limit: limit, write: options,
+                                     locatedRawExtension: "eml", onProgress: onProgress) { email, index in
             let eml = render?(email) ?? (email.rawSource.isEmpty
                 ? "Subject: \(email.headers["Subject"] ?? "")\n\n\(email.plainBody)"
                 : email.rawSource)

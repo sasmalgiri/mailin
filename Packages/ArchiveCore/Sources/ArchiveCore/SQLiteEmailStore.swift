@@ -186,9 +186,26 @@ actor SQLiteEmailStore: EmailArchiveStore {
     // before the offset parser was switched on. Nothing here changes how an
     // existing archive behaves.
 
+    /// Everything the import knows about where one committed message's bytes
+    /// live. Handed to `insertBatch` so it is written in the SAME transaction
+    /// as the row (audit F02, 2026-09-28): a message above the full-parse
+    /// ceiling has no stored content, so a row without its locator is a
+    /// message that exists in name only.
+    struct LocatorRecord: Sendable {
+        var locator: MessageLocator
+        var bodyDecoded: Bool
+        var parts: [PartLocator] = []
+    }
+
     /// Records (or replaces) where one message's original bytes live.
     func saveLocator(_ locator: MessageLocator, emailID: UUID, bodyDecoded: Bool) throws {
         let db = try ensureDB()
+        try writeLocator(db, locator, emailID: emailID, bodyDecoded: bodyDecoded)
+    }
+
+    /// The statement behind `saveLocator`, for callers that already hold a
+    /// transaction (`insertBatch`).
+    private func writeLocator(_ db: OpaquePointer, _ locator: MessageLocator, emailID: UUID, bodyDecoded: Bool) throws {
         let stmt = try prepare(db, """
             INSERT INTO message_locators(
                 email_id, source_path, source_digest,
@@ -235,6 +252,13 @@ actor SQLiteEmailStore: EmailArchiveStore {
     func savePartLocators(_ parts: [PartLocator], emailID: UUID) throws {
         let db = try ensureDB()
         try inExclusiveTransaction(db) {
+            try writePartLocators(db, parts, emailID: emailID)
+        }
+    }
+
+    /// The statements behind `savePartLocators`, for callers that already
+    /// hold a transaction (`insertBatch`).
+    private func writePartLocators(_ db: OpaquePointer, _ parts: [PartLocator], emailID: UUID) throws {
             let clear = try prepare(db, "DELETE FROM part_locators WHERE email_id = ?;")
             bindText(clear, 1, emailID.uuidString)
             let cleared = sqlite3_step(clear) == SQLITE_DONE
@@ -269,7 +293,6 @@ actor SQLiteEmailStore: EmailArchiveStore {
                     throw SQLiteStoreError.step(lastError(db))
                 }
             }
-        }
     }
 
     /// One message's parts, in document order. Empty means "no parts
@@ -2113,7 +2136,8 @@ actor SQLiteEmailStore: EmailArchiveStore {
         respectTombstones: Bool = true,
         batchSize: Int,
         progress: ((Int, Int) -> Void)?,
-        progressCheckpoint: ImportProgressCheckpoint? = nil
+        progressCheckpoint: ImportProgressCheckpoint? = nil,
+        locators: [UUID: LocatorRecord] = [:]
     ) throws -> BatchInsertResult {
         let db = try ensureDB()
         let total = emails.count
@@ -2264,6 +2288,16 @@ actor SQLiteEmailStore: EmailArchiveStore {
                             guard sqlite3_step(insertDomain) == SQLITE_DONE else {
                                 throw SQLiteStoreError.step(lastError(db))
                             }
+                        }
+                        // F02: the locator commits with the row it describes.
+                        // Only for rows this statement inserted — a deduped or
+                        // resume-skipped row must not gain a locator pointing
+                        // at bytes no row owns.
+                        if let record = locators[email.id] {
+                            if !record.parts.isEmpty {
+                                try writePartLocators(db, record.parts, emailID: email.id)
+                            }
+                            try writeLocator(db, record.locator, emailID: email.id, bodyDecoded: record.bodyDecoded)
                         }
                     } else {
                         // INSERT OR IGNORE skipped the row. Distinguish "this

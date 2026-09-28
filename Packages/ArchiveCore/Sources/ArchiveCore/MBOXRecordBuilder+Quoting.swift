@@ -64,7 +64,12 @@ extension MBOXRecordBuilder {
     /// the executed round trip).
     static func unquoteFromLines(_ raw: String) -> String {
         guard !raw.isEmpty else { return raw }
-        let bytes = Array(raw.utf8)
+        return String(decoding: unquoteFromLines(bytes: Array(raw.utf8)), as: UTF8.self)
+    }
+
+    /// Byte-level form; `bytes` must start at a line boundary.
+    static func unquoteFromLines(bytes: [UInt8]) -> [UInt8] {
+        guard !bytes.isEmpty else { return bytes }
         var out = [UInt8]()
         out.reserveCapacity(bytes.count)
         var index = 0
@@ -87,7 +92,7 @@ extension MBOXRecordBuilder {
             }
             index = terminatorEnd
         }
-        return String(decoding: out, as: UTF8.self)
+        return out
     }
 
     /// The leading mbox envelope line of `raw` (without its terminator) when

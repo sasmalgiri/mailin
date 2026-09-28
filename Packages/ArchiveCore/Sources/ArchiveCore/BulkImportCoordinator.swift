@@ -130,10 +130,13 @@ final class BulkImportCoordinator {
         /// still stops a run that genuinely does not fit. Off only for
         /// harnesses measuring on deliberately small volumes.
         var enforceStoragePreflight: Bool = true
-        /// Whether originals are copied into the library (vs referenced), which
-        /// doubles the source's contribution to the requirement.
-        var copiesOriginals: Bool = true
-        /// S4, behind `Capability.offsetParser` (OFF by default). Index message
+        /// Whether originals are copied into the library. Audit F03
+        /// (2026-09-28): 3.0 does NOT copy originals — the archive stores every
+        /// message under the full-parse ceiling itself and reads larger ones
+        /// from the source file — so this only shapes the space estimate and
+        /// defaults to the truth. A real copy is the 3.1 item I-1.
+        var copiesOriginals: Bool = false
+        /// S4, `Capability.offsetParser` (ON by default in 3.0). Index message
         /// boundaries and parse headers only, so import memory stops scaling
         /// with the largest message and a message over 100 MB is ARCHIVED
         /// instead of being reported as damaged and dropped.
@@ -143,9 +146,15 @@ final class BulkImportCoordinator {
         /// knows the switch position.
         var useOffsetEngine: Bool = false
         /// S4/S5: record where each message's original bytes are, so an
-        /// attachment or an export can be served from the source. Meaningless
-        /// without `useOffsetEngine`, which is the only producer of locators.
+        /// attachment or an export can be served from the source. Set whenever
+        /// `useOffsetEngine` is (F02): for a message above the ceiling the
+        /// locator is its only content. Meaningless without the engine, which
+        /// is the only producer of locators.
         var recordLocators: Bool = false
+        /// Test hook: the offset engine's full-parse ceiling for this run, so a
+        /// small fixture can exercise the header-only (deferred) path. Nil
+        /// means the engine's default (100 MiB).
+        var fullParseCeilingBytes: Int64? = nil
     }
 
     /// UI/side-effect hooks. All are invoked on the main actor.
@@ -730,6 +739,14 @@ final class BulkImportCoordinator {
                         let atomicCheckpoint = await checkpoints.progressCheckpoint(
                             identity: identity, sourceName: sourceName,
                             firstOrdinal: batchStart + range.lowerBound, store: store)
+                        // F02: locators ride the insert's transaction, so a
+                        // committed row can never be without the one record
+                        // that says where its bytes are.
+                        let locatorRecords: [UUID: SQLiteEmailStore.LocatorRecord] = batchLocators.reduce(into: [:]) { acc, entry in
+                            acc[entry.key] = SQLiteEmailStore.LocatorRecord(locator: entry.value.locator,
+                                                                            bodyDecoded: entry.value.bodyDecoded,
+                                                                            parts: entry.value.parts)
+                        }
                         do {
                             insertResult = try await self.retryingAfterVolumeLoss {
                               try await self.store.insertBatch(
@@ -741,7 +758,8 @@ final class BulkImportCoordinator {
                                 dedupPolicy: options.dedupPolicy,
                                 batchSize: batchSize,
                                 progress: nil,
-                                progressCheckpoint: atomicCheckpoint
+                                progressCheckpoint: atomicCheckpoint,
+                                locators: locatorRecords
                               )
                             }
                         } catch {
@@ -827,44 +845,15 @@ final class BulkImportCoordinator {
                         }
                         await MainActor.run { callbacks.onCommittedBatch?(pending) }
 
-                        // S4/S5: record where the committed messages' bytes
-                        // are. After the insert, so a locator can never
-                        // reference a row that does not exist; only for
-                        // `insertedIDs`, so a deduped or resume-skipped row
-                        // gets none.
+                        // S4/S5: the locators were written INSIDE the insert
+                        // transaction above (F02). What remains is the count:
+                        // against COMMITTED rows only, since a header-only
+                        // message that was deduped away is not a shortfall in
+                        // this archive.
                         if !batchLocators.isEmpty {
                             for id in insertResult.insertedIDs {
                                 guard let entry = batchLocators[id] else { continue }
-                                // Per-part ranges, when the engine produced
-                                // them. Saved before the message locator so a
-                                // failure here cannot leave parts referring to
-                                // a message whose own locator never landed.
-                                if !entry.parts.isEmpty {
-                                    do {
-                                        try await store.savePartLocators(entry.parts, emailID: id)
-                                    } catch {
-                                        // Degrades to the whole-message read
-                                        // path — the pre-S5 behaviour — and is
-                                        // never a reason to fail an import that
-                                        // has already committed the mail.
-                                        Self.logger.warning("part locators failed for \(id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
-                                    }
-                                }
-                                // Counted against COMMITTED rows only: a
-                                // header-only message that was deduped away is
-                                // not a shortfall in this archive.
                                 if !entry.bodyDecoded { summary.bodiesNotDecoded += 1 }
-                                do {
-                                    try await store.saveLocator(entry.locator, emailID: id,
-                                                                bodyDecoded: entry.bodyDecoded)
-                                } catch {
-                                    // A missing locator degrades a later read
-                                    // to the stored-raw-MIME path, which is
-                                    // the pre-S5 behaviour — not a reason to
-                                    // fail an import that has already
-                                    // committed the mail.
-                                    Self.logger.warning("locator save failed for \(id.uuidString, privacy: .public): \(error.localizedDescription, privacy: .public)")
-                                }
                             }
                         }
 
@@ -890,7 +879,8 @@ final class BulkImportCoordinator {
                         && !SourceFormatClassifier.isDirectoryForm(classification.format)
 
                     if offsetEligible {
-                        let engine = OffsetImportEngine()
+                        var engine = OffsetImportEngine()
+                        if let ceiling = options.fullParseCeilingBytes { engine.fullParseCeilingBytes = ceiling }
                         fileReport = try await engine.importMessages(
                             fileURL: url,
                             senderEmail: options.senderEmail,

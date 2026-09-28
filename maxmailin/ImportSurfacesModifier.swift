@@ -36,7 +36,8 @@ struct ImportSurfacesModifier: ViewModifier {
                     GuidedImportSheet(
                         urls: urls,
                         dedupPolicy: dedupPolicy,
-                        copiesOriginals: true,
+                        copiesOriginals: false,   // F03: 3.0 references originals
+
                         onStart: { choices in
                             pendingURLs = nil
                             onStart(choices)

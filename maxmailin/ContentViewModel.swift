@@ -897,9 +897,19 @@ class ContentViewModel: ObservableObject {
             }
             usedNames.insert(filename)
             let fileURL = folder.appendingPathComponent(filename)
-            let emlContent = exportEmailAsEML(email)
             do {
-                try FileUtils.writeData(Data(emlContent.utf8), to: fileURL.path)
+                // F05: a located message streams from its source; one with
+                // neither content nor a reachable source counts as failed,
+                // never as a headers-only stub.
+                if email.rawSource.isEmpty {
+                    guard let locator = RawMessageFile.locator(for: email) else {
+                        throw RawMessageError.contentUnavailable(subject: rawSubject, reason: "no stored content and no reachable original file")
+                    }
+                    try RawMessageFile.write(located: locator, to: fileURL)
+                } else {
+                    let emlContent = exportEmailAsEML(email)
+                    try FileUtils.writeData(Data(emlContent.utf8), to: fileURL.path)
+                }
             } catch {
                 failedCount += 1
                 FileUtilsAudit.logError(error, context: "EML Export", path: fileURL.path)

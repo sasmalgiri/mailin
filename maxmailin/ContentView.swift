@@ -1924,9 +1924,19 @@ struct ContentView: View {
                 }
                 usedNames.insert(filename)
                 let fileURL = folderURL.appendingPathComponent(filename)
-                let emlContent = vm.exportEmailAsEML(email)
                 do {
-                    try FileUtils.writeData(Data(emlContent.utf8), to: fileURL.path)
+                    // F05: a located message streams from its source; one
+                    // with neither content nor a reachable source is a
+                    // failure, never a headers-only stub.
+                    if email.rawSource.isEmpty {
+                        guard let locator = RawMessageFile.locator(for: email) else {
+                            throw RawMessageError.contentUnavailable(subject: rawSubject, reason: "no stored content and no reachable original file")
+                        }
+                        try RawMessageFile.write(located: locator, to: fileURL)
+                    } else {
+                        let emlContent = vm.exportEmailAsEML(email)
+                        try FileUtils.writeData(Data(emlContent.utf8), to: fileURL.path)
+                    }
                     exportedCount += 1
                 } catch {
                     failedCount += 1
@@ -3626,7 +3636,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
     private func startImport(_ urls: [URL]) {
         startImport(ImportChoices(urls: urls,
                                   dedupPolicy: removeDuplicates ? .messageID : .preserveAll,
-                                  copiesOriginals: true,
+                                  copiesOriginals: false,   // F03: 3.0 references originals
                                   indexAttachmentText: ImportChoices.indexAttachmentTextDefault()))
     }
 
@@ -3958,7 +3968,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
                 return
             }
             do {
-                try CaseBundleService.export(caseTitle: title, emails: emails, to: url)
+                try await CaseBundleService.exportResolvingSources(caseTitle: title, emails: emails, to: url)
                 // Says how many were read, not how many were tagged: a tagged
                 // id the archive can no longer produce must not be counted as
                 // if it travelled.

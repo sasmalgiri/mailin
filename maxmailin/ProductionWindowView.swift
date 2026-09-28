@@ -26,6 +26,11 @@ struct ProductionRun: Codable, Equatable, Sendable {
     var excluded: Int
     var excludedByTag: Int
     var excludedOnHold: Int
+    /// Audit F05: messages whose content the archive could not supply —
+    /// imported from headers only (above the full-parse ceiling) or with the
+    /// original file gone. Withheld with the reason in excluded.csv, never
+    /// produced as a headers-only PDF over an empty hash.
+    var excludedNoContent: Int = 0
     var firstBates: String?
     var lastBates: String?
     var pages: Int
@@ -205,7 +210,7 @@ enum ProductionEngine {
         try fm.createDirectory(at: pdfFolder, withIntermediateDirectories: true)
 
         let requested = try await archive.count(scope: scope)
-        var included = 0, excludedByTag = 0, excludedOnHold = 0, pages = 0
+        var included = 0, excludedByTag = 0, excludedOnHold = 0, excludedNoContent = 0, pages = 0
         var families: [String: Int] = [:]
         var firstBates: String?, lastBates: String?
         var number = bates.startNumber
@@ -243,6 +248,24 @@ enum ProductionEngine {
                 if excludeHeld, holds.contains(email.id) {
                     excludedOnHold += 1
                     exclusions += [email.id.uuidString, messageID, subject, "under legal hold"].map(csv).joined(separator: ",") + "\n"
+                    continue
+                }
+                // F05: a message with no stored content cannot be produced
+                // honestly here — a PDF of its headers over a hash of "" would
+                // claim completeness it does not have. Withheld, with the
+                // reason and the way to get it (MBOX/EML export streams it).
+                if email.rawSource.isEmpty, email.plainBody.isEmpty, email.htmlBody.isEmpty {
+                    let reason: String
+                    switch await archive.rawMessageSource(for: email) {
+                    case .located:
+                        reason = "content not decoded at import (message above the full-parse ceiling) — export it as MBOX or EML, which stream it from the original file"
+                    case .unavailable(let why):
+                        reason = "content unavailable: \(why)"
+                    case .stored:
+                        reason = "no content"
+                    }
+                    excludedNoContent += 1
+                    exclusions += [email.id.uuidString, messageID, subject, reason].map(csv).joined(separator: ",") + "\n"
                     continue
                 }
                 // Bates + PDF.
@@ -294,11 +317,12 @@ enum ProductionEngine {
         // Bates sequence continues after this run; assignments are kept.
         bates.merge(assignments: assignments, nextStart: number)
 
-        let excluded = excludedByTag + excludedOnHold
+        let excluded = excludedByTag + excludedOnHold + excludedNoContent
         let elapsed = start.duration(to: clock.now).components
         var run = ProductionRun(productionNumber: nil, title: title, caseNumber: caseNumber,
                                 requested: requested, included: included, excluded: excluded,
                                 excludedByTag: excludedByTag, excludedOnHold: excludedOnHold,
+                                excludedNoContent: excludedNoContent,
                                 firstBates: firstBates, lastBates: lastBates, pages: pages,
                                 attachmentFamilies: families, folder: folder.path,
                                 manifestSHA256: manifestHash,
@@ -311,11 +335,17 @@ enum ProductionEngine {
         let record = try JSONEncoder.pretty.encode(run)
         try record.write(to: folder.appendingPathComponent("production.json"), options: .atomic)
 
+        // Tag and hold exclusions are the production's intent and leave it
+        // complete; a message withheld for want of content is a shortfall,
+        // and the receipt says partial.
         ExportRunCenter.shared.record(ExportReceipt(
             title: "Production \(run.productionNumber ?? title)", destination: folder.path, isFolder: true,
             requested: requested, written: included, bytesWritten: nil,
-            outcome: .complete, sha256Hex: manifestHash,
-            errorMessage: excluded > 0 ? "\(excluded) withheld — see excluded.csv" : nil,
+            outcome: excludedNoContent > 0 ? .partial : .complete, sha256Hex: manifestHash,
+            errorMessage: excluded > 0
+                ? "\(excluded) withheld — see excluded.csv"
+                    + (excludedNoContent > 0 ? " (\(excludedNoContent) had no producible content; export those as MBOX or EML)" : "")
+                : nil,
             startedAt: Date().addingTimeInterval(-run.seconds), completedAt: Date()))
         return run
     }

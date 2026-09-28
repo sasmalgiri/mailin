@@ -118,7 +118,8 @@ struct ArchiveLocationView: View {
                         \(deferredBodies) message\(deferredBodies == 1 ? "" : "s") \
                         \(deferredBodies == 1 ? "was" : "were") stored from headers only, because \
                         \(deferredBodies == 1 ? "it was" : "they were") too large to read fully. \
-                        Their original bytes are recorded, but their text is not searchable.
+                        \(deferredBodies == 1 ? "It is" : "They are") read from the original file when opened or exported, \
+                        so keep that file where it was imported from. \(deferredBodies == 1 ? "Its" : "Their") text is not searchable.
                         """, systemImage: "exclamationmark.triangle")
                         .font(.caption)
                         .foregroundStyle(.orange)

@@ -102,7 +102,10 @@ struct GuidedImportSheet: View {
     // A3: the choices the plan asks for, made on the sheet rather than
     // inherited silently from Settings.
     @State private var chosenDedup: DedupPolicy = .messageID
-    @State private var chosenCopiesOriginals = true
+    /// Always false in 3.0 (F03): nothing copies originals yet, and the space
+    /// estimate must not claim otherwise. The stored flag stays so 3.1's real
+    /// copy (I-1) has its plumbing.
+    @State private var chosenCopiesOriginals = false
     @State private var chosenIndexAttachmentText = ImportChoices.indexAttachmentTextDefault()
     @State private var didSeedChoices = false
 
@@ -133,7 +136,7 @@ struct GuidedImportSheet: View {
         .onAppear {
             guard !didSeedChoices else { return }
             chosenDedup = dedupPolicy
-            chosenCopiesOriginals = copiesOriginals
+            chosenCopiesOriginals = false   // F03: no copy exists in 3.0, whatever the caller seeded
             didSeedChoices = true
         }
         // The space requirement depends on copy-vs-reference, so the plan is
@@ -153,11 +156,19 @@ struct GuidedImportSheet: View {
             }
             .help("Skip compares Message-IDs against the archive; Keep every copy imports each occurrence, which is what a forensic intake usually wants")
             .accessibilityIdentifier("import.sheet.duplicates")
-            Picker("Originals", selection: $chosenCopiesOriginals) {
-                Text("Copy into the archive").tag(true)
-                Text("Reference where they are").tag(false)
+            // Audit F03 (2026-09-28): the "Copy into the archive" choice was
+            // offered but nothing copied. Until 3.1 implements a real copy,
+            // the sheet states what actually happens to the originals.
+            LabeledContent("Originals") {
+                Text("""
+                    Messages up to \(ByteCountFormatter.string(fromByteCount: OffsetImportEngine().fullParseCeilingBytes, countStyle: .file)) \
+                    are stored inside the archive. Larger messages are read from the original file, \
+                    which must stay where it is.
+                    """)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .help("Copying doubles the source's contribution to the space requirement; referencing keeps one copy and needs the source to stay where it is")
             .accessibilityIdentifier("import.sheet.originals")
             Toggle("Index attachment contents after import", isOn: $chosenIndexAttachmentText)
                 .help("Extracts text from attachments in the background so in:attachments finds words inside PDFs and documents; off saves time and disk")

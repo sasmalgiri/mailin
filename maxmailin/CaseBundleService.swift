@@ -60,11 +60,16 @@ enum CaseBundleService {
         case sealFailed(String)
         case notABundle
         case sealBroken(SealedReceipt.VerifyResult)
+        /// Audit F05: a message with no content must never be sealed as if it
+        /// were complete. Named by subject so the examiner knows which one.
+        case contentUnavailable(subject: String, reason: String)
 
         var errorDescription: String? {
             switch self {
             case .sealFailed(let detail):
                 return "Could not seal the case bundle: \(detail)"
+            case .contentUnavailable(let subject, let reason):
+                return "Not sealed: the content of “\(subject)” is not available (\(reason)). A bundle never carries an empty message as evidence."
             case .notABundle:
                 return "This file is not a valid .mailincase bundle."
             case .sealBroken(let result):
@@ -84,8 +89,40 @@ enum CaseBundleService {
 
     // MARK: Export
 
+    /// `export` for messages as the archive hands them back: a message whose
+    /// bytes are LOCATED rather than stored (header-only import above the
+    /// full-parse ceiling) is first read from its source, so the bundle
+    /// carries its real content; one whose content cannot be read refuses the
+    /// whole bundle (F05). This is the entry point the UI uses.
+    static func exportResolvingSources(
+        caseTitle: String,
+        emails: [MBOXParser.RawEmail],
+        note: String = "",
+        archive: ArchiveDataService = .shared,
+        to url: URL
+    ) async throws {
+        var resolved: [MBOXParser.RawEmail] = []
+        resolved.reserveCapacity(emails.count)
+        for var email in emails {
+            if email.rawSource.isEmpty {
+                do {
+                    let bytes = try await archive.rawMessageData(for: email)
+                    email.rawSource = String(decoding: bytes, as: UTF8.self)
+                } catch let error as RawMessageError {
+                    if case .contentUnavailable(let subject, let reason) = error {
+                        throw BundleError.contentUnavailable(subject: subject, reason: reason)
+                    }
+                    throw error
+                }
+            }
+            resolved.append(email)
+        }
+        try export(caseTitle: caseTitle, emails: resolved, note: note, to: url)
+    }
+
     /// Builds a sealed bundle from a set of emails + all current studio
     /// artifacts (callers can pass filtered artifact lists for a narrower case).
+    /// Every email must carry its raw source; see `exportResolvingSources`.
     static func export(
         caseTitle: String,
         emails: [MBOXParser.RawEmail],
@@ -97,6 +134,13 @@ enum CaseBundleService {
         reasoningCases: [ReasoningCaseModel]? = nil,
         to url: URL
     ) throws {
+        // F05: refuse before anything is written. An empty rawSource would be
+        // hashed and sealed as evidence of a message with no content.
+        if let empty = emails.first(where: { $0.rawSource.isEmpty }) {
+            throw BundleError.contentUnavailable(
+                subject: empty.headers["Subject"] ?? "(no subject)",
+                reason: "no stored content; use exportResolvingSources to read it from the original file")
+        }
         var bundle = CaseBundle(
             caseTitle: caseTitle,
             exportedBy: ManagedConfig.examinerName ?? ForensicManager.shared.examinerName,

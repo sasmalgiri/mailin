@@ -358,6 +358,71 @@ final class CaseBundleTests: XCTestCase {
             plainBody: "evidence body", htmlBody: "")
     }
 
+    /// Audit F05: a message without content is refused, never sealed as
+    /// evidence of an empty message.
+    func testExportRefusesAnEmailWithoutContent() {
+        var empty = bundledEmail()
+        empty.rawSource = ""
+        let url = root.appendingPathComponent("empty.mailincase")
+        XCTAssertThrowsError(try CaseBundleService.export(caseTitle: "Matter 42", emails: [empty], to: url)) { error in
+            guard case CaseBundleService.BundleError.contentUnavailable(let subject, _) = error else {
+                return XCTFail("expected contentUnavailable, got \(error)")
+            }
+            XCTAssertEqual(subject, "Handoff")
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "nothing is written for a refused bundle")
+    }
+
+    /// Audit F05: a located message (header-only import) is read from its
+    /// source before sealing, so the bundle carries the real bytes; a located
+    /// message whose source is gone refuses the bundle.
+    func testExportResolvingSources_readsLocatedBytesAndRefusesAMissingSource() async throws {
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store", isDirectory: true))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts", isDirectory: true))
+        let archive = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+
+        // A bare .eml source (no envelope, so no mboxrd unquoting) and a
+        // header-only row pointing at it.
+        let source = root.appendingPathComponent("big.eml")
+        let bytes = Data("From: a@example.com\r\nSubject: Located\r\n\r\nthe located body\r\n".utf8)
+        try bytes.write(to: source)
+        var located = bundledEmail()
+        located.headers["Subject"] = "Located"
+        located.headers["Message-ID"] = "<located@example.com>"
+        located.rawSource = ""
+        located.plainBody = ""
+        let locator = MessageLocator(id: located.id, sourceDigest: nil, sourcePath: source.path,
+                                     messageRange: ByteRange(offset: 0, length: Int64(bytes.count)), envelopeRange: nil,
+                                     headerRange: ByteRange(offset: 0, length: 44),
+                                     bodyRange: ByteRange(offset: 44, length: Int64(bytes.count) - 44), ordinal: 0)
+        _ = try await store.insertBatch([located], sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil,
+                                        dedupPolicy: .messageID, batchSize: 10, progress: nil,
+                                        locators: [located.id: .init(locator: locator, bodyDecoded: false)])
+        let readBack = try await archive.fullEmail(id: located.id)
+        let fromArchive = try XCTUnwrap(readBack)
+        XCTAssertTrue(fromArchive.rawSource.isEmpty, "the row itself holds no content")
+
+        let url = root.appendingPathComponent("located.mailincase")
+        try await CaseBundleService.exportResolvingSources(caseTitle: "Matter 42", emails: [fromArchive], archive: archive, to: url)
+        let (bundle, _) = try CaseBundleService.open(url: url)
+        XCTAssertEqual(bundle.emails.count, 1)
+        XCTAssertEqual(Data(bundle.emails[0].rawSource.utf8), bytes, "the bundle carries the source bytes")
+        let expected = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        XCTAssertEqual(bundle.emails[0].sha256Hex, expected)
+
+        // Source gone → refused, nothing written.
+        try FileManager.default.removeItem(at: source)
+        let url2 = root.appendingPathComponent("gone.mailincase")
+        do {
+            try await CaseBundleService.exportResolvingSources(caseTitle: "Matter 42", emails: [fromArchive], archive: archive, to: url2)
+            XCTFail("must refuse")
+        } catch CaseBundleService.BundleError.contentUnavailable(let subject, let reason) {
+            XCTAssertEqual(subject, "Located")
+            XCTAssertTrue(reason.contains("no longer at"))
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url2.path))
+    }
+
     /// Export → open round trip: the seal verifies and every field survives.
     func testExportedBundleVerifiesAndRoundTrips() throws {
         try withIsolatedStudioStores {
