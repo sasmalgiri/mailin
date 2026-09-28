@@ -168,6 +168,64 @@ now 1 % of the volume clamped to 128 MiB–2.5 GiB (healthy above twice that).
 - Throughput in Debug is 1.3–1.8 MiB/s for single-file sources, in line with
   the 1.5 GB rows above.
 
+## Executed 2026-09-28 — Release throughput, and where the time went
+
+Test: `ImportThroughputTests` in the ArchiveCore package, run with
+`swift test -c release` (the package carries `-enable-testing` in every
+configuration, so the optimised build is measurable without the app). Same
+file (the owner's real Sent.mbox, 94,915,160 B, 526 attachment-heavy
+messages), same Mac, production coordinator into disposable storage.
+
+| Build | Engine | Before | After fix 1 | After fix 2 | Speed-up |
+|---|---|---|---|---|---|
+| Release | offset engine (3.0 default) | 78.7 s · 1.15 MiB/s | 35.8 s · 2.53 MiB/s | **16.8 s · 5.40 MiB/s · 31 msg/s** | **4.7×** |
+| Release | streaming parser | 63.5 s · 1.43 MiB/s | 45.1 s · 2.01 MiB/s | **10.0 s · 9.04 MiB/s · 52 msg/s** | **6.4×** |
+| Debug | offset engine | 174.3 s · 0.52 MiB/s | — | — | — |
+
+Counts were identical in every run (526 stored, 526 indexed, 0 damaged).
+
+**The first finding was that Release was NOT faster than Debug** (1.15 vs the
+1.3 MiB/s recorded above): the optimiser was not the problem, the algorithm
+was. Sampling the import thread:
+
+- **Fix 1 — 61 % of all import time was one line.** `AttachmentSaver` cleaned
+  every base64 attachment body with
+  `.filter { "ABC…+/=".contains($0) }`: for every Character of a
+  multi-megabyte body, a linear scan of a 65-Character String, with
+  grapheme-cluster semantics on both sides. Replaced by a one-pass byte
+  table over UTF-8 (same result: stray boundary lines dropped, non-alphabet
+  bytes skipped). A second Character-level whitespace filter before
+  `Data(base64Encoded:)` was removed — the decoder ignores whitespace itself.
+- **Fix 2 — every message was MIME-parsed twice.** `processRawMessage` parsed
+  the tree for headers, then `EmailBodyExtractor.extractContents(from:)`
+  parsed the same text again. The extractor now walks the parts it is given.
+- SQLite and FTS5 did not appear in either profile. The store already does
+  one transaction per batch with prepared statements, WAL and
+  `synchronous = NORMAL`, which is what the literature recommends; there was
+  nothing to gain there yet.
+
+What remains in the profile after both fixes, in order: `MIMEParser`'s
+Character-level splitting (`components(separatedBy:)`, `Substring.index
+(offsetBy:)`, grapheme walks), the offset engine's per-message part scan and
+locator writes (it is now slower than the streaming parser by that margin),
+and one temp-file write per attachment during import. Those are the next
+items, each an order of magnitude smaller than the two above.
+
+### The table the owner asked for, restated with the measured Release rate
+
+At 5.4 MiB/s (offset engine, Release, this MacBook Air; folder sources ≈ 3.4×
+slower until the FTS shard budget is per source):
+
+| Source | Single file | Folder of files |
+|---|---|---|
+| 1 GB | ≈ 3 min | ≈ 11 min |
+| 10 GB | ≈ 32 min | ≈ 1.8 h |
+| 100 GB | ≈ 5.3 h | ≈ 18 h |
+| 200 GB | ≈ 10.5 h | ≈ 1.5 days |
+
+Extrapolated from a 95 MB run; the 1 GB rows above were measured before
+these fixes and will be re-run.
+
 ## Earlier results
 
 `V2_SCALE_RESULTS.md` (synthetic tiny-message corpora up to 1,000,000

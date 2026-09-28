@@ -105,6 +105,36 @@ struct ProductionImportRun {
     func dispose() { try? FileManager.default.removeItem(at: root) }
 }
 
+// MARK: - Temp hygiene
+
+/// The test host's temporary directory lives inside the app container, which
+/// nothing outside the sandbox can list or clean (TCC). A run that is killed
+/// or crashes leaves its disposable stores behind — gigabytes per format row.
+/// This sweeps the known prefixes older than 30 minutes and reports what it
+/// found, so a full disk never silently ends a later run.
+final class TestTempHygiene: XCTestCase {
+    static let prefixes = ["format-", "large-message-", "handoff-", "reloc-", "enospc-", "eject-", "v1lib-", "v2lib-",
+                           "mboxrd-", "throughput-", "mailin-container-", "measure-", "overflow-"]
+
+    func testSweepStaleDisposableStores() throws {
+        let fm = FileManager.default
+        let tmp = fm.temporaryDirectory
+        let entries = (try? fm.contentsOfDirectory(at: tmp, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        var freed: Int64 = 0, kept: Int64 = 0, removed = 0
+        for entry in entries where Self.prefixes.contains(where: { entry.lastPathComponent.hasPrefix($0) }) {
+            let modified = (try? entry.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let bytes = ProductionImportRun.directoryOrFileBytes(entry)
+            if Date().timeIntervalSince(modified) > 30 * 60 {
+                try? fm.removeItem(at: entry)
+                freed += bytes; removed += 1
+            } else {
+                kept += bytes
+            }
+        }
+        print("TEMP-HYGIENE tmp=\(tmp.path) removed=\(removed) freedBytes=\(freed) keptRecentBytes=\(kept)")
+    }
+}
+
 // MARK: - Small rows (always on when the fixture is present)
 
 final class RealBinaryFixtureTests: XCTestCase {

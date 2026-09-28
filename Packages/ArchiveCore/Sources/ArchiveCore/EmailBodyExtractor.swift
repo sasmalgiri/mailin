@@ -77,7 +77,19 @@ public class EmailBodyExtractor {
         attachments: [AttachmentMetadata]
     ) {
         let (_, parts) = MIMEParser.parseEmail(rawEmail: rawEmail)
+        return try extractContents(parts: parts)
+    }
 
+    /// The same extraction over an ALREADY-PARSED MIME tree. `processRawMessage`
+    /// parses the message once for its headers and then called
+    /// `extractContents(from:)`, which parsed the whole text a second time —
+    /// two full MIME passes per message (profiled 2026-09-28). Callers that
+    /// hold the parts pass them here.
+    public static func extractContents(parts: [MIMEPart]) throws -> (
+        plainBody: String,
+        htmlBody: String,
+        attachments: [AttachmentMetadata]
+    ) {
         var plainBodies: [String] = []
         var htmlBodies: [String] = []
         var attachments: [AttachmentMetadata] = []
@@ -244,8 +256,9 @@ public class EmailBodyExtractor {
         if encoding == "quoted-printable" {
             return QuotedPrintableDecoder.decode(raw, isHeader: false, charset: charset)
         } else if encoding == "base64" {
-            let filtered = raw.filter { !$0.isWhitespace }
-            if let data = Data(base64Encoded: filtered) {
+            // The decoder skips whitespace itself; a Character-level filter
+            // here cost a grapheme walk over the whole body for nothing.
+            if let data = Data(base64Encoded: raw, options: [.ignoreUnknownCharacters]) {
                 let enc = charsetToEncoding(charset)
                 if let str = String(data: data, encoding: enc) { return str }
                 if let str = String(data: data, encoding: .utf8) { return str }
@@ -261,6 +274,61 @@ public class EmailBodyExtractor {
 // MARK: - AttachmentSaver (Robust binary-safe fallback for all edge-cases)
 
 public class AttachmentSaver {
+
+    /// True for the 65 bytes of the base64 alphabet (A–Z a–z 0–9 + / =).
+    private static let base64Alphabet: [Bool] = {
+        var table = [Bool](repeating: false, count: 256)
+        for byte in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=".utf8 { table[Int(byte)] = true }
+        return table
+    }()
+
+    /// The base64 bytes of `body`, line by line: a line that is empty after
+    /// trimming, starts with `--`, or mentions `boundary` is dropped (stray
+    /// MIME framing); every other byte outside the alphabet is skipped. Same
+    /// result as the old Character pipeline, in one pass over UTF-8.
+    static func base64Payload(of body: String) -> [UInt8] {
+        var out = [UInt8]()
+        out.reserveCapacity(body.utf8.count)
+        let boundary = Array("boundary".utf8)
+        var body = body
+        body.withUTF8 { bytes in
+            var lineStart = 0
+            let count = bytes.count
+            while lineStart < count {
+                var lineEnd = lineStart
+                while lineEnd < count, bytes[lineEnd] != 0x0A { lineEnd += 1 }
+                // Trim ASCII whitespace at both ends of the line.
+                var first = lineStart, last = lineEnd
+                while first < last, bytes[first] == 0x20 || bytes[first] == 0x09 || bytes[first] == 0x0D { first += 1 }
+                while last > first, bytes[last - 1] == 0x20 || bytes[last - 1] == 0x09 || bytes[last - 1] == 0x0D { last -= 1 }
+                let line = UnsafeBufferPointer(rebasing: bytes[first..<last])
+                let skip = line.isEmpty
+                    || (line.count >= 2 && line[0] == UInt8(ascii: "-") && line[1] == UInt8(ascii: "-"))
+                    || Self.contains(line, boundary)
+                if !skip {
+                    for byte in line where base64Alphabet[Int(byte)] { out.append(byte) }
+                }
+                lineStart = lineEnd + 1
+            }
+        }
+        return out
+    }
+
+    private static func contains(_ haystack: UnsafeBufferPointer<UInt8>, _ needle: [UInt8]) -> Bool {
+        guard haystack.count >= needle.count, !needle.isEmpty else { return false }
+        var i = 0
+        let limit = haystack.count - needle.count
+        while i <= limit {
+            if haystack[i] == needle[0] {
+                var j = 1
+                while j < needle.count, haystack[i + j] == needle[j] { j += 1 }
+                if j == needle.count { return true }
+            }
+            i += 1
+        }
+        return false
+    }
+
     /// Saves the decoded data from email attachment to a temp file (with fallback for raw binary/nonstandard)
     public static func saveAttachment(
         body: String,
@@ -272,16 +340,17 @@ public class AttachmentSaver {
         let data: Data? = {
             let enc = encoding?.lowercased() ?? ""
             if enc == "base64" {
-                // Clean body (remove whitespace and non-base64 chars)
-                let filtered = body
-                    .components(separatedBy: .newlines)
-                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                    .filter { !$0.isEmpty && !$0.hasPrefix("--") && !$0.contains("boundary") }
-                    .joined()
-                    .filter { "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=".contains($0) }
+                // Clean body (drop stray boundary lines, keep only the base64
+                // alphabet) at the BYTE level. The previous version filtered
+                // Character by Character against a 65-character String, with
+                // grapheme-cluster semantics on both sides — a linear scan per
+                // character over megabytes per message. Profiled 2026-09-28
+                // on the real mailbox: 61 % of the entire import was this one
+                // line; SQLite and FTS did not appear in the profile at all.
+                var filtered = Self.base64Payload(of: body)
                 let padLen = (4 - filtered.count % 4) % 4
-                let padded = filtered + String(repeating: "=", count: padLen)
-                if let d = Data(base64Encoded: padded, options: [.ignoreUnknownCharacters]), !d.isEmpty {
+                filtered.append(contentsOf: repeatElement(UInt8(ascii: "="), count: padLen))
+                if let d = Data(base64Encoded: Data(filtered)), !d.isEmpty {
                     return d
                 }
                 // Fallback: treat as raw binary
@@ -302,6 +371,8 @@ public class AttachmentSaver {
         guard let finalData = data, !finalData.isEmpty else {
             throw EmailExtractionError.decodingFailed
         }
+
+        // (helpers below)
 
         // Step 2: Save to temp file (raw, not re-encoded)
         let rawExt = mimeType?.components(separatedBy: "/").last ?? ""

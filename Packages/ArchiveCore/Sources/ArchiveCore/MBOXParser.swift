@@ -483,7 +483,8 @@ struct MBOXParser {
         let rootPart = mimeParts.first
         let extraction: (plainBody: String, htmlBody: String, attachments: [AttachmentMetadata])
         do {
-            extraction = try EmailBodyExtractor.extractContents(from: fullRaw)
+            // One MIME pass: the tree parsed above is what the extractor walks.
+            extraction = try EmailBodyExtractor.extractContents(parts: mimeParts)
         } catch {
             let bodyLines = fullRaw.components(separatedBy: "\n")
             let blankIdx = bodyLines.firstIndex(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) ?? 0
