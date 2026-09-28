@@ -39,6 +39,8 @@ struct ArchiveLocationView: View {
     @State private var confirmDeleteRetired = false
     @State private var retiredCopy: URL?
     @State private var retiredBytes: Int64 = 0
+    /// F01: a verified move exists but this run still has the old copy open.
+    @State private var moveAwaitsRelaunch = false
 
     private let store = ArchiveLocationStore(url: ArchiveLocationStore.productionURL)
 
@@ -56,6 +58,8 @@ struct ArchiveLocationView: View {
                 }
                 if retiredCopy != nil {
                     retiredSection
+                } else if moveAwaitsRelaunch {
+                    relaunchSection
                 }
             } else {
                 Section {
@@ -229,6 +233,22 @@ struct ArchiveLocationView: View {
         }
     }
 
+    /// Shown between a verified move and the relaunch. The copy on this Mac is
+    /// still the one open, so it is not offered for deletion yet.
+    private var relaunchSection: some View {
+        Section {
+            Label("""
+                The archive has been copied and verified. This Mac's copy is still the one in use \
+                until you quit and relaunch mailin. After the relaunch you can delete the copy here.
+                """, systemImage: "arrow.triangle.2.circlepath")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("archive.location.relaunchToFinish")
+        } header: {
+            Text("Copy on this Mac").font(.headline)
+        }
+    }
+
     private var retiredSection: some View {
         Section {
             Text("A copy of the archive from before the move is still on this Mac (\(bytes(retiredBytes))). The moved archive is the one in use.")
@@ -298,6 +318,7 @@ struct ArchiveLocationView: View {
     private func refresh() {
         chosen = store.load()
         retiredCopy = ArchiveRelocator.retiredCopyOnThisMac()
+        moveAwaitsRelaunch = ArchiveRelocator.moveAwaitsRelaunch()
         if let retiredCopy {
             let measured = ArchiveRelocator.measure([ArchiveLayout.sqliteDirectory(under: retiredCopy),
                                                      ArchiveLayout.ftsDirectory(under: retiredCopy)])
