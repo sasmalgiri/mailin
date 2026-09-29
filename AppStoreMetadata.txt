@@ -21,6 +21,27 @@ IN-APP PURCHASES:
   - Professional Lifetime: $149.99 (one-time purchase) — Best Value
 
 BUNDLE ID: com.ecosanskriti.mailin
+VERSION: 3.0 (build 300)
+
+NOTE (2026-09-29): the description of record for 3.0 is STORE_LISTING_3_0.md
+(written against what the code does and what was executed). The DESCRIPTION
+below is the 2.x copy kept for reference; use the 3.0 file for App Store Connect.
+
+------------------------------------
+WHAT'S NEW IN 3.0
+------------------------------------
+
+- Three-pane archive shell; open an archive and you are in it.
+- Import queue with pause, resume, stop-this-file and reorder; the import sheet lets you choose the
+  duplicate policy, whether originals are copied, and whether attachment contents are indexed.
+- Export pre-flight and resume. Every export ends in a receipt.
+- Move the archive to another disk as a verified copy.
+- Search results say where they matched and what the index covered.
+- Import from and export to Apple Mail and Thunderbird, with the exact steps and a read-back check.
+- AI Insights and Professional Workflows are separate pages you switch on; nothing they need
+  runs until you do.
+- Offset import engine is now the default: single messages over 100 MB are archived instead of
+  reported as damaged.
 
 ------------------------------------
 DESCRIPTION

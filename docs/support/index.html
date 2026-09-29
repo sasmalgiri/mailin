@@ -210,8 +210,8 @@
             <h3>What are the system requirements?</h3>
             <p>mailin runs on both Mac and iOS:</p>
             <ul>
-                <li><strong>Mac:</strong> macOS 14 (Sonoma) or later &mdash; Apple Silicon and Intel</li>
-                <li><strong>iPhone &amp; iPad:</strong> iOS 17 / iPadOS 17 or later</li>
+                <li><strong>Mac:</strong> macOS 14.6 (Sonoma) or later &mdash; Apple Silicon and Intel</li>
+                <li><strong>iPhone &amp; iPad:</strong> iOS 17.6 / iPadOS 17.6 or later</li>
             </ul>
             <p style="margin-top: 8px;">Apple Intelligence features require macOS 26 (Tahoe) or later with a supported device.</p>
         </div>
@@ -221,6 +221,44 @@
             <p>mailin's interface is fully localized in <strong>11 languages</strong>:</p>
             <p style="margin-top: 6px;">English, Deutsch (German), Espa&ntilde;ol (Spanish), Fran&ccedil;ais (French), &#2361;&#2367;&#2306;&#2342;&#2368; (Hindi), Italiano (Italian), &#26085;&#26412;&#35486; (Japanese), &#54620;&#44397;&#50612; (Korean), Portugu&ecirc;s (Brazilian Portuguese), &#20013;&#25991;&#31616;&#20307; (Chinese Simplified), &#20013;&#25991;&#32321;&#39636; (Chinese Traditional).</p>
             <p style="margin-top: 6px;">Your system language is detected automatically. You can also change the language in System Settings &gt; Language &amp; Region.</p>
+        </div>
+
+        <!-- New in 3.0 -->
+        <h2 class="section-header">New in 3.0</h2>
+
+        <div class="faq">
+            <h3>What changed in version 3.0?</h3>
+            <p>A three-pane archive shell (mailboxes, sources and labels; the list; the message), an import queue, export pre-flight and resume, moving the archive to another disk, search results that say where they matched and what the index covered, direct ZIP import, and single messages over 100 MB kept instead of reported as damaged. AI Insights and Professional Workflows are now separate pages you switch on. The Live Mail page is a placeholder in this version and connects to nothing.</p>
+        </div>
+
+        <div class="faq">
+            <h3>How does the import queue work?</h3>
+            <p>Add as many files as you like. Each one shows its stage, throughput and an estimated time. You can pause and resume the whole queue, stop a single file (what it already wrote stays), and reorder what comes next. Every finished import produces a signed receipt: what was found, written, skipped and why. If mailin is quit or crashes mid-import, the next launch resumes from the last checkpoint.</p>
+        </div>
+
+        <div class="faq">
+            <h3>Can I move my archive to an external disk?</h3>
+            <p>Yes. Settings &rarr; Archive location lets you choose a folder on another disk. mailin copies the archive there, verifies the copy, records the new location and opens from it after a relaunch. If the disk is not connected, the copy on this Mac is used. The old copy is offered for deletion only after the new location is in use. Cloud-synced folders (iCloud Drive, Dropbox and similar) are refused, because a database that syncs while it is open can be corrupted.</p>
+        </div>
+
+        <div class="faq">
+            <h3>What happens to very large messages?</h3>
+            <p>Messages up to 100 MB are stored inside the archive. A single message larger than that is kept by byte range: mailin records where it sits in the file you imported and reads it from there when you open or export it, after checking the file is still the one that was imported. Keep that file where it is. If it is moved or deleted, the message shows as unavailable rather than empty.</p>
+        </div>
+
+        <div class="faq">
+            <h3>Why does a search say how much of the archive it covered?</h3>
+            <p>While an import is still being indexed, a search cannot have seen every message. Rather than show a bare zero, mailin tells you how many messages the index covered when it answered and which sources are still indexing. Results also say where they matched: From, Subject, Body or an attachment's name or text.</p>
+        </div>
+
+        <div class="faq">
+            <h3>What are the optional pages?</h3>
+            <p><strong>AI Insights</strong> (ask questions with citations that reopen the exact message, summaries, reports) and <strong>Professional Workflows</strong> (custodians and legal holds, chain of custody, Bates numbering, redaction, review batches, eDiscovery, investigation reports, reasoning studios, and a production window). Both are off on a fresh install. The page switcher shows what each one needs; nothing they need runs until you enable them.</p>
+        </div>
+
+        <div class="faq">
+            <h3>Can I export what was interrupted?</h3>
+            <p>Yes. A cancelled or failed export keeps what it wrote, cut back to the last recorded batch, and its receipt offers Resume. Resume checks that the archive selection has not changed and that the partial output is exactly what the receipt recorded before it appends anything. If either check fails, it tells you to start again rather than guess.</p>
         </div>
 
         <!-- Features -->
@@ -284,21 +322,19 @@
 
         <div class="faq">
             <h3>What export formats are available?</h3>
-            <p>mailin can export emails and analysis in multiple formats:</p>
+            <p>Every export starts with a pre-flight (what will be written, how much space it needs) and ends with a receipt that records what was requested, what was written, what was skipped and why, and the file's SHA-256. An interrupted export resumes from its receipt.</p>
             <ul>
-                <li><strong>EML</strong> &mdash; standard email format, compatible with any email client</li>
-                <li><strong>CSV</strong> &mdash; spreadsheet-compatible for data analysis</li>
-                <li><strong>PDF</strong> &mdash; formatted documents with optional Bates stamping</li>
-                <li><strong>Plain text</strong> &mdash; simple text export</li>
-                <li><strong>JSON</strong> &mdash; structured data for developers</li>
-                <li><strong>MSG</strong> &mdash; Outlook message format export</li>
-                <li><strong>PST</strong> &mdash; Outlook archive export</li>
-                <li><strong>vCard</strong> &mdash; export contacts extracted from email headers</li>
-                <li><strong>Forensic reports</strong> &mdash; with SHA-256, SHA-1, and MD5 hash verification</li>
-                <li><strong>Concordance load files</strong> &mdash; for legal review platforms</li>
-                <li><strong>Redacted exports</strong> &mdash; PII automatically removed</li>
+                <li><strong>mbox</strong> &mdash; one file for a whole selection, optionally split into parts; large messages are streamed byte for byte from their source</li>
+                <li><strong>EML</strong> &mdash; one file per message, compatible with any mail client</li>
+                <li><strong>PDF and TIFF</strong> &mdash; one document per message, with optional Bates stamping</li>
+                <li><strong>MSG</strong> &mdash; Outlook message format</li>
+                <li><strong>CSV, Word, Markdown, JSON</strong> &mdash; for spreadsheets, documents and developers</li>
+                <li><strong>Portable HTML viewer</strong> &mdash; a folder you can open in any browser</li>
+                <li><strong>vCard and ICS</strong> &mdash; contacts and calendar items found in headers</li>
+                <li><strong>Concordance load files, redacted sets, forensic reports</strong> &mdash; in Professional Workflows</li>
                 <li><strong>Bulk attachment download</strong> &mdash; save all attachments at once</li>
             </ul>
+            <p style="margin-top: 10px;">PDF, TIFF and MSG need the decoded message body. A message over 100 MB whose body was not decoded at import is withheld from those formats and listed on the receipt with the reason; export it as mbox or EML, which copy the original bytes.</p>
         </div>
 
         <div class="faq">
@@ -434,7 +470,7 @@
 
         <div class="faq">
             <h3>Does mailin use cloud AI?</h3>
-            <p>No. All AI features use Apple's on-device <strong>NaturalLanguage framework</strong>. On macOS 26+, mailin can also use Apple Intelligence's on-device models via the <strong>FoundationModels framework</strong>. No data is sent to OpenAI, Google, or any other cloud AI service.</p>
+            <p>Not unless you switch it on. By default every AI feature runs on your device: Apple's <strong>NaturalLanguage framework</strong> everywhere, and on macOS 26+ Apple Intelligence's on-device models through the FoundationModels framework. An optional Cloud AI mode exists for people who want a larger model: it is off by default, uses your own OpenAI or Anthropic key, and asks you to confirm each request before anything is sent. Nothing is ever sent to us.</p>
         </div>
 
         <div class="faq">

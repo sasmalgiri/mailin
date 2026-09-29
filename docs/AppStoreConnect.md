@@ -23,83 +23,36 @@ Secondary: Utilities
 ## App Description (4000 characters max)
 
 ```
-mailin is a powerful, privacy-first email archive analyzer for Mac, iPhone, and iPad. Import your .mbox, .eml, .emlx, .msg, .pst, .ost, or .nsf files from Gmail Takeout, Thunderbird, Apple Mail, Outlook, or Lotus Notes — and instantly search, filter, analyze, and export your email history. Available in 11 languages. Everything runs on your device. Nothing leaves your device.
+mailin opens your email archives — Gmail Takeout, Apple Mail, Thunderbird, Outlook (.pst, .msg),
+Lotus Notes (.nsf), plain .mbox and .eml, or a ZIP of any of them — and turns them into a fast,
+searchable, private archive that never leaves your Mac.
 
-IMPORT & BROWSE
-• Open .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, and .zip archives
-• Full MIME and RFC 822 support with attachment handling
-• Conversation threading groups related emails together
-• Full-text search across subjects, senders, and body content
+**The archive**
+- A three-pane browser: mailboxes, sources and labels on the left, the list in the middle, the
+  message on the right. Keyboard-first: J/K, Return, / to search.
+- Search that says where it matched (From, Subject, Body, Attachment) and how much of the archive
+  the index covered when it answered — a search that hasn't seen every message never reads as a
+  bare zero.
+- Import with a receipt: what was found, what was written, what was skipped and why, signed so it
+  can be filed. Pause, resume, reorder and stop imports from the queue.
+- Export to mbox, .eml, PDF, TIFF, .msg, CSV, Word, Markdown, JSON or a portable HTML viewer, with
+  a pre-flight that shows the space needed and a receipt with the hash. An interrupted export
+  resumes from its receipt.
+- Move your archive to an external disk as a verified copy, and get it back if the disk is away.
 
-ADVANCED SEARCH
-• Boolean operators (AND / OR / NOT) for precise queries
-• Regex and wildcard search for pattern matching
-• Proximity search — find terms near each other ("budget" NEAR/5 "deadline")
-• BM25 relevance ranking for the best results first
-• Gmail label detection from Google Takeout exports
+**No built-in size limit.** Import streams from disk, so archive size is bounded by your storage,
+not by mailin. Verified on real mail up to 1.5 GB; larger archives have not been tested.
 
-ON-DEVICE AI & NLP
-• Sentiment analysis — see the emotional tone of every email
-• Topic and keyword extraction powered by Apple NaturalLanguage
-• Language detection for multilingual archives (11 languages)
-• Priority scoring highlights what matters most
-• PII and GDPR compliance scanning
-• Predictive coding — AI learns what's relevant as you review
-• Near-duplicate detection — find similar emails across your archive
-• AI Assistant — ask natural language questions about your emails
-• AI Digest — generate summaries of your email archive
-• Anomaly detection — automatically flag unusual patterns
-• Apple Intelligence support on macOS 26 and later
+**AI Insights (optional, off until you switch it on).** Ask questions and get answers with
+citations that reopen the exact message; summaries; reports. Everything runs on your Mac with
+Apple's on-device models. Cloud providers are used only if you add your own key and approve each
+request when it is about to be sent.
 
-ANALYTICS DASHBOARD
-• Email volume timeline with sent vs. received breakdown
-• Top contacts and communication pairs
-• Activity heatmap by day and hour
-• Attachment type breakdown and email size distribution
-• Contact network visualization
-• Exportable analytics reports
+**Professional Workflows (optional).** Custodians and legal holds, chain of custody, Bates
+numbering, redaction, review batches, eDiscovery, investigation reports, five reasoning studios,
+and a production window that writes a Bates-stamped set with a hash manifest and a numbered record.
 
-EXPORT ANYWHERE
-• Export as EML, JSON, CSV, PDF, MSG, or PST
-• Bates-stamped PDF for legal and compliance
-• Forensic reports with SHA-256, SHA-1, and MD5 hashes
-• Concordance load files for legal review platforms
-• vCard contact export from email headers
-• Bulk download all attachments at once
-• Redacted exports with PII automatically removed
-
-FORENSIC & LEGAL TOOLS
-• Tamper-proof HMAC audit logging and chain of custody
-• Evidence tagging and examiner annotations
-• SPF, DKIM, and DMARC authentication analysis
-• S/MIME signature verification and encryption detection
-• Spoofing and phishing detection
-• MIME tree inspection and received chain analysis
-• Bates numbering and Concordance load file export
-• Custodian management and legal hold marking
-• Review batching for systematic document review
-• Deduplication and near-duplicate detection
-
-ADDITIONAL FEATURES
-• Email comparison — side-by-side diff of two emails
-• Keyword monitoring and smart alerts
-• Automation rules — auto-tag by custom rules
-• Encrypted storage (AES-256) and biometric lock
-• Spotlight search and iCloud sync
-• Available in 11 languages — adapts to your system language
-
-BUILT FOR PRIVACY
-• Zero data collection — no analytics, no tracking, no telemetry
-• All processing on-device using Apple frameworks
-• App Sandbox with minimal permissions
-
-FLEXIBLE PLANS
-• Free: up to 500 emails with basic filtering and NLP
-• Personal: unlimited emails, AI assistant, analytics, exports
-• Professional: adds audit trail, chain of custody, Bates numbering, predictive coding
-• Monthly, yearly, or one-time lifetime purchase
-
-Whether you're a journalist, lawyer, researcher, or just someone who wants to understand their email history — mailin gives you the tools to do it privately.
+mailin has no account, no sync and no telemetry. Your archive is a folder you own.
 ```
 
 ## Keywords (100 characters max, comma-separated)
@@ -168,39 +121,39 @@ That's it. Since mailin collects zero user data, no further questions apply.
 ## App Review Notes (for the reviewer)
 
 ```
-mailin is an email archive analyzer that parses .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf, and .zip files locally on the user's device. It runs on Mac, iPhone, and iPad, and is localized in 11 languages.
+mailin is an email archive analyzer that opens .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf and .zip files locally on the user's device. It runs on Mac, iPhone and iPad.
 
 TESTING:
-- A demo file (demo_emails.mbox) is included in the app bundle for testing. On launch, click "Select Files" and choose any supported file, or use the demo data.
-- Free tier allows up to 500 emails. Personal and Professional features require a subscription or one-time purchase.
+- Help > Open sample loads the bundled demo_emails.mbox; it shows every surface. Or drag any supported file onto the window.
+- The archive page is always on. AI Insights and Professional Workflows are optional pages, off on a fresh install; the page switcher (top of the window) explains what each needs and turns it on.
+- Free tier: up to 500 emails. Personal and Professional features need a subscription or one-time purchase (StoreKit 2; cancel via Apple's Subscriptions UI).
 
-ON-DEVICE AI:
-- The on-device NLP engine uses Apple's NaturalLanguage framework and works entirely offline.
-- Apple Intelligence features require macOS 26 or later with a supported device.
-- No cloud AI services are used. All AI processing happens on-device.
+NETWORK:
+- No account, no login, no developer server. The archive never leaves the device.
+- Optional Cloud AI (AI Insights > Settings) is OFF by default, needs the user's own OpenAI or Anthropic key, and asks the user to confirm each request before it is sent.
+- The Live Mail page is a placeholder in 3.0: no account can be added and no mail server is contacted; the page says so.
+- StoreKit is the only other network use.
 
-IN-APP PURCHASES:
-- Personal Monthly: $4.99/month — unlimited emails, AI assistant, analytics, all exports
-- Personal Yearly: $29.99/year — same as monthly, save 40%
-- Personal Lifetime: $49.99 one-time — pay once, own forever
-- Professional Monthly: $9.99/month — all Personal features plus forensic tools, audit trail, chain of custody, Bates numbering, batch processing, predictive coding
-- Professional Yearly: $79.99/year — same as monthly, save 40%
-- Professional Lifetime: $149.99 one-time — pay once, own forever
-- Free tier: up to 500 emails with basic features.
+PRIVACY:
+- PrivacyInfo.xcprivacy declares no tracking and no collected data. No third-party SDKs.
 
-NETWORK ACCESS:
-- This app has NO network entitlement. All email processing is entirely offline. In-app purchases are handled by StoreKit 2, which operates through Apple's own infrastructure without requiring a network entitlement from the app.
-
-LOCALIZATION:
-- The app is fully localized in 11 languages: English, German, Spanish, French, Hindi, Italian, Japanese, Korean, Portuguese (Brazil), Chinese Simplified, and Chinese Traditional.
-
-No special demo account is needed. The app works with any supported file (.mbox, .eml, .emlx, .msg, .pst, .ost, .nsf).
+No demo account is needed.
 ```
 
 ---
 
-## What's New (Version 1.0)
+## What's New (Version 3.0)
 
 ```
-Initial release of mailin — your private, on-device email archive analyzer. Import MBOX, EML, EMLX, MSG, PST, OST, and NSF archives. 11 languages, forensic tools, on-device AI, analytics dashboard. Subscribe monthly, yearly, or buy once for lifetime access.
+- Three-pane archive shell; open an archive and you are in it.
+- Import queue with pause, resume, stop-this-file and reorder; the import sheet lets you choose the
+  duplicate policy, whether originals are copied, and whether attachment contents are indexed.
+- Export pre-flight and resume. Every export ends in a receipt.
+- Move the archive to another disk as a verified copy.
+- Search results say where they matched and what the index covered.
+- Import from and export to Apple Mail and Thunderbird, with the exact steps and a read-back check.
+- AI Insights and Professional Workflows are separate pages you switch on; nothing they need
+  runs until you do.
+- Offset import engine is now the default: single messages over 100 MB are archived instead of
+  reported as damaged.
 ```

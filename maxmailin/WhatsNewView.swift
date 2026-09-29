@@ -128,6 +128,16 @@ private struct ReleaseItem {
 // MARK: - Release Notes Content
 
 private let releaseNotes: [ReleaseNote] = [
+    ReleaseNote(version: "3.0", date: "September 2026", items: [
+        ReleaseItem(icon: "sidebar.left", title: "Three-Pane Archive", description: "Mailboxes, sources and labels on the left, the list in the middle, the message on the right. Open an archive and you are in it. Keyboard-first: J/K, Return, / to search.", color: .blue),
+        ReleaseItem(icon: "list.bullet.rectangle", title: "Import Queue", description: "Pause, resume, reorder or stop a single file while the rest continue. Choose the duplicate policy and attachment indexing before you start. Every import ends in a signed receipt.", color: .indigo),
+        ReleaseItem(icon: "square.and.arrow.up.on.square", title: "Export Pre-flight and Resume", description: "See the space needed first. Every export ends in a receipt with its hash; an interrupted export resumes from that receipt and writes nothing twice.", color: .green),
+        ReleaseItem(icon: "externaldrive", title: "Move the Archive", description: "Copy the archive to another disk, verified, and open it from there. If the disk is away, the copy on this Mac stays usable. Nothing is deleted until the new location is live.", color: .teal),
+        ReleaseItem(icon: "magnifyingglass.circle", title: "Search That Says What It Saw", description: "Results show where they matched (From, Subject, Body, Attachment) and how much of the archive the index covered when it answered.", color: .orange),
+        ReleaseItem(icon: "doc.zipper", title: "Large Messages and ZIPs", description: "Single messages over 100 MB are archived and read from the file you imported instead of being reported as damaged. Import a ZIP directly.", color: .purple),
+        ReleaseItem(icon: "square.grid.2x2", title: "Optional Pages", description: "AI Insights and Professional Workflows are separate pages, off until you switch them on. Nothing they need runs until you do.", color: .pink),
+        ReleaseItem(icon: "checkmark.shield", title: "Hardened Integrity", description: "The audit log is anchored so a truncated log is detected; a large message whose source file changed since import is refused rather than exported silently.", color: .gray),
+    ]),
     ReleaseNote(version: "2.0", date: "August 2026", items: [
         ReleaseItem(icon: "infinity", title: "Million-Email Architecture", description: "Storage rebuilt on SQLite + full-text shards: browsing, search and analysis stay fast and memory stays flat whether your archive holds 1 email or 1,000,000 — measured, not estimated.", color: .blue),
         ReleaseItem(icon: "magnifyingglass.circle", title: "Complete Search Results", description: "Search now pages through every match with exact counts — no more result ceilings. Select All, bulk actions and exports cover every matching email.", color: .green),

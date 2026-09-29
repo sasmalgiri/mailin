@@ -10,17 +10,18 @@ Paste each section below into the corresponding field in **App Store Connect →
 Thank you for reviewing mailin.
 
 HOW TO TEST WITHOUT A REAL EMAIL ARCHIVE
-On the welcome screen, tap "Try with Sample Data" to load 25 fictional emails. All sample emails are clearly tagged "SAMPLE" and can be removed at any time from Settings. The sample button is intentionally placed near "Select Email Archive" specifically so reviewers (and new users) can immediately explore every feature.
+Help > Open sample loads the bundled demo_emails.mbox (fictional messages). Or use "Try with Sample Data" on the welcome screen, or drag any .mbox/.eml/.pst/.msg/.nsf/.zip onto the window. Sample data can be removed at any time from Settings.
 
-WHAT TO LOOK FOR ONCE SAMPLE DATA IS LOADED
-- Tap any email to see the detail view (headers, body, attachments, AI analysis).
-- Tap the Search icon to test full-text search ("project", "invoice", "kickoff").
-- Tap the chart icon for Email Analytics (charts, timeline, communication patterns).
-- Tap the brain icon for the AI Assistant — ask "summarize the project emails" or "who do I email the most?". All AI runs on-device via Apple Intelligence (no network required, no third-party servers).
-- The Settings screen contains the Glossary (plain-language definitions of every legal/forensic term used in the app).
+WHAT TO LOOK FOR (VERSION 3.0)
+- The Archive page is always on: mailboxes, sources and labels on the left, the list in the middle, the message on the right. J/K move, Return opens, / searches.
+- Import: drop several files to see the import queue (pause, resume, stop one file, reorder). Every import ends in a receipt.
+- Search "project" or "invoice": results say where they matched and how much of the archive the index covered.
+- Export (toolbar > Export): a pre-flight sheet shows the space needed; the run ends in a receipt with the file's SHA-256. Cancel mid-way and the receipt offers Resume.
+- AI Insights and Professional Workflows are OPTIONAL pages, off on a fresh install. The page switcher at the top explains what each needs and turns it on. AI Insights runs on-device (Apple NaturalLanguage; Apple Intelligence on macOS 26+).
+- The Live Mail page is a placeholder in 3.0: no account can be added and no mail server is contacted; the page says so.
 
 OFFLINE-FIRST
-mailin works completely offline. No account creation, no login, no network calls for core functionality. The optional Cloud AI toggle (Settings → AI) is OFF by default and requires the user to provide their own API key — it is not used unless explicitly enabled.
+mailin works completely offline. No account creation, no login, no developer server, no network calls for anything to do with the archive. The optional Cloud AI mode (AI Insights > Settings) is OFF by default, requires the user's own OpenAI or Anthropic key, and asks the user to confirm each request before it is sent.
 
 SUBSCRIPTIONS / IN-APP PURCHASES
 All paywalls are gated by free trial. The app is fully functional in the free tier for evaluation: sample data, basic search, parsing, and a limited number of exports. Auto-renewable subscriptions (Personal / Professional) and a one-time Lifetime purchase unlock unlimited exports, advanced forensic features, and Cloud AI. Subscriptions are managed via standard StoreKit 2; cancellation is via Apple's standard Settings → Subscriptions UI.

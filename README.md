@@ -8,6 +8,21 @@ Import, search, analyze, and export email archives from Gmail, Outlook, Thunderb
 ![iOS](https://img.shields.io/badge/iOS-17.6+-blue)
 ![Swift](https://img.shields.io/badge/Swift-5.9+-orange)
 ![License](https://img.shields.io/badge/license-Proprietary-green)
+![Version](https://img.shields.io/badge/version-3.0-blue)
+
+---
+
+## What's New in 3.0
+
+- Three-pane archive shell (mailboxes, sources and labels; list; message), keyboard-first
+- Import queue: pause, resume, stop one file, reorder; duplicate policy and attachment indexing chosen in the import sheet; every import ends in a signed receipt
+- Export pre-flight and resume; every export ends in a receipt with its hash; mbox, EML, PDF, TIFF, MSG, CSV, Word, Markdown, JSON, portable HTML
+- Move the archive to another disk as a verified copy; the copy on this Mac stays usable when the disk is away
+- Search results say where they matched and how much of the archive the index covered
+- Import from and export to Apple Mail and Thunderbird with a read-back check
+- AI Insights and Professional Workflows are separate optional pages, off until switched on
+- Single messages over 100 MB are archived by byte range and read from the original file instead of being reported as damaged; ZIP archives import directly
+- Details: `RELEASE_NOTES_3_0.md`; what was executed: `RELEASE_READINESS.md`, `SCALE_RESULTS.md`, `Verification/`
 
 ---
 
@@ -32,7 +47,7 @@ Import, search, analyze, and export email archives from Gmail, Outlook, Thunderb
 - Full RFC 822 & MIME compliant parser with multipart, base64, quoted-printable support
 - Drag-and-drop or file browser import
 - Conversation threading via Message-ID / In-Reply-To / References headers
-- Streaming parser for large archives (100MB+) with memory-safe batch mode
+- Streaming import for mbox/eml in bounded batches (verified on 1.5 GB in one file); resumable checkpoints; messages over 100 MB kept by byte range
 - Robust handling of malformed emails with anomaly detection
 
 ### Search
