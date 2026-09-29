@@ -1,0 +1,119 @@
+mailin 3.0 — ArchiveCore package tests
+commit: c9dbb8c (v3-architecture)
+date: 2026-09-29T14:01:58Z
+command: xcrun swift test --skip FaultVolumeTests --skip ImportThroughputTests
+host: 27.0 arm64, Xcode 27.0 Build version 27A266a 
+----
+Test Suite 'Selected tests' started at 2026-09-29 19:32:00.322.
+Test Suite 'ArchiveCoreTests.xctest' started at 2026-09-29 19:32:00.325.
+Test Suite 'AuditWave1Tests' started at 2026-09-29 19:32:00.326.
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testAttachmentDecode_base64StillDecodesWrappedPayload]' started.
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testAttachmentDecode_base64StillDecodesWrappedPayload]' passed (0.001 seconds).
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testAttachmentDecode_quotedPrintableIsBytesNotText]' started.
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testAttachmentDecode_quotedPrintableIsBytesNotText]' passed (0.000 seconds).
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testQuotedPrintable_decodesBinaryBytesUnchanged]' started.
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testQuotedPrintable_decodesBinaryBytesUnchanged]' passed (0.000 seconds).
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testQuotedPrintable_malformedEscapeIsLiteral_softBreaksVanish]' started.
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testQuotedPrintable_malformedEscapeIsLiteral_softBreaksVanish]' passed (0.000 seconds).
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testQuotedPrintable_roundTripsEveryByteValue]' started.
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testQuotedPrintable_roundTripsEveryByteValue]' passed (0.001 seconds).
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testSelectPart_ambiguous_returnsNil]' started.
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testSelectPart_ambiguous_returnsNil]' passed (0.000 seconds).
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testSelectPart_noFilename_usesOrdinal]' started.
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testSelectPart_noFilename_usesOrdinal]' passed (0.000 seconds).
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testSelectPart_orderDisagrees_uniqueNameWins]' started.
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testSelectPart_orderDisagrees_uniqueNameWins]' passed (0.000 seconds).
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testSelectPart_sameNameTwice_resolvesByOrdinal]' started.
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testSelectPart_sameNameTwice_resolvesByOrdinal]' passed (0.000 seconds).
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testZip64_centralDirectoryOffsetAboveInt64Max_throws]' started.
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testZip64_centralDirectoryOffsetAboveInt64Max_throws]' passed (0.001 seconds).
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testZip64_extraFieldDeclaresMoreThanPresent_throws]' started.
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testZip64_extraFieldDeclaresMoreThanPresent_throws]' passed (0.001 seconds).
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testZip64_locatorOffsetAboveInt64Max_throws]' started.
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testZip64_locatorOffsetAboveInt64Max_throws]' passed (0.000 seconds).
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testZip64_offsetPlusSizeOverflow_throws]' started.
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testZip64_offsetPlusSizeOverflow_throws]' passed (0.000 seconds).
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testZip64_wellFormedStillParses]' started.
+Test Case '-[ArchiveCoreTests.AuditWave1Tests testZip64_wellFormedStillParses]' passed (0.001 seconds).
+Test Suite 'AuditWave1Tests' passed at 2026-09-29 19:32:00.333.
+	 Executed 14 tests, with 0 failures (0 unexpected) in 0.006 (0.007) seconds
+Test Suite 'DeferredMessageIntegrityTests' started at 2026-09-29 19:32:00.333.
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testAttachmentFallback_sameNameTwice_returnsTheRequestedOne]' started.
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testAttachmentFallback_sameNameTwice_returnsTheRequestedOne]' passed (0.004 seconds).
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testDeferredImport_everyCommittedRowHasALocator]' started.
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testDeferredImport_everyCommittedRowHasALocator]' passed (0.070 seconds).
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testEditedSource_sameLength_isRefusedByEveryStreamingExport]' started.
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testEditedSource_sameLength_isRefusedByEveryStreamingExport]' passed (0.049 seconds).
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testEMLExport_streamsTheDeferredMessageByteForByte]' started.
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testEMLExport_streamsTheDeferredMessageByteForByte]' passed (0.091 seconds).
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testInsertBatch_writesLocatorsInsideTheRowTransaction]' started.
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testInsertBatch_writesLocatorsInsideTheRowTransaction]' passed (0.009 seconds).
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testLedger_detectsASourceChangedBetweenVerificationAndRead]' started.
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testLedger_detectsASourceChangedBetweenVerificationAndRead]' passed (0.044 seconds).
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testLedger_verifiesEachSourceOncePerRun_andReverifiesAfterAnEdit]' started.
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testLedger_verifiesEachSourceOncePerRun_andReverifiesAfterAnEdit]' passed (0.045 seconds).
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testLedgerKey_distinguishesDigestsAtTheSamePath_andSeesEdits]' started.
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testLedgerKey_distinguishesDigestsAtTheSamePath_andSeesEdits]' passed (0.045 seconds).
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testMBOXStream_refusesASourceChangedDuringTheRead]' started.
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testMBOXStream_refusesASourceChangedDuringTheRead]' passed (0.045 seconds).
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testMBOXStream_refusesASourceEditedBetweenPlanAndRead_andCutsTheOutputBack]' started.
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testMBOXStream_refusesASourceEditedBetweenPlanAndRead_andCutsTheOutputBack]' passed (0.046 seconds).
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testMessageFiles_withheldBeforeAnInterruption_isStillReportedAfterTheResume]' started.
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testMessageFiles_withheldBeforeAnInterruption_isStillReportedAfterTheResume]' passed (0.049 seconds).
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testMessageFilesExport_withoutRawStreaming_withholdsDeferredMessages]' started.
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testMessageFilesExport_withoutRawStreaming_withholdsDeferredMessages]' passed (0.045 seconds).
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testMissingSource_isUnavailable_andEMLExportFailsWithoutAStub]' started.
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testMissingSource_isUnavailable_andEMLExportFailsWithoutAStub]' passed (0.043 seconds).
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testRawMessageData_ofADeferredMessage_equalsWhatAFullParseStores]' started.
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testRawMessageData_ofADeferredMessage_equalsWhatAFullParseStores]' passed (0.082 seconds).
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testRawMessageFile_refusesAnEditedSource]' started.
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testRawMessageFile_refusesAnEditedSource]' passed (0.047 seconds).
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testRawMessageFile_synchronousPath_matches]' started.
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testRawMessageFile_synchronousPath_matches]' passed (0.088 seconds).
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testStreamingFilters_longLines_matchWholeTextForAnyChunking]' started.
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testStreamingFilters_longLines_matchWholeTextForAnyChunking]' passed (4.688 seconds).
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testStreamingFilters_veryLongQuoteRuns_matchWholeText]' started.
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testStreamingFilters_veryLongQuoteRuns_matchWholeText]' passed (0.569 seconds).
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testStreamingUnquoter_matchesWholeTextAcrossChunkBoundaries]' started.
+Test Case '-[ArchiveCoreTests.DeferredMessageIntegrityTests testStreamingUnquoter_matchesWholeTextAcrossChunkBoundaries]' passed (0.000 seconds).
+Test Suite 'DeferredMessageIntegrityTests' passed at 2026-09-29 19:32:06.394.
+	 Executed 19 tests, with 0 failures (0 unexpected) in 6.060 (6.061) seconds
+Test Suite 'ExportResumeTests' started at 2026-09-29 19:32:06.394.
+Test Case '-[ArchiveCoreTests.ExportResumeTests testFreshRun_refusesADirectoryAtTheManifestPath_andRemovesNothingInsideIt]' started.
+Test Case '-[ArchiveCoreTests.ExportResumeTests testFreshRun_refusesADirectoryAtTheManifestPath_andRemovesNothingInsideIt]' passed (0.032 seconds).
+Test Case '-[ArchiveCoreTests.ExportResumeTests testManifest_asASymlink_isRefusedBeforeAnyReadOrWrite_andAFreshRunNeverWritesThroughOne]' started.
+Test Case '-[ArchiveCoreTests.ExportResumeTests testManifest_asASymlink_isRefusedBeforeAnyReadOrWrite_andAFreshRunNeverWritesThroughOne]' passed (0.076 seconds).
+Test Case '-[ArchiveCoreTests.ExportResumeTests testManifest_refusesTraversalAbsoluteAndSymlinkNames_andTouchesNothingOutsideTheFolder]' started.
+Test Case '-[ArchiveCoreTests.ExportResumeTests testManifest_refusesTraversalAbsoluteAndSymlinkNames_andTouchesNothingOutsideTheFolder]' passed (0.004 seconds).
+Test Case '-[ArchiveCoreTests.ExportResumeTests testManifest_strayThatCannotBeRemoved_refusesTheResume_andKeepsItsEntryForTheRetry]' started.
+Test Case '-[ArchiveCoreTests.ExportResumeTests testManifest_strayThatCannotBeRemoved_refusesTheResume_andKeepsItsEntryForTheRetry]' passed (0.138 seconds).
+Test Case '-[ArchiveCoreTests.ExportResumeTests testManifest_trailingEntriesPastTheBoundary_areCutBack_soTheNextResumeStaysValid]' started.
+Test Case '-[ArchiveCoreTests.ExportResumeTests testManifest_trailingEntriesPastTheBoundary_areCutBack_soTheNextResumeStaysValid]' passed (0.102 seconds).
+Test Case '-[ArchiveCoreTests.ExportResumeTests testMessageFiles_keptPartialHoldsOnlyReportedRecords_andResumeAddsTheRest]' started.
+Test Case '-[ArchiveCoreTests.ExportResumeTests testMessageFiles_keptPartialHoldsOnlyReportedRecords_andResumeAddsTheRest]' passed (0.269 seconds).
+Test Case '-[ArchiveCoreTests.ExportResumeTests testMessageFiles_resumeInterruptedDuringPrefixReplay_keepsTheManifestBoundary]' started.
+Test Case '-[ArchiveCoreTests.ExportResumeTests testMessageFiles_resumeInterruptedDuringPrefixReplay_keepsTheManifestBoundary]' passed (0.467 seconds).
+Test Case '-[ArchiveCoreTests.ExportResumeTests testMessageFiles_resumeRefusesMissingOrChangedFilesAndAMissingFolder]' started.
+Test Case '-[ArchiveCoreTests.ExportResumeTests testMessageFiles_resumeRefusesMissingOrChangedFilesAndAMissingFolder]' passed (0.042 seconds).
+Test Case '-[ArchiveCoreTests.ExportResumeTests testMessageFiles_skipExistingFiles_acceptedFileIsInTheManifest_andTheRunResumes]' started.
+Test Case '-[ArchiveCoreTests.ExportResumeTests testMessageFiles_skipExistingFiles_acceptedFileIsInTheManifest_andTheRunResumes]' passed (0.096 seconds).
+Test Case '-[ArchiveCoreTests.ExportResumeTests testMessageFiles_skippedInputs_resumeByInputPositionNotByProducedCount]' started.
+Test Case '-[ArchiveCoreTests.ExportResumeTests testMessageFiles_skippedInputs_resumeByInputPositionNotByProducedCount]' passed (0.139 seconds).
+Test Case '-[ArchiveCoreTests.ExportResumeTests testResume_refusesAChangedOrMissingPartialArtifact]' started.
+Test Case '-[ArchiveCoreTests.ExportResumeTests testResume_refusesAChangedOrMissingPartialArtifact]' passed (0.019 seconds).
+Test Case '-[ArchiveCoreTests.ExportResumeTests testSelectionFingerprint_isStable_changesWhenTheSelectionChanges_andIgnoresSetOrder]' started.
+Test Case '-[ArchiveCoreTests.ExportResumeTests testSelectionFingerprint_isStable_changesWhenTheSelectionChanges_andIgnoresSetOrder]' passed (0.011 seconds).
+Test Case '-[ArchiveCoreTests.ExportResumeTests testTextDocument_failureInFirstBatchKeepsOnlyTheHeader]' started.
+Test Case '-[ArchiveCoreTests.ExportResumeTests testTextDocument_failureInFirstBatchKeepsOnlyTheHeader]' passed (0.012 seconds).
+Test Case '-[ArchiveCoreTests.ExportResumeTests testTextDocument_keptPartialEndsAtTheReportedBatch_andResumeCompletesExactly]' started.
+Test Case '-[ArchiveCoreTests.ExportResumeTests testTextDocument_keptPartialEndsAtTheReportedBatch_andResumeCompletesExactly]' passed (0.188 seconds).
+Test Case '-[ArchiveCoreTests.ExportResumeTests testTextDocument_resumeInterruptedDuringPrefixReplay_keepsTheCheckpoint]' started.
+Test Case '-[ArchiveCoreTests.ExportResumeTests testTextDocument_resumeInterruptedDuringPrefixReplay_keepsTheCheckpoint]' passed (0.281 seconds).
+Test Case '-[ArchiveCoreTests.ExportResumeTests testWriterCleanup_inaccessibleStrays_keepTheirEntries_andTheRetryYieldsExactlyTheOutputSet]' started.
+Test Case '-[ArchiveCoreTests.ExportResumeTests testWriterCleanup_inaccessibleStrays_keepTheirEntries_andTheRetryYieldsExactlyTheOutputSet]' passed (0.071 seconds).
+Test Suite 'ExportResumeTests' passed at 2026-09-29 19:32:08.342.
+	 Executed 16 tests, with 0 failures (0 unexpected) in 1.947 (1.948) seconds
+Test Suite 'ArchiveCoreTests.xctest' passed at 2026-09-29 19:32:08.342.
+	 Executed 49 tests, with 0 failures (0 unexpected) in 8.013 (8.017) seconds
+Test Suite 'Selected tests' passed at 2026-09-29 19:32:08.342.
+	 Executed 49 tests, with 0 failures (0 unexpected) in 8.013 (8.021) seconds

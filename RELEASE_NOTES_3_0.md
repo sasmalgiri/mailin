@@ -274,6 +274,16 @@ acted on: the wording above narrowed to what the unlink actually refuses (a dire
 permission regression skips cleanly before it can record a failure in an environment that does not
 enforce mode bits. Native test logs for the reviewed commit are kept under `Verification/`.
 
+### Eighth review (2026-09-29, of the native logs)
+
+No production defect. One validation gap, fixed: the on-device privacy audit looked for the
+bounded-core files under the app folder after they had moved into the ArchiveCore package, and its
+missing-file guard skipped instead of failing, so the test had been silently skipped. It now
+resolves both trees, fails on a missing file, and scans the whole package (which contains no
+network symbol). Every production source guard (offline gate, Private Cloud Compute, public-log
+content, `allIndexedIDs` confinement) now covers the package as well. The Verification README lists
+the skipped rows by name and reason.
+
 ## Known limits, stated
 
 - The streaming `From`-line filter keeps a leading-`>` run as a count, but emits the run as one
