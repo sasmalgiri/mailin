@@ -658,21 +658,35 @@ final class V2VerificationTests: XCTestCase {
 
     // MARK: - Part U — extended guard family (source scans)
 
-    /// Production source directory (shared by the scan guards below).
-    private var productionSourceDir: URL {
+    private var repoRoot: URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("maxmailin")
     }
 
-    /// Every production Swift file, or skip if the tree isn't present.
+    /// Production source directory (shared by the scan guards below).
+    private var productionSourceDir: URL {
+        repoRoot.appendingPathComponent("maxmailin")
+    }
+
+    /// The bounded core moved into the ArchiveCore package; production
+    /// guards must see both trees (eighth review V1).
+    private var packageSourceDir: URL {
+        repoRoot.appendingPathComponent("Packages/ArchiveCore/Sources/ArchiveCore")
+    }
+
+    /// Every production Swift file: the app target AND the ArchiveCore
+    /// package. Both directories are required — a guard that cannot see its
+    /// subject must fail, not skip.
     private func productionSwiftFiles() throws -> [URL] {
-        guard let items = try? FileManager.default.contentsOfDirectory(
-            at: productionSourceDir, includingPropertiesForKeys: nil
-        ) else {
-            throw XCTSkip("app source not found at \(productionSourceDir.path)")
+        var out: [URL] = []
+        for dir in [productionSourceDir, packageSourceDir] {
+            guard let items = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else {
+                XCTFail("production source not found at \(dir.path); the layout changed and this guard must be updated")
+                continue
+            }
+            out += items.filter { $0.pathExtension == "swift" }
         }
-        return items.filter { $0.pathExtension == "swift" }
+        return out
     }
 
     /// `allIndexedIDs` materializes every indexed UUID (unbounded memory) and
@@ -794,9 +808,11 @@ final class V2VerificationTests: XCTestCase {
     /// (Opt-in online features live in other files, e.g. CloudAIProvider/iCloud,
     /// behind user toggles; this guards the always-on bounded core.)
     func testPrivacyAudit_boundedLayerIsOnDevice() throws {
-        let src = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("maxmailin")
+        // Eighth review V1: the bounded core is split between the app target
+        // and the ArchiveCore package. Every named file must be found in
+        // exactly one of the two trees — a missing file FAILS (the guard
+        // would otherwise be silently skipping its subject) — and the whole
+        // package, which IS the bounded core, is scanned as well.
         let onDeviceFiles = [
             "ArchiveDataService.swift", "ArchiveRetrievalService.swift",
             "ArchiveFullAnalytics.swift", "ArchiveTimelineService.swift",
@@ -804,17 +820,31 @@ final class V2VerificationTests: XCTestCase {
             "ArchiveEvidenceService.swift", "ArchiveExportService.swift",
             "SQLiteEmailStore.swift", "EmailRepository.swift", "FTSSearchIndex.swift",
         ]
+        var scan: [URL] = []
+        for name in onDeviceFiles {
+            let candidates = [productionSourceDir, packageSourceDir]
+                .map { $0.appendingPathComponent(name) }
+                .filter { FileManager.default.fileExists(atPath: $0.path) }
+            XCTAssertEqual(candidates.count, 1, "\(name) must exist in exactly one production tree (app or ArchiveCore); found \(candidates.map(\.path))")
+            scan += candidates
+        }
+        guard let packageFiles = try? FileManager.default.contentsOfDirectory(at: packageSourceDir, includingPropertiesForKeys: nil) else {
+            return XCTFail("ArchiveCore sources not found at \(packageSourceDir.path)")
+        }
+        for f in packageFiles where f.pathExtension == "swift" && !scan.contains(f) { scan.append(f) }
+        XCTAssertGreaterThan(scan.count, onDeviceFiles.count, "the package sources are part of the audited layer")
+
         let networkTokens = ["URLSession", "URLRequest", ".dataTask", "https://", "http://", "import Network"]
         var violations: [String] = []
-        for name in onDeviceFiles {
-            let url = src.appendingPathComponent(name)
+        for url in scan {
             guard let text = try? String(contentsOf: url, encoding: .utf8) else {
-                throw XCTSkip("missing \(name)")
+                XCTFail("\(url.lastPathComponent) could not be read")
+                continue
             }
             for (i, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
                 if line.contains("//") { continue }
                 for tok in networkTokens where line.contains(tok) {
-                    violations.append("\(name):\(i + 1)  \(tok)")
+                    violations.append("\(url.lastPathComponent):\(i + 1)  \(tok)")
                 }
             }
         }
