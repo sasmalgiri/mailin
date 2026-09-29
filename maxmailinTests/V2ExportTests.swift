@@ -75,41 +75,66 @@ final class V2ExportTests: XCTestCase {
         let fresh = try await ExportJobRunner.resumeIsCurrent(request, archive: env.archive)
         XCTAssertTrue(fresh, "a first run has nothing to compare")
 
-        // Recheck R2: the run binds itself to the selection BEFORE writing;
-        // the resume request carries THAT fingerprint, not one taken later.
-        let bound = try await ExportJobRunner.bindSelection(request, archive: env.archive)
+        // Recheck R2 / third review T1: `prepare` is the runner's one entry
+        // point. A fresh run is bound BEFORE writing; the resume request
+        // carries THAT fingerprint plus the partial's length and hash.
+        let bound = try await ExportJobRunner.prepare(request, archive: env.archive)
         let boundFingerprint = try XCTUnwrap(bound.selectionFingerprint)
-        // A partial artifact of a known length exists when the run stops.
         try Data("partial".utf8).write(to: URL(fileURLWithPath: bound.destination))
-        let stopped = try XCTUnwrap(ExportJobRunner.resumeRequest(for: bound, written: 10))
+        let stopped = try XCTUnwrap(ExportJobRunner.resumeRequest(for: bound, positions: 10))
         XCTAssertEqual(stopped.skipFirst, 10)
         XCTAssertEqual(stopped.selectionFingerprint, boundFingerprint, "the start-time fingerprint travels unchanged")
         XCTAssertEqual(stopped.resumeArtifactBytes, 7)
+        XCTAssertEqual(stopped.resumeArtifactSHA256?.count, 64)
         XCTAssertEqual(stopped.writeOptions.expectedAppendOffset, 7)
-        let unchanged = try await ExportJobRunner.resumeIsCurrent(stopped, archive: env.archive)
-        XCTAssertTrue(unchanged)
+        XCTAssertEqual(stopped.writeOptions.expectedAppendSHA256, stopped.resumeArtifactSHA256)
+        let prepared = try await ExportJobRunner.prepare(stopped, archive: env.archive)
+        XCTAssertEqual(prepared, stopped, "a valid resume passes prepare untouched")
 
-        // The archive gains a message → the positions no longer line up, even
-        // though a fingerprint taken NOW would match itself.
-        let store = SQLiteEmailStore(directory: env.root.appendingPathComponent("store"))
-        try await store.insertBatch([makeEmail(i: 777)], batchSize: 10)
-        let changed = try await ExportJobRunner.resumeIsCurrent(stopped, archive: env.archive)
-        XCTAssertFalse(changed, "a positional resume over a changed selection must be refused")
-
-        // A resume with no recorded fingerprint is refused, not waved through.
+        // T1: a legacy resume with NO fingerprint must be refused by the
+        // runner's own entry point — not re-bound to the current archive.
         var unbound = stopped
         unbound.selectionFingerprint = nil
-        let refused = try await ExportJobRunner.resumeIsCurrent(unbound, archive: env.archive)
-        XCTAssertFalse(refused, "fail closed")
-        XCTAssertNil(ExportJobRunner.resumeRequest(for: unbound, written: 10), "an unbound run offers no resume")
+        do {
+            _ = try await ExportJobRunner.prepare(unbound, archive: env.archive)
+            XCTFail("an unbound resume must be refused, not bound to the current archive")
+        } catch ExportJobRunner.ResumeError.unbound {}
+        let bind = try await ExportJobRunner.bindSelection(unbound, archive: env.archive)
+        XCTAssertNil(bind.selectionFingerprint, "bindSelection never binds a resume (skipFirst > 0)")
+        XCTAssertNil(ExportJobRunner.resumeRequest(for: unbound, positions: 10), "an unbound run offers no resume")
+
+        // T2: a single-file resume without its boundary is refused.
+        var noBoundary = stopped
+        noBoundary.resumeArtifactSHA256 = nil
+        do {
+            _ = try await ExportJobRunner.prepare(noBoundary, archive: env.archive)
+            XCTFail()
+        } catch ExportJobRunner.ResumeError.boundaryMissing {}
+
+        // The archive gains a message → the positions no longer line up.
+        let store = SQLiteEmailStore(directory: env.root.appendingPathComponent("store"))
+        try await store.insertBatch([makeEmail(i: 777)], batchSize: 10)
+        do {
+            _ = try await ExportJobRunner.prepare(stopped, archive: env.archive)
+            XCTFail("a positional resume over a changed selection must be refused")
+        } catch ExportJobRunner.ResumeError.selectionChanged {}
 
         // No partial artifact on disk → nothing to continue.
         try FileManager.default.removeItem(at: URL(fileURLWithPath: bound.destination))
-        XCTAssertNil(ExportJobRunner.resumeRequest(for: bound, written: 10))
+        XCTAssertNil(ExportJobRunner.resumeRequest(for: bound, positions: 10))
+
+        // Folder formats need their manifest to offer a resume.
+        var folderRequest = bound
+        folderRequest.format = .emlFiles; folderRequest.isFolder = true
+        folderRequest.destination = env.root.appendingPathComponent("eml", isDirectory: true).path
+        try FileManager.default.createDirectory(at: folderRequest.destinationURL, withIntermediateDirectories: true)
+        XCTAssertNil(ExportJobRunner.resumeRequest(for: folderRequest, positions: 10), "no manifest → no resume")
+        try Data("{}\n".utf8).write(to: folderRequest.destinationURL.appendingPathComponent(ExportFolderManifest.filename))
+        XCTAssertNotNil(ExportJobRunner.resumeRequest(for: folderRequest, positions: 10))
 
         // Non-resumable formats never carry a resume request.
         request.format = .json
-        XCTAssertNil(ExportJobRunner.resumeRequest(for: request, written: 10))
+        XCTAssertNil(ExportJobRunner.resumeRequest(for: request, positions: 10))
     }
 
     func testCSVQueryScopeWithExclusionsExactlyOnce() async throws {

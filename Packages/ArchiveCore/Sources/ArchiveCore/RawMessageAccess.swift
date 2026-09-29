@@ -77,14 +77,27 @@ extension MBOXRecordBuilder {
 /// silently, each with a fresh, valid artifact hash. One ledger lives for one
 /// export run; the hash is computed off the main actor.
 final class SourceVerificationLedger: @unchecked Sendable {
+    /// What a source looked like when it was verified: size and modification
+    /// date. Re-checked before and after every read that relies on the
+    /// verification (third review T4). This is a CHANGE DETECTOR, not an
+    /// identity: a replacement of equal size with a restored modification
+    /// date passes it. The digest verification at the start of the operation
+    /// is the identity; the ledger is scoped to ONE operation so that
+    /// verification is never older than the export it serves.
+    struct Snapshot: Equatable {
+        var size: Int64
+        var modified: Double
+    }
+
     private var verifiedKeys: Set<String> = []
+    private var snapshots: [String: Snapshot] = [:]
     private var verified: Set<String> = []
     private var unverified: Set<String> = []
     private let lock = NSLock()
 
     init() {}
 
-    /// Paths this run has verified so far (for receipts and tests).
+    /// Paths this operation has verified so far (for receipts and tests).
     var verifiedPaths: Set<String> {
         lock.lock(); defer { lock.unlock() }
         return verified
@@ -98,29 +111,30 @@ final class SourceVerificationLedger: @unchecked Sendable {
         return unverified
     }
 
-    /// Recheck R4: the cache key is the file's canonical identity PLUS the
-    /// digest the locator expects PLUS the file's current size and
-    /// modification date. Two locators that recorded different digests for
-    /// the same path each get their own verification, and a file modified
-    /// after a verification is re-verified because its key changed.
+    /// Canonical path plus the digest the locator expects: two locators that
+    /// recorded different digests for one path each get their own
+    /// verification (recheck R4). Size and date are NOT part of the key —
+    /// they are checked separately as a change detector (T4).
     static func cacheKey(for locator: MessageLocator) -> String {
         let path = ArchiveRelocator.canonicalPath(URL(fileURLWithPath: locator.sourcePath))
-        let attributes = try? FileManager.default.attributesOfItem(atPath: locator.sourcePath)
-        let size = (attributes?[.size] as? NSNumber)?.int64Value ?? -1
-        let modified = (attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1
-        return "\(path)|\(locator.sourceDigest ?? "")|\(size)|\(modified)"
+        return "\(path)|\(locator.sourceDigest ?? "")"
+    }
+
+    static func snapshot(of path: String) -> Snapshot? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path) else { return nil }
+        return Snapshot(size: (attributes[.size] as? NSNumber)?.int64Value ?? -1,
+                        modified: (attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1)
     }
 
     /// Throws `LocatorReadError.digestMismatch` when the source has changed
     /// since import, `.sourceMissing` when it is gone. A locator without a
-    /// digest is recorded in `unverifiedPaths` and passes.
+    /// digest is recorded in `unverifiedPaths` and passes. Verified once per
+    /// (path, digest) per operation; every later use goes through
+    /// `assertUnchanged`.
     func verify(_ locator: MessageLocator) async throws {
         guard locator.hasVerifiableSource else { noteUnverifiable(locator); return }
         let key = Self.cacheKey(for: locator)
-        lock.lock()
-        let done = verifiedKeys.contains(key)
-        lock.unlock()
-        if done { return }
+        if isVerified(key) { try assertUnchanged(locator); return }
         try await Task.detached(priority: .userInitiated) {
             try LocatorReader().verifySource(locator)
         }.value
@@ -132,18 +146,37 @@ final class SourceVerificationLedger: @unchecked Sendable {
     func verifySync(_ locator: MessageLocator) throws {
         guard locator.hasVerifiableSource else { noteUnverifiable(locator); return }
         let key = Self.cacheKey(for: locator)
-        lock.lock()
-        let done = verifiedKeys.contains(key)
-        lock.unlock()
-        if done { return }
+        if isVerified(key) { try assertUnchanged(locator); return }
         try LocatorReader().verifySource(locator)
         record(key, locator)
     }
 
+    /// The source must still look as it did when it was verified (size and
+    /// modification date). Called before AND after a read so a change during
+    /// the read is caught too. Passes for a path this ledger never verified
+    /// (an undigested locator) — those are reported, not blocked.
+    func assertUnchanged(_ locator: MessageLocator) throws {
+        lock.lock()
+        let recorded = snapshots[locator.sourcePath]
+        lock.unlock()
+        guard let recorded else { return }
+        guard let now = Self.snapshot(of: locator.sourcePath) else {
+            throw LocatorReadError.sourceMissing(locator.sourcePath)
+        }
+        guard now == recorded else { throw LocatorReadError.sourceChangedDuringExport(locator.sourcePath) }
+    }
+
+    private func isVerified(_ key: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return verifiedKeys.contains(key)
+    }
+
     private func record(_ key: String, _ locator: MessageLocator) {
+        let snapshot = Self.snapshot(of: locator.sourcePath)
         lock.lock()
         verifiedKeys.insert(key)
         verified.insert(locator.sourcePath)
+        if let snapshot { snapshots[locator.sourcePath] = snapshot }
         lock.unlock()
     }
 
@@ -156,12 +189,10 @@ final class SourceVerificationLedger: @unchecked Sendable {
 
 /// Synchronous located-message writer, for the two legacy UI export loops
 /// that cannot await. Reads the locator on its own read-only connection.
-/// Every write verifies the source first (R4) through a process-wide ledger
-/// whose key includes the file's size and modification date, so a run over
-/// many located messages hashes each unchanged source once.
+/// Every write verifies the source first (R4) through the caller's ledger —
+/// one per export operation (T4), never process-wide — and re-checks the
+/// source's size and date before and after the read.
 enum RawMessageFile {
-
-    nonisolated(unsafe) static let ledger = SourceVerificationLedger()
 
     /// The message's original bytes, if it has any: stored raw MIME, or a
     /// locator whose source file is present. Nil means an export must fail or
@@ -179,8 +210,8 @@ enum RawMessageFile {
     /// removed.
     @discardableResult
     static func write(located locator: MessageLocator, to url: URL, chunkSize: Int = 1_048_576,
-                      verifying ledger: SourceVerificationLedger? = RawMessageFile.ledger) throws -> RawMessageResult {
-        if let ledger { try ledger.verifySync(locator) }
+                      verifying ledger: SourceVerificationLedger) throws -> RawMessageResult {
+        try ledger.verifySync(locator)
         FileManager.default.createFile(atPath: url.path, contents: nil)
         let handle = try FileHandle(forWritingTo: url)
         var succeeded = false
@@ -190,7 +221,7 @@ enum RawMessageFile {
         }
         var digest = SHA256()
         var total = 0
-        try stream(located: locator, chunkSize: chunkSize) { chunk in
+        try stream(located: locator, chunkSize: chunkSize, ledger: ledger) { chunk in
             try handle.write(contentsOf: chunk)
             digest.update(data: chunk)
             total += chunk.count
@@ -205,7 +236,12 @@ enum RawMessageFile {
     /// unquoter leaves it alone), mboxrd quoting undone when the record came
     /// from an mbox.
     static func stream(located locator: MessageLocator, chunkSize: Int = 1_048_576,
+                       ledger: SourceVerificationLedger? = nil,
                        sink: (Data) throws -> Void) throws {
+        // T4: the source must be as verified before the read begins and
+        // still so after it ends; otherwise what was streamed is not what
+        // was verified and the caller discards it.
+        try ledger?.assertUnchanged(locator)
         let range = locator.messageRange
         var unquoter = MBOXRecordBuilder.StreamingUnquoter(enabled: locator.envelopeRange != nil)
         try LocatorReader().stream(range, from: locator.sourcePath, chunkSize: chunkSize) { chunk in
@@ -214,6 +250,7 @@ enum RawMessageFile {
         }
         let tail = unquoter.finish()
         if !tail.isEmpty { try sink(tail) }
+        try ledger?.assertUnchanged(locator)
     }
 
     static func hex(_ digest: SHA256Digest) -> String {
@@ -254,7 +291,7 @@ extension ArchiveDataService {
             try sink(data)
         case .located(let locator):
             if let ledger { try await ledger.verify(locator) }
-            try RawMessageFile.stream(located: locator, chunkSize: chunkSize) { chunk in
+            try RawMessageFile.stream(located: locator, chunkSize: chunkSize, ledger: ledger) { chunk in
                 digest.update(data: chunk)
                 total += chunk.count
                 try sink(chunk)

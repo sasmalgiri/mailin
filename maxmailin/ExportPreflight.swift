@@ -262,11 +262,20 @@ final class ExportJobRunner {
 
     private init() {}
 
-    /// Audit F08: why a resume was refused.
+    /// Audit F08 / third review T1: why a resume was refused.
     enum ResumeError: LocalizedError {
         case selectionChanged
+        case unbound
+        case boundaryMissing
         var errorDescription: String? {
-            "The archive changed since this export stopped, so it cannot be continued from where it was. Start the export again."
+            switch self {
+            case .selectionChanged:
+                return "The archive changed since this export stopped, so it cannot be continued from where it was. Start the export again."
+            case .unbound:
+                return "This export's receipt does not record which selection it was writing, so it cannot be continued safely. Start the export again."
+            case .boundaryMissing:
+                return "This export's receipt does not record where its partial file ended, so it cannot be continued safely. Start the export again."
+            }
         }
     }
 
@@ -274,10 +283,10 @@ final class ExportJobRunner {
     /// writes anything. The fingerprint is taken here, once, and travels with
     /// the request into its receipt; a resume compares against this value,
     /// not against a fingerprint taken after the archive may have changed
-    /// during the run. A selection that cannot be fingerprinted cannot be
-    /// resumed safely, so the run does not start.
+    /// during the run. Only a FRESH run is bound (T1): a resume must already
+    /// carry its fingerprint, and never receives a new one.
     static func bindSelection(_ request: ExportRequest, archive: ArchiveDataService = .shared) async throws -> ExportRequest {
-        guard request.isResumable, request.selectionFingerprint == nil else { return request }
+        guard request.isResumable, request.skipFirst == 0, request.selectionFingerprint == nil else { return request }
         var bound = request
         bound.selectionFingerprint = try await archive.selectionFingerprint(scope: request.scope)
         return bound
@@ -292,18 +301,39 @@ final class ExportJobRunner {
         return try await archive.selectionFingerprint(scope: request.scope) == recorded
     }
 
+    /// Third review T1: the ONE entry point the runner uses. A fresh run is
+    /// bound to its selection; a resume is validated against its original
+    /// fingerprint and boundary BEFORE anything is written, and is never
+    /// re-bound to the current archive.
+    static func prepare(_ request: ExportRequest, archive: ArchiveDataService = .shared) async throws -> ExportRequest {
+        if request.skipFirst > 0 {
+            guard request.selectionFingerprint != nil else { throw ResumeError.unbound }
+            guard try await resumeIsCurrent(request, archive: archive) else { throw ResumeError.selectionChanged }
+            if !request.isFolder {
+                guard request.resumeArtifactBytes != nil, request.resumeArtifactSHA256 != nil else { throw ResumeError.boundaryMissing }
+            }
+            return request
+        }
+        return try await bindSelection(request, archive: archive)
+    }
+
     /// The request a receipt should carry so the stopped run can continue:
-    /// positions written so far, the fingerprint the run was bound to at its
-    /// start, and — for a single document — the partial artifact's length.
-    /// Nil when the format cannot resume or the run was never bound.
-    static func resumeRequest(for request: ExportRequest, written: Int) -> ExportRequest? {
-        guard request.isResumable, request.selectionFingerprint != nil else { return nil }
+    /// the INPUT positions consumed at the last boundary (T3), the fingerprint
+    /// the run was bound to at its start, and — for a single document — the
+    /// partial artifact's length and SHA-256 (T2); a folder relies on its
+    /// manifest. Nil when the format cannot resume, the run was never bound,
+    /// or the partial output is not there to continue.
+    static func resumeRequest(for request: ExportRequest, positions: Int) -> ExportRequest? {
+        guard request.isResumable, request.selectionFingerprint != nil, positions > 0 else { return nil }
         var resume = request
-        resume.skipFirst = written
-        if !request.isFolder {
-            let size = (try? FileManager.default.attributesOfItem(atPath: request.destination)[.size] as? NSNumber)?.uint64Value
-            guard let size else { return nil }   // no partial artifact → nothing to continue
+        resume.skipFirst = positions
+        if request.isFolder {
+            guard FileManager.default.fileExists(atPath: request.destinationURL.appendingPathComponent(ExportFolderManifest.filename).path) else { return nil }
+        } else {
+            guard let size = (try? FileManager.default.attributesOfItem(atPath: request.destination)[.size] as? NSNumber)?.uint64Value,
+                  let digest = try? ArchiveExportService.sha256(ofFile: request.destinationURL) else { return nil }
             resume.resumeArtifactBytes = size
+            resume.resumeArtifactSHA256 = digest.map { String(format: "%02x", $0) }.joined()
         }
         return resume
     }
@@ -314,8 +344,7 @@ final class ExportJobRunner {
             guard let self else { return }
             var request = request
             do {
-                request = try await Self.bindSelection(request)
-                guard try await Self.resumeIsCurrent(request) else { throw ResumeError.selectionChanged }
+                request = try await Self.prepare(request)
                 try await self.execute(request, service: service)
             } catch {
                 self.onError?("\(request.title) failed: \(error.localizedDescription)")
@@ -326,7 +355,7 @@ final class ExportJobRunner {
                 // anything.
                 var resume: ExportRequest? = nil
                 if !(error is ResumeError), !(error is ArchiveExportError) {
-                    resume = Self.resumeRequest(for: request, written: center.done)
+                    resume = Self.resumeRequest(for: request, positions: center.done)
                 }
                 center.recordFailure(destination: request.destinationURL, isFolder: request.isFolder,
                                      requested: request.emailCountHint, message: error.localizedDescription,
@@ -345,6 +374,9 @@ final class ExportJobRunner {
         let cap = request.cap
         let write = request.writeOptions
         let onProgress: @MainActor (Int, Int) -> Void = { [weak self] in self?.progress($0, $1) }
+        // T3: folder formats report input position through onProgress and the
+        // produced-file count separately.
+        let onProduced: @MainActor (Int) -> Void = { count in ExportRunCenter.shared.noteProduced(count) }
 
         switch request.format {
         case .word:
@@ -388,19 +420,19 @@ final class ExportJobRunner {
                 await finish(request, result: r, written: r.recordsWritten, cancelled: r.cancelled, what: "mbox")
             }
         case .emlFiles:
-            let r = try await service.exportEMLFiles(scope: scope, to: url, limit: cap, render: emlRender, write: write, onProgress: onProgress)
+            let r = try await service.exportEMLFiles(scope: scope, to: url, limit: cap, render: emlRender, write: write, onProgress: onProgress, onProduced: onProduced)
             try await attachmentsFolderIfRequested(request, result: r, service: service)
             await finish(request, result: r, written: r.recordsWritten, cancelled: r.cancelled, what: "EML")
         case .pdfFiles:
-            let r = try await service.exportPDFFiles(scope: scope, to: url, limit: cap, write: write, onProgress: onProgress)
+            let r = try await service.exportPDFFiles(scope: scope, to: url, limit: cap, write: write, onProgress: onProgress, onProduced: onProduced)
             try await attachmentsFolderIfRequested(request, result: r, service: service)
             await finish(request, result: r, written: r.recordsWritten, cancelled: r.cancelled, what: "PDF")
         case .tiffFiles:
-            let r = try await service.exportTIFFFiles(scope: scope, to: url, limit: cap, write: write, onProgress: onProgress)
+            let r = try await service.exportTIFFFiles(scope: scope, to: url, limit: cap, write: write, onProgress: onProgress, onProduced: onProduced)
             try await attachmentsFolderIfRequested(request, result: r, service: service)
             await finish(request, result: r, written: r.recordsWritten, cancelled: r.cancelled, what: "TIFF")
         case .msgFiles:
-            let r = try await service.exportMSGFiles(scope: scope, to: url, limit: cap, write: write, onProgress: onProgress)
+            let r = try await service.exportMSGFiles(scope: scope, to: url, limit: cap, write: write, onProgress: onProgress, onProduced: onProduced)
             try await attachmentsFolderIfRequested(request, result: r, service: service)
             await finish(request, result: r, written: r.recordsWritten, cancelled: r.cancelled, what: "MSG")
         case .portableHTML:
@@ -457,7 +489,7 @@ final class ExportJobRunner {
 
         var resume: ExportRequest? = nil
         if outcome == .cancelled || outcome == .failed {
-            resume = Self.resumeRequest(for: request, written: written)
+            resume = Self.resumeRequest(for: request, positions: result?.positionsConsumed ?? written)
         }
 
         var isFolder: ObjCBool = false

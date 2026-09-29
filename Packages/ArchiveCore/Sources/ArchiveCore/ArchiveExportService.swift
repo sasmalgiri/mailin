@@ -45,6 +45,10 @@ struct ArchiveExportResult: Sendable, Equatable {
     /// Recheck R4: source files streamed from whose locators carry no digest,
     /// so their identity could not be verified. Reported on the receipt.
     var unverifiedSources: Int = 0
+    /// Third review T3: INPUT positions of the scope consumed by this run up
+    /// to its last durable boundary — what a resume must skip. Differs from
+    /// `recordsWritten` whenever a message was skipped or withheld.
+    var positionsConsumed: Int = 0
 }
 
 enum ArchiveExportError: LocalizedError {
@@ -54,6 +58,13 @@ enum ArchiveExportError: LocalizedError {
     case partialArtifactMissing(String)
     /// Recheck R2: the partial artifact is not the length the receipt recorded.
     case partialArtifactChanged(path: String, expected: UInt64, actual: UInt64)
+    /// Third review T2: same length, different bytes.
+    case partialArtifactContentChanged(path: String)
+    /// Third review T2: a resume without the recorded boundary (length + hash).
+    case resumeBoundaryMissing(String)
+    /// Third review T2/T3: the folder's manifest is absent, inconsistent, or a
+    /// listed file is missing or changed.
+    case partialManifestInvalid(String)
 
     var errorDescription: String? {
         switch self {
@@ -63,6 +74,12 @@ enum ArchiveExportError: LocalizedError {
             return "The partial export at \(path) is no longer there, so it cannot be continued. Start the export again."
         case .partialArtifactChanged(let path, let expected, let actual):
             return "The partial export at \(path) is \(actual) bytes but the receipt recorded \(expected); it was changed after the run stopped and cannot be continued. Start the export again."
+        case .partialArtifactContentChanged(let path):
+            return "The partial export at \(path) does not match the receipt's hash; it was changed after the run stopped and cannot be continued. Start the export again."
+        case .resumeBoundaryMissing(let what):
+            return "This export cannot be continued: \(what). Start the export again."
+        case .partialManifestInvalid(let why):
+            return "The partial export folder cannot be continued: \(why). Start the export again."
         }
     }
 }
@@ -196,10 +213,22 @@ final class ArchiveExportService {
         if !appending { fm.createFile(atPath: url.path, contents: nil) }
         let handle = try FileHandle(forWritingTo: url)
         if appending {
-            let end = try handle.seekToEnd()
-            if let expected = options.expectedAppendOffset, end != expected {
+            // T2: the boundary is length AND content. Without both the resume
+            // is refused; with both, the existing bytes are re-hashed first.
+            guard let expectedOffset = options.expectedAppendOffset,
+                  let expectedHash = options.expectedAppendSHA256 else {
                 try? handle.close()
-                throw ArchiveExportError.partialArtifactChanged(path: url.path, expected: expected, actual: end)
+                throw ArchiveExportError.resumeBoundaryMissing("the receipt carries no length and hash for the partial file")
+            }
+            let end = try handle.seekToEnd()
+            if end != expectedOffset {
+                try? handle.close()
+                throw ArchiveExportError.partialArtifactChanged(path: url.path, expected: expectedOffset, actual: end)
+            }
+            let actualHash = try Self.sha256(ofFile: url).map { String(format: "%02x", $0) }.joined()
+            if actualHash != expectedHash {
+                try? handle.close()
+                throw ArchiveExportError.partialArtifactContentChanged(path: url.path)
             }
         }
         var digest = SHA256()
@@ -273,10 +302,12 @@ final class ArchiveExportService {
             if cancelled || Task.isCancelled {
                 if options.keepPartialOnCancel {
                     keepPartial()
-                    return ArchiveExportResult(recordsWritten: committedPosition, bytesWritten: bytes, completed: false, cancelled: true)
+                    return ArchiveExportResult(recordsWritten: committedPosition, bytesWritten: bytes, completed: false, cancelled: true,
+                                               positionsConsumed: committedPosition)
                 }
                 abort()
-                return ArchiveExportResult(recordsWritten: position, bytesWritten: 0, completed: false, cancelled: true)
+                return ArchiveExportResult(recordsWritten: position, bytesWritten: 0, completed: false, cancelled: true,
+                                           positionsConsumed: position)
             }
             try write(footer(position))
             try handle.close()
@@ -304,7 +335,8 @@ final class ArchiveExportService {
         return ArchiveExportResult(recordsWritten: position, bytesWritten: bytes,
                                    completed: true, cancelled: false,
                                    sha256Hex: hex, signatureURL: sigURL,
-                                   unverifiedSources: sourceLedger.unverifiedPaths.count)
+                                   unverifiedSources: sourceLedger.unverifiedPaths.count,
+                                   positionsConsumed: position)
     }
 
     /// SHA-256 of a file in 1 MiB chunks — never the whole file in memory.
@@ -339,36 +371,57 @@ final class ArchiveExportService {
         write options: ExportWriteOptions = ExportWriteOptions(),
         locatedRawExtension: String? = nil,
         onProgress: (@MainActor (Int, Int) -> Void)? = nil,
+        onProduced: (@MainActor (Int) -> Void)? = nil,
         content: @MainActor (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)?
     ) async throws -> ArchiveExportResult {
         beginSourceLedger()
         let total = try await boundedTotal(scope: scope, limit: limit)
 
         let fm = FileManager.default
+        let resuming = options.append && options.skipFirst > 0
+        // T2/T3: a resume must find the folder and its manifest, and the
+        // manifest must end at the position the receipt recorded with every
+        // listed file present and unchanged. Verified before anything is written.
+        var producedBefore = 0
+        if resuming {
+            guard fm.fileExists(atPath: folder.path) else {
+                throw ArchiveExportError.partialManifestInvalid("the partial export folder \(folder.path) is gone")
+            }
+            let state = try ExportFolderManifest.verify(folder: folder, expectedPositions: options.skipFirst)
+            producedBefore = state.produced
+        }
         let createdFolder = !fm.fileExists(atPath: folder.path)
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        var manifest = ExportFolderManifest(folder: folder)
+        try manifest.open(append: resuming)
+        defer { manifest.close() }
 
         // Only relative paths are retained for cleanup — bounded metadata, never bodies.
         var written: [String] = []
         var createdSubfolders: [URL] = []
         // A8 resume: `records` continues the interrupted run's numbering so the
-        // per-message filenames stay one unbroken sequence.
-        var records = options.skipFirst, skipped = 0, bytes = 0, cancelled = false
+        // per-message filenames stay one unbroken sequence. T3: the produced
+        // count comes from the manifest, the INPUT position from `skipFirst`.
+        var records = producedBefore, skipped = 0, bytes = 0, cancelled = false
         var seen = 0
         // Audit F08: files written after the last reported batch boundary are
         // removed on a kept-partial stop, so the folder holds exactly the
         // records the receipt counts and a resume rewrites nothing twice.
         var writtenAtBoundary = 0
         var recordsAtBoundary = records
+        var positionsAtBoundary = options.skipFirst
         var withheld = 0
 
         func cleanup() {
             guard !options.keepPartialOnCancel else {
                 for name in written[writtenAtBoundary...] { try? fm.removeItem(at: folder.appendingPathComponent(name)) }
                 written.removeSubrange(writtenAtBoundary...)
+                manifest.truncateToBoundary()
                 return
             }
             for name in written { try? fm.removeItem(at: folder.appendingPathComponent(name)) }
+            manifest.close()
+            manifest.remove()
             for sub in createdSubfolders.reversed() { try? fm.removeItem(at: sub) }
             if createdFolder { try? fm.removeItem(at: folder) }
         }
@@ -448,19 +501,30 @@ final class ArchiveExportService {
                                 : target.lastPathComponent
                         }
                     }
+                    let fileBytes: Int
+                    let fileHash: String
                     if let data = file.data {
                         try data.write(to: target, options: .atomic)
-                        bytes += data.count
+                        fileBytes = data.count
+                        fileHash = ExportFolderManifest.hex(data)
                     } else {
                         let streamed = try await archive.writeRawMessage(for: email, to: target, ledger: sourceLedger)
-                        bytes += streamed.bytes
+                        fileBytes = streamed.bytes
+                        fileHash = streamed.sha256Hex
                     }
+                    bytes += fileBytes
                     written.append(relative)
+                    try manifest.appendFile(name: relative, bytes: fileBytes, sha256: fileHash)
                     records += 1
                 }
-                onProgress?(records, total)
+                // T3: progress is the INPUT position (what a resume skips);
+                // the produced count travels separately.
+                try manifest.appendBoundary(positions: seen, produced: records)
+                onProgress?(seen, total)
+                onProduced?(records)
                 writtenAtBoundary = written.count
                 recordsAtBoundary = records
+                positionsAtBoundary = seen
                 if let limit, records + skipped >= limit { break }
             }
         } catch {
@@ -472,10 +536,15 @@ final class ArchiveExportService {
             return ArchiveExportResult(recordsWritten: options.keepPartialOnCancel ? recordsAtBoundary : records,
                                        bytesWritten: options.keepPartialOnCancel ? bytes : 0,
                                        completed: false, cancelled: true, withheld: withheld,
-                                       unverifiedSources: sourceLedger.unverifiedPaths.count)
+                                       unverifiedSources: sourceLedger.unverifiedPaths.count,
+                                       positionsConsumed: options.keepPartialOnCancel ? positionsAtBoundary : seen)
         }
+        // A finished run needs no manifest: the receipt is the record.
+        manifest.close()
+        manifest.remove()
         return ArchiveExportResult(recordsWritten: records, bytesWritten: bytes, completed: true, cancelled: false,
-                                   withheld: withheld, unverifiedSources: sourceLedger.unverifiedPaths.count)
+                                   withheld: withheld, unverifiedSources: sourceLedger.unverifiedPaths.count,
+                                   positionsConsumed: seen)
     }
 
     /// `2019`, or `undated` when the Date header is missing or unparseable.
@@ -526,9 +595,10 @@ final class ArchiveExportService {
                         limit: Int? = nil,
                         render: (@MainActor (MBOXParser.RawEmail) -> String)? = nil,
                         write options: ExportWriteOptions = ExportWriteOptions(),
-                        onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
+                        onProgress: (@MainActor (Int, Int) -> Void)? = nil,
+                        onProduced: (@MainActor (Int) -> Void)? = nil) async throws -> ArchiveExportResult {
         try await exportMessageFiles(scope: scope, to: folder, limit: limit, write: options,
-                                     locatedRawExtension: "eml", onProgress: onProgress) { email, index in
+                                     locatedRawExtension: "eml", onProgress: onProgress, onProduced: onProduced) { email, index in
             let eml = render?(email) ?? (email.rawSource.isEmpty
                 ? "Subject: \(email.headers["Subject"] ?? "")\n\n\(email.plainBody)"
                 : email.rawSource)
@@ -542,8 +612,9 @@ final class ArchiveExportService {
     func exportMSGFiles(scope: ArchiveSelectionScope, to folder: URL,
                         limit: Int? = nil,
                         write options: ExportWriteOptions = ExportWriteOptions(),
-                        onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
-        try await exportMessageFiles(scope: scope, to: folder, limit: limit, write: options, onProgress: onProgress) { email, index in
+                        onProgress: (@MainActor (Int, Int) -> Void)? = nil,
+                        onProduced: (@MainActor (Int) -> Void)? = nil) async throws -> ArchiveExportResult {
+        try await exportMessageFiles(scope: scope, to: folder, limit: limit, write: options, onProgress: onProgress, onProduced: onProduced) { email, index in
             guard let data = MSGWriter.write(email: email) else { return nil }
             return (Self.messageFilename(index: index, subject: email.headers["Subject"], ext: "msg"), data)
         }

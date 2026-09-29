@@ -130,9 +130,14 @@ enum LocatorReadError: LocalizedError, Equatable {
     case rangeUnresolvable(ByteRange, fileSize: Int64)
     case digestMismatch(expected: String, path: String)
     case ioError(String)
+    /// Third review T4: the source's size or modification date changed between
+    /// its verification and the end of the read that depended on it.
+    case sourceChangedDuringExport(String)
 
     var errorDescription: String? {
         switch self {
+        case .sourceChangedDuringExport(let path):
+            return "The file at \(path) changed while it was being exported. The output was discarded; run the export again."
         case .sourceMissing(let path):
             return "The original file is no longer at \(path), so these bytes cannot be re-read."
         case .rangeUnresolvable(let range, let size):

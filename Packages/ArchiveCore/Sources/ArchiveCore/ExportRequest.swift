@@ -57,6 +57,9 @@ struct ExportWriteOptions: Codable, Equatable, Sendable {
     /// artifact must have (recorded when the run stopped). A different length
     /// means the file was changed and the resume is refused.
     var expectedAppendOffset: UInt64? = nil
+    /// Third review T2: the SHA-256 the partial artifact must hash to; length
+    /// alone does not distinguish a same-length edit.
+    var expectedAppendSHA256: String? = nil
 }
 
 /// The user's pre-flight choices.
@@ -93,6 +96,9 @@ struct ExportRequest: Codable, Equatable, Identifiable, Sendable {
     /// length when the run stopped; the resume refuses a file of any other
     /// length. Nil for folder formats.
     var resumeArtifactBytes: UInt64? = nil
+    /// Resume (T2): the partial single-document artifact's SHA-256 when the
+    /// run stopped. Nil for folder formats (their manifest carries per-file hashes).
+    var resumeArtifactSHA256: String? = nil
     /// Count known when the request was built (menu headline); nil = unknown.
     var emailCountHint: Int?
 
@@ -116,7 +122,8 @@ struct ExportRequest: Codable, Equatable, Identifiable, Sendable {
                            keepPartialOnCancel: isResumable,
                            layout: options.layout,
                            collision: options.collision,
-                           expectedAppendOffset: skipFirst > 0 ? resumeArtifactBytes : nil)
+                           expectedAppendOffset: skipFirst > 0 ? resumeArtifactBytes : nil,
+                           expectedAppendSHA256: skipFirst > 0 ? resumeArtifactSHA256 : nil)
     }
 }
 

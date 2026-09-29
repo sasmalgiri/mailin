@@ -27,8 +27,14 @@ final class ExportRunCenter {
 
     private(set) var isActive = false
     private(set) var title = ""
+    /// Input positions consumed at the last reported boundary (what a resume skips).
     private(set) var done = 0
     private(set) var total = 0
+    /// Files produced so far, when the writer reports it separately (folder
+    /// formats, third review T3). Nil when produced == done.
+    private(set) var produced: Int?
+    /// What the receipt calls "written".
+    var writtenForReceipt: Int { produced ?? done }
     private(set) var startedAt = Date()
 
     /// The most recent finished run. Shown by the overlay until dismissed.
@@ -73,6 +79,7 @@ final class ExportRunCenter {
         self.title = title
         done = 0
         total = 0
+        produced = nil
         startedAt = Date()
         pendingReceipt = nil
         showReceipt = false
@@ -86,6 +93,12 @@ final class ExportRunCenter {
     func update(done: Int, total: Int) {
         self.done = done
         self.total = total
+    }
+
+    /// Folder formats: files produced so far (differs from `done` when
+    /// messages were skipped or withheld).
+    func noteProduced(_ count: Int) {
+        produced = count
     }
 
     func cancel() {
@@ -106,7 +119,7 @@ final class ExportRunCenter {
             destination: destination?.path ?? "—",
             isFolder: isFolder,
             requested: requested,
-            written: done,
+            written: writtenForReceipt,
             outcome: .failed,
             errorMessage: message,
             startedAt: startedAt,

@@ -1955,6 +1955,8 @@ struct ContentView: View {
         Task.detached(priority: .userInitiated) {
             var usedNames = Set<String>()
             var exportedCount = 0
+            // T4: one source-verification ledger per export operation.
+            let sourceLedger = SourceVerificationLedger()
             var failedCount = 0
             var failedSubjects: [String] = []
             for (index, email) in limitedEmails.enumerated() {
@@ -1979,7 +1981,7 @@ struct ContentView: View {
                         guard let locator = RawMessageFile.locator(for: email) else {
                             throw RawMessageError.contentUnavailable(subject: rawSubject, reason: "no stored content and no reachable original file")
                         }
-                        try RawMessageFile.write(located: locator, to: fileURL)
+                        try RawMessageFile.write(located: locator, to: fileURL, verifying: sourceLedger)
                     } else {
                         let emlContent = vm.exportEmailAsEML(email)
                         try FileUtils.writeData(Data(emlContent.utf8), to: fileURL.path)

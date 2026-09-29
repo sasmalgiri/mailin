@@ -345,6 +345,29 @@ final class ArchiveRelocatorTests: XCTestCase {
         XCTAssertEqual(siblings, [ArchiveLayout.relocatedFolderName], "staging folder must not remain: \(siblings)")
     }
 
+    /// Third review T6: a destination folder whose contents cannot be listed
+    /// is refused — emptiness must be proven, never assumed.
+    func testRelocate_refusesAnUnreadableDestinationFolder() async throws {
+        let f = try await makeFixture("unreadable"); defer { try? FileManager.default.removeItem(at: f.base) }
+        let destination = f.volume.appendingPathComponent(ArchiveLayout.relocatedFolderName, isDirectory: true)
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        let secret = destination.appendingPathComponent("inside.txt")
+        try Data("hidden from the lister".utf8).write(to: secret)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: destination.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destination.path) }
+        guard case .unreadable = ArchiveRelocator.directoryState(destination) else {
+            // Running as root (or on a filesystem that ignores mode bits) the
+            // listing succeeds; the rule cannot be exercised here.
+            return
+        }
+        let plan = ArchiveRelocator.plan(sourceRoot: f.home, destinationVolume: f.volume)
+        XCTAssertTrue(plan.destinationIsOccupied, "unreadable counts as occupied")
+        XCTAssertTrue(plan.refusalReason?.contains("could not be read") == true, plan.refusalReason ?? "")
+        try await assertRefused(plan, f)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destination.path)
+        XCTAssertEqual(try String(contentsOf: secret, encoding: .utf8), "hidden from the lister", "nothing inside was touched")
+    }
+
     /// The store handed to `perform` must be the one over the plan's source.
     func testRelocate_refusesAStoreThatIsNotTheSource() async throws {
         let f = try await makeFixture("wrong-store"); defer { try? FileManager.default.removeItem(at: f.base) }

@@ -52,8 +52,13 @@ struct RelocationPlan: Equatable, Sendable {
         if destinationHoldsArchive {
             return "A mailin archive already exists at \(destinationRoot.path). Choose a folder that does not contain one; mailin never replaces an existing archive."
         }
-        if destinationIsOccupied {
+        switch ArchiveRelocator.directoryState(destinationRoot) {
+        case .missing, .empty:
+            break
+        case .occupied:
             return "The folder \(destinationRoot.path) already exists and is not empty. mailin never removes files it did not write; move or rename that folder first."
+        case .unreadable(let why):
+            return "The folder \(destinationRoot.path) already exists and its contents could not be read (\(why)). mailin will not replace a folder it cannot prove is empty."
         }
         if freeBytes < requiredBytes {
             return "Not enough space there: the archive needs about \(ByteCountFormatter.string(fromByteCount: requiredBytes, countStyle: .file)), \(ByteCountFormatter.string(fromByteCount: freeBytes, countStyle: .file)) is free."
@@ -91,7 +96,10 @@ struct RelocationPlan: Equatable, Sendable {
     /// names, never the destination itself). Only an empty folder may be
     /// replaced.
     var destinationIsOccupied: Bool {
-        ArchiveRelocator.isNonEmptyDirectory(destinationRoot)
+        switch ArchiveRelocator.directoryState(destinationRoot) {
+        case .missing, .empty: return false
+        case .occupied, .unreadable: return true   // T6: unreadable is treated as occupied — fail closed
+        }
     }
 }
 
@@ -214,11 +222,15 @@ enum ArchiveRelocator {
             // Publish. Only an EMPTY pre-existing destination folder may be
             // replaced (R8): anything with content is not ours to remove,
             // whether or not it looks like an archive.
-            if fm.fileExists(atPath: plan.destinationRoot.path) {
-                guard !isNonEmptyDirectory(plan.destinationRoot) else {
-                    throw RelocationError.refused("The folder \(plan.destinationRoot.path) gained content while copying. Nothing was replaced.")
-                }
+            switch directoryState(plan.destinationRoot) {
+            case .missing:
+                break
+            case .empty:
                 try fm.removeItem(at: plan.destinationRoot)
+            case .occupied:
+                throw RelocationError.refused("The folder \(plan.destinationRoot.path) gained content while copying. Nothing was replaced.")
+            case .unreadable(let why):
+                throw RelocationError.refused("The folder \(plan.destinationRoot.path) could not be read (\(why)). Nothing was replaced.")
             }
             try fm.moveItem(at: staging, to: plan.destinationRoot)
         } catch {
@@ -296,15 +308,31 @@ enum ArchiveRelocator {
 
     // MARK: Helpers
 
-    /// True for an existing directory (or file) at `url` that has any entry
-    /// at all, hidden files included. A missing path is not occupied.
-    static func isNonEmptyDirectory(_ url: URL) -> Bool {
+    /// What is at `url`. Third review T6: a folder whose contents cannot be
+    /// listed is `unreadable`, never assumed empty — only a POSITIVELY empty
+    /// folder may be replaced.
+    enum DirectoryState: Equatable {
+        case missing
+        case empty
+        case occupied
+        case unreadable(String)
+    }
+
+    static func directoryState(_ url: URL) -> DirectoryState {
         let fm = FileManager.default
         var isDirectory: ObjCBool = false
-        guard fm.fileExists(atPath: url.path, isDirectory: &isDirectory) else { return false }
-        guard isDirectory.boolValue else { return true }   // a file in the way is "occupied" too
-        let entries = (try? fm.contentsOfDirectory(atPath: url.path)) ?? []
-        return !entries.isEmpty
+        guard fm.fileExists(atPath: url.path, isDirectory: &isDirectory) else { return .missing }
+        guard isDirectory.boolValue else { return .occupied }   // a file in the way is "occupied" too
+        do {
+            let entries = try fm.contentsOfDirectory(atPath: url.path)   // hidden files included
+            return entries.isEmpty ? .empty : .occupied
+        } catch {
+            return .unreadable(error.localizedDescription)
+        }
+    }
+
+    static func isNonEmptyDirectory(_ url: URL) -> Bool {
+        directoryState(url) != .missing && directoryState(url) != .empty
     }
 
     /// One path for one place: standardized, symlinks resolved, no trailing

@@ -224,7 +224,7 @@ final class DeferredMessageIntegrityTests: XCTestCase {
         let big = try await email(subject: "Big one", in: f)
         let locator = try XCTUnwrap(RawMessageFile.locator(for: big, storeDirectory: f.store.storeDirectory))
         let out = f.root.appendingPathComponent("big.eml")
-        let result = try RawMessageFile.write(located: locator, to: out)
+        let result = try RawMessageFile.write(located: locator, to: out, verifying: SourceVerificationLedger())
         let expected = try await fullyParsedRaw(subject: "Big one", of: f)
         XCTAssertEqual(try Data(contentsOf: out), expected)
         XCTAssertEqual(result.bytes, expected.count)
@@ -343,9 +343,10 @@ final class DeferredMessageIntegrityTests: XCTestCase {
             try await ledger.verify(locator)
             XCTFail("an edited source must not ride the earlier verification")
         } catch let error as LocatorReadError {
-            guard case .digestMismatch = error else { return XCTFail("\(error)") }
+            // Within one operation the change detector (size/mtime) fires.
+            guard case .sourceChangedDuringExport = error else { return XCTFail("\(error)") }
         }
-        // And a fresh ledger sees it too.
+        // And a fresh operation re-hashes and sees it by digest.
         do {
             try await SourceVerificationLedger().verify(locator)
             XCTFail()
@@ -376,17 +377,17 @@ final class DeferredMessageIntegrityTests: XCTestCase {
             guard case .digestMismatch = error else { return XCTFail("\(error)") }
         }
 
-        // Editing the file changes its size/mtime, so the SAME locator is
-        // re-verified within the same run and the edit is caught.
+        // Editing the file changes its size/mtime, so the SAME locator's next
+        // use within the run is refused by the change detector (T4).
         var bytes = try Data(contentsOf: f.mbox)
         bytes[bytes.count / 2] = bytes[bytes.count / 2] == 0x20 ? 0x2E : 0x20
         try? FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(5)], ofItemAtPath: f.mbox.path)
         try bytes.write(to: f.mbox)
         do {
             try await ledger.verify(locator)
-            XCTFail("an edited file must be re-verified, not served from the cache")
+            XCTFail("an edited file must not be served from the cache")
         } catch let error as LocatorReadError {
-            guard case .digestMismatch = error else { return XCTFail("\(error)") }
+            guard case .sourceChangedDuringExport = error else { return XCTFail("\(error)") }
         }
 
         // A locator without a digest is reported as unverified, not passed off as verified.
@@ -496,6 +497,66 @@ final class DeferredMessageIntegrityTests: XCTestCase {
             q.append(quoter.finish())
             XCTAssertEqual([UInt8](u), wholeUnquoted, "unquote, chunk sizes \(sizes)")
             XCTAssertEqual([UInt8](q), wholeQuoted, "quote, chunk sizes \(sizes)")
+        }
+    }
+
+    // MARK: Third review T5 — no cutoff on the `>` run
+
+    func testStreamingFilters_veryLongQuoteRuns_matchWholeText() {
+        for quotes in [65_535, 65_536, 65_537, 200_000] {
+            var bytes = [UInt8](repeating: UInt8(ascii: ">"), count: quotes) + Array("From boundary\n".utf8)
+            bytes += Array("plain\n".utf8)
+            let wholeU = MBOXRecordBuilder.unquoteFromLines(bytes: bytes)
+            let wholeQ = MBOXRecordBuilder.quoteFromLines(bytes: bytes)
+            XCTAssertEqual(wholeU.count, bytes.count - 1)
+            XCTAssertEqual(wholeQ.count, bytes.count + 1)
+            for sizes in [[8192], [1], [quotes], [quotes + 3, 2]] {
+                var unquoter = MBOXRecordBuilder.StreamingUnquoter(enabled: true)
+                var quoter = MBOXRecordBuilder.StreamingQuoter(enabled: true)
+                var u = Data(), q = Data()
+                for chunk in chunked(bytes, sizes: sizes) {
+                    u.append(unquoter.process(chunk)); q.append(quoter.process(chunk))
+                }
+                u.append(unquoter.finish()); q.append(quoter.finish())
+                XCTAssertEqual([UInt8](u), wholeU, "unquote \(quotes) quotes, chunks \(sizes)")
+                XCTAssertEqual([UInt8](q), wholeQ, "quote \(quotes) quotes, chunks \(sizes)")
+            }
+        }
+    }
+
+    // MARK: Third review T4 — the ledger is a change detector across the read
+
+    func testLedger_detectsASourceChangedBetweenVerificationAndRead() async throws {
+        let f = try makeFixture("during"); defer { try? FileManager.default.removeItem(at: f.root) }
+        _ = try await importFixture(f, ceiling: Self.ceiling)
+        let big = try await email(subject: "Big one", in: f)
+        let storedLocator = try await f.store.locator(forEmailID: big.id)
+        let locator = try XCTUnwrap(storedLocator)
+        let ledger = SourceVerificationLedger()
+        try await ledger.verify(locator)
+        try ledger.assertUnchanged(locator)
+        // The file grows by one byte after verification: every read that
+        // relies on the verification now refuses.
+        let handle = try FileHandle(forWritingTo: f.mbox)
+        try handle.seekToEnd(); try handle.write(contentsOf: Data([0x0A])); try handle.close()
+        XCTAssertThrowsError(try ledger.assertUnchanged(locator)) { error in
+            guard case LocatorReadError.sourceChangedDuringExport = error else { return XCTFail("\(error)") }
+        }
+        let out = f.root.appendingPathComponent("changed.eml")
+        XCTAssertThrowsError(try RawMessageFile.write(located: locator, to: out, verifying: ledger))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: out.path))
+        do {
+            _ = try await f.archive.rawMessageData(for: big, ledger: ledger)
+            XCTFail()
+        } catch let error as LocatorReadError {
+            guard case .sourceChangedDuringExport = error else { return XCTFail("\(error)") }
+        }
+        // A NEW operation re-verifies from scratch and catches it by digest.
+        do {
+            _ = try await f.archive.rawMessageData(for: big, ledger: SourceVerificationLedger())
+            XCTFail()
+        } catch let error as LocatorReadError {
+            guard case .digestMismatch = error else { return XCTFail("\(error)") }
         }
     }
 

@@ -11,9 +11,10 @@
 //
 //  This filter is a byte state machine with bounded memory and no such
 //  flush: it knows at every byte whether it is at a line start, and the only
-//  bytes it ever holds back are the prefix of a line that might still turn
-//  out to be `>*From ` (a run of `>` followed by up to five bytes). A line of
-//  any length passes through in one append per chunk.
+//  state it keeps for a line that might still turn out to be `>*From ` is a
+//  COUNT of leading `>` plus up to five bytes of "From ". Third review T5: the
+//  count replaces the earlier byte buffer and its 65,536 cap, so the output
+//  equals the whole-text functions for a `>` run of any length.
 //
 
 import Foundation
@@ -30,29 +31,28 @@ extension MBOXRecordBuilder {
     /// Line-aware `From ` quoting / unquoting over arbitrary chunk boundaries.
     /// Feed `process` any slicing of the bytes, then `finish`; the output is
     /// identical to `quoteFromLines(bytes:)` / `unquoteFromLines(bytes:)` on
-    /// the whole text.
+    /// the whole text, for any line length and any run of leading `>`.
     struct StreamingFromLineFilter {
         let mode: FromLineFilterMode
         let enabled: Bool
         /// True when the next byte begins a line.
         private var atLineStart = true
-        /// Bytes of the current line held back while it may still be `>*From `.
-        private var pending: [UInt8] = []
-        /// How many bytes of "From " have matched so far after the `>` run.
+        /// Leading `>` of the current line held back while it may still be `>*From `.
+        private var pendingQuotes = 0
+        /// Bytes of "From " matched so far after the `>` run (0…5).
         private var fromMatched = 0
         /// The last four bytes emitted, for the record-terminator decision.
         private(set) var tail: [UInt8] = []
 
         private static let from: [UInt8] = Array("From ".utf8)
-        /// A run of `>` longer than this is passed through verbatim: no real
-        /// mailbox writer produces it, and holding it back would let one
-        /// pathological line grow the pending buffer without bound.
-        private static let maxPendingQuotes = 65_536
+        private static let gt = UInt8(ascii: ">")
 
         init(mode: FromLineFilterMode, enabled: Bool) {
             self.mode = mode
             self.enabled = enabled
         }
+
+        private var scanningPrefix: Bool { pendingQuotes > 0 || fromMatched > 0 }
 
         mutating func process(_ chunk: Data) -> Data {
             guard enabled, !chunk.isEmpty else { remember(chunk); return chunk }
@@ -63,16 +63,15 @@ extension MBOXRecordBuilder {
                 var i = 0
                 let n = bytes.count
                 while i < n {
-                    if atLineStart || !pending.isEmpty {
+                    if atLineStart || scanningPrefix {
                         let b = bytes[i]
                         i += 1
                         atLineStart = false
-                        if fromMatched == 0, b == UInt8(ascii: ">"), pending.count < Self.maxPendingQuotes {
-                            pending.append(b)
+                        if fromMatched == 0, b == Self.gt {
+                            pendingQuotes += 1
                             continue
                         }
                         if b == Self.from[fromMatched] {
-                            pending.append(b)
                             fromMatched += 1
                             if fromMatched == Self.from.count {
                                 decide(into: &out)
@@ -81,9 +80,7 @@ extension MBOXRecordBuilder {
                         }
                         // Not a `>*From ` line: everything held back was
                         // literal. The byte itself may be a terminator.
-                        out.append(contentsOf: pending)
-                        pending.removeAll(keepingCapacity: true)
-                        fromMatched = 0
+                        releasePending(into: &out)
                         out.append(b)
                         if b == MBOXRecordBuilder.lf || b == MBOXRecordBuilder.cr { atLineStart = true }
                         continue
@@ -104,28 +101,31 @@ extension MBOXRecordBuilder {
             return Data(out)
         }
 
+        /// The held-back prefix as it was read: the `>` run and the partial "From ".
+        private mutating func releasePending(into out: inout [UInt8]) {
+            out.append(contentsOf: repeatElement(Self.gt, count: pendingQuotes))
+            out.append(contentsOf: Self.from[0..<fromMatched])
+            pendingQuotes = 0
+            fromMatched = 0
+        }
+
         /// The line is `>*From `: apply the mode and release the prefix.
         private mutating func decide(into out: inout [UInt8]) {
             switch mode {
             case .quote:
-                out.append(UInt8(ascii: ">"))
-                out.append(contentsOf: pending)
+                out.append(contentsOf: repeatElement(Self.gt, count: pendingQuotes + 1))
             case .unquote:
-                if pending.first == UInt8(ascii: ">") {
-                    out.append(contentsOf: pending.dropFirst())
-                } else {
-                    out.append(contentsOf: pending)
-                }
+                out.append(contentsOf: repeatElement(Self.gt, count: max(0, pendingQuotes - 1)))
             }
-            pending.removeAll(keepingCapacity: true)
+            out.append(contentsOf: Self.from)
+            pendingQuotes = 0
             fromMatched = 0
         }
 
         mutating func finish() -> Data {
             // An undecided prefix at the very end is literal.
-            let out = pending
-            pending = []
-            fromMatched = 0
+            var out = [UInt8]()
+            releasePending(into: &out)
             remember(out)
             return Data(out)
         }

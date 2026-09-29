@@ -19,8 +19,9 @@ extension ArchiveExportService {
     func exportTIFFFiles(scope: ArchiveSelectionScope, to folder: URL,
                          limit: Int? = nil,
                          write options: ExportWriteOptions = ExportWriteOptions(),
-                         onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
-        try await exportMessageFiles(scope: scope, to: folder, limit: limit, write: options, onProgress: onProgress) { email, index in
+                         onProgress: (@MainActor (Int, Int) -> Void)? = nil,
+                        onProduced: (@MainActor (Int) -> Void)? = nil) async throws -> ArchiveExportResult {
+        try await exportMessageFiles(scope: scope, to: folder, limit: limit, write: options, onProgress: onProgress, onProduced: onProduced) { email, index in
             guard let data = ExportManager.exportAsTIFF(email: email) else { return nil }
             return (Self.messageFilename(index: index, subject: email.headers["Subject"], ext: "tiff"), data)
         }
@@ -31,8 +32,9 @@ extension ArchiveExportService {
     func exportPDFFiles(scope: ArchiveSelectionScope, to folder: URL,
                         limit: Int? = nil,
                         write options: ExportWriteOptions = ExportWriteOptions(),
-                        onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
-        try await exportMessageFiles(scope: scope, to: folder, limit: limit, write: options, onProgress: onProgress) { email, index in
+                        onProgress: (@MainActor (Int, Int) -> Void)? = nil,
+                        onProduced: (@MainActor (Int) -> Void)? = nil) async throws -> ArchiveExportResult {
+        try await exportMessageFiles(scope: scope, to: folder, limit: limit, write: options, onProgress: onProgress, onProduced: onProduced) { email, index in
             let data = ExportManager.generateSinglePDFData(email: email)
             guard !data.isEmpty else { return nil }
             return (Self.messageFilename(index: index, subject: email.headers["Subject"], ext: "pdf"), data)
