@@ -190,8 +190,29 @@ introduced by the first fix wave. All nine are fixed in this release:
 - Report and digest date pickers replaced the page's date bounds instead of narrowing them. They
   now intersect.
 
+### Third review (2026-09-29, against the second fix wave)
+
+Six remaining paths, all in export resume and source verification, all fixed:
+
+- A resume without a recorded selection fingerprint was bound to the current archive and accepted.
+  A resume is now validated before anything is written and is never re-bound.
+- A partial single-file export was checked by length only. It is now checked by length and hash.
+  Folder exports keep a manifest of every produced file with its hash; a resume requires the
+  manifest, verifies every file, and refuses a missing or changed file or a deleted folder.
+- Skipped or withheld messages shifted the resume position. Progress now reports the input
+  position; the produced count travels separately, so a resume skips exactly what was consumed.
+- Source verification was cached process-wide by file metadata. It is now scoped to one export
+  operation, keyed by path and expected digest, and re-checks the file's size and date before and
+  after every read that depends on it.
+- The streaming quoter stopped recognising a line as `From` after 65,536 leading `>`. It now
+  counts the run instead of buffering it, with no limit.
+- The relocator treated a destination folder it could not list as empty. It now refuses.
+
 ## Known limits, stated
 
+- A source file replaced by one of equal size with its modification date restored, between the
+  verification at the start of an export and the read, is not detected within that run. Every new
+  run re-hashes the file and would refuse it.
 - Originals are referenced, not copied: a message above the 100 MiB full-parse ceiling is read from
   the file it was imported from whenever it is opened or exported. Move or delete that file and the
   message's content is unavailable (the app says so; it never substitutes an empty message).
