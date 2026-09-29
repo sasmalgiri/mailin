@@ -264,8 +264,15 @@ Two narrower manifest paths, both fixed:
   error) keeps its manifest entry for the next verification.
 - A fresh run claimed the manifest path with a recursive remove, which would have deleted a
   directory placed at that name together with its contents. The path is now claimed with a
-  non-recursive unlink that can remove only a stale file or a symlink itself; a directory or any
-  other object there refuses the export.
+  non-recursive unlink that removes a single directory entry (a stale file, or a symlink itself)
+  and can never remove a directory or its contents; a directory there refuses the export.
+
+### Seventh review (2026-09-29)
+
+No defect found; both sixth-review items confirmed closed at source level. Two precision notes
+acted on: the wording above narrowed to what the unlink actually refuses (a directory), and the
+permission regression skips cleanly before it can record a failure in an environment that does not
+enforce mode bits. Native test logs for the reviewed commit are kept under `Verification/`.
 
 ## Known limits, stated
 

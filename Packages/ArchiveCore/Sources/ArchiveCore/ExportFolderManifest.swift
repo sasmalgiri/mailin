@@ -108,15 +108,16 @@ struct ExportFolderManifest {
     }
 
     /// Sixth review U2: removes the control path with `unlink(2)` — which
-    /// removes a regular file or the symlink itself and can never remove a
-    /// directory or its contents — and throws for anything but "already
-    /// gone". No type check followed by a recursive delete, so a type swap
-    /// between the two cannot widen what is removed.
+    /// removes a single directory entry (a regular file, the symlink itself,
+    /// or another non-directory object) and can never remove a directory or
+    /// its contents — and throws for anything but "already gone". No type
+    /// check followed by a recursive delete, so a type swap between the two
+    /// cannot widen what is removed. A directory at the path refuses.
     private static func unlinkControlFile(at url: URL) throws {
         guard unlink(url.path) != 0 else { return }
         if errno == ENOENT { return }
         let why = (errno == EPERM || errno == EISDIR)
-            ? "a directory (or something that is not a file) sits at the manifest path"
+            ? "a directory sits at the manifest path"
             : String(cString: strerror(errno))
         throw ArchiveExportError.partialManifestInvalid("the export folder's control path \(filename) could not be claimed: \(why)")
     }
@@ -127,11 +128,10 @@ struct ExportFolderManifest {
         if append {
             handle = try Self.openNoFollow(url, flags: O_WRONLY)
         } else {
-            // A fresh run claims the path: a stale regular file or a symlink
-            // (removed as the link itself) is unlinked; a directory or any
-            // other object refuses the export rather than being removed. The
-            // manifest is then created exclusively so nothing can be
-            // substituted in between.
+            // A fresh run claims the path: a stale file or a symlink (removed
+            // as the link itself) is unlinked; a directory refuses the export
+            // rather than being removed. The manifest is then created
+            // exclusively so nothing can be substituted in between.
             try Self.unlinkControlFile(at: url)
             handle = try Self.openNoFollow(url, flags: O_WRONLY | O_CREAT | O_EXCL)
         }
