@@ -107,16 +107,32 @@ struct ExportFolderManifest {
         return lstat(url.path, &st) == 0
     }
 
+    /// Sixth review U2: removes the control path with `unlink(2)` — which
+    /// removes a regular file or the symlink itself and can never remove a
+    /// directory or its contents — and throws for anything but "already
+    /// gone". No type check followed by a recursive delete, so a type swap
+    /// between the two cannot widen what is removed.
+    private static func unlinkControlFile(at url: URL) throws {
+        guard unlink(url.path) != 0 else { return }
+        if errno == ENOENT { return }
+        let why = (errno == EPERM || errno == EISDIR)
+            ? "a directory (or something that is not a file) sits at the manifest path"
+            : String(cString: strerror(errno))
+        throw ArchiveExportError.partialManifestInvalid("the export folder's control path \(filename) could not be claimed: \(why)")
+    }
+
     // MARK: Writing
 
     mutating func open(append: Bool) throws {
         if append {
             handle = try Self.openNoFollow(url, flags: O_WRONLY)
         } else {
-            // A fresh run owns the path: whatever sits there (including a
-            // symlink, removed as the link itself) goes, and the manifest is
-            // created exclusively so nothing can be substituted in between.
-            if Self.entryExists(at: url) { try? FileManager.default.removeItem(at: url) }
+            // A fresh run claims the path: a stale regular file or a symlink
+            // (removed as the link itself) is unlinked; a directory or any
+            // other object refuses the export rather than being removed. The
+            // manifest is then created exclusively so nothing can be
+            // substituted in between.
+            try Self.unlinkControlFile(at: url)
             handle = try Self.openNoFollow(url, flags: O_WRONLY | O_CREAT | O_EXCL)
         }
         boundaryOffset = try handle?.seekToEnd() ?? 0
@@ -158,8 +174,9 @@ struct ExportFolderManifest {
         handle = nil
     }
 
+    /// Removes the manifest file itself — never a directory at its path (U2).
     func remove() {
-        try? FileManager.default.removeItem(at: url)
+        _ = unlink(url.path)
     }
 
     private func write<T: Encodable>(_ value: T) throws {

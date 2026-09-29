@@ -255,6 +255,18 @@ Two remaining manifest-recovery paths, both fixed:
   resume and keeps its entry, so the next attempt sees it again. The writer's own stop-time cleanup
   cuts the manifest back only when every past-boundary file is really gone.
 
+### Sixth review (2026-09-29, against the fifth fix wave)
+
+Two narrower manifest paths, both fixed:
+
+- The writer's stop-time cleanup treated any failure to inspect a past-boundary file as "gone".
+  Only a definite absence counts now; a file whose state cannot be established (permission or I/O
+  error) keeps its manifest entry for the next verification.
+- A fresh run claimed the manifest path with a recursive remove, which would have deleted a
+  directory placed at that name together with its contents. The path is now claimed with a
+  non-recursive unlink that can remove only a stale file or a symlink itself; a directory or any
+  other object there refuses the export.
+
 ## Known limits, stated
 
 - The streaming `From`-line filter keeps a leading-`>` run as a count, but emits the run as one

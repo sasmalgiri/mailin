@@ -442,8 +442,13 @@ final class ArchiveExportService {
                     do {
                         try fm.removeItem(at: target)
                     } catch {
+                        // Sixth review U1: only a definite "gone" (ENOENT)
+                        // counts as removed. A file that is still there, or
+                        // whose state cannot be established (EACCES, EIO…),
+                        // keeps its entry.
                         var st = stat()
-                        if lstat(target.path, &st) == 0 { allRemoved = false }
+                        if lstat(target.path, &st) != 0, errno == ENOENT { continue }
+                        allRemoved = false
                     }
                 }
                 written.removeSubrange(writtenAtBoundary...)

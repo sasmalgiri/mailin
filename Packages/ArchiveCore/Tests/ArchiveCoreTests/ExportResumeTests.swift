@@ -739,6 +739,92 @@ final class ExportResumeTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: accepted, encoding: .utf8), "mine\n")
     }
 
+    // MARK: Sixth review U1 — a file whose state cannot be established keeps its entry
+
+    /// The export folder becomes unsearchable after five files past the
+    /// boundary were written: the next write fails, and in the stop-time
+    /// cleanup both removal and `lstat` fail with EACCES. The manifest (its
+    /// descriptor already open) must NOT be cut back: the five entries stay
+    /// so the next verification reconciles them once access is restored.
+    func testWriterCleanup_inaccessibleStrays_keepTheirEntries_andTheRetryYieldsExactlyTheOutputSet() async throws {
+        let env = try await makeEnv(count: 120); defer { try? FileManager.default.removeItem(at: env.root) }
+        let folder = env.root.appendingPathComponent("unsearchable", isDirectory: true)
+        let render: @MainActor (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)? = { email, index in
+            ("\(index).txt", Data((email.headers["Message-ID"] ?? "").utf8))
+        }
+        var kept = ExportWriteOptions(); kept.keepPartialOnCancel = true
+        let restore = { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+        defer { restore() }
+        do {
+            _ = try await env.service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder, batchSize: 40, write: kept) { email, index in
+                if index == 45 { try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: folder.path) }
+                return try render(email, index)
+            }
+            restore()
+            XCTFail("the write into an unsearchable folder must fail")
+        } catch {
+            restore()
+        }
+        guard !FileManager.default.fileExists(atPath: folder.appendingPathComponent("45.txt").path) else {
+            throw XCTSkip("mode 000 did not block the write (root or a permission-less filesystem); the EACCES path cannot be injected here")
+        }
+        let manifestURL = folder.appendingPathComponent(ExportFolderManifest.filename)
+        let text = try String(contentsOf: manifestURL, encoding: .utf8)
+        for n in 40..<45 {
+            XCTAssertTrue(text.contains("\"\(n).txt\""), "\(n).txt could not be inspected during cleanup, so its entry is kept")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: folder.appendingPathComponent("\(n).txt").path), "\(n).txt survived the cleanup")
+        }
+
+        // Access restored: verification removes the five strays and the
+        // resume, even under Keep both, yields exactly the intended set —
+        // no "(2)" duplicates, nothing untracked left behind.
+        var resume = kept; resume.skipFirst = 40; resume.append = true; resume.collision = .keepBoth
+        let result = try await env.service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder, batchSize: 40, write: resume, content: render)
+        XCTAssertTrue(result.completed)
+        XCTAssertEqual(result.recordsWritten, 120)
+        let all = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasSuffix(".txt") }
+        XCTAssertEqual(Set(all), Set((0..<120).map { "\($0).txt" }))
+    }
+
+    // MARK: Sixth review U2 — a directory at the control path is refused, never removed
+
+    func testFreshRun_refusesADirectoryAtTheManifestPath_andRemovesNothingInsideIt() async throws {
+        let env = try await makeEnv(count: 60); defer { try? FileManager.default.removeItem(at: env.root) }
+        let folder = env.root.appendingPathComponent("dir-at-control-path", isDirectory: true)
+        let controlDir = folder.appendingPathComponent(ExportFolderManifest.filename, isDirectory: true)
+        try FileManager.default.createDirectory(at: controlDir, withIntermediateDirectories: true)
+        let sentinel = controlDir.appendingPathComponent("sentinel.txt")
+        try Data("do not delete".utf8).write(to: sentinel)
+        let render: @MainActor (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)? = { email, index in
+            ("\(index).txt", Data((email.headers["Message-ID"] ?? "").utf8))
+        }
+        for keep in [false, true] {
+            var options = ExportWriteOptions(); options.keepPartialOnCancel = keep
+            do {
+                _ = try await env.service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder, batchSize: 20, write: options, content: render)
+                XCTFail("a directory at the control path must refuse the export")
+            } catch let error as ArchiveExportError {
+                guard case .partialManifestInvalid(let why) = error else { return XCTFail("\(error)") }
+                XCTAssertTrue(why.contains("directory"), why)
+            }
+            var isDir: ObjCBool = false
+            XCTAssertTrue(FileManager.default.fileExists(atPath: controlDir.path, isDirectory: &isDir) && isDir.boolValue, "the directory is still there")
+            XCTAssertEqual(try String(contentsOf: sentinel, encoding: .utf8), "do not delete", "nothing inside it was removed")
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasSuffix(".txt") }.count, 0, "no output was written")
+        }
+
+        // A stale regular file at the control path IS replaced (a fresh run
+        // owns its own manifest); the fresh-symlink case is covered above.
+        let folder2 = env.root.appendingPathComponent("stale-control-file", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder2, withIntermediateDirectories: true)
+        try Data("stale\n".utf8).write(to: folder2.appendingPathComponent(ExportFolderManifest.filename))
+        let result = try await env.service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder2, batchSize: 20, content: render)
+        XCTAssertTrue(result.completed)
+        XCTAssertEqual(result.recordsWritten, 60)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder2.appendingPathComponent(ExportFolderManifest.filename).path),
+                       "a finished run leaves no manifest, stale or new")
+    }
+
     // MARK: Selection fingerprint
 
     func testSelectionFingerprint_isStable_changesWhenTheSelectionChanges_andIgnoresSetOrder() async throws {
