@@ -239,6 +239,22 @@ fix found by the new regression, not by the review — fetching a page of messag
 them in SQLite's order rather than the requested order, so the stream order depended on batch
 size. Rows now come back in the order asked for, which positional resume relies on.
 
+### Fifth review (2026-09-29, against the fourth fix wave)
+
+Two remaining manifest-recovery paths, both fixed:
+
+- The manifest file's own identity was never checked: a symlink placed at its path would have
+  redirected the cut-back and later appends to a file outside the export folder. The manifest is
+  now opened by descriptor without following symlinks, must be a plain regular file with a single
+  link, and every read, cut-back and append goes through a descriptor checked that way. A fresh run
+  replaces whatever sits at the path and creates its manifest exclusively. The control filename is
+  reserved and refused as an output entry.
+- A stray file past the last boundary that could not be removed was forgotten: its entry was cut
+  from the manifest and the resume reported success with the file left behind. Committed output is
+  now verified before anything is removed; a stray that cannot be inspected or removed refuses the
+  resume and keeps its entry, so the next attempt sees it again. The writer's own stop-time cleanup
+  cuts the manifest back only when every past-boundary file is really gone.
+
 ## Known limits, stated
 
 - The streaming `From`-line filter keeps a leading-`>` run as a count, but emits the run as one

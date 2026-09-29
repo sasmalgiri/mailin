@@ -24,6 +24,13 @@
 //  symlink) before anything is deleted; a manifest that cannot be validated
 //  or cut back to its boundary refuses the resume rather than guessing.
 //
+//  Fifth review S1/S2: the manifest FILE is untrusted too. It is opened by
+//  descriptor without following symlinks, must be a plain regular file with
+//  one link, and every read, truncate and append goes through a descriptor
+//  that was checked that way. Committed output is verified BEFORE any stray
+//  file is removed; a stray that cannot be removed refuses the resume and
+//  keeps its entry, so the next attempt sees it again.
+//
 
 import Foundation
 import CryptoKit
@@ -66,16 +73,53 @@ struct ExportFolderManifest {
         url = folder.appendingPathComponent(Self.filename)
     }
 
+    // MARK: Opening without following symlinks (S1)
+
+    /// Opens `url` with `O_NOFOLLOW` and confirms through the descriptor that
+    /// it is a regular file with a single link. A symlink at the path fails
+    /// to open (ELOOP); anything that is not a plain file is refused. Every
+    /// manifest read or write in this type goes through a handle from here.
+    private static func openNoFollow(_ url: URL, flags: Int32) throws -> FileHandle {
+        let fd = Darwin.open(url.path, flags | O_NOFOLLOW | O_CLOEXEC, 0o644)
+        guard fd >= 0 else {
+            let why = errno == ELOOP ? "it is a symbolic link" : String(cString: strerror(errno))
+            throw ArchiveExportError.partialManifestInvalid("the export manifest cannot be opened: \(why)")
+        }
+        var st = stat()
+        guard fstat(fd, &st) == 0 else {
+            Darwin.close(fd)
+            throw ArchiveExportError.partialManifestInvalid("the export manifest cannot be inspected")
+        }
+        guard (st.st_mode & S_IFMT) == S_IFREG else {
+            Darwin.close(fd)
+            throw ArchiveExportError.partialManifestInvalid("the export manifest is not a regular file")
+        }
+        guard st.st_nlink == 1 else {
+            Darwin.close(fd)
+            throw ArchiveExportError.partialManifestInvalid("the export manifest has \(st.st_nlink) links; it must be the folder's own file")
+        }
+        return FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+    }
+
+    /// True when something (file, symlink, anything) sits at `url`.
+    private static func entryExists(at url: URL) -> Bool {
+        var st = stat()
+        return lstat(url.path, &st) == 0
+    }
+
     // MARK: Writing
 
     mutating func open(append: Bool) throws {
-        let fm = FileManager.default
-        if !append || !fm.fileExists(atPath: url.path) {
-            fm.createFile(atPath: url.path, contents: nil)
+        if append {
+            handle = try Self.openNoFollow(url, flags: O_WRONLY)
+        } else {
+            // A fresh run owns the path: whatever sits there (including a
+            // symlink, removed as the link itself) goes, and the manifest is
+            // created exclusively so nothing can be substituted in between.
+            if Self.entryExists(at: url) { try? FileManager.default.removeItem(at: url) }
+            handle = try Self.openNoFollow(url, flags: O_WRONLY | O_CREAT | O_EXCL)
         }
-        let h = try FileHandle(forWritingTo: url)
-        boundaryOffset = try h.seekToEnd()
-        handle = h
+        boundaryOffset = try handle?.seekToEnd() ?? 0
     }
 
     mutating func appendFile(name: String, bytes: Int, sha256: String, existing: Bool = false) throws {
@@ -89,9 +133,10 @@ struct ExportFolderManifest {
         boundaryOffset = try handle?.offset() ?? boundaryOffset
     }
 
-    /// A stopped run: cut the manifest back to its last boundary. If the cut
-    /// fails the manifest is removed — a manifest that may describe files
-    /// that are not there must not be offered for resume (Q6, fail closed).
+    /// A stopped run whose past-boundary files were all removed: cut the
+    /// manifest back to its last boundary. If the cut fails the manifest is
+    /// removed — a manifest that may describe files that are not there must
+    /// not be offered for resume (Q6, fail closed).
     mutating func truncateToBoundary() {
         do {
             try handle?.truncate(atOffset: boundaryOffset)
@@ -100,6 +145,12 @@ struct ExportFolderManifest {
             close()
             remove()
         }
+    }
+
+    /// Flush what is written so far without cutting anything (S2: entries
+    /// past the boundary stay when their files could not be removed).
+    func synchronize() {
+        try? handle?.synchronize()
     }
 
     mutating func close() {
@@ -121,18 +172,24 @@ struct ExportFolderManifest {
 
     /// Reads and verifies the manifest for a resume: the last boundary must
     /// equal `expectedPositions`, and every listed file must exist in `folder`
-    /// with the recorded size and SHA-256. Files written after the last
-    /// boundary (a stop that could not be cut back) are removed — only after
-    /// every name has been validated (Q4) — and the manifest itself is cut
-    /// back to that boundary (Q6) so the resumed run appends after it. Throws
-    /// `ArchiveExportError.partialManifestInvalid` naming the first problem.
+    /// with the recorded size and SHA-256. Only then are files written after
+    /// the last boundary (a stop that could not be cut back) removed — every
+    /// name validated first (Q4), every removal required to succeed (S2) —
+    /// and the manifest cut back to that boundary (Q6) so the resumed run
+    /// appends after it. Throws `ArchiveExportError.partialManifestInvalid`
+    /// naming the first problem; nothing is mutated before the committed
+    /// output has been verified.
     static func verify(folder: URL, expectedPositions: Int) throws -> State {
         let url = folder.appendingPathComponent(filename)
         let fm = FileManager.default
-        guard fm.fileExists(atPath: url.path) else {
+        guard entryExists(at: url) else {
             throw ArchiveExportError.partialManifestInvalid("no export manifest at \(url.path); the partial folder cannot be continued")
         }
-        let data = try Data(contentsOf: url)
+        // S1: one descriptor, checked to be the folder's own regular file,
+        // used for the read and for the cut-back below.
+        let manifest = try openNoFollow(url, flags: O_RDWR)
+        defer { try? manifest.close() }
+        let data = try manifest.readToEnd() ?? Data()
         var files: [FileEntry] = []
         var lastBoundary: Boundary?
         var filesAtBoundary = 0
@@ -188,18 +245,7 @@ struct ExportFolderManifest {
             targets.append(try validatedTarget(for: entry.name, in: folder, canonicalFolder: canonicalFolder))
         }
 
-        // Files written after the last boundary never counted; remove them —
-        // only files this export created (never an accepted existing file),
-        // only regular files, only inside the folder.
-        for (entry, target) in zip(files[filesAtBoundary...], targets[filesAtBoundary...]) {
-            guard entry.existing != true else { continue }
-            guard let type = try? fm.attributesOfItem(atPath: target.path)[.type] as? FileAttributeType else { continue }
-            guard type == .typeRegular else {
-                throw ArchiveExportError.partialManifestInvalid("\(entry.name) is not a regular file; the partial export cannot be trusted")
-            }
-            try? fm.removeItem(at: target)
-        }
-
+        // S2: the committed output is verified BEFORE anything destructive.
         let counted = Array(files[..<filesAtBoundary])
         for (entry, target) in zip(counted, targets[..<filesAtBoundary]) {
             guard let attributes = try? fm.attributesOfItem(atPath: target.path) else {
@@ -218,14 +264,35 @@ struct ExportFolderManifest {
             }
         }
 
+        // Files written after the last boundary never counted; remove them —
+        // only files this export created (never an accepted existing file),
+        // only regular files, only inside the folder. A file that is gone is
+        // fine; one that cannot be inspected or removed refuses the resume
+        // and keeps its entry for the next attempt (S2).
+        for (entry, target) in zip(files[filesAtBoundary...], targets[filesAtBoundary...]) {
+            guard entry.existing != true else { continue }
+            var st = stat()
+            if lstat(target.path, &st) != 0 {
+                if errno == ENOENT { continue }
+                throw ArchiveExportError.partialManifestInvalid("\(entry.name) could not be inspected: \(String(cString: strerror(errno)))")
+            }
+            guard (st.st_mode & S_IFMT) == S_IFREG else {
+                throw ArchiveExportError.partialManifestInvalid("\(entry.name) is not a regular file; the partial export cannot be trusted")
+            }
+            do {
+                try fm.removeItem(at: target)
+            } catch {
+                throw ArchiveExportError.partialManifestInvalid("\(entry.name) was written after the last checkpoint and could not be removed: \(error.localizedDescription)")
+            }
+        }
+
         // Q6: the manifest ends exactly at its last boundary before the run
         // reopens it for append; stale entries must not be counted later.
+        // Through the descriptor checked above, never through the path (S1).
         if boundaryEnd != data.count {
             do {
-                let h = try FileHandle(forWritingTo: url)
-                defer { try? h.close() }
-                try h.truncate(atOffset: UInt64(boundaryEnd))
-                try h.synchronize()
+                try manifest.truncate(atOffset: UInt64(boundaryEnd))
+                try manifest.synchronize()
             } catch {
                 throw ArchiveExportError.partialManifestInvalid("the manifest could not be cut back to its last boundary: \(error.localizedDescription)")
             }
@@ -235,13 +302,17 @@ struct ExportFolderManifest {
     }
 
     /// Q4: a manifest name is accepted only when it is a relative path with
-    /// no empty, `.` or `..` component, resolves (through any symlinked
-    /// parent) to a location inside `folder`, and is not itself a symlink.
+    /// no empty, `.` or `..` component, is not the control file itself (S1),
+    /// resolves (through any symlinked parent) to a location inside
+    /// `folder`, and is not itself a symlink.
     static func validatedTarget(for name: String, in folder: URL, canonicalFolder: String) throws -> URL {
         let components = name.split(separator: "/", omittingEmptySubsequences: false)
         guard !name.isEmpty, !name.hasPrefix("/"), !name.contains("\0"),
               components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
             throw ArchiveExportError.partialManifestInvalid("the manifest names a file outside the export folder: \(name.prefix(80))")
+        }
+        guard components.last.map(String.init) != filename else {
+            throw ArchiveExportError.partialManifestInvalid("the manifest lists its own control file as output")
         }
         let target = folder.appendingPathComponent(name)
         // The parent is resolved (aliases, symlinked subfolders, missing
@@ -250,8 +321,8 @@ struct ExportFolderManifest {
         guard parent == canonicalFolder || parent.hasPrefix(canonicalFolder + "/") else {
             throw ArchiveExportError.partialManifestInvalid("the manifest names a file outside the export folder: \(name.prefix(80))")
         }
-        if let type = try? FileManager.default.attributesOfItem(atPath: target.path)[.type] as? FileAttributeType,
-           type == .typeSymbolicLink {
+        var st = stat()
+        if lstat(target.path, &st) == 0, (st.st_mode & S_IFMT) == S_IFLNK {
             throw ArchiveExportError.partialManifestInvalid("\(name.prefix(80)) is a symbolic link; the partial export cannot be trusted")
         }
         return target

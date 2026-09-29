@@ -490,9 +490,9 @@ final class ExportResumeTests: XCTestCase {
         let good = Data("good".utf8)
         try good.write(to: folder.appendingPathComponent("0.txt"))
 
-        func expectRefusal(_ lines: [Data], _ label: String, file: StaticString = #filePath, line: UInt = #line) throws {
+        func expectRefusal(_ lines: [Data], _ label: String, expected: Int = 1, file: StaticString = #filePath, line: UInt = #line) throws {
             try writeManifest(lines, to: folder)
-            XCTAssertThrowsError(try ExportFolderManifest.verify(folder: folder, expectedPositions: 1), label, file: file, line: line) { error in
+            XCTAssertThrowsError(try ExportFolderManifest.verify(folder: folder, expectedPositions: expected), label, file: file, line: line) { error in
                 guard case ArchiveExportError.partialManifestInvalid? = error as? ArchiveExportError else {
                     return XCTFail("\(label): \(error)", file: file, line: line)
                 }
@@ -518,8 +518,11 @@ final class ExportResumeTests: XCTestCase {
         try expectRefusal([try fileLine("0.txt", good), try boundaryLine(1, produced: 1), try fileLine("1.txt", Data("do not delete".utf8))], "symlink entry")
         XCTAssertTrue(FileManager.default.fileExists(atPath: fileLink.path), "the symlink itself is not removed either")
         try FileManager.default.removeItem(at: fileLink)
-        // A duplicate name.
-        try expectRefusal([try fileLine("0.txt", good), try fileLine("0.txt", good), try boundaryLine(2, produced: 2)].map { $0 }, "duplicate")
+        // A duplicate name (matching position and count, so only the
+        // duplicate guard can refuse — fifth review test note).
+        try expectRefusal([try fileLine("0.txt", good), try fileLine("0.txt", good), try boundaryLine(2, produced: 2)], "duplicate", expected: 2)
+        // The control file listed as output.
+        try expectRefusal([try fileLine("0.txt", good), try boundaryLine(1, produced: 1), try fileLine(ExportFolderManifest.filename, good)], "control file as entry")
 
         // And the honest case still verifies, removing only the stray regular file it created.
         let stray = folder.appendingPathComponent("1.txt")
@@ -591,6 +594,149 @@ final class ExportResumeTests: XCTestCase {
         bad.append(try boundaryLine(1, produced: 1)); bad.append(0x0A)
         try bad.write(to: folder2.appendingPathComponent(ExportFolderManifest.filename))
         XCTAssertThrowsError(try ExportFolderManifest.verify(folder: folder2, expectedPositions: 1))
+    }
+
+    // MARK: Fifth review S1 — the manifest file itself is untrusted
+
+    func testManifest_asASymlink_isRefusedBeforeAnyReadOrWrite_andAFreshRunNeverWritesThroughOne() async throws {
+        let env = try await makeEnv(count: 120); defer { try? FileManager.default.removeItem(at: env.root) }
+        let folder = env.root.appendingPathComponent("symlinked-manifest", isDirectory: true)
+        let render: @MainActor (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)? = { email, index in
+            ("\(index).txt", Data((email.headers["Message-ID"] ?? "").utf8))
+        }
+        var kept = ExportWriteOptions(); kept.keepPartialOnCancel = true
+        do {
+            _ = try await env.service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder, batchSize: 40, write: kept) { email, index in
+                if index == 50 { throw Injected() }
+                return try render(email, index)
+            }
+            XCTFail()
+        } catch is Injected {}
+        let manifestURL = folder.appendingPathComponent(ExportFolderManifest.filename)
+        let outputBefore = try (0..<40).map { try Data(contentsOf: folder.appendingPathComponent("\($0).txt")) }
+
+        // A writable sentinel OUTSIDE the folder holding a matching, parseable
+        // manifest with a trailing entry (what would be truncated).
+        let sentinel = env.root.appendingPathComponent("outside-manifest.jsonl")
+        var sentinelBytes = try Data(contentsOf: manifestURL)
+        sentinelBytes.append(try fileLine("40.txt", Data("x".utf8))); sentinelBytes.append(0x0A)
+        try sentinelBytes.write(to: sentinel)
+        try FileManager.default.removeItem(at: manifestURL)
+        try FileManager.default.createSymbolicLink(at: manifestURL, withDestinationURL: sentinel)
+
+        var resume = kept; resume.skipFirst = 40; resume.append = true
+        do {
+            _ = try await env.service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder, batchSize: 40, write: resume, content: render)
+            XCTFail("a symlinked manifest must refuse the resume")
+        } catch let error as ArchiveExportError {
+            guard case .partialManifestInvalid(let why) = error else { return XCTFail("\(error)") }
+            XCTAssertTrue(why.contains("symbolic link"), why)
+        }
+        XCTAssertEqual(try Data(contentsOf: sentinel), sentinelBytes, "the outside file is byte-identical: neither truncated nor appended to")
+        XCTAssertEqual(try (0..<40).map { try Data(contentsOf: folder.appendingPathComponent("\($0).txt")) }, outputBefore)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasSuffix(".txt") }.count, 40, "no new file was written")
+
+        // No-tail variant: a matching manifest without trailing bytes would
+        // only be appended to — still refused before the append.
+        let exact = try Data(contentsOf: manifestURL)   // follows the link: the sentinel's content
+        XCTAssertEqual(exact, sentinelBytes)
+        sentinelBytes.removeLast(try fileLine("40.txt", Data("x".utf8)).count + 1)
+        try sentinelBytes.write(to: sentinel)
+        XCTAssertThrowsError(try ExportFolderManifest.verify(folder: folder, expectedPositions: 40))
+        XCTAssertEqual(try Data(contentsOf: sentinel), sentinelBytes)
+
+        // A hard link is not the folder's own file either.
+        try FileManager.default.removeItem(at: manifestURL)
+        try FileManager.default.linkItem(at: sentinel, to: manifestURL)
+        XCTAssertThrowsError(try ExportFolderManifest.verify(folder: folder, expectedPositions: 40)) { error in
+            guard case ArchiveExportError.partialManifestInvalid(let why)? = error as? ArchiveExportError else { return XCTFail("\(error)") }
+            XCTAssertTrue(why.contains("links"), why)
+        }
+        try FileManager.default.removeItem(at: manifestURL)
+
+        // A FRESH run into a folder that already holds a symlink at the
+        // manifest path replaces the link and never writes through it.
+        let fresh = env.root.appendingPathComponent("fresh-with-link", isDirectory: true)
+        try FileManager.default.createDirectory(at: fresh, withIntermediateDirectories: true)
+        let sentinel2 = env.root.appendingPathComponent("outside-2.jsonl")
+        try Data("untouched\n".utf8).write(to: sentinel2)
+        try FileManager.default.createSymbolicLink(at: fresh.appendingPathComponent(ExportFolderManifest.filename), withDestinationURL: sentinel2)
+        let result = try await env.service.exportMessageFiles(scope: .query(.all, exclusions: []), to: fresh, batchSize: 40, content: render)
+        XCTAssertTrue(result.completed)
+        XCTAssertEqual(result.recordsWritten, 120)
+        XCTAssertEqual(try String(contentsOf: sentinel2, encoding: .utf8), "untouched\n", "nothing was written through the pre-existing link")
+    }
+
+    // MARK: Fifth review S2 — a stray file that cannot be removed is never forgotten
+
+    func testManifest_strayThatCannotBeRemoved_refusesTheResume_andKeepsItsEntryForTheRetry() async throws {
+        let env = try await makeEnv(count: 120); defer { try? FileManager.default.removeItem(at: env.root) }
+        let folder = env.root.appendingPathComponent("locked-stray", isDirectory: true)
+        let render: @MainActor (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)? = { email, index in
+            ("\(index).txt", Data((email.headers["Message-ID"] ?? "").utf8))
+        }
+        var kept = ExportWriteOptions(); kept.keepPartialOnCancel = true
+        let locked = folder.appendingPathComponent("42.txt")
+        // The writer's own stop-time cleanup meets a file it cannot remove:
+        // 42.txt (written after the 40 boundary) is made immutable before the
+        // failure at 50.
+        do {
+            _ = try await env.service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder, batchSize: 40, write: kept) { email, index in
+                if index == 45 { try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: locked.path) }
+                if index == 50 { throw Injected() }
+                return try render(email, index)
+            }
+            XCTFail()
+        } catch is Injected {}
+        defer { try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: locked.path) }
+        guard FileManager.default.fileExists(atPath: locked.path) else {
+            throw XCTSkip("the immutable flag did not prevent removal on this filesystem; the failure path cannot be injected here")
+        }
+        let manifestURL = folder.appendingPathComponent(ExportFolderManifest.filename)
+        let manifestText = try String(contentsOf: manifestURL, encoding: .utf8)
+        XCTAssertTrue(manifestText.contains("\"42.txt\""), "the entry for the file that would not go is kept, not cut away")
+
+        // Resume verification tries again, cannot remove it, and refuses —
+        // it does not return success and drop the accounting.
+        var resume = kept; resume.skipFirst = 40; resume.append = true
+        do {
+            _ = try await env.service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder, batchSize: 40, write: resume, content: render)
+            XCTFail("an unremovable stray must refuse the resume")
+        } catch let error as ArchiveExportError {
+            guard case .partialManifestInvalid(let why) = error else { return XCTFail("\(error)") }
+            XCTAssertTrue(why.contains("42.txt") && why.contains("could not be removed"), why)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: locked.path))
+        XCTAssertTrue(try String(contentsOf: manifestURL, encoding: .utf8).contains("\"42.txt\""), "still accounted for after the refusal")
+
+        // Deletion becomes possible again: the retry cleans up and completes
+        // with exactly the intended output set.
+        try FileManager.default.setAttributes([.immutable: false], ofItemAtPath: locked.path)
+        let result = try await env.service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder, batchSize: 40, write: resume, content: render)
+        XCTAssertTrue(result.completed)
+        XCTAssertEqual(result.recordsWritten, 120)
+        let all = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasSuffix(".txt") }
+        XCTAssertEqual(Set(all), Set((0..<120).map { "\($0).txt" }), "exactly the intended files, the once-stray 42.txt rewritten by its message")
+
+        // Accepted-existing files are never candidates for removal, locked or not.
+        let folder2 = env.root.appendingPathComponent("locked-accepted", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder2, withIntermediateDirectories: true)
+        let accepted = folder2.appendingPathComponent("45.txt")
+        try Data("mine\n".utf8).write(to: accepted)
+        try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: accepted.path)
+        defer { try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: accepted.path) }
+        var skipExisting = kept; skipExisting.collision = .skipExisting
+        do {
+            _ = try await env.service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder2, batchSize: 40, write: skipExisting) { email, index in
+                if index == 50 { throw Injected() }
+                return try render(email, index)
+            }
+            XCTFail()
+        } catch is Injected {}
+        var resume2 = skipExisting; resume2.skipFirst = 40; resume2.append = true
+        let result2 = try await env.service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder2, batchSize: 40, write: resume2, content: render)
+        XCTAssertTrue(result2.completed)
+        XCTAssertEqual(try String(contentsOf: accepted, encoding: .utf8), "mine\n")
     }
 
     // MARK: Selection fingerprint

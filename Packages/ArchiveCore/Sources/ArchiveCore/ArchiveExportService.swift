@@ -432,9 +432,22 @@ final class ArchiveExportService {
 
         func cleanup() {
             guard !options.keepPartialOnCancel else {
-                for name in written[writtenAtBoundary...] { try? fm.removeItem(at: folder.appendingPathComponent(name)) }
+                // Fifth review S2: the manifest is cut back ONLY when every
+                // file past the boundary is really gone. A file that will not
+                // go keeps its entry, so the next resume's verification sees
+                // it, tries again, and refuses while it is still there.
+                var allRemoved = true
+                for name in written[writtenAtBoundary...] {
+                    let target = folder.appendingPathComponent(name)
+                    do {
+                        try fm.removeItem(at: target)
+                    } catch {
+                        var st = stat()
+                        if lstat(target.path, &st) == 0 { allRemoved = false }
+                    }
+                }
                 written.removeSubrange(writtenAtBoundary...)
-                manifest.truncateToBoundary()
+                if allRemoved { manifest.truncateToBoundary() } else { manifest.synchronize() }
                 return
             }
             for name in written { try? fm.removeItem(at: folder.appendingPathComponent(name)) }
