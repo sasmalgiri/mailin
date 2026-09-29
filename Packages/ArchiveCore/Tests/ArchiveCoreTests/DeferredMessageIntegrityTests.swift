@@ -560,6 +560,128 @@ final class DeferredMessageIntegrityTests: XCTestCase {
         }
     }
 
+    // MARK: Fourth review Q1 — the MBOX stream checks the source before and after the read
+
+    private struct Stop: Error {}
+
+    /// The source is edited in place (same length) AFTER the plan verified
+    /// it and BEFORE the bytes are streamed. The stream must refuse, and the
+    /// kept partial must be cut back to the last boundary — not hold the
+    /// edited bytes under a valid-looking hash.
+    func testMBOXStream_refusesASourceEditedBetweenPlanAndRead_andCutsTheOutputBack() async throws {
+        let f = try makeFixture("mbox-between"); defer { try? FileManager.default.removeItem(at: f.root) }
+        _ = try await importFixture(f, ceiling: Self.ceiling)
+        let big = try await email(subject: "Big one", in: f)
+        let service = await ArchiveExportService(archive: f.archive)
+        let out = f.root.appendingPathComponent("out.mbox")
+        var kept = ExportWriteOptions(); kept.keepPartialOnCancel = true
+
+        func editSourceInPlace() throws {
+            var bytes = try Data(contentsOf: f.mbox)
+            let marker = Data("Line 60 of a message".utf8)
+            let at = try XCTUnwrap(bytes.range(of: marker)?.lowerBound)
+            bytes[at + 5] = UInt8(ascii: "7")
+            try bytes.write(to: f.mbox)
+            // An ordinary edit: the modification date moves on its own; make
+            // that unambiguous on filesystems with coarse timestamps.
+            try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(2)], ofItemAtPath: f.mbox.path)
+        }
+
+        do {
+            _ = try await service.exportTextDocument(
+                scope: .explicit([big.id]), to: out, write: kept,
+                header: { _ in "HEADER\n" },
+                rawStream: { email in
+                    let plan = try await service.locatorStreamPlan(for: email)
+                    try editSourceInPlace()   // between verification and the read
+                    return plan
+                }) { _, _ in XCTFail("the located message must not fall back to a String row"); return "" }
+            XCTFail("an edited source must be refused")
+        } catch let error as LocatorReadError {
+            guard case .sourceChangedDuringExport(let path) = error else { return XCTFail("\(error)") }
+            XCTAssertEqual(path, f.mbox.path)
+        }
+        XCTAssertEqual(try String(contentsOf: out, encoding: .utf8), "HEADER\n",
+                       "the output is cut back to the last boundary — none of the edited bytes survive")
+    }
+
+    /// The source changes DURING the streamed read (between two chunks). The
+    /// post-read check refuses and nothing of the record is committed.
+    @MainActor
+    func testMBOXStream_refusesASourceChangedDuringTheRead() async throws {
+        let f = try makeFixture("mbox-during"); defer { try? FileManager.default.removeItem(at: f.root) }
+        _ = try await importFixture(f, ceiling: Self.ceiling)
+        let big = try await email(subject: "Big one", in: f)
+        let service = ArchiveExportService(archive: f.archive)
+        let maybePlan = try await service.locatorStreamPlan(for: big)
+        let plan = try XCTUnwrap(maybePlan)
+        XCTAssertNotNil(plan.locator, "the plan carries the verified locator")
+        let ledger = service.sourceLedger
+
+        var chunks = 0
+        var written = Data()
+        XCTAssertThrowsError(try ArchiveExportService.streamRecord(plan, chunkSize: 1024, ledger: ledger) { chunk in
+            written.append(chunk)
+            chunks += 1
+            if chunks == 2 {
+                // Grow the file by one byte mid-read.
+                let h = try FileHandle(forWritingTo: f.mbox); try h.seekToEnd(); try h.write(contentsOf: Data([0x0A])); try h.close()
+            }
+        }) { error in
+            guard case LocatorReadError.sourceChangedDuringExport? = error as? LocatorReadError else { return XCTFail("\(error)") }
+        }
+        XCTAssertGreaterThan(chunks, 2, "the record spans several chunks so the edit landed mid-read")
+        XCTAssertEqual(written.count, Int(plan.range.length),
+                       "the range was read, but no record terminator follows a failed post-read check (the caller discards it all)")
+
+        // Without a ledger the stream is a plain read (the caller's choice);
+        // with a fresh one the digest check catches the change.
+        _ = try? ArchiveExportService.streamRecord(plan, chunkSize: 1024, ledger: nil) { _ in }
+        do {
+            try await SourceVerificationLedger().verify(try XCTUnwrap(plan.locator))
+            XCTFail()
+        } catch let error as LocatorReadError {
+            guard case .digestMismatch = error else { return XCTFail("\(error)") }
+        }
+    }
+
+    // MARK: Fourth review Q3 — a withheld message survives the resume
+
+    /// The query order is date-descending, so the deferred "Big one" sits
+    /// between the two small messages. With one-message batches the run
+    /// withholds it, commits that boundary, and then fails on the next
+    /// message. The resumed run must still report the withheld message.
+    func testMessageFiles_withheldBeforeAnInterruption_isStillReportedAfterTheResume() async throws {
+        let f = try makeFixture("withheld-resume"); defer { try? FileManager.default.removeItem(at: f.root) }
+        _ = try await importFixture(f, ceiling: Self.ceiling)
+        let service = await ArchiveExportService(archive: f.archive)
+        let folder = f.root.appendingPathComponent("pdf-like", isDirectory: true)
+        var kept = ExportWriteOptions(); kept.keepPartialOnCancel = true
+        var renders = 0, lastDone = -1
+        do {
+            _ = try await service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder, batchSize: 1, write: kept,
+                                                     onProgress: { d, _ in lastDone = d }) { email, index in
+                renders += 1
+                if renders == 2 { throw Stop() }
+                return ("\(index).txt", Data((email.headers["Subject"] ?? "").utf8))
+            }
+            XCTFail()
+        } catch is Stop {}
+        XCTAssertEqual(lastDone, 2, "one rendered, one withheld, then the failure")
+        let state = try ExportFolderManifest.verify(folder: folder, expectedPositions: 2)
+        XCTAssertEqual(state.produced, 1)
+        XCTAssertEqual(state.withheld, 1, "the boundary records the withheld message")
+
+        var resume = kept; resume.skipFirst = 2; resume.append = true
+        let result = try await service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder, batchSize: 1, write: resume) { email, index in
+            ("\(index).txt", Data((email.headers["Subject"] ?? "").utf8))
+        }
+        XCTAssertTrue(result.completed)
+        XCTAssertEqual(result.recordsWritten, 2)
+        XCTAssertEqual(result.positionsConsumed, 3)
+        XCTAssertEqual(result.withheld, 1, "the resumed run's result covers the whole export: the receipt says partial, not complete")
+    }
+
     // MARK: Recheck R1 — the whole-message fallback resolves by ordinal too
 
     func testAttachmentFallback_sameNameTwice_returnsTheRequestedOne() throws {

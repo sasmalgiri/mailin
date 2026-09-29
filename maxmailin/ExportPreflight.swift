@@ -345,6 +345,11 @@ final class ExportJobRunner {
             var request = request
             do {
                 request = try await Self.prepare(request)
+                // Fourth review Q2: a validated resume starts AT its
+                // checkpoint. If the writer fails before it reports a new
+                // batch, the receipt still offers the same checkpoint —
+                // never zero, never something below it.
+                if request.skipFirst > 0 { center.update(done: request.skipFirst, total: 0) }
                 try await self.execute(request, service: service)
             } catch {
                 self.onError?("\(request.title) failed: \(error.localizedDescription)")

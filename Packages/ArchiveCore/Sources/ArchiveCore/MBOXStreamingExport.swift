@@ -26,6 +26,10 @@ struct RawStreamPlan: Sendable {
     var range: ByteRange
     /// True when the source is NOT an mbox (no container escaping present).
     var quoteFromLines: Bool
+    /// Fourth review Q1: the verified locator travels with the plan so the
+    /// stream can prove the source is still what was verified — before the
+    /// first byte and after the last.
+    var locator: MessageLocator? = nil
 }
 
 extension MBOXRecordBuilder {
@@ -69,8 +73,13 @@ extension ArchiveExportService {
     /// export's SHA-256 covers the streamed record too.
     static func streamRecord(_ plan: RawStreamPlan,
                              chunkSize: Int = 1_048_576,
+                             ledger: SourceVerificationLedger? = nil,
                              write: (Data) throws -> Void) throws {
         let path = plan.sourcePath
+        // Q1: the same pre/post change check `RawMessageFile.stream` makes.
+        // A source that changed between verification and this read, or
+        // during it, throws — and the caller cuts its output back.
+        if let locator = plan.locator { try ledger?.assertUnchanged(locator) }
         guard FileManager.default.fileExists(atPath: path) else {
             throw LocatorReadError.sourceMissing(path)
         }
@@ -95,6 +104,9 @@ extension ArchiveExportService {
             remaining -= chunk.count
             try write(quoter.process(chunk))
         }
+        // Checked BEFORE the tail is committed: a change during the read
+        // means the bytes already written are not the verified bytes.
+        if let locator = plan.locator { try ledger?.assertUnchanged(locator) }
         try write(quoter.finish())
         try write(quoter.recordTerminator)
     }
@@ -117,9 +129,11 @@ extension ArchiveExportService {
            let envelope = MBOXRecordBuilder.envelopeLine(in: text), !envelope.contains("MAILER-DAEMON") {
             prefix = envelope + "\n"
         }
+        // Q1: the envelope read above relied on the verification too.
+        try sourceLedger.assertUnchanged(locator)
         let start = locator.headerRange.offset
         let range = ByteRange(offset: start, length: max(0, locator.messageRange.end - start))
         return RawStreamPlan(prefix: prefix, sourcePath: locator.sourcePath, range: range,
-                             quoteFromLines: locator.envelopeRange == nil)
+                             quoteFromLines: locator.envelopeRange == nil, locator: locator)
     }
 }

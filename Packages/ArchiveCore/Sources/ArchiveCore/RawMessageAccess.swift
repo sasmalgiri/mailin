@@ -135,10 +135,15 @@ final class SourceVerificationLedger: @unchecked Sendable {
         guard locator.hasVerifiableSource else { noteUnverifiable(locator); return }
         let key = Self.cacheKey(for: locator)
         if isVerified(key) { try assertUnchanged(locator); return }
+        // Fourth review: the metadata baseline is taken BEFORE the hash and
+        // confirmed after it, so an edit that lands while the file is being
+        // hashed cannot become the accepted baseline.
+        let before = try baseline(for: locator)
         try await Task.detached(priority: .userInitiated) {
             try LocatorReader().verifySource(locator)
         }.value
-        record(key, locator)
+        try confirm(before, for: locator)
+        record(key, locator, snapshot: before)
     }
 
     /// Same contract, on the calling thread — for the synchronous legacy
@@ -147,8 +152,24 @@ final class SourceVerificationLedger: @unchecked Sendable {
         guard locator.hasVerifiableSource else { noteUnverifiable(locator); return }
         let key = Self.cacheKey(for: locator)
         if isVerified(key) { try assertUnchanged(locator); return }
+        let before = try baseline(for: locator)
         try LocatorReader().verifySource(locator)
-        record(key, locator)
+        try confirm(before, for: locator)
+        record(key, locator, snapshot: before)
+    }
+
+    private func baseline(for locator: MessageLocator) throws -> Snapshot {
+        guard let snapshot = Self.snapshot(of: locator.sourcePath) else {
+            throw LocatorReadError.sourceMissing(locator.sourcePath)
+        }
+        return snapshot
+    }
+
+    private func confirm(_ before: Snapshot, for locator: MessageLocator) throws {
+        guard let after = Self.snapshot(of: locator.sourcePath) else {
+            throw LocatorReadError.sourceMissing(locator.sourcePath)
+        }
+        guard after == before else { throw LocatorReadError.sourceChangedDuringExport(locator.sourcePath) }
     }
 
     /// The source must still look as it did when it was verified (size and
@@ -171,12 +192,11 @@ final class SourceVerificationLedger: @unchecked Sendable {
         return verifiedKeys.contains(key)
     }
 
-    private func record(_ key: String, _ locator: MessageLocator) {
-        let snapshot = Self.snapshot(of: locator.sourcePath)
+    private func record(_ key: String, _ locator: MessageLocator, snapshot: Snapshot) {
         lock.lock()
         verifiedKeys.insert(key)
         verified.insert(locator.sourcePath)
-        if let snapshot { snapshots[locator.sourcePath] = snapshot }
+        snapshots[locator.sourcePath] = snapshot
         lock.unlock()
     }
 

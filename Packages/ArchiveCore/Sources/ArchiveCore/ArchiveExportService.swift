@@ -243,6 +243,10 @@ final class ArchiveExportService {
         // next batch truncates back to them.
         var committedOffset: UInt64 = appending ? try handle.offset() : 0
         var committedPosition = skip
+        // Fourth review Q2: a resume starts AT its checkpoint. Progress is
+        // seeded from it so a failure before the first new batch keeps it,
+        // and the loop below never reports or commits a position below it.
+        if appending { onProgress?(skip, total) }
 
         func writeData(_ d: Data) throws {
             guard !d.isEmpty else { return }
@@ -286,7 +290,9 @@ final class ArchiveExportService {
                         // source; everything else renders through `row`.
                         if let rawStream, let plan = try await rawStream(email) {
                             try write(plan.prefix)
-                            try Self.streamRecord(plan, write: writeData)
+                            // Q1: the source is checked against its verified
+                            // snapshot before and after the streamed read.
+                            try Self.streamRecord(plan, ledger: sourceLedger, write: writeData)
                         } else {
                             try write(try row(email, position))
                         }
@@ -294,9 +300,14 @@ final class ArchiveExportService {
                     position += 1
                     if let maxBytes, bytes >= maxBytes { break stream }
                 }
-                onProgress?(position, total)
-                committedOffset = try handle.offset()
-                committedPosition = position
+                // Q2: a replay-only batch (still stepping over what the
+                // interrupted run wrote) moves nothing — the checkpoint
+                // never goes backward.
+                if position > committedPosition {
+                    onProgress?(position, total)
+                    committedOffset = try handle.offset()
+                    committedPosition = position
+                }
                 if let limit, position >= limit { break }
             }
             if cancelled || Task.isCancelled {
@@ -382,13 +393,20 @@ final class ArchiveExportService {
         // T2/T3: a resume must find the folder and its manifest, and the
         // manifest must end at the position the receipt recorded with every
         // listed file present and unchanged. Verified before anything is written.
-        var producedBefore = 0
+        var producedBefore = 0, withheldBefore = 0, skippedBefore = 0
         if resuming {
             guard fm.fileExists(atPath: folder.path) else {
                 throw ArchiveExportError.partialManifestInvalid("the partial export folder \(folder.path) is gone")
             }
             let state = try ExportFolderManifest.verify(folder: folder, expectedPositions: options.skipFirst)
             producedBefore = state.produced
+            // Q3: what the earlier run(s) withheld or skipped is restored, so
+            // the final receipt covers the whole export, not this run alone.
+            withheldBefore = state.withheld
+            skippedBefore = state.skipped
+            // Q2: progress and produced start AT the checkpoint.
+            onProgress?(options.skipFirst, total)
+            onProduced?(producedBefore)
         }
         let createdFolder = !fm.fileExists(atPath: folder.path)
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -402,7 +420,7 @@ final class ArchiveExportService {
         // A8 resume: `records` continues the interrupted run's numbering so the
         // per-message filenames stay one unbroken sequence. T3: the produced
         // count comes from the manifest, the INPUT position from `skipFirst`.
-        var records = producedBefore, skipped = 0, bytes = 0, cancelled = false
+        var records = producedBefore, skipped = skippedBefore, bytes = 0, cancelled = false
         var seen = 0
         // Audit F08: files written after the last reported batch boundary are
         // removed on a kept-partial stop, so the folder holds exactly the
@@ -410,7 +428,7 @@ final class ArchiveExportService {
         var writtenAtBoundary = 0
         var recordsAtBoundary = records
         var positionsAtBoundary = options.skipFirst
-        var withheld = 0
+        var withheld = withheldBefore
 
         func cleanup() {
             guard !options.keepPartialOnCancel else {
@@ -490,6 +508,14 @@ final class ArchiveExportService {
                     if fm.fileExists(atPath: target.path) {
                         switch options.collision {
                         case .skipExisting:
+                            // Q5: an existing file accepted as output is
+                            // fingerprinted in the manifest like a produced
+                            // one (so produced == listed files and a resume
+                            // re-verifies it), but never created or removed
+                            // by this export.
+                            let size = (try? fm.attributesOfItem(atPath: target.path)[.size] as? NSNumber)?.intValue ?? 0
+                            let digest = try Self.sha256(ofFile: target).map { String(format: "%02x", $0) }.joined()
+                            try manifest.appendFile(name: relative, bytes: size, sha256: digest, existing: true)
                             records += 1
                             continue
                         case .overwrite:
@@ -518,13 +544,18 @@ final class ArchiveExportService {
                     records += 1
                 }
                 // T3: progress is the INPUT position (what a resume skips);
-                // the produced count travels separately.
-                try manifest.appendBoundary(positions: seen, produced: records)
-                onProgress?(seen, total)
-                onProduced?(records)
-                writtenAtBoundary = written.count
-                recordsAtBoundary = records
-                positionsAtBoundary = seen
+                // the produced count travels separately. Q2: a replay-only
+                // batch writes no boundary and reports nothing — the
+                // checkpoint never moves backward. Q3: the boundary carries
+                // the cumulative withheld and skipped counts.
+                if seen > positionsAtBoundary {
+                    try manifest.appendBoundary(positions: seen, produced: records, withheld: withheld, skipped: skipped)
+                    onProgress?(seen, total)
+                    onProduced?(records)
+                    writtenAtBoundary = written.count
+                    recordsAtBoundary = records
+                    positionsAtBoundary = seen
+                }
                 if let limit, records + skipped >= limit { break }
             }
         } catch {

@@ -208,7 +208,42 @@ Six remaining paths, all in export resume and source verification, all fixed:
   counts the run instead of buffering it, with no limit.
 - The relocator treated a destination folder it could not list as empty. It now refuses.
 
+### Fourth review (2026-09-29, against the third fix wave)
+
+Six remaining paths, all in export resume, all fixed:
+
+- The MBOX stream verified a located source once and then read it without the before/after change
+  check the per-file path had. The verified locator now travels with the stream plan and the
+  source is checked before the first byte and after the last; a change cuts the output back.
+- A resume with a smaller batch replayed the already-written prefix and reported each replay batch
+  as progress, so a failure during replay could move the checkpoint backward and a later resume
+  wrote those messages twice. Progress is now seeded from the checkpoint and never reported or
+  committed below it; replay-only batches write no boundary.
+- A folder export that withheld a message before an interruption forgot it after the resume and
+  could report "complete". The manifest boundary now carries the cumulative withheld and skipped
+  counts; the resumed run restores them and the receipt says partial.
+- The manifest was trusted: a stray entry named `../x` would have been deleted outside the export
+  folder. Every name is now validated (relative, no `..`, resolves inside the folder through any
+  symlinked parent, not itself a symlink, no duplicates) before anything is touched; a bad entry
+  refuses the resume.
+- "Skip files that already exist" counted the accepted file as produced without listing it, so the
+  manifest could never verify. Accepted files are now fingerprinted into the manifest (marked as
+  existing) and are never created or removed by the export.
+- Entries past the last boundary were tolerated but left in the manifest, so the next run counted
+  them. Verification now cuts the manifest back to its last boundary (tolerating one torn trailing
+  line) and refuses if it cannot.
+
+Also from this review: the ledger takes its size/date baseline before hashing a source and
+confirms it afterwards, so an edit that lands during the hash cannot become the baseline; and a
+fix found by the new regression, not by the review — fetching a page of messages by id returned
+them in SQLite's order rather than the requested order, so the stream order depended on batch
+size. Rows now come back in the order asked for, which positional resume relies on.
+
 ## Known limits, stated
+
+- The streaming `From`-line filter keeps a leading-`>` run as a count, but emits the run as one
+  buffer when the line is decided, so a single run of `>` bytes costs its own length in memory
+  once. This is a resource bound, not a correctness defect.
 
 - A source file replaced by one of equal size with its modification date restored, between the
   verification at the start of an export and the read, is not detected within that run. Every new

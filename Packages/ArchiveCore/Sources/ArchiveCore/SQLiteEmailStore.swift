@@ -3588,7 +3588,15 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 if let email = rawEmailFromRow(stmt) { base.append(email) }
             }
             try hydrateSideTables(db, into: &base)
-            out.append(contentsOf: base)
+            // Fourth review (found by the Q2 regression): SQLite returns an
+            // `IN (...)` match in its own order, which depends on which ids
+            // share the chunk. Callers page ids in a stable order (date, id)
+            // and a positional export resume relies on that order — so the
+            // rows go back in the order they were asked for.
+            var byID: [UUID: MBOXParser.RawEmail] = [:]
+            byID.reserveCapacity(base.count)
+            for email in base { byID[email.id] = email }
+            out.append(contentsOf: chunk.compactMap { byID[$0] })
         }
         return out
     }

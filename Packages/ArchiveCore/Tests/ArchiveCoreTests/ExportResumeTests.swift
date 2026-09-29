@@ -310,6 +310,289 @@ final class ExportResumeTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "no file is created by a refused resume")
     }
 
+    // MARK: Fourth review Q2 — a resume never moves its checkpoint backward
+
+    /// 600 rows, stopped at 400. The resume uses a SMALLER batch, so its
+    /// first four batches only replay the prefix; it then fails inside the
+    /// first new batch. The checkpoint must stay at 400 throughout (never
+    /// 100/200/300), the file must still hold exactly 400 rows, and a second
+    /// resume must produce the same bytes as one uninterrupted pass.
+    func testTextDocument_resumeInterruptedDuringPrefixReplay_keepsTheCheckpoint() async throws {
+        let env = try await makeEnv(count: 600); defer { try? FileManager.default.removeItem(at: env.root) }
+        let url = env.root.appendingPathComponent("rows.txt")
+        let row: @MainActor (MBOXParser.RawEmail, Int) throws -> String = { email, position in
+            "\(position)|\(email.headers["Message-ID"] ?? "")\n"
+        }
+        var kept = ExportWriteOptions(); kept.keepPartialOnCancel = true
+        var lastDone = -1
+        do {
+            _ = try await env.service.exportTextDocument(scope: .query(.all, exclusions: []), to: url, batchSize: 200, write: kept,
+                                                         onProgress: { d, _ in lastDone = d }) { email, position in
+                if position == 410 { throw Injected() }
+                return try row(email, position)
+            }
+            XCTFail()
+        } catch is Injected {}
+        XCTAssertEqual(lastDone, 400)
+        let sizeAt400 = Self.size(of: url), shaAt400 = try Self.sha(of: url)
+
+        // Resume 1: batch 100, fails at position 450 (inside the first NEW batch).
+        var resume = ExportWriteOptions(); resume.skipFirst = 400; resume.append = true; resume.keepPartialOnCancel = true
+        resume.expectedAppendOffset = sizeAt400; resume.expectedAppendSHA256 = shaAt400
+        var reports: [Int] = []
+        do {
+            _ = try await env.service.exportTextDocument(scope: .query(.all, exclusions: []), to: url, batchSize: 100, write: resume,
+                                                         onProgress: { d, _ in reports.append(d) }) { email, position in
+                if position == 450 { throw Injected() }
+                return try row(email, position)
+            }
+            XCTFail()
+        } catch is Injected {}
+        XCTAssertEqual(reports, [400], "the checkpoint is seeded from the resume and never reported below it: \(reports)")
+        XCTAssertEqual(Self.size(of: url), sizeAt400, "the file is cut back to the same 400-row boundary")
+        XCTAssertEqual(try Self.sha(of: url), shaAt400)
+
+        // Resume 2 from the SAME boundary completes the export exactly once.
+        let result = try await env.service.exportTextDocument(scope: .query(.all, exclusions: []), to: url, batchSize: 100, write: resume, row: row)
+        XCTAssertTrue(result.completed)
+        XCTAssertEqual(result.positionsConsumed, 600)
+        let fresh = env.root.appendingPathComponent("fresh.txt")
+        _ = try await env.service.exportTextDocument(scope: .query(.all, exclusions: []), to: fresh, batchSize: 200, row: row)
+        XCTAssertEqual(try Data(contentsOf: url), try Data(contentsOf: fresh), "byte-identical to a single pass")
+        let rows = try String(contentsOf: url, encoding: .utf8).split(separator: "\n")
+        XCTAssertEqual(rows.count, 600)
+        XCTAssertEqual(Set(rows).count, 600, "no row appears twice")
+    }
+
+    func testMessageFiles_resumeInterruptedDuringPrefixReplay_keepsTheManifestBoundary() async throws {
+        let env = try await makeEnv(count: 600); defer { try? FileManager.default.removeItem(at: env.root) }
+        let folder = env.root.appendingPathComponent("replay", isDirectory: true)
+        let render: @MainActor (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)? = { email, index in
+            ("\(index).txt", Data((email.headers["Message-ID"] ?? "").utf8))
+        }
+        var kept = ExportWriteOptions(); kept.keepPartialOnCancel = true
+        do {
+            _ = try await env.service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder, batchSize: 200, write: kept) { email, index in
+                if index == 410 { throw Injected() }
+                return try render(email, index)
+            }
+            XCTFail()
+        } catch is Injected {}
+        func txtFiles() throws -> [String] {
+            try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasSuffix(".txt") }
+        }
+        XCTAssertEqual(try txtFiles().count, 400)
+
+        var resume = ExportWriteOptions(); resume.skipFirst = 400; resume.append = true; resume.keepPartialOnCancel = true
+        var reports: [Int] = [], produced: [Int] = []
+        do {
+            _ = try await env.service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder, batchSize: 100, write: resume,
+                                                         onProgress: { d, _ in reports.append(d) }, onProduced: { produced.append($0) }) { email, index in
+                if index == 450 { throw Injected() }
+                return try render(email, index)
+            }
+            XCTFail()
+        } catch is Injected {}
+        XCTAssertEqual(reports, [400], "no replay-only boundary is reported: \(reports)")
+        XCTAssertEqual(produced, [400])
+        XCTAssertEqual(try txtFiles().count, 400, "files past the unchanged boundary are removed")
+        let state = try ExportFolderManifest.verify(folder: folder, expectedPositions: 400)
+        XCTAssertEqual(state.positions, 400)
+        XCTAssertEqual(state.files.count, 400, "the manifest still ends at the 400 boundary")
+        // The manifest's last boundary is 400 — a resume from anything lower is refused.
+        XCTAssertThrowsError(try ExportFolderManifest.verify(folder: folder, expectedPositions: 200))
+
+        let result = try await env.service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder, batchSize: 100, write: resume, content: render)
+        XCTAssertTrue(result.completed)
+        XCTAssertEqual(result.positionsConsumed, 600)
+        let all = try txtFiles()
+        XCTAssertEqual(all.count, 600)
+        XCTAssertEqual(Set(all).count, 600)
+    }
+
+    // MARK: Fourth review Q5 — "skip existing files" still resumes
+
+    func testMessageFiles_skipExistingFiles_acceptedFileIsInTheManifest_andTheRunResumes() async throws {
+        let env = try await makeEnv(count: 120); defer { try? FileManager.default.removeItem(at: env.root) }
+        let folder = env.root.appendingPathComponent("skip-existing", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let existing = folder.appendingPathComponent("7.txt")
+        try Data("already here\n".utf8).write(to: existing)
+        let render: @MainActor (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)? = { email, index in
+            ("\(index).txt", Data((email.headers["Message-ID"] ?? "").utf8))
+        }
+        var kept = ExportWriteOptions(); kept.keepPartialOnCancel = true; kept.collision = .skipExisting
+        var lastProduced = -1
+        do {
+            _ = try await env.service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder, batchSize: 40, write: kept,
+                                                         onProduced: { lastProduced = $0 }) { email, index in
+                if index == 50 { throw Injected() }
+                return try render(email, index)
+            }
+            XCTFail()
+        } catch is Injected {}
+        XCTAssertEqual(lastProduced, 40, "the accepted file counts as produced")
+        let state = try ExportFolderManifest.verify(folder: folder, expectedPositions: 40)
+        XCTAssertEqual(state.files.count, 40, "produced == listed files, including the accepted one")
+        let accepted = try XCTUnwrap(state.files.first { $0.name == "7.txt" })
+        XCTAssertEqual(accepted.existing, true)
+        XCTAssertEqual(accepted.bytes, "already here\n".utf8.count)
+
+        var resume = kept; resume.skipFirst = 40; resume.append = true
+        let result = try await env.service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder, batchSize: 40, write: resume, content: render)
+        XCTAssertTrue(result.completed)
+        XCTAssertEqual(result.recordsWritten, 120)
+        XCTAssertEqual(try String(contentsOf: existing, encoding: .utf8), "already here\n", "the accepted file is never rewritten or removed")
+        let all = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasSuffix(".txt") }
+        XCTAssertEqual(all.count, 120)
+
+        // The accepted file is part of the verified output: editing it refuses a resume.
+        let folder2 = env.root.appendingPathComponent("skip-existing-2", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder2, withIntermediateDirectories: true)
+        try Data("already here\n".utf8).write(to: folder2.appendingPathComponent("7.txt"))
+        do {
+            _ = try await env.service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder2, batchSize: 40, write: kept) { email, index in
+                if index == 50 { throw Injected() }
+                return try render(email, index)
+            }
+            XCTFail()
+        } catch is Injected {}
+        try Data("edited later\n".utf8).write(to: folder2.appendingPathComponent("7.txt"))
+        XCTAssertThrowsError(try ExportFolderManifest.verify(folder: folder2, expectedPositions: 40)) { error in
+            guard case ArchiveExportError.partialManifestInvalid(let why)? = error as? ArchiveExportError else { return XCTFail("\(error)") }
+            XCTAssertTrue(why.contains("7.txt"), why)
+        }
+    }
+
+    // MARK: Fourth review Q4 — the manifest is untrusted input
+
+    private func writeManifest(_ lines: [Data], to folder: URL) throws {
+        var data = Data()
+        for line in lines { data.append(line); data.append(0x0A) }
+        try data.write(to: folder.appendingPathComponent(ExportFolderManifest.filename))
+    }
+    private func fileLine(_ name: String, _ content: Data) throws -> Data {
+        try JSONEncoder().encode(ExportFolderManifest.FileEntry(name: name, bytes: content.count, sha256: ExportFolderManifest.hex(content)))
+    }
+    private func boundaryLine(_ positions: Int, produced: Int) throws -> Data {
+        try JSONEncoder().encode(ExportFolderManifest.Boundary(boundary: positions, produced: produced, withheld: 0, skipped: 0))
+    }
+
+    func testManifest_refusesTraversalAbsoluteAndSymlinkNames_andTouchesNothingOutsideTheFolder() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("manifest-escape-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let folder = base.appendingPathComponent("export", isDirectory: true)
+        let outside = base.appendingPathComponent("outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let sentinel = outside.appendingPathComponent("sentinel.txt")
+        try Data("do not delete".utf8).write(to: sentinel)
+        let good = Data("good".utf8)
+        try good.write(to: folder.appendingPathComponent("0.txt"))
+
+        func expectRefusal(_ lines: [Data], _ label: String, file: StaticString = #filePath, line: UInt = #line) throws {
+            try writeManifest(lines, to: folder)
+            XCTAssertThrowsError(try ExportFolderManifest.verify(folder: folder, expectedPositions: 1), label, file: file, line: line) { error in
+                guard case ArchiveExportError.partialManifestInvalid? = error as? ArchiveExportError else {
+                    return XCTFail("\(label): \(error)", file: file, line: line)
+                }
+            }
+            XCTAssertEqual(try String(contentsOf: sentinel, encoding: .utf8), "do not delete", "\(label): the sentinel outside the folder is untouched", file: file, line: line)
+        }
+
+        // A stray (past-boundary) entry that climbs out of the folder.
+        try expectRefusal([try fileLine("0.txt", good), try boundaryLine(1, produced: 1),
+                           try fileLine("../outside/sentinel.txt", Data("do not delete".utf8))], "traversal stray")
+        // A counted entry that climbs out.
+        try expectRefusal([try fileLine("../outside/sentinel.txt", Data("do not delete".utf8)), try boundaryLine(1, produced: 1)], "traversal counted")
+        // Absolute path.
+        try expectRefusal([try fileLine("0.txt", good), try boundaryLine(1, produced: 1), try fileLine(sentinel.path, Data("do not delete".utf8))], "absolute")
+        // Through a symlinked subfolder inside the export folder.
+        let link = folder.appendingPathComponent("link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        try expectRefusal([try fileLine("0.txt", good), try boundaryLine(1, produced: 1), try fileLine("link/sentinel.txt", Data("do not delete".utf8))], "symlinked parent")
+        try FileManager.default.removeItem(at: link)
+        // The entry itself is a symlink pointing outside.
+        let fileLink = folder.appendingPathComponent("1.txt")
+        try FileManager.default.createSymbolicLink(at: fileLink, withDestinationURL: sentinel)
+        try expectRefusal([try fileLine("0.txt", good), try boundaryLine(1, produced: 1), try fileLine("1.txt", Data("do not delete".utf8))], "symlink entry")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fileLink.path), "the symlink itself is not removed either")
+        try FileManager.default.removeItem(at: fileLink)
+        // A duplicate name.
+        try expectRefusal([try fileLine("0.txt", good), try fileLine("0.txt", good), try boundaryLine(2, produced: 2)].map { $0 }, "duplicate")
+
+        // And the honest case still verifies, removing only the stray regular file it created.
+        let stray = folder.appendingPathComponent("1.txt")
+        try Data("stray".utf8).write(to: stray)
+        try writeManifest([try fileLine("0.txt", good), try boundaryLine(1, produced: 1), try fileLine("1.txt", Data("stray".utf8))], to: folder)
+        let state = try ExportFolderManifest.verify(folder: folder, expectedPositions: 1)
+        XCTAssertEqual(state.files.map(\.name), ["0.txt"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stray.path))
+        XCTAssertEqual(try String(contentsOf: sentinel, encoding: .utf8), "do not delete")
+    }
+
+    // MARK: Fourth review Q6 — stale entries past the boundary are cut, not inherited
+
+    func testManifest_trailingEntriesPastTheBoundary_areCutBack_soTheNextResumeStaysValid() async throws {
+        let env = try await makeEnv(count: 120); defer { try? FileManager.default.removeItem(at: env.root) }
+        let folder = env.root.appendingPathComponent("trailing", isDirectory: true)
+        let render: @MainActor (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)? = { email, index in
+            ("\(index).txt", Data((email.headers["Message-ID"] ?? "").utf8))
+        }
+        var kept = ExportWriteOptions(); kept.keepPartialOnCancel = true
+        do {
+            _ = try await env.service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder, batchSize: 40, write: kept) { email, index in
+                if index == 50 { throw Injected() }
+                return try render(email, index)
+            }
+            XCTFail()
+        } catch is Injected {}
+
+        // Simulate a stop that could not cut the manifest back: a complete
+        // stray entry (its file present) and a torn final line.
+        let manifestURL = folder.appendingPathComponent(ExportFolderManifest.filename)
+        let stray = folder.appendingPathComponent("stray.txt")
+        try Data("stray".utf8).write(to: stray)
+        var tail = try fileLine("stray.txt", Data("stray".utf8)); tail.append(0x0A)
+        tail.append(Data("{\"name\":\"to".utf8))
+        let h = try FileHandle(forWritingTo: manifestURL); try h.seekToEnd(); try h.write(contentsOf: tail); try h.close()
+
+        // Resume 1 verifies (cutting the manifest back to the 40 boundary and
+        // removing the stray file), writes one more batch, then fails.
+        var resume = kept; resume.skipFirst = 40; resume.append = true
+        do {
+            _ = try await env.service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder, batchSize: 40, write: resume) { email, index in
+                if index == 90 { throw Injected() }
+                return try render(email, index)
+            }
+            XCTFail()
+        } catch is Injected {}
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stray.path), "the uncommitted stray file is removed")
+
+        // Resume 2: the manifest's 80 boundary must verify — the old stray
+        // entry was cut, not carried across into the committed range.
+        let state = try ExportFolderManifest.verify(folder: folder, expectedPositions: 80)
+        XCTAssertEqual(state.files.count, 80)
+        XCTAssertFalse(state.files.contains { $0.name == "stray.txt" })
+        var resume2 = kept; resume2.skipFirst = 80; resume2.append = true
+        let result = try await env.service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder, batchSize: 40, write: resume2, content: render)
+        XCTAssertTrue(result.completed)
+        XCTAssertEqual(result.recordsWritten, 120)
+        let all = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasSuffix(".txt") }
+        XCTAssertEqual(all.count, 120)
+
+        // A torn line BEFORE any boundary, or an unreadable line inside the
+        // committed range, still refuses.
+        let folder2 = env.root.appendingPathComponent("torn-early", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder2, withIntermediateDirectories: true)
+        try Data("{\"name\":\"to".utf8).write(to: folder2.appendingPathComponent(ExportFolderManifest.filename))
+        XCTAssertThrowsError(try ExportFolderManifest.verify(folder: folder2, expectedPositions: 1))
+        var bad = try fileLine("0.txt", Data("x".utf8)); bad.append(0x0A); bad.append(Data("garbage\n".utf8))
+        bad.append(try boundaryLine(1, produced: 1)); bad.append(0x0A)
+        try bad.write(to: folder2.appendingPathComponent(ExportFolderManifest.filename))
+        XCTAssertThrowsError(try ExportFolderManifest.verify(folder: folder2, expectedPositions: 1))
+    }
+
     // MARK: Selection fingerprint
 
     func testSelectionFingerprint_isStable_changesWhenTheSelectionChanges_andIgnoresSetOrder() async throws {

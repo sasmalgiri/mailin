@@ -357,8 +357,9 @@ final class ArchiveRelocatorTests: XCTestCase {
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destination.path) }
         guard case .unreadable = ArchiveRelocator.directoryState(destination) else {
             // Running as root (or on a filesystem that ignores mode bits) the
-            // listing succeeds; the rule cannot be exercised here.
-            return
+            // listing succeeds; the rule cannot be exercised here — say so
+            // rather than pass silently (fourth review).
+            throw XCTSkip("the destination stayed readable with mode 000 (root or a permission-less filesystem); the refusal rule cannot be exercised here")
         }
         let plan = ArchiveRelocator.plan(sourceRoot: f.home, destinationVolume: f.volume)
         XCTAssertTrue(plan.destinationIsOccupied, "unreadable counts as occupied")
