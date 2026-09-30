@@ -34,15 +34,20 @@ struct ArchiveThreePaneView: View {
     var onHome: (() -> Void)? = nil
     /// Import entry point, so the shell has Import / Search / Export.
     var onImport: (() -> Void)? = nil
+    /// Settings entry point (owner, 2026-09-30: the shell showed no way into
+    /// Settings; the app menu is hidden in full screen).
+    var onSettings: (() -> Void)? = nil
 
     init(archive: ArchiveDataService = .shared,
          onHome: (() -> Void)? = nil,
-         onImport: (() -> Void)? = nil) {
+         onImport: (() -> Void)? = nil,
+         onSettings: (() -> Void)? = nil) {
         _model = StateObject(wrappedValue: ArchiveListViewModel(archive: archive, pageSize: 100, maxRetained: 500))
         _detail = StateObject(wrappedValue: ArchiveDetailViewModel(archive: archive))
         _sidebar = StateObject(wrappedValue: ArchiveSidebarModel(archive: archive))
         self.onHome = onHome
         self.onImport = onImport
+        self.onSettings = onSettings
     }
 
     var body: some View {
@@ -72,6 +77,15 @@ struct ArchiveThreePaneView: View {
                         }
                         .help("Limit the list to a date range")
                         .accessibilityIdentifier("archive.list.dateScope")
+                    }
+                    if let onSettings {
+                        ToolbarItem {
+                            Button(action: onSettings) {
+                                Label("Settings", systemImage: "gearshape")
+                            }
+                            .help("Open Settings (⌘,)")
+                            .accessibilityIdentifier("archive.threePane.settings")
+                        }
                     }
                     if let onHome {
                         ToolbarItem(placement: .navigation) {

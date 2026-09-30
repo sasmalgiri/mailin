@@ -1137,7 +1137,8 @@ struct ContentView: View {
             // A2: the three-pane archive shell — sidebar / list / detail, all
             // repository-paged. Import / Search / Export live in its chrome.
             ArchiveThreePaneView(onHome: modules.isEnabled(.professional) ? { sidebarSelection = nil } : nil,
-                                 onImport: { openPanelFallback() })
+                                 onImport: { openPanelFallback() },
+                                 onSettings: { openSettingsAction() })
         } else {
             advancedInboxDestination
         }
@@ -1190,7 +1191,8 @@ struct ContentView: View {
                 // A2: iPad gets the three-pane shell; iPhone's compact layout
                 // keeps the two-pane list (a split view inside a stack does
                 // not collapse well).
-                ArchiveThreePaneView(onImport: { showFileImporter = true })
+                ArchiveThreePaneView(onImport: { showFileImporter = true },
+                                     onSettings: { openSettingsAction() })
             } else {
                 ParsedEmailListView(model: modelVM, selectedEmailIDs: $selectedEmailIDs)
             }
