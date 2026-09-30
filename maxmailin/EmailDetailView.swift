@@ -30,6 +30,9 @@ struct EmailDetailView: View {
     @ObservedObject private var personaManager = PersonaManager.shared
     @AppStorage("showInlineImages") private var showInlineImages = true
     @AppStorage("showAdvancedFeatures") private var showAdvancedFeatures = false
+    /// Owner, 2026-09-30: AI surfaces in the detail view (the on-device reply
+    /// draft) belong to the AI Insights page and hide while it is off.
+    @Environment(ModuleRegistry.self) private var modules
     @State private var showCleanView = true
     @State private var safeHTML: String = ""
     @State private var isHTMLReady = false
@@ -201,7 +204,7 @@ struct EmailDetailView: View {
                 HStack(spacing: 2) {
                     #if canImport(FoundationModels)
                     if #available(macOS 26, iOS 26, *) {
-                        if FoundationModelEngine.isAvailable {
+                        if modules.isEnabled(.aiInsights), FoundationModelEngine.isAvailable {
                             mailIconButton(icon: "sparkles", tooltip: "Draft a reply with on-device AI — pick a tone, edit before sending; nothing leaves your Mac", color: .purple) {
                                 showReplySheet = true
                             }

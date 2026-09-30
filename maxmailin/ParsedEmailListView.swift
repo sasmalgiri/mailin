@@ -872,7 +872,7 @@ struct ParsedEmailListView: View {
                 HStack(spacing: Spacing.xSmall) {
                     ForEach(activeFilterChips, id: \.key) { chip in
                         let isAIChip = Self.aiFilterKeys.contains(chip.key)
-                        if !isAIChip || aiTagsApplied {
+                        if !isAIChip || (aiTagsApplied && modules.isEnabled(.aiInsights)) {
                             DismissableFilterChip(
                                 label: chip.label,
                                 icon: chip.icon,
@@ -1241,7 +1241,9 @@ struct ParsedEmailListView: View {
                 }
             }
 
-            if aiTagsApplied {
+            // Owner, 2026-09-30: AI filter sections and the hint that offers
+            // them exist only while the AI Insights page is on.
+            if aiTagsApplied, modules.isEnabled(.aiInsights) {
                 ForEach(aiSections, id: \.self) { section in
                     if let chips = sections[section] {
                         Section("\(section) (AI)") {
@@ -1251,7 +1253,7 @@ struct ParsedEmailListView: View {
                         }
                     }
                 }
-            } else {
+            } else if modules.isEnabled(.aiInsights) {
                 Section {
                     Label("Turn on AI to see Category, Sentiment & Priority filters", systemImage: "brain")
                         .font(.caption)
@@ -2447,11 +2449,13 @@ struct ParsedEmailListView: View {
                     Label("Copy Sender", systemImage: "person.crop.circle")
                 }
 
-                Button {
-                    let summary = EmailNLPEngine.summarizeEmail(email)
-                    PlatformClipboard.copyString(summary)
-                } label: {
-                    Label("Summarize", systemImage: "sparkles")
+                if modules.isEnabled(.aiInsights) {
+                    Button {
+                        let summary = EmailNLPEngine.summarizeEmail(email)
+                        PlatformClipboard.copyString(summary)
+                    } label: {
+                        Label("Summarize", systemImage: "sparkles")
+                    }
                 }
 
                 if !email.attachments.isEmpty {
@@ -2626,11 +2630,13 @@ struct ParsedEmailListView: View {
 
             Divider()
 
-            Button {
-                let summary = EmailNLPEngine.summarizeEmail(email)
-                PlatformClipboard.copyString(summary)
-            } label: {
-                Label("Summarize (copy to clipboard)", systemImage: "sparkles")
+            if modules.isEnabled(.aiInsights) {
+                Button {
+                    let summary = EmailNLPEngine.summarizeEmail(email)
+                    PlatformClipboard.copyString(summary)
+                } label: {
+                    Label("Summarize (copy to clipboard)", systemImage: "sparkles")
+                }
             }
 
             if !email.attachments.isEmpty {
@@ -2883,7 +2889,7 @@ struct ParsedEmailListView: View {
     private func activeTags(for email: MBOXParser.RawEmail) -> [EmailQuickTag] {
         let hidden = suppressedAITags[email.id] ?? []
         var all: [EmailQuickTag] = []
-        if enableAIFeatures && aiTagsApplied {
+        if enableAIFeatures && aiTagsApplied && modules.isEnabled(.aiInsights) {
             all.append(contentsOf: factsVisible(aiTags(for: email)).filter { !hidden.contains($0) })
         } else {
             all.append(contentsOf: factsVisible(basicTags(for: email)))
@@ -2960,7 +2966,7 @@ struct ParsedEmailListView: View {
         let manualTags = manualTagsOnly(for: email)
 
         HStack(spacing: 3) {
-            if enableAIFeatures && aiTagsApplied && !autoTags.isEmpty {
+            if enableAIFeatures && aiTagsApplied && modules.isEnabled(.aiInsights) && !autoTags.isEmpty {
                 Menu {
                     Section("AI Tags — click one to remove it") {
                         ForEach(autoTags, id: \.self) { tag in
@@ -3000,7 +3006,7 @@ struct ParsedEmailListView: View {
                             Label(tag.rawValue, systemImage: tag.icon)
                         }
                     }
-                    if enableAIFeatures {
+                    if enableAIFeatures, modules.isEnabled(.aiInsights) {
                         Section {
                             Button {
                                 aiTagsApplied = true

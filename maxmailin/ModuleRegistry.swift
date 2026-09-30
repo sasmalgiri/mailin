@@ -326,6 +326,12 @@ final class ModuleRegistry {
     /// observer runs, so a fresh "before" would equal "after".
     private var lastEffectiveModules: Set<AppModule> = []
 
+    /// The app's one registry, for surfaces that are hosted OUTSIDE the
+    /// SwiftUI environment chain (tool windows built with `NSHostingView`).
+    /// Claimed by the first production registry; test registries
+    /// (`trapsOnMisuse: false`) never claim it.
+    static weak var live: ModuleRegistry?
+
     init(store: ModuleStateStore = ModuleStateStore(url: ModuleStateStore.productionURL),
          excludedByBuild: Set<AppModule> = ModuleRegistry.buildExclusions,
          trapsOnMisuse: Bool = true) {
@@ -346,6 +352,7 @@ final class ModuleRegistry {
                     self.applyPolicyChange()
                 }
             }
+        if trapsOnMisuse, Self.live == nil { Self.live = self }
     }
 
     /// Test/MDM hook: re-read the managed dictionary now.

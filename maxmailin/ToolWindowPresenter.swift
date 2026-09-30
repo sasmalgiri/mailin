@@ -40,7 +40,14 @@ final class ToolWindowPresenter {
         window.title = title
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 680, height: 520)
-        window.contentView = NSHostingView(rootView: content())
+        // A tool window is a new SwiftUI root: it does not inherit the main
+        // window's environment, so the page registry is attached here or a
+        // view that gates on it would have nothing to read.
+        if let modules = ModuleRegistry.live {
+            window.contentView = NSHostingView(rootView: content().environment(modules))
+        } else {
+            window.contentView = NSHostingView(rootView: content())
+        }
         window.center()
 
         observers[title] = NotificationCenter.default.addObserver(
