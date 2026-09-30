@@ -156,7 +156,7 @@ No demo account is needed.
 ```
 - Three-pane archive shell; open an archive and you are in it.
 - Import queue with pause, resume, stop-this-file and reorder; the import sheet lets you choose the
-  duplicate policy, whether originals are copied, and whether attachment contents are indexed.
+  duplicate policy and whether attachment contents are indexed.
 - Export pre-flight and resume. Every export ends in a receipt.
 - Move the archive to another disk as a verified copy.
 - Search results say where they matched and what the index covered.
