@@ -158,6 +158,16 @@ private struct PageSwitcher: View {
     let onSelect: (AppModule) -> Void
 
     var body: some View {
+        // Compact widths (iPhone): the three names do not fit side by side at
+        // heading size, and a wrapped "Professio-nal Workflow-s" is worse than
+        // a scroll. Names never wrap; the strip scrolls sideways if it must.
+        ScrollView(.horizontal, showsIndicators: false) {
+            switcherRow
+        }
+        .scrollBounceBehavior(.basedOnSize)
+    }
+
+    private var switcherRow: some View {
         HStack(spacing: Spacing.xxSmall) {
             ForEach(pages, id: \.rawValue) { page in
                 // Owner, 2026-09-30: these are the PAGE names, so they read
@@ -174,6 +184,8 @@ private struct PageSwitcher: View {
                             .font(.system(size: 15, weight: .semibold))
                         Text(page.displayName)
                             .font(.system(size: 15, weight: .semibold))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                         if isLocked(page) {
                             Image(systemName: "lock.fill")
                                 .font(.system(size: 11))
