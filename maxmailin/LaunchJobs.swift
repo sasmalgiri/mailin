@@ -63,15 +63,14 @@ enum LaunchJobs {
 
         if modules.isEnabled(.archive) {
             let sender = UserDefaults.standard.string(forKey: "defaultSenderEmail") ?? ""
-            modules.jobs.register(id: "fidelity.backfill", module: .archive, label: "Repair pre-full-fidelity rows",
-                                  cancel: { FidelityBackfillJob.shared.cancel() })
-            FidelityBackfillJob.shared.kickIfNeeded(senderEmail: sender)
-            observeCompletion(of: .fidelityBackfillCompleted, jobID: "fidelity.backfill", modules: modules)
+            // Owner's review 2026-09-29: these two jobs own their "Running
+            // now" rows — registered when a run starts (including later
+            // re-kicks after an import) and cleared on every exit path. The
+            // hook only hands them the registry.
+            FidelityBackfillJob.shared.kickIfNeeded(senderEmail: sender, registry: modules.jobs)
 
             if ImportChoices.indexAttachmentTextDefault() {
-                modules.jobs.register(id: "attachment.textIndex", module: .archive, label: "Index attachment contents",
-                                      cancel: { AttachmentTextIndexJob.shared.cancel() })
-                AttachmentTextIndexJob.shared.kickIfNeeded()
+                AttachmentTextIndexJob.shared.kickIfNeeded(registry: modules.jobs)
             }
 
             let reconcile = Task.detached(priority: .utility) {
@@ -104,15 +103,6 @@ enum LaunchJobs {
                 _ = await seed.result
                 modules.jobs.finish(id: "workflow.seed")
             }
-        }
-    }
-
-    /// Unregister a job when its completion notification arrives.
-    private static func observeCompletion(of name: Notification.Name, jobID: String, modules: ModuleRegistry) {
-        var token: NSObjectProtocol?
-        token = NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
-            Task { @MainActor in modules.jobs.finish(id: jobID) }
-            if let token { NotificationCenter.default.removeObserver(token) }
         }
     }
 }

@@ -39,6 +39,17 @@ final class AttachmentTextIndexJob {
     private var task: Task<Void, Never>?
     private var runGeneration = 0
 
+    /// Settings ▸ Modules "Running now". The job owns its own row (owner's
+    /// review 2026-09-29): registered when a run starts — including re-kicks
+    /// after an import — and cleared on EVERY exit. Before this the launch
+    /// hook registered the row and nothing ever cleared it.
+    static let jobID = "attachment.textIndex"
+    static let jobLabel = "Index attachment contents"
+    private weak var registry: JobRegistry?
+
+    /// Test seam: the current run, if any.
+    var currentRun: Task<Void, Never>? { task }
+
     /// Extracted text cap per attachment — plenty for search, never unbounded.
     nonisolated static let maxTextPerAttachment = 500_000
 
@@ -57,14 +68,19 @@ final class AttachmentTextIndexJob {
         }
     }
 
-    func kickIfNeeded() {
+    func kickIfNeeded(registry: JobRegistry? = nil) {
         guard task == nil else { return }
+        if let registry { self.registry = registry }
         runGeneration += 1
         let generation = runGeneration
+        self.registry?.register(id: Self.jobID, module: .archive, label: Self.jobLabel) { [weak self] in self?.cancel() }
         task = Task(priority: .utility) { @MainActor [weak self] in
             guard let self else { return }
             _ = await self.run()
-            if self.runGeneration == generation { self.task = nil }
+            if self.runGeneration == generation {
+                self.task = nil
+                self.registry?.finish(id: Self.jobID)
+            }
         }
     }
 
@@ -72,6 +88,14 @@ final class AttachmentTextIndexJob {
         runGeneration += 1
         task?.cancel()
         task = nil
+        registry?.finish(id: Self.jobID)
+    }
+
+    private func report(_ outcome: Outcome) {
+        var parts = ["\(outcome.indexedEmails.formatted()) emails indexed"]
+        if outcome.extractedTexts > 0 { parts.append("\(outcome.extractedTexts.formatted()) texts") }
+        if outcome.failed > 0 { parts.append("\(outcome.failed.formatted()) failed") }
+        registry?.update(id: Self.jobID, detail: parts.joined(separator: ", "))
     }
 
     @discardableResult
@@ -108,6 +132,7 @@ final class AttachmentTextIndexJob {
                     }
                 }
                 if pageProgress == 0 { break }
+                report(outcome)
             }
             if outcome.indexedEmails > 0 {
                 Self.logger.info("attachment text indexed: \(outcome.indexedEmails) email(s), \(outcome.extractedTexts) text(s)")

@@ -216,6 +216,9 @@ final class JobRegistry {
         let id: String
         let module: AppModule
         let label: String
+        /// Progress, when the job reports it ("1,200 rows repaired"). A job
+        /// that appears here is doing work right now; the detail says how far.
+        var detail: String? = nil
         let cancel: @MainActor () -> Void
     }
 
@@ -227,8 +230,20 @@ final class JobRegistry {
         entries.append(Entry(id: id, module: module, label: label, cancel: cancel))
     }
 
+    /// Owner's review 2026-09-29: a job's row must exist only while it works,
+    /// and should say how far it is. Jobs call this as they progress; a
+    /// finished id is ignored.
+    func update(id: String, detail: String?) {
+        guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
+        entries[i].detail = detail
+    }
+
     func finish(id: String) {
         entries.removeAll { $0.id == id }
+    }
+
+    func isRunning(id: String) -> Bool {
+        entries.contains { $0.id == id }
     }
 
     func jobs(for module: AppModule) -> [Entry] {

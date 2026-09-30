@@ -590,3 +590,103 @@ struct PageFeatureCatalogTests {
         #expect(PageFeature.Availability.notInThisBuild.label == "Not in this build")
     }
 }
+
+// MARK: - Owner's screenshot review 2026-09-29 — "Running now" rows exist only while a job works
+
+/// These tests drive the two shared launch-job singletons. Swift Testing runs
+/// tests in parallel by default and each singleton is one object, so the
+/// suite is serialized: two of these interleaving at an `await` would hand
+/// the job a different test's registry mid-flight (seen once in a full run).
+@Suite("Running-now job lifecycle", .serialized)
+@MainActor
+struct RunningJobLifecycleTests {
+
+
+    private func disposableStore(_ tag: String) -> (SQLiteEmailStore, URL) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("jobs-\(tag)-\(UUID().uuidString)", isDirectory: true)
+        return (SQLiteEmailStore(directory: root.appendingPathComponent("store", isDirectory: true)), root)
+    }
+
+    @Test("Attachment indexing registers while it runs and clears its row when there is nothing to do")
+    func attachmentIndexRowClearsOnNothingToDo() async throws {
+        let (registry, _) = makeRegistry()
+        let (store, root) = disposableStore("attach"); defer { try? FileManager.default.removeItem(at: root) }
+        AttachmentTextIndexJob.testStoreOverride = store; defer { AttachmentTextIndexJob.testStoreOverride = nil }
+        let job = AttachmentTextIndexJob.shared
+        job.cancel()   // a clean start regardless of what the host app kicked
+
+        job.kickIfNeeded(registry: registry.jobs)
+        #expect(registry.jobs.isRunning(id: AttachmentTextIndexJob.jobID), "the row appears when the run starts")
+        let run = try #require(job.currentRun)
+        await run.value
+        // In the full suite, imports run by OTHER tests post `.parsingFinished`,
+        // whose observer re-kicks this shared job at any moment; each re-kick
+        // over the empty test store ends at once. Drain any such run before
+        // asserting, so the assertion is about lifecycle, not about timing.
+        while let later = job.currentRun { await later.value }
+        #expect(!registry.jobs.isRunning(id: AttachmentTextIndexJob.jobID), "an empty archive: the run ends at once and its row is gone")
+        #expect(job.currentRun == nil)
+
+        // A later re-kick (what an import does) registers again without being handed the registry.
+        job.kickIfNeeded()
+        #expect(registry.jobs.isRunning(id: AttachmentTextIndexJob.jobID))
+        while let later = job.currentRun { await later.value }
+        #expect(!registry.jobs.isRunning(id: AttachmentTextIndexJob.jobID))
+    }
+
+    @Test("Cancelling a job clears its row immediately, and the cancelled run cannot clear a newer one")
+    func attachmentIndexRowClearsOnCancel() async throws {
+        let (registry, _) = makeRegistry()
+        let (store, root) = disposableStore("attach-cancel"); defer { try? FileManager.default.removeItem(at: root) }
+        AttachmentTextIndexJob.testStoreOverride = store; defer { AttachmentTextIndexJob.testStoreOverride = nil }
+        let job = AttachmentTextIndexJob.shared
+        job.cancel()
+
+        job.kickIfNeeded(registry: registry.jobs)
+        let first = try #require(job.currentRun)
+        registry.jobs.entries.first { $0.id == AttachmentTextIndexJob.jobID }?.cancel()   // the Stop button
+        #expect(!registry.jobs.isRunning(id: AttachmentTextIndexJob.jobID), "Stop clears the row at once")
+
+        job.kickIfNeeded(registry: registry.jobs)
+        #expect(registry.jobs.isRunning(id: AttachmentTextIndexJob.jobID), "a new run has its own row")
+        await first.value   // the cancelled run's completion must not touch the new row
+        while let later = job.currentRun { await later.value }
+        #expect(!registry.jobs.isRunning(id: AttachmentTextIndexJob.jobID))
+    }
+
+    @Test("Repair job clears its row when the archive is already clean, without any notification")
+    func fidelityRepairRowClearsOnNothingToDo() async throws {
+        let (registry, _) = makeRegistry()
+        let (store, root) = disposableStore("fidelity"); defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = try #require(UserDefaults(suiteName: "test.fidelity.\(UUID().uuidString)"))
+        defaults.set(FidelityBackfillJob.headerPassVersion, forKey: FidelityBackfillJob.headerPassKey)   // header sweep already done
+        FidelityBackfillJob.testStoreOverride = store; defer { FidelityBackfillJob.testStoreOverride = nil }
+        FidelityBackfillJob.testDefaultsOverride = defaults; defer { FidelityBackfillJob.testDefaultsOverride = nil }
+        let job = FidelityBackfillJob.shared
+        job.cancel()
+
+        var completions = 0
+        let token = NotificationCenter.default.addObserver(forName: .fidelityBackfillCompleted, object: nil, queue: .main) { _ in completions += 1 }
+        defer { NotificationCenter.default.removeObserver(token) }
+
+        job.kickIfNeeded(senderEmail: "", registry: registry.jobs)
+        #expect(registry.jobs.isRunning(id: FidelityBackfillJob.jobID))
+        let run = try #require(job.currentRun)
+        await run.value
+        while let later = job.currentRun { await later.value }
+        #expect(!registry.jobs.isRunning(id: FidelityBackfillJob.jobID), "nothing to repair: the row is cleared even though no completion notification was posted")
+        #expect(completions == 0, "the UI-refresh notification is not what clears the row")
+    }
+
+    @Test("A job's progress detail is shown on its row and dropped with it")
+    func jobDetailUpdates() {
+        let (registry, _) = makeRegistry()
+        registry.jobs.register(id: "x", module: .archive, label: "X") {}
+        registry.jobs.update(id: "x", detail: "12 done")
+        #expect(registry.jobs.entries.first?.detail == "12 done")
+        registry.jobs.update(id: "y", detail: "ignored")   // unknown id: no-op
+        #expect(registry.jobs.entries.count == 1)
+        registry.jobs.finish(id: "x")
+        #expect(registry.jobs.isIdle)
+    }
+}

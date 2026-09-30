@@ -99,7 +99,7 @@ struct ModulesSettingsView: View {
                                 .controlSize(.small)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(entry.label)
-                                Text(entry.module.displayName)
+                                Text(entry.detail.map { "\(entry.module.displayName) · \($0)" } ?? entry.module.displayName)
                                     .font(Typography.caption2)
                                     .foregroundColor(AppColors.secondary)
                             }

@@ -51,6 +51,19 @@ final class FidelityBackfillJob {
     /// start concurrently.
     private var runGeneration = 0
 
+    /// Settings ▸ Modules "Running now". The job owns its own row (owner's
+    /// review 2026-09-29): registered when a run starts, cleared on EVERY
+    /// exit — finished, nothing to do, cancelled, failed. Before this the row
+    /// was cleared by a notification that fired only when a row was repaired,
+    /// so a clean archive spun forever and a long run vanished at its first
+    /// progress post.
+    static let jobID = "fidelity.backfill"
+    static let jobLabel = "Repair pre-full-fidelity rows"
+    private weak var registry: JobRegistry?
+
+    /// Test seam: the current run, if any.
+    var currentRun: Task<Void, Never>? { task }
+
     /// M1: the sender address the last classification used. When it changes,
     /// sent/received reclassifies in one SQL pass (from_addr is stored).
     private static let senderUsedKey = "mailin.fidelity.senderUsed"
@@ -71,16 +84,31 @@ final class FidelityBackfillJob {
 
     /// Fire-and-forget launch hook. A no-op (one indexed COUNT probe) when
     /// nothing is pending; one job at a time.
-    func kickIfNeeded(senderEmail: String) {
+    func kickIfNeeded(senderEmail: String, registry: JobRegistry? = nil) {
         guard task == nil else { return }
+        if let registry { self.registry = registry }
         runGeneration += 1
         let generation = runGeneration
+        self.registry?.register(id: Self.jobID, module: .archive, label: Self.jobLabel) { [weak self] in self?.cancel() }
         task = Task { @MainActor [weak self] in
             guard let self else { return }
             await self.reclassifyIfSenderChanged(senderEmail)
             _ = await self.run(senderEmail: senderEmail)
-            if self.runGeneration == generation { self.task = nil }
+            // Only this run's own completion clears its handle and its row;
+            // a cancel already did both and may have started a newer run.
+            if self.runGeneration == generation {
+                self.task = nil
+                self.registry?.finish(id: Self.jobID)
+            }
         }
+    }
+
+    private func report(_ outcome: Outcome) {
+        var parts: [String] = []
+        if outcome.repaired > 0 { parts.append("\(outcome.repaired.formatted()) repaired") }
+        if outcome.unrecoverable > 0 { parts.append("\(outcome.unrecoverable.formatted()) unrecoverable") }
+        if outcome.failed > 0 { parts.append("\(outcome.failed.formatted()) failed") }
+        registry?.update(id: Self.jobID, detail: parts.isEmpty ? "checking…" : parts.joined(separator: ", "))
     }
 
     /// M1: a changed sender address reclassifies every already-classified row
@@ -104,6 +132,7 @@ final class FidelityBackfillJob {
         runGeneration += 1
         task?.cancel()
         task = nil
+        registry?.finish(id: Self.jobID)
     }
 
     /// Awaitable core (used by tests and the launch hook).
@@ -119,6 +148,7 @@ final class FidelityBackfillJob {
                 return outcome
             }
             Self.logger.info("fidelity backfill starting: \(pending) legacy row(s)")
+            report(outcome)
 
             // v1 parity: an EMPTY sender address auto-detects from the archive
             // (v1's annotate() used the most common From; v2 prefers the
@@ -189,6 +219,7 @@ final class FidelityBackfillJob {
                 // converges; a page with ZERO forward progress (every apply
                 // failed) must stop instead of spinning on the same rows.
                 if pageProgress == 0 { break }
+                report(outcome)
                 pagesSinceNotify += 1
                 if pagesSinceNotify >= Self.notifyEveryPages, outcome.repaired > repairedAtLastNotify {
                     NotificationCenter.default.post(name: .fidelityBackfillCompleted, object: nil)
@@ -238,6 +269,7 @@ final class FidelityBackfillJob {
                     pageProgress += unparseable.count
                 }
                 if pageProgress == 0 { break }
+                report(outcome)
             }
 
             // Third pass — header recovery for rows with NO raw MIME (pre-v2

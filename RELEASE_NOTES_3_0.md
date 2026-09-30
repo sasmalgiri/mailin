@@ -284,6 +284,16 @@ network symbol). Every production source guard (offline gate, Private Cloud Comp
 content, `allIndexedIDs` confinement) now covers the package as well. The Verification README lists
 the skipped rows by name and reason.
 
+### Owner's screenshot review (2026-09-29)
+
+Settings ▸ Modules ▸ "Running now" showed the two Archive maintenance jobs (repair pre-full-fidelity
+rows, index attachment contents) spinning indefinitely. Neither was necessarily still working: the
+attachment job's row was registered at launch and never cleared, and the repair job's row was
+cleared only by a notification that fires when at least one row was repaired, so a clean archive
+spun forever and a long run vanished at its first progress post. Each job now owns its row:
+registered when a run starts (including re-kicks after an import), cleared on every exit (finished,
+nothing to do, cancelled, failed), and carrying a progress line ("1,200 repaired") while it works.
+
 ## Known limits, stated
 
 - The streaming `From`-line filter keeps a leading-`>` run as a count, but emits the run as one
