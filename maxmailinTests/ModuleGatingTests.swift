@@ -217,6 +217,9 @@ struct ModuleGatingTests {
     @Test("Email Analytics (sentiment + NLP passes) belongs to AI Insights")
     func emailAnalyticsOwnedByAIInsights() {
         #expect(HubDestination.emailAnalytics.owner == .aiInsights)
+        // Owner, 2026-09-30: topic discovery is NLP clustering, so the docked
+        // Topics panel and the hub tool both belong to AI Insights.
+        #expect(HubDestination.topicClusters.owner == .aiInsights)
         // The pure-count tools stay with the archive.
         for dest in [HubDestination.timeline, .communicationPatterns, .relationshipGraph, .duplicateManager] {
             #expect(dest.owner == .archive, "\(dest.rawValue)")

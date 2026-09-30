@@ -1261,12 +1261,16 @@ struct ContentView: View {
                                 }
                             }
                             Section("Tools") {
-                                Button {
-                                    if storeManager.requirePremium() {
-                                        withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? nil : .topics }
+                                // Topic discovery is NLP clustering: an AI Insights tool
+                                // (owner, 2026-09-30). Subjects grouping is plain text.
+                                if modules.isEnabled(.aiInsights) {
+                                    Button {
+                                        if storeManager.requirePremium() {
+                                            withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? nil : .topics }
+                                        }
+                                    } label: {
+                                        Label("Topics", systemImage: "circle.grid.3x3")
                                     }
-                                } label: {
-                                    Label("Topics", systemImage: "circle.grid.3x3")
                                 }
                                 Button {
                                     if storeManager.requirePremium() {
@@ -2358,8 +2362,10 @@ struct ContentView: View {
                         if modules.isEnabled(.aiInsights) {
                             compactToolIcon("chart.bar", color: .blue) { appState.showAnalytics = true }
                         }
-                        compactToolIcon("circle.grid.3x3", color: .teal) {
-                            withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? nil : .topics }
+                        if modules.isEnabled(.aiInsights) {
+                            compactToolIcon("circle.grid.3x3", color: .teal) {
+                                withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? nil : .topics }
+                            }
                         }
                         compactToolIcon("list.bullet.rectangle.portrait", color: .orange) {
                             withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .subjects ? nil : .subjects }
@@ -2685,12 +2691,31 @@ struct ContentView: View {
             Group {
                 switch appState.dockedBottomPanel {
                 case .topics:
-                    ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
-                        TopicClustersView(
-                            emails: emails,
-                            selectedClusterFilter: $selectedClusterFilter,
-                            clusterFilterIDs: $modelVM.clusterFilterIDs
-                        )
+                    if modules.isEnabled(.aiInsights) {
+                        ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
+                            TopicClustersView(
+                                emails: emails,
+                                selectedClusterFilter: $selectedClusterFilter,
+                                clusterFilterIDs: $modelVM.clusterFilterIDs
+                            )
+                        }
+                    } else {
+                        // A panel restored from a previous session while the
+                        // page is off: say so instead of running NLP
+                        // clustering under the Archive page.
+                        VStack(spacing: Spacing.small) {
+                            Image(systemName: "circle.grid.3x3")
+                                .font(.system(size: 22))
+                                .foregroundColor(AppColors.secondary)
+                            Text("AI Insights is off")
+                                .font(Typography.callout).fontWeight(.medium)
+                            Text("Topic discovery groups messages with on-device NLP and belongs to the AI Insights page. Turn the page on in Settings ▸ Modules to use it.")
+                                .font(Typography.caption1)
+                                .foregroundColor(AppColors.secondary)
+                                .multilineTextAlignment(.center)
+                                .frame(maxWidth: 360)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 case .subjects:
                     ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
@@ -2707,6 +2732,19 @@ struct ContentView: View {
         }
         .background(AppColors.backgroundPrimary)
         .transition(.move(edge: .bottom).combined(with: .opacity))
+        // Switching AI Insights off while the Topics panel is open closes it
+        // (and clears any cluster filter it applied), like every other
+        // AI-owned surface.
+        .onChange(of: modules.isEnabled(.aiInsights)) { _, on in
+            if !on, appState.dockedBottomPanel == .topics {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    appState.dockedBottomPanel = nil
+                    modelVM.clusterFilterIDs = nil
+                    selectedClusterFilter = nil
+                    modelVM.applyFilters()
+                }
+            }
+        }
     }
 
     private var dockedPanelDragHandle: some View {
@@ -2742,12 +2780,14 @@ struct ContentView: View {
     private var dockedPanelTabBar: some View {
         @Bindable var appState = appState
         return HStack(spacing: 0) {
-            dockedTabButton(
-                title: "Topics",
-                icon: "circle.grid.3x3",
-                isActive: appState.dockedBottomPanel == .topics
-            ) {
-                withAnimation(.easeInOut(duration: 0.2)) { appState.dockedBottomPanel = .topics }
+            if modules.isEnabled(.aiInsights) {
+                dockedTabButton(
+                    title: "Topics",
+                    icon: "circle.grid.3x3",
+                    isActive: appState.dockedBottomPanel == .topics
+                ) {
+                    withAnimation(.easeInOut(duration: 0.2)) { appState.dockedBottomPanel = .topics }
+                }
             }
 
             dockedTabButton(
