@@ -100,7 +100,7 @@ final class MBOXQuotingTests: XCTestCase {
 final class HandoffRoundTripTests: XCTestCase {
 
     private static var fixture: URL? {
-        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads/Mail/Sent.mbox")
+        let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Downloads/Mail/Sent.mbox")
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
@@ -110,7 +110,7 @@ final class HandoffRoundTripTests: XCTestCase {
     /// byte. The mbox container's own framing (envelope line, `>From `
     /// quoting, record separator) is legitimately rewritten and is excluded.
     func testRealMailbox_roundTripsThroughMBOX() async throws {
-        let fixture = try XCTUnwrap(Self.fixture, "~/Downloads/Mail/Sent.mbox not present")
+        guard let fixture = Self.fixture else { throw XCTSkip("~/Downloads/Mail/Sent.mbox not present") }
         try TestPreconditions.requireFreeSpace(TestPreconditions.referenceFixtureBudget)
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("handoff-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -128,7 +128,7 @@ final class HandoffRoundTripTests: XCTestCase {
     /// Small partitions force several files, which is how a >4 GB export
     /// reaches an exFAT drive; identity must survive the split.
     func testRealMailbox_partitionedRoundTrip() async throws {
-        let fixture = try XCTUnwrap(Self.fixture, "~/Downloads/Mail/Sent.mbox not present")
+        guard let fixture = Self.fixture else { throw XCTSkip("~/Downloads/Mail/Sent.mbox not present") }
         try TestPreconditions.requireFreeSpace(TestPreconditions.referenceFixtureBudget)
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("handoff-parts-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }

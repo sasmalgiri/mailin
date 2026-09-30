@@ -22,7 +22,7 @@ import XCTest
 final class ImportMemoryAttributionTests: XCTestCase {
 
     private static var fixtureURL: URL? {
-        let url = FileManager.default.homeDirectoryForCurrentUser
+        let url = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Downloads/Mail/Sent.mbox")
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }

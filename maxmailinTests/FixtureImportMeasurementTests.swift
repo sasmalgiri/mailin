@@ -28,7 +28,7 @@ final class FixtureImportMeasurementTests: XCTestCase {
 
     /// Owner-supplied fixture (see RELEASE_READINESS.md §P0.2).
     private static var fixtureURL: URL? {
-        let url = FileManager.default.homeDirectoryForCurrentUser
+        let url = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Downloads/Mail/Sent.mbox")
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
@@ -258,13 +258,13 @@ final class ScaleFixtureImportTests: XCTestCase {
     }
 
     private static var scaleFixtureURL: URL? {
-        let url = FileManager.default.homeDirectoryForCurrentUser
+        let url = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Downloads/Mail/Scale/Sent-x16.mbox")
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
     private static var scaleZipURL: URL? {
-        let url = FileManager.default.homeDirectoryForCurrentUser
+        let url = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Downloads/Mail/Scale/Sent-x16.zip")
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }

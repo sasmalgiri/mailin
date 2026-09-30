@@ -22,7 +22,7 @@ import XCTest
 final class LegacyLibraryMigrationTests: XCTestCase {
 
     private static var fixture: URL? {
-        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads/Mail/Sent.mbox")
+        let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Downloads/Mail/Sent.mbox")
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
@@ -34,7 +34,7 @@ final class LegacyLibraryMigrationTests: XCTestCase {
 
     /// v1 JSON library → read → into the SQLite store, both timed.
     func testSyntheticV1JSONLibrary_loadsAndMigratesWithExactCount() async throws {
-        let fixture = try XCTUnwrap(Self.fixture, "~/Downloads/Mail/Sent.mbox not present")
+        guard let fixture = Self.fixture else { throw XCTSkip("~/Downloads/Mail/Sent.mbox not present") }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("v1lib-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -68,7 +68,7 @@ final class LegacyLibraryMigrationTests: XCTestCase {
     /// reopened cold by a fresh instance — the open path a customer's library
     /// takes at launch — timed and counted.
     func testSyntheticV2Library_coldReopenKeepsEveryRowAtCurrentSchema() async throws {
-        let fixture = try XCTUnwrap(Self.fixture, "~/Downloads/Mail/Sent.mbox not present")
+        guard let fixture = Self.fixture else { throw XCTSkip("~/Downloads/Mail/Sent.mbox not present") }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("v2lib-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }

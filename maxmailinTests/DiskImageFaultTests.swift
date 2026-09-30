@@ -38,7 +38,7 @@ final class DiskImageFaultTests: XCTestCase {
     }
 
     private static var fixture: URL? {
-        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads/Mail/Sent.mbox")
+        let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Downloads/Mail/Sent.mbox")
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 

@@ -139,7 +139,7 @@ final class TestTempHygiene: XCTestCase {
 
 final class RealBinaryFixtureTests: XCTestCase {
 
-    private static let fixtures = FileManager.default.homeDirectoryForCurrentUser
+    private static let fixtures = URL(fileURLWithPath: NSHomeDirectory())
         .appendingPathComponent("Downloads/Mail/Fixtures/tika")
 
     private func fixture(_ name: String) throws -> URL {
@@ -226,7 +226,7 @@ final class SyntheticBinaryFormatTests: XCTestCase {
 
 final class FormatMatrixScaleTests: XCTestCase {
 
-    private static let formats = FileManager.default.homeDirectoryForCurrentUser
+    private static let formats = URL(fileURLWithPath: NSHomeDirectory())
         .appendingPathComponent("Downloads/Mail/Scale/formats")
     /// `make_format_fixtures.py` default: 11 copies × 526 messages.
     private static let copies = 11
