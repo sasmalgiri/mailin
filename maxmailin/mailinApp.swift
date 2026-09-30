@@ -1056,7 +1056,10 @@ class AppStateManager {
     var showExportProgress = false
     var exportProgressValue: Double = 0
     var exportProgressMessage: String = ""
-    var dockedBottomPanel: DockedPanel? = nil
+    /// Owner, 2026-09-30: the Subjects panel is always on; the panel is never
+    /// nil while an archive is open (Topics takes its place only while the
+    /// AI Insights page is on).
+    var dockedBottomPanel: DockedPanel? = .subjects
     // (Send/Receive & Cloud-Connect flags removed in v2 — mailin is
     // strictly offline.)
 

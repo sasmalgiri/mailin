@@ -1266,7 +1266,7 @@ struct ContentView: View {
                                 if modules.isEnabled(.aiInsights) {
                                     Button {
                                         if storeManager.requirePremium() {
-                                            withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? nil : .topics }
+                                            withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? .subjects : .topics }
                                         }
                                     } label: {
                                         Label("Topics", systemImage: "circle.grid.3x3")
@@ -1274,7 +1274,7 @@ struct ContentView: View {
                                 }
                                 Button {
                                     if storeManager.requirePremium() {
-                                        withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .subjects ? nil : .subjects }
+                                        withAnimation { appState.dockedBottomPanel = .subjects }
                                     }
                                 } label: {
                                     Label("Subjects", systemImage: "list.bullet.rectangle.portrait")
@@ -2364,11 +2364,11 @@ struct ContentView: View {
                         }
                         if modules.isEnabled(.aiInsights) {
                             compactToolIcon("circle.grid.3x3", color: .teal) {
-                                withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? nil : .topics }
+                                withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? .subjects : .topics }
                             }
                         }
                         compactToolIcon("list.bullet.rectangle.portrait", color: .orange) {
-                            withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .subjects ? nil : .subjects }
+                            withAnimation { appState.dockedBottomPanel = .subjects }
                         }
                         compactToolIcon("doc.on.doc", color: .indigo) { if storeManager.requirePremium() { appState.showDuplicateManager = true } }
                         if isForensicPersona && modules.isEnabled(.aiInsights) {
@@ -2455,11 +2455,11 @@ struct ContentView: View {
                             }
                             if modules.isEnabled(.aiInsights) {
                                 detailToolButton(title: "Topics", icon: "circle.grid.3x3", color: appState.dockedBottomPanel == .topics ? .teal.opacity(0.5) : .teal) {
-                                    withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? nil : .topics }
+                                    withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? .subjects : .topics }
                                 }
                             }
                             detailToolButton(title: "Subjects", icon: "list.bullet.rectangle.portrait", color: appState.dockedBottomPanel == .subjects ? .orange.opacity(0.5) : .orange) {
-                                withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .subjects ? nil : .subjects }
+                                withAnimation { appState.dockedBottomPanel = .subjects }
                             }
                             detailToolButton(title: "Duplicates", icon: "doc.on.doc", color: .indigo) {
                                 if storeManager.requirePremium() { appState.showDuplicateManager = true }
@@ -2618,22 +2618,24 @@ struct ContentView: View {
     }
 
     private func detailToolButton(title: String, icon: String, color: Color, tip: String? = nil, action: @escaping () -> Void) -> some View {
+        // Owner, 2026-09-30: compact chips instead of 64-pt tiles — the
+        // detail column is for the message; tools and settings are a strip.
         Button(action: action) {
-            VStack(spacing: Spacing.xxSmall) {
+            HStack(spacing: 4) {
                 Image(systemName: icon)
-                    .font(.system(size: 22))
+                    .font(.system(size: 11))
                     .foregroundColor(color)
                 Text(title)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundColor(AppColors.secondary)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
+                    .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
-            .frame(maxWidth: .infinity, minHeight: 64)
-            .padding(.vertical, Spacing.small)
+            .frame(maxWidth: .infinity, minHeight: 22)
+            .padding(.vertical, 2)
+            .padding(.horizontal, 4)
             .background(color.opacity(0.06))
-            .cornerRadius(CornerRadius.medium)
+            .cornerRadius(CornerRadius.small)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title)
@@ -2738,7 +2740,7 @@ struct ContentView: View {
         .onChange(of: modules.isEnabled(.aiInsights)) { _, on in
             if !on, appState.dockedBottomPanel == .topics {
                 withAnimation(.easeInOut(duration: 0.2)) {
-                    appState.dockedBottomPanel = nil
+                    appState.dockedBottomPanel = .subjects
                     modelVM.clusterFilterIDs = nil
                     selectedClusterFilter = nil
                     modelVM.applyFilters()
@@ -2799,25 +2801,29 @@ struct ContentView: View {
             }
 
             Spacer()
-
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    appState.dockedBottomPanel = nil
-                    modelVM.clusterFilterIDs = nil
-                    selectedClusterFilter = nil
-                    modelVM.applyFilters()
+            // Owner, 2026-09-30: the panel is always on, so there is no close
+            // button. Leaving Topics (or switching AI Insights off) returns to
+            // Subjects and clears any cluster filter.
+            if appState.dockedBottomPanel == .topics {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        appState.dockedBottomPanel = .subjects
+                        modelVM.clusterFilterIDs = nil
+                        selectedClusterFilter = nil
+                        modelVM.applyFilters()
+                    }
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(AppColors.secondary)
+                        .padding(6)
+                        .background(AppColors.secondary.opacity(0.1))
+                        .clipShape(Circle())
                 }
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(AppColors.secondary)
-                    .padding(6)
-                    .background(AppColors.secondary.opacity(0.1))
-                    .clipShape(Circle())
+                .buttonStyle(.plain)
+                .accessibilityLabel("Back to Subjects")
+                .padding(.trailing, Spacing.small)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Close panel")
-            .padding(.trailing, Spacing.small)
         }
         .padding(.leading, Spacing.small)
         .background(AppColors.backgroundSecondary)
