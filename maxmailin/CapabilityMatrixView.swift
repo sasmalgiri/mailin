@@ -87,12 +87,17 @@ struct CapabilityMatrixView: View {
                 .toggleStyle(.switch)
                 .font(.caption)
                 .help("Hide everything that is not currently active")
-            if scope != nil {
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.defaultAction)
-            }
+            // Owner, 2026-09-30: the full matrix (no scope) had no Done button,
+            // so the sheet could not be closed by clicking. Done is always
+            // there; Escape closes too.
+            Button("Done") { dismiss() }
+                .keyboardShortcut(.defaultAction)
+                .accessibilityIdentifier("capabilityMatrix.done")
         }
         .padding(16)
+        #if os(macOS)
+        .onExitCommand { dismiss() }
+        #endif
     }
 
     // MARK: Blocked summary

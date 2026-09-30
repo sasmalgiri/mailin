@@ -160,28 +160,49 @@ private struct PageSwitcher: View {
     var body: some View {
         HStack(spacing: Spacing.xxSmall) {
             ForEach(pages, id: \.rawValue) { page in
+                // Owner, 2026-09-30: these are the PAGE names, so they read
+                // at heading size, and a page that is on looks different
+                // from one that is off — filled tint and a green dot when on;
+                // dimmed text with an "Off" marker (or a lock) when not.
+                let on = isEnabled(page)
+                let current = page == selection && on
                 Button {
                     onSelect(page)
                 } label: {
-                    HStack(spacing: 4) {
+                    HStack(spacing: 6) {
                         Image(systemName: icon(page))
+                            .font(.system(size: 15, weight: .semibold))
                         Text(page.displayName)
-                        // An inactive tab is marked, so the tab bar does not
-                        // imply the page is already running.
+                            .font(.system(size: 15, weight: .semibold))
                         if isLocked(page) {
-                            Image(systemName: "lock.fill").font(.caption2)
-                        } else if !isEnabled(page) {
-                            Image(systemName: "plus.circle").font(.caption2)
+                            Image(systemName: "lock.fill")
+                                .font(.system(size: 11))
+                        } else if on {
+                            Circle()
+                                .fill(Color.green)
+                                .frame(width: 7, height: 7)
+                                .accessibilityLabel("On")
+                        } else {
+                            Text("Off")
+                                .font(.system(size: 10, weight: .semibold))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(AppColors.secondary.opacity(0.15), in: Capsule())
                         }
                     }
-                    .font(Typography.caption1)
-                    .foregroundColor(isEnabled(page) ? .primary : AppColors.secondary)
-                    .padding(.horizontal, Spacing.xSmall)
-                    .padding(.vertical, 4)
+                    .foregroundColor(on ? (current ? .accentColor : .primary) : AppColors.secondary.opacity(0.8))
+                    .padding(.horizontal, Spacing.small)
+                    .padding(.vertical, 7)
                     .background(
-                        page == selection && isEnabled(page)
-                            ? Color.accentColor.opacity(0.18) : .clear,
-                        in: RoundedRectangle(cornerRadius: 6)
+                        current
+                            ? Color.accentColor.opacity(0.16)
+                            : (on ? AppColors.secondary.opacity(0.08) : .clear),
+                        in: RoundedRectangle(cornerRadius: 8)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(on ? Color.clear : AppColors.secondary.opacity(0.25),
+                                          style: StrokeStyle(lineWidth: 1, dash: on ? [] : [3, 3]))
                     )
                 }
                 .buttonStyle(.plain)
