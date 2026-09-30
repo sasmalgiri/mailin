@@ -7,11 +7,8 @@ is built on the `live-mail` feature branch and is not part of this release. Ever
 
 ## Archive (Page 1)
 
-- **Archive list.** The Advanced list (sort, filter, smart tags, sender/domain and saved-search
-  filters, multi-select, bulk actions, J/K/Return// and 1–5 tagging) is the one archive list, paged by
-  the repository so it stays fast at any size. A three-pane shell was built for 3.0 and retired on
-  2026-09-30 by owner decision (Advanced only); its sidebar's per-source "still indexing" indicator
-  went with it, while the archive-wide search coverage line and match fields remain in the list.
+- **Three-pane shell.** Mailboxes / sources / labels / saved searches · list · detail, all paged by
+  keyset or ranked cursor; an open archive lands here. Trash is a real mailbox (`trashedOnly`).
 - **Search says where it matched** (From / To / Subject / Attachment / Body / Source / Tag) and
   **what the index covered** when it answered; a no-results state never reads as a bare zero.
 - **Import sheet with choices**: duplicate policy (incl. re-encoded copies), copy vs reference with

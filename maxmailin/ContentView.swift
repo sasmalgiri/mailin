@@ -30,6 +30,7 @@ struct ContentView: View {
     // Part S: PURE presentation preference. Both modes page the same bounded
     // repository-backed architecture (ArchiveDataService); there is no
     // architectural fallback or rollback semantics behind this flag.
+    @AppStorage(ListModePreference.key) private var preferSimpleList = ListModePreference.defaultSimple
     @StateObject private var viewModel = ContentViewModel()
     @StateObject private var modelVM: ParsedEmailListViewModel
     @State private var showSpinner = false
@@ -1131,12 +1132,15 @@ struct ContentView: View {
 
     #if os(macOS)
     @ViewBuilder
-    /// Owner decision 2026-09-30: the Advanced list (the full filter / sort /
-    /// smart-tag / saved-search toolkit) is the ONLY archive list. The
-    /// three-pane shell (`ArchiveThreePaneView`) is retired from the shell;
-    /// its files stay in the target until the project file can be edited.
     private var emailInboxDestination: some View {
-        advancedInboxDestination
+        if preferSimpleList {
+            // A2: the three-pane archive shell — sidebar / list / detail, all
+            // repository-paged. Import / Search / Export live in its chrome.
+            ArchiveThreePaneView(onHome: modules.isEnabled(.professional) ? { sidebarSelection = nil } : nil,
+                                 onImport: { openPanelFallback() })
+        } else {
+            advancedInboxDestination
+        }
     }
 
     private var advancedInboxDestination: some View {
@@ -1181,10 +1185,17 @@ struct ContentView: View {
     }
     #else
     private var emailInboxDestination: some View {
-        // Owner decision 2026-09-30: the Advanced list is the only archive
-        // list on iPad as well.
-        ParsedEmailListView(model: modelVM, selectedEmailIDs: $selectedEmailIDs)
-            .navigationTitle("Email Inbox")
+        Group {
+            if preferSimpleList {
+                // A2: iPad gets the three-pane shell; iPhone's compact layout
+                // keeps the two-pane list (a split view inside a stack does
+                // not collapse well).
+                ArchiveThreePaneView(onImport: { showFileImporter = true })
+            } else {
+                ParsedEmailListView(model: modelVM, selectedEmailIDs: $selectedEmailIDs)
+            }
+        }
+        .navigationTitle("Email Inbox")
     }
     #endif
 
@@ -1194,7 +1205,9 @@ struct ContentView: View {
         @Bindable var appState = appState
         return NavigationStack {
             Group {
-                if modelVM.showParsedList {
+                if preferSimpleList {
+                    ArchiveListView()
+                } else if modelVM.showParsedList {
                     ParsedEmailListView(model: modelVM, selectedEmailIDs: $selectedEmailIDs)
                 } else if modelVM.isParsing || viewModel.loadingProgress > 0 {
                     iPhoneLoadingView
