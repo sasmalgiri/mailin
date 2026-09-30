@@ -13,12 +13,12 @@ PRICE: Free (with In-App Purchases)
 IN-APP PURCHASES:
   Personal Tier:
   - Personal Monthly: $4.99/month (auto-renewable subscription)
-  - Personal Yearly: $29.99/year (auto-renewable subscription) — Save 40%
-  - Personal Lifetime: $49.99 (one-time purchase)
+  - Personal Yearly: $44.99/year (auto-renewable subscription) — Save 25%
+  - Personal Lifetime: $99.99 (one-time purchase)
   Professional Tier:
   - Professional Monthly: $9.99/month (auto-renewable subscription)
-  - Professional Yearly: $79.99/year (auto-renewable subscription) — Save 40%
-  - Professional Lifetime: $149.99 (one-time purchase) — Best Value
+  - Professional Yearly: $79.99/year (auto-renewable subscription) — Save 33%
+  - Professional Lifetime: $249.99 (one-time purchase) — Best Value
 
 BUNDLE ID: com.ecosanskriti.mailin
 VERSION: 3.0 (build 300)

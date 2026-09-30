@@ -169,7 +169,7 @@ Requires iOS 17.6+ / macOS 14.6+. Free tier included, no signup.
 | Export | EML, CSV (limited) | All formats | All formats |
 | Forensic Mode | — | — | Full |
 | Audit Trail | — | — | Full |
-| | Free | $4.99/mo or $49.99 lifetime | $9.99/mo or $149.99 lifetime |
+| | Free | $4.99/mo, $44.99/yr or $99.99 lifetime | $9.99/mo, $79.99/yr or $249.99 lifetime |
 
 ---
 

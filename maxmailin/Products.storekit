@@ -5,7 +5,7 @@
   ],
   "products" : [
     {
-      "displayPrice" : "49.99",
+      "displayPrice" : "99.99",
       "familyShareable" : true,
       "internalID" : "Personal_Lifetime_001",
       "localizations" : [
@@ -20,7 +20,7 @@
       "type" : "NonConsumable"
     },
     {
-      "displayPrice" : "149.99",
+      "displayPrice" : "249.99",
       "familyShareable" : true,
       "internalID" : "Professional_Lifetime_001",
       "localizations" : [
@@ -134,7 +134,7 @@
           "codeOffers" : [
 
           ],
-          "displayPrice" : "29.99",
+          "displayPrice" : "44.99",
           "familyShareable" : true,
           "groupNumber" : 1,
           "internalID" : "Personal_Yearly_001",
