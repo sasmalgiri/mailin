@@ -4,6 +4,15 @@ Everything below is ready to paste into App Store Connect.
 
 ---
 
+## Build to upload (3.0 public update, 2026-09-30)
+
+- Bundle ID: `com.ecosanskriti.mailin` (the record the installed 1.0 (10) belongs to)
+- Version 3.0, build 300 — set in the `maxmailin` target; both are above 1.0 (10)
+- Configuration: Release, scheme `maxmailin`, destination My Mac. Product ▸ Archive, then Distribute App ▸ App Store Connect ▸ Upload
+- Compile flags: `NO_NETWORK_BUILD` only (no `ENTERPRISE_EDITION`): purchases and the free tier are in, cloud AI and Live Mail connectors are out, no network entitlement
+- Entitlements: app sandbox, user-selected files read/write, security-scoped bookmarks, print — identical to the installed 1.0
+- Screenshots for the Mac listing (2880 × 1800): `~/Downloads/AppStoreScreenshots-3.0/`
+
 ## App Name
 ```
 mailin
