@@ -45,8 +45,8 @@ not by mailin. Verified on real mail up to 1.5 GB; larger archives have not been
 
 **AI Insights (optional, off until you switch it on).** Ask questions and get answers with
 citations that reopen the exact message; summaries; reports. Everything runs on your Mac with
-Apple's on-device models. Cloud providers are used only if you add your own key and approve each
-request when it is about to be sent.
+Apple's on-device models. There is no cloud AI: the app has no network entitlement and cannot
+contact any provider.
 
 **Professional Workflows (optional).** Custodians and legal holds, chain of custody, Bates
 numbering, redaction, review batches, eDiscovery, investigation reports, five reasoning studios,
@@ -130,7 +130,7 @@ TESTING:
 
 NETWORK:
 - No account, no login, no developer server. The archive never leaves the device.
-- Optional Cloud AI (AI Insights > Settings) is OFF by default, needs the user's own OpenAI or Anthropic key, and asks the user to confirm each request before it is sent.
+- No cloud AI. The app has no network entitlement and cannot contact any server.
 - The Live Mail page is a placeholder in 3.0: no account can be added and no mail server is contacted; the page says so.
 - StoreKit is the only other network use.
 

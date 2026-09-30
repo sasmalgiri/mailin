@@ -38,7 +38,7 @@ is built on the `live-mail` feature branch and is not part of this release. Ever
 - Citations that reopen: every `[E#]` in an answer maps to the retrieved message with Open.
 - Opt-in, resumable **semantic index** (on-device sentence vectors; feeds Ask's retrieval).
 - **Per-request cloud consent**: provider, model, bytes and excerpt shown before anything leaves the
-  Mac; fails closed; honours the managed hard-off. (Cloud AI is compiled out of this configuration.)
+  Mac; fails closed; honours the managed hard-off. (Owner decision 2026-09-30: no edition ships cloud AI; the consent code is compiled out everywhere and the app has no network entitlement.)
 
 ## Professional Workflows (Page 3, off by default)
 

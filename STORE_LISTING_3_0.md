@@ -32,8 +32,8 @@ not by mailin. Verified on real mail up to 1.5 GB; larger archives have not been
 
 **AI Insights (optional, off until you switch it on).** Ask questions and get answers with
 citations that reopen the exact message; summaries; reports. Everything runs on your Mac with
-Apple's on-device models. Cloud providers are used only if you add your own key and approve each
-request when it is about to be sent.
+Apple's on-device models. There is no cloud AI: the app has no network entitlement and cannot
+contact any provider.
 
 **Professional Workflows (optional).** Custodians and legal holds, chain of custody, Bates
 numbering, redaction, review batches, eDiscovery, investigation reports, five reasoning studios,
@@ -60,9 +60,9 @@ mailin has no account, no sync and no telemetry. Your archive is a folder you ow
 **Data Not Collected.** mailin has no network capability in this configuration: the sandbox grants
 no network entitlement, so no connection can be made.
 
-If the Live Mail edition ships later, the label changes to disclose that email content is sent to
-and received from the user's own mail providers at the user's request, and that cloud AI, when the
-user enables it and approves a request, sends selected text to the provider the user chose.
+If a Live Mail edition ever ships, the label changes to disclose that email content is sent to and
+received from the user's own mail providers at the user's request. There is no cloud AI in any
+edition.
 
 ## Review notes
 

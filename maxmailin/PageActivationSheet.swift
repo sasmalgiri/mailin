@@ -105,7 +105,7 @@ enum PageFeatureCatalog {
         case .aiInsights:
             return [
                 "Runs analysis in the background and keeps a weekly digest schedule.",
-                "Uses the on-device model. A cloud provider is never contacted unless you separately opt in per request.",
+                "Uses the on-device model only. No cloud provider is ever contacted; the app has no network access.",
                 "Switching it off stops the work and unloads the model; saved summaries and reports are kept.",
             ]
         case .professional:

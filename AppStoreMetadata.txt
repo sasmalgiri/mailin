@@ -133,7 +133,7 @@ BUILT FOR PRIVACY
 - Zero data collection — no analytics, no tracking, no telemetry
 - All processing happens on-device using Apple frameworks
 - App Sandbox with minimal permissions
-- AI runs on-device by default — your email data stays on your device unless you enable the optional, opt-in Cloud AI
+- AI runs on-device only — your email data stays on your device; there is no cloud AI and no network entitlement
 
 FLEXIBLE PLANS
 - Free tier: browse up to 500 emails with basic filtering and NLP
@@ -152,7 +152,7 @@ VERIFIABLE PRIVACY
 - Zero analytics, zero third-party SDKs, zero cloud calls in offline mode
 - Apple App Sandbox enforced — Apple's own runtime verifies the privacy claim
 - Privacy Manifest declares: no tracking, no data collection
-- AI runs on-device by default using Apple NaturalLanguage and Foundation Models (optional Cloud AI is opt-in)
+- AI runs on-device only, using Apple NaturalLanguage and Foundation Models
 - File Protection (Complete class) on persistent storage — files unreadable when device locked
 - Ed25519 cryptographic signatures on exports (forensic chain anchor)
 
@@ -193,7 +193,7 @@ mailin v1.0 — the first forensic-grade email archive analyzer native to iPhone
 
 ✓ 7 archive formats: .mbox, .eml, .emlx, .msg, .pst, .ost, .nsf
 ✓ HMAC chain of custody, Bates numbering, IOC extraction
-✓ On-device Apple Intelligence by default — no tracking; optional Cloud AI is opt-in
+✓ On-device Apple Intelligence only — no tracking, no cloud AI, no network
 ✓ Sub-second full-text search
 ✓ 11 languages
 ✓ Universal Purchase across all your Apple devices

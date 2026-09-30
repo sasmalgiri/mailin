@@ -110,29 +110,17 @@
         <h2>Email Processing</h2>
         <p>All email parsing, search, filtering, and core analysis happens <strong>entirely on your device</strong>. mailin uses Apple's on-device NaturalLanguage framework and FoundationModels framework for AI features &mdash; both run locally on your device.</p>
 
-        <h2>Optional Cloud AI</h2>
-        <p>mailin offers an <strong>optional</strong> Cloud AI feature that uses third-party AI providers (OpenAI and Anthropic) for enhanced analysis. This feature is:</p>
-        <ul>
-            <li><strong>Disabled by default</strong> &mdash; you must explicitly enable it in Settings and provide your own API key.</li>
-            <li><strong>User-controlled</strong> &mdash; you choose which provider, model, and when to use it.</li>
-            <li><strong>Transparent</strong> &mdash; email context is sent to the selected provider only when you explicitly invoke Cloud AI analysis.</li>
-            <li><strong>Automatically disabled in Forensic Mode</strong> &mdash; forensic investigations never send data externally.</li>
-        </ul>
-        <p>When Cloud AI is used, email excerpts and metadata relevant to your query are sent to the selected provider's API. These providers have their own privacy policies: <a href="https://openai.com/privacy">OpenAI Privacy Policy</a>, <a href="https://www.anthropic.com/privacy">Anthropic Privacy Policy</a>. mailin does not store, log, or retain any data sent to or received from these providers.</p>
+        <h2>No Cloud AI</h2>
+        <p>Every AI feature in mailin runs on your device using Apple's NaturalLanguage framework and, on macOS 26 and later, Apple Intelligence's on-device models. mailin has no cloud AI mode and no way to add one: the app has no network entitlement, so it cannot contact any AI provider, and no email content is ever sent to a third party.</p>
 
         <h2>Live Mail (not included in version 3.0)</h2>
         <p>Version 3.0 does not connect to any mail account. The Live Mail page is present as a placeholder and states this in the app: no account can be added and no mail server is contacted. If Live Mail ships in a later version, this policy will be updated before it does, and each account will be authorised by you separately from enabling the page.</p>
 
         <h2>Network Access</h2>
-        <p>mailin does not require an internet connection for anything it does with your archive. Network activity is limited to:</p>
-        <ul>
-            <li><strong>App Store:</strong> Apple's StoreKit for in-app purchases and subscription verification.</li>
-            <li><strong>Cloud AI (optional):</strong> API calls to the provider you chose (OpenAI or Anthropic) with your own key, only when you have enabled Cloud AI and approved the request that is about to be sent.</li>
-        </ul>
-        <p>There is no developer server. Nothing about your archive, your searches or your use of the app is sent to us.</p>
+        <p>mailin has no network capability. The app sandbox grants it no network entitlement, so no connection can be made from the app to any server, including ours. The only network activity associated with mailin is Apple's own StoreKit handling of in-app purchases, which runs in Apple's systems, not in the app.</p>
 
         <h2>Third-Party Services</h2>
-        <p>mailin does not integrate any third-party analytics, advertising, or tracking services. The only third-party services are the optional Cloud AI providers described above, used with your own key.</p>
+        <p>mailin does not integrate any third-party analytics, advertising, tracking or AI services.</p>
 
         <h2>In-App Purchases &amp; Subscriptions</h2>
         <p>mailin offers both auto-renewable subscriptions and one-time lifetime purchases. All transactions are processed by Apple through the App Store. Apple's privacy policy governs how purchase and subscription data is handled. mailin does not have access to your payment information. Subscription status is verified locally through Apple's StoreKit framework.</p>

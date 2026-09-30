@@ -21,10 +21,10 @@ WHAT TO LOOK FOR (VERSION 3.0)
 - The Live Mail page is a placeholder in 3.0: no account can be added and no mail server is contacted; the page says so.
 
 OFFLINE-FIRST
-mailin works completely offline. No account creation, no login, no developer server, no network calls for anything to do with the archive. The optional Cloud AI mode (AI Insights > Settings) is OFF by default, requires the user's own OpenAI or Anthropic key, and asks the user to confirm each request before it is sent.
+mailin works completely offline. No account creation, no login, no developer server, no network calls for anything to do with the archive. There is no cloud AI: the app has no network entitlement and cannot contact any server.
 
 SUBSCRIPTIONS / IN-APP PURCHASES
-All paywalls are gated by free trial. The app is fully functional in the free tier for evaluation: sample data, basic search, parsing, and a limited number of exports. Auto-renewable subscriptions (Personal / Professional) and a one-time Lifetime purchase unlock unlimited exports, advanced forensic features, and Cloud AI. Subscriptions are managed via standard StoreKit 2; cancellation is via Apple's standard Settings → Subscriptions UI.
+All paywalls are gated by free trial. The app is fully functional in the free tier for evaluation: sample data, basic search, parsing, and a limited number of exports. Auto-renewable subscriptions (Personal / Professional) and a one-time Lifetime purchase unlock unlimited exports and advanced forensic features. Subscriptions are managed via standard StoreKit 2; cancellation is via Apple's standard Settings → Subscriptions UI.
 
 DEMO ACCOUNT
 Not required. mailin has no account system — it is a local file analyzer. No login, no signup, no server.
@@ -32,7 +32,7 @@ Not required. mailin has no account system — it is a local file analyzer. No l
 PRIVACY
 - No tracking. No analytics SDK. No third-party libraries.
 - All processing is on-device by default.
-- Optional Cloud AI is opt-in and requires the user's own API key.
+- No cloud AI. The app has no network entitlement.
 - Privacy Manifest (PrivacyInfo.xcprivacy) declares zero data collection and only Required Reason APIs.
 
 CONTACT
@@ -106,7 +106,7 @@ A: The "Try with Sample Data" button loads 25 fictional emails. Reviewer can the
 A: No, and the app explicitly disclaims this. See in-app Terms of Use clause 6 and the visible disclaimer in Settings: "Disclaimer: Forensic features are analytical tools and have NOT been independently validated for court admissibility." Admissibility is jurisdiction-specific; the app supports workflows but makes no admissibility claim.
 
 **Q: Does the app upload email content anywhere?**
-A: No. Default mode is fully on-device. The optional "Cloud AI" toggle (off by default) requires the user's own OpenAI / Anthropic API key, and is disclosed in Settings with a clear privacy warning before activation.
+A: No. All processing is on-device and the app has no network entitlement, so it cannot upload anything. There is no cloud AI.
 
 **Q: Why does the app declare BGTaskScheduler for background analysis?**
 A: To allow long-running parsing/indexing of large archives to continue when the user briefly switches apps. Background work is gated to user-initiated parses only — never opportunistic, never network-bound.

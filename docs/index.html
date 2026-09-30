@@ -522,9 +522,8 @@
         <p style="text-align:center; font-size:13px; color:#86868b; margin-top:28px; max-width:640px; margin-left:auto; margin-right:auto;">
             <strong>No built-in size limit.</strong> Import streams from disk, so archive size is bounded by
             your storage, not by mailin. Verified on real mail up to 1.5 GB in one file; larger archives
-            have not been tested. <strong>Offline by default.</strong> No account, no telemetry. The only
-            feature that can send anything out is the optional Cloud AI mode — off by default, using your
-            own provider key, and confirmed by you before each request.
+            have not been tested. <strong>Offline, full stop.</strong> No account, no telemetry, no cloud AI.
+            The app has no network entitlement: nothing about your archive can leave your device.
         </p>
     </div>
 </section>
@@ -578,7 +577,7 @@
 <section id="hybrid-ai" class="section section-dark">
     <h2>Two AI engines. <span class="gradient">Both on-device.</span></h2>
     <p class="subtitle">
-        By default, mailin runs AI locally using Apple's own frameworks — no cloud, no API key. An optional Cloud AI mode is available if you choose it: opt-in, off by default, and it uses your own provider key.
+        mailin runs AI locally using Apple's own frameworks — no cloud, no API key, no network. There is no cloud AI mode: the app cannot connect to any provider.
     </p>
 
     <div class="hybrid-ai-diagram">
@@ -599,11 +598,11 @@
     <div class="hybrid-bullets">
         <div class="b">
             <strong>On-device by default.</strong><br>
-            Apple Intelligence and NaturalLanguage run entirely on your device — no cloud and no API key for the default engines.
+            Apple Intelligence and NaturalLanguage run entirely on your device — no cloud, no API key, no network access at all.
         </div>
         <div class="b">
             <strong>The developer collects nothing.</strong><br>
-            No telemetry, no analytics, no accounts, no third-party SDKs. If you opt into Cloud AI, only the excerpts you choose go to your provider (OpenAI/Anthropic) with your own key — never to us.
+            No telemetry, no analytics, no accounts, no third-party SDKs, no third-party AI. Nothing about your archive goes anywhere — not to a provider, and never to us.
         </div>
         <div class="b">
             <strong>Every output is tagged.</strong><br>
@@ -918,7 +917,7 @@
         <div class="feature-card">
             <div class="f-icon">🔒</div>
             <h3>Privacy enforcement, not just claims</h3>
-            <p>Offline by default. The only feature that transmits anything is the optional, opt-in Cloud AI mode (using your own OpenAI/Anthropic key) — off unless you enable it. No telemetry, no analytics, no data collection by the developer. Every AI output is tagged with the engine that produced it (AIProvenance).</p>
+            <p>Offline, enforced by the sandbox: the app has no network entitlement, so it cannot transmit anything. No cloud AI, no telemetry, no analytics, no data collection by the developer. Every AI output is tagged with the on-device engine that produced it (AIProvenance).</p>
         </div>
         <div class="feature-card">
             <div class="f-icon">🛡️</div>
