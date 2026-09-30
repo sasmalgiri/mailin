@@ -13,7 +13,7 @@ HOW TO TEST WITHOUT A REAL EMAIL ARCHIVE
 Help > Open sample loads the bundled demo_emails.mbox (fictional messages). Or use "Try with Sample Data" on the welcome screen, or drag any .mbox/.eml/.pst/.msg/.nsf/.zip onto the window. Sample data can be removed at any time from Settings.
 
 WHAT TO LOOK FOR (VERSION 3.0)
-- The Archive page is always on: mailboxes, sources and labels on the left, the list in the middle, the message on the right. J/K move, Return opens, / searches.
+- The Archive page is always on: the list with filters, sort, smart tags and saved searches on the left, the message on the right. J/K move, Return opens, / searches, 1–5 tag and advance.
 - Import: drop several files to see the import queue (pause, resume, stop one file, reorder). Every import ends in a receipt.
 - Search "project" or "invoice": results say where they matched and how much of the archive the index covered.
 - Export (toolbar > Export): a pre-flight sheet shows the space needed; the run ends in a receipt with the file's SHA-256. Cancel mid-way and the receipt offers Resume.

@@ -31,7 +31,7 @@ below is the 2.x copy kept for reference; use the 3.0 file for App Store Connect
 WHAT'S NEW IN 3.0
 ------------------------------------
 
-- Three-pane archive shell; open an archive and you are in it.
+- Keyboard-first archive list: J/K, Return, /, 1–5 tagging; sort, filter, smart tags and saved searches over the whole archive.
 - Import queue with pause, resume, stop-this-file and reorder; the import sheet lets you choose the
   duplicate policy, whether originals are copied, and whether attachment contents are indexed.
 - Export pre-flight and resume. Every export ends in a receipt.

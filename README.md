@@ -14,7 +14,7 @@ Import, search, analyze, and export email archives from Gmail, Outlook, Thunderb
 
 ## What's New in 3.0
 
-- Three-pane archive shell (mailboxes, sources and labels; list; message), keyboard-first
+- Keyboard-first archive list (J/K, Return, /, 1–5 tagging; sort, filter, smart tags, saved searches over the whole archive)
 - Import queue: pause, resume, stop one file, reorder; duplicate policy and attachment indexing chosen in the import sheet; every import ends in a signed receipt
 - Export pre-flight and resume; every export ends in a receipt with its hash; mbox, EML, PDF, TIFF, MSG, CSV, Word, Markdown, JSON, portable HTML
 - Move the archive to another disk as a verified copy; the copy on this Mac stays usable when the disk is away

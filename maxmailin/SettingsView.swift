@@ -15,6 +15,10 @@ import UserNotifications
 /// bounded repository-backed architecture. The old key `useV2ArchiveList`
 /// carried rollback connotations from the cutover and is migrated once.
 enum ListModePreference {
+    /// Owner decision 2026-09-30: the picker is gone and only the Advanced
+    /// list ships. The key, default and migration stay so an old stored
+    /// "Simple" choice is never read as anything and the default guard
+    /// (`testDefaultListModeIsAdvanced`) keeps holding.
     static let key = "listModeSimple"
     /// §27 "no silent feature loss": the DEFAULT list is Advanced — the full
     /// v1-parity toolkit (sorts, filters, multi-select, tags, threads, bulk
@@ -44,9 +48,6 @@ struct SettingsView: View {
     @AppStorage("showInlineImages") private var showInlineImages = true
     @AppStorage("enableAIFeatures") private var enableAIFeatures = true
     @AppStorage("emailListDensity") private var emailListDensity = "comfortable"
-    // Simple (true) = clean ArchiveListView; Advanced (false) = full-filter
-    // toolkit list. Both are bounded + repository-backed (Part S).
-    @AppStorage(ListModePreference.key) private var preferSimpleList = ListModePreference.defaultSimple
     @AppStorage("showEmailPreviews") private var showEmailPreviews = true
     @AppStorage("showBasicTagPills") private var showBasicTagPills = false
     @AppStorage("autoAdvanceAfterTag") private var autoAdvanceAfterTag = true
@@ -518,24 +519,6 @@ struct SettingsView: View {
     // MARK: - Display Settings
     private var displaySettings: some View {
         Form {
-            Section {
-                Picker("List Mode", selection: $preferSimpleList) {
-                    Text("Simple").tag(true)
-                    Text("Advanced").tag(false)
-                }
-                .pickerStyle(.segmented)
-                .help("Simple: a fast, clean list (search + date filter). Advanced: the full filter/sort/smart-tag/saved-search toolkit. Both scale to any archive size.")
-
-                Text(preferSimpleList
-                     ? "Simple — fast, clean browsing. Search and date range cover the whole archive."
-                     : "Advanced — sort, smart-tag, sender/domain and saved-search filters over the same paged archive.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            } header: {
-                Text("List Mode")
-                    .font(.headline)
-            }
-
             Section {
                 Picker("Email List Density", selection: $emailListDensity) {
                     Text("Compact").tag("compact")

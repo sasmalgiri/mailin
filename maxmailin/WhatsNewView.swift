@@ -129,7 +129,7 @@ private struct ReleaseItem {
 
 private let releaseNotes: [ReleaseNote] = [
     ReleaseNote(version: "3.0", date: "September 2026", items: [
-        ReleaseItem(icon: "sidebar.left", title: "Three-Pane Archive", description: "Mailboxes, sources and labels on the left, the list in the middle, the message on the right. Open an archive and you are in it. Keyboard-first: J/K, Return, / to search.", color: .blue),
+        ReleaseItem(icon: "keyboard", title: "Keyboard-First Archive List", description: "J/K move, Return opens, / focuses search, 1–5 tag and advance. Sort, filter, smart tags, sender/domain and saved-search filters over the whole archive, paged so it stays fast at any size.", color: .blue),
         ReleaseItem(icon: "list.bullet.rectangle", title: "Import Queue", description: "Pause, resume, reorder or stop a single file while the rest continue. Choose the duplicate policy and attachment indexing before you start. Every import ends in a signed receipt.", color: .indigo),
         ReleaseItem(icon: "square.and.arrow.up.on.square", title: "Export Pre-flight and Resume", description: "See the space needed first. Every export ends in a receipt with its hash; an interrupted export resumes from that receipt and writes nothing twice.", color: .green),
         ReleaseItem(icon: "externaldrive", title: "Move the Archive", description: "Copy the archive to another disk, verified, and open it from there. If the disk is away, the copy on this Mac stays usable. Nothing is deleted until the new location is live.", color: .teal),

@@ -28,8 +28,9 @@ Lotus Notes (.nsf), plain .mbox and .eml, or a ZIP of any of them — and turns 
 searchable, private archive that never leaves your Mac.
 
 **The archive**
-- A three-pane browser: mailboxes, sources and labels on the left, the list in the middle, the
-  message on the right. Keyboard-first: J/K, Return, / to search.
+- A keyboard-first list: J/K move, Return opens, / focuses search, 1–5 tag and advance. Sort,
+  filter, smart tags, sender/domain and saved-search filters over the whole archive, paged so it
+  stays fast at any size.
 - Search that says where it matched (From, Subject, Body, Attachment) and how much of the archive
   the index covered when it answered — a search that hasn't seen every message never reads as a
   bare zero.
@@ -145,7 +146,7 @@ No demo account is needed.
 ## What's New (Version 3.0)
 
 ```
-- Three-pane archive shell; open an archive and you are in it.
+- Keyboard-first archive list: J/K, Return, /, 1–5 tagging; sort, filter, smart tags and saved searches over the whole archive.
 - Import queue with pause, resume, stop-this-file and reorder; the import sheet lets you choose the
   duplicate policy, whether originals are copied, and whether attachment contents are indexed.
 - Export pre-flight and resume. Every export ends in a receipt.
