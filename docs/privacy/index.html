@@ -98,7 +98,7 @@
     </section>
 
     <div class="content">
-        <p class="effective">Effective Date: May 7, 2026</p>
+        <p class="effective">Effective Date: September 29, 2026 (version 3.0)</p>
 
         <div class="highlight">
             mailin does not collect, store, transmit, or share any personal data. Period.
@@ -110,35 +110,17 @@
         <h2>Email Processing</h2>
         <p>All email parsing, search, filtering, and core analysis happens <strong>entirely on your device</strong>. mailin uses Apple's on-device NaturalLanguage framework and FoundationModels framework for AI features &mdash; both run locally on your device.</p>
 
-        <h2>Optional Cloud AI</h2>
-        <p>mailin offers an <strong>optional</strong> Cloud AI feature that uses third-party AI providers (OpenAI and Anthropic) for enhanced analysis. This feature is:</p>
-        <ul>
-            <li><strong>Disabled by default</strong> &mdash; you must explicitly enable it in Settings and provide your own API key.</li>
-            <li><strong>User-controlled</strong> &mdash; you choose which provider, model, and when to use it.</li>
-            <li><strong>Transparent</strong> &mdash; email context is sent to the selected provider only when you explicitly invoke Cloud AI analysis.</li>
-            <li><strong>Automatically disabled in Forensic Mode</strong> &mdash; forensic investigations never send data externally.</li>
-        </ul>
-        <p>When Cloud AI is used, email excerpts and metadata relevant to your query are sent to the selected provider's API. These providers have their own privacy policies: <a href="https://openai.com/privacy">OpenAI Privacy Policy</a>, <a href="https://www.anthropic.com/privacy">Anthropic Privacy Policy</a>. mailin does not store, log, or retain any data sent to or received from these providers.</p>
+        <h2>No Cloud AI</h2>
+        <p>Every AI feature in mailin runs on your device using Apple's NaturalLanguage framework and, on macOS 26 and later, Apple Intelligence's on-device models. mailin has no cloud AI mode and no way to add one: the app has no network entitlement, so it cannot contact any AI provider, and no email content is ever sent to a third party.</p>
 
-        <h2>IMAP &amp; SMTP (Email Fetch &amp; Send)</h2>
-        <p>mailin can optionally connect to email servers via IMAP (to fetch emails) and SMTP (to send emails). These connections are:</p>
-        <ul>
-            <li><strong>User-initiated</strong> &mdash; you configure and connect manually.</li>
-            <li><strong>Direct</strong> &mdash; mailin connects directly to your email server, never through our servers.</li>
-            <li><strong>Credential storage</strong> &mdash; credentials are stored locally on your device using Apple's Keychain.</li>
-        </ul>
+        <h2>Live Mail (not included in version 3.0)</h2>
+        <p>Version 3.0 does not connect to any mail account. The Live Mail page is present as a placeholder and states this in the app: no account can be added and no mail server is contacted. If Live Mail ships in a later version, this policy will be updated before it does, and each account will be authorised by you separately from enabling the page.</p>
 
         <h2>Network Access</h2>
-        <p>mailin does not require an internet connection for core functionality. Network activity is limited to:</p>
-        <ul>
-            <li><strong>App Store:</strong> Apple's StoreKit for in-app purchases and subscription verification.</li>
-            <li><strong>Cloud AI (optional):</strong> API calls to OpenAI or Anthropic when explicitly enabled by the user.</li>
-            <li><strong>IMAP/SMTP (optional):</strong> Direct connections to your email server when configured.</li>
-            <li><strong>Gmail/Outlook Connect (optional):</strong> OAuth-based connections to Google or Microsoft services when configured.</li>
-        </ul>
+        <p>mailin has no network capability. The app sandbox grants it no network entitlement, so no connection can be made from the app to any server, including ours. The only network activity associated with mailin is Apple's own StoreKit handling of in-app purchases, which runs in Apple's systems, not in the app.</p>
 
         <h2>Third-Party Services</h2>
-        <p>mailin does not integrate any third-party analytics, advertising, or tracking services. The only third-party services are the optional Cloud AI providers (OpenAI, Anthropic) and optional email server connections, all user-initiated.</p>
+        <p>mailin does not integrate any third-party analytics, advertising, tracking or AI services.</p>
 
         <h2>In-App Purchases &amp; Subscriptions</h2>
         <p>mailin offers both auto-renewable subscriptions and one-time lifetime purchases. All transactions are processed by Apple through the App Store. Apple's privacy policy governs how purchase and subscription data is handled. mailin does not have access to your payment information. Subscription status is verified locally through Apple's StoreKit framework.</p>
@@ -147,7 +129,8 @@
         <p>mailin optionally indexes email subjects and senders using Apple's CoreSpotlight framework so you can find emails from macOS Spotlight search. This index is stored locally on your device and is never transmitted. You can remove all indexed data by clearing your email data in Settings.</p>
 
         <h2>Data Storage</h2>
-        <p>All imported email data is stored locally on your device using Apple's standard app container. You can clear all saved data at any time from Settings. When you clear data, it is permanently deleted from your device.</p>
+        <p>Your archive is a folder you own, stored locally in mailin's app container or, if you move it, on a disk you choose. Moving makes a verified copy at the new location and never deletes the old one until the new one is in use. You can clear all saved data at any time from Settings; cleared data is permanently deleted.</p>
+        <p>Single messages larger than 100 MB are not copied into the archive. mailin records where the message sits in the file you imported and reads it from there when you open or export it, after checking that the file is still the one that was imported. Keep that file where it is; if it is moved or deleted, mailin says the message's content is unavailable rather than showing an empty message.</p>
 
         <h2>Children's Privacy</h2>
         <p>mailin does not knowingly collect any information from anyone, including children under the age of 13.</p>

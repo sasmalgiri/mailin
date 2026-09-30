@@ -426,6 +426,7 @@
     <div class="nav-inner">
         <a href="#" class="logo">mailin</a>
         <div class="nav-links">
+            <a href="#v3">New in 3.0</a>
             <a href="#hybrid-ai">On-device AI</a>
             <a href="#workflows">Workflows</a>
             <a href="#gallery">Screenshots</a>
@@ -437,92 +438,92 @@
     </div>
 </nav>
 
-<!-- What's new in v2 -->
-<section id="v2" class="section" style="background:linear-gradient(180deg,#f7f7fa 0%,#fff 100%);">
+<!-- What's new in 3.0 -->
+<section id="v3" class="section" style="background:linear-gradient(180deg,#f7f7fa 0%,#fff 100%);">
     <div class="section-inner" style="max-width:1100px; margin:0 auto; padding:64px 24px;">
         <div style="text-align:center; margin-bottom:36px;">
             <div style="display:inline-block; background:#ebebff; color:#5e5ce6; font-size:12px; font-weight:600; padding:4px 12px; border-radius:980px; letter-spacing:0.02em; margin-bottom:14px;">
-                NEW IN VERSION 2.0
+                NEW IN VERSION 3.0
             </div>
             <h2 style="font-size:36px; font-weight:700; letter-spacing:-0.02em; margin-bottom:10px;">
-                A foundation rewrite, now shipping — under the same UI.
+                Your mail archive, on your Mac — with a receipt for everything.
             </h2>
             <p style="font-size:17px; color:#6e6e73; max-width:680px; margin:0 auto;">
-                mailin 2.0 keeps every v1 feature — the persona-driven UI, the full
-                analysis suite, the on-device AI — and rebuilds the storage, ingest, and search
-                layers underneath for archives that were never realistic on v1.
+                mailin 3.0 rebuilds the archive experience around one idea: every import,
+                export and move should leave a record you can check. A new three-pane shell,
+                an import queue, resumable exports, and search that tells you what it covered.
             </p>
         </div>
         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:18px;">
             <div style="background:#fff; border:1px solid #e8e8ea; border-radius:14px; padding:22px;">
-                <div style="font-size:24px; margin-bottom:8px;">💧</div>
-                <h3 style="font-size:17px; font-weight:600; margin-bottom:6px;">Streaming ingest</h3>
+                <div style="font-size:24px; margin-bottom:8px;">🗂️</div>
+                <h3 style="font-size:17px; font-weight:600; margin-bottom:6px;">Three-pane archive</h3>
                 <p style="font-size:14px; color:#515154; line-height:1.55;">
-                    Drop a 200 GB Gmail Takeout and walk away. v2 drains messages
-                    in batches of 200; peak memory stays flat regardless of file
-                    size.
+                    Mailboxes, sources and labels on the left, the list in the middle, the message on the right. Open an archive and you are in it. Keyboard-first: J/K, Return, / to search.
                 </p>
             </div>
             <div style="background:#fff; border:1px solid #e8e8ea; border-radius:14px; padding:22px;">
-                <div style="font-size:24px; margin-bottom:8px;">♻️</div>
-                <h3 style="font-size:17px; font-weight:600; margin-bottom:6px;">Resumable from any crash</h3>
+                <div style="font-size:24px; margin-bottom:8px;">⏯️</div>
+                <h3 style="font-size:17px; font-weight:600; margin-bottom:6px;">Import queue</h3>
                 <p style="font-size:14px; color:#515154; line-height:1.55;">
-                    Per-file SHA-256 plus per-batch checkpoints. A crash 800 GB into
-                    an import resumes from the last batch — re-work capped at one
-                    batch of 200 messages.
+                    Pause, resume, reorder or stop a single file while the rest continue. The import sheet lets you pick the duplicate policy and whether attachment contents are indexed. Every import ends in a signed receipt.
                 </p>
             </div>
             <div style="background:#fff; border:1px solid #e8e8ea; border-radius:14px; padding:22px;">
-                <div style="font-size:24px; margin-bottom:8px;">🔎</div>
-                <h3 style="font-size:17px; font-weight:600; margin-bottom:6px;">Year-sharded FTS5</h3>
+                <div style="font-size:24px; margin-bottom:8px;">📤</div>
+                <h3 style="font-size:17px; font-weight:600; margin-bottom:6px;">Export pre-flight, receipt, resume</h3>
                 <p style="font-size:14px; color:#515154; line-height:1.55;">
-                    Search splits across per-year SQLite shards with bm25 ranking.
-                    Time-bounded queries hit one shard; cross-archive queries fan
-                    out and merge.
+                    See the space needed before you start. Every export ends in a receipt with its hash; an interrupted export resumes from that receipt and writes nothing twice. mbox, .eml, PDF, TIFF, .msg, CSV, Word, Markdown, JSON or a portable HTML viewer.
                 </p>
             </div>
             <div style="background:#fff; border:1px solid #e8e8ea; border-radius:14px; padding:22px;">
-                <div style="font-size:24px; margin-bottom:8px;">⚡</div>
-                <h3 style="font-size:17px; font-weight:600; margin-bottom:6px;">Keyset pagination</h3>
+                <div style="font-size:24px; margin-bottom:8px;">💽</div>
+                <h3 style="font-size:17px; font-weight:600; margin-bottom:6px;">Move the archive to another disk</h3>
                 <p style="font-size:14px; color:#515154; line-height:1.55;">
-                    Jump to email #1,000,000 — it responds in a heartbeat. The
-                    old offset-scan freeze at depth is gone. Stable across
-                    timestamp ties.
+                    A verified copy on an external drive, opened from there; if the drive is away, the copy on this Mac stays usable. Nothing is deleted until the new location is live.
                 </p>
             </div>
             <div style="background:#fff; border:1px solid #e8e8ea; border-radius:14px; padding:22px;">
-                <div style="font-size:24px; margin-bottom:8px;">🗺️</div>
-                <h3 style="font-size:17px; font-weight:600; margin-bottom:6px;">Larger PST / NSF</h3>
+                <div style="font-size:24px; margin-bottom:8px;">🎯</div>
+                <h3 style="font-size:17px; font-weight:600; margin-bottom:6px;">Search that says what it saw</h3>
                 <p style="font-size:14px; color:#515154; line-height:1.55;">
-                    Memory-mapped readers. PST/OST up to 50 GB; NSF up to 64 GB.
-                    Multi-GB files no longer materialise in RAM.
+                    Results show where they matched (From, Subject, Body, Attachment) and how much of the archive the index covered when it answered. A search that has not seen every message never reads as a bare zero.
                 </p>
             </div>
             <div style="background:#fff; border:1px solid #e8e8ea; border-radius:14px; padding:22px;">
-                <div style="font-size:24px; margin-bottom:8px;">🔒</div>
-                <h3 style="font-size:17px; font-weight:600; margin-bottom:6px;">Same privacy posture</h3>
+                <div style="font-size:24px; margin-bottom:8px;">📦</div>
+                <h3 style="font-size:17px; font-weight:600; margin-bottom:6px;">Large messages, kept</h3>
                 <p style="font-size:14px; color:#515154; line-height:1.55;">
-                    No telemetry, no analytics, no third-party SDKs. v2 stores data
-                    in the exact same on-device location as v1 — existing users
-                    get a free in-place upgrade.
+                    Single messages over 100 MB are archived and read from the file you imported instead of being reported as damaged. Import a ZIP directly; mailin reads the mailbox files inside.
                 </p>
             </div>
             <div style="background:#fff; border:1px solid #e8e8ea; border-radius:14px; padding:22px;">
-                <div style="font-size:24px; margin-bottom:8px;">🧭</div>
-                <h3 style="font-size:17px; font-weight:600; margin-bottom:6px;">Guided jobs, saved as documents</h3>
+                <div style="font-size:24px; margin-bottom:8px;">🧩</div>
+                <h3 style="font-size:17px; font-weight:600; margin-bottom:6px;">Optional pages, off until you switch them on</h3>
                 <p style="font-size:14px; color:#515154; line-height:1.55;">
-                    Pick the job you came to do — mailin runs each step, auto-saves,
-                    and keeps a numbered, reopenable record. 47 built-in workflows
-                    across all five roles.
+                    AI Insights and Professional Workflows are separate pages. Nothing they need runs until you enable them, and the page switcher shows what each one needs.
                 </p>
             </div>
         </div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:18px; margin-top:28px;">
+            <figure style="margin:0;">
+                <div class="shot-card"><img src="shot-welcome.png" alt="First launch: Archive on, AI Insights and Professional Workflows off" loading="lazy" decoding="async"></div>
+                <figcaption style="font-size:12px; color:#86868b; margin-top:8px; text-align:center;">First launch. Archive is on; the other two pages are off until you switch them on.</figcaption>
+            </figure>
+            <figure style="margin:0;">
+                <div class="shot-card"><img src="shot-import.png" alt="Import pre-flight: what the files are, your choices, space needed, how it will run" loading="lazy" decoding="async"></div>
+                <figcaption style="font-size:12px; color:#86868b; margin-top:8px; text-align:center;">Import pre-flight. What the files are, your choices, the space needed and how it will run — nothing is written until you start.</figcaption>
+            </figure>
+            <figure style="margin:0;">
+                <div class="shot-card"><img src="shot-professional.png" alt="Turning on Professional Workflows: the feature list and what is included" loading="lazy" decoding="async"></div>
+                <figcaption style="font-size:12px; color:#86868b; margin-top:8px; text-align:center;">Every optional page says what it includes and what will start running before you turn it on.</figcaption>
+            </figure>
+        </div>
         <p style="text-align:center; font-size:13px; color:#86868b; margin-top:28px; max-width:640px; margin-left:auto; margin-right:auto;">
-            <strong>Offline by default.</strong>
-            mailin needs no account and works fully offline. The only feature
-            that can send anything out is the optional Cloud AI mode — opt-in,
-            off by default, and clearly disclosed in-app. Otherwise your archive
-            stays on your device.
+            <strong>No built-in size limit.</strong> Import streams from disk, so archive size is bounded by
+            your storage, not by mailin. Verified on real mail up to 1.5 GB in one file; larger archives
+            have not been tested. <strong>Offline, full stop.</strong> No account, no telemetry, no cloud AI.
+            The app has no network entitlement: nothing about your archive can leave your device.
         </p>
     </div>
 </section>
@@ -532,18 +533,18 @@
     <h2>See it in <span class="gradient">action</span></h2>
     <p class="subtitle">Real screens from mailin — guided workflows, the Work Center, and the on‑device analysis tools.</p>
     <div class="shot-gallery">
-        <div class="shot-card"><img src="feature-hub.png" alt="Every tool, organized by role" loading="lazy" decoding="async"></div>
-        <div class="shot-card"><img src="feature-workcenter.png" alt="Work Center — jobs, documents and reports" loading="lazy" decoding="async"></div>
+        <div class="shot-card"><img src="feature-hub.png" alt="Home: choose your workspace — Personal, Forensic, Legal, IT Admin or Journalist" loading="lazy" decoding="async"></div>
+        <div class="shot-card"><img src="feature-workcenter.png" alt="Work Center — studios, tools and guided workflows in one place" loading="lazy" decoding="async"></div>
         <div class="shot-card"><img src="feature-runner.png" alt="Run the whole job, step by step" loading="lazy" decoding="async"></div>
         <div class="shot-card"><img src="feature-evidence.png" alt="Attach the exact files and emails to each step" loading="lazy" decoding="async"></div>
         <div class="shot-card"><img src="feature-analytics.png" alt="See the shape of your archive" loading="lazy" decoding="async"></div>
-        <div class="shot-card"><img src="feature-ai.png" alt="On-device AI by default" loading="lazy" decoding="async"></div>
-        <div class="shot-card"><img src="shot-inbox.png" alt="Browse and triage your archive" loading="lazy" decoding="async"></div>
-        <div class="shot-card"><img src="shot-search.png" alt="Structured, operator-driven search" loading="lazy" decoding="async"></div>
+        <div class="shot-card"><img src="feature-ai.png" alt="Turning on AI Insights: what it includes and what happens on-device" loading="lazy" decoding="async"></div>
+        <div class="shot-card"><img src="shot-inbox.png" alt="The archive list with filters, smart tags, tools and the Subjects panel" loading="lazy" decoding="async"></div>
+        <div class="shot-card"><img src="shot-search.png" alt="Operator-driven search with the message open beside the list" loading="lazy" decoding="async"></div>
         <div class="shot-card"><img src="shot-documents.png" alt="Numbered document trail and history" loading="lazy" decoding="async"></div>
-        <div class="shot-card"><img src="shot-workflow.png" alt="Guided workflow runner, step by step" loading="lazy" decoding="async"></div>
+        <div class="shot-card"><img src="shot-workflow.png" alt="Professional Workflows: studios, tools and the workflow catalog" loading="lazy" decoding="async"></div>
         <div class="shot-card"><img src="shot-analytics.png" alt="On-device analytics dashboard" loading="lazy" decoding="async"></div>
-        <div class="shot-card"><img src="shot-ai.png" alt="On-device AI assistant with citations" loading="lazy" decoding="async"></div>
+        <div class="shot-card"><img src="shot-ai.png" alt="AI Insights: ask anything about your archive, answers cite the messages" loading="lazy" decoding="async"></div>
     </div>
 </section>
 
@@ -576,7 +577,7 @@
 <section id="hybrid-ai" class="section section-dark">
     <h2>Two AI engines. <span class="gradient">Both on-device.</span></h2>
     <p class="subtitle">
-        By default, mailin runs AI locally using Apple's own frameworks — no cloud, no API key. An optional Cloud AI mode is available if you choose it: opt-in, off by default, and it uses your own provider key.
+        mailin runs AI locally using Apple's own frameworks — no cloud, no API key, no network. There is no cloud AI mode: the app cannot connect to any provider.
     </p>
 
     <div class="hybrid-ai-diagram">
@@ -597,11 +598,11 @@
     <div class="hybrid-bullets">
         <div class="b">
             <strong>On-device by default.</strong><br>
-            Apple Intelligence and NaturalLanguage run entirely on your device — no cloud and no API key for the default engines.
+            Apple Intelligence and NaturalLanguage run entirely on your device — no cloud, no API key, no network access at all.
         </div>
         <div class="b">
             <strong>The developer collects nothing.</strong><br>
-            No telemetry, no analytics, no accounts, no third-party SDKs. If you opt into Cloud AI, only the excerpts you choose go to your provider (OpenAI/Anthropic) with your own key — never to us.
+            No telemetry, no analytics, no accounts, no third-party SDKs, no third-party AI. Nothing about your archive goes anywhere — not to a provider, and never to us.
         </div>
         <div class="b">
             <strong>Every output is tagged.</strong><br>
@@ -626,7 +627,7 @@
         <div class="format-card"><div class="ext">.emlx</div><div class="name">Apple Mail message</div></div>
         <div class="format-card"><div class="ext">.msg</div><div class="name">Outlook single message</div></div>
         <div class="format-card"><div class="ext">.nsf</div><div class="name">Lotus / HCL Notes archive</div></div>
-        <div class="format-card"><div class="ext">.zip</div><div class="name">Unzip first, then import the mailbox files inside</div></div>
+        <div class="format-card"><div class="ext">.zip</div><div class="name">Import directly — mailin reads the mailbox files inside</div></div>
     </div>
 </section>
 
@@ -640,14 +641,14 @@
             <h3>Open every archive format</h3>
             <p>Drag in a Gmail Takeout, an Outlook export, or a folder of messages. mailin parses it natively, threads the conversations, and shows a clean, readable inbox — no conversion, no upload.</p>
             <ul>
-                <li>MBOX, EML, EMLX, MSG, PST, OST, NSF (unzip .zip bundles first)</li>
+                <li>MBOX, EML, EMLX, MSG, PST, OST, NSF, or a ZIP of any of them</li>
                 <li>Conversation threading via Message-ID / References</li>
                 <li>Filter by sender, date, folder, attachment</li>
                 <li>Full message view with headers and attachments</li>
             </ul>
         </div>
         <div class="showcase-image">
-<img src="shot-inbox.png" alt="mailin inbox with an email archive loaded" loading="lazy" decoding="async">
+<img src="shot-inbox.png" alt="mailin archive list with an mbox loaded" loading="lazy" decoding="async">
         </div>
     </div>
 
@@ -663,7 +664,7 @@
             </ul>
         </div>
         <div class="showcase-image">
-<img src="shot-search.png" alt="mailin search and tools" loading="lazy" decoding="async">
+<img src="shot-search.png" alt="mailin search with the message detail open" loading="lazy" decoding="async">
         </div>
     </div>
 
@@ -695,7 +696,7 @@
             </ul>
         </div>
         <div class="showcase-image">
-<img src="shot-ai.png" alt="mailin on-device AI assistant" loading="lazy" decoding="async">
+<img src="shot-ai.png" alt="mailin AI Insights page, on-device assistant" loading="lazy" decoding="async">
         </div>
     </div>
 </section>
@@ -717,7 +718,7 @@
             </ul>
         </div>
         <div class="showcase-image">
-            <img src="shot-workflow.png" alt="mailin guided workflow runner with roadmap and steps" loading="lazy" decoding="async">
+            <img src="shot-workflow.png" alt="mailin Professional Workflows page" loading="lazy" decoding="async">
         </div>
     </div>
 
@@ -901,7 +902,7 @@
         <div class="feature-card">
             <div class="f-icon">🧩</div>
             <h3>Parsers, hand-written in Swift</h3>
-            <p>MBOX, EML, EMLX, MSG, PST, OST, NSF — all parsed natively. RFC 822 + full MIME compliance: multipart, base64, quoted-printable, charset decoding. Streaming parser so 10GB+ Gmail Takeouts don't OOM.</p>
+            <p>MBOX, EML, EMLX, MSG, PST, OST, NSF — all parsed natively. RFC 822 + full MIME compliance: multipart, base64, quoted-printable, charset decoding. mbox and .eml stream from disk in bounded batches; verified on 1.5 GB of real mail in one file. Single messages over 100 MB are kept by byte range and read from the original file.</p>
         </div>
         <div class="feature-card">
             <div class="f-icon">🔎</div>
@@ -916,12 +917,17 @@
         <div class="feature-card">
             <div class="f-icon">🔒</div>
             <h3>Privacy enforcement, not just claims</h3>
-            <p>Offline by default. The only feature that transmits anything is the optional, opt-in Cloud AI mode (using your own OpenAI/Anthropic key) — off unless you enable it. No telemetry, no analytics, no data collection by the developer. Every AI output is tagged with the engine that produced it (AIProvenance).</p>
+            <p>Offline, enforced by the sandbox: the app has no network entitlement, so it cannot transmit anything. No cloud AI, no telemetry, no analytics, no data collection by the developer. Every AI output is tagged with the on-device engine that produced it (AIProvenance).</p>
         </div>
         <div class="feature-card">
             <div class="f-icon">🛡️</div>
             <h3>Data integrity</h3>
-            <p>SHA-256 hash on every email at import. HMAC-chained audit log where each entry signs the previous (tamper-evident). Ed25519-signed exports. Bates numbering with configurable prefix and padding.</p>
+            <p>SHA-256 hash on every email at import. HMAC-chained audit log where each entry signs the previous, anchored so a truncated log is detected (tamper-evident). Ed25519-signed exports. Bates numbering with configurable prefix and padding.</p>
+        </div>
+        <div class="feature-card">
+            <div class="f-icon">🧾</div>
+            <h3>Receipts, not progress bars</h3>
+            <p>Every import and export ends in a receipt: what was requested, what was written, what was skipped and why, and the artifact's hash. An interrupted export is cut back to its last recorded batch and resumes from the receipt, so nothing is written twice. A large message whose source file changed since import is refused, never exported silently.</p>
         </div>
     </div>
 </section>
@@ -1021,7 +1027,7 @@
         '.section h2', '.section .subtitle',
         '.feature-card', '.format-card', '.engine-card', '.hybrid-bullets .b',
         '.showcase-row', '.persona', '.platform-card', '.price-card',
-        '.universal-note', '.trust-banner .badge', '#v2 .section-inner > div', '.shot-card'
+        '.universal-note', '.trust-banner .badge', '#v3 .section-inner > div', '.shot-card'
     ];
     var els = [];
     selectors.forEach(function (s) {
