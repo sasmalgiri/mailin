@@ -102,30 +102,42 @@ class StoreManager: ObservableObject {
     @Published private(set) var isLifetimePurchase = false
     @Published var showPaywall = false
 
-    #if ENTERPRISE_EDITION
-    // mailin Enterprise (Custom App via Apple Business Manager): every
-    // Professional feature is included in the purchase price — there are no
-    // in-app purchases in this edition (IAP cannot be bulk-purchased through
-    // ABM, and App Review rejects dead IAP UI in custom apps).
-    var isPremium: Bool { true }
-    var isProfessional: Bool { true }
-    var isSubscribed: Bool { true }
-    #elseif DEBUG
-    // Debug builds unlock all paid tiers so we can exercise gated features in
-    // the simulator without going through StoreKit. Release builds (TestFlight,
-    // App Store) keep the real entitlement check.
-    var isPremium: Bool { true }
-    var isProfessional: Bool { true }
-    var isSubscribed: Bool { true }
-    #else
-    var isPremium: Bool { currentTier >= .personal }
-    var isProfessional: Bool { currentTier >= .professional }
-    var isSubscribed: Bool { currentTier >= .personal }
+    #if DEBUG
+    /// Debug builds unlock every paid tier by default so gated features can
+    /// be exercised in the simulator without StoreKit. Tests that prove a
+    /// gate denies set this to false on their own instance (see
+    /// `init(testTier:)`); Release builds do not compile this property, so
+    /// the override cannot reach the App Store.
+    var debugUnlocksAllTiers = true
     #endif
+
+    /// The single tier every purchase gate consults. Enterprise: everything is
+    /// included in the purchase price. Debug (unless a test opts out): all
+    /// unlocked. Otherwise the tier StoreKit's verified transactions proved.
+    var effectiveTier: PurchaseTier {
+        #if ENTERPRISE_EDITION
+        return .professional
+        #else
+        #if DEBUG
+        if debugUnlocksAllTiers { return .professional }
+        #endif
+        return currentTier
+        #endif
+    }
+
+    var isPremium: Bool { effectiveTier >= .personal }
+    var isProfessional: Bool { effectiveTier >= .professional }
+    var isSubscribed: Bool { effectiveTier >= .personal }
 
     #if !ENTERPRISE_EDITION
     private var transactionListener: Task<Void, Error>?
     #endif
+
+    /// The app's store manager, for views hosted outside the SwiftUI
+    /// environment (tool windows, the shared list pane). Claimed by the first
+    /// instance the app creates; test instances made with `init(testTier:)`
+    /// never claim it.
+    static weak var live: StoreManager?
 
     // MARK: - Lifecycle
 
@@ -138,7 +150,18 @@ class StoreManager: ObservableObject {
         Task { await loadProducts() }
         Task { await checkEntitlements() }
         #endif
+        if Self.live == nil { Self.live = self }
     }
+
+    #if DEBUG
+    /// Test fixture: a deterministic Free / Personal / Professional manager
+    /// that never touches StoreKit and does not take the debug unlock, so a
+    /// test can prove that a gate denies.
+    init(testTier: PurchaseTier) {
+        currentTier = testTier
+        debugUnlocksAllTiers = false
+    }
+    #endif
 
     deinit {
         #if !ENTERPRISE_EDITION
@@ -267,6 +290,34 @@ class StoreManager: ObservableObject {
         if isProfessional { return true }
         showPaywall = true
         return false
+    }
+
+    /// Purchase gate for a tier: true when the effective tier covers it,
+    /// otherwise shows the paywall and returns false. `.free` always passes.
+    @discardableResult
+    func require(_ tier: PurchaseTier) -> Bool {
+        if effectiveTier >= tier { return true }
+        showPaywall = true
+        return false
+    }
+
+    /// The purchase tier a tools-hub destination needs before it may EXECUTE,
+    /// mirrored from the Archive page's hub so Page 3's strip, a workflow
+    /// step and a keyboard shortcut all answer the same way. Enabling the
+    /// Professional page is module consent, not purchase authorization.
+    static func requiredTier(for destination: HubDestination) -> PurchaseTier {
+        switch destination {
+        case .eDiscovery, .predictiveCoding, .gdprCompliance, .chainOfCustody,
+             .forensicReview, .investigationReport, .batesNumbering,
+             .reviewBatches, .custodianPanel, .legalWorkspace, .achMatrix, .factMatrix,
+             .evidenceDesks, .iocExtractor, .phishingTriage, .reviewDashboard:
+            return .professional
+        case .settings, .workCenter, .personaHub, .emailInbox, .customExperts,
+             .workspaceManager, .personalOrganizer, .generalExplorer:
+            return .free
+        default:
+            return .personal
+        }
     }
 
     func hasAccess(to feature: ProFeature) -> Bool {

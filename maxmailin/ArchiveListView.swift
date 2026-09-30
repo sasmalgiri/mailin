@@ -202,11 +202,29 @@ struct ArchiveListPane: View {
         .onKeyPress(.init("k")) { moveSelection(by: -1); return .handled }
         .onKeyPress(.return) { openSelectionInWindow(); return .handled }
         .overlay(alignment: .bottom) {
-            Text("\(model.totalCount) emails")
-                .font(.caption)
+            // Accessible and total counts are shown apart when the tier limits
+            // depth, with the upgrade action right there. Nothing is deleted:
+            // the rows past the limit stay in the archive, unlocked by purchase.
+            if model.isAccessLimited {
+                Button {
+                    StoreManager.live?.showPaywall = true
+                } label: {
+                    Label("Showing the first \(model.accessibleCount) of \(model.totalCount) emails · Unlock to browse all",
+                          systemImage: "lock.fill")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
                 .padding(6)
+                .help("The Free tier browses the first \(model.accessibleCount) emails of any list. Personal and Professional browse the whole archive.")
                 .accessibilityIdentifier("archive.list.count")
+            } else {
+                Text("\(model.totalCount) emails")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(6)
+                    .accessibilityIdentifier("archive.list.count")
+            }
         }
         .task(id: isSearching) {
             if isSearching { await coverage.refresh() }

@@ -71,6 +71,33 @@ final class ArchiveListViewModel: ObservableObject {
 
     private(set) var maxRetainedObserved = 0
 
+    /// Purchase-tier depth limit (Free = `StoreManager.freeEmailLimit`), nil
+    /// when the tier covers the whole archive. Unlike `maxRetained`, which is
+    /// a sliding MEMORY window, this caps how deep any query may page: the
+    /// first `accessLimit` rows of the current query's order are reachable,
+    /// nothing after them is fetched, and `hasMore` turns false there. The
+    /// shell sets it from the store manager and reloads when the tier changes.
+    @Published var accessLimit: Int? = nil
+
+    /// True when the current query has rows the tier cannot reach.
+    var isAccessLimited: Bool {
+        guard let accessLimit else { return false }
+        return totalCount > accessLimit
+    }
+
+    /// Rows of the current query the tier can reach.
+    var accessibleCount: Int { min(totalCount, accessLimit ?? Int.max) }
+
+    /// Cuts a fetched page at the access limit. Pages before the limit are
+    /// full, so the depth of page `index` is `index * pageSize`; the page that
+    /// crosses the limit is truncated and reports no continuation.
+    private func clampToAccessLimit(_ batch: [EmailSummary], next: PageCursor?, pageIndex: Int) -> ([EmailSummary], PageCursor?) {
+        guard let accessLimit else { return (batch, next) }
+        let room = max(0, accessLimit - pageIndex * pageSize)
+        if batch.count >= room { return (Array(batch.prefix(room)), nil) }
+        return (batch, next)
+    }
+
     #if DEBUG
     /// Test hook: every freshly-fetched page's summaries are reported here.
     var _debugOnAppend: (([EmailSummary]) -> Void)?
@@ -108,8 +135,9 @@ final class ArchiveListViewModel: ObservableObject {
         isLoading = true
         do {
             let count = try await archive.count(query: query)
-            let (batch, next) = try await fetchPage(startingAt: nil)
+            let fetched = try await fetchPage(startingAt: nil)
             guard revision == queryRevision else { return }
+            let (batch, next) = clampToAccessLimit(fetched.batch, next: fetched.next, pageIndex: 0)
             totalCount = count
             startCursor[0] = .some(nil)
             nextCursorByPage[0] = next
@@ -134,11 +162,14 @@ final class ArchiveListViewModel: ObservableObject {
         guard !isLoading, let tail = residentPages.last else { return }
         guard let cursor = nextCursorByPage[tail.index] ?? nil else { return }  // no next → at end
         let newIndex = tail.index + 1
+        // Purchase depth limit: nothing past it is fetched, whichever query.
+        if let accessLimit, newIndex * pageSize >= accessLimit { return }
         let revision = queryRevision
         isLoading = true
         do {
-            let (batch, next) = try await fetchPage(startingAt: cursor)
+            let fetched = try await fetchPage(startingAt: cursor)
             guard revision == queryRevision else { return }
+            let (batch, next) = clampToAccessLimit(fetched.batch, next: fetched.next, pageIndex: newIndex)
             startCursor[newIndex] = .some(cursor)
             nextCursorByPage[newIndex] = next
             lastDiscoveredPage = max(lastDiscoveredPage, newIndex)
@@ -166,8 +197,9 @@ final class ArchiveListViewModel: ObservableObject {
         let revision = queryRevision
         isLoading = true
         do {
-            let (batch, next) = try await fetchPage(startingAt: fetchCursor)
+            let fetched = try await fetchPage(startingAt: fetchCursor)
             guard revision == queryRevision else { return }
+            let (batch, next) = clampToAccessLimit(fetched.batch, next: fetched.next, pageIndex: prevIndex)
             nextCursorByPage[prevIndex] = next
             residentPages.insert((prevIndex, batch), at: 0)
             if residentPages.count > windowPages { residentPages.removeLast() }
@@ -185,7 +217,10 @@ final class ArchiveListViewModel: ObservableObject {
 
     private func rebuildPublished() {
         summaries = residentPages.flatMap(\.summaries)
-        hasMore = (nextCursorByPage[residentPages.last?.index ?? 0] ?? nil) != nil
+        // `nextCursorByPage` holds `PageCursor?` values, so a stored "no next"
+        // is `.some(nil)`. `?? nil` on a double optional can resolve to the
+        // outer optional and read `.some(nil)` as "has more"; flatten first.
+        hasMore = nextCursorByPage[residentPages.last?.index ?? 0].flatMap { $0 } != nil
         hasPrevious = (residentPages.first?.index ?? 0) > 0
         maxRetainedObserved = max(maxRetainedObserved, summaries.count)
     }

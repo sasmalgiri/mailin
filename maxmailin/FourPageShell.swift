@@ -109,6 +109,18 @@ struct FourPageShell: View {
         // I5: the one place a cloud AI request asks before anything leaves
         // the device. Attached at the root so any page's request can ask.
         .modifier(CloudAIConsentSheetModifier())
+        // The one paywall sheet. Every purchase gate (`StoreManager.require`)
+        // sets `showPaywall`; attaching the sheet at the root means a denied
+        // action on ANY page — Archive hub, AI Insights, Professional strip,
+        // the three-pane list's unlock link — presents it. Before this it
+        // hung off the Archive page only, so the other pages denied silently.
+        #if !ENTERPRISE_EDITION
+        .sheet(isPresented: $storeManager.showPaywall) {
+            PaywallView()
+                .environmentObject(storeManager)
+                .resizableSheet()
+        }
+        #endif
         .sheet(item: $pendingActivation) { module in
             PageActivationSheet(
                 module: module,

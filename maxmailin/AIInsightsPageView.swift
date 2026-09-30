@@ -30,6 +30,7 @@ struct AIInsightsPageView: View {
     }
 
     @Environment(ModuleRegistry.self) private var modules
+    @EnvironmentObject private var storeManager: StoreManager
     @State private var tab: Tab = .ask
     @State private var sources: [SQLiteEmailStore.StoredSource] = []
     @State private var selectedSource: String? = nil       // filename
@@ -143,12 +144,49 @@ struct AIInsightsPageView: View {
         case .ask:
             AIAssistantView(archiveScope: .all, searchContext: scopeContext)
                 .id(scopeContext)   // a new scope is a new conversation context
+        // Summaries and Reports are paid (Personal or Professional) on the
+        // Archive page's hub; the same rule applies here. Ask keeps its own
+        // free allowance inside `AIAssistantView`, identical from both routes.
+        // Turning the AI Insights page on is module consent, not a purchase.
         case .summaries:
-            AIDigestView(scope: scopeQuery)
-                .id(scopeContext)
+            if storeManager.isPremium {
+                AIDigestView(scope: scopeQuery)
+                    .id(scopeContext)
+            } else {
+                PaidFeatureLockedView(title: "Summaries", requiredTier: .personal,
+                                      detail: "AI summaries of a source or a date range are part of the Personal and Professional purchases.")
+            }
         case .reports:
-            ReportBuilderView(scope: scopeQuery)
-                .id(scopeContext)
+            if storeManager.isPremium {
+                ReportBuilderView(scope: scopeQuery)
+                    .id(scopeContext)
+            } else {
+                PaidFeatureLockedView(title: "Reports", requiredTier: .personal,
+                                      detail: "Report building is part of the Personal and Professional purchases.")
+            }
         }
+    }
+}
+
+/// What a page shows in place of a paid surface the current tier does not
+/// cover: the feature stays discoverable, nothing about it runs, and one
+/// button opens the paywall. Reads the store manager from the environment.
+struct PaidFeatureLockedView: View {
+    @EnvironmentObject private var storeManager: StoreManager
+    let title: String
+    let requiredTier: PurchaseTier
+    let detail: String
+
+    var body: some View {
+        ContentUnavailableView {
+            Label("\(title) is a \(requiredTier.displayName) feature", systemImage: "lock.fill")
+        } description: {
+            Text(detail)
+        } actions: {
+            Button("Unlock \(requiredTier.displayName)…") { storeManager.showPaywall = true }
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("paid.unlock.\(title)")
+        }
+        .accessibilityIdentifier("paid.locked.\(title)")
     }
 }

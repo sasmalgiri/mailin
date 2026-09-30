@@ -38,6 +38,11 @@ struct ArchiveThreePaneView: View {
     /// Settings; the app menu is hidden in full screen).
     var onSettings: (() -> Void)? = nil
 
+    @EnvironmentObject private var storeManager: StoreManager
+
+    /// nil = the tier covers the whole archive.
+    private var accessLimit: Int? { storeManager.isPremium ? nil : StoreManager.freeEmailLimit }
+
     init(archive: ArchiveDataService = .shared,
          onHome: (() -> Void)? = nil,
          onImport: (() -> Void)? = nil,
@@ -106,8 +111,18 @@ struct ArchiveThreePaneView: View {
             )
         }
         .task {
+            // Purchase depth: the Free tier browses the first 500 rows of any
+            // query, the same rule the Advanced list applies. Set BEFORE the
+            // first load so the first page is already clamped.
+            model.accessLimit = accessLimit
             await sidebar.refresh()
             if model.summaries.isEmpty && model.error == nil { await applyQuery() }
+        }
+        .onChange(of: storeManager.isPremium) { _, _ in
+            // A purchase (or an expiry) while the page is open changes what
+            // may be reached; reload from the first page under the new rule.
+            model.accessLimit = accessLimit
+            Task { await model.reload() }
         }
         .onChange(of: selection) { _, _ in
             selectedID = nil

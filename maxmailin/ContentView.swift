@@ -334,13 +334,9 @@ struct ContentView: View {
                 #endif
         }
         #endif
-        #if !DEBUG && !ENTERPRISE_EDITION
-        .sheet(isPresented: $storeManager.showPaywall) {
-            PaywallView()
-                .environmentObject(storeManager)
-                .resizableSheet()
-        }
-        #endif
+        // The paywall sheet is attached once, at the four-page root
+        // (`FourPageShell`), so a denied action on the AI Insights or
+        // Professional page shows it too — not only on this page.
         .alert("Start New Import?", isPresented: $showNewImportConfirmation) {
             Button("Clear & Start Fresh", role: .destructive) {
                 // Call the handler directly. On macOS, posting through

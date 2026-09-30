@@ -2485,6 +2485,66 @@ final class V2VerificationTests: XCTestCase {
         await EmailStore.shared.resetForTesting()
     }
     #endif
+
+    // MARK: - Purchase depth on the paged list (audit 2026-09-30)
+
+    /// The Free tier browses the first `accessLimit` rows of ANY query, the
+    /// rest is never fetched, and lifting the limit (a purchase) reaches the
+    /// whole archive after a reload. This is the paging-depth rule the
+    /// Advanced list already applied; the three-pane list lacked it.
+    func testArchiveListVM_accessLimitStopsPagingAtTheLimit() async throws {
+        let fixtures = (0..<55).map { makeEmailDated(mid: "<al-\($0)@t>", subject: "Subj \($0)", body: "body \($0)", dayOffset: $0) }
+        let oracle = oracleOrder(fixtures)
+        let vm = try await makeListVM(fixtures, pageSize: 10, maxRetained: 10_000)
+        vm.accessLimit = 25   // not a page multiple: the third page is cut mid-way
+
+        await vm.loadInitial()
+        XCTAssertEqual(vm.totalCount, 55, "the total is honest; the archive is not truncated")
+        XCTAssertEqual(vm.accessibleCount, 25)
+        XCTAssertTrue(vm.isAccessLimited)
+        XCTAssertEqual(vm.summaries.count, 10)
+        XCTAssertTrue(vm.hasMore)
+
+        var guardCounter = 0
+        while vm.hasMore, guardCounter < 20 { await vm.loadNextPage(); guardCounter += 1 }
+        XCTAssertEqual(vm.summaries.count, 25, "paging stops at the access limit")
+        XCTAssertFalse(vm.hasMore, "no continuation past the limit")
+        XCTAssertEqual(vm.summaries.map(\.id), Array(oracle.prefix(25)), "the reachable rows are the first 25 in archive order")
+        // A direct extra request past the limit fetches nothing.
+        await vm.loadNextPage()
+        XCTAssertEqual(vm.summaries.count, 25)
+
+        // A search does not widen the reach: the same depth rule applies to
+        // ranked results.
+        await vm.setQuery(EmailQuery(text: "Subj"))
+        guardCounter = 0
+        while vm.hasMore, guardCounter < 20 { await vm.loadNextPage(); guardCounter += 1 }
+        XCTAssertLessThanOrEqual(vm.summaries.count, 25, "search cannot expose rows past the limit")
+        XCTAssertFalse(vm.hasMore)
+
+        // Purchase: lifting the limit and reloading reaches the whole archive.
+        vm.accessLimit = nil
+        await vm.setQuery(.all)
+        guardCounter = 0
+        while vm.hasMore, guardCounter < 20 { await vm.loadNextPage(); guardCounter += 1 }
+        XCTAssertEqual(vm.summaries.count, 55)
+        XCTAssertFalse(vm.isAccessLimited)
+        XCTAssertEqual(vm.accessibleCount, 55)
+    }
+
+    /// An archive smaller than the limit is not "limited" and the count line
+    /// stays the plain total.
+    func testArchiveListVM_accessLimitLargerThanArchiveIsNotLimiting() async throws {
+        let fixtures = (0..<7).map { makeEmailDated(mid: "<as-\($0)@t>", subject: "S \($0)", body: "b", dayOffset: $0) }
+        let vm = try await makeListVM(fixtures, pageSize: 10, maxRetained: 100)
+        vm.accessLimit = 500
+        await vm.loadInitial()
+        XCTAssertEqual(vm.summaries.count, 7)
+        XCTAssertFalse(vm.isAccessLimited)
+        XCTAssertFalse(vm.hasMore)
+        XCTAssertEqual(vm.accessibleCount, 7)
+    }
+
 }
 
 /// A repository whose `page()` calls suspend until explicitly `release()`d, so a

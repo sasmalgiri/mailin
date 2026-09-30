@@ -693,3 +693,88 @@ struct RunningJobLifecycleTests {
         #expect(registry.jobs.isIdle)
     }
 }
+
+// MARK: - Purchase gates on the 3.0 pages (audit 2026-09-30)
+
+/// A user who has not purchased must be restricted the same way whichever
+/// page, strip, workflow step or list launches the work. These tests use the
+/// deterministic `StoreManager(testTier:)` fixture, which never touches
+/// StoreKit and does not take the Debug all-unlocked shortcut, so a denial is
+/// actually exercised here rather than assumed from a lock label.
+@Suite("Purchase gates (Free / Personal / Professional)")
+@MainActor
+struct PurchaseGateTests {
+
+    @Test("Free: nothing paid passes, and a denied gate shows the paywall")
+    func freeTierIsDenied() {
+        let store = StoreManager(testTier: .free)
+        #expect(store.effectiveTier == .free)
+        #expect(!store.isPremium)
+        #expect(!store.isProfessional)
+        #expect(store.require(.free))
+        #expect(!store.showPaywall, "a Free-tier gate never shows the paywall")
+        #expect(!store.require(.personal))
+        #expect(store.showPaywall, "a denied gate must surface the paywall, not fail silently")
+        store.showPaywall = false
+        #expect(!store.requirePremium())
+        #expect(!store.requireProfessional())
+        #expect(store.showPaywall)
+    }
+
+    @Test("Personal: Premium passes, Professional is denied")
+    func personalTierStopsAtProfessional() {
+        let store = StoreManager(testTier: .personal)
+        #expect(store.isPremium)
+        #expect(!store.isProfessional)
+        #expect(store.require(.personal))
+        #expect(!store.require(.professional))
+        #expect(store.showPaywall)
+    }
+
+    @Test("Professional: every gate passes and no paywall appears")
+    func professionalTierPassesEverything() {
+        let store = StoreManager(testTier: .professional)
+        #expect(store.isPremium && store.isProfessional)
+        #expect(store.require(.professional) && store.requirePremium() && store.requireProfessional())
+        #expect(!store.showPaywall)
+    }
+
+    @Test("The test fixture never becomes the app's live store manager")
+    func testFixtureDoesNotClaimLive() {
+        let store = StoreManager(testTier: .free)
+        #expect(StoreManager.live !== store)
+    }
+
+    @Test("Every tool the Professional page can launch is paid, at the tier the Archive hub charges")
+    func professionalPageToolsArePaidLikeTheHub() {
+        let tools = ProfessionalPageView.toolDestinations
+        #expect(tools.count == 12, "strip lists 5 studios + 7 tools")
+        // The Archive page's hub (ContentView) charges these three at
+        // Personal and the rest at Professional; Page 3 must answer the same.
+        let personalOnHub: Set<HubDestination> = [.actionRegister, .reasoningStudio, .redaction]
+        for destination in tools {
+            let tier = StoreManager.requiredTier(for: destination)
+            #expect(tier > .free, "\(destination.rawValue) must never run for a Free user from Page 3")
+            #expect(tier == (personalOnHub.contains(destination) ? .personal : .professional),
+                    "\(destination.rawValue) opened from Page 3 must be gated like the Archive hub gates it")
+        }
+    }
+
+    @Test("Hub tier mapping mirrors the Archive page: Work Center free, AI surfaces Personal")
+    func hubTierMappingMirrorsArchiveHub() {
+        #expect(StoreManager.requiredTier(for: .workCenter) == .free)
+        #expect(StoreManager.requiredTier(for: .settings) == .free)
+        #expect(StoreManager.requiredTier(for: .aiDigest) == .personal)
+        #expect(StoreManager.requiredTier(for: .reportBuilder) == .personal)
+        #expect(StoreManager.requiredTier(for: .aiAssistant) == .personal)
+        #expect(StoreManager.requiredTier(for: .custodianPanel) == .professional)
+        #expect(StoreManager.requiredTier(for: .batesNumbering) == .professional)
+        #expect(StoreManager.requiredTier(for: .chainOfCustody) == .professional)
+        #expect(StoreManager.requiredTier(for: .eDiscovery) == .professional)
+    }
+
+    @Test("The Free browse depth is the same number the Advanced list and exports use")
+    func freeDepthIsOneNumber() {
+        #expect(StoreManager.freeEmailLimit == 500)
+    }
+}

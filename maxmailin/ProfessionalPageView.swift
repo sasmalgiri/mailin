@@ -15,23 +15,31 @@ import SwiftUI
 
 struct ProfessionalPageView: View {
     @Environment(ModuleRegistry.self) private var modules
+    @EnvironmentObject private var storeManager: StoreManager
     @State private var presented: HubDestination?
 
-    private struct Tool: Identifiable {
+    struct Tool: Identifiable {
         let destination: HubDestination
         let title: String
         let symbol: String
         var id: String { destination.rawValue }
     }
 
-    private let studios: [Tool] = [
+    /// Every destination this page can launch (strip + Work Center steps).
+    /// Each one is Professional-tier work: `StoreManager.requiredTier(for:)`
+    /// answers `.professional` for all of them (pinned by a test).
+    static var toolDestinations: [HubDestination] {
+        (studios + tools).map(\.destination)
+    }
+
+    private static let studios: [Tool] = [
         Tool(destination: .achMatrix, title: "Hypothesis Matrix", symbol: "tablecells"),
         Tool(destination: .factMatrix, title: "Fact–Evidence", symbol: "checklist"),
         Tool(destination: .actionRegister, title: "Action Register", symbol: "list.bullet.clipboard"),
         Tool(destination: .evidenceDesks, title: "Evidence Desks", symbol: "square.grid.3x3"),
         Tool(destination: .reasoningStudio, title: "Reasoning Studio", symbol: "brain.head.profile"),
     ]
-    private let tools: [Tool] = [
+    private static let tools: [Tool] = [
         Tool(destination: .custodianPanel, title: "Custodians & Holds", symbol: "person.badge.shield.checkmark"),
         Tool(destination: .chainOfCustody, title: "Chain of Custody", symbol: "link"),
         Tool(destination: .eDiscovery, title: "eDiscovery", symbol: "doc.text.magnifyingglass"),
@@ -65,17 +73,19 @@ struct ProfessionalPageView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 Text("Studios").font(.caption).foregroundStyle(.secondary)
-                ForEach(studios) { tool in toolButton(tool) }
+                ForEach(Self.studios) { tool in toolButton(tool) }
                 Divider().frame(height: 18)
                 Text("Tools").font(.caption).foregroundStyle(.secondary)
-                ForEach(tools) { tool in toolButton(tool) }
+                ForEach(Self.tools) { tool in toolButton(tool) }
                 Divider().frame(height: 18)
                 Button {
                     openProductionWindow()
                 } label: {
-                    Label("Production…", systemImage: "shippingbox")
+                    Label("Production…", systemImage: storeManager.isProfessional ? "shippingbox" : "lock.fill")
                 }
-                .help("Produce a Bates-stamped set with a hash manifest, an exclusion log and a numbered production record")
+                .help(storeManager.isProfessional
+                      ? "Produce a Bates-stamped set with a hash manifest, an exclusion log and a numbered production record"
+                      : "Production needs the Professional purchase")
                 .accessibilityIdentifier("professional.production")
             }
             .padding(.horizontal, 12)
@@ -85,14 +95,24 @@ struct ProfessionalPageView: View {
     }
 
     private func toolButton(_ tool: Tool) -> some View {
-        Button { open(tool.destination) } label: {
-            Label(tool.title, systemImage: tool.symbol)
+        let required = StoreManager.requiredTier(for: tool.destination)
+        let locked = storeManager.effectiveTier < required
+        return Button { open(tool.destination) } label: {
+            // Discoverable when locked (the name stays), execution gated in
+            // `open`. The lock says why a click shows the paywall.
+            Label(tool.title, systemImage: locked ? "lock.fill" : tool.symbol)
         }
-        .help("Open \(tool.title)")
+        .help(locked ? "\(tool.title) needs the \(required.displayName) purchase" : "Open \(tool.title)")
         .accessibilityIdentifier("professional.tool.\(tool.destination.rawValue)")
     }
 
+    /// The single launch point for this page's tools — the strip, a Work
+    /// Center workflow step and the compact sheet all pass through here — so
+    /// the purchase gate cannot be bypassed by the route taken. Turning the
+    /// page on is module consent; the Professional purchase is what unlocks
+    /// execution (same rule as the Archive page's hub).
     private func open(_ destination: HubDestination) {
+        guard storeManager.require(StoreManager.requiredTier(for: destination)) else { return }
         #if os(macOS)
         ToolWindowPresenter.shared.open(title: destination.rawValue, size: CGSize(width: 1000, height: 700)) {
             AnyView(ProfessionalDestinationView(destination: destination).toolWindowFrame())
@@ -103,6 +123,7 @@ struct ProfessionalPageView: View {
     }
 
     private func openProductionWindow() {
+        guard storeManager.requireProfessional() else { return }
         #if os(macOS)
         ToolWindowPresenter.shared.open(title: "Production", size: CGSize(width: 760, height: 720)) {
             AnyView(ProductionWindowView().toolWindowFrame())
