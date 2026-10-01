@@ -41,13 +41,18 @@ final class ToolWindowPresenter {
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 680, height: 520)
         // A tool window is a new SwiftUI root: it does not inherit the main
-        // window's environment, so the page registry is attached here or a
-        // view that gates on it would have nothing to read.
+        // window's environment, so the page registry and the ONE store
+        // manager are attached here (never a second StoreManager), and the
+        // window hosts its own purchase presenter so a locked action inside
+        // it shows the purchase screen in this window, not behind it.
+        var root = AnyView(content())
         if let modules = ModuleRegistry.live {
-            window.contentView = NSHostingView(rootView: content().environment(modules))
-        } else {
-            window.contentView = NSHostingView(rootView: content())
+            root = AnyView(root.environment(modules))
         }
+        if let store = StoreManager.live {
+            root = AnyView(root.environmentObject(store).purchasePresenter(target: .window(title)))
+        }
+        window.contentView = NSHostingView(rootView: root)
         window.center()
 
         observers[title] = NotificationCenter.default.addObserver(

@@ -778,3 +778,117 @@ struct PurchaseGateTests {
         #expect(StoreManager.freeEmailLimit == 500)
     }
 }
+
+// MARK: - Purchase presentation coordinator (directive 2026-09-30, part 2)
+
+/// One request, one presenter per window, no duplicates, nothing dropped.
+@Suite("Purchase presentation coordinator")
+@MainActor
+struct PurchasePresentationTests {
+
+    @Test("A denied gate raises a request carrying tier, feature, reason and window")
+    func deniedGateRaisesContextualRequest() {
+        let store = StoreManager(testTier: .free)
+        let allowed = store.require(.professional, feature: "Chain of Custody", reason: "Needs Professional", target: .window("Chain of Custody"))
+        #expect(!allowed)
+        #expect(store.paywallRequest == PurchaseRequest(requiredTier: .professional, feature: "Chain of Custody",
+                                                        reason: "Needs Professional", target: .window("Chain of Custody")))
+    }
+
+    @Test("A second request while the sheet is up updates it in place and keeps its window")
+    func secondRequestUpdatesInPlace() {
+        let store = StoreManager(testTier: .free)
+        store.requestPurchase(.personal, feature: "Summaries", reason: "r1", target: .main)
+        store.requestPurchase(.professional, feature: "Bates Numbering", reason: "r2", target: .window("Bates"))
+        let request = store.paywallRequest
+        #expect(request?.requiredTier == .professional, "the higher tier wins")
+        #expect(request?.feature == "Bates Numbering")
+        #expect(request?.reason == "r2")
+        #expect(request?.target == .main, "the sheet already showing in the main window stays there — no duplicate")
+    }
+
+    @Test("A plain request never lowers the tier of a specific one")
+    func plainRequestKeepsSpecificTier() {
+        let store = StoreManager(testTier: .free)
+        store.requestPurchase(.professional, feature: "eDiscovery", reason: "needs pro", target: .main)
+        store.showPaywall = true   // legacy gate: "show plans"
+        #expect(store.paywallRequest?.requiredTier == .professional)
+        #expect(store.paywallRequest?.feature == "eDiscovery")
+    }
+
+    @Test("Dismiss clears the request; the legacy flag reads it")
+    func dismissClears() {
+        let store = StoreManager(testTier: .free)
+        #expect(!store.showPaywall)
+        store.showPaywall = true
+        #expect(store.showPaywall)
+        #expect(store.paywallRequest == PurchaseRequest(requiredTier: .free, feature: nil, reason: nil, target: .main))
+        store.dismissPaywall()
+        #expect(!store.showPaywall)
+        #expect(store.paywallRequest == nil)
+    }
+
+    @Test("Only the presenter whose window matches shows the request")
+    func presenterTargetMatching() {
+        let store = StoreManager(testTier: .free)
+        store.requestPurchase(.personal, target: .settings)
+        #expect(store.paywallRequest?.target == .settings)
+        #expect(store.paywallRequest?.target != .main)
+        #expect(store.paywallRequest?.target != .window("Production"))
+    }
+
+    @Test("Plan badge: Free upgrades, Personal sees Professional, Professional sees its plan")
+    func planBadge() {
+        #expect(StoreManager.planBadgeLabel(tier: .free, lifetime: false) == "Free · Upgrade")
+        #expect(StoreManager.planBadgeLabel(tier: .personal, lifetime: false) == "Personal")
+        #expect(StoreManager.planBadgeLabel(tier: .personal, lifetime: true) == "Personal · Lifetime")
+        #expect(StoreManager.planBadgeLabel(tier: .professional, lifetime: true) == "Professional · Lifetime")
+        #expect(StoreManager.planBadgeRequestTier(current: .free) == .personal)
+        #expect(StoreManager.planBadgeRequestTier(current: .personal) == .professional)
+        #expect(StoreManager.planBadgeRequestTier(current: .professional) == .free, "plan details, not an upgrade demand")
+    }
+
+    @Test("Purchase screen opens on the minimum tier the feature needs, never below the next unowned tier")
+    func initialSelectedTier() {
+        let pro = PurchaseRequest(requiredTier: .professional, feature: "Bates", reason: nil, target: .main)
+        let personal = PurchaseRequest(requiredTier: .personal, feature: "Summaries", reason: nil, target: .main)
+        #expect(PaywallView.initialSelectedTier(request: pro, currentTier: .free) == .professional)
+        #expect(PaywallView.initialSelectedTier(request: personal, currentTier: .free) == .personal)
+        #expect(PaywallView.initialSelectedTier(request: nil, currentTier: .free) == .personal)
+        #expect(PaywallView.initialSelectedTier(request: personal, currentTier: .personal) == .professional,
+                "a Personal owner is never offered Personal again")
+        #expect(PaywallView.initialSelectedTier(request: nil, currentTier: .personal) == .professional)
+        #expect(PaywallView.initialSelectedTier(request: pro, currentTier: .professional) == nil,
+                "a Professional owner has nothing to buy")
+    }
+
+    @Test("Restore outcomes are three distinct messages")
+    func restoreOutcomes() {
+        #expect(RestoreOutcome.restored(.personal).isSuccess)
+        #expect(!RestoreOutcome.nothingFound.isSuccess)
+        #expect(!RestoreOutcome.failed("x").isSuccess)
+        #expect(RestoreOutcome.restored(.professional).message.contains("Professional"))
+        #expect(RestoreOutcome.nothingFound.message.contains("No eligible purchases"))
+        #expect(RestoreOutcome.failed("offline").message.contains("offline"))
+    }
+
+    @Test("Lifetime fixture is reported as lifetime, not a subscription")
+    func lifetimeFixture() {
+        let store = StoreManager(testTier: .personal, lifetime: true)
+        #expect(store.isLifetimePurchase)
+        #expect(store.isPremium && !store.isProfessional)
+    }
+
+    @Test("Debug launch override simulates a tier on the live manager; Release has no such code")
+    func debugLaunchOverride() {
+        let store = StoreManager(testTier: .professional)
+        store.applyDebugLaunchOverride(arguments: ["app", "-mailinSimulateTier", "free"])
+        #expect(store.effectiveTier == .free)
+        #expect(!store.isPremium)
+        store.applyDebugLaunchOverride(arguments: ["app", "-mailinSimulateTier", "personal", "-mailinSimulateLifetime"])
+        #expect(store.effectiveTier == .personal)
+        #expect(store.isLifetimePurchase)
+        store.applyDebugLaunchOverride(arguments: ["app", "-mailinSimulateTier", "bogus"])
+        #expect(store.effectiveTier == .personal, "an unknown value changes nothing")
+    }
+}

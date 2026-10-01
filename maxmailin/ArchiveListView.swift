@@ -207,9 +207,13 @@ struct ArchiveListPane: View {
             // the rows past the limit stay in the archive, unlocked by purchase.
             if model.isAccessLimited {
                 Button {
-                    StoreManager.live?.showPaywall = true
+                    StoreManager.live?.requestPurchase(
+                        .personal,
+                        feature: "Full Archive",
+                        reason: "The Free plan browses the first \(model.accessibleCount) emails of any list or search. Personal and Professional browse all \(model.totalCount).",
+                        target: .main)
                 } label: {
-                    Label("Showing the first \(model.accessibleCount) of \(model.totalCount) emails · Unlock to browse all",
+                    Label("First \(model.accessibleCount) of \(model.totalCount) emails · Unlock Full Archive",
                           systemImage: "lock.fill")
                         .font(.caption)
                 }

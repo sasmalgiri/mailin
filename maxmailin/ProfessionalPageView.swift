@@ -16,6 +16,7 @@ import SwiftUI
 struct ProfessionalPageView: View {
     @Environment(ModuleRegistry.self) private var modules
     @EnvironmentObject private var storeManager: StoreManager
+    @Environment(\.purchasePresentationTarget) private var purchaseTarget
     @State private var presented: HubDestination?
 
     struct Tool: Identifiable {
@@ -30,6 +31,11 @@ struct ProfessionalPageView: View {
     /// answers `.professional` for all of them (pinned by a test).
     static var toolDestinations: [HubDestination] {
         (studios + tools).map(\.destination)
+    }
+
+    /// The destination behind a strip title ("Chain of Custody" → `.chainOfCustody`).
+    static func destination(forTitle title: String) -> HubDestination? {
+        (studios + tools).first { $0.title == title }?.destination
     }
 
     private static let studios: [Tool] = [
@@ -72,6 +78,25 @@ struct ProfessionalPageView: View {
     private var toolStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
+                #if !ENTERPRISE_EDITION
+                if !storeManager.isProfessional {
+                    // The page is on (module consent) but the work is not
+                    // bought: say so once, up front, with the way to buy it.
+                    Button {
+                        storeManager.requestPurchase(.professional,
+                                                     feature: "Professional Workflows",
+                                                     reason: "Custodians and holds, chain of custody, eDiscovery, Bates numbering, production and the studios are part of the Professional purchase.",
+                                                     target: purchaseTarget)
+                    } label: {
+                        Label("Unlock Professional", systemImage: "lock.open.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.purple)
+                    .help("The tools on this page need the Professional purchase")
+                    .accessibilityIdentifier("professional.unlock")
+                    Divider().frame(height: 18)
+                }
+                #endif
                 Text("Studios").font(.caption).foregroundStyle(.secondary)
                 ForEach(Self.studios) { tool in toolButton(tool) }
                 Divider().frame(height: 18)
@@ -112,7 +137,12 @@ struct ProfessionalPageView: View {
     /// page on is module consent; the Professional purchase is what unlocks
     /// execution (same rule as the Archive page's hub).
     private func open(_ destination: HubDestination) {
-        guard storeManager.require(StoreManager.requiredTier(for: destination)) else { return }
+        let required = StoreManager.requiredTier(for: destination)
+        let title = (Self.studios + Self.tools).first { $0.destination == destination }?.title ?? destination.rawValue
+        guard storeManager.require(required,
+                                   feature: title,
+                                   reason: "\(title) is part of the \(required.displayName) purchase\(required == .personal ? " and of Professional" : "").",
+                                   target: purchaseTarget) else { return }
         #if os(macOS)
         ToolWindowPresenter.shared.open(title: destination.rawValue, size: CGSize(width: 1000, height: 700)) {
             AnyView(ProfessionalDestinationView(destination: destination).toolWindowFrame())
@@ -123,7 +153,10 @@ struct ProfessionalPageView: View {
     }
 
     private func openProductionWindow() {
-        guard storeManager.requireProfessional() else { return }
+        guard storeManager.require(.professional,
+                                   feature: "Production",
+                                   reason: "Producing a Bates-stamped set with a hash manifest is part of the Professional purchase.",
+                                   target: purchaseTarget) else { return }
         #if os(macOS)
         ToolWindowPresenter.shared.open(title: "Production", size: CGSize(width: 760, height: 720)) {
             AnyView(ProductionWindowView().toolWindowFrame())

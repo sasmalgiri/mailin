@@ -31,6 +31,10 @@ struct AIInsightsPageView: View {
 
     @Environment(ModuleRegistry.self) private var modules
     @EnvironmentObject private var storeManager: StoreManager
+    @Environment(\.purchasePresentationTarget) private var purchaseTarget
+    /// Same counter `AIAssistantView` consumes, so the number here is the
+    /// number Ask will enforce.
+    @AppStorage("freeAIQueryCount") private var freeQueryCount: Int = 0
     @State private var tab: Tab = .ask
     @State private var sources: [SQLiteEmailStore.StoredSource] = []
     @State private var selectedSource: String? = nil       // filename
@@ -77,6 +81,28 @@ struct AIInsightsPageView: View {
             .pickerStyle(.segmented)
             .frame(maxWidth: 360)
             .accessibilityIdentifier("aiInsights.tabs")
+
+            #if !ENTERPRISE_EDITION
+            if !storeManager.isPremium {
+                // The Free allowance Ask enforces, visible before the sixth
+                // query is refused; one tap opens Personal selected.
+                let remaining = max(0, AIAssistantView.freeQueryLimit - freeQueryCount)
+                Button {
+                    storeManager.requestPurchase(.personal,
+                                                 feature: "AI Insights",
+                                                 reason: "Personal and Professional remove the daily Ask limit and include Summaries and Reports.",
+                                                 target: purchaseTarget)
+                } label: {
+                    Text("\(remaining) of \(AIAssistantView.freeQueryLimit) free Ask queries left today")
+                        .font(.caption)
+                        .lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(remaining == 0 ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                .help("The Free plan allows \(AIAssistantView.freeQueryLimit) Ask queries a day. Click to see plans.")
+                .accessibilityIdentifier("aiInsights.freeQuota")
+            }
+            #endif
 
             Spacer()
 
@@ -173,6 +199,7 @@ struct AIInsightsPageView: View {
 /// button opens the paywall. Reads the store manager from the environment.
 struct PaidFeatureLockedView: View {
     @EnvironmentObject private var storeManager: StoreManager
+    @Environment(\.purchasePresentationTarget) private var purchaseTarget
     let title: String
     let requiredTier: PurchaseTier
     let detail: String
@@ -183,9 +210,14 @@ struct PaidFeatureLockedView: View {
         } description: {
             Text(detail)
         } actions: {
-            Button("Unlock \(requiredTier.displayName)…") { storeManager.showPaywall = true }
-                .buttonStyle(.borderedProminent)
-                .accessibilityIdentifier("paid.unlock.\(title)")
+            // Opens the purchase screen with THIS tier selected and this
+            // feature named as the reason, in the window the view lives in.
+            Button("Unlock with \(requiredTier.displayName)…") {
+                storeManager.requestPurchase(requiredTier, feature: title, reason: detail, target: purchaseTarget)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(requiredTier == .professional ? .purple : .blue)
+            .accessibilityIdentifier("paid.unlock.\(title)")
         }
         .accessibilityIdentifier("paid.locked.\(title)")
     }

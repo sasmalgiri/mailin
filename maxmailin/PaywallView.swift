@@ -15,15 +15,35 @@ struct PaywallView: View {
     @State private var selectedPeriod: BillingPeriod = .yearly
     @State private var selectedTier: SelectedTier?
     @State private var errorMessage: String?
+    @State private var statusMessage: String?
+
+    /// What asked for the screen: the minimum tier, the feature and the
+    /// reason. nil = "show plans" from a badge or Settings.
+    let request: PurchaseRequest?
+
+    init(request: PurchaseRequest? = nil) {
+        self.request = request
+    }
 
     private enum SelectedTier { case personal, professional }
+
+    /// The tier the screen opens on: the minimum the triggering feature
+    /// needs, never below the next tier the user does not own yet; nil for a
+    /// Professional owner, who has nothing to buy here.
+    static func initialSelectedTier(request: PurchaseRequest?, currentTier: PurchaseTier) -> PurchaseTier? {
+        guard currentTier < .professional else { return nil }
+        let nextTier: PurchaseTier = currentTier == .free ? .personal : .professional
+        return max(request?.requiredTier ?? .free, nextTier)
+    }
+
+    private var ownsEverything: Bool { store.effectiveTier >= .professional }
 
     var body: some View {
         VStack(spacing: 0) {
             ZStack(alignment: .topTrailing) {
                 headerSection
                 Button {
-                    dismiss()
+                    closePaywall()
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.title3)
@@ -32,31 +52,51 @@ struct PaywallView: View {
                 .buttonStyle(.plain)
                 .padding(Spacing.medium)
                 .accessibilityLabel("Close")
+                .accessibilityIdentifier("paywall.close")
             }
             Divider()
             ScrollView {
                 VStack(spacing: Spacing.large) {
-                    featureComparison
-                    billingPeriodPicker
-                    purchaseCards
+                    if ownsEverything {
+                        ownershipDetails
+                    } else {
+                        if let request, let feature = request.feature {
+                            unlockReason(feature: feature, tier: request.requiredTier, reason: request.reason)
+                        }
+                        featureComparison
+                        billingPeriodPicker
+                        purchaseCards
+                    }
                     if store.purchasePending {
                         HStack(spacing: Spacing.xSmall) {
                             Image(systemName: "clock.fill")
                                 .foregroundColor(.orange)
-                            Text("Your purchase is pending approval. If you're using Ask to Buy, check with your family organizer.")
+                            Text("Your purchase is pending approval. Nothing is unlocked until the App Store confirms it. If you're using Ask to Buy, check with your family organizer.")
                                 .font(Typography.caption1)
                                 .foregroundColor(.orange)
                         }
                         .padding(Spacing.small)
                         .background(Color.orange.opacity(0.1))
                         .cornerRadius(CornerRadius.medium)
+                        .accessibilityIdentifier("paywall.pending")
+                    }
+                    if let statusMessage {
+                        Text(statusMessage)
+                            .font(Typography.caption1)
+                            .foregroundColor(AppColors.secondary)
+                            .multilineTextAlignment(.center)
+                            .accessibilityIdentifier("paywall.status")
                     }
                     if let errorMessage {
                         Text(errorMessage)
                             .font(Typography.caption1)
                             .foregroundColor(AppColors.error)
+                            .multilineTextAlignment(.center)
+                            .accessibilityIdentifier("paywall.error")
                     }
-                    purchaseButton
+                    if !ownsEverything {
+                        purchaseButton
+                    }
                     restoreSection
                     legalText
                 }
@@ -67,12 +107,29 @@ struct PaywallView: View {
         .frame(minWidth: 380, idealWidth: 640, minHeight: 380, idealHeight: 700)
         #endif
         .background(AppColors.backgroundPrimary)
+        .accessibilityIdentifier("paywall")
         .onAppear {
+            switch Self.initialSelectedTier(request: request, currentTier: store.effectiveTier) {
+            case .personal?: selectedTier = .personal
+            case .professional?: selectedTier = .professional
+            default: selectedTier = nil
+            }
             updateSelectedProduct()
         }
         .onChange(of: selectedPeriod, initial: false) {
             updateSelectedProduct()
         }
+        .onChange(of: store.products.count, initial: false) {
+            updateSelectedProduct()
+        }
+    }
+
+    /// Dismisses both the sheet and the coordinator's request, whichever
+    /// window hosts the screen. The user's page, selection and unfinished
+    /// work are untouched: this view never navigates.
+    private func closePaywall() {
+        store.dismissPaywall()
+        dismiss()
     }
 
     private func updateSelectedProduct() {
@@ -80,6 +137,9 @@ struct PaywallView: View {
             selectedProduct = personal
         } else if selectedTier == .professional, let pro = store.professionalProduct(for: selectedPeriod) {
             selectedProduct = pro
+        } else if selectedTier == nil, store.effectiveTier == .free, let personal = store.personalProduct(for: selectedPeriod) {
+            selectedProduct = personal
+            selectedTier = .personal
         } else if let pro = store.professionalProduct(for: selectedPeriod) {
             selectedProduct = pro
             selectedTier = .professional
@@ -91,20 +151,82 @@ struct PaywallView: View {
         }
     }
 
+    // MARK: - Context
+
+    /// Why the screen opened: the feature and the tier that unlocks it.
+    private func unlockReason(feature: String, tier: PurchaseTier, reason: String?) -> some View {
+        HStack(alignment: .top, spacing: Spacing.xSmall) {
+            Image(systemName: "lock.open.fill")
+                .foregroundColor(tier == .professional ? .purple : .blue)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(feature) needs \(tier.displayName)")
+                    .font(Typography.callout)
+                    .fontWeight(.semibold)
+                Text(reason ?? "\(feature) is part of the \(tier.displayName) purchase\(tier == .personal ? " and of Professional" : "").")
+                    .font(Typography.caption1)
+                    .foregroundColor(AppColors.secondary)
+            }
+            Spacer()
+        }
+        .padding(Spacing.small)
+        .background((tier == .professional ? Color.purple : Color.blue).opacity(0.08))
+        .cornerRadius(CornerRadius.medium)
+        .accessibilityIdentifier("paywall.reason")
+    }
+
+    /// A Professional owner sees their plan, not an upgrade demand.
+    private var ownershipDetails: some View {
+        VStack(alignment: .leading, spacing: Spacing.small) {
+            Label("You own Professional. Every feature is unlocked.", systemImage: "checkmark.seal.fill")
+                .font(Typography.callout)
+                .foregroundColor(.green)
+            if store.isLifetimePurchase {
+                Text("Lifetime purchase: it never expires and never renews. No subscription is needed to keep this access.")
+                    .font(Typography.caption1)
+                    .foregroundColor(AppColors.secondary)
+            } else if let expiration = store.subscriptionExpirationDate {
+                Text("Subscription · renews or ends \(expiration.formatted(date: .abbreviated, time: .omitted)). Manage it below.")
+                    .font(Typography.caption1)
+                    .foregroundColor(AppColors.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .adaptiveCard(cornerRadius: CornerRadius.large)
+        .accessibilityIdentifier("paywall.ownership")
+    }
+
     // MARK: - Header
+
+    private var headerTitle: String {
+        if ownsEverything { return "Your plan" }
+        if let feature = request?.feature { return "Unlock \(feature)" }
+        return store.effectiveTier == .personal ? "Upgrade to Professional" : "Unlock mailin"
+    }
+
+    private var headerSubtitle: String {
+        if ownsEverything { return "Professional\(store.isLifetimePurchase ? " · Lifetime" : "")" }
+        if store.effectiveTier == .personal {
+            return store.isLifetimePurchase
+                ? "You own Personal for life. Professional adds the legal and forensic tools; it is a separate purchase at its listed price."
+                : "You have Personal. Professional adds the legal and forensic tools."
+        }
+        return "Subscribe monthly or yearly, or buy once for lifetime access. Prices are shown by the App Store in your currency."
+    }
 
     private var headerSection: some View {
         VStack(spacing: Spacing.small) {
             crownIcon
 
-            Text("Unlock mailin")
+            Text(headerTitle)
                 .font(.system(.title2, design: .rounded))
                 .fontWeight(.bold)
+                .accessibilityIdentifier("paywall.title")
 
-            Text("Subscribe monthly, yearly, or buy once for lifetime access.")
+            Text(headerSubtitle)
                 .font(.subheadline)
                 .foregroundColor(AppColors.secondary)
                 .multilineTextAlignment(.center)
+                .padding(.horizontal, Spacing.medium)
 
             HStack(spacing: Spacing.medium) {
                 Label("Complete Privacy", systemImage: "lock.shield.fill")
@@ -293,8 +415,8 @@ struct PaywallView: View {
                         Text(period.rawValue)
                             .font(Typography.callout)
                             .fontWeight(selectedPeriod == period ? .semibold : .regular)
-                        if period == .yearly {
-                            Text(verbatim: "Save 40%")
+                        if period == .yearly, let savings = yearlySavingsLabel {
+                            Text(savings)
                                 .font(.system(size: 9, weight: .bold))
                                 .foregroundColor(.green)
                         } else if period == .lifetime {
@@ -324,41 +446,52 @@ struct PaywallView: View {
         )
     }
 
+    /// Yearly saving against twelve months of the monthly price, from the
+    /// App Store's own prices for the selected tier; nil when either product
+    /// is missing, so no made-up percentage is ever shown.
+    private var yearlySavingsLabel: String? {
+        let monthly: Product?
+        let yearly: Product?
+        if selectedTier == .professional {
+            monthly = store.professionalProduct(for: .monthly)
+            yearly = store.professionalProduct(for: .yearly)
+        } else {
+            monthly = store.personalProduct(for: .monthly)
+            yearly = store.personalProduct(for: .yearly)
+        }
+        guard let monthly, let yearly, monthly.price > 0 else { return nil }
+        let twelveMonths = monthly.price * 12
+        guard twelveMonths > yearly.price else { return nil }
+        let fraction = (twelveMonths - yearly.price) / twelveMonths
+        let percent = Int((NSDecimalNumber(decimal: fraction).doubleValue * 100).rounded())
+        return percent >= 5 ? "Save \(percent)%" : nil
+    }
+
     // MARK: - Purchase Cards
 
     private var purchaseCards: some View {
         VStack(spacing: Spacing.small) {
-            if store.isPremium && !store.isProfessional {
+            if store.effectiveTier == .personal {
                 HStack(spacing: Spacing.xSmall) {
                     Image(systemName: "checkmark.seal.fill")
                         .foregroundColor(.blue)
-                    Text("You own Personal. Upgrade to Professional for forensic & advanced tools.")
+                    Text(store.isLifetimePurchase
+                         ? "You own Personal (lifetime). It stays yours; Professional is an optional separate purchase."
+                         : "You have Personal. Professional adds the forensic and legal tools.")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
                 }
                 .padding(Spacing.small)
                 .background(Color.blue.opacity(0.08))
                 .cornerRadius(CornerRadius.medium)
-            }
-
-            if store.isProfessional {
-                HStack(spacing: Spacing.xSmall) {
-                    Image(systemName: "checkmark.seal.fill")
-                        .foregroundColor(.green)
-                    Text("You own Professional. All features are unlocked.")
-                        .font(Typography.caption1)
-                        .foregroundColor(AppColors.secondary)
-                }
-                .padding(Spacing.small)
-                .background(Color.green.opacity(0.08))
-                .cornerRadius(CornerRadius.medium)
+                .accessibilityIdentifier("paywall.ownsPersonal")
             }
 
             if !store.products.isEmpty {
-                if store.currentTier < .personal, let personal = store.personalProduct(for: selectedPeriod) {
+                if store.effectiveTier < .personal, let personal = store.personalProduct(for: selectedPeriod) {
                     purchaseCard(personal, tierName: "Personal", badge: nil, color: .blue)
                 }
-                if store.currentTier < .professional, let professional = store.professionalProduct(for: selectedPeriod) {
+                if store.effectiveTier < .professional, let professional = store.professionalProduct(for: selectedPeriod) {
                     purchaseCard(professional, tierName: "Professional", badge: "Most Popular", color: .purple)
                 }
             } else if store.productLoadError != nil {
@@ -436,25 +569,44 @@ struct PaywallView: View {
 
     private var pricingSubtitle: String {
         switch selectedPeriod {
-        case .monthly: return "Auto-renewable subscription"
-        case .yearly: return "Auto-renewable subscription — save 40%"
-        case .lifetime: return "One-time purchase — best value"
+        case .monthly: return "Recurring: renews every month until cancelled"
+        case .yearly: return "Recurring: renews every year until cancelled"
+        case .lifetime: return "One-time payment, never renews"
         }
     }
 
     // MARK: - Purchase Button
 
+    /// One submission at a time; each StoreKit outcome gets its own message.
+    /// On verified success the request is dismissed and every window reads
+    /// the new tier from the one StoreManager. The action that triggered the
+    /// screen is NOT restarted: the user returns to it and starts it on purpose.
+    private func submitPurchase() {
+        guard let product = selectedProduct, !store.purchaseInProgress else { return }
+        errorMessage = nil
+        statusMessage = nil
+        Task {
+            switch await store.purchase(product) {
+            case .success(let tier):
+                statusMessage = "\(tier.displayName) is unlocked on this device."
+                closePaywall()
+            case .cancelled:
+                statusMessage = "Purchase cancelled. Nothing was charged."
+            case .pending:
+                statusMessage = "Waiting for approval. You can close this and keep working; access arrives when the purchase is approved."
+            case .verificationFailed:
+                errorMessage = "The App Store's receipt could not be verified, so nothing was unlocked. Try Restore Purchases, or contact support."
+            case .failed(let detail):
+                errorMessage = "Purchase failed: \(detail)"
+            case .alreadyInProgress:
+                break
+            }
+        }
+    }
+
     private var purchaseButton: some View {
         Button {
-            guard let product = selectedProduct else { return }
-            Task {
-                do {
-                    try await store.purchase(product)
-                    if store.isPremium { dismiss() }
-                } catch {
-                    errorMessage = "Purchase failed: \(error.localizedDescription)"
-                }
-            }
+            submitPurchase()
         } label: {
             Group {
                 if store.purchaseInProgress {
@@ -469,12 +621,25 @@ struct PaywallView: View {
         }
         .buttonStyle(PrimaryButtonStyle())
         .disabled(selectedProduct == nil || store.purchaseInProgress)
+        .accessibilityIdentifier("paywall.buy")
     }
 
     private var purchaseLabel: String {
         guard let product = selectedProduct else { return "Select a plan" }
         let tierName = StoreManager.professionalProductIDs.contains(product.id) ? "Professional" : "Personal"
-        return "Buy \(tierName) — \(product.displayPrice)"
+        let billing: String
+        if let period = product.subscription?.subscriptionPeriod {
+            switch period.unit {
+            case .month: billing = period.value == 1 ? " / month" : " / \(period.value) months"
+            case .year: billing = period.value == 1 ? " / year" : " / \(period.value) years"
+            case .week: billing = " / week"
+            case .day: billing = " / day"
+            @unknown default: billing = ""
+            }
+        } else {
+            billing = " once"
+        }
+        return "Buy \(tierName) — \(product.displayPrice)\(billing)"
     }
 
     // MARK: - Shared Views
@@ -494,9 +659,10 @@ struct PaywallView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+                .accessibilityIdentifier("paywall.retryProducts")
 
                 Button("Continue Free") {
-                    dismiss()
+                    closePaywall()
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
@@ -522,15 +688,37 @@ struct PaywallView: View {
 
     private var restoreSection: some View {
         VStack(spacing: Spacing.xSmall) {
-            Button("Restore Purchases") {
-                Task { await store.restorePurchases() }
+            Button {
+                Task {
+                    let outcome = await store.restorePurchases()
+                    // Restored access that covers the request: the screen's
+                    // job is done. Anything else stays visible with its message.
+                    if case .restored(let tier) = outcome, tier >= (request?.requiredTier ?? .personal) {
+                        closePaywall()
+                    }
+                }
+            } label: {
+                HStack(spacing: Spacing.xSmall) {
+                    Text("Restore Purchases")
+                    if store.isRestoring { ProgressView().controlSize(.small) }
+                }
             }
             .font(Typography.callout)
+            .disabled(store.isRestoring)
             #if os(macOS)
             .buttonStyle(.link)
             #else
             .buttonStyle(.borderless)
             #endif
+            .accessibilityIdentifier("paywall.restore")
+
+            if let outcome = store.lastRestoreOutcome {
+                Label(outcome.message, systemImage: outcome.isSuccess ? "checkmark.circle.fill" : "info.circle")
+                    .font(Typography.caption1)
+                    .foregroundColor(outcome.isSuccess ? .green : (outcome == .nothingFound ? AppColors.secondary : AppColors.error))
+                    .multilineTextAlignment(.center)
+                    .accessibilityIdentifier("paywall.restoreResult")
+            }
 
             if store.isPremium && !store.isLifetimePurchase {
                 Button("Manage Subscription") {
@@ -544,12 +732,15 @@ struct PaywallView: View {
                 #endif
             }
 
-            Button("Continue with Free Version") {
-                dismiss()
+            if !ownsEverything {
+                Button(store.effectiveTier == .free ? "Continue with Free Version" : "Not now") {
+                    closePaywall()
+                }
+                .font(Typography.caption1)
+                .foregroundColor(AppColors.secondary)
+                .accessibilityLabel(store.effectiveTier == .free ? "Continue using the free version" : "Close without upgrading")
+                .accessibilityIdentifier("paywall.continueFree")
             }
-            .font(Typography.caption1)
-            .foregroundColor(AppColors.secondary)
-            .accessibilityLabel("Continue using the free version")
         }
     }
 
@@ -587,6 +778,182 @@ struct PaywallView: View {
         .environmentObject(StoreManager())
 }
 #endif
+
+// MARK: - Presentation (one coordinator, one presenter per window)
+
+private struct PurchasePresentationTargetKey: EnvironmentKey {
+    static let defaultValue: PurchasePresentationTarget = .main
+}
+
+extension EnvironmentValues {
+    /// The window a view lives in, for purchase requests it raises. Set by
+    /// `purchasePresenter(target:)` on each SwiftUI root.
+    var purchasePresentationTarget: PurchasePresentationTarget {
+        get { self[PurchasePresentationTargetKey.self] }
+        set { self[PurchasePresentationTargetKey.self] = newValue }
+    }
+}
+
+/// Hosts the single paywall sheet for one window. Presents only the request
+/// aimed at `target`, so two windows never show the same request, and a
+/// request raised while the sheet is up just updates the sheet's content.
+/// Dismissing clears the request and nothing else: page, selection and
+/// unfinished work stay as they were. Compiled to a no-op in the enterprise
+/// edition, which has no purchases.
+struct PurchasePresenterModifier: ViewModifier {
+    @EnvironmentObject private var store: StoreManager
+    let target: PurchasePresentationTarget
+
+    func body(content: Content) -> some View {
+        #if ENTERPRISE_EDITION
+        content
+        #else
+        content.sheet(isPresented: Binding(
+            get: { store.paywallRequest?.target == target },
+            set: { if !$0 { store.dismissPaywall() } }
+        )) {
+            PaywallView(request: store.paywallRequest)
+                .environmentObject(store)
+                .resizableSheet()
+        }
+        #endif
+    }
+}
+
+extension View {
+    /// Makes this view a window root for purchase presentation: hosts the
+    /// paywall for requests aimed at `target` and tells every descendant
+    /// which target to raise requests for.
+    func purchasePresenter(target: PurchasePresentationTarget) -> some View {
+        modifier(PurchasePresenterModifier(target: target))
+            .environment(\.purchasePresentationTarget, target)
+    }
+}
+
+// MARK: - Plan badge (every page, every platform)
+
+/// The compact current-plan control: Free reads "Free · Upgrade" and opens
+/// Personal selected; Personal shows the plan and opens Professional; a
+/// Professional owner sees the plan and opens plan details, never an
+/// upgrade demand. Lifetime ownership is named in the label.
+struct PlanBadgeButton: View {
+    @EnvironmentObject private var store: StoreManager
+    @Environment(\.purchasePresentationTarget) private var target
+
+    var body: some View {
+        let tier = store.effectiveTier
+        let label = StoreManager.planBadgeLabel(tier: tier, lifetime: store.isLifetimePurchase)
+        Button {
+            store.requestPurchase(StoreManager.planBadgeRequestTier(current: tier), target: target)
+        } label: {
+            Label(label, systemImage: tier == .free ? "arrow.up.circle.fill" : "checkmark.seal.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .tint(tier == .free ? .orange : .secondary)
+        .help(tier == .free ? "You are on the Free plan. See plans and upgrade." : "Your plan: \(label). Plan details, restore and subscription management.")
+        .accessibilityLabel(tier == .free ? "Free plan. Upgrade" : "Current plan: \(label)")
+        .accessibilityIdentifier("plan.badge")
+    }
+}
+
+// MARK: - Settings ▸ Plan & Purchases
+
+/// The one Settings section for purchases: current tier, ownership kind,
+/// renewal date when StoreKit reports one, View Plans / Upgrade, Restore
+/// (always available, with a distinct result message), Manage Subscription
+/// for subscribers, and product-load errors with a retry.
+struct PlanAndPurchasesSection: View {
+    @EnvironmentObject private var store: StoreManager
+    @Environment(\.purchasePresentationTarget) private var target
+
+    private var ownershipText: String {
+        #if ENTERPRISE_EDITION
+        return "Enterprise edition: every feature is included in the purchase price."
+        #else
+        switch store.effectiveTier {
+        case .free: return "No purchase. Browse the first 500 emails, 5 Ask queries a day."
+        case .personal, .professional:
+            if store.isLifetimePurchase { return "Lifetime purchase: yours permanently, never renews." }
+            return "Subscription"
+        }
+        #endif
+    }
+
+    var body: some View {
+        Section {
+            LabeledContent("Current plan") {
+                Text(store.effectiveTier.displayName)
+                    .fontWeight(.semibold)
+                    .foregroundColor(store.isPremium ? .green : AppColors.secondary)
+                    .accessibilityIdentifier("settings.plan.tier")
+            }
+            LabeledContent("Ownership") {
+                Text(ownershipText)
+                    .foregroundColor(AppColors.secondary)
+                    .multilineTextAlignment(.trailing)
+            }
+            if !store.isLifetimePurchase, let expiration = store.subscriptionExpirationDate {
+                LabeledContent("Renews or ends", value: expiration.formatted(date: .abbreviated, time: .omitted))
+            }
+
+            #if !ENTERPRISE_EDITION
+            Button(store.effectiveTier == .free ? "View Plans / Upgrade…"
+                   : (store.effectiveTier == .personal ? "Upgrade to Professional…" : "View Plan Details…")) {
+                store.requestPurchase(StoreManager.planBadgeRequestTier(current: store.effectiveTier), target: target)
+            }
+            .accessibilityIdentifier("settings.plan.viewPlans")
+
+            if store.isPremium && !store.isLifetimePurchase {
+                Button("Manage Subscription…") {
+                    Task { await store.manageSubscriptions() }
+                }
+                .accessibilityLabel("Manage or cancel subscription")
+            }
+
+            Button {
+                Task { await store.restorePurchases() }
+            } label: {
+                HStack {
+                    Text("Restore Purchases")
+                    if store.isRestoring { ProgressView().controlSize(.small) }
+                }
+            }
+            .disabled(store.isRestoring)
+            .accessibilityLabel("Restore purchases")
+            .accessibilityIdentifier("settings.plan.restore")
+
+            if let outcome = store.lastRestoreOutcome {
+                Label(outcome.message, systemImage: outcome.isSuccess ? "checkmark.circle.fill" : "info.circle")
+                    .font(.caption)
+                    .foregroundColor(outcome.isSuccess ? .green : (outcome == .nothingFound ? .secondary : AppColors.error))
+                    .accessibilityIdentifier("settings.plan.restoreResult")
+            }
+
+            if let error = store.productLoadError {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundColor(AppColors.error)
+                Button("Retry loading plans") { Task { await store.loadProducts() } }
+            }
+            #endif
+        } header: {
+            Text("Plan & Purchases")
+                .font(.headline)
+        } footer: {
+            #if !ENTERPRISE_EDITION
+            Text("Personal and Professional are each offered monthly, yearly, or as a one-time lifetime purchase. Professional includes everything in Personal. Prices are shown by the App Store in your currency.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            #else
+            EmptyView()
+            #endif
+        }
+    }
+}
 
 // MARK: - Feature Locked Badge (pre-action visibility)
 

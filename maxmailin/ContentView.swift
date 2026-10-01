@@ -2231,7 +2231,7 @@ struct ContentView: View {
                                     Text("Free limit: \(StoreManager.freeEmailLimit) emails")
                                         .font(Typography.caption1)
                                         .fontWeight(.semibold)
-                                    Text("\(remaining) more email\(remaining == 1 ? "" : "s") available with Pro")
+                                    Text("\(remaining) more email\(remaining == 1 ? "" : "s") with Personal or Professional")
                                         .font(Typography.caption2)
                                         .foregroundColor(.secondary)
                                 }

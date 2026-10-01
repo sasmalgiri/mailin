@@ -475,8 +475,9 @@ final class ExportJobRunner {
             onError?("\(what) export cancelled\(request.isResumable ? " — partial output kept; Resume continues it." : " — partial output removed.")")
             outcome = .cancelled
         } else if let cap = request.cap, let requested, requested > cap {
-            storeManager?.showPaywall = true
-            onError?("Exported \(written) of \(requested) emails. Upgrade to Pro for unlimited export.")
+            storeManager?.requestPurchase(.personal, feature: "Full Export",
+                                          reason: "The Free plan exports up to \(cap) emails per run. Personal and Professional export without the limit.")
+            onError?("Exported \(written) of \(requested) emails. Personal and Professional export without the \(cap)-email limit.")
             outcome = .truncated
         } else if let requested, written < requested, result?.completed == false {
             outcome = .failed

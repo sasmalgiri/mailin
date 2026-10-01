@@ -86,41 +86,48 @@ struct FourPageShell: View {
             // asks first, showing that page's feature matrix. A page compiled
             // out of the edition (Live Mail in the no-network build) has no
             // tab at all — nothing behind it exists to turn on.
-            PageSwitcher(
-                pages: modules.shippedModules,
-                selection: router.selection,
-                isEnabled: { modules.isEnabled($0) },
-                isLocked: { !modules.activation($0).isUserSwitchable },
-                onSelect: { page in
-                    if modules.isEnabled(page) {
-                        router.select(page, in: modules)
-                    } else {
-                        pendingActivation = page
+            HStack(spacing: 0) {
+                PageSwitcher(
+                    pages: modules.shippedModules,
+                    selection: router.selection,
+                    isEnabled: { modules.isEnabled($0) },
+                    isLocked: { !modules.activation($0).isUserSwitchable },
+                    onSelect: { page in
+                        if modules.isEnabled(page) {
+                            router.select(page, in: modules)
+                        } else {
+                            pendingActivation = page
+                        }
                     }
-                }
-            )
+                )
+                // The current-plan control sits on the page strip, so it is
+                // on every page and every platform without crowding a page's
+                // own toolbar. Not built in the enterprise edition (no IAP).
+                #if !ENTERPRISE_EDITION
+                PlanBadgeButton()
+                    .padding(.trailing, Spacing.xSmall)
+                #endif
+            }
             Divider()
             page
         }
-        .onAppear { router.reconcile(with: modules) }
+        .onAppear {
+            router.reconcile(with: modules)
+            #if DEBUG
+            storeManager.applyDebugLaunchOverride()
+            #endif
+        }
         .onChange(of: modules.enabledModules) { _, _ in
             router.reconcile(with: modules)
         }
         // I5: the one place a cloud AI request asks before anything leaves
         // the device. Attached at the root so any page's request can ask.
         .modifier(CloudAIConsentSheetModifier())
-        // The one paywall sheet. Every purchase gate (`StoreManager.require`)
-        // sets `showPaywall`; attaching the sheet at the root means a denied
-        // action on ANY page — Archive hub, AI Insights, Professional strip,
-        // the three-pane list's unlock link — presents it. Before this it
-        // hung off the Archive page only, so the other pages denied silently.
-        #if !ENTERPRISE_EDITION
-        .sheet(isPresented: $storeManager.showPaywall) {
-            PaywallView()
-                .environmentObject(storeManager)
-                .resizableSheet()
-        }
-        #endif
+        // The main window's paywall presenter. Every purchase gate raises a
+        // request on the one StoreManager; this root shows the requests aimed
+        // at the main window, whichever page is on screen. Settings and tool
+        // windows host their own presenter for requests raised there.
+        .purchasePresenter(target: .main)
         .sheet(item: $pendingActivation) { module in
             PageActivationSheet(
                 module: module,

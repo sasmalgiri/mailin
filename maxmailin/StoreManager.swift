@@ -28,6 +28,57 @@ enum BillingPeriod: String, CaseIterable {
     case lifetime = "Lifetime"
 }
 
+/// Where a purchase request should be presented. Each SwiftUI root (main
+/// window, Settings window, each tool window) hosts one presenter and shows
+/// the paywall only for requests aimed at it, so a request is never shown
+/// twice and never shown in a window the user is not looking at.
+enum PurchasePresentationTarget: Hashable {
+    case main
+    case settings
+    case window(String)
+}
+
+/// A request to show the purchase screen: the minimum tier the triggering
+/// feature needs (`.free` = just show plans), the feature's name and the
+/// reason, and the window to present in.
+struct PurchaseRequest: Equatable {
+    var requiredTier: PurchaseTier
+    var feature: String?
+    var reason: String?
+    var target: PurchasePresentationTarget
+}
+
+/// What one purchase attempt did. Distinct cases so the UI never says
+/// "unlocked" for a pending or unverified transaction.
+enum PurchaseOutcome: Equatable {
+    case success(PurchaseTier)
+    case cancelled
+    case pending
+    case verificationFailed
+    case failed(String)
+    case alreadyInProgress
+}
+
+/// What Restore Purchases did.
+enum RestoreOutcome: Equatable {
+    case restored(PurchaseTier)
+    case nothingFound
+    case failed(String)
+
+    var message: String {
+        switch self {
+        case .restored(let tier): return "Restored: your \(tier.displayName) access is active on this device."
+        case .nothingFound: return "No eligible purchases were found for this Apple Account."
+        case .failed(let detail): return "Restore failed: \(detail)"
+        }
+    }
+
+    var isSuccess: Bool {
+        if case .restored = self { return true }
+        return false
+    }
+}
+
 @MainActor
 class StoreManager: ObservableObject {
 
@@ -100,7 +151,60 @@ class StoreManager: ObservableObject {
     @Published private(set) var productLoadError: String?
     @Published private(set) var subscriptionExpirationDate: Date?
     @Published private(set) var isLifetimePurchase = false
-    @Published var showPaywall = false
+
+    // MARK: - Purchase presentation (one coordinator, many presenters)
+
+    /// The purchase request currently asking to be shown, if any. Exactly one
+    /// presenter — the main window's root, the Settings window, or a tool
+    /// window — matches its `target` and hosts the single `PaywallView`.
+    /// Views bind to it through `purchasePresenter(target:)`; nothing else
+    /// presents a paywall. There is one StoreManager per process, so every
+    /// window sees the same tier the moment it changes.
+    @Published private(set) var paywallRequest: PurchaseRequest?
+
+    /// Compatibility surface for the 40-odd gates that set `showPaywall =
+    /// true`: reads "a request is up", setting true raises a plain "show
+    /// plans" request in the main window, setting false dismisses.
+    var showPaywall: Bool {
+        get { paywallRequest != nil }
+        set {
+            if newValue {
+                requestPurchase(.free, feature: nil, reason: nil, target: .main)
+            } else {
+                dismissPaywall()
+            }
+        }
+    }
+
+    /// Asks for the purchase screen. `tier` is the minimum the triggering
+    /// feature needs (`.free` = "show plans", nothing specific). If a request
+    /// is already showing, it is UPDATED in place — same sheet, new tier and
+    /// reason — so a second click never stacks a duplicate and never gets
+    /// lost; the already-visible sheet keeps its window.
+    func requestPurchase(_ tier: PurchaseTier,
+                         feature: String? = nil,
+                         reason: String? = nil,
+                         target: PurchasePresentationTarget = .main) {
+        if var current = paywallRequest {
+            current.requiredTier = max(current.requiredTier, tier)
+            current.feature = feature ?? current.feature
+            current.reason = reason ?? current.reason
+            paywallRequest = current
+        } else {
+            paywallRequest = PurchaseRequest(requiredTier: tier, feature: feature, reason: reason, target: target)
+        }
+    }
+
+    func dismissPaywall() {
+        paywallRequest = nil
+    }
+
+    // MARK: - Restore state
+
+    /// What the last Restore Purchases did, for Settings and the paywall to
+    /// report. Distinguishes restored / nothing found / failed; never silent.
+    @Published private(set) var lastRestoreOutcome: RestoreOutcome?
+    @Published private(set) var isRestoring = false
 
     #if DEBUG
     /// Debug builds unlock every paid tier by default so gated features can
@@ -157,10 +261,47 @@ class StoreManager: ObservableObject {
     /// Test fixture: a deterministic Free / Personal / Professional manager
     /// that never touches StoreKit and does not take the debug unlock, so a
     /// test can prove that a gate denies.
-    init(testTier: PurchaseTier) {
+    init(testTier: PurchaseTier, lifetime: Bool = false) {
         currentTier = testTier
+        isLifetimePurchase = lifetime
         debugUnlocksAllTiers = false
     }
+
+    /// Developer switch: launching with `-mailinSimulateTier free|personal|
+    /// professional` makes the LIVE manager behave as that tier in a Debug
+    /// build (no all-unlocked shortcut), so the Free experience and every
+    /// purchase entry point can be seen and screenshotted without StoreKit.
+    /// Release builds do not compile this.
+    func applyDebugLaunchOverride(arguments: [String] = CommandLine.arguments) {
+        guard let index = arguments.firstIndex(of: "-mailinSimulateTier"), index + 1 < arguments.count else { return }
+        let tier: PurchaseTier?
+        switch arguments[index + 1].lowercased() {
+        case "free": tier = .free
+        case "personal": tier = .personal
+        case "professional": tier = .professional
+        default: tier = nil
+        }
+        guard let tier else { return }
+        debugUnlocksAllTiers = false
+        currentTier = tier
+        isLifetimePurchase = arguments.contains("-mailinSimulateLifetime")
+        // Keep the simulated tier even after StoreKit's entitlement pass.
+        simulatedTier = tier
+        // `-mailinShowPaywall <feature>` raises a contextual request at launch
+        // so the purchase screen itself can be reviewed and screenshotted.
+        if let flag = arguments.firstIndex(of: "-mailinShowPaywall"), flag + 1 < arguments.count {
+            let feature = arguments[flag + 1]
+            // A hub destination name gets its real tier; anything else asks
+            // for the next tier up.
+            let destination = HubDestination(rawValue: feature) ?? ProfessionalPageView.destination(forTitle: feature)
+            let required = destination.map(Self.requiredTier(for:))
+                ?? (tier == .free ? PurchaseTier.personal : .professional)
+            requestPurchase(required, feature: feature,
+                            reason: "\(feature) is part of the \(required.displayName) purchase.", target: .main)
+        }
+    }
+
+    private var simulatedTier: PurchaseTier?
     #endif
 
     deinit {
@@ -193,36 +334,65 @@ class StoreManager: ObservableObject {
 
     // MARK: - Purchase
 
-    func purchase(_ product: Product) async throws {
-        guard !purchaseInProgress else { return }
+    /// One purchase attempt with a distinct outcome for each StoreKit result.
+    /// A second submission while one is in flight is refused (`.alreadyInProgress`),
+    /// a pending (Ask to Buy) purchase unlocks nothing until the transaction
+    /// arrives through the listener, and a verification failure never unlocks.
+    @discardableResult
+    func purchase(_ product: Product) async -> PurchaseOutcome {
+        guard !purchaseInProgress else { return .alreadyInProgress }
         purchaseInProgress = true
         purchasePending = false
         defer { purchaseInProgress = false }
 
-        let result = try await product.purchase()
+        let result: Product.PurchaseResult
+        do {
+            result = try await product.purchase()
+        } catch {
+            return .failed(error.localizedDescription)
+        }
 
         switch result {
         case .success(let verification):
-            let transaction = try checkVerified(verification)
-            await transaction.finish()
-            await checkEntitlements()
+            do {
+                let transaction = try checkVerified(verification)
+                await transaction.finish()
+                await checkEntitlements()
+                return .success(currentTier)
+            } catch {
+                return .verificationFailed
+            }
 
         case .userCancelled:
-            break
+            return .cancelled
 
         case .pending:
             purchasePending = true
+            return .pending
 
         @unknown default:
-            break
+            return .failed("The App Store returned an unknown result.")
         }
     }
 
     // MARK: - Restore
 
-    func restorePurchases() async {
-        try? await AppStore.sync()
-        await checkEntitlements()
+    /// Restore Purchases, reporting what happened: access restored (to which
+    /// tier), nothing eligible on this Apple ID, or the sync itself failed.
+    @discardableResult
+    func restorePurchases() async -> RestoreOutcome {
+        isRestoring = true
+        defer { isRestoring = false }
+        let outcome: RestoreOutcome
+        do {
+            try await AppStore.sync()
+            await checkEntitlements()
+            outcome = currentTier > .free ? .restored(currentTier) : .nothingFound
+        } catch {
+            outcome = .failed(error.localizedDescription)
+        }
+        lastRestoreOutcome = outcome
+        return outcome
     }
 
     // MARK: - Entitlement Check
@@ -258,6 +428,12 @@ class StoreManager: ObservableObject {
             }
         }
 
+        #if DEBUG
+        if let simulatedTier {
+            currentTier = simulatedTier
+            return
+        }
+        #endif
         currentTier = highestTier
         isLifetimePurchase = hasLifetime
         subscriptionExpirationDate = hasLifetime ? nil : latestExpiration
@@ -280,25 +456,42 @@ class StoreManager: ObservableObject {
 
     // MARK: - Feature Gating
 
-    func requirePremium() -> Bool {
-        if isPremium { return true }
-        showPaywall = true
-        return false
-    }
+    func requirePremium() -> Bool { require(.personal) }
 
-    func requireProfessional() -> Bool {
-        if isProfessional { return true }
-        showPaywall = true
-        return false
-    }
+    func requireProfessional() -> Bool { require(.professional) }
 
     /// Purchase gate for a tier: true when the effective tier covers it,
-    /// otherwise shows the paywall and returns false. `.free` always passes.
+    /// otherwise raises a purchase request — with the feature's name and the
+    /// reason, in the window that asked — and returns false. `.free` always
+    /// passes.
     @discardableResult
-    func require(_ tier: PurchaseTier) -> Bool {
+    func require(_ tier: PurchaseTier,
+                 feature: String? = nil,
+                 reason: String? = nil,
+                 target: PurchasePresentationTarget = .main) -> Bool {
         if effectiveTier >= tier { return true }
-        showPaywall = true
+        requestPurchase(tier, feature: feature, reason: reason, target: target)
         return false
+    }
+
+    /// The plan badge every page shows: what the user has, and for Free the
+    /// upgrade call in the same two words.
+    static func planBadgeLabel(tier: PurchaseTier, lifetime: Bool) -> String {
+        switch tier {
+        case .free: return "Free · Upgrade"
+        case .personal: return lifetime ? "Personal · Lifetime" : "Personal"
+        case .professional: return lifetime ? "Professional · Lifetime" : "Professional"
+        }
+    }
+
+    /// What the plan badge asks for: Free and Personal see the next tier
+    /// selected; a Professional owner sees their plan, not an upgrade demand.
+    static func planBadgeRequestTier(current: PurchaseTier) -> PurchaseTier {
+        switch current {
+        case .free: return .personal
+        case .personal: return .professional
+        case .professional: return .free
+        }
     }
 
     /// The purchase tier a tools-hub destination needs before it may EXECUTE,

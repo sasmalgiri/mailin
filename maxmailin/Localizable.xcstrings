@@ -4297,6 +4297,7 @@
       }
     },
     "You own Personal. Upgrade to Professional for forensic & advanced tools." : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {

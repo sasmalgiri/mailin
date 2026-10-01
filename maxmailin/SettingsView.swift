@@ -207,8 +207,12 @@ struct SettingsView: View {
         #if os(macOS)
         .frame(minWidth: 400, idealWidth: 540, minHeight: 380, idealHeight: 520)
         #endif
+        // Settings is its own window on macOS and its own sheet on iOS: it
+        // hosts its own paywall, so Upgrade works here without returning to
+        // the main window's current page.
+        .purchasePresenter(target: .settings)
     }
-    
+
     // MARK: - Profile / Persona Settings
     private var profileSettings: some View {
         Form {
@@ -439,36 +443,9 @@ struct SettingsView: View {
             }
             #endif
 
-            Section {
-                HStack {
-                    Text("Status")
-                    Spacer()
-                    Text(storeManager.currentTier.displayName)
-                        .foregroundColor(storeManager.isPremium ? .green : AppColors.secondary)
-                        .fontWeight(.semibold)
-                }
-
-                if storeManager.currentTier < .professional {
-                    Button(storeManager.currentTier == .free ? "Upgrade" : "Upgrade to Professional") {
-                        storeManager.showPaywall = true
-                    }
-                }
-
-                #if !ENTERPRISE_EDITION
-                if storeManager.isPremium && !storeManager.isLifetimePurchase {
-                    Button("Manage Subscription") {
-                        Task { await storeManager.manageSubscriptions() }
-                    }
-                }
-
-                Button("Restore Purchases") {
-                    Task { await storeManager.restorePurchases() }
-                }
-                #endif
-            } header: {
-                Text("Purchase")
-                    .font(.headline)
-            }
+            // Plan & Purchases: the one purchase section in Settings (it used
+            // to be duplicated here and under Advanced with no restore result).
+            PlanAndPurchasesSection()
 
         }
         .formStyle(.grouped)
@@ -561,48 +538,6 @@ struct SettingsView: View {
     // MARK: - Advanced Settings
     private var advancedSettings: some View {
         Form {
-            Section {
-                HStack {
-                    Text("Status")
-                    Spacer()
-                    if storeManager.isPremium {
-                        Label(storeManager.currentTier.displayName, systemImage: "crown.fill")
-                            .foregroundColor(.orange)
-                            .fontWeight(.semibold)
-                    } else {
-                        Text("Free")
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                if storeManager.currentTier < .professional {
-                    Button(storeManager.currentTier == .free ? "Upgrade" : "Upgrade to Professional") {
-                        storeManager.showPaywall = true
-                    }
-                }
-
-                #if !ENTERPRISE_EDITION
-                if storeManager.isPremium && !storeManager.isLifetimePurchase {
-                    Button("Manage Subscription") {
-                        Task { await storeManager.manageSubscriptions() }
-                    }
-                    .accessibilityLabel("Manage or cancel subscription")
-                }
-
-                Button("Restore Purchases") {
-                    Task { await storeManager.restorePurchases() }
-                }
-                .accessibilityLabel("Restore purchases")
-                #endif
-            } header: {
-                Text("Purchase")
-                    .font(.headline)
-            } footer: {
-                Text("Lifetime option available — buy once, own forever. Monthly and yearly subscriptions also offered.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
             Section {
                 // Full Fidelity Restore — heals archives migrated from v1
                 // (labels/attachments/raw source restored IN PLACE from the

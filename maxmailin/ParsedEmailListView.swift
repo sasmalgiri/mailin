@@ -3257,8 +3257,9 @@ struct ParsedEmailListView: View {
                         freeAttachmentDownloadCount += outcome.saved
                     }
                     if outcome.capped {
-                        storeManager.showPaywall = true
-                        listExportError = "Free limit: saved \(outcome.saved) attachments. Upgrade to Pro for unlimited."
+                        storeManager.requestPurchase(.personal, feature: "Attachment Downloads",
+                                                     reason: "The Free plan saves 10 attachments a day. Personal and Professional have no daily limit.")
+                        listExportError = "Free limit: saved \(outcome.saved) attachments today. Personal and Professional have no daily limit."
                     }
                     #if os(iOS)
                     if outcome.saved > 0 { iOSShareFile(at: folderURL) }
