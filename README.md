@@ -107,7 +107,7 @@ Import, search, analyze, and export email archives from Gmail, Outlook, Thunderb
 - Spotlight search integration
 - Command palette (Cmd+Shift+P)
 - Duplicate detection and removal
-- Available in 11 languages
+- Email content analysis in 11 languages (interface in English; a few labels translated)
 
 ---
 

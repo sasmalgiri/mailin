@@ -109,9 +109,9 @@ FORENSIC & LEGAL TOOLS
 - Review batching for systematic document review
 - Deduplication and near-duplicate detection
 
-AVAILABLE IN 11 LANGUAGES
-- English, German, Spanish, French, Hindi, Italian, Japanese, Korean, Portuguese (Brazil), Chinese Simplified, Chinese Traditional
-- Interface automatically adapts to your system language
+MULTILINGUAL ARCHIVES
+- Detects and analyzes email content in 11 languages: English, German, Spanish, French, Hindi, Italian, Japanese, Korean, Portuguese (Brazil), Chinese Simplified, Chinese Traditional
+- Interface in English (plan and purchase labels follow your system language)
 
 MULTI-PLATFORM
 - Native app for Mac, iPhone, and iPad
@@ -195,7 +195,7 @@ mailin v1.0 — the first forensic-grade email archive analyzer native to iPhone
 ✓ HMAC chain of custody, Bates numbering, IOC extraction
 ✓ On-device Apple Intelligence only — no tracking, no cloud AI, no network
 ✓ Sub-second full-text search
-✓ 11 languages
+✓ Email content analysis in 11 languages
 ✓ Universal Purchase across all your Apple devices
 
 Free to try. Subscribe monthly, yearly, or buy once for lifetime access.
