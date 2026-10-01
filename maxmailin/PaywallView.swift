@@ -304,7 +304,8 @@ struct PaywallView: View {
 
             Divider()
 
-            featureRow("Parse emails", free: "500", personal: true, pro: true)
+            featureRow("Import archives", free: "100 MB", personal: true, pro: true)
+            featureRow("Browse & search emails", free: "500", personal: true, pro: true)
             featureRow("All formats (MBOX/EML/MSG/PST)", free: true, personal: true, pro: true)
             featureRow("View & filter emails", free: true, personal: true, pro: true)
             featureRow("Boolean/regex/proximity search", free: true, personal: true, pro: true)
@@ -875,7 +876,7 @@ struct PlanAndPurchasesSection: View {
         return "Enterprise edition: every feature is included in the purchase price."
         #else
         switch store.effectiveTier {
-        case .free: return "No purchase. Browse the first 500 emails, 5 Ask queries a day."
+        case .free: return "No purchase. Import up to 100 MB, browse the first 500 emails, 5 Ask queries a day."
         case .personal, .professional:
             if store.isLifetimePurchase { return "Lifetime purchase: yours permanently, never renews." }
             return "Subscription"

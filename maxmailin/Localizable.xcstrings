@@ -2758,6 +2758,7 @@
       }
     },
     "Parse emails" : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {

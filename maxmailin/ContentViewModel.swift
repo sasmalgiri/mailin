@@ -212,8 +212,12 @@ class ContentViewModel: ObservableObject {
         )
     }
 
+    /// `inputByteLimit`: the tier's cumulative input allowance (nil =
+    /// unlimited). Checked here, at the service boundary, as well as by the
+    /// UI funnel, so a caller that skipped the sheet still cannot ingest past
+    /// it. A denied run imports nothing and reports the reason.
     func parseSelectedFiles(_ urls: [URL], dedupPolicy: DedupPolicy, maxEmails: Int? = nil,
-                            copiesOriginals: Bool = true) {
+                            copiesOriginals: Bool = true, inputByteLimit: Int? = nil) {
         guard !isParsing else { return }
 
         statusMessage = "Parsing files..."
@@ -230,6 +234,18 @@ class ContentViewModel: ObservableObject {
 
         Task { @MainActor [weak self] in
             guard let self else { return }
+
+            if let denial = await ImportAllowance.check(urls: urls, limitBytes: inputByteLimit).denial {
+                self.isParsing = false
+                self.stopMemoryMonitoring()
+                self.parseErrors = [denial.message]
+                self.statusMessage = "Import refused: Free plan input limit."
+                self.statusColor = .orange
+                self.loadingProgress = 0.0
+                self.loadingText = ""
+                for url in urls { ImportQueue.shared.markFailed(path: url.path, reason: "Free plan input limit") }
+                return
+            }
 
             // Chain-of-custody hashes of each source file (legacy parity).
             var fileHashes: [ForensicManager.SourceFileHash] = []

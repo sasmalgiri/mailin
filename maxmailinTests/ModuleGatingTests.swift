@@ -892,3 +892,69 @@ struct PurchasePresentationTests {
         #expect(store.effectiveTier == .personal, "an unknown value changes nothing")
     }
 }
+
+// MARK: - Free input allowance (owner decision 2026-10-01: 100 MB of input)
+
+@Suite("Free input allowance (100 MB)")
+struct ImportAllowanceTests {
+
+    @Test("The limit is 100 MB, decimal, and only the Free tier has one")
+    @MainActor
+    func limitPerTier() {
+        #expect(StoreManager.freeInputByteLimit == 100_000_000)
+        #expect(StoreManager(testTier: .free).inputByteLimit == 100_000_000)
+        #expect(StoreManager(testTier: .personal).inputByteLimit == nil)
+        #expect(StoreManager(testTier: .professional).inputByteLimit == nil)
+    }
+
+    @Test("Cumulative: what the archive holds plus this import must fit; no limit means always allowed")
+    func evaluateIsCumulative() {
+        let limit = StoreManager.freeInputByteLimit
+        #expect(ImportAllowance.evaluate(requestedBytes: limit, ingestedBytes: 0, limitBytes: limit) == .allowed, "exactly the limit fits")
+        #expect(ImportAllowance.evaluate(requestedBytes: limit + 1, ingestedBytes: 0, limitBytes: limit).denial != nil)
+        #expect(ImportAllowance.evaluate(requestedBytes: 1, ingestedBytes: limit, limitBytes: limit).denial != nil, "a full archive admits nothing more")
+        #expect(ImportAllowance.evaluate(requestedBytes: 40_000_000, ingestedBytes: 70_000_000, limitBytes: limit).denial != nil, "70 + 40 > 100")
+        #expect(ImportAllowance.evaluate(requestedBytes: 30_000_000, ingestedBytes: 70_000_000, limitBytes: limit) == .allowed, "70 + 30 = 100")
+        #expect(ImportAllowance.evaluate(requestedBytes: 5_000_000_000, ingestedBytes: 5_000_000_000, limitBytes: nil) == .allowed, "paid tiers: no limit")
+    }
+
+    @Test("A denial names the figures and the way out")
+    func denialMessage() {
+        let d = ImportAllowance.evaluate(requestedBytes: 40_000_000, ingestedBytes: 70_000_000, limitBytes: 100_000_000).denial
+        #expect(d?.remainingBytes == 30_000_000)
+        let message = d?.message ?? ""
+        #expect(message.contains("100 MB"))
+        #expect(message.contains("70 MB"))
+        #expect(message.contains("40 MB"))
+        #expect(message.contains("30 MB"))
+        #expect(message.contains("Personal and Professional"))
+        let fresh = ImportAllowance.evaluate(requestedBytes: 250_000_000, ingestedBytes: 0, limitBytes: 100_000_000).denial
+        #expect(fresh?.message.contains("250 MB") == true)
+    }
+
+    @Test("Input bytes: files by size, folders by their regular contents, symlinks never followed")
+    func totalBytesMeasuresInput() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("allowance-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("eml", isDirectory: true)
+        let nested = folder.appendingPathComponent("more", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        let single = root.appendingPathComponent("a.mbox")
+        try Data(count: 1_000).write(to: single)
+        try Data(count: 300).write(to: folder.appendingPathComponent("1.eml"))
+        try Data(count: 200).write(to: nested.appendingPathComponent("2.eml"))
+        // A symlink inside the folder to a large file outside it must not count.
+        let outside = root.appendingPathComponent("huge.bin")
+        try Data(count: 50_000).write(to: outside)
+        try FileManager.default.createSymbolicLink(at: folder.appendingPathComponent("link.eml"), withDestinationURL: outside)
+
+        #expect(ImportAllowance.totalBytes(of: [single]) == 1_000)
+        #expect(ImportAllowance.totalBytes(of: [folder]) == 500)
+        #expect(ImportAllowance.totalBytes(of: [single, folder]) == 1_500)
+        // A top-level symlink is not input either.
+        let topLink = root.appendingPathComponent("top.mbox")
+        try FileManager.default.createSymbolicLink(at: topLink, withDestinationURL: outside)
+        #expect(ImportAllowance.totalBytes(of: [topLink]) == 0)
+        #expect(ImportAllowance.totalBytes(of: [root.appendingPathComponent("missing.mbox")]) == 0)
+    }
+}

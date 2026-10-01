@@ -110,6 +110,22 @@ struct ContentView: View {
             .onDrop(of: [.fileURL, .emailMessage], isTargeted: nil) { providers in
                 handleDroppedProviders(providers)
             }
+            // Free input allowance refused an import: say exactly what and
+            // why, with the way to lift it. Attached at the root so every
+            // entry point (drop, picker, Shortcut, open-with) gets the same
+            // alert.
+            .alert("Import refused", isPresented: Binding(
+                get: { importAllowanceDenial != nil },
+                set: { if !$0 { importAllowanceDenial = nil } })) {
+                Button("See Plans") {
+                    storeManager.requestPurchase(.personal, feature: "Import more than 100 MB",
+                                                 reason: importAllowanceDenial?.message)
+                    importAllowanceDenial = nil
+                }
+                Button("OK", role: .cancel) { importAllowanceDenial = nil }
+            } message: {
+                Text(importAllowanceDenial?.message ?? "")
+            }
             // A2: an open archive lands in the three-pane shell, not on a
             // picker. The hub stays one click away (Tools).
             .onChange(of: modelVM.showParsedList) { _, shown in
@@ -3739,6 +3755,26 @@ private func handleMultipleFiles(_ urls: [URL]) {
 
     /// A3: the sheet's choices drive the run.
     private func startImport(_ choices: ImportChoices) {
+        // Free input allowance (owner, 2026-10-01): decided BEFORE anything is
+        // queued or spun up, with the cumulative figure from the store. A
+        // denied import does nothing and says why; the paywall opens on
+        // Personal with the reason. The view model checks again at the
+        // service boundary, so no other caller can skip this.
+        let limit = storeManager.inputByteLimit
+        Task { @MainActor in
+            if let denial = await ImportAllowance.check(urls: choices.urls, limitBytes: limit).denial {
+                importAllowanceDenial = denial
+                viewModel.statusMessage = "Import refused: Free plan input limit."
+                viewModel.statusColor = .orange
+                storeManager.requestPurchase(.personal, feature: "Import more than 100 MB",
+                                             reason: denial.message)
+                return
+            }
+            runImport(choices, inputByteLimit: limit)
+        }
+    }
+
+    private func runImport(_ choices: ImportChoices, inputByteLimit: Int?) {
         showSpinner = true
         parseFailed = false
         UserDefaults.standard.set(choices.indexAttachmentText, forKey: ImportChoices.indexAttachmentTextKey)
@@ -3754,7 +3790,8 @@ private func handleMultipleFiles(_ urls: [URL]) {
         viewModel.parseSelectedFiles(choices.urls,
                                      dedupPolicy: choices.dedupPolicy,
                                      maxEmails: cap,
-                                     copiesOriginals: choices.copiesOriginals)
+                                     copiesOriginals: choices.copiesOriginals,
+                                     inputByteLimit: inputByteLimit)
     }
 
     private func resolveAndHandleSelectedFile(_ url: URL) {
@@ -3780,6 +3817,9 @@ private func handleMultipleFiles(_ urls: [URL]) {
     }
 
     private static let freeExportLimit = 10
+
+    /// Set when the Free input allowance refuses an import; drives the alert.
+    @State private var importAllowanceDenial: ImportAllowance.Denial?
 
     // MARK: - Part O: streaming export plumbing
 

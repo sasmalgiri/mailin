@@ -108,6 +108,19 @@ struct GuidedImportSheet: View {
     @State private var chosenCopiesOriginals = false
     @State private var chosenIndexAttachmentText = ImportChoices.indexAttachmentTextDefault()
     @State private var didSeedChoices = false
+    /// Free input allowance: what the archive already holds (from the store)
+    /// and what these files add, measured on disk including folder contents.
+    @State private var ingestedBytes: Int?
+    @State private var requestedBytes: Int?
+
+    /// The tier's allowance, read from the app's one store manager; nil when
+    /// the tier has no limit (or when no manager exists, as in previews).
+    private var inputByteLimit: Int? { StoreManager.live?.inputByteLimit }
+
+    private var allowanceDenial: ImportAllowance.Denial? {
+        guard let inputByteLimit, let ingestedBytes, let requestedBytes else { return nil }
+        return ImportAllowance.evaluate(requestedBytes: requestedBytes, ingestedBytes: ingestedBytes, limitBytes: inputByteLimit).denial
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -117,6 +130,7 @@ struct GuidedImportSheet: View {
                 VStack(alignment: .leading, spacing: 18) {
                     if let plan {
                         whatItIs(plan)
+                        allowance
                         choices
                         whatItCosts(plan)
                         whatMayBeLost(plan)
@@ -247,6 +261,42 @@ struct GuidedImportSheet: View {
         }
     }
 
+    /// Free plan only: the input allowance, stated before the button, with
+    /// the figures that decide it and the way to lift it.
+    @ViewBuilder
+    private var allowance: some View {
+        if let limit = inputByteLimit {
+            let f = { (n: Int) in ByteCountFormatter.string(fromByteCount: Int64(n), countStyle: .file) }
+            section("Free plan input allowance", systemImage: "lock") {
+                row("Allowance", "\(f(limit)) of input in total")
+                row("Already imported", ingestedBytes.map(f) ?? "Measuring…")
+                row("This import adds", requestedBytes.map(f) ?? "Measuring…")
+                if let ingestedBytes, let requestedBytes {
+                    let after = ingestedBytes + requestedBytes
+                    row("After this import", after <= limit ? "\(f(after)) (\(f(limit - after)) left)" : "\(f(after)) — over the allowance")
+                }
+                if let denial = allowanceDenial {
+                    Text(denial.message)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button {
+                        StoreManager.live?.requestPurchase(.personal, feature: "Import more than 100 MB", reason: denial.message)
+                    } label: {
+                        Label("Unlock with Personal…", systemImage: "lock.open.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("import.allowance.unlock")
+                } else {
+                    Text("Personal and Professional have no input limit.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .accessibilityIdentifier("import.allowance")
+        }
+    }
+
     @ViewBuilder
     private func whatMayBeLost(_ plan: ImportPlan) -> some View {
         let warnings = plan.items.compactMap(\.classification.warning)
@@ -322,8 +372,13 @@ struct GuidedImportSheet: View {
             // preflight says it cannot finish — the coordinator would refuse
             // anyway, and offering a button that throws is worse than a
             // disabled one with the shortfall stated above it.
+            // Also disabled while the Free allowance is still being measured
+            // or is exceeded: the funnel would refuse anyway, and the reason
+            // is stated above the button.
             .disabled(plan == nil || plan?.isEmpty == true
-                      || plan?.storagePlan?.canProceed == false)
+                      || plan?.storagePlan?.canProceed == false
+                      || (inputByteLimit != nil && (ingestedBytes == nil || requestedBytes == nil))
+                      || allowanceDenial != nil)
         }
         .padding(16)
     }
@@ -338,6 +393,13 @@ struct GuidedImportSheet: View {
             ImportPlan.build(urls: sources, destination: destination, copiesOriginals: copies)
         }.value
         plan = built
+        if inputByteLimit != nil {
+            let supported = built.supported.map(\.url)
+            requestedBytes = await Task.detached(priority: .userInitiated) {
+                ImportAllowance.totalBytes(of: supported)
+            }.value
+            ingestedBytes = await ImportAllowance.ingestedBytes()
+        }
     }
 
     private func section<Content: View>(_ title: String,

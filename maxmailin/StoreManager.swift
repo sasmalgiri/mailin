@@ -79,6 +79,94 @@ enum RestoreOutcome: Equatable {
     }
 }
 
+/// The Free plan's input allowance, applied at the one import funnel
+/// (`ContentView.startImport`) and again at the service boundary
+/// (`ContentViewModel.parseSelectedFiles`) so no caller can get past it.
+/// Cumulative: what the archive already holds, from the `sources` table,
+/// plus what this import would add. Pure functions, so the rule is tested
+/// without StoreKit or a store.
+enum ImportAllowance {
+    struct Denial: Equatable {
+        let requestedBytes: Int
+        let ingestedBytes: Int
+        let limitBytes: Int
+
+        var remainingBytes: Int { max(0, limitBytes - ingestedBytes) }
+
+        /// The sentence the alert, the sheet and the status line all use.
+        var message: String {
+            let f = { (n: Int) in ByteCountFormatter.string(fromByteCount: Int64(n), countStyle: .file) }
+            if ingestedBytes == 0 {
+                return "The Free plan imports up to \(f(limitBytes)) of input. These files total \(f(requestedBytes)). Personal and Professional have no input limit."
+            }
+            return "The Free plan imports up to \(f(limitBytes)) of input in total. This archive already holds \(f(ingestedBytes)); these files would add \(f(requestedBytes)), \(f(remainingBytes)) remain. Personal and Professional have no input limit."
+        }
+    }
+
+    enum Decision: Equatable {
+        case allowed
+        case denied(Denial)
+
+        var denial: Denial? {
+            if case .denied(let d) = self { return d }
+            return nil
+        }
+    }
+
+    /// `limitBytes == nil` means the tier has no limit. A request that would
+    /// take the cumulative total past the limit is denied as a whole: nothing
+    /// is imported, nothing is silently truncated.
+    static func evaluate(requestedBytes: Int, ingestedBytes: Int, limitBytes: Int?) -> Decision {
+        guard let limitBytes else { return .allowed }
+        if ingestedBytes + requestedBytes <= limitBytes { return .allowed }
+        return .denied(Denial(requestedBytes: requestedBytes, ingestedBytes: ingestedBytes, limitBytes: limitBytes))
+    }
+
+    /// Bytes of input the user is asking to import: regular files by size,
+    /// folders by the sum of the regular files inside them (symbolic links
+    /// are not followed, so a link cannot smuggle a larger tree past the
+    /// count nor inflate it).
+    nonisolated static func totalBytes(of urls: [URL]) -> Int {
+        let fm = FileManager.default
+        var total = 0
+        for url in urls {
+            guard let attributes = try? fm.attributesOfItem(atPath: url.path),
+                  let type = attributes[.type] as? FileAttributeType else { continue }
+            switch type {
+            case .typeRegular:
+                total += (attributes[.size] as? NSNumber)?.intValue ?? 0
+            case .typeDirectory:
+                guard let enumerator = fm.enumerator(at: url,
+                                                     includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .isSymbolicLinkKey],
+                                                     options: [.skipsHiddenFiles]) else { continue }
+                for case let child as URL in enumerator {
+                    guard let values = try? child.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .isSymbolicLinkKey]),
+                          values.isSymbolicLink != true, values.isRegularFile == true else { continue }
+                    total += values.fileSize ?? 0
+                }
+            default:
+                continue   // symlink at the top level, device, socket: not input
+            }
+        }
+        return total
+    }
+
+    /// Bytes already ingested into this archive: the recorded size of every
+    /// source the store holds.
+    static func ingestedBytes(archive: ArchiveDataService = .shared) async -> Int {
+        let sources = (try? await archive.sources()) ?? []
+        return sources.reduce(0) { $0 + max(0, $1.byteSize) }
+    }
+
+    /// One call for the funnel: measures, sums, decides.
+    static func check(urls: [URL], limitBytes: Int?, archive: ArchiveDataService = .shared) async -> Decision {
+        guard let limitBytes else { return .allowed }
+        let requested = totalBytes(of: urls)
+        let ingested = await ingestedBytes(archive: archive)
+        return evaluate(requestedBytes: requested, ingestedBytes: ingested, limitBytes: limitBytes)
+    }
+}
+
 @MainActor
 class StoreManager: ObservableObject {
 
@@ -114,6 +202,15 @@ class StoreManager: ObservableObject {
     static let allProductIDs: Set<String> = personalProductIDs.union(professionalProductIDs)
 
     nonisolated static let freeEmailLimit = 500
+
+    /// Owner decision 2026-10-01: the Free plan ingests at most 100 MB of
+    /// input in total (every file or folder it has ever imported into this
+    /// archive, counted by the bytes on disk). Decimal megabytes, so the
+    /// formatter and the number agree ("100 MB").
+    nonisolated static let freeInputByteLimit = 100_000_000
+
+    /// The input allowance for the current tier: nil = unlimited.
+    var inputByteLimit: Int? { isPremium ? nil : Self.freeInputByteLimit }
 
     // MARK: - Daily Usage Reset
 
