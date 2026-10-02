@@ -343,15 +343,14 @@ final class ExportJobRunner {
         center.run(title: request.title) { [weak self] in
             guard let self else { return }
             var request = request
-            // Purchase policy is evaluated when the run STARTS, not when the
-            // request was built: a resume from a receipt, or a request kept
-            // open across a purchase or an expiry, carries a stale cap. The
-            // current tier decides; a Free resume past the cap writes nothing
-            // further and ends in a truncated receipt (fail closed).
-            if let storeManager = self.storeManager {
-                request.cap = Self.enforcedCap(savedCap: request.cap, isPremium: storeManager.isPremium)
-            }
             do {
+                // Purchase policy is evaluated when the run STARTS, not when
+                // the request was built: a resume from a receipt, or a request
+                // kept open across a purchase or an expiry, carries a stale
+                // cap. The current tier decides; a Free resume past the cap
+                // writes nothing further and ends in a truncated receipt. No
+                // tier to check means no run at all (fail closed).
+                request = try Self.authorized(request, isPremium: self.storeManager?.isPremium)
                 request = try await Self.prepare(request)
                 // Fourth review Q2: a validated resume starts AT its
                 // checkpoint. If the writer fails before it reports a new
@@ -367,7 +366,7 @@ final class ExportJobRunner {
                 // offers no further resume: the positions no longer mean
                 // anything.
                 var resume: ExportRequest? = nil
-                if !(error is ResumeError), !(error is ArchiveExportError) {
+                if !(error is ResumeError), !(error is AuthorizationError), !(error is ArchiveExportError) {
                     resume = Self.resumeRequest(for: request, positions: center.done)
                 }
                 center.recordFailure(destination: request.destinationURL, isFolder: request.isFolder,
@@ -377,12 +376,33 @@ final class ExportJobRunner {
         }
     }
 
-    /// The cap a run must honour given the tier in force NOW. The saved cap
-    /// only tells us what the request thought at build time; the current
-    /// entitlement wins in both directions — a Free run that was built while
-    /// Personal was active is capped, a Personal run built while Free is not.
-    nonisolated static func enforcedCap(savedCap: Int?, isPremium: Bool) -> Int? {
-        isPremium ? nil : StoreManager.freeEmailLimit
+    /// Why a run was refused before it wrote anything.
+    enum AuthorizationError: LocalizedError {
+        /// The runner has no store to ask, so the tier in force is unknown.
+        case tierUnknown
+        var errorDescription: String? {
+            switch self {
+            case .tierUnknown:
+                return String(localized: "This export cannot start because your plan could not be checked. Open the export again from the Export menu.")
+            }
+        }
+    }
+
+    /// The request as it may run under the tier in force NOW. The cap saved
+    /// in the request only tells us what it thought at build time; the current
+    /// entitlement wins in both directions — a Free run built while Personal
+    /// was active is capped, a Personal run built while Free is not. An
+    /// unknown tier (`nil`) refuses the run rather than trusting the saved cap.
+    nonisolated static func authorized(_ request: ExportRequest, isPremium: Bool?) throws -> ExportRequest {
+        var authorized = request
+        authorized.cap = try enforcedCap(savedCap: request.cap, isPremium: isPremium)
+        return authorized
+    }
+
+    /// The cap a run must honour given the tier in force NOW; see `authorized`.
+    nonisolated static func enforcedCap(savedCap: Int?, isPremium: Bool?) throws -> Int? {
+        guard let isPremium else { throw AuthorizationError.tierUnknown }
+        return isPremium ? nil : StoreManager.freeEmailLimit
     }
 
     private func progress(_ done: Int, _ total: Int) {

@@ -260090,6 +260090,70 @@
         }
       }
     },
+    "This export cannot start because your plan could not be checked. Open the export again from the Export menu.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieser Export kann nicht gestartet werden, weil Ihr Plan nicht geprüft werden konnte. Öffnen Sie den Export erneut über das Menü „Exportieren“."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esta exportación no puede iniciarse porque no se pudo comprobar tu plan. Vuelve a abrir la exportación desde el menú Exportar."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cette exportation ne peut pas démarrer, car votre forfait n'a pas pu être vérifié. Rouvrez l'exportation depuis le menu Exporter."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "आपके प्लान की जाँच नहीं हो सकी, इसलिए यह निर्यात शुरू नहीं हो सकता। निर्यात मेनू से निर्यात को फिर से खोलें।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questa esportazione non può iniziare perché non è stato possibile verificare il tuo piano. Riapri l'esportazione dal menu Esporta."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プランを確認できなかったため、この書き出しを開始できません。「書き出し」メニューからもう一度書き出しを開いてください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "플랜을 확인할 수 없어 이 내보내기를 시작할 수 없습니다. 내보내기 메뉴에서 내보내기를 다시 여십시오."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esta exportação não pode começar porque não foi possível verificar seu plano. Abra a exportação novamente pelo menu Exportar."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法检查您的方案，因此无法开始此导出。请从“导出”菜单重新打开导出。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法檢查您的方案，因此無法開始此匯出。請從「匯出」選單重新開啟匯出。"
+          }
+        }
+      }
+    },
     "This file's movement record: what it delivered, what was skipped as duplicate, and its content fingerprint for provenance": {
       "localizations": {
         "de": {

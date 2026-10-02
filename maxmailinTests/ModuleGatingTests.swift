@@ -779,17 +779,40 @@ struct PurchaseGateTests {
     }
 
     @Test("An export run honours the tier in force when it starts, not the cap saved in its request")
-    func exportCapFollowsCurrentTier() {
+    func exportCapFollowsCurrentTier() throws {
         // A request built (or a receipt written) while Personal was active
         // carries no cap; if the entitlement has lapsed by the time it is
         // started or resumed, the Free cap applies anyway.
-        #expect(ExportJobRunner.enforcedCap(savedCap: nil, isPremium: false) == StoreManager.freeEmailLimit)
+        #expect(try ExportJobRunner.enforcedCap(savedCap: nil, isPremium: false) == StoreManager.freeEmailLimit)
         // A request built while Free carries the cap; once Personal is bought
         // the resume runs to the end of the selection.
-        #expect(ExportJobRunner.enforcedCap(savedCap: StoreManager.freeEmailLimit, isPremium: true) == nil)
+        #expect(try ExportJobRunner.enforcedCap(savedCap: StoreManager.freeEmailLimit, isPremium: true) == nil)
         // No change in tier, no change in behaviour.
-        #expect(ExportJobRunner.enforcedCap(savedCap: StoreManager.freeEmailLimit, isPremium: false) == StoreManager.freeEmailLimit)
-        #expect(ExportJobRunner.enforcedCap(savedCap: nil, isPremium: true) == nil)
+        #expect(try ExportJobRunner.enforcedCap(savedCap: StoreManager.freeEmailLimit, isPremium: false) == StoreManager.freeEmailLimit)
+        #expect(try ExportJobRunner.enforcedCap(savedCap: nil, isPremium: true) == nil)
+    }
+
+    @Test("A fresh run or a resume with no tier to check is refused, never run on its saved cap")
+    func exportWithoutATierIsRefused() throws {
+        let scope = ArchiveSelectionScope.query(.all, exclusions: [])
+        // A fresh request that was built uncapped (as a Personal host builds it).
+        let fresh = ExportRequest(format: .csv, title: "CSV", scope: scope,
+                                  destination: NSTemporaryDirectory() + "refused.csv", isFolder: false, cap: nil)
+        #expect(throws: ExportJobRunner.AuthorizationError.self) {
+            _ = try ExportJobRunner.authorized(fresh, isPremium: nil)
+        }
+        // A resume from a receipt that recorded no cap: the saved cap says
+        // "unlimited", and the receipt alone must not be enough to run.
+        var resume = fresh
+        resume.skipFirst = 500
+        resume.selectionFingerprint = "fp"
+        #expect(throws: ExportJobRunner.AuthorizationError.self) {
+            _ = try ExportJobRunner.authorized(resume, isPremium: nil)
+        }
+        // With a tier to check, the same requests run under that tier's cap.
+        #expect(try ExportJobRunner.authorized(resume, isPremium: false).cap == StoreManager.freeEmailLimit)
+        #expect(try ExportJobRunner.authorized(resume, isPremium: true).cap == nil)
+        #expect(try ExportJobRunner.authorized(resume, isPremium: false).skipFirst == 500)
     }
 }
 
