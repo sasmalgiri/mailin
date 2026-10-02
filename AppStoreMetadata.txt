@@ -204,7 +204,7 @@ Free to try. Subscribe monthly, yearly, or buy once for lifetime access.
 PROMOTIONAL TEXT (170 characters max)
 ------------------------------------
 
-Forensic-grade email archive analyzer. Open .mbox, .pst, .nsf, .msg on iPhone, iPad & Mac. On-device AI by default. Bates, IOC, custody. No tracking; optional Cloud AI opt-in. Free to try.
+Forensic-grade email archive analyzer. Open .mbox, .pst, .nsf, .msg on iPhone, iPad & Mac. On-device AI only. Bates, IOC, custody. No tracking, no cloud. Free to try.
 
 ------------------------------------
 SUPPORT URL
