@@ -105,7 +105,7 @@ struct AttachmentGridView: View {
                 TutorialHelpButton(showTutorial: $showTutorial)
                 Picker("Sort", selection: $sortOrder) {
                     ForEach(SortOrder.allCases, id: \.self) { order in
-                        Text(order.rawValue).tag(order)
+                        Text(LocalizedStringKey(order.rawValue)).tag(order)
                     }
                 }
                 .pickerStyle(.segmented)

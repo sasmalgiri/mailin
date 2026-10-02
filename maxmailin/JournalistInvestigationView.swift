@@ -216,16 +216,16 @@ struct JournalistInvestigationView: View {
 
         coordinator.begin(steps: 10, color: .purple)
 
-        coordinator.advance(step: 1, label: "Analyzing sentiment...")
+        coordinator.advance(step: 1, label: String(localized: "Analyzing sentiment..."))
         guard let sentiment = await coordinator.runDetached({ EmailNLPEngine.analyzeSentiment(of: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 2, label: "Extracting topics...")
+        coordinator.advance(step: 2, label: String(localized: "Extracting topics..."))
         guard let topics = await coordinator.runDetached({ EmailNLPEngine.extractTopics(from: emailsCopy, limit: 25) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 3, label: "Building contact insights...")
+        coordinator.advance(step: 3, label: String(localized: "Building contact insights..."))
         guard let insights = await coordinator.runDetached({ EmailNLPEngine.contactInsights(from: emailsCopy, limit: 20) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 4, label: "Running anomaly detection...")
+        coordinator.advance(step: 4, label: String(localized: "Running anomaly detection..."))
         guard let anom = await coordinator.runDetached({ AnomalyDetectionEngine.detectAnomalies(in: emailsCopy) }) else { coordinator.finish(); return }
 
         nlpSentiment = sentiment; nlpTopics = topics; contactInsights = insights; anomalies = anom
@@ -252,19 +252,19 @@ struct JournalistInvestigationView: View {
 
         if !coordinator.isActive { coordinator.begin(steps: 10, color: .purple); coordinator.advance(step: 4, label: "") }
 
-        coordinator.advance(step: 5, label: "Scoring source credibility...")
+        coordinator.advance(step: 5, label: String(localized: "Scoring source credibility..."))
         guard let creds = await coordinator.runDetached({ InvestigationFeatures.scoreSourceCredibility(emails: emailsCopy, graph: graphCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 6, label: "Detecting story leads...")
+        coordinator.advance(step: 6, label: String(localized: "Detecting story leads..."))
         guard let leads = await coordinator.runDetached({ InvestigationFeatures.detectStoryLeads(emails: emailsCopy, anomalies: anomCopy, graph: graphCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 7, label: "Finding contradictions...")
+        coordinator.advance(step: 7, label: String(localized: "Finding contradictions..."))
         guard let contras = await coordinator.runDetached({ InvestigationFeatures.detectContradictions(in: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 8, label: "Extracting key quotes...")
+        coordinator.advance(step: 8, label: String(localized: "Extracting key quotes..."))
         guard let quotes = await coordinator.runDetached({ InvestigationFeatures.extractQuotes(from: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 9, label: "Building event timeline...")
+        coordinator.advance(step: 9, label: String(localized: "Building event timeline..."))
         guard let events = await coordinator.runDetached({ InvestigationFeatures.extractTimelineEvents(from: emailsCopy) }) else { coordinator.finish(); return }
 
         sourceCredibilities = creds; storyLeads = leads; contradictions = contras
@@ -288,7 +288,7 @@ struct JournalistInvestigationView: View {
                 } label: {
                     HStack(spacing: 3) {
                         Image(systemName: tab.icon).font(.system(size: 9))
-                        Text(tab.rawValue).font(.system(size: 9, weight: activeTab == tab ? .bold : .medium))
+                        Text(LocalizedStringKey(tab.rawValue)).font(.system(size: 9, weight: activeTab == tab ? .bold : .medium))
                     }
                     .foregroundColor(activeTab == tab ? .purple : .secondary)
                     .padding(.horizontal, 6).padding(.vertical, 3)
@@ -720,7 +720,7 @@ struct JournalistInvestigationView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack {
-                    Text(event.eventType.rawValue)
+                    Text(LocalizedStringKey(event.eventType.rawValue))
                         .font(.system(size: 8, weight: .bold))
                         .foregroundColor(.white)
                         .padding(.horizontal, 5).padding(.vertical, 1)
@@ -930,11 +930,11 @@ struct JournalistInvestigationView: View {
             }
 
             HStack(alignment: .top, spacing: 8) {
-                claimView(label: "Claim A", color: .blue, claim: contradiction.claimA)
+                claimView(label: String(localized: "Claim A"), color: .blue, claim: contradiction.claimA)
                 Image(systemName: "arrow.left.arrow.right")
                     .font(.system(size: 10))
                     .foregroundColor(.red.opacity(0.6))
-                claimView(label: "Claim B", color: .orange, claim: contradiction.claimB)
+                claimView(label: String(localized: "Claim B"), color: .orange, claim: contradiction.claimB)
             }
         }
         .padding(8)
@@ -1104,7 +1104,7 @@ struct JournalistInvestigationView: View {
         let scoreText = String(format: "%.0f%%", storyLead.relevanceScore * 100)
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
-                Text(storyLead.leadType.rawValue)
+                Text(LocalizedStringKey(storyLead.leadType.rawValue))
                     .font(.system(size: 7, weight: .bold))
                     .foregroundColor(.white)
                     .padding(.horizontal, 5).padding(.vertical, 2)
@@ -1571,7 +1571,7 @@ struct JournalistInvestigationView: View {
                         let target = bookmarked.isEmpty ? workingSet : bookmarked
                         let data = await InvestigationReportGenerator.generateReport(
                             emails: target,
-                            title: "Investigation Report",
+                            title: String(localized: "Investigation Report"),
                             investigatorName: "Journalist"
                         )
                         #if os(macOS)
@@ -1822,11 +1822,11 @@ struct JournalistInvestigationView: View {
         }
 
         if score >= 6 {
-            return CredibilityInfo(label: "High", icon: "checkmark.seal.fill", color: .green)
+            return CredibilityInfo(label: String(localized: "High"), icon: "checkmark.seal.fill", color: .green)
         } else if score >= 3 {
-            return CredibilityInfo(label: "Med", icon: "checkmark.seal", color: .orange)
+            return CredibilityInfo(label: String(localized: "Med"), icon: "checkmark.seal", color: .orange)
         }
-        return CredibilityInfo(label: "Low", icon: "questionmark.circle", color: .red)
+        return CredibilityInfo(label: String(localized: "Low"), icon: "questionmark.circle", color: .red)
     }
 
     private func performExport() {

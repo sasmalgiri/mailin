@@ -44,8 +44,8 @@ struct NearDuplicateDetectionView: View {
                     Spacer()
                     EmptyStateView(
                         icon: "doc.on.doc",
-                        title: "No Near-Duplicates Found",
-                        message: "Adjust the similarity threshold and run the analysis to find emails with similar content."
+                        title: String(localized: "No Near-Duplicates Found"),
+                        message: String(localized: "Adjust the similarity threshold and run the analysis to find emails with similar content.")
                     )
                     thresholdControl
                         .padding(.top, Spacing.medium)
@@ -60,8 +60,8 @@ struct NearDuplicateDetectionView: View {
                     Spacer()
                     EmptyStateView(
                         icon: "checkmark.circle",
-                        title: "All Duplicates Removed",
-                        message: "All duplicate groups have been dismissed from view."
+                        title: String(localized: "All Duplicates Removed"),
+                        message: String(localized: "All duplicate groups have been dismissed from view.")
                     )
                     Button("Reset View") {
                         removedGroupIDs.removeAll()

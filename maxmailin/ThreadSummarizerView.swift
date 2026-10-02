@@ -334,16 +334,16 @@ struct ThreadSummarizerView: View {
             Divider()
 
             if isComputing {
-                LoadingView(message: "Analyzing thread...")
+                LoadingView(message: String(localized: "Analyzing thread..."))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let summary = summary {
                 summaryContent(summary)
             } else {
                 EmptyStateView(
                     icon: "bubble.left.and.text.bubble.right",
-                    title: "Thread Summary",
+                    title: String(localized: "Thread Summary"),
                     message: "Analyze \(threadEmails.count) email\(threadEmails.count == 1 ? "" : "s") in this thread to extract key insights.",
-                    actionTitle: "Summarize Thread"
+                    actionTitle: String(localized: "Summarize Thread")
                 ) {
                     computeSummary()
                 }
@@ -387,7 +387,7 @@ struct ThreadSummarizerView: View {
 
             TutorialHelpButton(showTutorial: $showTutorial)
 
-            SaveToDocumentsButton(title: "Thread Summarizer") {
+            SaveToDocumentsButton(title: String(localized: "Thread Summarizer")) {
                 [.init(key: "Messages in thread", value: "\(threadEmails.count)")]
             }
 

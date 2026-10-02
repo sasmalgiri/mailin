@@ -30,59 +30,59 @@ struct KeyboardShortcutOverlayView: View {
 
     private let groups: [ShortcutGroup] = [
         ShortcutGroup(
-            title: "File",
+            title: String(localized: "File"),
             icon: "doc",
             shortcuts: [
-                ShortcutItem(keys: "\u{2318}N", description: "New Import"),
-                ShortcutItem(keys: "\u{2318}O", description: "Open Archive"),
-                ShortcutItem(keys: "\u{21E7}\u{2318}E", description: "Export"),
-                ShortcutItem(keys: "\u{2318}P", description: "Print"),
+                ShortcutItem(keys: "\u{2318}N", description: String(localized: "New Import")),
+                ShortcutItem(keys: "\u{2318}O", description: String(localized: "Open Archive")),
+                ShortcutItem(keys: "\u{21E7}\u{2318}E", description: String(localized: "Export")),
+                ShortcutItem(keys: "\u{2318}P", description: String(localized: "Print")),
             ]
         ),
         ShortcutGroup(
-            title: "Edit",
+            title: String(localized: "Edit"),
             icon: "pencil",
             shortcuts: [
-                ShortcutItem(keys: "\u{2318}F", description: "Find"),
-                ShortcutItem(keys: "\u{2318}A", description: "Select All"),
+                ShortcutItem(keys: "\u{2318}F", description: String(localized: "Find")),
+                ShortcutItem(keys: "\u{2318}A", description: String(localized: "Select All")),
             ]
         ),
         ShortcutGroup(
-            title: "Analysis",
+            title: String(localized: "Analysis"),
             icon: "chart.bar.fill",
             shortcuts: [
-                ShortcutItem(keys: "\u{2318}K", description: "Ask AI"),
-                ShortcutItem(keys: "\u{21E7}\u{2318}G", description: "Analytics"),
-                ShortcutItem(keys: "\u{21E7}\u{2318}R", description: "Reply Stats"),
-                ShortcutItem(keys: "\u{21E7}\u{2318}T", description: "Timeline"),
-                ShortcutItem(keys: "\u{21E7}\u{2318}J", description: "Relationship Graph"),
-                ShortcutItem(keys: "\u{21E7}\u{2318}U", description: "Automation Rules"),
+                ShortcutItem(keys: "\u{2318}K", description: String(localized: "Ask AI")),
+                ShortcutItem(keys: "\u{21E7}\u{2318}G", description: String(localized: "Analytics")),
+                ShortcutItem(keys: "\u{21E7}\u{2318}R", description: String(localized: "Reply Stats")),
+                ShortcutItem(keys: "\u{21E7}\u{2318}T", description: String(localized: "Timeline")),
+                ShortcutItem(keys: "\u{21E7}\u{2318}J", description: String(localized: "Relationship Graph")),
+                ShortcutItem(keys: "\u{21E7}\u{2318}U", description: String(localized: "Automation Rules")),
             ]
         ),
         ShortcutGroup(
-            title: "Forensic",
+            title: String(localized: "Forensic"),
             icon: "shield.checkered",
             shortcuts: [
-                ShortcutItem(keys: "\u{21E7}\u{2318}F", description: "Forensic Mode"),
-                ShortcutItem(keys: "\u{2318}1\u{2013}5", description: "Evidence Tags"),
-                ShortcutItem(keys: "\u{2318}0", description: "Clear Tag"),
+                ShortcutItem(keys: "\u{21E7}\u{2318}F", description: String(localized: "Forensic Mode")),
+                ShortcutItem(keys: "\u{2318}1\u{2013}5", description: String(localized: "Evidence Tags")),
+                ShortcutItem(keys: "\u{2318}0", description: String(localized: "Clear Tag")),
             ]
         ),
         ShortcutGroup(
-            title: "View",
+            title: String(localized: "View"),
             icon: "eye",
             shortcuts: [
-                ShortcutItem(keys: "\u{2325}\u{2318}S", description: "Toggle Sidebar"),
-                ShortcutItem(keys: "\u{21E7}\u{2318}P", description: "Command Palette"),
+                ShortcutItem(keys: "\u{2325}\u{2318}S", description: String(localized: "Toggle Sidebar")),
+                ShortcutItem(keys: "\u{21E7}\u{2318}P", description: String(localized: "Command Palette")),
             ]
         ),
         ShortcutGroup(
-            title: "Navigation",
+            title: String(localized: "Navigation"),
             icon: "arrow.up.arrow.down",
             shortcuts: [
-                ShortcutItem(keys: "\u{2191}\u{2193}", description: "Email list"),
-                ShortcutItem(keys: "\u{2190}\u{2192}", description: "Panels"),
-                ShortcutItem(keys: "Space", description: "Preview"),
+                ShortcutItem(keys: "\u{2191}\u{2193}", description: String(localized: "Email list")),
+                ShortcutItem(keys: "\u{2190}\u{2192}", description: String(localized: "Panels")),
+                ShortcutItem(keys: "Space", description: String(localized: "Preview")),
             ]
         ),
     ]

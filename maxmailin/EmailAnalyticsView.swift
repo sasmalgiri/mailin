@@ -120,7 +120,7 @@ struct EmailAnalyticsView: View {
 
             TutorialHelpButton(showTutorial: $showTutorial)
 
-            SaveToDocumentsButton(title: "Email Analytics") {
+            SaveToDocumentsButton(title: String(localized: "Email Analytics")) {
                 [.init(key: "Emails analyzed", value: "\(analyticsData?.totalCount ?? 0)")]
             }
 
@@ -152,19 +152,19 @@ struct EmailAnalyticsView: View {
 
                 #if os(iOS)
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: Spacing.xSmall) {
-                    ComputeStageIndicator(label: "Sentiment", isActive: computeStage.contains("Sentiment"), isDone: computeStage.contains("Timeline") || computeStage.contains("Contact") || computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
-                    ComputeStageIndicator(label: "Timeline", isActive: computeStage.contains("Timeline"), isDone: computeStage.contains("Contact") || computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
-                    ComputeStageIndicator(label: "Contacts", isActive: computeStage.contains("Contact"), isDone: computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
+                    ComputeStageIndicator(label: String(localized: "Sentiment"), isActive: computeStage.contains("Sentiment"), isDone: computeStage.contains("Timeline") || computeStage.contains("Contact") || computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
+                    ComputeStageIndicator(label: String(localized: "Timeline"), isActive: computeStage.contains("Timeline"), isDone: computeStage.contains("Contact") || computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
+                    ComputeStageIndicator(label: String(localized: "Contacts"), isActive: computeStage.contains("Contact"), isDone: computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
                     ComputeStageIndicator(label: "NLP", isActive: computeStage.contains("Language") || computeStage.contains("Topic"), isDone: computeStage.contains("Compliance") || computeStage.contains("Done"))
-                    ComputeStageIndicator(label: "Compliance", isActive: computeStage.contains("Compliance"), isDone: computeStage.contains("Done"))
+                    ComputeStageIndicator(label: String(localized: "Compliance"), isActive: computeStage.contains("Compliance"), isDone: computeStage.contains("Done"))
                 }
                 #else
                 HStack(spacing: Spacing.small) {
-                    ComputeStageIndicator(label: "Sentiment", isActive: computeStage.contains("Sentiment"), isDone: computeStage.contains("Timeline") || computeStage.contains("Contact") || computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
-                    ComputeStageIndicator(label: "Timeline", isActive: computeStage.contains("Timeline"), isDone: computeStage.contains("Contact") || computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
-                    ComputeStageIndicator(label: "Contacts", isActive: computeStage.contains("Contact"), isDone: computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
+                    ComputeStageIndicator(label: String(localized: "Sentiment"), isActive: computeStage.contains("Sentiment"), isDone: computeStage.contains("Timeline") || computeStage.contains("Contact") || computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
+                    ComputeStageIndicator(label: String(localized: "Timeline"), isActive: computeStage.contains("Timeline"), isDone: computeStage.contains("Contact") || computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
+                    ComputeStageIndicator(label: String(localized: "Contacts"), isActive: computeStage.contains("Contact"), isDone: computeStage.contains("Language") || computeStage.contains("Topic") || computeStage.contains("Done"))
                     ComputeStageIndicator(label: "NLP", isActive: computeStage.contains("Language") || computeStage.contains("Topic"), isDone: computeStage.contains("Compliance") || computeStage.contains("Done"))
-                    ComputeStageIndicator(label: "Compliance", isActive: computeStage.contains("Compliance"), isDone: computeStage.contains("Done"))
+                    ComputeStageIndicator(label: String(localized: "Compliance"), isActive: computeStage.contains("Compliance"), isDone: computeStage.contains("Done"))
                 }
                 #endif
             }
@@ -184,14 +184,14 @@ struct EmailAnalyticsView: View {
     private func overviewCards(data: AnalyticsData) -> some View {
         VStack(spacing: Spacing.small) {
             LazyVGrid(columns: adaptiveStatColumns, spacing: Spacing.small) {
-                StatCard(title: "Total", value: "\(data.totalCount)", icon: "envelope.fill", color: .blue)
-                StatCard(title: "Sent", value: "\(data.sentCount)", icon: "arrow.up.circle.fill", color: AppColors.sentEmail)
-                StatCard(title: "Received", value: "\(data.receivedCount)", icon: "arrow.down.circle.fill", color: AppColors.receivedEmail)
-                StatCard(title: "Sentiment", value: data.sentimentLabel, icon: data.sentimentIcon, color: data.sentimentColor)
-                StatCard(title: "High Priority", value: "\(data.highPriorityCount)", icon: "exclamationmark.triangle.fill", color: .red)
-                StatCard(title: "Med Priority", value: "\(data.mediumPriorityCount)", icon: "exclamationmark.circle.fill", color: .orange)
-                StatCard(title: "Attachments", value: "\(data.totalAttachments)", icon: "paperclip", color: .purple)
-                StatCard(title: "Storage", value: String(format: "%.1f MB", data.totalStorageMB), icon: "internaldrive", color: .teal)
+                StatCard(title: String(localized: "Total"), value: "\(data.totalCount)", icon: "envelope.fill", color: .blue)
+                StatCard(title: String(localized: "Sent"), value: "\(data.sentCount)", icon: "arrow.up.circle.fill", color: AppColors.sentEmail)
+                StatCard(title: String(localized: "Received"), value: "\(data.receivedCount)", icon: "arrow.down.circle.fill", color: AppColors.receivedEmail)
+                StatCard(title: String(localized: "Sentiment"), value: data.sentimentLabel, icon: data.sentimentIcon, color: data.sentimentColor)
+                StatCard(title: String(localized: "High Priority"), value: "\(data.highPriorityCount)", icon: "exclamationmark.triangle.fill", color: .red)
+                StatCard(title: String(localized: "Med Priority"), value: "\(data.mediumPriorityCount)", icon: "exclamationmark.circle.fill", color: .orange)
+                StatCard(title: String(localized: "Attachments"), value: "\(data.totalAttachments)", icon: "paperclip", color: .purple)
+                StatCard(title: String(localized: "Storage"), value: String(format: "%.1f MB", data.totalStorageMB), icon: "internaldrive", color: .teal)
             }
 
             Label {
@@ -317,8 +317,8 @@ struct EmailAnalyticsView: View {
                 .frame(height: 220)
 
                 HStack(spacing: Spacing.medium) {
-                    ChartLegendDot(color: AppColors.sentEmail, label: "Sent")
-                    ChartLegendDot(color: AppColors.receivedEmail, label: "Received")
+                    ChartLegendDot(color: AppColors.sentEmail, label: String(localized: "Sent"))
+                    ChartLegendDot(color: AppColors.receivedEmail, label: String(localized: "Received"))
                 }
                 .font(Typography.caption1)
             }
@@ -812,7 +812,7 @@ struct EmailAnalyticsView: View {
                                         .font(Typography.caption1)
                                         .foregroundColor(.orange)
                                         .frame(width: 16)
-                                    Text(type.rawValue)
+                                    Text(LocalizedStringKey(type.rawValue))
                                         .font(Typography.caption1)
                                     Spacer()
                                     Text("\(count)")

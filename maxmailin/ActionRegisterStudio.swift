@@ -307,7 +307,7 @@ struct ActionRegisterEditorView: View {
                 Text(action.wrappedValue.action)
                     .font(Typography.caption1.weight(.semibold))
                 Spacer()
-                Text(action.wrappedValue.status.rawValue)
+                Text(LocalizedStringKey(action.wrappedValue.status.rawValue))
                     .font(.caption2.weight(.bold))
                     .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(action.wrappedValue.status.color.opacity(0.15))
@@ -391,7 +391,7 @@ struct ActionRegisterEditorView: View {
         defer { isPosting = false }
 
         var sections: [CapturedDocument.Section] = []
-        sections.append(.init(name: "Method", fields: [
+        sections.append(.init(name: String(localized: "Method"), fields: [
             .init(key: "Technique", value: "CAPA register — every action links a cause; closure requires a named human verifier; 'effective' requires an evidence note."),
         ]))
         for a in model.actions {

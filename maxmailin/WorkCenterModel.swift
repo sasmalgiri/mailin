@@ -46,14 +46,14 @@ enum WorkCenterModel {
             out.append(WorkItem(
                 severity: .critical, icon: "exclamationmark.triangle.fill",
                 title: "\(i.privilegeGaps) privileged email\(i.privilegeGaps == 1 ? "" : "s") missing annotation",
-                detail: "Every withheld email needs its reason on record — close these before production.",
+                detail: String(localized: "Every withheld email needs its reason on record — close these before production."),
                 destination: .reviewDashboard))
         }
         if i.triagePending > 0 {
             out.append(WorkItem(
                 severity: .action, icon: "shield.lefthalf.filled",
                 title: "\(i.triagePending) email\(i.triagePending == 1 ? "" : "s") awaiting triage verdict",
-                detail: "User-reported suspicious emails, pre-scored and waiting for your call.",
+                detail: String(localized: "User-reported suspicious emails, pre-scored and waiting for your call."),
                 destination: .phishingTriage))
         }
         if i.reviewPending > 0 {
@@ -66,8 +66,8 @@ enum WorkCenterModel {
         if i.watchFolderActive == false {
             out.append(WorkItem(
                 severity: .info, icon: "eye.slash",
-                title: "Watch folder is off",
-                detail: "New reported emails won't auto-import until you resume watching.",
+                title: String(localized: "Watch folder is off"),
+                detail: String(localized: "New reported emails won't auto-import until you resume watching."),
                 destination: .phishingTriage))
         }
         if i.analysisTotal > 0 && i.analysisAnalyzed < i.analysisTotal {

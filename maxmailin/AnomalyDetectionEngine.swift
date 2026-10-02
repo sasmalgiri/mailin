@@ -36,12 +36,12 @@ struct AnomalyDetectionEngine {
 
         var description: String {
             switch self {
-            case .frequencySpike: return "Unusually high email volume on a given day"
-            case .unusualHour: return "Emails sent during late-night hours"
-            case .newDomain: return "New sender domains appearing recently"
-            case .toneShift: return "Significant sentiment change from a sender"
-            case .largeAttachment: return "Emails with unusually many attachments"
-            case .recipientAnomaly: return "Emails with unusually large recipient lists or unknown domains"
+            case .frequencySpike: return String(localized: "Unusually high email volume on a given day")
+            case .unusualHour: return String(localized: "Emails sent during late-night hours")
+            case .newDomain: return String(localized: "New sender domains appearing recently")
+            case .toneShift: return String(localized: "Significant sentiment change from a sender")
+            case .largeAttachment: return String(localized: "Emails with unusually many attachments")
+            case .recipientAnomaly: return String(localized: "Emails with unusually large recipient lists or unknown domains")
             }
         }
     }

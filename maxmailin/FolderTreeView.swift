@@ -168,14 +168,14 @@ struct FolderTreeView: View {
         let received = typeCounts["received"] ?? 0
         let sent = typeCounts["sent"] ?? 0
         if received > 0 {
-            nodes.append(FolderNode(name: "Inbox", icon: "tray.fill", children: [], emailCount: received, filterValue: "type:received"))
+            nodes.append(FolderNode(name: String(localized: "Inbox"), icon: "tray.fill", children: [], emailCount: received, filterValue: "type:received"))
         }
         if sent > 0 {
-            nodes.append(FolderNode(name: "Sent", icon: "paperplane.fill", children: [], emailCount: sent, filterValue: "type:sent"))
+            nodes.append(FolderNode(name: String(localized: "Sent"), icon: "paperplane.fill", children: [], emailCount: sent, filterValue: "type:sent"))
         }
 
         if attachmentTotal > 0 {
-            nodes.append(FolderNode(name: "Has Attachments", icon: "paperclip", children: [], emailCount: attachmentTotal, filterValue: "has:attachment"))
+            nodes.append(FolderNode(name: String(localized: "Has Attachments"), icon: "paperclip", children: [], emailCount: attachmentTotal, filterValue: "has:attachment"))
         }
 
         if !labelBuckets.isEmpty {
@@ -184,7 +184,7 @@ struct FolderTreeView: View {
             }
             // v1 showed the label-application total on the parent row
             // (labels overlap, so this can exceed the email count).
-            nodes.append(FolderNode(name: "Labels", icon: "tag.fill", children: labelChildren,
+            nodes.append(FolderNode(name: String(localized: "Labels"), icon: "tag.fill", children: labelChildren,
                                     emailCount: labelChildren.reduce(0) { $0 + $1.emailCount }, filterValue: ""))
         }
 
@@ -192,7 +192,7 @@ struct FolderTreeView: View {
             let sourceChildren = sourceBuckets.map {
                 FolderNode(name: $0.value, icon: "doc.fill", children: [], emailCount: $0.count, filterValue: "source:\(Self.operatorValue($0.value))")
             }
-            nodes.append(FolderNode(name: "Source Files", icon: "folder.fill", children: sourceChildren,
+            nodes.append(FolderNode(name: String(localized: "Source Files"), icon: "folder.fill", children: sourceChildren,
                                     emailCount: archiveTotal, filterValue: ""))
         }
 

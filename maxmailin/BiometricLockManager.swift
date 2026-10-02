@@ -32,10 +32,10 @@ class BiometricLockManager: ObservableObject {
 
         var displayName: String {
             switch self {
-            case .none: return "None"
-            case .touchID: return "Touch ID"
-            case .faceID: return "Face ID"
-            case .opticID: return "Optic ID"
+            case .none: return String(localized: "None")
+            case .touchID: return String(localized: "Touch ID")
+            case .faceID: return String(localized: "Face ID")
+            case .opticID: return String(localized: "Optic ID")
             }
         }
 

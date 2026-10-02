@@ -58,15 +58,15 @@ enum ArchiveSidebarSelection: Hashable, Sendable {
 
     var title: String {
         switch self {
-        case .allMail: return "All Mail"
-        case .sent: return "Sent"
-        case .received: return "Received"
-        case .withAttachments: return "With Attachments"
-        case .pinned: return "Pinned"
-        case .trash: return "Trash"
+        case .allMail: return String(localized: "All Mail")
+        case .sent: return String(localized: "Sent")
+        case .received: return String(localized: "Received")
+        case .withAttachments: return String(localized: "With Attachments")
+        case .pinned: return String(localized: "Pinned")
+        case .trash: return String(localized: "Trash")
         case .source(let name): return name
         case .label(let tag): return tag
-        case .saved: return "Saved Search"
+        case .saved: return String(localized: "Saved Search")
         }
     }
 }

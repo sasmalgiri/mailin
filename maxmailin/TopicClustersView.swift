@@ -218,7 +218,7 @@ struct TopicClustersView: View {
                         sortOrder = order
                     } label: {
                         HStack {
-                            Text(order.rawValue)
+                            Text(LocalizedStringKey(order.rawValue))
                             if sortOrder == order {
                                 Image(systemName: "checkmark")
                             }
@@ -243,7 +243,7 @@ struct TopicClustersView: View {
 
             TutorialHelpButton(showTutorial: $showTutorial)
 
-            SaveToDocumentsButton(title: "Topic Clusters") {
+            SaveToDocumentsButton(title: String(localized: "Topic Clusters")) {
                 [.init(key: "Clusters", value: "\(clusters.count)"), .init(key: "Emails", value: "\(emails.count)")]
             }
 

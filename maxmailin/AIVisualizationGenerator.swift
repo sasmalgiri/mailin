@@ -23,10 +23,10 @@ enum VisualizationType: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .topicFlow: return "Topic Flow"
-        case .communicationHeatmap: return "Activity Heatmap"
-        case .sentimentTimeline: return "Sentiment Timeline"
-        case .relationshipMap: return "Relationship Map"
+        case .topicFlow: return String(localized: "Topic Flow")
+        case .communicationHeatmap: return String(localized: "Activity Heatmap")
+        case .sentimentTimeline: return String(localized: "Sentiment Timeline")
+        case .relationshipMap: return String(localized: "Relationship Map")
         }
     }
 
@@ -623,9 +623,9 @@ struct SentimentTimelineView: View {
         }()
 
         return HStack(spacing: Spacing.medium) {
-            miniStat(label: "Average", value: String(format: "%.2f", avgAll))
-            miniStat(label: "Trend", value: trend)
-            miniStat(label: "Periods", value: "\(data.dataPoints.count)")
+            miniStat(label: String(localized: "Average"), value: String(format: "%.2f", avgAll))
+            miniStat(label: String(localized: "Trend"), value: trend)
+            miniStat(label: String(localized: "Periods"), value: "\(data.dataPoints.count)")
         }
     }
 

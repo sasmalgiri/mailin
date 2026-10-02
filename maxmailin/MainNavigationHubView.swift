@@ -142,9 +142,11 @@ struct MainNavigationHubView: View {
         var id: String { title }
     }
 
-    private func t(_ dest: HubDestination, _ title: String, _ subtitle: String,
+    /// `LocalizedStringResource` parameters so the compiler extracts every tile
+    /// title and subtitle into the string catalog.
+    private func t(_ dest: HubDestination, _ title: LocalizedStringResource, _ subtitle: LocalizedStringResource,
                    _ icon: String, _ color: Color) -> HubTile {
-        HubTile(dest: dest, title: title, subtitle: subtitle, icon: icon, color: color)
+        HubTile(dest: dest, title: String(localized: title), subtitle: String(localized: subtitle), icon: icon, color: color)
     }
 
     var body: some View {
@@ -189,7 +191,7 @@ struct MainNavigationHubView: View {
         if !guidedWorkflows.isEmpty {
             VStack(alignment: .leading, spacing: Spacing.small) {
                 HStack(spacing: Spacing.xSmall) {
-                    sectionHeader(title: "Start a job", icon: "flowchart", color: persona.accentColor)
+                    sectionHeader(title: String(localized: "Start a job"), icon: "flowchart", color: persona.accentColor)
                     Spacer()
                     Text("GUIDED")
                         .font(.system(size: 9, weight: .bold))
@@ -341,24 +343,24 @@ struct MainNavigationHubView: View {
     }
     private var heroTitle: String {
         switch persona {
-        case .forensic: return "Forensic Review"
-        case .legal: return "Legal Review Workspace"
-        case .itAdmin: return "IT Admin Analysis"
-        case .journalist: return "Investigation Workbench"
-        case .personal: return "Personal Organizer"
-        case .researcher: return "Research Corpus"
-        case .general: return "Feature Explorer"
+        case .forensic: return String(localized: "Forensic Review")
+        case .legal: return String(localized: "Legal Review Workspace")
+        case .itAdmin: return String(localized: "IT Admin Analysis")
+        case .journalist: return String(localized: "Investigation Workbench")
+        case .personal: return String(localized: "Personal Organizer")
+        case .researcher: return String(localized: "Research Corpus")
+        case .general: return String(localized: "Feature Explorer")
         }
     }
     private var heroSubtitle: String {
         switch persona {
-        case .forensic: return "Evidence coding, eDiscovery, chain of custody"
-        case .legal: return "Privilege coding, responsiveness, production sets"
-        case .itAdmin: return "Headers, authentication, routing, MIME structure"
-        case .journalist: return "Sources, timeline, leads, key quotes"
-        case .personal: return "Contacts, categories, attachments, cleanup"
-        case .researcher: return "Protocols, screening, coding, cited chronologies"
-        case .general: return "Discover all features, tips, and guided tour"
+        case .forensic: return String(localized: "Evidence coding, eDiscovery, chain of custody")
+        case .legal: return String(localized: "Privilege coding, responsiveness, production sets")
+        case .itAdmin: return String(localized: "Headers, authentication, routing, MIME structure")
+        case .journalist: return String(localized: "Sources, timeline, leads, key quotes")
+        case .personal: return String(localized: "Contacts, categories, attachments, cleanup")
+        case .researcher: return String(localized: "Protocols, screening, coding, cited chronologies")
+        case .general: return String(localized: "Discover all features, tips, and guided tour")
         }
     }
     private var heroIcon: String {
@@ -450,7 +452,7 @@ struct MainNavigationHubView: View {
     private var recentToolsSection: some View {
         if !recentTools.isEmpty {
             VStack(alignment: .leading, spacing: Spacing.small) {
-                sectionHeader(title: "Recently used", icon: "clock.arrow.circlepath", color: AppColors.secondary)
+                sectionHeader(title: String(localized: "Recently used"), icon: "clock.arrow.circlepath", color: AppColors.secondary)
                 LazyVGrid(columns: featureColumns, spacing: Spacing.small) {
                     ForEach(recentTools) { tile in
                         hubTile(tile)
@@ -485,13 +487,13 @@ struct MainNavigationHubView: View {
 
     private var coreTitle: String {
         switch persona {
-        case .forensic: return "Forensic Tools"
-        case .legal: return "Legal Tools"
-        case .itAdmin: return "Admin Tools"
-        case .journalist: return "Investigation Tools"
-        case .personal: return "Organizer Tools"
-        case .researcher: return "Research Tools"
-        case .general: return "Explorer Tools"
+        case .forensic: return String(localized: "Forensic Tools")
+        case .legal: return String(localized: "Legal Tools")
+        case .itAdmin: return String(localized: "Admin Tools")
+        case .journalist: return String(localized: "Investigation Tools")
+        case .personal: return String(localized: "Organizer Tools")
+        case .researcher: return String(localized: "Research Tools")
+        case .general: return String(localized: "Explorer Tools")
         }
     }
 
@@ -572,7 +574,7 @@ struct MainNavigationHubView: View {
     // MARK: Category sections (shared tool catalog — de-dup trims overlaps)
 
     private var analysisSection: ToolSection {
-        ToolSection(title: "Analysis & Insights", icon: "chart.bar", color: .blue, tiles: [
+        ToolSection(title: String(localized: "Analysis & Insights"), icon: "chart.bar", color: .blue, tiles: [
             t(.emailAnalytics, "Email Analytics", "Comprehensive stats", "chart.bar", .blue),
             t(.topicClusters, "Topic Clusters", "NLP grouping", "circle.grid.3x3", .teal),
             t(.timeline, "Timeline", "Chronological view", "calendar.day.timeline.left", .purple),
@@ -587,7 +589,7 @@ struct MainNavigationHubView: View {
     }
 
     private var securitySection: ToolSection {
-        ToolSection(title: "Security & Detection", icon: "shield.checkered", color: .red, tiles: [
+        ToolSection(title: String(localized: "Security & Detection"), icon: "shield.checkered", color: .red, tiles: [
             t(.anomalyDetection, "Anomaly Detection", "Statistical outliers", "waveform.path.ecg", .red),
             t(.phishingTriage, "Phishing Triage", "Verdict queue", "shield.lefthalf.filled", .red),
             t(.iocExtractor, "IOC Extractor", "Threat indicators", "exclamationmark.shield", .red),
@@ -599,7 +601,7 @@ struct MainNavigationHubView: View {
     }
 
     private var legalForensicSection: ToolSection {
-        ToolSection(title: "Legal & Forensic", icon: "building.columns", color: .indigo, tiles: [
+        ToolSection(title: String(localized: "Legal & Forensic"), icon: "building.columns", color: .indigo, tiles: [
             t(.eDiscovery, "eDiscovery", "EDRM Workflow", "checklist", .blue),
             t(.predictiveCoding, "Predictive Coding", "TAR Classifier", "brain", .pink),
             t(.forensicReview, "Document Review", "Evidence coding", "shield.checkered", .orange),
@@ -618,7 +620,7 @@ struct MainNavigationHubView: View {
     }
 
     private var exportSection: ToolSection {
-        ToolSection(title: "Export & Reports", icon: "doc.text", color: .orange, tiles: [
+        ToolSection(title: String(localized: "Export & Reports"), icon: "doc.text", color: .orange, tiles: [
             t(.reportBuilder, "Report Builder", "PDF generation", "doc.richtext", .blue),
             t(.batchOperations, "Batch Operations", "Bulk actions", "square.stack.3d.up", .orange),
             t(.archiveComparison, "Archive Compare", "Diff archives", "rectangle.on.rectangle.angled", .cyan),
@@ -627,7 +629,7 @@ struct MainNavigationHubView: View {
     }
 
     private var aiSection: ToolSection {
-        ToolSection(title: "AI Intelligence", icon: "sparkles", color: .purple, tiles: [
+        ToolSection(title: String(localized: "AI Intelligence"), icon: "sparkles", color: .purple, tiles: [
             t(.aiAssistant, "AI Assistant", "Ask anything", "sparkles", .purple),
             t(.aiDigest, "AI Digest", "Smart summary", "newspaper", .blue),
             t(.smartAutoTagger, "Auto-Tagger", "NLP classification", "tag", .teal),
@@ -669,9 +671,9 @@ struct MainNavigationHubView: View {
             Spacer()
 
             HStack(spacing: Spacing.small) {
-                hubHeaderButton(icon: "plus.circle", label: "Add Files") { onOpenArchive() }
-                hubHeaderButton(icon: "house", label: "New Import") { onNewImport() }
-                hubHeaderButton(icon: "gearshape", label: "Settings") { onSettings() }
+                hubHeaderButton(icon: "plus.circle", label: String(localized: "Add Files")) { onOpenArchive() }
+                hubHeaderButton(icon: "house", label: String(localized: "New Import")) { onNewImport() }
+                hubHeaderButton(icon: "gearshape", label: String(localized: "Settings")) { onSettings() }
             }
         }
     }

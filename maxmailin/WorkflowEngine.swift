@@ -132,12 +132,12 @@ enum WorkflowCatalog {
     }
 
     static let forensic = WorkflowDefinition(
-        defID: "builtin.forensic.intake", name: "Evidence Intake & Review",
+        defID: "builtin.forensic.intake", name: String(localized: "Evidence Intake & Review"),
         persona: "forensic", builtin: true, operations: [
             op(1, "receive", "Receive & Identify", "Record the case and custodian; import the source. Posts an Import document.", .importRun, launches: .emailInbox, [
-                f("caseNumber", "Case / Matter number", .text, "Links this evidence to the investigation. Use your lab's case-numbering scheme.", placeholder: "CASE-2026-0001", required: true),
+                f("caseNumber", "Case / Matter number", .text, "Links this evidence to the investigation. Use your lab's case-numbering scheme.", placeholder: String(localized: "CASE-2026-0001"), required: true),
                 f("custodian", "Custodian / owner", .text, "Whose mailbox or account this evidence came from.", placeholder: "jdoe@corp.com", required: true),
-                f("sourceLocation", "Source location", .text, "Where the data resided — server, cloud tenant, device.", placeholder: "Exchange Online tenant"),
+                f("sourceLocation", "Source location", .text, "Where the data resided — server, cloud tenant, device.", placeholder: String(localized: "Exchange Online tenant")),
                 f("purpose", "Purpose of collection", .longText, "Why this evidence is being collected — the authority or request behind it."),
             ]),
             op(2, "preserve", "Preserve & Hash", "Compute and verify per-email SHA-256 so integrity is provable.", nil, launches: .chainOfCustody, [
@@ -156,17 +156,17 @@ enum WorkflowCatalog {
             op(5, "report", "Document & Report", "Generate the daily activity report for the case file. Posts a Report document.", .report, launches: .investigationReport, [
                 f("findings", "Findings summary", .longText, "The conclusions this run supports — written for the case file.", required: true),
             ], gates: [
-                WorkflowGate(rule: .operationConfirmed(seq: 4), reason: "Finish Analyze first."),
+                WorkflowGate(rule: .operationConfirmed(seq: 4), reason: String(localized: "Finish Analyze first.")),
                 WorkflowGate(rule: .fieldPresent(seq: 2, key: "method"),
-                             reason: "Record the acquisition method in Preserve & Hash — a report can't rest on unverified custody."),
+                             reason: String(localized: "Record the acquisition method in Preserve & Hash — a report can't rest on unverified custody.")),
             ]),
         ])
 
     static let legal = WorkflowDefinition(
-        defID: "builtin.legal.production", name: "Production Run",
+        defID: "builtin.legal.production", name: String(localized: "Production Run"),
         persona: "legal", builtin: true, operations: [
             op(1, "assemble", "Assemble Batch", "Create/assign the review batch (EDRM Review).", nil, launches: .reviewBatches, [
-                f("matter", "Matter name", .text, "The litigation or matter this production serves.", placeholder: "Acme v. Roe", required: true),
+                f("matter", "Matter name", .text, "The litigation or matter this production serves.", placeholder: String(localized: "Acme v. Roe"), required: true),
                 f("requestNo", "Request / RFP reference", .text, "The discovery request this responds to."),
                 f("reviewer", "Reviewer", .text, "Who is coding this batch (goes on the defensibility record)."),
                 f("batchSize", "Batch size", .number, "How many documents are in this batch."),
@@ -183,21 +183,21 @@ enum WorkflowCatalog {
             ]),
             op(4, "bates", "Bates & Redact", "Stamp production numbers; redact as needed.", nil, launches: .batesNumbering, [
                 f("batesPrefix", "Bates prefix", .text, "Production prefix for sequential stamping.", placeholder: "ACME"),
-                f("batesStart", "Bates start", .text, "First Bates number in this production.", placeholder: "ACME-000001"),
+                f("batesStart", "Bates start", .text, "First Bates number in this production.", placeholder: String(localized: "ACME-000001")),
                 f("redactions", "Redactions applied", .number, "How many documents required redaction."),
             ]),
             op(5, "produce", "Produce", "Export the set and copy the defensibility summary. Posts Export + Report.", .export, launches: .eDiscovery, [
-                f("productionName", "Production set name", .text, "Label for this production volume.", placeholder: "PROD001", required: true),
+                f("productionName", "Production set name", .text, "Label for this production volume.", placeholder: String(localized: "PROD001"), required: true),
                 f("format", "Production format", .choice, "How the set is produced.", options: ["Native", "PDF (Bates-stamped)", "Load file (DAT/Opticon)"]),
             ], gates: [
-                WorkflowGate(rule: .operationConfirmed(seq: 4), reason: "Finish Bates & Redact first."),
+                WorkflowGate(rule: .operationConfirmed(seq: 4), reason: String(localized: "Finish Bates & Redact first.")),
                 WorkflowGate(rule: .fieldEquals(seq: 3, key: "logComplete", value: "Yes"),
-                             reason: "Complete the privilege log first — producing before every privileged doc is annotated is the gap opposing counsel finds."),
+                             reason: String(localized: "Complete the privilege log first — producing before every privileged doc is annotated is the gap opposing counsel finds.")),
             ]),
         ])
 
     static let itAdmin = WorkflowDefinition(
-        defID: "builtin.it.phishing", name: "Phishing Incident",
+        defID: "builtin.it.phishing", name: String(localized: "Phishing Incident"),
         persona: "it_admin", builtin: true, operations: [
             op(1, "intake", "Intake", "Reported email enters the triage queue (watch folder auto-imports).", .importRun, launches: .phishingTriage, [
                 f("reporter", "Reporter", .text, "Who reported the suspicious email.", placeholder: "user@corp.com", required: true),
@@ -222,15 +222,15 @@ enum WorkflowCatalog {
                 f("rootCause", "Root cause / lessons", .longText, "What let it through and what to improve."),
             ], gates: [
                 WorkflowGate(rule: .fieldPresent(seq: 3, key: "disposition"),
-                             reason: "Set a verdict first — an incident can't be closed without a disposition on record."),
+                             reason: String(localized: "Set a verdict first — an incident can't be closed without a disposition on record.")),
             ]),
         ])
 
     static let journalist = WorkflowDefinition(
-        defID: "builtin.journalist.story", name: "Story Build",
+        defID: "builtin.journalist.story", name: String(localized: "Story Build"),
         persona: "journalist", builtin: true, operations: [
             op(1, "ingest", "Ingest & Verify", "Import the leak/FOIA set with its provenance receipt. Posts Import.", .importRun, launches: .emailInbox, [
-                f("dataset", "Dataset name", .text, "What this set is and where it came from.", placeholder: "Acme leak 2026", required: true),
+                f("dataset", "Dataset name", .text, "What this set is and where it came from.", placeholder: String(localized: "Acme leak 2026"), required: true),
                 f("provenance", "Provenance", .longText, "How you obtained it and why you trust it — the five-pillars provenance note."),
             ]),
             op(2, "leads", "Find Leads", "Search; identify the threads worth pursuing.", nil, launches: .emailInbox, [
@@ -249,10 +249,10 @@ enum WorkflowCatalog {
         ])
 
     static let personal = WorkflowDefinition(
-        defID: "builtin.personal.cleanup", name: "Archive Cleanup",
+        defID: "builtin.personal.cleanup", name: String(localized: "Archive Cleanup"),
         persona: "personal", builtin: true, operations: [
             op(1, "import", "Import / Backup", "Bring the archive in. Posts Import.", .importRun, launches: .emailInbox, [
-                f("archive", "Archive name", .text, "What you're cleaning up.", placeholder: "Gmail export 2026"),
+                f("archive", "Archive name", .text, "What you're cleaning up.", placeholder: String(localized: "Gmail export 2026")),
             ]),
             op(2, "dedupe", "Dedupe", "Remove exact duplicates archive-wide. Posts Cleanup.", .cleanup, launches: .duplicateManager, [
                 f("removed", "Duplicates removed", .number, "How many exact duplicates were cleared."),
@@ -270,17 +270,17 @@ enum WorkflowCatalog {
     /// Forensic — Keyword / Term Sweep (NIST 800-86 Examination). Run a
     /// search-term list across the evidence and turn the hits into findings.
     static let forensicKeywordSweep = WorkflowDefinition(
-        defID: "builtin.forensic.keywordsweep", name: "Keyword / Term Sweep",
+        defID: "builtin.forensic.keywordsweep", name: String(localized: "Keyword / Term Sweep"),
         persona: "forensic", builtin: true, operations: [
             op(1, "terms", "Define Terms", "Draft the search-term list that scopes the examination.", nil, launches: .keywordMonitor, [
-                f("caseNumber", "Case / Matter number", .text, "Ties this sweep to the investigation.", placeholder: "CASE-2026-0001", required: true),
+                f("caseNumber", "Case / Matter number", .text, "Ties this sweep to the investigation.", placeholder: String(localized: "CASE-2026-0001"), required: true),
                 f("terms", "Search terms", .longText, "Keywords and phrases — one per line.", required: true),
                 f("rationale", "Why these terms", .text, "The theory the terms are testing."),
             ]),
             op(2, "sweep", "Run Sweep", "Execute the term list across the evidence set.", nil, launches: .keywordMonitor, [
                 f("hits", "Matches found", .number, "How many emails matched any term."),
                 f("coverage", "Coverage", .text, "Date range and custodians searched."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: "Define the terms first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: String(localized: "Define the terms first."))]),
             op(3, "review", "Review Hits", "Triage each match for relevance.", nil, launches: .forensicReview, [
                 f("relevant", "Relevant hits", .number, "Matches that actually matter."),
                 f("falsePositives", "False positives", .number, "Matches discarded as noise."),
@@ -288,46 +288,46 @@ enum WorkflowCatalog {
             ]),
             op(4, "report", "Report Findings", "Write up what the sweep established. Posts a Report.", .report, launches: .investigationReport, [
                 f("summary", "Findings summary", .longText, "The conclusions this sweep supports — for the case file.", required: true),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 2), reason: "Run the sweep before reporting.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 2), reason: String(localized: "Run the sweep before reporting."))]),
         ])
 
     /// Forensic — Custody Verification (chain-of-custody integrity). Re-hash
     /// the set, prove nothing changed since intake, and seal a report.
     static let forensicCustodyVerify = WorkflowDefinition(
-        defID: "builtin.forensic.custodyverify", name: "Custody Verification",
+        defID: "builtin.forensic.custodyverify", name: String(localized: "Custody Verification"),
         persona: "forensic", builtin: true, operations: [
             op(1, "scope", "Select Evidence", "Choose the items to re-verify.", nil, launches: .chainOfCustody, [
-                f("caseNumber", "Case / Matter number", .text, "Ties this verification to the investigation.", placeholder: "CASE-2026-0001", required: true),
+                f("caseNumber", "Case / Matter number", .text, "Ties this verification to the investigation.", placeholder: String(localized: "CASE-2026-0001"), required: true),
                 f("itemCount", "Items under verification", .number, "How many evidence items you're checking."),
             ]),
             op(2, "rehash", "Recompute Hashes", "Re-hash every item and compare to the intake fingerprints.", nil, launches: .chainOfCustody, [
                 f("algorithm", "Hash algorithm", .choice, "The integrity fingerprint algorithm.", required: true, options: ["SHA-256", "SHA-1", "MD5"]),
                 f("verified", "Items matching", .number, "How many items still match their intake hash."),
                 f("mismatches", "Items changed", .number, "How many items no longer match — must be zero for intact custody."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: "Select the evidence first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: String(localized: "Select the evidence first."))]),
             op(3, "resolve", "Resolve Mismatches", "Investigate and explain any item that changed.", nil, launches: .forensicReview, [
                 f("explanation", "Mismatch explanation", .longText, "Explain or escalate every changed item — a hole here breaks admissibility."),
-            ], gates: [WorkflowGate(rule: .fieldPresent(seq: 2, key: "algorithm"), reason: "Recompute the hashes first.")]),
+            ], gates: [WorkflowGate(rule: .fieldPresent(seq: 2, key: "algorithm"), reason: String(localized: "Recompute the hashes first."))]),
             op(4, "seal", "Seal & Report", "Record the verdict and seal the custody report. Posts a Report.", .report, launches: .investigationReport, [
                 f("conclusion", "Integrity conclusion", .choice, "The verdict this verification supports.", required: true, options: ["Integrity intact", "Integrity broken — flagged"]),
                 f("verifier", "Verified by", .text, "Who performed the verification."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 2), reason: "Recompute the hashes before sealing.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 2), reason: String(localized: "Recompute the hashes before sealing."))]),
         ])
 
     /// Forensic — Timeline Reconstruction (NIST 800-86 Analysis phase). The
     /// central DFIR deliverable: put the events in provable order.
     static let forensicTimeline = WorkflowDefinition(
-        defID: "builtin.forensic.timeline", name: "Timeline Reconstruction",
+        defID: "builtin.forensic.timeline", name: String(localized: "Timeline Reconstruction"),
         persona: "forensic", builtin: true, operations: [
             op(1, "scope", "Set Scope", "Fix the window and custodians the timeline will cover.", nil, launches: .emailInbox, [
-                f("caseNumber", "Case / Matter number", .text, "Ties this timeline to the investigation.", placeholder: "CASE-2026-0001", required: true),
+                f("caseNumber", "Case / Matter number", .text, "Ties this timeline to the investigation.", placeholder: String(localized: "CASE-2026-0001"), required: true),
                 f("window", "Time window", .dateRange, "The date range the timeline spans — pick From and To."),
                 f("custodians", "Custodians in scope", .longText, "Whose mail is included — one per line."),
             ]),
             op(2, "build", "Build Timeline", "Assemble the chronological event list from the set.", nil, launches: .timeline, [
                 f("eventCount", "Events placed", .number, "How many dated events you put on the timeline."),
                 f("sources", "Timestamp sources", .longText, "Where the times come from — header Date, Received hops, server logs."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: "Set the scope first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: String(localized: "Set the scope first."))]),
             op(3, "keyEvents", "Mark Key Events", "Flag the pivotal moments and any unexplained gaps.", nil, launches: .timeline, [
                 f("pivotal", "Pivotal events", .longText, "The moments that matter to the case, in order.", required: true),
                 f("gaps", "Unexplained gaps", .longText, "Silences or missing intervals worth noting."),
@@ -339,16 +339,16 @@ enum WorkflowCatalog {
             op(5, "exhibit", "Export Exhibit", "Produce the timeline exhibit for the file. Posts a Timeline document.", .timeline, launches: .investigationReport, [
                 f("title", "Exhibit title", .text, "Label for this timeline exhibit.", required: true),
                 f("scopeNote", "Scope statement", .longText, "One line on what the timeline does and does not cover."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 2), reason: "Build the timeline before exporting an exhibit.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 2), reason: String(localized: "Build the timeline before exporting an exhibit."))]),
         ])
 
     /// Legal — Legal Hold & Preservation (EDRM Information Governance /
     /// Preservation). The first duty in any matter; missing it is spoliation.
     static let legalHold = WorkflowDefinition(
-        defID: "builtin.legal.hold", name: "Legal Hold & Preservation",
+        defID: "builtin.legal.hold", name: String(localized: "Legal Hold & Preservation"),
         persona: "legal", builtin: true, operations: [
             op(1, "identify", "Identify Custodians", "List everyone who must preserve, and the sources in scope.", nil, launches: .custodianPanel, [
-                f("matter", "Matter name", .text, "The litigation or investigation this hold serves.", placeholder: "Acme v. Roe", required: true),
+                f("matter", "Matter name", .text, "The litigation or investigation this hold serves.", placeholder: String(localized: "Acme v. Roe"), required: true),
                 f("custodians", "Custodians", .longText, "Everyone under a duty to preserve — one per line.", required: true),
                 f("scope", "Data sources in scope", .longText, "Mailboxes, drives, devices covered by the hold."),
             ]),
@@ -357,7 +357,7 @@ enum WorkflowCatalog {
                 f("instructions", "Preservation instructions", .longText, "Exactly what recipients must preserve and not delete."),
                 f("legalBasis", "Legal basis", .text, "The trigger — litigation, subpoena, investigation."),
             ], gates: [WorkflowGate(rule: .fieldPresent(seq: 1, key: "custodians"),
-                                    reason: "Identify the custodians before issuing the hold.")]),
+                                    reason: String(localized: "Identify the custodians before issuing the hold."))]),
             op(3, "acknowledge", "Track Acknowledgements", "Record who has confirmed the hold.", nil, launches: .custodianPanel, [
                 f("acknowledged", "Acknowledged", .number, "How many custodians confirmed receipt."),
                 f("outstanding", "Outstanding", .number, "How many have not yet confirmed."),
@@ -370,16 +370,16 @@ enum WorkflowCatalog {
             op(5, "monitor", "Monitor / Release", "Keep the hold active, or lift it with a reason on record.", nil, launches: .custodianPanel, [
                 f("status", "Hold status", .choice, "Active while the duty persists; Released only when it ends.", options: ["Active", "Released"]),
                 f("releaseReason", "Release reason", .longText, "Why the hold was lifted — required if releasing."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Track acknowledgements before changing hold status.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: String(localized: "Track acknowledgements before changing hold status."))]),
         ])
 
     /// Legal — Early Case Assessment (EDRM Processing/Analysis). Cull before
     /// the expensive review; decide scope on evidence, not guesswork.
     static let legalECA = WorkflowDefinition(
-        defID: "builtin.legal.eca", name: "Early Case Assessment",
+        defID: "builtin.legal.eca", name: String(localized: "Early Case Assessment"),
         persona: "legal", builtin: true, operations: [
             op(1, "terms", "Define Search Terms", "Draft the term list that scopes the case.", nil, launches: .keywordMonitor, [
-                f("matter", "Matter name", .text, "The matter under assessment.", placeholder: "Acme v. Roe", required: true),
+                f("matter", "Matter name", .text, "The matter under assessment.", placeholder: String(localized: "Acme v. Roe"), required: true),
                 f("terms", "Search terms", .longText, "Keywords and queries — one per line.", required: true),
                 f("dateRange", "Date range", .text, "The relevant period.", placeholder: "2024-01 → 2025-12"),
             ]),
@@ -400,17 +400,17 @@ enum WorkflowCatalog {
             op(5, "decide", "Decide Scope", "Proceed, narrow, or negotiate — with the rationale on record. Posts a Report.", .report, launches: .reviewDashboard, [
                 f("decision", "Decision", .choice, "The scoping call this assessment supports.", required: true, options: ["Proceed to review", "Narrow terms", "Negotiate scope"]),
                 f("rationale", "Rationale", .longText, "Why — the defensible basis for the scope decision.", required: true),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Assess a sample before deciding scope.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: String(localized: "Assess a sample before deciding scope."))]),
         ])
 
     /// Legal / Compliance — Data Subject Request (GDPR Art. 15 & related).
     /// A statutory-deadline job; releasing others' PII is itself a breach.
     static let legalDSAR = WorkflowDefinition(
-        defID: "builtin.legal.dsar", name: "Data Subject Request (DSAR)",
+        defID: "builtin.legal.dsar", name: String(localized: "Data Subject Request (DSAR)"),
         persona: "legal", builtin: true, operations: [
             op(1, "log", "Log Request", "Capture the request and its statutory clock.", nil, launches: .gdprCompliance, [
-                f("requestId", "Request ID", .text, "Your internal reference for this request.", placeholder: "DSAR-2026-001", required: true),
-                f("subject", "Data subject", .text, "Whose personal data is requested.", placeholder: "name / email", required: true),
+                f("requestId", "Request ID", .text, "Your internal reference for this request.", placeholder: String(localized: "DSAR-2026-001"), required: true),
+                f("subject", "Data subject", .text, "Whose personal data is requested.", placeholder: String(localized: "name / email"), required: true),
                 f("type", "Request type", .choice, "The right being exercised.", options: ["Access", "Erasure", "Rectification", "Portability"]),
                 f("deadline", "Statutory deadline", .date, "The date the response is legally due."),
             ]),
@@ -430,13 +430,13 @@ enum WorkflowCatalog {
                 f("format", "Response format", .choice, "How the pack is delivered.", options: ["PDF pack", "Native + index"]),
                 f("deliveredDate", "Delivered date", .date, "When the response was sent to the subject."),
             ], gates: [WorkflowGate(rule: .fieldEquals(seq: 3, key: "thirdPartyRedacted", value: "Yes"),
-                                    reason: "Redact third-party personal data before producing — releasing others' PII is itself a breach.")]),
+                                    reason: String(localized: "Redact third-party personal data before producing — releasing others' PII is itself a breach."))]),
         ])
 
     /// IT / SOC — Threat Hunt (NIST 800-61 proactive). The other half of the
     /// job: hunt the archive instead of waiting for a report.
     static let itThreatHunt = WorkflowDefinition(
-        defID: "builtin.it.threathunt", name: "Threat Hunt",
+        defID: "builtin.it.threathunt", name: String(localized: "Threat Hunt"),
         persona: "it_admin", builtin: true, operations: [
             op(1, "hypothesis", "Form Hypothesis", "State what you're hunting and where.", nil, launches: .keywordMonitor, [
                 f("hypothesis", "Hunt hypothesis", .longText, "The threat you suspect — e.g. lookalike-domain BEC targeting finance.", required: true),
@@ -445,7 +445,7 @@ enum WorkflowCatalog {
             op(2, "hunt", "Hunt", "Run the searches and indicators against the archive.", nil, launches: .keywordMonitor, [
                 f("queriesRun", "Queries run", .number, "How many searches/indicators you executed."),
                 f("leads", "Leads found", .number, "Hits worth a closer look."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: "Form the hypothesis first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: String(localized: "Form the hypothesis first."))]),
             op(3, "analyze", "Analyze Anomalies", "Check authentication, routing, and attachment anomalies.", nil, launches: .anomalyDetection, [
                 f("authFindings", "Authentication findings", .choice, "The strongest signal found.", options: ["None", "SPF/DKIM/DMARC fails", "Spoofed display name", "Suspicious routing"]),
                 f("anomalies", "Anomaly notes", .longText, "What stood out and why it's suspicious."),
@@ -457,16 +457,16 @@ enum WorkflowCatalog {
             op(5, "report", "Report Findings", "Write up the verdict and recommendations. Posts a Threat Hunt document.", .threatHunt, launches: .investigationReport, [
                 f("verdict", "Verdict", .choice, "The hunt's conclusion.", required: true, options: ["Threat found", "No threat found", "Inconclusive"]),
                 f("recommendations", "Recommendations", .longText, "What to block, harden, or hunt next.", required: true),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 2), reason: "Run the hunt before reporting.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 2), reason: String(localized: "Run the hunt before reporting."))]),
         ])
 
     /// Journalist — Entity & Network Map (ICIJ cross-reference). The story
     /// spine: who is connected to whom, and how.
     static let journalistNetwork = WorkflowDefinition(
-        defID: "builtin.journalist.network", name: "Entity & Network Map",
+        defID: "builtin.journalist.network", name: String(localized: "Entity & Network Map"),
         persona: "journalist", builtin: true, operations: [
             op(1, "extract", "Extract Entities", "Pull out the people, organizations, and addresses.", nil, launches: .knowledgeGraphExplorer, [
-                f("dataset", "Dataset", .text, "The set you're mapping.", placeholder: "Acme leak 2026", required: true),
+                f("dataset", "Dataset", .text, "The set you're mapping.", placeholder: String(localized: "Acme leak 2026"), required: true),
                 f("entityCount", "Entities found", .number, "How many distinct entities surfaced."),
                 f("entityTypes", "Entity types", .longText, "What kinds — people, orgs, domains, accounts."),
             ]),
@@ -481,17 +481,17 @@ enum WorkflowCatalog {
             op(4, "annotate", "Annotate the Map", "Label the story-relevant nodes and write the narrative. Posts an Entity Map document.", .entityMap, launches: .storyFile, [
                 f("annotatedNodes", "Nodes annotated", .number, "How many entities you tagged as story-relevant."),
                 f("narrative", "Network narrative", .longText, "How the network supports the story — in plain prose.", required: true),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 2), reason: "Map the connections before annotating.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 2), reason: String(localized: "Map the connections before annotating."))]),
         ])
 
     /// IT / SOC — Phishing Campaign (Bulk). The many-reports reality: one
     /// campaign generates dozens of user reports; triage them as a single
     /// incident with one verdict and one bulk containment, not one-by-one.
     static let itCampaign = WorkflowDefinition(
-        defID: "builtin.it.campaign", name: "Phishing Campaign (Bulk)",
+        defID: "builtin.it.campaign", name: String(localized: "Phishing Campaign (Bulk)"),
         persona: "it_admin", builtin: true, operations: [
             op(1, "cluster", "Cluster Reports", "Group the many reported emails into one campaign.", nil, launches: .nearDuplicates, [
-                f("campaignName", "Campaign name", .text, "A label for this campaign — you'll cite it in the incident.", placeholder: "Invoice-lure Aug 2026", required: true),
+                f("campaignName", "Campaign name", .text, "A label for this campaign — you'll cite it in the incident.", placeholder: String(localized: "Invoice-lure Aug 2026"), required: true),
                 f("reportsCount", "User reports", .number, "How many separate user reports this campaign generated."),
                 f("clusterKey", "Clustered by", .choice, "What ties the reports together into one campaign.", options: ["Sender domain", "Subject pattern", "URL / landing page", "Attachment hash"]),
             ]),
@@ -509,7 +509,7 @@ enum WorkflowCatalog {
                 f("mailboxesPurged", "Mailboxes purged", .number, "How many mailboxes had the message removed."),
                 f("blocksAdded", "Blocks added", .number, "Sender/domain/URL blocks put in place."),
             ], gates: [WorkflowGate(rule: .fieldPresent(seq: 3, key: "disposition"),
-                                    reason: "Set the campaign verdict before bulk containment — don't purge on a hunch.")]),
+                                    reason: String(localized: "Set the campaign verdict before bulk containment — don't purge on a hunch."))]),
             op(5, "notify", "Notify & Close", "Notify affected users and record the campaign's metrics.", nil, [
                 f("usersNotified", "Users notified", .number, "How many recipients were warned or briefed."),
                 f("rootCause", "Root cause / lessons", .longText, "How it got through and what to harden."),
@@ -519,7 +519,7 @@ enum WorkflowCatalog {
     /// IT / SOC — Account Compromise (BEC) Investigation (NIST 800-61). Work
     /// a suspected mailbox takeover end to end.
     static let itBEC = WorkflowDefinition(
-        defID: "builtin.it.bec", name: "Account Compromise (BEC)",
+        defID: "builtin.it.bec", name: String(localized: "Account Compromise (BEC)"),
         persona: "it_admin", builtin: true, operations: [
             op(1, "detect", "Detect & Scope", "Identify the account and why it's suspected.", nil, launches: .itAdminDashboard, [
                 f("account", "Compromised mailbox", .text, "The account under investigation.", placeholder: "user@corp.com", required: true),
@@ -529,7 +529,7 @@ enum WorkflowCatalog {
                 f("rulesFound", "Malicious inbox rules", .number, "Auto-forward/delete rules the attacker set."),
                 f("authFindings", "Auth / login findings", .choice, "The strongest access signal.", options: ["None", "Impossible travel", "MFA fatigue", "Token theft", "Unknown"]),
                 f("iocCount", "IOCs found", .number, "Indicators extracted from the account's mail."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: "Scope the account first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: String(localized: "Scope the account first."))]),
             op(3, "verdict", "Verdict", "Confirm or clear the compromise. Posts the Verdict.", .triageVerdict, launches: .phishingTriage, [
                 f("disposition", "Disposition", .choice, "The call this investigation supports.", required: true, options: ["Confirmed compromise", "False alarm", "Needs info"]),
                 f("severity", "Severity", .choice, "Business impact.", options: ["P1 — Critical", "P2 — High", "P3 — Medium", "P4 — Low"]),
@@ -538,17 +538,17 @@ enum WorkflowCatalog {
                 f("actions", "Actions taken", .longText, "Password reset, sessions revoked, rules removed, MFA re-enrolled."),
                 f("affected", "Downstream recipients", .number, "People who got mail from the account while compromised."),
             ], gates: [WorkflowGate(rule: .fieldPresent(seq: 3, key: "disposition"),
-                                    reason: "Set a verdict before containment — don't lock a user out on a hunch.")]),
+                                    reason: String(localized: "Set a verdict before containment — don't lock a user out on a hunch."))]),
             op(5, "report", "Report", "Incident write-up and lessons. Posts a Report.", .report, launches: .investigationReport, [
                 f("rootCause", "Root cause", .longText, "How the account was taken over.", required: true),
                 f("lessons", "Lessons / hardening", .longText, "What to change so it doesn't recur."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Reach a verdict before reporting.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: String(localized: "Reach a verdict before reporting."))]),
         ])
 
     /// Journalist — Fact-Check & Verify (ICIJ verification). Stand up every
     /// claim before publication.
     static let journalistFactCheck = WorkflowDefinition(
-        defID: "builtin.journalist.factcheck", name: "Fact-Check & Verify",
+        defID: "builtin.journalist.factcheck", name: String(localized: "Fact-Check & Verify"),
         persona: "journalist", builtin: true, operations: [
             op(1, "claims", "List Claims", "Enumerate every factual claim to be checked.", nil, launches: .storyFile, [
                 f("story", "Story", .text, "Which story these claims belong to.", required: true),
@@ -566,13 +566,13 @@ enum WorkflowCatalog {
                 f("decision", "Decision", .choice, "Where verification leaves the story.", required: true, options: ["Ready to publish", "Hold — unresolved claims"]),
                 f("notes", "Verification notes", .longText, "What still needs work, or why it's ready."),
             ], gates: [WorkflowGate(rule: .fieldEquals(seq: 3, key: "rightOfReplyDone", value: "Yes"),
-                                    reason: "Give every named subject a right of reply before sign-off.")]),
+                                    reason: String(localized: "Give every named subject a right of reply before sign-off."))]),
         ])
 
     /// Journalist — Source Protection & Publish. Strip anything that could
     /// identify a source before the set leaves your device.
     static let journalistPublish = WorkflowDefinition(
-        defID: "builtin.journalist.publish", name: "Source Protection & Publish",
+        defID: "builtin.journalist.publish", name: String(localized: "Source Protection & Publish"),
         persona: "journalist", builtin: true, operations: [
             op(1, "identify", "Identify Sensitive Data", "List what must be protected.", nil, launches: .redaction, [
                 f("dataset", "Set to publish", .text, "What you're preparing for publication.", required: true),
@@ -581,19 +581,19 @@ enum WorkflowCatalog {
             op(2, "redact", "Redact", "Remove or obscure the identifying material.", nil, launches: .redaction, [
                 f("redactedItems", "Items redacted", .number, "How many documents you redacted."),
                 f("method", "Method", .choice, "How you protected the source.", options: ["Black-box redaction", "Remove attachment", "Paraphrase quote", "Strip metadata"]),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: "Identify the sensitive data first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: String(localized: "Identify the sensitive data first."))]),
             op(3, "verify", "Verify No Leaks", "Double-check nothing identifying remains.", nil, launches: .emailInbox, [
                 f("leakCheckPassed", "No source-identifying data remains", .bool, "Turn on only after you've confirmed the set is safe to release."),
             ]),
             op(4, "publish", "Prepare Publish Set", "Export the source-safe set. Posts Export.", .export, launches: .emailInbox, [
                 f("outputName", "Output name", .text, "Label for the published set.", required: true),
             ], gates: [WorkflowGate(rule: .fieldEquals(seq: 3, key: "leakCheckPassed", value: "Yes"),
-                                    reason: "Confirm no source-identifying data remains before exporting.")]),
+                                    reason: String(localized: "Confirm no source-identifying data remains before exporting."))]),
         ])
 
     /// Personal — Find & Export. The everyday "find that email and save it" job.
     static let personalFindExport = WorkflowDefinition(
-        defID: "builtin.personal.findexport", name: "Find & Export",
+        defID: "builtin.personal.findexport", name: String(localized: "Find & Export"),
         persona: "personal", builtin: true, operations: [
             op(1, "search", "Find Emails", "Search for what you need.", nil, launches: .emailInbox, [
                 f("query", "What are you looking for", .text, "Sender, subject, keyword, or date.", required: true),
@@ -606,7 +606,7 @@ enum WorkflowCatalog {
             op(3, "export", "Export", "Save them out. Posts Export.", .export, launches: .emailInbox, [
                 f("format", "Format", .choice, "How to save them.", options: ["PDF", "EML files", "MBOX"]),
                 f("destination", "Saved to", .text, "Where you put the export."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: "Find the emails first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: String(localized: "Find the emails first."))]),
             op(4, "confirm", "Confirm", "Open the export and sanity-check it.", nil, launches: .emailInbox, [
                 f("verified", "Export looks right", .bool, "Turn on once you've opened it and confirmed it's complete."),
             ]),
@@ -614,7 +614,7 @@ enum WorkflowCatalog {
 
     /// Personal — Unsubscribe & Declutter. Inbox hygiene.
     static let personalDeclutter = WorkflowDefinition(
-        defID: "builtin.personal.declutter", name: "Unsubscribe & Declutter",
+        defID: "builtin.personal.declutter", name: String(localized: "Unsubscribe & Declutter"),
         persona: "personal", builtin: true, operations: [
             op(1, "scan", "Scan Clutter", "Find newsletters, promotions, and automated mail.", nil, launches: .topicClusters, [
                 f("newsletters", "Newsletters", .number, "How many newsletter senders."),
@@ -626,7 +626,7 @@ enum WorkflowCatalog {
             ]),
             op(3, "purge", "Purge Old Clutter", "Clear out the old low-value mail. Posts Cleanup.", .cleanup, launches: .duplicateManager, [
                 f("removed", "Emails cleared", .number, "How many you removed."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: "Scan first so you know what's clutter.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: String(localized: "Scan first so you know what's clutter."))]),
             op(4, "summary", "Summary", "Record what changed.", nil, launches: .emailInbox, [
                 f("notes", "What changed", .longText, "A quick note on the cleanup for next time."),
             ]),
@@ -638,10 +638,10 @@ enum WorkflowCatalog {
     /// court-ready, Bates-stamped, redacted package (review → redact → stamp
     /// → export), so the examiner never assembles tools by hand.
     static let forensicExhibit = WorkflowDefinition(
-        defID: "builtin.forensic.exhibit", name: "Court Exhibit Package",
+        defID: "builtin.forensic.exhibit", name: String(localized: "Court Exhibit Package"),
         persona: "forensic", builtin: true, operations: [
             op(1, "select", "Select Evidence", "Pick the tagged items that become exhibits.", nil, launches: .forensicReview, [
-                f("caseNumber", "Case / Matter number", .text, "The case this exhibit set belongs to.", placeholder: "CASE-2026-0001", required: true),
+                f("caseNumber", "Case / Matter number", .text, "The case this exhibit set belongs to.", placeholder: String(localized: "CASE-2026-0001"), required: true),
                 f("itemsSelected", "Items selected", .number, "How many emails you're packaging as exhibits."),
             ]),
             op(2, "redact", "Redact", "Remove privileged / third-party PII before anything leaves.", nil, launches: .redaction, [
@@ -650,11 +650,11 @@ enum WorkflowCatalog {
             ]),
             op(3, "bates", "Bates Stamp", "Apply sequential production numbers.", nil, launches: .batesNumbering, [
                 f("batesPrefix", "Bates prefix", .text, "Production prefix.", placeholder: "ACME"),
-                f("batesStart", "Bates start", .text, "First number.", placeholder: "ACME-000001"),
+                f("batesStart", "Bates start", .text, "First number.", placeholder: String(localized: "ACME-000001")),
             ], gates: [WorkflowGate(rule: .fieldEquals(seq: 2, key: "redactionComplete", value: "Yes"),
-                                    reason: "Redact before stamping and exporting — a leaked exhibit can't be unshared.")]),
+                                    reason: String(localized: "Redact before stamping and exporting — a leaked exhibit can't be unshared."))]),
             op(4, "package", "Export Package", "Produce the court-ready package with a cover report. Posts Export.", .export, launches: .investigationReport, [
-                f("exhibitName", "Exhibit set name", .text, "Label for this package.", placeholder: "Exhibits A–F", required: true),
+                f("exhibitName", "Exhibit set name", .text, "Label for this package.", placeholder: String(localized: "Exhibits A–F"), required: true),
                 f("recipient", "For", .text, "Who receives it — counsel, prosecutor, court."),
             ]),
         ])
@@ -662,7 +662,7 @@ enum WorkflowCatalog {
     /// Forensic — Insider Threat Review. One job across comms patterns,
     /// anomalies and keywords to judge a subject.
     static let forensicInsider = WorkflowDefinition(
-        defID: "builtin.forensic.insider", name: "Insider Threat Review",
+        defID: "builtin.forensic.insider", name: String(localized: "Insider Threat Review"),
         persona: "forensic", builtin: true, operations: [
             op(1, "scope", "Scope Subject", "Fix the subject and window under review.", nil, launches: .communicationPatterns, [
                 f("subject", "Subject", .text, "The mailbox/person under review.", placeholder: "jdoe@corp.com", required: true),
@@ -670,7 +670,7 @@ enum WorkflowCatalog {
             ]),
             op(2, "patterns", "Communication Patterns", "Look for off-hours, external, or unusual volume.", nil, launches: .communicationPatterns, [
                 f("findings", "Pattern findings", .longText, "External recipients, off-hours spikes, new contacts."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: "Scope the subject first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: String(localized: "Scope the subject first."))]),
             op(3, "anomalies", "Anomalies & Keywords", "Flag risky terms and statistical outliers.", nil, launches: .anomalyDetection, [
                 f("anomalies", "Anomalies found", .number, "Outliers worth noting."),
                 f("riskyTerms", "Risky terms", .longText, "Exfiltration, resignation, competitor names, etc."),
@@ -678,15 +678,15 @@ enum WorkflowCatalog {
             op(4, "report", "Report", "Record the judgment for HR/legal. Posts a Report.", .report, launches: .investigationReport, [
                 f("verdict", "Verdict", .choice, "Where the review lands.", required: true, options: ["Concern found", "No concern", "Escalate"]),
                 f("summary", "Summary", .longText, "The basis for the verdict."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 2), reason: "Review the patterns before concluding.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 2), reason: String(localized: "Review the patterns before concluding."))]),
         ])
 
     /// Legal — Privilege QC & Redaction. The pre-production safety pass.
     static let legalPrivQC = WorkflowDefinition(
-        defID: "builtin.legal.privqc", name: "Privilege QC & Redaction",
+        defID: "builtin.legal.privqc", name: String(localized: "Privilege QC & Redaction"),
         persona: "legal", builtin: true, operations: [
             op(1, "qc", "QC Privilege Log", "Confirm every withheld doc has its basis annotated.", nil, launches: .reviewDashboard, [
-                f("matter", "Matter", .text, "The matter this production serves.", placeholder: "Acme v. Roe", required: true),
+                f("matter", "Matter", .text, "The matter this production serves.", placeholder: String(localized: "Acme v. Roe"), required: true),
                 f("withheld", "Withheld count", .number, "Documents withheld as privileged."),
                 f("gaps", "Unannotated gaps", .number, "Privileged docs still missing a basis — must reach zero."),
             ]),
@@ -697,15 +697,15 @@ enum WorkflowCatalog {
             op(3, "bates", "Bates Stamp", "Stamp the production set.", nil, launches: .batesNumbering, [
                 f("batesPrefix", "Bates prefix", .text, "Production prefix.", placeholder: "ACME"),
             ], gates: [WorkflowGate(rule: .fieldEquals(seq: 2, key: "redactionComplete", value: "Yes"),
-                                    reason: "Finish redaction before stamping the production.")]),
+                                    reason: String(localized: "Finish redaction before stamping the production."))]),
             op(4, "signoff", "Sign Off", "Clear the set for production. Posts a Report.", .report, launches: .reviewDashboard, [
                 f("decision", "Decision", .choice, "The QC outcome.", required: true, options: ["Cleared for production", "Hold — gaps remain"]),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: "QC the privilege log first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: String(localized: "QC the privilege log first."))]),
         ])
 
     /// Legal / Compliance — Retention & Compliance Audit.
     static let legalCompliance = WorkflowDefinition(
-        defID: "builtin.legal.compliance", name: "Retention & Compliance Audit",
+        defID: "builtin.legal.compliance", name: String(localized: "Retention & Compliance Audit"),
         persona: "legal", builtin: true, operations: [
             op(1, "scan", "Scan for PII", "Find personal data across the set.", nil, launches: .gdprCompliance, [
                 f("matter", "Matter / scope", .text, "What you're auditing.", required: true),
@@ -720,12 +720,12 @@ enum WorkflowCatalog {
             ]),
             op(4, "report", "Compliance Report", "Record the audit outcome. Posts a Report.", .report, launches: .reportBuilder, [
                 f("conclusion", "Conclusion", .choice, "The audit result.", required: true, options: ["Compliant", "Gaps found — remediation needed"]),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: "Scan for PII before concluding.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: String(localized: "Scan for PII before concluding."))]),
         ])
 
     /// IT / SOC — Email Authentication Audit (SPF/DKIM/DMARC posture).
     static let itAuthAudit = WorkflowDefinition(
-        defID: "builtin.it.authaudit", name: "Email Authentication Audit",
+        defID: "builtin.it.authaudit", name: String(localized: "Email Authentication Audit"),
         persona: "it_admin", builtin: true, operations: [
             op(1, "scope", "Scope", "Which domains/senders to audit.", nil, launches: .itAdminDashboard, [
                 f("scope", "Scope", .text, "Domains or senders under audit.", required: true),
@@ -733,22 +733,22 @@ enum WorkflowCatalog {
             op(2, "check", "Check SPF/DKIM/DMARC", "Assess the authentication posture.", nil, launches: .smartAlerts, [
                 f("passRate", "Pass rate", .text, "Share passing all three.", placeholder: "e.g. 82%"),
                 f("failures", "Failing senders", .number, "How many senders fail one or more."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: "Scope the audit first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: String(localized: "Scope the audit first."))]),
             op(3, "spoof", "Spoofing Check", "Look for spoofing / lookalike anomalies.", nil, launches: .anomalyDetection, [
                 f("spoofingFound", "Spoofing present", .bool, "Turn on if spoofing/lookalike domains appear."),
                 f("notes", "Notes", .longText, "What you found."),
             ]),
             op(4, "report", "Report & Recommend", "Posture report with fixes. Posts a Report.", .report, launches: .investigationReport, [
                 f("recommendations", "Recommendations", .longText, "DMARC policy, alignment, sender fixes.", required: true),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 2), reason: "Check auth before recommending.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 2), reason: String(localized: "Check auth before recommending."))]),
         ])
 
     /// IT / SOC — Security Metrics Report (periodic exec briefing).
     static let itMetrics = WorkflowDefinition(
-        defID: "builtin.it.metrics", name: "Security Metrics Report",
+        defID: "builtin.it.metrics", name: String(localized: "Security Metrics Report"),
         persona: "it_admin", builtin: true, operations: [
             op(1, "gather", "Gather Metrics", "Pull triage volumes for the period.", nil, launches: .phishingTriage, [
-                f("period", "Reporting period", .text, "The window this report covers.", placeholder: "Aug 2026", required: true),
+                f("period", "Reporting period", .text, "The window this report covers.", placeholder: String(localized: "Aug 2026"), required: true),
                 f("incidents", "Incidents", .number, "Total reported this period."),
                 f("confirmed", "Confirmed phishing", .number, "How many were real."),
             ]),
@@ -760,12 +760,12 @@ enum WorkflowCatalog {
             ]),
             op(4, "report", "Executive Report", "Publish the briefing. Posts a Report.", .report, launches: .reportBuilder, [
                 f("summary", "Summary", .longText, "The narrative for the report.", required: true),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: "Gather metrics first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: String(localized: "Gather metrics first."))]),
         ])
 
     /// Journalist — Tip & Lead Intake. Triage incoming tips into leads.
     static let journalistTips = WorkflowDefinition(
-        defID: "builtin.journalist.tips", name: "Tip & Lead Intake",
+        defID: "builtin.journalist.tips", name: String(localized: "Tip & Lead Intake"),
         persona: "journalist", builtin: true, operations: [
             op(1, "ingest", "Ingest Tips", "Bring in the tips and skim them.", nil, launches: .emailInbox, [
                 f("source", "Source", .text, "Where the tips came from.", required: true),
@@ -776,7 +776,7 @@ enum WorkflowCatalog {
             ]),
             op(3, "prioritize", "Prioritize Leads", "Pick the leads worth the work.", nil, launches: .emailInbox, [
                 f("topLeads", "Top leads", .longText, "The leads you'll chase, ranked.", required: true),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 2), reason: "Cluster the tips before prioritizing.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 2), reason: String(localized: "Cluster the tips before prioritizing."))]),
             op(4, "annotate", "Annotate", "Open the story file for the chosen leads. Posts a Story version.", .storyVersion, launches: .storyFile, [
                 f("notes", "Working notes", .longText, "First annotations on the leads."),
             ]),
@@ -784,7 +784,7 @@ enum WorkflowCatalog {
 
     /// Journalist — Data Story Pack. Numbers → charts → narrative → export.
     static let journalistDataPack = WorkflowDefinition(
-        defID: "builtin.journalist.datapack", name: "Data Story Pack",
+        defID: "builtin.journalist.datapack", name: String(localized: "Data Story Pack"),
         persona: "journalist", builtin: true, operations: [
             op(1, "analyze", "Analyze", "Find the numbers behind the story.", nil, launches: .emailAnalytics, [
                 f("dataset", "Dataset", .text, "What you're analyzing.", required: true),
@@ -795,23 +795,23 @@ enum WorkflowCatalog {
             ]),
             op(3, "narrative", "Draft Narrative", "Write the story around the data.", nil, launches: .storyFile, [
                 f("narrative", "Narrative", .longText, "How the data supports the story.", required: true),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: "Analyze before drafting.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: String(localized: "Analyze before drafting."))]),
             op(4, "export", "Export Pack", "Produce the shareable data pack. Posts Export.", .export, launches: .emailInbox, [
                 f("outputName", "Pack name", .text, "Label for this data story pack.", required: true),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Draft the narrative before exporting.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: String(localized: "Draft the narrative before exporting."))]),
         ])
 
     /// Personal — Receipts & Records Roundup. Find, collect, export.
     static let personalReceipts = WorkflowDefinition(
-        defID: "builtin.personal.receipts", name: "Receipts & Records Roundup",
+        defID: "builtin.personal.receipts", name: String(localized: "Receipts & Records Roundup"),
         persona: "personal", builtin: true, operations: [
             op(1, "find", "Find Receipts", "Search for the receipts/records you need.", nil, launches: .emailInbox, [
-                f("query", "Search for", .text, "e.g. receipt, invoice, order, statement.", placeholder: "receipt OR invoice", required: true),
+                f("query", "Search for", .text, "e.g. receipt, invoice, order, statement.", placeholder: String(localized: "receipt OR invoice"), required: true),
                 f("found", "Matches found", .number, "How many matched."),
             ]),
             op(2, "select", "Review & Select", "Keep the ones that matter.", nil, launches: .emailInbox, [
                 f("selected", "Selected", .number, "How many you're keeping."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: "Find them first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 1), reason: String(localized: "Find them first."))]),
             op(3, "attachments", "Collect Attachments", "Gather the attached PDFs/images.", nil, launches: .attachmentGallery, [
                 f("files", "Files collected", .number, "Attachments pulled together."),
             ]),
@@ -823,10 +823,10 @@ enum WorkflowCatalog {
     // MARK: - Batch: 19 additional built-in secondary jobs
 
     static let forensicHeaders = WorkflowDefinition(
-        defID: "builtin.forensic.headers", name: "Header & Authentication Analysis",
+        defID: "builtin.forensic.headers", name: String(localized: "Header & Authentication Analysis"),
         persona: "forensic", builtin: true, operations: [
             op(1, "scope", "Scope", "Pick the messages whose headers you will examine.", nil, launches: .itAdminDashboard, [
-                f("caseNumber", "Case / Matter number", .text, "Ties this analysis to the investigation.", placeholder: "CASE-2026-0001", required: true),
+                f("caseNumber", "Case / Matter number", .text, "Ties this analysis to the investigation.", placeholder: String(localized: "CASE-2026-0001"), required: true),
                 f("messageCount", "Messages in scope", .number, "How many messages you are inspecting."),
             ]),
             op(2, "inspect", "Inspect Headers", "Read the raw headers and trace the Received hops.", nil, launches: .itAdminDashboard, [
@@ -840,14 +840,14 @@ enum WorkflowCatalog {
             op(4, "report", "Report", "Write up the header findings. Posts a Report.", .report, launches: .investigationReport, [
                 f("title", "Report title", .text, "Label for this header-analysis report."),
                 f("summary", "Findings summary", .longText, "What the headers prove about origin and authenticity."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: String(localized: "Finish the prior steps first."))]),
         ])
 
     static let forensicCull = WorkflowDefinition(
-        defID: "builtin.forensic.cull", name: "Deduplication & Culling",
+        defID: "builtin.forensic.cull", name: String(localized: "Deduplication & Culling"),
         persona: "forensic", builtin: true, operations: [
             op(1, "load", "Load Set", "Load the evidence set you will cull.", nil, launches: .emailInbox, [
-                f("caseNumber", "Case / Matter number", .text, "Ties this cull to the investigation.", placeholder: "CASE-2026-0001", required: true),
+                f("caseNumber", "Case / Matter number", .text, "Ties this cull to the investigation.", placeholder: String(localized: "CASE-2026-0001"), required: true),
                 f("startCount", "Starting count", .number, "Documents before culling."),
             ]),
             op(2, "dedupe", "Remove Duplicates", "Strip exact duplicates from the set.", nil, launches: .duplicateManager, [
@@ -860,14 +860,14 @@ enum WorkflowCatalog {
             op(4, "record", "Record Cull", "Record the culling results. Posts a Cleanup.", .cleanup, launches: .investigationReport, [
                 f("finalCount", "Final count", .number, "Documents remaining after the cull."),
                 f("notes", "Cull notes", .longText, "What was removed and why."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: String(localized: "Finish the prior steps first."))]),
         ])
 
     static let forensicIOCReport = WorkflowDefinition(
-        defID: "builtin.forensic.iocreport", name: "IOC Extraction & Report",
+        defID: "builtin.forensic.iocreport", name: String(localized: "IOC Extraction & Report"),
         persona: "forensic", builtin: true, operations: [
             op(1, "scope", "Scope", "Pick the messages to mine for indicators.", nil, launches: .emailInbox, [
-                f("caseNumber", "Case / Matter number", .text, "Ties this extraction to the investigation.", placeholder: "CASE-2026-0001", required: true),
+                f("caseNumber", "Case / Matter number", .text, "Ties this extraction to the investigation.", placeholder: String(localized: "CASE-2026-0001"), required: true),
                 f("scopeNote", "Scope note", .longText, "What set you are extracting indicators from."),
             ]),
             op(2, "extract", "Extract IOCs", "Pull URLs, domains, IPs and hashes from the set.", nil, launches: .iocExtractor, [
@@ -879,16 +879,16 @@ enum WorkflowCatalog {
                 f("assessment", "Assessment notes", .longText, "Why these indicators matter."),
             ]),
             op(4, "export", "Export & Report", "Export the indicators and write them up. Posts an Export.", .export, launches: .investigationReport, [
-                f("format", "Export format", .text, "How the indicators are delivered.", placeholder: "STIX / CSV"),
+                f("format", "Export format", .text, "How the indicators are delivered.", placeholder: String(localized: "STIX / CSV")),
                 f("summary", "Report summary", .longText, "What the indicators reveal."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: String(localized: "Finish the prior steps first."))]),
         ])
 
     static let forensicAffidavit = WorkflowDefinition(
-        defID: "builtin.forensic.affidavit", name: "Expert Report",
+        defID: "builtin.forensic.affidavit", name: String(localized: "Expert Report"),
         persona: "forensic", builtin: true, operations: [
             op(1, "gather", "Gather Findings", "Assemble the findings the report will rest on.", nil, launches: .forensicReview, [
-                f("caseNumber", "Case / Matter number", .text, "Ties this report to the investigation.", placeholder: "CASE-2026-0001", required: true),
+                f("caseNumber", "Case / Matter number", .text, "Ties this report to the investigation.", placeholder: String(localized: "CASE-2026-0001"), required: true),
                 f("findings", "Findings", .longText, "The evidence-backed findings you will attest to."),
             ]),
             op(2, "verify", "Verify Integrity", "Confirm the evidence is unchanged since intake.", nil, launches: .chainOfCustody, [
@@ -902,14 +902,14 @@ enum WorkflowCatalog {
             op(4, "finalize", "Finalize", "Finalize and sign off the report. Posts a Report.", .report, launches: .investigationReport, [
                 f("title", "Report title", .text, "Label for this expert report."),
                 f("signOff", "Signed off", .bool, "Turn on when the report is final and attested."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: String(localized: "Finish the prior steps first."))]),
         ])
 
     static let legalCollection = WorkflowDefinition(
-        defID: "builtin.legal.collection", name: "Collection",
+        defID: "builtin.legal.collection", name: String(localized: "Collection"),
         persona: "legal", builtin: true, operations: [
             op(1, "identify", "Identify Custodians", "List whose mail must be collected.", nil, launches: .custodianPanel, [
-                f("matter", "Matter name", .text, "The matter this collection serves.", placeholder: "Acme v. Roe", required: true),
+                f("matter", "Matter name", .text, "The matter this collection serves.", placeholder: String(localized: "Acme v. Roe"), required: true),
                 f("custodians", "Custodians", .longText, "Everyone whose data is in scope — one per line."),
             ]),
             op(2, "collect", "Collect", "Pull the in-scope mailboxes into the case.", nil, launches: .emailInbox, [
@@ -923,14 +923,14 @@ enum WorkflowCatalog {
             op(4, "record", "Record Collection", "Record the collection results. Posts an Import.", .importRun, launches: .reviewDashboard, [
                 f("totalCount", "Total collected", .number, "Final count of collected items."),
                 f("notes", "Collection notes", .longText, "How and when the collection was done."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: String(localized: "Finish the prior steps first."))]),
         ])
 
     static let legalProcessing = WorkflowDefinition(
-        defID: "builtin.legal.processing", name: "Processing & Deduplication",
+        defID: "builtin.legal.processing", name: String(localized: "Processing & Deduplication"),
         persona: "legal", builtin: true, operations: [
             op(1, "load", "Load", "Load the collected set for processing.", nil, launches: .emailInbox, [
-                f("matter", "Matter name", .text, "The matter being processed.", placeholder: "Acme v. Roe", required: true),
+                f("matter", "Matter name", .text, "The matter being processed.", placeholder: String(localized: "Acme v. Roe"), required: true),
                 f("startCount", "Starting count", .number, "Documents before processing."),
             ]),
             op(2, "dedupe", "Deduplicate", "Remove duplicate documents from the set.", nil, launches: .duplicateManager, [
@@ -943,14 +943,14 @@ enum WorkflowCatalog {
             op(4, "record", "Record", "Record the processing results. Posts a Cleanup.", .cleanup, launches: .reviewDashboard, [
                 f("finalCount", "Final count", .number, "Documents remaining after processing."),
                 f("summary", "Processing summary", .longText, "What processing did to the set."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: String(localized: "Finish the prior steps first."))]),
         ])
 
     static let legalFirstPass = WorkflowDefinition(
-        defID: "builtin.legal.firstpass", name: "First-Pass Review",
+        defID: "builtin.legal.firstpass", name: String(localized: "First-Pass Review"),
         persona: "legal", builtin: true, operations: [
             op(1, "assemble", "Assemble Batch", "Build the batch reviewers will code.", nil, launches: .reviewBatches, [
-                f("matter", "Matter name", .text, "The matter under review.", placeholder: "Acme v. Roe", required: true),
+                f("matter", "Matter name", .text, "The matter under review.", placeholder: String(localized: "Acme v. Roe"), required: true),
                 f("batchSize", "Batch size", .number, "How many documents in this batch."),
             ]),
             op(2, "code", "Code Responsiveness", "Tag each document responsive or not.", nil, launches: .emailInbox, [
@@ -964,14 +964,14 @@ enum WorkflowCatalog {
             op(4, "report", "Report", "Report first-pass results. Posts a Report.", .report, launches: .reviewDashboard, [
                 f("title", "Report title", .text, "Label for this first-pass report."),
                 f("summary", "Summary", .longText, "Where the review stands and what is left."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: String(localized: "Finish the prior steps first."))]),
         ])
 
     static let legalClawback = WorkflowDefinition(
-        defID: "builtin.legal.clawback", name: "Clawback",
+        defID: "builtin.legal.clawback", name: String(localized: "Clawback"),
         persona: "legal", builtin: true, operations: [
             op(1, "identify", "Identify Disclosure", "Pin down the inadvertently disclosed material.", nil, launches: .reviewDashboard, [
-                f("matter", "Matter name", .text, "The matter this clawback serves.", placeholder: "Acme v. Roe", required: true),
+                f("matter", "Matter name", .text, "The matter this clawback serves.", placeholder: String(localized: "Acme v. Roe"), required: true),
                 f("disclosed", "Disclosed items", .longText, "What was produced that should not have been."),
             ]),
             op(2, "notify", "Notify & Log", "Send the clawback notice and log it.", nil, launches: .custodianPanel, [
@@ -984,14 +984,14 @@ enum WorkflowCatalog {
             op(4, "record", "Record", "Record the clawback outcome. Posts a Report.", .report, launches: .reportBuilder, [
                 f("title", "Record title", .text, "Label for this clawback record."),
                 f("summary", "Summary", .longText, "What was clawed back and how it was resolved."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: String(localized: "Finish the prior steps first."))]),
         ])
 
     static let itQuarantine = WorkflowDefinition(
-        defID: "builtin.it.quarantine", name: "Quarantine Review",
+        defID: "builtin.it.quarantine", name: String(localized: "Quarantine Review"),
         persona: "it_admin", builtin: true, operations: [
             op(1, "load", "Load Quarantine", "Pull the quarantined messages to review.", nil, launches: .phishingTriage, [
-                f("queueName", "Queue name", .text, "Which quarantine queue you are working.", placeholder: "Default quarantine", required: true),
+                f("queueName", "Queue name", .text, "Which quarantine queue you are working.", placeholder: String(localized: "Default quarantine"), required: true),
                 f("itemCount", "Items in queue", .number, "How many messages are quarantined."),
             ]),
             op(2, "analyze", "Analyze", "Extract indicators and inspect the messages.", nil, launches: .iocExtractor, [
@@ -1005,14 +1005,14 @@ enum WorkflowCatalog {
             op(4, "close", "Release or Close", "Release the clean, hold the rest. Posts a Triage Verdict.", .triageVerdict, launches: .phishingTriage, [
                 f("released", "Released", .number, "How many messages were released to users."),
                 f("summary", "Disposition summary", .longText, "What happened to the queue."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: String(localized: "Finish the prior steps first."))]),
         ])
 
     static let itRules = WorkflowDefinition(
-        defID: "builtin.it.rules", name: "Inbox Rule Audit",
+        defID: "builtin.it.rules", name: String(localized: "Inbox Rule Audit"),
         persona: "it_admin", builtin: true, operations: [
             op(1, "scope", "Scope Mailboxes", "Choose the mailboxes to audit.", nil, launches: .itAdminDashboard, [
-                f("scopeName", "Scope name", .text, "Which mailboxes or group you are auditing.", placeholder: "Finance dept", required: true),
+                f("scopeName", "Scope name", .text, "Which mailboxes or group you are auditing.", placeholder: String(localized: "Finance dept"), required: true),
                 f("mailboxCount", "Mailboxes in scope", .number, "How many mailboxes are covered."),
             ]),
             op(2, "find", "Find Rules", "Surface auto-forward and hidden inbox rules.", nil, launches: .anomalyDetection, [
@@ -1026,14 +1026,14 @@ enum WorkflowCatalog {
             op(4, "report", "Report", "Report the rule findings. Posts a Report.", .report, launches: .investigationReport, [
                 f("title", "Report title", .text, "Label for this rule-audit report."),
                 f("summary", "Summary", .longText, "What the audit found and what to remediate."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: String(localized: "Finish the prior steps first."))]),
         ])
 
     static let itBlocklist = WorkflowDefinition(
-        defID: "builtin.it.blocklist", name: "Blocklist Export",
+        defID: "builtin.it.blocklist", name: String(localized: "Blocklist Export"),
         persona: "it_admin", builtin: true, operations: [
             op(1, "gather", "Gather IOCs", "Collect the indicators to block.", nil, launches: .iocExtractor, [
-                f("sourceName", "Source name", .text, "Where these indicators come from.", placeholder: "Campaign 2026-08", required: true),
+                f("sourceName", "Source name", .text, "Where these indicators come from.", placeholder: String(localized: "Campaign 2026-08"), required: true),
                 f("iocCount", "IOCs gathered", .number, "How many indicators you collected."),
             ]),
             op(2, "validate", "Validate", "Weed out false positives before blocking.", nil, launches: .anomalyDetection, [
@@ -1045,16 +1045,16 @@ enum WorkflowCatalog {
                 f("notes", "Compile notes", .longText, "Anything notable about the list."),
             ]),
             op(4, "export", "Export", "Export the blocklist for the gateway. Posts an Export.", .export, launches: .investigationReport, [
-                f("format", "Export format", .text, "The format the gateway expects.", placeholder: "CSV / plaintext"),
+                f("format", "Export format", .text, "The format the gateway expects.", placeholder: String(localized: "CSV / plaintext")),
                 f("summary", "Export summary", .longText, "What was exported and where it goes."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: String(localized: "Finish the prior steps first."))]),
         ])
 
     static let itDLP = WorkflowDefinition(
-        defID: "builtin.it.dlp", name: "Data Exfiltration Review",
+        defID: "builtin.it.dlp", name: String(localized: "Data Exfiltration Review"),
         persona: "it_admin", builtin: true, operations: [
             op(1, "scope", "Scope", "Define the sensitive terms and window to review.", nil, launches: .keywordMonitor, [
-                f("scopeName", "Scope name", .text, "What exfiltration concern you are reviewing.", placeholder: "PII leak Q3", required: true),
+                f("scopeName", "Scope name", .text, "What exfiltration concern you are reviewing.", placeholder: String(localized: "PII leak Q3"), required: true),
                 f("window", "Time window", .dateRange, "The period under review — pick From and To."),
             ]),
             op(2, "scan", "Scan Sensitive Terms", "Search the traffic for sensitive terms.", nil, launches: .keywordMonitor, [
@@ -1068,14 +1068,14 @@ enum WorkflowCatalog {
             op(4, "report", "Report", "Report the exfiltration findings. Posts a Report.", .report, launches: .investigationReport, [
                 f("title", "Report title", .text, "Label for this exfiltration report."),
                 f("summary", "Summary", .longText, "What data may have left and how."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: String(localized: "Finish the prior steps first."))]),
         ])
 
     static let journalistProvenance = WorkflowDefinition(
-        defID: "builtin.journalist.provenance", name: "Provenance Check",
+        defID: "builtin.journalist.provenance", name: String(localized: "Provenance Check"),
         persona: "journalist", builtin: true, operations: [
             op(1, "receive", "Receive Material", "Take in the material and note where it came from.", nil, launches: .emailInbox, [
-                f("storyName", "Story name", .text, "The story this material feeds.", placeholder: "The leaked memos", required: true),
+                f("storyName", "Story name", .text, "The story this material feeds.", placeholder: String(localized: "The leaked memos"), required: true),
                 f("origin", "Stated origin", .longText, "Where the source says the material came from."),
             ]),
             op(2, "verify", "Verify Authenticity", "Check the material is genuine, not fabricated.", nil, launches: .forensicReview, [
@@ -1089,18 +1089,18 @@ enum WorkflowCatalog {
             op(4, "record", "Record", "Record the provenance finding. Posts a Report.", .report, launches: .storyFile, [
                 f("title", "Record title", .text, "Label for this provenance record."),
                 f("finding", "Provenance finding", .longText, "Your conclusion on the material's provenance."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: String(localized: "Finish the prior steps first."))]),
         ])
 
     static let journalistFOIA = WorkflowDefinition(
-        defID: "builtin.journalist.foia", name: "Records Request (FOIA)",
+        defID: "builtin.journalist.foia", name: String(localized: "Records Request (FOIA)"),
         persona: "journalist", builtin: true, operations: [
             op(1, "draft", "Draft Request", "Write the records request to send.", nil, launches: .emailInbox, [
-                f("agency", "Agency", .text, "Which body you are requesting records from.", placeholder: "City Housing Authority", required: true),
+                f("agency", "Agency", .text, "Which body you are requesting records from.", placeholder: String(localized: "City Housing Authority"), required: true),
                 f("request", "Request text", .longText, "What records you are asking for."),
             ]),
             op(2, "track", "Track Responses", "Follow the agency's replies and deadlines.", nil, launches: .emailInbox, [
-                f("status", "Response status", .text, "Where the request stands.", placeholder: "Acknowledged / partial / denied"),
+                f("status", "Response status", .text, "Where the request stands.", placeholder: String(localized: "Acknowledged / partial / denied")),
                 f("dueDate", "Statutory due date", .text, "When the response is legally due.", placeholder: "2026-09-15"),
             ]),
             op(3, "review", "Review Released Records", "Read what the agency released.", nil, launches: .emailInbox, [
@@ -1110,15 +1110,15 @@ enum WorkflowCatalog {
             op(4, "log", "Log", "Log the request outcome. Posts a Report.", .report, launches: .reportBuilder, [
                 f("title", "Log title", .text, "Label for this request log."),
                 f("outcome", "Outcome", .longText, "What was released, withheld, or appealed."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: String(localized: "Finish the prior steps first."))]),
         ])
 
     static let journalistQuotes = WorkflowDefinition(
-        defID: "builtin.journalist.quotes", name: "Quote & Attribution",
+        defID: "builtin.journalist.quotes", name: String(localized: "Quote & Attribution"),
         persona: "journalist", builtin: true, operations: [
             op(1, "find", "Find Statements", "Locate the quotable statements in the mail.", nil, launches: .emailInbox, [
-                f("storyName", "Story name", .text, "The story these quotes serve.", placeholder: "The leaked memos", required: true),
-                f("query", "Search for", .text, "Terms that surface the statements you need.", placeholder: "\"we knew\""),
+                f("storyName", "Story name", .text, "The story these quotes serve.", placeholder: String(localized: "The leaked memos"), required: true),
+                f("query", "Search for", .text, "Terms that surface the statements you need.", placeholder: String(localized: "\"we knew\"")),
             ]),
             op(2, "summarize", "Summarize Threads", "Read the surrounding threads for context.", nil, launches: .threadSummarizer, [
                 f("threadCount", "Threads read", .number, "How many threads you reviewed for context."),
@@ -1130,14 +1130,14 @@ enum WorkflowCatalog {
             op(4, "save", "Save", "Save the attributed quotes. Posts a Story Version.", .storyVersion, launches: .storyFile, [
                 f("versionLabel", "Version label", .text, "Label for this saved quote set."),
                 f("summary", "Summary", .longText, "What these quotes establish for the story."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: String(localized: "Finish the prior steps first."))]),
         ])
 
     static let journalistCrossRef = WorkflowDefinition(
-        defID: "builtin.journalist.crossref", name: "Cross-Reference Datasets",
+        defID: "builtin.journalist.crossref", name: String(localized: "Cross-Reference Datasets"),
         persona: "journalist", builtin: true, operations: [
             op(1, "load", "Load Datasets", "Load the datasets you will cross-reference.", nil, launches: .archiveComparison, [
-                f("storyName", "Story name", .text, "The story this comparison serves.", placeholder: "The leaked memos", required: true),
+                f("storyName", "Story name", .text, "The story this comparison serves.", placeholder: String(localized: "The leaked memos"), required: true),
                 f("datasets", "Datasets", .longText, "Which sets you are comparing — one per line."),
             ]),
             op(2, "compare", "Compare", "Diff the datasets to surface differences.", nil, launches: .archiveComparison, [
@@ -1151,34 +1151,34 @@ enum WorkflowCatalog {
             op(4, "report", "Report", "Report the cross-reference findings. Posts a Report.", .report, launches: .storyFile, [
                 f("title", "Report title", .text, "Label for this cross-reference report."),
                 f("summary", "Summary", .longText, "What linking the datasets uncovered."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: String(localized: "Finish the prior steps first."))]),
         ])
 
     static let personalBackup = WorkflowDefinition(
-        defID: "builtin.personal.backup", name: "Full Backup",
+        defID: "builtin.personal.backup", name: String(localized: "Full Backup"),
         persona: "personal", builtin: true, operations: [
             op(1, "scope", "Choose Scope", "Pick what to back up.", nil, launches: .emailInbox, [
-                f("scopeName", "What to back up", .text, "Which mail you are backing up.", placeholder: "All mail", required: true),
+                f("scopeName", "What to back up", .text, "Which mail you are backing up.", placeholder: String(localized: "All mail"), required: true),
                 f("itemCount", "Items in scope", .number, "How many messages are covered."),
             ]),
             op(2, "dedupe", "Deduplicate", "Drop duplicates so the backup stays lean.", nil, launches: .duplicateManager, [
                 f("removedDupes", "Duplicates removed", .number, "How many duplicates were dropped."),
             ]),
             op(3, "export", "Export Backup", "Write the backup out.", nil, launches: .emailInbox, [
-                f("format", "Backup format", .text, "The format you are saving in.", placeholder: "MBOX / ZIP"),
-                f("size", "Backup size", .text, "Roughly how big the backup is.", placeholder: "2.3 GB"),
+                f("format", "Backup format", .text, "The format you are saving in.", placeholder: String(localized: "MBOX / ZIP")),
+                f("size", "Backup size", .text, "Roughly how big the backup is.", placeholder: String(localized: "2.3 GB")),
             ]),
             op(4, "confirm", "Confirm", "Confirm the backup is complete and readable. Posts an Export.", .export, launches: .emailInbox, [
                 f("destination", "Saved to", .text, "Where the backup lives."),
                 f("verified", "Verified readable", .bool, "Turn on once you have confirmed the backup opens."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: String(localized: "Finish the prior steps first."))]),
         ])
 
     static let personalAttachments = WorkflowDefinition(
-        defID: "builtin.personal.attachments", name: "Find Attachments",
+        defID: "builtin.personal.attachments", name: String(localized: "Find Attachments"),
         persona: "personal", builtin: true, operations: [
             op(1, "search", "Search", "Search for the mail with the attachments you want.", nil, launches: .emailInbox, [
-                f("query", "Search for", .text, "Terms that find the right mail.", placeholder: "invoice pdf", required: true),
+                f("query", "Search for", .text, "Terms that find the right mail.", placeholder: String(localized: "invoice pdf"), required: true),
                 f("found", "Matches found", .number, "How many messages matched."),
             ]),
             op(2, "browse", "Browse Gallery", "Skim the attachments in the gallery.", nil, launches: .attachmentGallery, [
@@ -1190,14 +1190,14 @@ enum WorkflowCatalog {
             op(4, "export", "Export", "Save the selected attachments. Posts an Export.", .export, launches: .emailInbox, [
                 f("destination", "Saved to", .text, "Where you saved the attachments."),
                 f("count", "Files exported", .number, "How many files were saved out."),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: String(localized: "Finish the prior steps first."))]),
         ])
 
     static let personalContacts = WorkflowDefinition(
-        defID: "builtin.personal.contacts", name: "Contacts Roundup",
+        defID: "builtin.personal.contacts", name: String(localized: "Contacts Roundup"),
         persona: "personal", builtin: true, operations: [
             op(1, "analyze", "Analyze Contacts", "See who you correspond with most.", nil, launches: .emailAnalytics, [
-                f("scopeName", "What to analyze", .text, "Which mail you are drawing contacts from.", placeholder: "All mail", required: true),
+                f("scopeName", "What to analyze", .text, "Which mail you are drawing contacts from.", placeholder: String(localized: "All mail"), required: true),
                 f("contactCount", "Contacts found", .number, "How many distinct contacts appear."),
             ]),
             op(2, "patterns", "Communication Patterns", "Look at how often you talk to each.", nil, launches: .communicationPatterns, [
@@ -1208,8 +1208,8 @@ enum WorkflowCatalog {
             ]),
             op(4, "export", "Export", "Export the contacts list. Posts an Export.", .export, launches: .emailInbox, [
                 f("destination", "Saved to", .text, "Where you saved the contacts."),
-                f("format", "Format", .text, "The format you exported in.", placeholder: "vCard / CSV"),
-            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: "Finish the prior steps first.")]),
+                f("format", "Format", .text, "The format you exported in.", placeholder: String(localized: "vCard / CSV")),
+            ], gates: [WorkflowGate(rule: .operationConfirmed(seq: 3), reason: String(localized: "Finish the prior steps first."))]),
         ])
 
     // MARK: - Researcher jobs (V3 Phase 5 — kalsmritikosh RES-01/07/08, INV-06)
@@ -1217,12 +1217,12 @@ enum WorkflowCatalog {
     // Researcher persona lands; the jobs themselves are complete.
 
     static let researchProtocol = WorkflowDefinition(
-        defID: "builtin.researcher.protocol", name: "Research Protocol",
+        defID: "builtin.researcher.protocol", name: String(localized: "Research Protocol"),
         persona: "researcher", builtin: true, operations: [
             op(1, "question", "Research Question", "State the question this corpus should answer — the protocol persists with the record.", nil, launches: .emailInbox, [
                 f("question", "Question", .longText, "The question being investigated.", required: true),
                 f("scope", "Corpus scope", .text, "Which archives / senders / date range are in scope.", required: true),
-                f("dateBounds", "Date bounds", .text, "Earliest and latest dates considered.", placeholder: "e.g. 2019-01 to 2022-12"),
+                f("dateBounds", "Date bounds", .text, "Earliest and latest dates considered.", placeholder: String(localized: "e.g. 2019-01 to 2022-12")),
             ]),
             op(2, "method", "Method Plan", "Record how you will search, screen, and code — before you start.", nil, launches: .reasoningStudio, [
                 f("searchPlan", "Search plan", .longText, "Terms, operators, and saved searches you will run.", required: true),
@@ -1246,7 +1246,7 @@ enum WorkflowCatalog {
         ])
 
     static let researcherScreening = WorkflowDefinition(
-        defID: "builtin.researcher.screening", name: "Screening (Include / Exclude)",
+        defID: "builtin.researcher.screening", name: String(localized: "Screening (Include / Exclude)"),
         persona: "researcher", builtin: true, operations: [
             op(1, "criteria", "Confirm Criteria", "Restate the include/exclude criteria from your protocol.", nil, launches: .emailInbox, [
                 f("criteria", "Criteria", .longText, "The rules that decide inclusion.", required: true),
@@ -1271,7 +1271,7 @@ enum WorkflowCatalog {
         ])
 
     static let researcherCoding = WorkflowDefinition(
-        defID: "builtin.researcher.coding", name: "Extraction & Coding",
+        defID: "builtin.researcher.coding", name: String(localized: "Extraction & Coding"),
         persona: "researcher", builtin: true, operations: [
             op(1, "codebook", "Codebook", "Define the codes before coding — each code needs a definition.", nil, launches: .emailInbox, [
                 f("codes", "Codes & definitions", .longText, "One code per line with its meaning.", required: true),
@@ -1286,7 +1286,7 @@ enum WorkflowCatalog {
             // posted, and accepts "coded alone" as an honest answer.
             op(3, "agreement", "Coder Agreement", "Re-code a sample and compare. If you coded alone, say so — a single coder is a stated limit, not a hidden one.", nil, launches: .reasoningStudio, [
                 f("sampleSize", "Sample re-coded", .number, "How many messages were coded a second time.", required: true),
-                f("agreementRate", "Agreement", .text, "Percentage or kappa, and how it was calculated.", placeholder: "e.g. 88% on 50 messages"),
+                f("agreementRate", "Agreement", .text, "Percentage or kappa, and how it was calculated.", placeholder: String(localized: "e.g. 88% on 50 messages")),
                 f("disagreements", "How disagreements were resolved", .longText, "Which codes were adjusted, and why.", required: true),
             ], gates: afterPrevious(3)),
             op(4, "dataset", "Post Coded Dataset", "Posts the coded dataset summary as a numbered document; export CSV for analysis.", .report, launches: .emailInbox, [
@@ -1295,7 +1295,7 @@ enum WorkflowCatalog {
         ])
 
     static let forensicEvidencePlan = WorkflowDefinition(
-        defID: "builtin.forensic.evidenceplan", name: "Evidence Collection Plan",
+        defID: "builtin.forensic.evidenceplan", name: String(localized: "Evidence Collection Plan"),
         persona: "forensic", builtin: true, operations: [
             op(1, "hypotheses", "Hypotheses & Gaps", "List what each hypothesis still lacks — start from your ACH matrix.", nil, launches: .achMatrix, [
                 f("gaps", "Evidence gaps", .longText, "What is missing, per hypothesis.", required: true),
@@ -1593,15 +1593,15 @@ struct StakeholderSummary {
     private var intro: String {
         switch persona {
         case "forensic":
-            return "This is a plain-language summary of the evidence handling and review performed on this matter, for case reviewers, counsel, and other stakeholders who need to understand what was done without technical detail."
+            return String(localized: "This is a plain-language summary of the evidence handling and review performed on this matter, for case reviewers, counsel, and other stakeholders who need to understand what was done without technical detail.")
         case "legal":
-            return "This is a plain-language summary of the document review and production performed for this matter, for counsel and stakeholders."
+            return String(localized: "This is a plain-language summary of the document review and production performed for this matter, for counsel and stakeholders.")
         case "it_admin":
-            return "This is a plain-language summary of how this reported email was investigated and resolved, for management and the teams involved."
+            return String(localized: "This is a plain-language summary of how this reported email was investigated and resolved, for management and the teams involved.")
         case "journalist":
-            return "This is a plain-language summary of the sourcing, verification, and reporting steps behind this story."
+            return String(localized: "This is a plain-language summary of the sourcing, verification, and reporting steps behind this story.")
         default:
-            return "This is a plain-language summary of the work performed on this archive."
+            return String(localized: "This is a plain-language summary of the work performed on this archive.")
         }
     }
 

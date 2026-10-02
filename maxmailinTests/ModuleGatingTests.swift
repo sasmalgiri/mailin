@@ -958,3 +958,110 @@ struct ImportAllowanceTests {
         #expect(ImportAllowance.totalBytes(of: [root.appendingPathComponent("missing.mbox")]) == 0)
     }
 }
+
+// MARK: - Interface localization
+
+/// The App Store listing says the interface ships in 11 languages. This suite
+/// pins that claim to the string catalog: every key that is meant to be
+/// translated has a value in each of the ten non-English languages, and every
+/// translation keeps the same format placeholders as its English key, so a
+/// localized `String(format:)` can never crash or print the wrong argument.
+@Suite("Interface localization — 11 languages")
+struct InterfaceLocalizationTests {
+    static let languages = ["de", "es", "fr", "hi", "it", "ja", "ko", "pt-BR", "zh-Hans", "zh-Hant"]
+
+    private struct Catalog: Decodable {
+        struct Entry: Decodable {
+            struct Localization: Decodable {
+                struct Unit: Decodable { let state: String; let value: String }
+                let stringUnit: Unit?
+            }
+            let shouldTranslate: Bool?
+            let extractionState: String?
+            let localizations: [String: Localization]?
+        }
+        let sourceLanguage: String
+        let strings: [String: Entry]
+    }
+
+    private static func loadCatalog() throws -> Catalog {
+        // The catalog is a source file; the test reads it from the repo so the
+        // check runs against what will be compiled, not against a built product.
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()          // maxmailinTests
+            .deletingLastPathComponent()          // repo root
+            .appendingPathComponent("maxmailin/Localizable.xcstrings")
+        return try JSONDecoder().decode(Catalog.self, from: Data(contentsOf: url))
+    }
+
+    /// Format placeholders with their positional index removed, so "%1$lld"
+    /// and "%lld" compare equal — translations may reorder arguments.
+    private static func placeholders(_ s: String) -> [String] {
+        let regex = try! NSRegularExpression(pattern: #"%(?:\d+\$)?(@|lld|ld|d|f|\.\d+f|s|u|llu|lu|%)"#)
+        let ns = s as NSString
+        return regex.matches(in: s, range: NSRange(location: 0, length: ns.length))
+            .map { ns.substring(with: $0.range(at: 1)) }
+            .sorted()
+    }
+
+    private static func translatableKeys(_ catalog: Catalog) -> [String] {
+        catalog.strings.compactMap { key, entry in
+            if entry.shouldTranslate == false { return nil }
+            if entry.extractionState == "stale" { return nil }
+            if key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
+            return key
+        }.sorted()
+    }
+
+    @Test("The catalog's source language is English and it is not a token effort")
+    func catalogShape() throws {
+        let catalog = try Self.loadCatalog()
+        #expect(catalog.sourceLanguage == "en")
+        // Fewer than this means the interface strings were not extracted.
+        #expect(Self.translatableKeys(catalog).count > 2_500)
+    }
+
+    @Test("Every translatable key has a value in all ten languages")
+    func everyKeyTranslated() throws {
+        let catalog = try Self.loadCatalog()
+        var missing: [String: [String]] = [:]
+        for key in Self.translatableKeys(catalog) {
+            let locs = catalog.strings[key]?.localizations ?? [:]
+            for lang in Self.languages {
+                let value = locs[lang]?.stringUnit?.value ?? ""
+                if value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    missing[lang, default: []].append(key)
+                }
+            }
+        }
+        for lang in Self.languages {
+            let keys = missing[lang] ?? []
+            #expect(keys.isEmpty, "\(lang): \(keys.count) untranslated, e.g. \(keys.prefix(5))")
+        }
+    }
+
+    @Test("Every translation keeps its English placeholders")
+    func placeholdersPreserved() throws {
+        let catalog = try Self.loadCatalog()
+        var broken: [String] = []
+        for key in Self.translatableKeys(catalog) {
+            let expected = Self.placeholders(key)
+            let locs = catalog.strings[key]?.localizations ?? [:]
+            for lang in Self.languages {
+                guard let value = locs[lang]?.stringUnit?.value, !value.isEmpty else { continue }
+                if Self.placeholders(value) != expected {
+                    broken.append("\(lang): \(key)")
+                }
+            }
+        }
+        #expect(broken.isEmpty, "\(broken.count) placeholder mismatches, e.g. \(broken.prefix(5))")
+    }
+
+    @Test("The built app declares all eleven interface languages")
+    func bundleDeclaresLanguages() {
+        let declared = Set(Bundle.main.localizations)
+        for lang in ["en"] + Self.languages {
+            #expect(declared.contains(lang), "Bundle.main.localizations lacks \(lang)")
+        }
+    }
+}

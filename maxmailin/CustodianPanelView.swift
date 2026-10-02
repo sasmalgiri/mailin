@@ -90,7 +90,7 @@ struct CustodianPanelView: View {
             .buttonStyle(CompactSecondaryButtonStyle())
             .accessibilityLabel("Export custodian report")
             TutorialHelpButton(showTutorial: $showTutorial)
-            SaveToDocumentsButton(title: "Custodian Panel") {
+            SaveToDocumentsButton(title: String(localized: "Custodian Panel")) {
                 [.init(key: "Working set", value: "\(workingSet.count)")]
             }
             if isPresented != nil {

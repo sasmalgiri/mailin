@@ -82,33 +82,33 @@ struct AboutView: View {
                 VStack(alignment: .leading, spacing: Spacing.medium) {
                     featureRow(
                         icon: "gift.fill",
-                        title: "Free to Try, Flexible Upgrade",
-                        description: "Monthly or yearly — choose the plan that works for you."
+                        title: String(localized: "Free to Try, Flexible Upgrade"),
+                        description: String(localized: "Monthly or yearly — choose the plan that works for you.")
                     )
                     featureRow(
                         icon: "lock.shield.fill",
-                        title: "Privacy First",
-                        description: "Zero data collection. On-device by default. Cloud AI is optional and user-controlled."
+                        title: String(localized: "Privacy First"),
+                        description: String(localized: "Zero data collection. On-device by default. Cloud AI is optional and user-controlled.")
                     )
                     featureRow(
                         icon: "swift",
-                        title: "Native Apple Technology",
-                        description: "Built with SwiftUI and on-device AI. Fast, fluid, and truly native."
+                        title: String(localized: "Native Apple Technology"),
+                        description: String(localized: "Built with SwiftUI and on-device AI. Fast, fluid, and truly native.")
                     )
                     featureRow(
                         icon: "brain.head.profile",
-                        title: "Hybrid AI — On-Device + Cloud",
-                        description: "MoE expert pipeline with Apple Intelligence, NLP, and optional OpenAI/Anthropic cloud AI."
+                        title: String(localized: "Hybrid AI — On-Device + Cloud"),
+                        description: String(localized: "MoE expert pipeline with Apple Intelligence, NLP, and optional OpenAI/Anthropic cloud AI.")
                     )
                     featureRow(
                         icon: "envelope.open.fill",
-                        title: "7 Format Support",
-                        description: "MBOX, EML, EMLX, MSG, PST, OST, NSF — Gmail, Outlook, Thunderbird, Apple Mail, Lotus Notes."
+                        title: String(localized: "7 Format Support"),
+                        description: String(localized: "MBOX, EML, EMLX, MSG, PST, OST, NSF — Gmail, Outlook, Thunderbird, Apple Mail, Lotus Notes.")
                     )
                     featureRow(
                         icon: "lock.shield.fill",
-                        title: "Offline & Private",
-                        description: "No account, no mail servers, no data collection. Your archive stays on your device by default — optional Cloud AI is opt-in."
+                        title: String(localized: "Offline & Private"),
+                        description: String(localized: "No account, no mail servers, no data collection. Your archive stays on your device by default — optional Cloud AI is opt-in.")
                     )
                     // D1: state what the PLATFORM enforces for this build, read
                     // from its own signed entitlements — not what the app
@@ -118,13 +118,13 @@ struct AboutView: View {
                     featureRow(
                         icon: NoNetworkAttestation.verdict().networkIsStructurallyImpossible
                             ? "checkmark.seal.fill" : "info.circle",
-                        title: "Verified for this build",
+                        title: String(localized: "Verified for this build"),
                         description: NoNetworkAttestation.verdict().summary
                     )
                     featureRow(
                         icon: "chart.bar.fill",
-                        title: "Analytics Dashboard",
-                        description: "Volume timelines, top contacts, heatmaps, network graphs, and exportable reports."
+                        title: String(localized: "Analytics Dashboard"),
+                        description: String(localized: "Volume timelines, top contacts, heatmaps, network graphs, and exportable reports.")
                     )
                 }
                 .padding(.horizontal, Spacing.large)
@@ -312,14 +312,14 @@ struct AboutView: View {
 
     private var statusText: String {
         switch migration.status {
-        case .idle: return "SwiftData v2: ready"
-        case .checking: return "SwiftData v2: checking…"
+        case .idle: return String(localized: "SwiftData v2: ready")
+        case .checking: return String(localized: "SwiftData v2: checking…")
         case .migrating:
             let pct = Int(migration.progressFraction * 100)
             return "Migrating \(migration.migratedCount)/\(migration.totalCount) (\(pct)%)"
-        case .completed: return "SwiftData v2: active"
-        case .skipped: return "SwiftData v2: active"
-        case .failed: return "SwiftData v2: migration error"
+        case .completed: return String(localized: "SwiftData v2: active")
+        case .skipped: return String(localized: "SwiftData v2: active")
+        case .failed: return String(localized: "SwiftData v2: migration error")
         }
     }
 

@@ -295,8 +295,8 @@ struct KeywordMonitorView: View {
                     Spacer()
                     EmptyStateView(
                         icon: "text.magnifyingglass",
-                        title: "No Keywords",
-                        message: "Add keywords to monitor in your email archive."
+                        title: String(localized: "No Keywords"),
+                        message: String(localized: "Add keywords to monitor in your email archive.")
                     )
                     Spacer()
                 }
@@ -397,8 +397,8 @@ struct KeywordMonitorView: View {
                     Spacer()
                     EmptyStateView(
                         icon: "doc.text.magnifyingglass",
-                        title: "Ready to Scan",
-                        message: "Add keywords and press 'Scan Archive' to search your emails."
+                        title: String(localized: "Ready to Scan"),
+                        message: String(localized: "Add keywords and press 'Scan Archive' to search your emails.")
                     )
                     Spacer()
                 }
@@ -414,8 +414,8 @@ struct KeywordMonitorView: View {
                     Spacer()
                     EmptyStateView(
                         icon: "checkmark.circle",
-                        title: "No Matches",
-                        message: "None of your keywords were found in the email archive."
+                        title: String(localized: "No Matches"),
+                        message: String(localized: "None of your keywords were found in the email archive.")
                     )
                     Spacer()
                 }
@@ -431,13 +431,13 @@ struct KeywordMonitorView: View {
                 // Summary
                 HStack(spacing: Spacing.medium) {
                     AnimatedStatCard(
-                        title: "Total Matches",
+                        title: String(localized: "Total Matches"),
                         value: "\(matches.count)",
                         icon: "checkmark.circle.fill",
                         color: .green
                     )
                     AnimatedStatCard(
-                        title: "Emails Matched",
+                        title: String(localized: "Emails Matched"),
                         value: "\(uniqueMatchedEmailCount)",
                         icon: "envelope.fill",
                         color: .blue
@@ -566,8 +566,8 @@ struct KeywordMonitorView: View {
                 let hitCount = results.count
                 Task { await DocumentRegistry.captureStructured(.report,
                     summary: "Keyword sweep — \(kwCount) terms, \(hitCount) matches",
-                    document: CapturedDocument(title: "Keyword Sweep", sections: [
-                      .init(name: "Keyword Sweep", fields: [
+                    document: CapturedDocument(title: String(localized: "Keyword Sweep"), sections: [
+                      .init(name: String(localized: "Keyword Sweep"), fields: [
                         .init(key: "Keywords", value: "\(kwCount)"),
                         .init(key: "Matches", value: "\(hitCount)")])])) }
             }

@@ -34,7 +34,7 @@ struct AIDigestView: View {
                     .font(Typography.headline)
                 Spacer()
                 TutorialHelpButton(showTutorial: $showTutorial)
-                SaveToDocumentsButton(title: "AI Digest") {
+                SaveToDocumentsButton(title: String(localized: "AI Digest")) {
                     [.init(key: "Note", value: "On-device analysis snapshot")]
                 }
                 if isPresented != nil {
@@ -50,7 +50,7 @@ struct AIDigestView: View {
             VStack(spacing: Spacing.small) {
                 Picker("Time Period", selection: $selectedPeriod) {
                     ForEach(AIDigestGenerator.TimePeriod.allCases, id: \.self) { period in
-                        Text(period.rawValue).tag(period)
+                        Text(LocalizedStringKey(period.rawValue)).tag(period)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -58,11 +58,11 @@ struct AIDigestView: View {
 
                 if selectedPeriod == .custom {
                     HStack(spacing: Spacing.medium) {
-                        ModernDateField(label: "From", date: $customStart)
+                        ModernDateField(label: String(localized: "From"), date: $customStart)
                         Text("to")
                             .font(Typography.caption1)
                             .foregroundColor(AppColors.secondary)
-                        ModernDateField(label: "To", date: $customEnd)
+                        ModernDateField(label: String(localized: "To"), date: $customEnd)
                     }
                 }
 
@@ -92,8 +92,8 @@ struct AIDigestView: View {
                     Spacer()
                     EmptyStateView(
                         icon: "doc.text.magnifyingglass",
-                        title: "No Digest Yet",
-                        message: "Select a time period and tap Generate Digest to create a summary of your email archive."
+                        title: String(localized: "No Digest Yet"),
+                        message: String(localized: "Select a time period and tap Generate Digest to create a summary of your email archive.")
                     )
                     Spacer()
                 }

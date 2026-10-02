@@ -1093,43 +1093,43 @@ struct ParsedEmailListView: View {
     }
 
     private static let allFilterChips: [FilterChipInfo] = [
-        FilterChipInfo(key: "sent", label: "Sent", icon: "arrow.up.right", color: .blue, section: "Type"),
-        FilterChipInfo(key: "received", label: "Received", icon: "arrow.down.left", color: .teal, section: "Type"),
-        FilterChipInfo(key: "attachments", label: "Attachments", icon: "paperclip", color: .brown, section: "Type"),
-        FilterChipInfo(key: "hasLinks", label: "Has Links", icon: "link", color: .indigo, section: "Type"),
-        FilterChipInfo(key: "largeEmails", label: "Large Emails", icon: "arrow.up.circle", color: .orange, section: "Type"),
+        FilterChipInfo(key: "sent", label: String(localized: "Sent"), icon: "arrow.up.right", color: .blue, section: "Type"),
+        FilterChipInfo(key: "received", label: String(localized: "Received"), icon: "arrow.down.left", color: .teal, section: "Type"),
+        FilterChipInfo(key: "attachments", label: String(localized: "Attachments"), icon: "paperclip", color: .brown, section: "Type"),
+        FilterChipInfo(key: "hasLinks", label: String(localized: "Has Links"), icon: "link", color: .indigo, section: "Type"),
+        FilterChipInfo(key: "largeEmails", label: String(localized: "Large Emails"), icon: "arrow.up.circle", color: .orange, section: "Type"),
 
-        FilterChipInfo(key: "personal", label: "Personal", icon: "person.fill", color: .cyan, section: "Category"),
-        FilterChipInfo(key: "transactional", label: "Transactional", icon: "creditcard", color: .indigo, section: "Category"),
-        FilterChipInfo(key: "newsletter", label: "Newsletters", icon: "newspaper.fill", color: .mint, section: "Category"),
-        FilterChipInfo(key: "promotional", label: "Promotional", icon: "megaphone", color: .pink, section: "Category"),
-        FilterChipInfo(key: "automated", label: "Automated", icon: "gearshape", color: .gray, section: "Category"),
+        FilterChipInfo(key: "personal", label: String(localized: "Personal"), icon: "person.fill", color: .cyan, section: "Category"),
+        FilterChipInfo(key: "transactional", label: String(localized: "Transactional"), icon: "creditcard", color: .indigo, section: "Category"),
+        FilterChipInfo(key: "newsletter", label: String(localized: "Newsletters"), icon: "newspaper.fill", color: .mint, section: "Category"),
+        FilterChipInfo(key: "promotional", label: String(localized: "Promotional"), icon: "megaphone", color: .pink, section: "Category"),
+        FilterChipInfo(key: "automated", label: String(localized: "Automated"), icon: "gearshape", color: .gray, section: "Category"),
 
-        FilterChipInfo(key: "relevant", label: "Relevant", icon: "checkmark.seal.fill", color: .green, section: "Evidence"),
-        FilterChipInfo(key: "privileged", label: "Privileged", icon: "lock.shield.fill", color: .orange, section: "Evidence"),
-        FilterChipInfo(key: "irrelevant", label: "Irrelevant", icon: "xmark.circle", color: .gray, section: "Evidence"),
-        FilterChipInfo(key: "flagged", label: "Flagged", icon: "flag.fill", color: .red, section: "Evidence"),
-        FilterChipInfo(key: "suspicious", label: "Suspicious", icon: "exclamationmark.triangle.fill", color: .purple, section: "Evidence"),
+        FilterChipInfo(key: "relevant", label: String(localized: "Relevant"), icon: "checkmark.seal.fill", color: .green, section: "Evidence"),
+        FilterChipInfo(key: "privileged", label: String(localized: "Privileged"), icon: "lock.shield.fill", color: .orange, section: "Evidence"),
+        FilterChipInfo(key: "irrelevant", label: String(localized: "Irrelevant"), icon: "xmark.circle", color: .gray, section: "Evidence"),
+        FilterChipInfo(key: "flagged", label: String(localized: "Flagged"), icon: "flag.fill", color: .red, section: "Evidence"),
+        FilterChipInfo(key: "suspicious", label: String(localized: "Suspicious"), icon: "exclamationmark.triangle.fill", color: .purple, section: "Evidence"),
 
-        FilterChipInfo(key: "positive", label: "Positive", icon: "face.smiling", color: .green, section: "Sentiment"),
-        FilterChipInfo(key: "negative", label: "Negative", icon: "face.dashed", color: .red, section: "Sentiment"),
-        FilterChipInfo(key: "neutral", label: "Neutral", icon: "minus.circle", color: .gray, section: "Sentiment"),
+        FilterChipInfo(key: "positive", label: String(localized: "Positive"), icon: "face.smiling", color: .green, section: "Sentiment"),
+        FilterChipInfo(key: "negative", label: String(localized: "Negative"), icon: "face.dashed", color: .red, section: "Sentiment"),
+        FilterChipInfo(key: "neutral", label: String(localized: "Neutral"), icon: "minus.circle", color: .gray, section: "Sentiment"),
 
-        FilterChipInfo(key: "highPriority", label: "High Priority", icon: "exclamationmark.triangle.fill", color: .red, section: "Priority"),
-        FilterChipInfo(key: "mediumPriority", label: "Medium Priority", icon: "exclamationmark.circle", color: .orange, section: "Priority"),
-        FilterChipInfo(key: "important", label: "Important", icon: "bolt.fill", color: .purple, section: "Priority"),
+        FilterChipInfo(key: "highPriority", label: String(localized: "High Priority"), icon: "exclamationmark.triangle.fill", color: .red, section: "Priority"),
+        FilterChipInfo(key: "mediumPriority", label: String(localized: "Medium Priority"), icon: "exclamationmark.circle", color: .orange, section: "Priority"),
+        FilterChipInfo(key: "important", label: String(localized: "Important"), icon: "bolt.fill", color: .purple, section: "Priority"),
 
-        FilterChipInfo(key: "phishing", label: "Phishing", icon: "shield.slash", color: .red, section: "Security"),
-        FilterChipInfo(key: "aiSuspicious", label: "AI Suspicious", icon: "exclamationmark.shield.fill", color: .purple, section: "Security"),
+        FilterChipInfo(key: "phishing", label: String(localized: "Phishing"), icon: "shield.slash", color: .red, section: "Security"),
+        FilterChipInfo(key: "aiSuspicious", label: String(localized: "AI Suspicious"), icon: "exclamationmark.shield.fill", color: .purple, section: "Security"),
 
-        FilterChipInfo(key: "unreviewed", label: "Unreviewed", icon: "eye.slash", color: .secondary, section: "Review"),
-        FilterChipInfo(key: "cleanup", label: "Cleanup", icon: "trash.circle", color: .secondary, section: "Review"),
+        FilterChipInfo(key: "unreviewed", label: String(localized: "Unreviewed"), icon: "eye.slash", color: .secondary, section: "Review"),
+        FilterChipInfo(key: "cleanup", label: String(localized: "Cleanup"), icon: "trash.circle", color: .secondary, section: "Review"),
         // The Trash view and the Archived filter the UI has always promised.
         // Mutually exclusive — see `filterBinding(for:)`. Their own section,
         // NOT "Review": that one only appears with advanced features on, and
         // getting a deleted email back is not an advanced feature.
-        FilterChipInfo(key: "trash", label: "Trash", icon: "trash", color: .red, section: "Review State"),
-        FilterChipInfo(key: "archived", label: "Archived", icon: "archivebox", color: .brown, section: "Review State"),
+        FilterChipInfo(key: "trash", label: String(localized: "Trash"), icon: "trash", color: .red, section: "Review State"),
+        FilterChipInfo(key: "archived", label: String(localized: "Archived"), icon: "archivebox", color: .brown, section: "Review State"),
     ]
 
     private var activeFilterChips: [FilterChipInfo] {
@@ -1427,7 +1427,7 @@ struct ParsedEmailListView: View {
                 VStack(spacing: Spacing.medium) {
                     EmptyStateView(
                         icon: "line.3.horizontal.decrease.circle",
-                        title: "No matching emails",
+                        title: String(localized: "No matching emails"),
                         message: hasAnyQuickFilterActive
                             ? "Active filter chips are hiding all emails. Clear them to see your \(model.visibleEmails.count) emails."
                             : "No emails match your current filters. Try widening the date range, selecting more senders, or reducing the minimum reply count."
@@ -1713,12 +1713,12 @@ struct ParsedEmailListView: View {
             HStack(spacing: 5) {
                 Image(systemName: "keyboard").font(.system(size: 9)).foregroundColor(.secondary)
                 Text("Quick Tag:").font(.system(size: 8)).foregroundColor(.secondary)
-                inboxKeyBadge("1", label: "Relevant", color: .green)
-                inboxKeyBadge("2", label: "Privileged", color: .orange)
-                inboxKeyBadge("3", label: "Irrelevant", color: .gray)
-                inboxKeyBadge("4", label: "Flagged", color: .red)
-                inboxKeyBadge("5", label: "Suspicious", color: .purple)
-                inboxKeyBadge("0", label: "Clear", color: .secondary)
+                inboxKeyBadge("1", label: String(localized: "Relevant"), color: .green)
+                inboxKeyBadge("2", label: String(localized: "Privileged"), color: .orange)
+                inboxKeyBadge("3", label: String(localized: "Irrelevant"), color: .gray)
+                inboxKeyBadge("4", label: String(localized: "Flagged"), color: .red)
+                inboxKeyBadge("5", label: String(localized: "Suspicious"), color: .purple)
+                inboxKeyBadge("0", label: String(localized: "Clear"), color: .secondary)
             }
             .help("Select an email, then press a number key to quickly tag it as evidence")
 
@@ -1892,7 +1892,7 @@ struct ParsedEmailListView: View {
 
         return HStack(spacing: 0) {
             if tag != .none {
-                Text(tag.rawValue)
+                Text(LocalizedStringKey(tag.rawValue))
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundColor(tag.color)
                     .padding(.horizontal, 3)
@@ -2109,9 +2109,9 @@ struct ParsedEmailListView: View {
                 Divider().frame(height: 12)
 
                 HStack(spacing: 5) {
-                    inboxStatusDot(.green, count: relevant, label: "Relevant")
-                    inboxStatusDot(.orange, count: privileged, label: "Privileged")
-                    inboxStatusDot(.red, count: flagged, label: "Flagged")
+                    inboxStatusDot(.green, count: relevant, label: String(localized: "Relevant"))
+                    inboxStatusDot(.orange, count: privileged, label: String(localized: "Privileged"))
+                    inboxStatusDot(.red, count: flagged, label: String(localized: "Flagged"))
                 }
                 .help("Distribution of your evidence tags across emails")
 
@@ -2198,7 +2198,7 @@ struct ParsedEmailListView: View {
                     Image(systemName: tag.icon)
                         .foregroundColor(tag.color)
                         .frame(width: 16)
-                    Text(tag.rawValue)
+                    Text(LocalizedStringKey(tag.rawValue))
                         .foregroundColor(.secondary)
                     Spacer()
                     Text("\(count)")
@@ -2496,7 +2496,7 @@ struct ParsedEmailListView: View {
             if forensicManager.isEnabled {
                 let tag = forensicManager.tagForEmail(email.id)
                 if tag != .none {
-                    Text(tag.rawValue)
+                    Text(LocalizedStringKey(tag.rawValue))
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundColor(tag.color)
                         .padding(.horizontal, 4)
@@ -2940,7 +2940,7 @@ struct ParsedEmailListView: View {
             tagBadge(badge, color: badgeColor)
             Image(systemName: primary.icon)
                 .font(.system(size: 9))
-            Text(primary.rawValue)
+            Text(LocalizedStringKey(primary.rawValue))
                 .font(.system(size: 9, weight: .medium))
                 .lineLimit(1)
             if extra > 0 {
@@ -3248,7 +3248,7 @@ struct ParsedEmailListView: View {
             // not via an Int.max whole-array walk.
             let scope: ArchiveSelectionScope = .query(model.currentArchiveQuery, exclusions: [])
             let cap: Int? = storeManager.isPremium ? nil : max(0, Self.freeAttachmentLimit - freeAttachmentDownloadCount)
-            ExportRunCenter.shared.run(title: "Saving attachments") {
+            ExportRunCenter.shared.run(title: String(localized: "Saving attachments")) {
                 do {
                     let outcome = try await ArchiveExportService.shared.exportAttachments(
                         scope: scope, to: folderURL, maxAttachments: cap,
@@ -3257,8 +3257,8 @@ struct ParsedEmailListView: View {
                         freeAttachmentDownloadCount += outcome.saved
                     }
                     if outcome.capped {
-                        storeManager.requestPurchase(.personal, feature: "Attachment Downloads",
-                                                     reason: "The Free plan saves 10 attachments a day. Personal and Professional have no daily limit.")
+                        storeManager.requestPurchase(.personal, feature: String(localized: "Attachment Downloads"),
+                                                     reason: String(localized: "The Free plan saves 10 attachments a day. Personal and Professional have no daily limit."))
                         listExportError = "Free limit: saved \(outcome.saved) attachments today. Personal and Professional have no daily limit."
                     }
                     #if os(iOS)
@@ -3274,11 +3274,11 @@ struct ParsedEmailListView: View {
 
     private var personaListTitle: String {
         switch personaManager.selectedPersona {
-        case .forensic: return "Evidence"
-        case .legal: return "Documents"
-        case .itAdmin: return "Messages"
-        case .researcher: return "Corpus"
-        case .journalist, .personal, .general: return "Emails"
+        case .forensic: return String(localized: "Evidence")
+        case .legal: return String(localized: "Documents")
+        case .itAdmin: return String(localized: "Messages")
+        case .researcher: return String(localized: "Corpus")
+        case .journalist, .personal, .general: return String(localized: "Emails")
         }
     }
 

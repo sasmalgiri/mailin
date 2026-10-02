@@ -40,8 +40,8 @@ struct SmartAlertsView: View {
                     Spacer()
                     EmptyStateView(
                         icon: "checkmark.shield",
-                        title: "No Alerts",
-                        message: "No suspicious patterns detected in the current archive."
+                        title: String(localized: "No Alerts"),
+                        message: String(localized: "No suspicious patterns detected in the current archive.")
                     )
                     Button("Run Analysis") { analyze() }
                         .buttonStyle(PrimaryButtonStyle())

@@ -246,7 +246,7 @@ struct ArchiveInsightsFeatures {
         return TrendAnalysis(
             id: "topic_shift",
             trendType: .topicShift,
-            title: "Topic Evolution Detected",
+            title: String(localized: "Topic Evolution Detected"),
             detail: detail,
             direction: shiftMagnitude > 0.4 ? .volatile : .stable,
             magnitude: shiftMagnitude,
@@ -338,7 +338,7 @@ struct ArchiveInsightsFeatures {
         return TrendAnalysis(
             id: "activity_pattern",
             trendType: .activityPattern,
-            title: "Activity Distribution",
+            title: String(localized: "Activity Distribution"),
             detail: pattern,
             direction: direction,
             magnitude: businessPct,
@@ -390,20 +390,20 @@ struct ArchiveInsightsFeatures {
         var qualityScore: Double = 0.5
 
         let diversityScore = min(1.0, Double(senders.count) / Double(max(1, emails.count / 5)))
-        qualityFactors.append(.init(name: "Sender Diversity", score: diversityScore, detail: "\(senders.count) unique senders across \(emails.count) emails"))
+        qualityFactors.append(.init(name: String(localized: "Sender Diversity"), score: diversityScore, detail: "\(senders.count) unique senders across \(emails.count) emails"))
         qualityScore += diversityScore * 0.15
 
         let completeness: Double
         let datedRatio = Double(dates.count) / Double(max(1, emails.count))
         completeness = datedRatio
-        qualityFactors.append(.init(name: "Date Completeness", score: completeness, detail: "\(Int(datedRatio * 100))% of emails have parseable dates"))
+        qualityFactors.append(.init(name: String(localized: "Date Completeness"), score: completeness, detail: "\(Int(datedRatio * 100))% of emails have parseable dates"))
         qualityScore += completeness * 0.15
 
         let bodyScore: Double = avgLength > 50 ? min(1.0, Double(avgLength) / 500.0) : 0.2
-        qualityFactors.append(.init(name: "Content Richness", score: bodyScore, detail: "Average email length: \(avgLength) characters"))
+        qualityFactors.append(.init(name: String(localized: "Content Richness"), score: bodyScore, detail: "Average email length: \(avgLength) characters"))
         qualityScore += bodyScore * 0.1
 
-        qualityFactors.append(.init(name: "Thread Depth", score: threadRate, detail: "\(Int(threadRate * 100))% of emails are threaded"))
+        qualityFactors.append(.init(name: String(localized: "Thread Depth"), score: threadRate, detail: "\(Int(threadRate * 100))% of emails are threaded"))
         qualityScore += threadRate * 0.1
 
         let sortedDates = dates.sorted()

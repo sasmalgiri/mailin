@@ -380,7 +380,7 @@ struct DuplicateManagerView: View {
                     "Remove \(archiveDupIDs.count) Duplicates",
                     isPresented: $showArchiveDedupConfirm,
                     message: "Every email keeps exactly one copy — \(archiveDupIDs.count) redundant row\(archiveDupIDs.count == 1 ? "" : "s") will be deleted. Review state on the removed copies is discarded.",
-                    actionTitle: "Remove Duplicates"
+                    actionTitle: String(localized: "Remove Duplicates")
                 ) {
                     let ids = Set(archiveDupIDs)
                     archiveDupIDs = []

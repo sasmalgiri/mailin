@@ -277,7 +277,7 @@ struct WorkCenterView: View {
         List {
             Section("Background jobs") {
                 jobRow(
-                    icon: "sparkles", title: "AI analysis",
+                    icon: "sparkles", title: String(localized: "AI analysis"),
                     status: analysisStatus,
                     detail: coverage.total > 0
                         ? "\(coverage.analyzed) of \(coverage.total) emails analyzed — powers the AI chips, priority and phishing signals."
@@ -285,14 +285,14 @@ struct WorkCenterView: View {
                     action: ("Run Now", { DerivedAIAnalysisJob.shared.kickIfNeeded() }))
                 jobRow(
                     icon: watchManager.isWatching ? "eye.fill" : "eye.slash",
-                    title: "Watch folder",
+                    title: String(localized: "Watch folder"),
                     status: watchManager.isWatching ? "Watching" : "Off",
                     detail: watchManager.isWatching
                         ? "Auto-importing new .eml/.mbox files into the triage queue."
                         : "Configure it in Phishing Triage to auto-import reported emails.",
                     action: nil)
                 jobRow(
-                    icon: "newspaper", title: "Weekly digest",
+                    icon: "newspaper", title: String(localized: "Weekly digest"),
                     status: digestEnabled ? "Scheduled" : "Off",
                     detail: digestEnabled
                         ? "Summarizes saved-search activity once a week."
@@ -306,8 +306,8 @@ struct WorkCenterView: View {
         switch runner.state {
         case .running: return runner.total > 0 ? "Running \(runner.processed)/\(runner.total)" : "Running"
         case .completed: return coverage.total > 0 && coverage.analyzed >= coverage.total ? "Complete" : "Idle"
-        case .failed: return "Failed — Run Now retries"
-        case .cancelled: return "Cancelled"
+        case .failed: return String(localized: "Failed — Run Now retries")
+        case .cancelled: return String(localized: "Cancelled")
         case .idle: return coverage.total > 0 && coverage.analyzed >= coverage.total ? "Complete" : "Idle"
         }
     }
@@ -730,7 +730,7 @@ struct WorkCenterView: View {
     @MainActor
     private func reverse(_ doc: SQLiteEmailStore.IssuedDocument) async {
         _ = try? await SQLiteEmailStore.shared.reverseDocument(
-            doc.number, type: doc.type, reason: "corrected by examiner",
+            doc.number, type: doc.type, reason: String(localized: "corrected by examiner"),
             createdBy: ForensicManager.shared.examinerName)
         ForensicManager.shared.logAction("Document reversed: \(doc.number)", detail: doc.summary)
         await reloadDocuments()

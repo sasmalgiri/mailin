@@ -112,22 +112,22 @@ struct GeneralAnalysisView: View {
 
         coordinator.begin(steps: 5, color: .mint)
 
-        coordinator.advance(step: 1, label: "Analyzing sentiment...")
+        coordinator.advance(step: 1, label: String(localized: "Analyzing sentiment..."))
         guard let sentiment = await coordinator.runDetached({ EmailNLPEngine.analyzeSentiment(of: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 2, label: "Detecting anomalies...")
+        coordinator.advance(step: 2, label: String(localized: "Detecting anomalies..."))
         guard let anomalyResults = await coordinator.runDetached({ AnomalyDetectionEngine.detectAnomalies(in: emailsCopy) }) else { coordinator.finish(); return }
 
         sentimentResults = sentiment; anomalies = anomalyResults
         hasAnalyzed = true; isAnalyzing = false
 
-        coordinator.advance(step: 3, label: "Detecting trends...")
+        coordinator.advance(step: 3, label: String(localized: "Detecting trends..."))
         guard let trendResults = await coordinator.runDetached({ ArchiveInsightsFeatures.detectTrends(in: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 4, label: "Analyzing archive composition...")
+        coordinator.advance(step: 4, label: String(localized: "Analyzing archive composition..."))
         guard let composition = await coordinator.runDetached({ ArchiveInsightsFeatures.analyzeComposition(emails: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 5, label: "Mapping communication patterns...")
+        coordinator.advance(step: 5, label: String(localized: "Mapping communication patterns..."))
         guard let patterns = await coordinator.runDetached({ ArchiveInsightsFeatures.analyzeCommunicationPatterns(emails: emailsCopy, graph: graphForPatterns) }) else { coordinator.finish(); return }
 
         trends = trendResults; archiveComposition = composition; communicationPatterns = patterns
@@ -788,17 +788,17 @@ struct GeneralAnalysisView: View {
                 .font(.system(size: 10)).foregroundColor(.secondary)
 
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                featuredCard("AI Assistant", subtitle: "Ask questions about your emails",
+                featuredCard("AI Assistant", subtitle: String(localized: "Ask questions about your emails"),
                              icon: "sparkles", color: .purple, destination: .aiAssistant)
-                featuredCard("Email Analytics", subtitle: "Charts, stats, and insights",
+                featuredCard("Email Analytics", subtitle: String(localized: "Charts, stats, and insights"),
                              icon: "chart.bar", color: .blue, destination: .emailAnalytics)
-                featuredCard("Topic Clusters", subtitle: "Auto-group by theme",
+                featuredCard("Topic Clusters", subtitle: String(localized: "Auto-group by theme"),
                              icon: "circle.grid.3x3", color: .teal, destination: .topicClusters)
-                featuredCard("Timeline", subtitle: "See emails chronologically",
+                featuredCard("Timeline", subtitle: String(localized: "See emails chronologically"),
                              icon: "calendar.day.timeline.left", color: .purple, destination: .timeline)
-                featuredCard("Relationships", subtitle: "Who contacts who",
+                featuredCard("Relationships", subtitle: String(localized: "Who contacts who"),
                              icon: "point.3.connected.trianglepath.dotted", color: .mint, destination: .relationshipGraph)
-                featuredCard("Executive Dashboard", subtitle: "High-level KPIs",
+                featuredCard("Executive Dashboard", subtitle: String(localized: "High-level KPIs"),
                              icon: "gauge.with.dots.needle.33percent", color: .blue, destination: .executiveDashboard)
             }
         }
@@ -935,13 +935,13 @@ struct GeneralAnalysisView: View {
                 .font(.system(size: 10)).foregroundColor(.secondary)
 
             HStack(spacing: 10) {
-                stepCard(step: 1, title: "Explore", description: "Browse your emails and see top contacts", icon: "magnifyingglass", color: .blue) {
+                stepCard(step: 1, title: String(localized: "Explore"), description: String(localized: "Browse your emails and see top contacts"), icon: "magnifyingglass", color: .blue) {
                     trackFeature(.emailInbox); onNavigate(.emailInbox)
                 }
-                stepCard(step: 2, title: "Ask AI", description: "Natural language questions about your archive", icon: "sparkles", color: .purple) {
+                stepCard(step: 2, title: String(localized: "Ask AI"), description: String(localized: "Natural language questions about your archive"), icon: "sparkles", color: .purple) {
                     trackFeature(.aiAssistant); onNavigate(.aiAssistant)
                 }
-                stepCard(step: 3, title: "Analyze", description: "Charts, patterns, and insights", icon: "chart.bar", color: .green) {
+                stepCard(step: 3, title: String(localized: "Analyze"), description: String(localized: "Charts, patterns, and insights"), icon: "chart.bar", color: .green) {
                     trackFeature(.emailAnalytics); onNavigate(.emailAnalytics)
                 }
             }

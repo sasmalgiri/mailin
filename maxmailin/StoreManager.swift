@@ -15,9 +15,9 @@ enum PurchaseTier: Int, Comparable {
 
     var displayName: String {
         switch self {
-        case .free: return "Free"
-        case .personal: return "Personal"
-        case .professional: return "Professional"
+        case .free: return String(localized: "Free")
+        case .personal: return String(localized: "Personal")
+        case .professional: return String(localized: "Professional")
         }
     }
 }
@@ -26,6 +26,14 @@ enum BillingPeriod: String, CaseIterable {
     case monthly = "Monthly"
     case yearly = "Yearly"
     case lifetime = "Lifetime"
+
+    var displayName: String {
+        switch self {
+        case .monthly: return String(localized: "Monthly")
+        case .yearly: return String(localized: "Yearly")
+        case .lifetime: return String(localized: "Lifetime")
+        }
+    }
 }
 
 /// Where a purchase request should be presented. Each SwiftUI root (main
@@ -68,7 +76,7 @@ enum RestoreOutcome: Equatable {
     var message: String {
         switch self {
         case .restored(let tier): return "Restored: your \(tier.displayName) access is active on this device."
-        case .nothingFound: return "No eligible purchases were found for this Apple Account."
+        case .nothingFound: return String(localized: "No eligible purchases were found for this Apple Account.")
         case .failed(let detail): return "Restore failed: \(detail)"
         }
     }

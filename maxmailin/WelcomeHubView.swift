@@ -228,11 +228,11 @@ struct WelcomeHubView: View {
 
             LazyVGrid(columns: featureColumns, spacing: Spacing.xSmall) {
                 purchaseCard(icon: "person", color: .blue,
-                             name: "mailin Personal",
-                             tagline: "Monthly · yearly · lifetime")
+                             name: String(localized: "mailin Personal"),
+                             tagline: String(localized: "Monthly · yearly · lifetime"))
                 purchaseCard(icon: "briefcase", color: .purple,
-                             name: "mailin Professional",
-                             tagline: "All features · monthly, yearly, lifetime")
+                             name: String(localized: "mailin Professional"),
+                             tagline: String(localized: "All features · monthly, yearly, lifetime"))
             }
         }
         .opacity(animateCards ? 1 : 0)
@@ -491,13 +491,13 @@ struct WelcomeHubView: View {
 
     private var personaPrimaryCategoryOrder: [String] {
         switch persona {
-        case .forensic:   return ["Forensics & Legal", "Security & Detection"]
-        case .legal:      return ["Forensics & Legal", "Analysis & Insights"]
-        case .itAdmin:    return ["Security & Detection", "Analysis & Insights"]
-        case .journalist: return ["AI Intelligence", "Analysis & Insights"]
-        case .researcher: return ["Analysis & Insights", "Export & Reports"]
-        case .personal:   return ["AI Intelligence", "Export & Reports"]
-        case .general:    return ["Analysis & Insights", "AI Intelligence"]
+        case .forensic:   return [String(localized: "Forensics & Legal"), String(localized: "Security & Detection")]
+        case .legal:      return [String(localized: "Forensics & Legal"), String(localized: "Analysis & Insights")]
+        case .itAdmin:    return [String(localized: "Security & Detection"), String(localized: "Analysis & Insights")]
+        case .journalist: return [String(localized: "AI Intelligence"), String(localized: "Analysis & Insights")]
+        case .researcher: return [String(localized: "Analysis & Insights"), String(localized: "Export & Reports")]
+        case .personal:   return [String(localized: "AI Intelligence"), String(localized: "Export & Reports")]
+        case .general:    return [String(localized: "Analysis & Insights"), String(localized: "AI Intelligence")]
         }
     }
 
@@ -506,14 +506,14 @@ struct WelcomeHubView: View {
     /// Page 1's own capabilities — import, search, read, export. Always shown,
     /// because the Archive page is always on.
     private var archiveCategory: FeatureCategory {
-        FeatureCategory(icon: "tray.full", title: "Archive", color: .blue, isPrimary: false, owner: .archive, features: [
-            FeatureItem(icon: "magnifyingglass", name: "Smart Search", tagline: "Boolean, regex, proximity", color: .blue),
-            FeatureItem(icon: "calendar.day.timeline.left", name: "Email Timeline", tagline: "Chronological exploration", color: .indigo),
-            FeatureItem(icon: "paperclip", name: "Attachments", tagline: "Read, preview and save", color: .teal),
-            FeatureItem(icon: "chart.xyaxis.line", name: "Visual Analytics", tagline: "Charts, trends, patterns", color: .purple),
-            FeatureItem(icon: "chart.line.uptrend.xyaxis", name: "Communication Patterns", tagline: "Volume and frequency", color: .mint),
-            FeatureItem(icon: "doc.on.doc", name: "Duplicate Detection", tagline: "Exact and near-matches", color: .gray),
-            FeatureItem(icon: "square.and.arrow.up", name: "Export", tagline: "mbox, PDF, CSV — round-trip verified", color: .green),
+        FeatureCategory(icon: "tray.full", title: String(localized: "Archive"), color: .blue, isPrimary: false, owner: .archive, features: [
+            FeatureItem(icon: "magnifyingglass", name: String(localized: "Smart Search"), tagline: String(localized: "Boolean, regex, proximity"), color: .blue),
+            FeatureItem(icon: "calendar.day.timeline.left", name: String(localized: "Email Timeline"), tagline: String(localized: "Chronological exploration"), color: .indigo),
+            FeatureItem(icon: "paperclip", name: String(localized: "Attachments"), tagline: String(localized: "Read, preview and save"), color: .teal),
+            FeatureItem(icon: "chart.xyaxis.line", name: String(localized: "Visual Analytics"), tagline: String(localized: "Charts, trends, patterns"), color: .purple),
+            FeatureItem(icon: "chart.line.uptrend.xyaxis", name: String(localized: "Communication Patterns"), tagline: String(localized: "Volume and frequency"), color: .mint),
+            FeatureItem(icon: "doc.on.doc", name: String(localized: "Duplicate Detection"), tagline: String(localized: "Exact and near-matches"), color: .gray),
+            FeatureItem(icon: "square.and.arrow.up", name: String(localized: "Export"), tagline: String(localized: "mbox, PDF, CSV — round-trip verified"), color: .green),
         ])
     }
 
@@ -521,36 +521,36 @@ struct WelcomeHubView: View {
     /// clustering and summarisation are not Archive facts — they are produced
     /// by models, and on a Page-1-only install nothing produces them.
     private var analysisCategory: FeatureCategory {
-        FeatureCategory(icon: "chart.bar.xaxis", title: "Analysis & Insights", color: .blue, isPrimary: false, owner: .aiInsights, features: [
-            FeatureItem(icon: "bubble.left.and.text.bubble.right", name: "Sentiment Analysis", tagline: "Tone and emotion detection", color: .orange),
-            FeatureItem(icon: "rectangle.3.group", name: "Topic Clusters", tagline: "Auto-grouped by subject", color: .teal),
-            FeatureItem(icon: "person.3", name: "Relationship Graph", tagline: "Who talks to whom", color: .pink),
-            FeatureItem(icon: "arrow.triangle.branch", name: "Thread Summarizer", tagline: "Conversation overviews", color: .cyan),
+        FeatureCategory(icon: "chart.bar.xaxis", title: String(localized: "Analysis & Insights"), color: .blue, isPrimary: false, owner: .aiInsights, features: [
+            FeatureItem(icon: "bubble.left.and.text.bubble.right", name: String(localized: "Sentiment Analysis"), tagline: String(localized: "Tone and emotion detection"), color: .orange),
+            FeatureItem(icon: "rectangle.3.group", name: String(localized: "Topic Clusters"), tagline: String(localized: "Auto-grouped by subject"), color: .teal),
+            FeatureItem(icon: "person.3", name: String(localized: "Relationship Graph"), tagline: String(localized: "Who talks to whom"), color: .pink),
+            FeatureItem(icon: "arrow.triangle.branch", name: String(localized: "Thread Summarizer"), tagline: String(localized: "Conversation overviews"), color: .cyan),
         ])
     }
 
     private var forensicsCategory: FeatureCategory {
-        FeatureCategory(icon: "shield.checkered", title: "Forensics & Legal", color: .orange, isPrimary: false, owner: .professional, features: [
-            FeatureItem(icon: "number.square", name: "Bates Numbering", tagline: "Legal production stamping", color: .indigo),
-            FeatureItem(icon: "checkmark.seal", name: "Hash Verification", tagline: "MD5, SHA-1, SHA-256", color: .orange),
-            FeatureItem(icon: "list.clipboard", name: "Audit Trail", tagline: "Tamper-evident HMAC chain", color: .brown),
-            FeatureItem(icon: "link", name: "Chain of Custody", tagline: "Evidence tracking + PDF", color: .blue),
-            FeatureItem(icon: "tag", name: "Evidence Tagging", tagline: "Relevant, privileged, flagged", color: .green),
-            FeatureItem(icon: "text.redaction", name: "PII Redaction", tagline: "SSN, credit card, phone", color: .red),
-            FeatureItem(icon: "building.columns", name: "eDiscovery Workflow", tagline: "End-to-end case management", color: .indigo),
-            FeatureItem(icon: "doc.text.magnifyingglass", name: "Predictive Coding", tagline: "AI-assisted review (TAR)", color: .purple),
-            FeatureItem(icon: "checklist", name: "GDPR Compliance", tagline: "Data protection reports", color: .teal),
+        FeatureCategory(icon: "shield.checkered", title: String(localized: "Forensics & Legal"), color: .orange, isPrimary: false, owner: .professional, features: [
+            FeatureItem(icon: "number.square", name: String(localized: "Bates Numbering"), tagline: String(localized: "Legal production stamping"), color: .indigo),
+            FeatureItem(icon: "checkmark.seal", name: String(localized: "Hash Verification"), tagline: String(localized: "MD5, SHA-1, SHA-256"), color: .orange),
+            FeatureItem(icon: "list.clipboard", name: String(localized: "Audit Trail"), tagline: String(localized: "Tamper-evident HMAC chain"), color: .brown),
+            FeatureItem(icon: "link", name: String(localized: "Chain of Custody"), tagline: String(localized: "Evidence tracking + PDF"), color: .blue),
+            FeatureItem(icon: "tag", name: String(localized: "Evidence Tagging"), tagline: String(localized: "Relevant, privileged, flagged"), color: .green),
+            FeatureItem(icon: "text.redaction", name: String(localized: "PII Redaction"), tagline: String(localized: "SSN, credit card, phone"), color: .red),
+            FeatureItem(icon: "building.columns", name: String(localized: "eDiscovery Workflow"), tagline: String(localized: "End-to-end case management"), color: .indigo),
+            FeatureItem(icon: "doc.text.magnifyingglass", name: String(localized: "Predictive Coding"), tagline: String(localized: "AI-assisted review (TAR)"), color: .purple),
+            FeatureItem(icon: "checklist", name: String(localized: "GDPR Compliance"), tagline: String(localized: "Data protection reports"), color: .teal),
         ])
     }
 
     private var securityCategory: FeatureCategory {
-        FeatureCategory(icon: "shield.lefthalf.filled", title: "Security & Detection", color: .red, isPrimary: false, owner: .professional, features: [
-            FeatureItem(icon: "exclamationmark.shield", name: "Phishing Detection", tagline: "Multi-signal risk scoring", color: .red),
-            FeatureItem(icon: "waveform.badge.exclamationmark", name: "Anomaly Detection", tagline: "Frequency, timing, domains", color: .orange),
-            FeatureItem(icon: "eye.trianglebadge.exclamationmark", name: "PII Exposure Scan", tagline: "Find sensitive data leaks", color: .purple),
-            FeatureItem(icon: "network", name: "Header Forensics", tagline: "SPF, DKIM, DMARC analysis", color: .teal),
-            FeatureItem(icon: "exclamationmark.triangle", name: "IOC Extractor", tagline: "IPs, URLs, hashes, domains", color: .yellow),
-            FeatureItem(icon: "bell.badge", name: "Smart Alerts", tagline: "Proactive risk notifications", color: .blue),
+        FeatureCategory(icon: "shield.lefthalf.filled", title: String(localized: "Security & Detection"), color: .red, isPrimary: false, owner: .professional, features: [
+            FeatureItem(icon: "exclamationmark.shield", name: String(localized: "Phishing Detection"), tagline: String(localized: "Multi-signal risk scoring"), color: .red),
+            FeatureItem(icon: "waveform.badge.exclamationmark", name: String(localized: "Anomaly Detection"), tagline: String(localized: "Frequency, timing, domains"), color: .orange),
+            FeatureItem(icon: "eye.trianglebadge.exclamationmark", name: String(localized: "PII Exposure Scan"), tagline: String(localized: "Find sensitive data leaks"), color: .purple),
+            FeatureItem(icon: "network", name: String(localized: "Header Forensics"), tagline: String(localized: "SPF, DKIM, DMARC analysis"), color: .teal),
+            FeatureItem(icon: "exclamationmark.triangle", name: String(localized: "IOC Extractor"), tagline: String(localized: "IPs, URLs, hashes, domains"), color: .yellow),
+            FeatureItem(icon: "bell.badge", name: String(localized: "Smart Alerts"), tagline: String(localized: "Proactive risk notifications"), color: .blue),
         ])
     }
 
@@ -559,26 +559,26 @@ struct WelcomeHubView: View {
     /// `archiveCategory`, so a Page-1-only install still sees that it can
     /// export.
     private var exportCategory: FeatureCategory {
-        FeatureCategory(icon: "square.and.arrow.up", title: "Export & Reports", color: .green, isPrimary: false, owner: .professional, features: [
-            FeatureItem(icon: "person.text.rectangle", name: "vCard Contacts", tagline: "Extract email contacts", color: .blue),
-            FeatureItem(icon: "calendar", name: "ICS Calendar", tagline: "Export meeting events", color: .orange),
-            FeatureItem(icon: "doc.badge.gearshape", name: "Concordance / Relativity", tagline: "Legal load file formats", color: .indigo),
-            FeatureItem(icon: "doc.zipper", name: "MSG / PST Export", tagline: "Outlook-compatible output", color: .teal),
-            FeatureItem(icon: "doc.text.fill", name: "Investigation Report", tagline: "Full case report as PDF", color: .purple),
-            FeatureItem(icon: "speedometer", name: "Executive Dashboard", tagline: "High-level archive overview", color: .mint),
+        FeatureCategory(icon: "square.and.arrow.up", title: String(localized: "Export & Reports"), color: .green, isPrimary: false, owner: .professional, features: [
+            FeatureItem(icon: "person.text.rectangle", name: String(localized: "vCard Contacts"), tagline: String(localized: "Extract email contacts"), color: .blue),
+            FeatureItem(icon: "calendar", name: String(localized: "ICS Calendar"), tagline: String(localized: "Export meeting events"), color: .orange),
+            FeatureItem(icon: "doc.badge.gearshape", name: String(localized: "Concordance / Relativity"), tagline: String(localized: "Legal load file formats"), color: .indigo),
+            FeatureItem(icon: "doc.zipper", name: String(localized: "MSG / PST Export"), tagline: String(localized: "Outlook-compatible output"), color: .teal),
+            FeatureItem(icon: "doc.text.fill", name: String(localized: "Investigation Report"), tagline: String(localized: "Full case report as PDF"), color: .purple),
+            FeatureItem(icon: "speedometer", name: String(localized: "Executive Dashboard"), tagline: String(localized: "High-level archive overview"), color: .mint),
         ])
     }
 
     private var aiCategory: FeatureCategory {
-        FeatureCategory(icon: "sparkles", title: "AI Intelligence", color: .purple, isPrimary: false, owner: .aiInsights, features: [
-            FeatureItem(icon: "bubble.left.and.bubble.right", name: "AI Assistant", tagline: "Ask questions about emails", color: .purple),
-            FeatureItem(icon: "text.page.badge.magnifyingglass", name: "AI Email Digest", tagline: "Auto-generated summaries", color: .blue),
-            FeatureItem(icon: "brain.head.profile", name: "Smart Classification", tagline: "Auto-categorize emails", color: .indigo),
-            FeatureItem(icon: "tag.fill", name: "Auto-Tagger", tagline: "Intelligent label assignment", color: .orange),
-            FeatureItem(icon: "gearshape.2", name: "Automation Rules", tagline: "If-then workflow engine", color: .teal),
-            FeatureItem(icon: "mic", name: "Voice Assistant", tagline: "Speak to search and ask", color: .pink),
-            FeatureItem(icon: "globe", name: "Translation", tagline: "Detect and translate languages", color: .cyan),
-            FeatureItem(icon: "wand.and.stars", name: "Custom AI Experts", tagline: "Define your own specialists", color: .mint),
+        FeatureCategory(icon: "sparkles", title: String(localized: "AI Intelligence"), color: .purple, isPrimary: false, owner: .aiInsights, features: [
+            FeatureItem(icon: "bubble.left.and.bubble.right", name: String(localized: "AI Assistant"), tagline: String(localized: "Ask questions about emails"), color: .purple),
+            FeatureItem(icon: "text.page.badge.magnifyingglass", name: String(localized: "AI Email Digest"), tagline: String(localized: "Auto-generated summaries"), color: .blue),
+            FeatureItem(icon: "brain.head.profile", name: String(localized: "Smart Classification"), tagline: String(localized: "Auto-categorize emails"), color: .indigo),
+            FeatureItem(icon: "tag.fill", name: String(localized: "Auto-Tagger"), tagline: String(localized: "Intelligent label assignment"), color: .orange),
+            FeatureItem(icon: "gearshape.2", name: String(localized: "Automation Rules"), tagline: String(localized: "If-then workflow engine"), color: .teal),
+            FeatureItem(icon: "mic", name: String(localized: "Voice Assistant"), tagline: String(localized: "Speak to search and ask"), color: .pink),
+            FeatureItem(icon: "globe", name: String(localized: "Translation"), tagline: String(localized: "Detect and translate languages"), color: .cyan),
+            FeatureItem(icon: "wand.and.stars", name: String(localized: "Custom AI Experts"), tagline: String(localized: "Define your own specialists"), color: .mint),
         ])
     }
 }

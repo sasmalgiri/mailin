@@ -202,77 +202,77 @@ struct UnifiedExportSections: View {
 
     private func exportWord() {
         guard let url = documentDestination(timestampName("mailin_emails", ext: "doc"), type: nil) else { return }
-        request(.word, title: "Exporting Word document", destination: url, isFolder: false)
+        request(.word, title: String(localized: "Exporting Word document"), destination: url, isFolder: false)
     }
 
     private func exportCSV() {
         guard let url = documentDestination(timestampName("mailin_emails", ext: "csv"), type: .commaSeparatedText) else { return }
-        request(.csv, title: "Exporting CSV", destination: url, isFolder: false)
+        request(.csv, title: String(localized: "Exporting CSV"), destination: url, isFolder: false)
     }
 
     private func exportJSON() {
         guard let url = documentDestination(timestampName("mailin_emails", ext: "json"), type: .json) else { return }
-        request(.json, title: "Exporting JSON", destination: url, isFolder: false)
+        request(.json, title: String(localized: "Exporting JSON"), destination: url, isFolder: false)
     }
 
     private func exportPrintText() {
         guard let url = documentDestination(timestampName("mailin_print", ext: "txt"), type: .plainText) else { return }
-        request(.printText, title: "Exporting print text", destination: url, isFolder: false)
+        request(.printText, title: String(localized: "Exporting print text"), destination: url, isFolder: false)
     }
 
     private func exportEML() {
-        guard let folder = folderDestination(message: "Select a folder to save .eml files",
+        guard let folder = folderDestination(message: String(localized: "Select a folder to save .eml files"),
                                              fallbackName: "eml_export_\(UUID().uuidString)") else { return }
-        request(.emlFiles, title: "Exporting emails as EML", destination: folder, isFolder: true)
+        request(.emlFiles, title: String(localized: "Exporting emails as EML"), destination: folder, isFolder: true)
     }
 
     private func exportPDFs() {
-        guard let folder = folderDestination(message: "Select a folder to save PDF files",
+        guard let folder = folderDestination(message: String(localized: "Select a folder to save PDF files"),
                                              fallbackName: "pdf_export_\(UUID().uuidString)") else { return }
-        request(.pdfFiles, title: "Exporting PDFs", destination: folder, isFolder: true)
+        request(.pdfFiles, title: String(localized: "Exporting PDFs"), destination: folder, isFolder: true)
     }
 
     private func exportTIFFs() {
-        guard let folder = folderDestination(message: "Select a folder to save TIFF images",
+        guard let folder = folderDestination(message: String(localized: "Select a folder to save TIFF images"),
                                              fallbackName: "tiff_export_\(UUID().uuidString)") else { return }
-        request(.tiffFiles, title: "Exporting TIFF images", destination: folder, isFolder: true)
+        request(.tiffFiles, title: String(localized: "Exporting TIFF images"), destination: folder, isFolder: true)
     }
 
     private func exportHTML() {
-        guard let base = folderDestination(message: "Select a folder for the portable HTML export",
+        guard let base = folderDestination(message: String(localized: "Select a folder for the portable HTML export"),
                                            fallbackName: "html_export_\(UUID().uuidString)") else { return }
         let folder = base.appendingPathComponent("mailin_html_export")
-        request(.portableHTML, title: "Exporting portable HTML", destination: folder, isFolder: true)
+        request(.portableHTML, title: String(localized: "Exporting portable HTML"), destination: folder, isFolder: true)
     }
 
     private func exportMarkdown() {
         guard let url = documentDestination(timestampName("mailin_emails", ext: "md"), type: .plainText) else { return }
-        request(.markdown, title: "Exporting Markdown", destination: url, isFolder: false)
+        request(.markdown, title: String(localized: "Exporting Markdown"), destination: url, isFolder: false)
     }
 
     private func exportHeadersOnly() {
         guard let url = documentDestination(timestampName("mailin_headers", ext: "csv"), type: .commaSeparatedText) else { return }
-        request(.headersCSV, title: "Exporting headers CSV", destination: url, isFolder: false)
+        request(.headersCSV, title: String(localized: "Exporting headers CSV"), destination: url, isFolder: false)
     }
 
     private func exportMBOX() {
         guard let url = documentDestination(timestampName("mailin_emails", ext: "mbox"), type: nil) else { return }
-        request(.mbox, title: "Exporting mbox", destination: url, isFolder: false)
+        request(.mbox, title: String(localized: "Exporting mbox"), destination: url, isFolder: false)
     }
 
     private func exportMSGs() {
-        guard let folder = folderDestination(message: "Select a folder to save .msg files",
+        guard let folder = folderDestination(message: String(localized: "Select a folder to save .msg files"),
                                              fallbackName: "msg_export_\(UUID().uuidString)") else { return }
-        request(.msgFiles, title: "Exporting Outlook messages", destination: folder, isFolder: true)
+        request(.msgFiles, title: String(localized: "Exporting Outlook messages"), destination: folder, isFolder: true)
     }
 
     private func exportVCard() {
         guard let url = documentDestination(timestampName("mailin_contacts", ext: "vcf"), type: .vCard) else { return }
-        request(.vcard, title: "Exporting contacts", destination: url, isFolder: false)
+        request(.vcard, title: String(localized: "Exporting contacts"), destination: url, isFolder: false)
     }
 
     private func exportICS() {
         guard let url = documentDestination(timestampName("mailin_events", ext: "ics"), type: UTType(filenameExtension: "ics")) else { return }
-        request(.ics, title: "Exporting calendar events", destination: url, isFolder: false)
+        request(.ics, title: String(localized: "Exporting calendar events"), destination: url, isFolder: false)
     }
 }

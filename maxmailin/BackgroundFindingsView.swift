@@ -121,7 +121,7 @@ struct BackgroundFindingsView: View {
             summaryBar
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: Spacing.xSmall) {
-                    categoryChip(label: "All", category: nil, count: manager.lastRunFindings.count)
+                    categoryChip(label: String(localized: "All"), category: nil, count: manager.lastRunFindings.count)
                     ForEach(categories, id: \.self) { cat in
                         let count = manager.lastRunFindings.filter { $0.category == cat }.count
                         categoryChip(label: displayName(for: cat), category: cat, count: count)

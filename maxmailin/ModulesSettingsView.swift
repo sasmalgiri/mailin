@@ -291,8 +291,8 @@ private struct ModuleCard: View {
     private var statusLabel: String {
         switch activation {
         case .unavailable(let reason): return reason.prefix(1).capitalized + reason.dropFirst()
-        case .disabled: return "Off — nothing from this page is running"
-        case .enabledNoAccounts: return "On — no account added yet"
+        case .disabled: return String(localized: "Off — nothing from this page is running")
+        case .enabledNoAccounts: return String(localized: "On — no account added yet")
         case .active: return module.isOptional ? "On" : "Always available"
         case .paused(let reason): return "Paused — \(reason)"
         case .error(let message): return "Error — \(message)"
@@ -324,13 +324,13 @@ private struct ModuleCard: View {
     private var purpose: String {
         switch module {
         case .archive:
-            return "Import, search and export your mail. Always available, fully offline."
+            return String(localized: "Import, search and export your mail. Always available, fully offline.")
         case .aiInsights:
-            return "Ask questions, summarise and build reports with citations back to originals."
+            return String(localized: "Ask questions, summarise and build reports with citations back to originals.")
         case .professional:
-            return "Case intake, review, production and audit workflows."
+            return String(localized: "Case intake, review, production and audit workflows.")
         case .liveMail:
-            return "Connect mail accounts to send and receive. Kept separate from your archive."
+            return String(localized: "Connect mail accounts to send and receive. Kept separate from your archive.")
         }
     }
 }

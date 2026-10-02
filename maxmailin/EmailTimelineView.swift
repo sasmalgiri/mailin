@@ -240,7 +240,7 @@ struct EmailTimelineView: View {
             }
             Spacer()
             TutorialHelpButton(showTutorial: $showTutorial)
-            SaveToDocumentsButton(title: "Timeline") {
+            SaveToDocumentsButton(title: String(localized: "Timeline")) {
                 [.init(key: "Emails analyzed", value: "\(timelineData?.totalEmails ?? 0)")]
             }
             if isPresented != nil {
@@ -262,8 +262,8 @@ struct EmailTimelineView: View {
             Spacer()
             EmptyStateView(
                 icon: "calendar.badge.clock",
-                title: "No Timeline Data",
-                message: "Import emails to see the chronological timeline."
+                title: String(localized: "No Timeline Data"),
+                message: String(localized: "Import emails to see the chronological timeline.")
             )
             Spacer()
         }
@@ -289,7 +289,7 @@ struct EmailTimelineView: View {
                 .foregroundColor(AppColors.secondary)
             Picker("Granularity", selection: $granularity) {
                 ForEach(Granularity.allCases, id: \.self) { g in
-                    Text(g.rawValue).tag(g)
+                    Text(LocalizedStringKey(g.rawValue)).tag(g)
                 }
             }
             .pickerStyle(.segmented)
@@ -442,10 +442,10 @@ struct EmailTimelineView: View {
 
             let s = stats
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: Spacing.small) {
-                statCard(title: "Busiest Day", value: s.busiestDay, detail: "\(s.busiestDayCount) emails")
-                statCard(title: "Avg Emails/Day", value: String(format: "%.1f", s.avgEmailsPerDay), detail: "over \(s.totalDays) days")
-                statCard(title: "Longest Gap", value: s.longestGap, detail: "without emails")
-                statCard(title: "Total Emails", value: "\(s.totalEmails)", detail: "with valid dates")
+                statCard(title: String(localized: "Busiest Day"), value: s.busiestDay, detail: "\(s.busiestDayCount) emails")
+                statCard(title: String(localized: "Avg Emails/Day"), value: String(format: "%.1f", s.avgEmailsPerDay), detail: "over \(s.totalDays) days")
+                statCard(title: String(localized: "Longest Gap"), value: s.longestGap, detail: String(localized: "without emails"))
+                statCard(title: String(localized: "Total Emails"), value: "\(s.totalEmails)", detail: String(localized: "with valid dates"))
             }
         }
         .padding(Spacing.medium)

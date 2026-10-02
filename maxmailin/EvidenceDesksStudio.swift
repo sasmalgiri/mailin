@@ -25,12 +25,12 @@ enum AdmiraltyReliability: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .a: return "A — Completely reliable"
-        case .b: return "B — Usually reliable"
-        case .c: return "C — Fairly reliable"
-        case .d: return "D — Not usually reliable"
-        case .e: return "E — Unreliable"
-        case .f: return "F — Cannot be judged"
+        case .a: return String(localized: "A — Completely reliable")
+        case .b: return String(localized: "B — Usually reliable")
+        case .c: return String(localized: "C — Fairly reliable")
+        case .d: return String(localized: "D — Not usually reliable")
+        case .e: return String(localized: "E — Unreliable")
+        case .f: return String(localized: "F — Cannot be judged")
         }
     }
 }
@@ -40,12 +40,12 @@ enum AdmiraltyCredibility: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .one: return "1 — Confirmed by other sources"
-        case .two: return "2 — Probably true"
-        case .three: return "3 — Possibly true"
-        case .four: return "4 — Doubtful"
-        case .five: return "5 — Improbable"
-        case .six: return "6 — Cannot be judged"
+        case .one: return String(localized: "1 — Confirmed by other sources")
+        case .two: return String(localized: "2 — Probably true")
+        case .three: return String(localized: "3 — Possibly true")
+        case .four: return String(localized: "4 — Doubtful")
+        case .five: return String(localized: "5 — Improbable")
+        case .six: return String(localized: "6 — Cannot be judged")
         }
     }
 }
@@ -579,13 +579,13 @@ struct EvidenceDeskEditorView: View {
         defer { isPosting = false }
 
         var sections: [CapturedDocument.Section] = []
-        sections.append(.init(name: "Method", fields: [
+        sections.append(.init(name: String(localized: "Method"), fields: [
             .init(key: "Source ratings", value: "Admiralty/NATO scale (reliability A–F × credibility 1–6); archive auth signals are advisory hints, ratings are human decisions."),
             .init(key: "Contradictions", value: "Both sides preserved with locators; never averaged or auto-resolved."),
             .init(key: "Gaps", value: "Each gap records an absence within a searched scope — not a conclusion."),
         ]))
         if !model.sources.isEmpty {
-            sections.append(.init(name: "Source reliability", fields:
+            sections.append(.init(name: String(localized: "Source reliability"), fields:
                 model.sources.map { .init(key: $0.source, value: "\($0.ratingCode) · \($0.authHint)\($0.note.isEmpty ? "" : " · \($0.note)")") }
             ))
         }
@@ -597,7 +597,7 @@ struct EvidenceDeskEditorView: View {
             ]))
         }
         if !model.gaps.isEmpty {
-            sections.append(.init(name: "Gap register", fields:
+            sections.append(.init(name: String(localized: "Gap register"), fields:
                 model.gaps.map { .init(key: $0.expected, value: "searched: \($0.searchedNote.isEmpty ? "—" : $0.searchedNote) · absence within scope, not proof") }
             ))
         }

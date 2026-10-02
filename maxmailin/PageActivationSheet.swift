@@ -30,9 +30,9 @@ struct PageFeature: Identifiable, Sendable {
 
         var label: String {
             switch self {
-            case .available: return "Included"
-            case .requiresProfessional: return "Professional"
-            case .notInThisBuild: return "Not in this build"
+            case .available: return String(localized: "Included")
+            case .requiresProfessional: return String(localized: "Professional")
+            case .notInThisBuild: return String(localized: "Not in this build")
             }
         }
 
@@ -59,40 +59,40 @@ enum PageFeatureCatalog {
         switch module {
         case .archive:
             return [
-                .init(name: "Import mail", detail: "mbox, eml, emlx, msg, pst, ost, nsf — routed by file content, not by filename", availability: .available),
-                .init(name: "Read messages", detail: "Headers, body, raw MIME, and attachments opened or saved from the archive", availability: .available),
-                .init(name: "Search", detail: "Sender, recipients, subject and body, with a visible index-coverage count", availability: .available),
-                .init(name: "Export", detail: "mbox, eml, CSV, JSON, PDF and more, with a hash and a receipt", availability: .available),
-                .init(name: "Import receipts", detail: "Source SHA-256, full accounting, and a Complete / Partial / Failed verdict", availability: .available),
-                .init(name: "Duplicates & attachments", detail: "Duplicate manager, attachment gallery and timeline over the archive", availability: .available),
+                .init(name: String(localized: "Import mail"), detail: String(localized: "mbox, eml, emlx, msg, pst, ost, nsf — routed by file content, not by filename"), availability: .available),
+                .init(name: String(localized: "Read messages"), detail: String(localized: "Headers, body, raw MIME, and attachments opened or saved from the archive"), availability: .available),
+                .init(name: String(localized: "Search"), detail: String(localized: "Sender, recipients, subject and body, with a visible index-coverage count"), availability: .available),
+                .init(name: String(localized: "Export"), detail: String(localized: "mbox, eml, CSV, JSON, PDF and more, with a hash and a receipt"), availability: .available),
+                .init(name: String(localized: "Import receipts"), detail: String(localized: "Source SHA-256, full accounting, and a Complete / Partial / Failed verdict"), availability: .available),
+                .init(name: String(localized: "Duplicates & attachments"), detail: String(localized: "Duplicate manager, attachment gallery and timeline over the archive"), availability: .available),
             ]
         case .aiInsights:
             return [
-                .init(name: "Ask questions", detail: "Answers cite the exact messages they came from, and every citation reopens the original", availability: .available),
-                .init(name: "Summaries & digests", detail: "Summarise a selection, a conversation or a search result", availability: .available),
-                .init(name: "Anomaly detection", detail: "Unusual sending times, frequency spikes and new domains", availability: .available),
-                .init(name: "Auto-tagging", detail: "Suggested tags over the archive", availability: .available),
-                .init(name: "Predictive coding", detail: "Learns from your tagging to rank documents for review", availability: .requiresProfessional),
-                .init(name: "Topic clusters", detail: "Groups the archive by topic", availability: .available),
-                .init(name: "Keyword monitor", detail: "Flags messages containing terms you choose", availability: .available),
+                .init(name: String(localized: "Ask questions"), detail: String(localized: "Answers cite the exact messages they came from, and every citation reopens the original"), availability: .available),
+                .init(name: String(localized: "Summaries & digests"), detail: String(localized: "Summarise a selection, a conversation or a search result"), availability: .available),
+                .init(name: String(localized: "Anomaly detection"), detail: String(localized: "Unusual sending times, frequency spikes and new domains"), availability: .available),
+                .init(name: String(localized: "Auto-tagging"), detail: String(localized: "Suggested tags over the archive"), availability: .available),
+                .init(name: String(localized: "Predictive coding"), detail: String(localized: "Learns from your tagging to rank documents for review"), availability: .requiresProfessional),
+                .init(name: String(localized: "Topic clusters"), detail: String(localized: "Groups the archive by topic"), availability: .available),
+                .init(name: String(localized: "Keyword monitor"), detail: String(localized: "Flags messages containing terms you choose"), availability: .available),
             ]
         case .professional:
             return [
-                .init(name: "Job catalog", detail: "51 built-in workflows across forensic, legal, IT, journalist, researcher and personal work", availability: .available),
-                .init(name: "Cases & custodians", detail: "Case intake, custodian records and collection scope", availability: .requiresProfessional),
-                .init(name: "Legal hold", detail: "Held messages cannot be deleted, and the hold survives switching this page off", availability: .requiresProfessional),
-                .init(name: "Review batches", detail: "Organise messages into batches for systematic review", availability: .requiresProfessional),
-                .init(name: "Bates numbering & redaction", detail: "Sequential stamping and person redaction with a validation pass", availability: .requiresProfessional),
-                .init(name: "Chain of custody & audit trail", detail: "Tamper-evident HMAC chain of who did what, when", availability: .requiresProfessional),
-                .init(name: "Reasoning studios", detail: "ACH hypothesis matrix, fact–evidence matrix, evidence desks, action register", availability: .available),
-                .init(name: "Productions", detail: "Numbered documents, hash manifests and delivery-ready exports", availability: .requiresProfessional),
+                .init(name: String(localized: "Job catalog"), detail: String(localized: "51 built-in workflows across forensic, legal, IT, journalist, researcher and personal work"), availability: .available),
+                .init(name: String(localized: "Cases & custodians"), detail: String(localized: "Case intake, custodian records and collection scope"), availability: .requiresProfessional),
+                .init(name: String(localized: "Legal hold"), detail: String(localized: "Held messages cannot be deleted, and the hold survives switching this page off"), availability: .requiresProfessional),
+                .init(name: String(localized: "Review batches"), detail: String(localized: "Organise messages into batches for systematic review"), availability: .requiresProfessional),
+                .init(name: String(localized: "Bates numbering & redaction"), detail: String(localized: "Sequential stamping and person redaction with a validation pass"), availability: .requiresProfessional),
+                .init(name: String(localized: "Chain of custody & audit trail"), detail: String(localized: "Tamper-evident HMAC chain of who did what, when"), availability: .requiresProfessional),
+                .init(name: String(localized: "Reasoning studios"), detail: String(localized: "ACH hypothesis matrix, fact–evidence matrix, evidence desks, action register"), availability: .available),
+                .init(name: String(localized: "Productions"), detail: String(localized: "Numbered documents, hash manifests and delivery-ready exports"), availability: .requiresProfessional),
             ]
         case .liveMail:
             return [
-                .init(name: "Add mail accounts", detail: "Gmail, Microsoft 365 or standards-based IMAP + SMTP", availability: .notInThisBuild),
-                .init(name: "Receive mail", detail: "Headers first, bodies on demand, with per-account limits", availability: .notInThisBuild),
-                .init(name: "Send mail", detail: "Compose, reply, forward, drafts and a per-account outbox", availability: .notInThisBuild),
-                .init(name: "Copy to Archive", detail: "Explicitly copy or reference live messages into the archive", availability: .notInThisBuild),
+                .init(name: String(localized: "Add mail accounts"), detail: String(localized: "Gmail, Microsoft 365 or standards-based IMAP + SMTP"), availability: .notInThisBuild),
+                .init(name: String(localized: "Receive mail"), detail: String(localized: "Headers first, bodies on demand, with per-account limits"), availability: .notInThisBuild),
+                .init(name: String(localized: "Send mail"), detail: String(localized: "Compose, reply, forward, drafts and a per-account outbox"), availability: .notInThisBuild),
+                .init(name: String(localized: "Copy to Archive"), detail: String(localized: "Explicitly copy or reference live messages into the archive"), availability: .notInThisBuild),
             ]
         }
     }
@@ -266,13 +266,13 @@ struct PageActivationSheet: View {
     private var purpose: String {
         switch module {
         case .archive:
-            return "Import, read, search and export your mail. Always available."
+            return String(localized: "Import, read, search and export your mail. Always available.")
         case .aiInsights:
-            return "Ask questions about the archive and build reports, with every answer citing the messages it came from."
+            return String(localized: "Ask questions about the archive and build reports, with every answer citing the messages it came from.")
         case .professional:
-            return "Case work: intake, custodians, review, productions and a tamper-evident audit trail."
+            return String(localized: "Case work: intake, custodians, review, productions and a tamper-evident audit trail.")
         case .liveMail:
-            return "Connect mail accounts to send and receive, kept separate from your archive."
+            return String(localized: "Connect mail accounts to send and receive, kept separate from your archive.")
         }
     }
 }

@@ -29,20 +29,20 @@ enum LaunchJobs {
 
     /// The inventory. Order is the order they are kicked.
     static let inventory: [Job] = [
-        Job(id: "fidelity.backfill", owner: .archive, label: "Repair pre-full-fidelity rows",
-            purpose: "Re-extracts type / attachments / labels / domains from stored MIME for rows imported by older builds; no-op once clean."),
-        Job(id: "attachment.textIndex", owner: .archive, label: "Index attachment contents",
-            purpose: "Bounded background text extraction so in:attachments searches file contents; honours the import sheet's choice."),
-        Job(id: "fts.reconcile", owner: .archive, label: "Reconcile store ↔ search index",
-            purpose: "Repairs store/FTS drift after a crash between commits and collapses duplicate FTS rows; bounded, restartable."),
-        Job(id: "digest.weekly", owner: .aiInsights, label: "Weekly saved-search digest",
-            purpose: "At most one digest per week for opted-in saved searches."),
-        Job(id: "semantic.index", owner: .aiInsights, label: "Semantic index",
-            purpose: "Opt-in, resumable on-device sentence vectors for Ask; runs only with the switch on and Page 2 enabled."),
-        Job(id: "workflow.seed", owner: .professional, label: "Seed built-in workflows",
-            purpose: "Idempotent upsert of the shipped workflow recipes; runs only when Page 3 is on."),
-        Job(id: "audit.launch", owner: .professional, label: "Audit-chain launch entry",
-            purpose: "Appends the launch event to the tamper-evident HMAC chain; Professional-owned (§3.3 R6).")
+        Job(id: "fidelity.backfill", owner: .archive, label: String(localized: "Repair pre-full-fidelity rows"),
+            purpose: String(localized: "Re-extracts type / attachments / labels / domains from stored MIME for rows imported by older builds; no-op once clean.")),
+        Job(id: "attachment.textIndex", owner: .archive, label: String(localized: "Index attachment contents"),
+            purpose: String(localized: "Bounded background text extraction so in:attachments searches file contents; honours the import sheet's choice.")),
+        Job(id: "fts.reconcile", owner: .archive, label: String(localized: "Reconcile store ↔ search index"),
+            purpose: String(localized: "Repairs store/FTS drift after a crash between commits and collapses duplicate FTS rows; bounded, restartable.")),
+        Job(id: "digest.weekly", owner: .aiInsights, label: String(localized: "Weekly saved-search digest"),
+            purpose: String(localized: "At most one digest per week for opted-in saved searches.")),
+        Job(id: "semantic.index", owner: .aiInsights, label: String(localized: "Semantic index"),
+            purpose: String(localized: "Opt-in, resumable on-device sentence vectors for Ask; runs only with the switch on and Page 2 enabled.")),
+        Job(id: "workflow.seed", owner: .professional, label: String(localized: "Seed built-in workflows"),
+            purpose: String(localized: "Idempotent upsert of the shipped workflow recipes; runs only when Page 3 is on.")),
+        Job(id: "audit.launch", owner: .professional, label: String(localized: "Audit-chain launch entry"),
+            purpose: String(localized: "Appends the launch event to the tamper-evident HMAC chain; Professional-owned (§3.3 R6)."))
     ]
 
     static func jobs(for module: AppModule) -> [Job] { inventory.filter { $0.owner == module } }
@@ -84,7 +84,7 @@ enum LaunchJobs {
                 _ = try? await FTSSearchIndex.shared.dedupeShards()
                 await MainActor.run { modules.jobs.finish(id: "fts.reconcile") }
             }
-            modules.jobs.register(id: "fts.reconcile", module: .archive, label: "Reconcile store ↔ search index",
+            modules.jobs.register(id: "fts.reconcile", module: .archive, label: String(localized: "Reconcile store ↔ search index"),
                                   cancel: { reconcile.cancel() })
         }
 
@@ -97,7 +97,7 @@ enum LaunchJobs {
 
         if modules.isEnabled(.professional) {
             let seed = Task { await WorkflowService.seedBuiltins() }
-            modules.jobs.register(id: "workflow.seed", module: .professional, label: "Seed built-in workflows",
+            modules.jobs.register(id: "workflow.seed", module: .professional, label: String(localized: "Seed built-in workflows"),
                                   cancel: { seed.cancel() })
             Task { @MainActor in
                 _ = await seed.result

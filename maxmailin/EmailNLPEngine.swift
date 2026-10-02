@@ -10,9 +10,9 @@ struct EmailNLPEngine {
         let email: MBOXParser.RawEmail
         let score: Double
         var label: String {
-            if score > 0.4 { return "Positive" }
-            if score < -0.4 { return "Negative" }
-            return "Neutral"
+            if score > 0.4 { return String(localized: "Positive") }
+            if score < -0.4 { return String(localized: "Negative") }
+            return String(localized: "Neutral")
         }
     }
 
@@ -418,9 +418,9 @@ struct EmailNLPEngine {
         let emailCount: Int
         let avgSentiment: Double
         var sentimentLabel: String {
-            if avgSentiment > 0.4 { return "Positive" }
-            if avgSentiment < -0.4 { return "Negative" }
-            return "Neutral"
+            if avgSentiment > 0.4 { return String(localized: "Positive") }
+            if avgSentiment < -0.4 { return String(localized: "Negative") }
+            return String(localized: "Neutral")
         }
     }
 
@@ -1477,32 +1477,32 @@ struct EmailNLPEngine {
         }
         if lower.contains("last week") || lower.contains("past week") {
             guard let start = calendar.date(byAdding: .day, value: -7, to: now) else { return nil }
-            return DateRange(start: start, end: now, label: "the last 7 days")
+            return DateRange(start: start, end: now, label: String(localized: "the last 7 days"))
         }
         if lower.contains("last month") || lower.contains("past month") {
             guard let start = calendar.date(byAdding: .month, value: -1, to: now) else { return nil }
-            return DateRange(start: start, end: now, label: "the last month")
+            return DateRange(start: start, end: now, label: String(localized: "the last month"))
         }
         if lower.contains("last year") || lower.contains("past year") {
             guard let start = calendar.date(byAdding: .year, value: -1, to: now) else { return nil }
-            return DateRange(start: start, end: now, label: "the last year")
+            return DateRange(start: start, end: now, label: String(localized: "the last year"))
         }
         if lower.contains("this week") {
             let start = calendar.dateComponents([.calendar, .yearForWeekOfYear, .weekOfYear], from: now).date ?? now
-            return DateRange(start: start, end: now, label: "this week")
+            return DateRange(start: start, end: now, label: String(localized: "this week"))
         }
         if lower.contains("this month") {
             var comps = calendar.dateComponents([.year, .month], from: now)
             comps.day = 1
             let start = calendar.date(from: comps) ?? now
-            return DateRange(start: start, end: now, label: "this month")
+            return DateRange(start: start, end: now, label: String(localized: "this month"))
         }
         if lower.contains("this year") {
             var comps = calendar.dateComponents([.year], from: now)
             comps.month = 1
             comps.day = 1
             let start = calendar.date(from: comps) ?? now
-            return DateRange(start: start, end: now, label: "this year")
+            return DateRange(start: start, end: now, label: String(localized: "this year"))
         }
 
         let lastNDays = try? NSRegularExpression(pattern: #"last\s+(\d+)\s+days?"#)

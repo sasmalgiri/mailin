@@ -171,7 +171,7 @@ struct PluginManagerView: View {
                             Text(finding.title)
                                 .font(.system(size: 10, weight: .medium)).lineLimit(1)
                             Spacer()
-                            Text(finding.severity.rawValue)
+                            Text(LocalizedStringKey(finding.severity.rawValue))
                                 .font(.system(size: 9)).foregroundColor(.secondary)
                         }
                     }

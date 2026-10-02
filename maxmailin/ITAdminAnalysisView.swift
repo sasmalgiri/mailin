@@ -194,32 +194,32 @@ struct ITAdminAnalysisView: View {
 
         coordinator.begin(steps: 8, color: .teal)
 
-        coordinator.advance(step: 1, label: "Detecting phishing patterns...")
+        coordinator.advance(step: 1, label: String(localized: "Detecting phishing patterns..."))
         guard let flags = await coordinator.runDetached({ EmailNLPEngine.detectPhishing(in: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 2, label: "Running anomaly detection...")
+        coordinator.advance(step: 2, label: String(localized: "Running anomaly detection..."))
         guard let anom = await coordinator.runDetached({ AnomalyDetectionEngine.detectAnomalies(in: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 3, label: "Extracting entities...")
+        coordinator.advance(step: 3, label: String(localized: "Extracting entities..."))
         guard let ents = await coordinator.runDetached({ EmailNLPEngine.extractEntities(from: emailsCopy, limit: 20) }) else { coordinator.finish(); return }
 
         phishingFlags = flags; anomalies = anom; entities = ents
         enhanceThreatScoresWithNLP()
         let phishCopy = phishingFlags; let anomCopy = anomalies
 
-        coordinator.advance(step: 4, label: "Correlating threat signals...")
+        coordinator.advance(step: 4, label: String(localized: "Correlating threat signals..."))
         guard let threats = await coordinator.runDetached({ SecurityAnalysisFeatures.correlateThreatSignals(emails: emailsCopy, phishingFlags: phishCopy, anomalies: anomCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 5, label: "Scoring domain reputations...")
+        coordinator.advance(step: 5, label: String(localized: "Scoring domain reputations..."))
         guard let domReps = await coordinator.runDetached({ SecurityAnalysisFeatures.scoreDomainReputations(emails: emailsCopy, phishingFlags: phishCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 6, label: "Detecting compromised accounts...")
+        coordinator.advance(step: 6, label: String(localized: "Detecting compromised accounts..."))
         guard let compromised = await coordinator.runDetached({ SecurityAnalysisFeatures.detectCompromisedAccounts(emails: emailsCopy, anomalies: anomCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 7, label: "Building security timeline...")
+        coordinator.advance(step: 7, label: String(localized: "Building security timeline..."))
         guard let timeline = await coordinator.runDetached({ SecurityAnalysisFeatures.buildSecurityTimeline(emails: emailsCopy, threats: threats, phishingFlags: phishCopy, anomalies: anomCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 8, label: "Analyzing authentication health...")
+        coordinator.advance(step: 8, label: String(localized: "Analyzing authentication health..."))
         guard let auth = await coordinator.runDetached({ SecurityAnalysisFeatures.analyzeAuthenticationHealth(emails: emailsCopy) }) else { coordinator.finish(); return }
 
         threatCorrelations = threats; domainReputations = domReps
@@ -277,7 +277,7 @@ struct ITAdminAnalysisView: View {
                 } label: {
                     HStack(spacing: 3) {
                         Image(systemName: tab.icon).font(.system(size: 9))
-                        Text(tab.rawValue).font(.system(size: 9, weight: activeTab == tab ? .bold : .medium))
+                        Text(LocalizedStringKey(tab.rawValue)).font(.system(size: 9, weight: activeTab == tab ? .bold : .medium))
                     }
                     .foregroundColor(activeTab == tab ? .teal : .secondary)
                     .padding(.horizontal, 6).padding(.vertical, 3)
@@ -985,7 +985,7 @@ struct ITAdminAnalysisView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             HStack(spacing: 6) {
                                 Image(systemName: type.icon).font(.system(size: 11)).foregroundColor(.orange)
-                                Text(type.rawValue).font(.system(size: 12, weight: .semibold))
+                                Text(LocalizedStringKey(type.rawValue)).font(.system(size: 12, weight: .semibold))
                                 Spacer()
                                 Text("\(items.count)").font(.system(size: 10, weight: .bold)).foregroundColor(.orange)
                             }
@@ -1101,7 +1101,7 @@ struct ITAdminAnalysisView: View {
                     .font(.system(size: 8)).foregroundColor(.secondary).lineLimit(1)
             }
             Spacer()
-            Text(flag.riskLevel.rawValue).font(.system(size: 9, weight: .bold)).foregroundColor(color)
+            Text(LocalizedStringKey(flag.riskLevel.rawValue)).font(.system(size: 9, weight: .bold)).foregroundColor(color)
         }
         .padding(6)
         .background(color.opacity(0.04))
@@ -1315,7 +1315,7 @@ struct ITAdminAnalysisView: View {
                                             .foregroundColor(threatLevelColor(threat.threatLevel))
                                             .help("Severity score from 0-100%. Above 70% = Critical, 40-70% = Medium, below 40% = Low")
                                         if let vector = threat.attackVector {
-                                            Text(vector.rawValue)
+                                            Text(LocalizedStringKey(vector.rawValue))
                                                 .font(.system(size: 7, weight: .bold))
                                                 .foregroundColor(.white)
                                                 .padding(.horizontal, 4).padding(.vertical, 1)
@@ -1356,7 +1356,7 @@ struct ITAdminAnalysisView: View {
                             Text(rep.domain)
                                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                             Spacer()
-                            Text(rep.category.rawValue)
+                            Text(LocalizedStringKey(rep.category.rawValue))
                                 .font(.system(size: 8, weight: .bold))
                                 .foregroundColor(.white)
                                 .padding(.horizontal, 5).padding(.vertical, 1)
@@ -1466,7 +1466,7 @@ struct ITAdminAnalysisView: View {
 
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 4) {
-                            Text(event.eventType.rawValue)
+                            Text(LocalizedStringKey(event.eventType.rawValue))
                                 .font(.system(size: 10, weight: .semibold))
                                 .foregroundColor(securityEventColor(event.eventType))
                             Spacer()
@@ -1524,7 +1524,7 @@ struct ITAdminAnalysisView: View {
                             .help("Sender Policy Framework: verifies the sender's IP is authorized to send on behalf of the domain")
                         authHealthBar(label: "DKIM", pass: health.dkimPass, fail: health.dkimFail)
                             .help("DomainKeys Identified Mail: verifies the message wasn't altered in transit using cryptographic signatures")
-                        authHealthBar(label: "DMARC", pass: health.dmarcPass, fail: health.dmarcFail)
+                        authHealthBar(label: String(localized: "DMARC"), pass: health.dmarcPass, fail: health.dmarcFail)
                             .help("Domain-based Message Authentication: policy for handling emails that fail SPF or DKIM checks")
                     }
                 }

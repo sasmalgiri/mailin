@@ -307,7 +307,7 @@ struct ForensicReviewView: View {
                     filterRisk = level
                 } label: {
                     HStack {
-                        Text(level.rawValue)
+                        Text(LocalizedStringKey(level.rawValue))
                         if filterRisk == level { Image(systemName: "checkmark") }
                     }
                 }
@@ -327,7 +327,7 @@ struct ForensicReviewView: View {
                     value.wrappedValue = opt
                 } label: {
                     HStack {
-                        Text(opt.rawValue)
+                        Text(LocalizedStringKey(opt.rawValue))
                         if value.wrappedValue == opt { Image(systemName: "checkmark") }
                     }
                 }
@@ -604,13 +604,13 @@ struct ForensicReviewView: View {
         HStack(spacing: 6) {
             Image(systemName: "keyboard").font(.system(size: 9)).foregroundColor(.secondary)
             Text("Quick Tag:").font(.system(size: 8)).foregroundColor(.secondary)
-            keyBadge("1", label: "Relevant", color: .green)
-            keyBadge("2", label: "Privileged", color: .orange)
-            keyBadge("3", label: "Irrelevant", color: .gray)
-            keyBadge("4", label: "Flagged", color: .red)
-            keyBadge("5", label: "Suspicious", color: .purple)
-            keyBadge("0", label: "Clear", color: .secondary)
-            keyBadge("␣", label: "Preview", color: .blue)
+            keyBadge("1", label: String(localized: "Relevant"), color: .green)
+            keyBadge("2", label: String(localized: "Privileged"), color: .orange)
+            keyBadge("3", label: String(localized: "Irrelevant"), color: .gray)
+            keyBadge("4", label: String(localized: "Flagged"), color: .red)
+            keyBadge("5", label: String(localized: "Suspicious"), color: .purple)
+            keyBadge("0", label: String(localized: "Clear"), color: .secondary)
+            keyBadge("␣", label: String(localized: "Preview"), color: .blue)
         }
         .help("Select an email, then press a number key to quickly tag it. Use Space to preview the full email.")
     }
@@ -809,7 +809,7 @@ struct ForensicReviewView: View {
 
             // Tag
             if tag != .none {
-                Text(tag.rawValue)
+                Text(LocalizedStringKey(tag.rawValue))
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundColor(tag.color)
                     .padding(.horizontal, 3).padding(.vertical, 1)
@@ -1034,7 +1034,7 @@ struct ForensicReviewView: View {
                             Image(systemName: tagOpt.icon)
                                 .font(.system(size: 12))
                                 .foregroundColor(tagOpt.color)
-                            Text(tagOpt.rawValue)
+                            Text(LocalizedStringKey(tagOpt.rawValue))
                                 .font(.system(size: 8))
                                 .foregroundColor(forensicManager.tagForEmail(email.id) == tagOpt ? tagOpt.color : .secondary)
                         }
@@ -1162,7 +1162,7 @@ struct ForensicReviewView: View {
                 Text("Risk Score:").font(.system(size: 10)).foregroundColor(.secondary)
                 Text("\(risk.score)/100").font(.system(size: 10, weight: .bold)).foregroundColor(riskColor(risk.score))
                     .help("Risk score 0-100. Safe: 0-20, Low: 21-40, Medium: 41-60, High: 61-80, Critical: 81-100")
-                Text(risk.level.rawValue).font(.system(size: 9)).foregroundColor(.secondary)
+                Text(LocalizedStringKey(risk.level.rawValue)).font(.system(size: 9)).foregroundColor(.secondary)
             }
 
             if let custodian = custodianManager.custodian(for: email.id) {
@@ -1239,7 +1239,7 @@ struct ForensicReviewView: View {
                     HStack(spacing: 4) {
                         Image(systemName: prod.status.icon).font(.system(size: 8)).foregroundColor(prod.status.color)
                         Text(prod.name).font(.system(size: 10))
-                        Text(prod.status.rawValue).font(.system(size: 8)).foregroundColor(prod.status.color)
+                        Text(LocalizedStringKey(prod.status.rawValue)).font(.system(size: 8)).foregroundColor(prod.status.color)
                         Spacer()
                         Button(role: .destructive) {
                             reviewManager.removeFromProductionSet(prod.id, emailIDs: [email.id])
@@ -1432,11 +1432,11 @@ struct ForensicReviewView: View {
                 Divider().frame(height: 12)
 
                 HStack(spacing: 5) {
-                    tagDot(.green, count: dashboard.tagDistribution[.relevant] ?? 0, label: "Relevant")
-                    tagDot(.orange, count: dashboard.tagDistribution[.privileged] ?? 0, label: "Privileged")
-                    tagDot(.red, count: dashboard.tagDistribution[.flagged] ?? 0, label: "Flagged")
-                    tagDot(.gray, count: dashboard.tagDistribution[.irrelevant] ?? 0, label: "Irrelevant")
-                    tagDot(.purple, count: dashboard.tagDistribution[.suspicious] ?? 0, label: "Suspicious")
+                    tagDot(.green, count: dashboard.tagDistribution[.relevant] ?? 0, label: String(localized: "Relevant"))
+                    tagDot(.orange, count: dashboard.tagDistribution[.privileged] ?? 0, label: String(localized: "Privileged"))
+                    tagDot(.red, count: dashboard.tagDistribution[.flagged] ?? 0, label: String(localized: "Flagged"))
+                    tagDot(.gray, count: dashboard.tagDistribution[.irrelevant] ?? 0, label: String(localized: "Irrelevant"))
+                    tagDot(.purple, count: dashboard.tagDistribution[.suspicious] ?? 0, label: String(localized: "Suspicious"))
                 }
                 .help("How your tagged emails are distributed across categories")
 
@@ -1532,7 +1532,7 @@ struct ForensicReviewView: View {
                     let pct = dashboard.totalEmails > 0 ? Double(count) / Double(dashboard.totalEmails) : 0
                     HStack {
                         Image(systemName: tag.icon).foregroundColor(tag.color).frame(width: 20)
-                        Text(tag.rawValue).font(.system(size: 12)).frame(width: 80, alignment: .leading)
+                        Text(LocalizedStringKey(tag.rawValue)).font(.system(size: 12)).frame(width: 80, alignment: .leading)
                         ProgressView(value: pct).frame(width: 120).tint(tag.color)
                         Text("\(count)").font(.system(size: 12, weight: .medium, design: .monospaced)).frame(width: 40, alignment: .trailing)
                         Text(String(format: "%.1f%%", pct * 100)).font(.system(size: 10)).foregroundColor(.secondary).frame(width: 50, alignment: .trailing)
@@ -1704,19 +1704,19 @@ struct ForensicReviewView: View {
 
         coordinator.begin(steps: 5, color: .orange)
 
-        coordinator.advance(step: 1, label: "Scoring evidence relevance...")
+        coordinator.advance(step: 1, label: String(localized: "Scoring evidence relevance..."))
         guard let scores = await coordinator.runDetached({ ForensicAnalysisFeatures.scoreEvidenceRelevance(emails: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 2, label: "Reconstructing forensic timeline...")
+        coordinator.advance(step: 2, label: String(localized: "Reconstructing forensic timeline..."))
         guard let timeline = await coordinator.runDetached({ ForensicAnalysisFeatures.reconstructTimeline(emails: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 3, label: "Detecting suspicious patterns...")
+        coordinator.advance(step: 3, label: String(localized: "Detecting suspicious patterns..."))
         guard let patterns = await coordinator.runDetached({ ForensicAnalysisFeatures.detectSuspiciousPatterns(in: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 4, label: "Clustering evidence...")
+        coordinator.advance(step: 4, label: String(localized: "Clustering evidence..."))
         guard let clusters = await coordinator.runDetached({ ForensicAnalysisFeatures.clusterEvidence(emails: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 5, label: "Checking metadata anomalies...")
+        coordinator.advance(step: 5, label: String(localized: "Checking metadata anomalies..."))
         guard let anomalies = await coordinator.runDetached({ ForensicAnalysisFeatures.detectMetadataAnomalies(in: emailsCopy) }) else { coordinator.finish(); return }
 
         evidenceScores = Dictionary(uniqueKeysWithValues: scores.map { ($0.id, $0) })
@@ -1778,7 +1778,7 @@ struct ForensicReviewView: View {
                 ForEach(suspiciousPatterns.prefix(5)) { pattern in
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 4) {
-                            Text(pattern.patternType.rawValue)
+                            Text(LocalizedStringKey(pattern.patternType.rawValue))
                                 .font(.system(size: 9, weight: .semibold))
                                 .foregroundColor(patternSeverityColor(pattern.severity))
                             Spacer()
@@ -1841,7 +1841,7 @@ struct ForensicReviewView: View {
                             Image(systemName: anomalyTypeIcon(anomaly.anomalyType))
                                 .font(.system(size: 9))
                                 .foregroundColor(patternSeverityColor(anomaly.severity))
-                            Text(anomaly.anomalyType.rawValue)
+                            Text(LocalizedStringKey(anomaly.anomalyType.rawValue))
                                 .font(.system(size: 9, weight: .semibold))
                                 .foregroundColor(patternSeverityColor(anomaly.severity))
                             Spacer()
@@ -1954,7 +1954,7 @@ struct ForensicReviewView: View {
                             .frame(width: 20)
                         VStack(alignment: .leading, spacing: 1) {
                             HStack(spacing: 4) {
-                                Text(event.eventType.rawValue)
+                                Text(LocalizedStringKey(event.eventType.rawValue))
                                     .font(.system(size: 10, weight: .semibold))
                                     .foregroundColor(timelineEventColor(event.eventType))
                                 Spacer()

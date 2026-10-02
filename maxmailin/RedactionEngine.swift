@@ -388,7 +388,7 @@ struct RedactionConfigView: View {
                                     .frame(width: 20)
 
                                 VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
-                                    Text(rule.type.rawValue)
+                                    Text(LocalizedStringKey(rule.type.rawValue))
                                         .font(Typography.callout)
                                         .foregroundColor(rule.isEnabled ? .primary : AppColors.secondary)
 
@@ -442,7 +442,7 @@ struct RedactionConfigView: View {
                 VStack(alignment: .leading, spacing: Spacing.xSmall) {
                     Picker("Category", selection: $newRuleCategory) {
                         ForEach(RedactionEngine.PIICategory.allCases) { category in
-                            Text(category.rawValue).tag(category)
+                            Text(LocalizedStringKey(category.rawValue)).tag(category)
                         }
                     }
                     .accessibilityLabel("Rule category")

@@ -66,13 +66,13 @@ class PersonaManager: ObservableObject {
 
         var displayName: String {
             switch self {
-            case .forensic: return "Forensic Investigator"
-            case .legal: return "Legal / eDiscovery"
-            case .itAdmin: return "IT Administrator"
-            case .journalist: return "Journalist"
-            case .researcher: return "Researcher / Historian"
-            case .personal: return "Personal Use"
-            case .general: return "Other / Just Exploring"
+            case .forensic: return String(localized: "Forensic Investigator")
+            case .legal: return String(localized: "Legal / eDiscovery")
+            case .itAdmin: return String(localized: "IT Administrator")
+            case .journalist: return String(localized: "Journalist")
+            case .researcher: return String(localized: "Researcher / Historian")
+            case .personal: return String(localized: "Personal Use")
+            case .general: return String(localized: "Other / Just Exploring")
             }
         }
 
@@ -90,25 +90,25 @@ class PersonaManager: ObservableObject {
 
         var tagline: String {
             switch self {
-            case .forensic: return "Evidence integrity, chain of custody, court-ready exports"
-            case .legal: return "Privilege review, keyword search, production sets"
-            case .itAdmin: return "Technical headers, MIME analysis, server routing"
-            case .journalist: return "Pattern discovery, timelines, contact networks"
-            case .researcher: return "Protocols, screening, coding, cited chronologies"
-            case .personal: return "Simple reading, search, and attachment recovery"
-            case .general: return "All features available — customize later in Settings"
+            case .forensic: return String(localized: "Evidence integrity, chain of custody, court-ready exports")
+            case .legal: return String(localized: "Privilege review, keyword search, production sets")
+            case .itAdmin: return String(localized: "Technical headers, MIME analysis, server routing")
+            case .journalist: return String(localized: "Pattern discovery, timelines, contact networks")
+            case .researcher: return String(localized: "Protocols, screening, coding, cited chronologies")
+            case .personal: return String(localized: "Simple reading, search, and attachment recovery")
+            case .general: return String(localized: "All features available — customize later in Settings")
             }
         }
 
         var impactDescription: String {
             switch self {
-            case .forensic: return "Shows: evidence tags, audit trail, hash verification, technical headers"
-            case .legal: return "Shows: privilege filters, Bates numbering, production exports, review batches"
-            case .itAdmin: return "Shows: MIME tree, SPF/DKIM analysis, routing headers, domain filters"
-            case .journalist: return "Shows: analytics dashboard, reply patterns, sentiment filters, redaction"
-            case .researcher: return "Shows: research protocol, screening & coding jobs, timeline, reasoning studio"
-            case .personal: return "Shows: clean layout, basic search and filters, attachment gallery"
-            case .general: return "Shows: everything — you can toggle features on or off as needed"
+            case .forensic: return String(localized: "Shows: evidence tags, audit trail, hash verification, technical headers")
+            case .legal: return String(localized: "Shows: privilege filters, Bates numbering, production exports, review batches")
+            case .itAdmin: return String(localized: "Shows: MIME tree, SPF/DKIM analysis, routing headers, domain filters")
+            case .journalist: return String(localized: "Shows: analytics dashboard, reply patterns, sentiment filters, redaction")
+            case .researcher: return String(localized: "Shows: research protocol, screening & coding jobs, timeline, reasoning studio")
+            case .personal: return String(localized: "Shows: clean layout, basic search and filters, attachment gallery")
+            case .general: return String(localized: "Shows: everything — you can toggle features on or off as needed")
             }
         }
 
@@ -128,13 +128,13 @@ class PersonaManager: ObservableObject {
 
         var shortLabel: String {
             switch self {
-            case .forensic: return "Forensic"
-            case .legal: return "Legal"
-            case .itAdmin: return "IT Admin"
-            case .journalist: return "Journalist"
-            case .researcher: return "Researcher"
-            case .personal: return "Personal"
-            case .general: return "General"
+            case .forensic: return String(localized: "Forensic")
+            case .legal: return String(localized: "Legal")
+            case .itAdmin: return String(localized: "IT Admin")
+            case .journalist: return String(localized: "Journalist")
+            case .researcher: return String(localized: "Researcher")
+            case .personal: return String(localized: "Personal")
+            case .general: return String(localized: "General")
             }
         }
     }

@@ -37,7 +37,7 @@ struct SearchCoverageSnapshot: Equatable, Sendable {
         if partiallyIndexedMessages > 0 {
             return "Every message indexed; \(partiallyIndexedMessages.formatted()) very large messages only in their first \(budgetLabel)"
         }
-        return "Index covers every message"
+        return String(localized: "Index covers every message")
     }
 }
 

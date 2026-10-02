@@ -279,7 +279,7 @@ struct mailinApp: App {
                             case .passed:
                                 _ = try? HMACChainAuditLog.shared.append(
                                     action: "v2.selfTest.passed",
-                                    detail: "Maxmailin v2 self-test passed"
+                                    detail: String(localized: "Maxmailin v2 self-test passed")
                                 )
                             case .failed(let msg):
                                 _ = try? HMACChainAuditLog.shared.append(
@@ -289,7 +289,7 @@ struct mailinApp: App {
                             case .skipped:
                                 _ = try? HMACChainAuditLog.shared.append(
                                     action: "v2.launch",
-                                    detail: "maxmailin launched"
+                                    detail: String(localized: "maxmailin launched")
                                 )
                             }
                         }

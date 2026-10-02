@@ -205,35 +205,35 @@ struct EmailDetailView: View {
                     #if canImport(FoundationModels)
                     if #available(macOS 26, iOS 26, *) {
                         if modules.isEnabled(.aiInsights), FoundationModelEngine.isAvailable {
-                            mailIconButton(icon: "sparkles", tooltip: "Draft a reply with on-device AI — pick a tone, edit before sending; nothing leaves your Mac", color: .purple) {
+                            mailIconButton(icon: "sparkles", tooltip: String(localized: "Draft a reply with on-device AI — pick a tone, edit before sending; nothing leaves your Mac"), color: .purple) {
                                 showReplySheet = true
                             }
                         }
                     }
                     #endif
-                    mailIconButton(icon: "text.bubble", tooltip: "Thread Story — the whole conversation as a timeline", color: AppColors.primary) {
+                    mailIconButton(icon: "text.bubble", tooltip: String(localized: "Thread Story — the whole conversation as a timeline"), color: AppColors.primary) {
                         showThreadStory = true
                     }
-                    mailIconButton(icon: "clock.arrow.circlepath", tooltip: "History — everything that happened to this email: when it arrived, from which file, every action taken, and its current labels and holds", color: AppColors.primary) {
+                    mailIconButton(icon: "clock.arrow.circlepath", tooltip: String(localized: "History — everything that happened to this email: when it arrived, from which file, every action taken, and its current labels and holds"), color: AppColors.primary) {
                         #if os(macOS)
                         let historyEmail = email
-                        ToolWindowPresenter.shared.open(title: "Email History") {
+                        ToolWindowPresenter.shared.open(title: String(localized: "Email History")) {
                             AnyView(EmailHistoryView(
                                 email: historyEmail,
-                                onClose: { ToolWindowPresenter.shared.close(title: "Email History") }))
+                                onClose: { ToolWindowPresenter.shared.close(title: String(localized: "Email History")) }))
                         }
                         #else
                         showHistory = true
                         #endif
                     }
-                    mailIconButton(icon: "translate", tooltip: "Translate this email using the system translator — fully offline once a language is downloaded", color: AppColors.secondary) {
+                    mailIconButton(icon: "translate", tooltip: String(localized: "Translate this email using the system translator — fully offline once a language is downloaded"), color: AppColors.secondary) {
                         showTranslation = true
                     }
                     .translationPresentation(
                         isPresented: $showTranslation,
                         text: !email.plainBody.isEmpty ? email.plainBody : email.htmlBody.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
                     )
-                    mailIconButton(icon: "printer", tooltip: "Print this email with its headers (⌘P)", color: AppColors.secondary) {
+                    mailIconButton(icon: "printer", tooltip: String(localized: "Print this email with its headers (⌘P)"), color: AppColors.secondary) {
                         printEmail()
                     }
                     .keyboardShortcut("p", modifiers: .command)
@@ -319,7 +319,7 @@ struct EmailDetailView: View {
                 }
 
                 #if os(macOS)
-                mailIconButton(icon: "xmark", tooltip: "Close this email and return to the list (Esc)", color: AppColors.secondary) {
+                mailIconButton(icon: "xmark", tooltip: String(localized: "Close this email and return to the list (Esc)"), color: AppColors.secondary) {
                     onClose?()
                 }
                 .padding(.leading, 6)
@@ -439,8 +439,8 @@ struct EmailDetailView: View {
         } else if email.htmlBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             EmptyStateView(
                 icon: "doc.text",
-                title: "No Email Body",
-                message: "This email has no text or HTML content to display."
+                title: String(localized: "No Email Body"),
+                message: String(localized: "This email has no text or HTML content to display.")
             )
             .frame(maxWidth: .infinity)
             .padding(.vertical, Spacing.large)
@@ -734,7 +734,7 @@ struct EmailDetailView: View {
                     HStack(spacing: 3) {
                         Image(systemName: tag.icon)
                             .font(.caption)
-                        Text(tag.rawValue)
+                        Text(LocalizedStringKey(tag.rawValue))
                             .font(.caption).fontWeight(.medium)
                     }
                     .padding(.horizontal, 6)
@@ -896,7 +896,7 @@ struct EmailDetailView: View {
                             .frame(width: 14)
                         VStack(alignment: .leading, spacing: 1) {
                             HStack(spacing: 4) {
-                                Text(indicator.severity.rawValue)
+                                Text(LocalizedStringKey(indicator.severity.rawValue))
                                     .font(.caption2).fontWeight(.bold)
                                     .foregroundColor(indicator.severity.color)
                                     .padding(.horizontal, 3)
@@ -1013,7 +1013,7 @@ struct EmailDetailView: View {
             HStack(spacing: Spacing.medium) {
                 authBadge(label: "SPF", value: auth.spf)
                 authBadge(label: "DKIM", value: auth.dkim)
-                authBadge(label: "DMARC", value: auth.dmarc)
+                authBadge(label: String(localized: "DMARC"), value: auth.dmarc)
             }
         }
     }
@@ -1203,7 +1203,7 @@ struct EmailDetailView: View {
                     if #available(macOS 26, iOS 26, *) {
                         Picker("Tone", selection: $selectedReplyTone) {
                             ForEach(Array(FoundationModelEngine.ReplyTone.allCases.enumerated()), id: \.offset) { index, tone in
-                                Text(tone.rawValue).tag(index)
+                                Text(LocalizedStringKey(tone.rawValue)).tag(index)
                             }
                         }
                         .pickerStyle(.segmented)
@@ -1312,7 +1312,7 @@ struct EmailDetailView: View {
     }
 
     private var emailBody: String {
-        guard !email.plainBody.isEmpty else { return "(No Body Content Found)" }
+        guard !email.plainBody.isEmpty else { return String(localized: "(No Body Content Found)") }
         let cleaned = showCleanView ? cleanText(email.plainBody) : email.plainBody
         return cleaned.isEmpty ? email.plainBody : cleaned
     }
@@ -2071,7 +2071,7 @@ struct EmailDetailView: View {
             Task { await DocumentRegistry.captureStructured(.export,
                 summary: "Redaction — \(subj)",
                 document: CapturedDocument(title: "Redaction — \(subj)", sections: [
-                  .init(name: "Redaction", fields: [
+                  .init(name: String(localized: "Redaction"), fields: [
                     .init(key: "Subject", value: subj),
                     .init(key: "Redacted content", value: capturedText)])])) }
         } catch {
@@ -2131,15 +2131,15 @@ struct EmailDetailView: View {
         VStack(spacing: Spacing.small) {
             HStack(alignment: .top, spacing: Spacing.large) {
                 VStack(alignment: .leading, spacing: Spacing.xSmall) {
-                    LabelText(title: "From", value: header("From"))
-                    LabelText(title: "To", value: header("To"))
+                    LabelText(title: String(localized: "From"), value: header("From"))
+                    LabelText(title: String(localized: "To"), value: header("To"))
                     if hasHeader("Reply-To") {
-                        LabelText(title: "Reply-To", value: header("Reply-To"))
+                        LabelText(title: String(localized: "Reply-To"), value: header("Reply-To"))
                     }
                 }
                 Spacer()
                 VStack(alignment: .leading, spacing: Spacing.xSmall) {
-                    LabelText(title: "Date", value: header("Date"))
+                    LabelText(title: String(localized: "Date"), value: header("Date"))
                     if hasHeader("Cc") {
                         LabelText(title: "CC", value: header("Cc"))
                     }
@@ -2147,7 +2147,7 @@ struct EmailDetailView: View {
                         LabelText(title: "BCC", value: header("Bcc"))
                     }
                     if hasHeader("Message-ID") {
-                        LabelText(title: "Message-ID", value: header("Message-ID"))
+                        LabelText(title: String(localized: "Message-ID"), value: header("Message-ID"))
                     }
                 }
             }
@@ -2160,11 +2160,11 @@ struct EmailDetailView: View {
 
     private var narrowHeaderLayout: some View {
         VStack(alignment: .leading, spacing: Spacing.xSmall) {
-            LabelText(title: "From", value: header("From"))
-            LabelText(title: "To", value: header("To"))
-            LabelText(title: "Date", value: header("Date"))
+            LabelText(title: String(localized: "From"), value: header("From"))
+            LabelText(title: String(localized: "To"), value: header("To"))
+            LabelText(title: String(localized: "Date"), value: header("Date"))
             if hasHeader("Reply-To") {
-                LabelText(title: "Reply-To", value: header("Reply-To"))
+                LabelText(title: String(localized: "Reply-To"), value: header("Reply-To"))
             }
             if hasHeader("Cc") {
                 LabelText(title: "CC", value: header("Cc"))
@@ -2173,7 +2173,7 @@ struct EmailDetailView: View {
                 LabelText(title: "BCC", value: header("Bcc"))
             }
             if hasHeader("Message-ID") {
-                LabelText(title: "Message-ID", value: header("Message-ID"))
+                LabelText(title: String(localized: "Message-ID"), value: header("Message-ID"))
             }
         }
     }

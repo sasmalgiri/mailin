@@ -302,7 +302,7 @@ struct PageNotBuiltView: View {
         Divider()
         PageNotBuiltView(
             module: .liveMail,
-            detail: "Live Mail is planned for this release but is not implemented in this build."
+            detail: String(localized: "Live Mail is planned for this release but is not implemented in this build.")
         )
     }
     .frame(width: 620, height: 380)

@@ -281,7 +281,7 @@ struct GuidedImportSheet: View {
                         .foregroundStyle(.red)
                         .fixedSize(horizontal: false, vertical: true)
                     Button {
-                        StoreManager.live?.requestPurchase(.personal, feature: "Import more than 100 MB", reason: denial.message)
+                        StoreManager.live?.requestPurchase(.personal, feature: String(localized: "Import more than 100 MB"), reason: denial.message)
                     } label: {
                         Label("Unlock with Personal…", systemImage: "lock.open.fill")
                     }

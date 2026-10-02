@@ -36,7 +36,7 @@ struct WorkspaceManagerView: View {
             "Delete Workspace",
             isPresented: $showDeleteConfirmation,
             message: "This will permanently delete the workspace \"\(workspaceToDelete?.name ?? "")\". This action cannot be undone.",
-            actionTitle: "Delete"
+            actionTitle: String(localized: "Delete")
         ) {
             if let ws = workspaceToDelete {
                 manager.deleteWorkspace(id: ws.id)
@@ -92,9 +92,9 @@ struct WorkspaceManagerView: View {
                 Spacer()
                 EmptyStateView(
                     icon: "square.stack.3d.up",
-                    title: "No Workspaces Yet",
-                    message: "Create one to organize your investigations.",
-                    actionTitle: "New Workspace"
+                    title: String(localized: "No Workspaces Yet"),
+                    message: String(localized: "Create one to organize your investigations."),
+                    actionTitle: String(localized: "New Workspace")
                 ) {
                     showNewWorkspaceSheet = true
                 }

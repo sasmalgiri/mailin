@@ -39,20 +39,20 @@ struct ProfessionalPageView: View {
     }
 
     private static let studios: [Tool] = [
-        Tool(destination: .achMatrix, title: "Hypothesis Matrix", symbol: "tablecells"),
-        Tool(destination: .factMatrix, title: "Fact–Evidence", symbol: "checklist"),
-        Tool(destination: .actionRegister, title: "Action Register", symbol: "list.bullet.clipboard"),
-        Tool(destination: .evidenceDesks, title: "Evidence Desks", symbol: "square.grid.3x3"),
-        Tool(destination: .reasoningStudio, title: "Reasoning Studio", symbol: "brain.head.profile"),
+        Tool(destination: .achMatrix, title: String(localized: "Hypothesis Matrix"), symbol: "tablecells"),
+        Tool(destination: .factMatrix, title: String(localized: "Fact–Evidence"), symbol: "checklist"),
+        Tool(destination: .actionRegister, title: String(localized: "Action Register"), symbol: "list.bullet.clipboard"),
+        Tool(destination: .evidenceDesks, title: String(localized: "Evidence Desks"), symbol: "square.grid.3x3"),
+        Tool(destination: .reasoningStudio, title: String(localized: "Reasoning Studio"), symbol: "brain.head.profile"),
     ]
     private static let tools: [Tool] = [
-        Tool(destination: .custodianPanel, title: "Custodians & Holds", symbol: "person.badge.shield.checkmark"),
-        Tool(destination: .chainOfCustody, title: "Chain of Custody", symbol: "link"),
+        Tool(destination: .custodianPanel, title: String(localized: "Custodians & Holds"), symbol: "person.badge.shield.checkmark"),
+        Tool(destination: .chainOfCustody, title: String(localized: "Chain of Custody"), symbol: "link"),
         Tool(destination: .eDiscovery, title: "eDiscovery", symbol: "doc.text.magnifyingglass"),
-        Tool(destination: .batesNumbering, title: "Bates Numbering", symbol: "number"),
-        Tool(destination: .redaction, title: "Redaction", symbol: "eye.slash"),
-        Tool(destination: .reviewBatches, title: "Review Batches", symbol: "square.stack.3d.up"),
-        Tool(destination: .investigationReport, title: "Investigation Report", symbol: "doc.richtext"),
+        Tool(destination: .batesNumbering, title: String(localized: "Bates Numbering"), symbol: "number"),
+        Tool(destination: .redaction, title: String(localized: "Redaction"), symbol: "eye.slash"),
+        Tool(destination: .reviewBatches, title: String(localized: "Review Batches"), symbol: "square.stack.3d.up"),
+        Tool(destination: .investigationReport, title: String(localized: "Investigation Report"), symbol: "doc.richtext"),
     ]
 
     var body: some View {
@@ -84,8 +84,8 @@ struct ProfessionalPageView: View {
                     // bought: say so once, up front, with the way to buy it.
                     Button {
                         storeManager.requestPurchase(.professional,
-                                                     feature: "Professional Workflows",
-                                                     reason: "Custodians and holds, chain of custody, eDiscovery, Bates numbering, production and the studios are part of the Professional purchase.",
+                                                     feature: String(localized: "Professional Workflows"),
+                                                     reason: String(localized: "Custodians and holds, chain of custody, eDiscovery, Bates numbering, production and the studios are part of the Professional purchase."),
                                                      target: purchaseTarget)
                     } label: {
                         Label("Unlock Professional", systemImage: "lock.open.fill")
@@ -154,11 +154,11 @@ struct ProfessionalPageView: View {
 
     private func openProductionWindow() {
         guard storeManager.require(.professional,
-                                   feature: "Production",
-                                   reason: "Producing a Bates-stamped set with a hash manifest is part of the Professional purchase.",
+                                   feature: String(localized: "Production"),
+                                   reason: String(localized: "Producing a Bates-stamped set with a hash manifest is part of the Professional purchase."),
                                    target: purchaseTarget) else { return }
         #if os(macOS)
-        ToolWindowPresenter.shared.open(title: "Production", size: CGSize(width: 760, height: 720)) {
+        ToolWindowPresenter.shared.open(title: String(localized: "Production"), size: CGSize(width: 760, height: 720)) {
             AnyView(ProductionWindowView().toolWindowFrame())
         }
         #else

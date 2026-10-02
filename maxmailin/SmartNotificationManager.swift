@@ -169,7 +169,7 @@ final class SmartNotificationManager: ObservableObject {
             alerts.append(SmartAlert(
                 type: .phishingDetected,
                 severity: .high,
-                title: "High-Risk Phishing Detected",
+                title: String(localized: "High-Risk Phishing Detected"),
                 message: "\(highIDs.count) email\(highIDs.count == 1 ? "" : "s") flagged as high-risk phishing. Review immediately.",
                 emailIDs: highIDs
             ))
@@ -179,7 +179,7 @@ final class SmartNotificationManager: ObservableObject {
             alerts.append(SmartAlert(
                 type: .phishingDetected,
                 severity: .medium,
-                title: "Suspicious Emails Detected",
+                title: String(localized: "Suspicious Emails Detected"),
                 message: "\(mediumIDs.count) email\(mediumIDs.count == 1 ? "" : "s") flagged as medium-risk. Manual review recommended.",
                 emailIDs: mediumIDs
             ))
@@ -189,7 +189,7 @@ final class SmartNotificationManager: ObservableObject {
             alerts.append(SmartAlert(
                 type: .phishingDetected,
                 severity: .low,
-                title: "Low-Risk Phishing Indicators",
+                title: String(localized: "Low-Risk Phishing Indicators"),
                 message: "\(lowIDs.count) email\(lowIDs.count == 1 ? "" : "s") have minor phishing indicators.",
                 emailIDs: lowIDs
             ))
@@ -239,7 +239,7 @@ final class SmartNotificationManager: ObservableObject {
                 alerts.append(SmartAlert(
                     type: .unusualVolume,
                     severity: severity,
-                    title: "Unusual Email Volume",
+                    title: String(localized: "Unusual Email Volume"),
                     message: "\(lastDayData.count) emails on \(lastDay) -- \(String(format: "%.1f", ratio))x the 30-day average of \(String(format: "%.1f", baselineAverage)).",
                     emailIDs: lastDayData.ids
                 ))
@@ -312,7 +312,7 @@ final class SmartNotificationManager: ObservableObject {
         return [SmartAlert(
             type: .piiExposure,
             severity: severity,
-            title: "Potential PII Exposure",
+            title: String(localized: "Potential PII Exposure"),
             message: "Found \(details.joined(separator: ", ")) across \(flaggedIDs.count) email\(flaggedIDs.count == 1 ? "" : "s").",
             emailIDs: flaggedIDs
         )]
@@ -359,7 +359,7 @@ final class SmartNotificationManager: ObservableObject {
                 alerts.append(SmartAlert(
                     type: .newSenderBurst,
                     severity: severity,
-                    title: "New Sender Burst",
+                    title: String(localized: "New Sender Burst"),
                     message: "\(ids.count) emails from new sender \(sender) within the last 24 hours.",
                     emailIDs: ids
                 ))
@@ -408,7 +408,7 @@ final class SmartNotificationManager: ObservableObject {
         return [SmartAlert(
             type: .sentimentShift,
             severity: severity,
-            title: "Sentiment Decline Detected",
+            title: String(localized: "Sentiment Decline Detected"),
             message: "Average sentiment shifted from \(String(format: "%.2f", priorSentiment.average)) (\(priorSentiment.label)) to \(String(format: "%.2f", recentSentiment.average)) (\(recentSentiment.label)) in the recent period.",
             emailIDs: recentIDs
         )]

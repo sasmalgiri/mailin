@@ -33,9 +33,9 @@ struct EmailComparisonView: View {
                 }
             } else {
                 HStack(spacing: 0) {
-                    emailColumn(emailA, label: "Email A", side: .left)
+                    emailColumn(emailA, label: String(localized: "Email A"), side: .left)
                     Divider()
-                    emailColumn(emailB, label: "Email B", side: .right)
+                    emailColumn(emailB, label: String(localized: "Email B"), side: .right)
                 }
             }
         }

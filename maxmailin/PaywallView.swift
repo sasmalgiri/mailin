@@ -198,7 +198,7 @@ struct PaywallView: View {
     // MARK: - Header
 
     private var headerTitle: String {
-        if ownsEverything { return "Your plan" }
+        if ownsEverything { return String(localized: "Your plan") }
         if let feature = request?.feature { return "Unlock \(feature)" }
         return store.effectiveTier == .personal ? "Upgrade to Professional" : "Unlock mailin"
     }
@@ -210,7 +210,7 @@ struct PaywallView: View {
                 ? "You own Personal for life. Professional adds the legal and forensic tools; it is a separate purchase at its listed price."
                 : "You have Personal. Professional adds the legal and forensic tools."
         }
-        return "Subscribe monthly or yearly, or buy once for lifetime access. Prices are shown by the App Store in your currency."
+        return String(localized: "Subscribe monthly or yearly, or buy once for lifetime access. Prices are shown by the App Store in your currency.")
     }
 
     private var headerSection: some View {
@@ -413,7 +413,7 @@ struct PaywallView: View {
                     }
                 } label: {
                     VStack(spacing: 2) {
-                        Text(period.rawValue)
+                        Text(period.displayName)
                             .font(Typography.callout)
                             .fontWeight(selectedPeriod == period ? .semibold : .regular)
                         if period == .yearly, let savings = yearlySavingsLabel {
@@ -570,9 +570,9 @@ struct PaywallView: View {
 
     private var pricingSubtitle: String {
         switch selectedPeriod {
-        case .monthly: return "Recurring: renews every month until cancelled"
-        case .yearly: return "Recurring: renews every year until cancelled"
-        case .lifetime: return "One-time payment, never renews"
+        case .monthly: return String(localized: "Recurring: renews every month until cancelled")
+        case .yearly: return String(localized: "Recurring: renews every year until cancelled")
+        case .lifetime: return String(localized: "One-time payment, never renews")
         }
     }
 
@@ -626,7 +626,7 @@ struct PaywallView: View {
     }
 
     private var purchaseLabel: String {
-        guard let product = selectedProduct else { return "Select a plan" }
+        guard let product = selectedProduct else { return String(localized: "Select a plan") }
         let tierName = StoreManager.professionalProductIDs.contains(product.id) ? "Professional" : "Personal"
         let billing: String
         if let period = product.subscription?.subscriptionPeriod {
@@ -873,13 +873,13 @@ struct PlanAndPurchasesSection: View {
 
     private var ownershipText: String {
         #if ENTERPRISE_EDITION
-        return "Enterprise edition: every feature is included in the purchase price."
+        return String(localized: "Enterprise edition: every feature is included in the purchase price.")
         #else
         switch store.effectiveTier {
-        case .free: return "No purchase. Import up to 100 MB, browse the first 500 emails, 5 Ask queries a day."
+        case .free: return String(localized: "No purchase. Import up to 100 MB, browse the first 500 emails, 5 Ask queries a day.")
         case .personal, .professional:
-            if store.isLifetimePurchase { return "Lifetime purchase: yours permanently, never renews." }
-            return "Subscription"
+            if store.isLifetimePurchase { return String(localized: "Lifetime purchase: yours permanently, never renews.") }
+            return String(localized: "Subscription")
         }
         #endif
     }

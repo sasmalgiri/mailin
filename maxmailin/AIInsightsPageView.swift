@@ -89,8 +89,8 @@ struct AIInsightsPageView: View {
                 let remaining = max(0, AIAssistantView.freeQueryLimit - freeQueryCount)
                 Button {
                     storeManager.requestPurchase(.personal,
-                                                 feature: "AI Insights",
-                                                 reason: "Personal and Professional remove the daily Ask limit and include Summaries and Reports.",
+                                                 feature: String(localized: "AI Insights"),
+                                                 reason: String(localized: "Personal and Professional remove the daily Ask limit and include Summaries and Reports."),
                                                  target: purchaseTarget)
                 } label: {
                     Text("\(remaining) of \(AIAssistantView.freeQueryLimit) free Ask queries left today")
@@ -179,16 +179,16 @@ struct AIInsightsPageView: View {
                 AIDigestView(scope: scopeQuery)
                     .id(scopeContext)
             } else {
-                PaidFeatureLockedView(title: "Summaries", requiredTier: .personal,
-                                      detail: "AI summaries of a source or a date range are part of the Personal and Professional purchases.")
+                PaidFeatureLockedView(title: String(localized: "Summaries"), requiredTier: .personal,
+                                      detail: String(localized: "AI summaries of a source or a date range are part of the Personal and Professional purchases."))
             }
         case .reports:
             if storeManager.isPremium {
                 ReportBuilderView(scope: scopeQuery)
                     .id(scopeContext)
             } else {
-                PaidFeatureLockedView(title: "Reports", requiredTier: .personal,
-                                      detail: "Report building is part of the Personal and Professional purchases.")
+                PaidFeatureLockedView(title: String(localized: "Reports"), requiredTier: .personal,
+                                      detail: String(localized: "Report building is part of the Personal and Professional purchases."))
             }
         }
     }

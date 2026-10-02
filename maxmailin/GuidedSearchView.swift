@@ -47,9 +47,9 @@ struct GuidedSearchView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    fieldRow(icon: "person", label: "Who sent it?", placeholder: "e.g. john, mom, boss@company.com", text: $whoFrom)
-                    fieldRow(icon: "person.2", label: "Who was it sent to?", placeholder: "e.g. me, team, jane@work.com", text: $whoTo)
-                    fieldRow(icon: "text.quote", label: "What was the subject about?", placeholder: "e.g. vacation photos, invoice, contract", text: $aboutWhat)
+                    fieldRow(icon: "person", label: String(localized: "Who sent it?"), placeholder: String(localized: "e.g. john, mom, boss@company.com"), text: $whoFrom)
+                    fieldRow(icon: "person.2", label: String(localized: "Who was it sent to?"), placeholder: String(localized: "e.g. me, team, jane@work.com"), text: $whoTo)
+                    fieldRow(icon: "text.quote", label: String(localized: "What was the subject about?"), placeholder: String(localized: "e.g. vacation photos, invoice, contract"), text: $aboutWhat)
 
                     dateRow
 
@@ -58,18 +58,18 @@ struct GuidedSearchView: View {
 
                     DisclosureGroup("More ways to narrow", isExpanded: $showAdvanced) {
                         VStack(alignment: .leading, spacing: 12) {
-                            fieldRow(icon: "quote.opening", label: "Exact phrase (anywhere in the text)",
-                                     placeholder: "e.g. wire transfer instructions", text: $exactPhrase)
-                            fieldRow(icon: "text.word.spacing", label: "Any of these words",
-                                     placeholder: "e.g. invoice receipt payment", text: $anyWords)
-                            fieldRow(icon: "minus.circle", label: "None of these words",
-                                     placeholder: "e.g. newsletter unsubscribe", text: $noneOfWords)
-                            fieldRow(icon: "paperclip", label: "Attachment name or type",
-                                     placeholder: "e.g. contract.pdf, xlsx, .zip", text: $attachmentName)
-                            fieldRow(icon: "tray", label: "From which imported file (folder / source)",
-                                     placeholder: "e.g. takeout, Sent.mbox", text: $sourceFile)
-                            fieldRow(icon: "tag", label: "With tag or label",
-                                     placeholder: "e.g. Important, triage:phish", text: $tag)
+                            fieldRow(icon: "quote.opening", label: String(localized: "Exact phrase (anywhere in the text)"),
+                                     placeholder: String(localized: "e.g. wire transfer instructions"), text: $exactPhrase)
+                            fieldRow(icon: "text.word.spacing", label: String(localized: "Any of these words"),
+                                     placeholder: String(localized: "e.g. invoice receipt payment"), text: $anyWords)
+                            fieldRow(icon: "minus.circle", label: String(localized: "None of these words"),
+                                     placeholder: String(localized: "e.g. newsletter unsubscribe"), text: $noneOfWords)
+                            fieldRow(icon: "paperclip", label: String(localized: "Attachment name or type"),
+                                     placeholder: String(localized: "e.g. contract.pdf, xlsx, .zip"), text: $attachmentName)
+                            fieldRow(icon: "tray", label: String(localized: "From which imported file (folder / source)"),
+                                     placeholder: String(localized: "e.g. takeout, Sent.mbox"), text: $sourceFile)
+                            fieldRow(icon: "tag", label: String(localized: "With tag or label"),
+                                     placeholder: String(localized: "e.g. Important, triage:phish"), text: $tag)
                             if !noneOfWords.trimmingCharacters(in: .whitespaces).isEmpty && positiveTerms.isEmpty {
                                 Label("\"None of these words\" needs at least one positive word, phrase or subject to exclude from.",
                                       systemImage: "info.circle")

@@ -117,12 +117,12 @@ struct InvestigationFeatures {
             var totalWeight: Double = 0
 
             let consistencyScore = measureConsistency(emails: data.emails)
-            factors.append(.init(name: "Consistency", score: consistencyScore, detail: "Sentiment and topic consistency across communications"))
+            factors.append(.init(name: String(localized: "Consistency"), score: consistencyScore, detail: String(localized: "Sentiment and topic consistency across communications")))
             totalScore += consistencyScore * 3.0
             totalWeight += 3.0
 
             let volumeScore = min(1.0, Double(data.emails.count) / 30.0)
-            factors.append(.init(name: "Volume", score: volumeScore, detail: "\(data.emails.count) emails in archive"))
+            factors.append(.init(name: String(localized: "Volume"), score: volumeScore, detail: "\(data.emails.count) emails in archive"))
             totalScore += volumeScore * 1.5
             totalWeight += 1.5
 
@@ -134,18 +134,18 @@ struct InvestigationFeatures {
             } else {
                 spanScore = 0.1
             }
-            factors.append(.init(name: "Longevity", score: spanScore, detail: "Communication span in archive"))
+            factors.append(.init(name: String(localized: "Longevity"), score: spanScore, detail: String(localized: "Communication span in archive")))
             totalScore += spanScore * 2.0
             totalWeight += 2.0
 
             let reciprocity = measureReciprocity(address: address, emails: emails, threadMap: threadMap)
-            factors.append(.init(name: "Reciprocity", score: reciprocity, detail: "Two-way communication patterns"))
+            factors.append(.init(name: String(localized: "Reciprocity"), score: reciprocity, detail: String(localized: "Two-way communication patterns")))
             totalScore += reciprocity * 2.5
             totalWeight += 2.5
 
             let topicDiversity = measureTopicDiversity(emails: data.emails)
             let diversityScore = min(1.0, Double(topicDiversity) / 8.0)
-            factors.append(.init(name: "Topic Range", score: diversityScore, detail: "\(topicDiversity) distinct topics discussed"))
+            factors.append(.init(name: String(localized: "Topic Range"), score: diversityScore, detail: "\(topicDiversity) distinct topics discussed"))
             totalScore += diversityScore * 1.0
             totalWeight += 1.0
 
@@ -153,7 +153,7 @@ struct InvestigationFeatures {
                 let nodeID = "person-\(address)"
                 let neighbors = graph.neighbors(of: nodeID)
                 let connectionScore = min(1.0, Double(neighbors.count) / 15.0)
-                factors.append(.init(name: "Network Position", score: connectionScore, detail: "\(neighbors.count) connections in knowledge graph"))
+                factors.append(.init(name: String(localized: "Network Position"), score: connectionScore, detail: "\(neighbors.count) connections in knowledge graph"))
                 totalScore += connectionScore * 2.0
                 totalWeight += 2.0
             }

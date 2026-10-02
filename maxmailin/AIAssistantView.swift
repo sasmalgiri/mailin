@@ -446,10 +446,10 @@ struct AIAssistantView: View {
                     // measured" where an engine cannot see a figure.
                     Button {
                         #if os(macOS)
-                        ToolWindowPresenter.shared.open(title: "AI Metrics",
+                        ToolWindowPresenter.shared.open(title: String(localized: "AI Metrics"),
                                                         size: CGSize(width: 820, height: 720)) {
                             AnyView(NavigationStack {
-                                AIMetricsView(onClose: { ToolWindowPresenter.shared.close(title: "AI Metrics") })
+                                AIMetricsView(onClose: { ToolWindowPresenter.shared.close(title: String(localized: "AI Metrics")) })
                             }
                             .toolWindowFrame())
                         }
@@ -496,7 +496,7 @@ struct AIAssistantView: View {
                         HStack(spacing: 4) {
                             Image(systemName: "cpu")
                                 .font(.caption)
-                            Text(selectedEngine.rawValue)
+                            Text(LocalizedStringKey(selectedEngine.rawValue))
                                 .font(.subheadline)
                             Image(systemName: "chevron.down")
                                 .font(.caption2)
@@ -699,16 +699,16 @@ struct AIAssistantView: View {
 
     private var engineDescription: String {
         switch selectedEngine {
-        case .auto: return "Smart routing — picks the best engine for each query automatically"
-        case .appleAIMoE: return "Apple AI with Mixture of Experts — maximum intelligence, on-device"
-        case .appleAI: return "Direct Apple AI — fast single-session, on-device"
-        case .hybrid: return "Enhanced NLP + Apple AI synthesis — best of both, on-device"
+        case .auto: return String(localized: "Smart routing — picks the best engine for each query automatically")
+        case .appleAIMoE: return String(localized: "Apple AI with Mixture of Experts — maximum intelligence, on-device")
+        case .appleAI: return String(localized: "Direct Apple AI — fast single-session, on-device")
+        case .hybrid: return String(localized: "Enhanced NLP + Apple AI synthesis — best of both, on-device")
         #if !NO_NETWORK_BUILD
         case .cloudAI:
             let mgr = CloudAIManager.shared
             return "\(mgr.selectedProvider.displayName) (\(mgr.selectedModel)) — cloud-powered analysis"
         #endif
-        case .nlp: return "Pure NLP — fast semantic search + deterministic analysis, no AI needed"
+        case .nlp: return String(localized: "Pure NLP — fast semantic search + deterministic analysis, no AI needed")
         }
     }
 
@@ -892,7 +892,7 @@ struct AIAssistantView: View {
                             .foregroundStyle(
                                 LinearGradient(colors: [.purple, .blue], startPoint: .leading, endPoint: .trailing)
                             )
-                        Text(selectedEngine.rawValue)
+                        Text(LocalizedStringKey(selectedEngine.rawValue))
                             .font(Typography.caption1)
                             .foregroundColor(AppColors.secondary)
                         if isStreaming {
@@ -1568,12 +1568,12 @@ struct AIAssistantView: View {
 
     private var personaAITitle: String {
         switch personaManager.selectedPersona {
-        case .forensic: return "Investigate your email evidence"
-        case .legal: return "Analyze documents for review"
-        case .itAdmin: return "Diagnose email infrastructure"
-        case .journalist: return "Discover patterns and stories"
-        case .researcher: return "Interrogate your corpus with citations"
-        case .personal, .general: return "Ask anything about your emails"
+        case .forensic: return String(localized: "Investigate your email evidence")
+        case .legal: return String(localized: "Analyze documents for review")
+        case .itAdmin: return String(localized: "Diagnose email infrastructure")
+        case .journalist: return String(localized: "Discover patterns and stories")
+        case .researcher: return String(localized: "Interrogate your corpus with citations")
+        case .personal, .general: return String(localized: "Ask anything about your emails")
         }
     }
 
@@ -1604,14 +1604,14 @@ struct AIAssistantView: View {
 
     private var engineHelp: String {
         switch selectedEngine {
-        case .auto: return "Auto — smart routing picks the best engine based on query complexity, email count, and available resources"
-        case .appleAIMoE: return "Apple AI MoE — multi-session experts, fan-in synthesis, self-correction"
-        case .appleAI: return "Apple AI — direct single-session, fast and private"
-        case .hybrid: return "Hybrid — NLP foundation + RAG + MoE experts + cloud experts + dynamic fan-in synthesis"
+        case .auto: return String(localized: "Auto — smart routing picks the best engine based on query complexity, email count, and available resources")
+        case .appleAIMoE: return String(localized: "Apple AI MoE — multi-session experts, fan-in synthesis, self-correction")
+        case .appleAI: return String(localized: "Apple AI — direct single-session, fast and private")
+        case .hybrid: return String(localized: "Hybrid — NLP foundation + RAG + MoE experts + cloud experts + dynamic fan-in synthesis")
         #if !NO_NETWORK_BUILD
         case .cloudAI: return "Cloud AI — \(CloudAIManager.shared.selectedProvider.displayName) powered analysis with NLP + RAG"
         #endif
-        case .nlp: return "NLP — pure semantic search + deterministic analysis, no AI"
+        case .nlp: return String(localized: "NLP — pure semantic search + deterministic analysis, no AI")
         }
     }
 

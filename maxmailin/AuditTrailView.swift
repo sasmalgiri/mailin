@@ -228,7 +228,7 @@ struct AuditTrailView: View {
 
                 Picker("", selection: $scope) {
                     ForEach(AuditTrailFilter.DateScope.allCases, id: \.self) { s in
-                        Text(s.rawValue).tag(s)
+                        Text(LocalizedStringKey(s.rawValue)).tag(s)
                     }
                 }
                 .pickerStyle(.segmented)

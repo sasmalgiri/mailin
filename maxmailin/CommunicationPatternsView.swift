@@ -486,8 +486,8 @@ struct CommunicationPatternsView: View {
                     Spacer()
                     EmptyStateView(
                         icon: "chart.line.uptrend.xyaxis",
-                        title: "No Data",
-                        message: "Import an email archive to analyze communication patterns."
+                        title: String(localized: "No Data"),
+                        message: String(localized: "Import an email archive to analyze communication patterns.")
                     )
                     Spacer()
                 }
@@ -531,7 +531,7 @@ struct CommunicationPatternsView: View {
             }
             Spacer()
             TutorialHelpButton(showTutorial: $showTutorial)
-            SaveToDocumentsButton(title: "Communication Patterns") {
+            SaveToDocumentsButton(title: String(localized: "Communication Patterns")) {
                 [.init(key: "Emails analyzed", value: "\(analyzedCount)")]
             }
             if isPresented != nil {
@@ -552,25 +552,25 @@ struct CommunicationPatternsView: View {
             GridItem(.flexible()), GridItem(.flexible())
         ], spacing: Spacing.small) {
             AnimatedStatCard(
-                title: "Total Contacts",
+                title: String(localized: "Total Contacts"),
                 value: "\(contacts.count)",
                 icon: "person.2.fill",
                 color: .blue
             )
             AnimatedStatCard(
-                title: "Avg Response",
+                title: String(localized: "Avg Response"),
                 value: formatResponseTime(avgResponseTime),
                 icon: "clock.fill",
                 color: .orange
             )
             AnimatedStatCard(
-                title: "Busiest Hour",
+                title: String(localized: "Busiest Hour"),
                 value: busiestHourLabel,
                 icon: "clock.badge",
                 color: .purple
             )
             AnimatedStatCard(
-                title: "Busiest Day",
+                title: String(localized: "Busiest Day"),
                 value: busiestDayLabel,
                 icon: "calendar",
                 color: .green

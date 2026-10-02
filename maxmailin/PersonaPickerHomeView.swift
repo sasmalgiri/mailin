@@ -208,59 +208,59 @@ struct PersonaPickerHomeView: View {
         switch persona {
         case .forensic:
             return [
-                FeatureItem(icon: "shield.checkered", title: "Evidence coding & review"),
-                FeatureItem(icon: "link", title: "Chain of custody tracking"),
-                FeatureItem(icon: "exclamationmark.shield", title: "IOC & threat detection"),
-                FeatureItem(icon: "waveform.path.ecg", title: "Anomaly detection"),
-                FeatureItem(icon: "doc.text.magnifyingglass", title: "Investigation reports"),
+                FeatureItem(icon: "shield.checkered", title: String(localized: "Evidence coding & review")),
+                FeatureItem(icon: "link", title: String(localized: "Chain of custody tracking")),
+                FeatureItem(icon: "exclamationmark.shield", title: String(localized: "IOC & threat detection")),
+                FeatureItem(icon: "waveform.path.ecg", title: String(localized: "Anomaly detection")),
+                FeatureItem(icon: "doc.text.magnifyingglass", title: String(localized: "Investigation reports")),
             ]
         case .legal:
             return [
-                FeatureItem(icon: "building.columns", title: "Privilege review workspace"),
-                FeatureItem(icon: "checklist", title: "eDiscovery EDRM workflow"),
-                FeatureItem(icon: "number", title: "Bates numbering & production"),
-                FeatureItem(icon: "hand.raised", title: "GDPR compliance reports"),
-                FeatureItem(icon: "brain", title: "Predictive coding / TAR"),
+                FeatureItem(icon: "building.columns", title: String(localized: "Privilege review workspace")),
+                FeatureItem(icon: "checklist", title: String(localized: "eDiscovery EDRM workflow")),
+                FeatureItem(icon: "number", title: String(localized: "Bates numbering & production")),
+                FeatureItem(icon: "hand.raised", title: String(localized: "GDPR compliance reports")),
+                FeatureItem(icon: "brain", title: String(localized: "Predictive coding / TAR")),
             ]
         case .itAdmin:
             return [
-                FeatureItem(icon: "server.rack", title: "Header & MIME analysis"),
-                FeatureItem(icon: "checkmark.shield", title: "SPF / DKIM / DMARC auth"),
-                FeatureItem(icon: "arrow.triangle.swap", title: "Routing hop inspection"),
-                FeatureItem(icon: "globe", title: "Domain mismatch detection"),
-                FeatureItem(icon: "chart.bar", title: "Batch auth statistics"),
+                FeatureItem(icon: "server.rack", title: String(localized: "Header & MIME analysis")),
+                FeatureItem(icon: "checkmark.shield", title: String(localized: "SPF / DKIM / DMARC auth")),
+                FeatureItem(icon: "arrow.triangle.swap", title: String(localized: "Routing hop inspection")),
+                FeatureItem(icon: "globe", title: String(localized: "Domain mismatch detection")),
+                FeatureItem(icon: "chart.bar", title: String(localized: "Batch auth statistics")),
             ]
         case .journalist:
             return [
-                FeatureItem(icon: "newspaper", title: "Source & lead tracking"),
-                FeatureItem(icon: "calendar.day.timeline.left", title: "Event timeline builder"),
-                FeatureItem(icon: "text.quote", title: "Key quote extraction"),
-                FeatureItem(icon: "person.2", title: "Contact network mapping"),
-                FeatureItem(icon: "circle.grid.3x3", title: "Topic discovery & clusters"),
+                FeatureItem(icon: "newspaper", title: String(localized: "Source & lead tracking")),
+                FeatureItem(icon: "calendar.day.timeline.left", title: String(localized: "Event timeline builder")),
+                FeatureItem(icon: "text.quote", title: String(localized: "Key quote extraction")),
+                FeatureItem(icon: "person.2", title: String(localized: "Contact network mapping")),
+                FeatureItem(icon: "circle.grid.3x3", title: String(localized: "Topic discovery & clusters")),
             ]
         case .researcher:
             return [
-                FeatureItem(icon: "books.vertical", title: "Research protocol on record"),
-                FeatureItem(icon: "checklist", title: "Screening — include / exclude"),
-                FeatureItem(icon: "tag", title: "Extraction & coding (codebook)"),
-                FeatureItem(icon: "calendar.day.timeline.left", title: "Cited chronologies"),
-                FeatureItem(icon: "brain.head.profile", title: "Reasoning studio & source criticism"),
+                FeatureItem(icon: "books.vertical", title: String(localized: "Research protocol on record")),
+                FeatureItem(icon: "checklist", title: String(localized: "Screening — include / exclude")),
+                FeatureItem(icon: "tag", title: String(localized: "Extraction & coding (codebook)")),
+                FeatureItem(icon: "calendar.day.timeline.left", title: String(localized: "Cited chronologies")),
+                FeatureItem(icon: "brain.head.profile", title: String(localized: "Reasoning studio & source criticism")),
             ]
         case .personal:
             return [
-                FeatureItem(icon: "tray.full", title: "Smart email categories"),
-                FeatureItem(icon: "person.crop.circle", title: "Contact insights & stats"),
-                FeatureItem(icon: "paperclip", title: "Attachment browser"),
-                FeatureItem(icon: "doc.on.doc", title: "Duplicate cleanup"),
-                FeatureItem(icon: "text.bubble", title: "Thread summarizer"),
+                FeatureItem(icon: "tray.full", title: String(localized: "Smart email categories")),
+                FeatureItem(icon: "person.crop.circle", title: String(localized: "Contact insights & stats")),
+                FeatureItem(icon: "paperclip", title: String(localized: "Attachment browser")),
+                FeatureItem(icon: "doc.on.doc", title: String(localized: "Duplicate cleanup")),
+                FeatureItem(icon: "text.bubble", title: String(localized: "Thread summarizer")),
             ]
         case .general:
             return [
-                FeatureItem(icon: "sparkles", title: "AI assistant & digest"),
-                FeatureItem(icon: "chart.bar", title: "Full analytics suite"),
-                FeatureItem(icon: "point.3.connected.trianglepath.dotted", title: "Knowledge graph explorer"),
-                FeatureItem(icon: "chart.line.uptrend.xyaxis", title: "Predictive insights"),
-                FeatureItem(icon: "puzzlepiece.extension", title: "Plugin extensibility"),
+                FeatureItem(icon: "sparkles", title: String(localized: "AI assistant & digest")),
+                FeatureItem(icon: "chart.bar", title: String(localized: "Full analytics suite")),
+                FeatureItem(icon: "point.3.connected.trianglepath.dotted", title: String(localized: "Knowledge graph explorer")),
+                FeatureItem(icon: "chart.line.uptrend.xyaxis", title: String(localized: "Predictive insights")),
+                FeatureItem(icon: "puzzlepiece.extension", title: String(localized: "Plugin extensibility")),
             ]
         }
     }

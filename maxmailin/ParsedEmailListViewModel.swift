@@ -1347,11 +1347,11 @@ class ParsedEmailListViewModel: ObservableObject {
         case sizeDesc = "Size ↓"
         var label: String {
             switch self {
-            case .dateAsc: return "Date (Oldest)"
-            case .dateDesc: return "Date (Newest)"
-            case .subjectAsc: return "Subject A-Z"
-            case .priorityDesc: return "Priority"
-            case .sizeDesc: return "Size (Largest)"
+            case .dateAsc: return String(localized: "Date (Oldest)")
+            case .dateDesc: return String(localized: "Date (Newest)")
+            case .subjectAsc: return String(localized: "Subject A-Z")
+            case .priorityDesc: return String(localized: "Priority")
+            case .sizeDesc: return String(localized: "Size (Largest)")
             }
         }
     }

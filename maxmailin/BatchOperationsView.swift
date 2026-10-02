@@ -113,7 +113,7 @@ struct BatchOperationsView: View {
             "Remove Selected Emails",
             isPresented: $showDeleteConfirmation,
             message: "This will remove \(selectedIDs.count) email(s) from the current view. The source file is not modified.",
-            actionTitle: "Remove"
+            actionTitle: String(localized: "Remove")
         ) {
             performBulkDelete()
         }
@@ -156,8 +156,8 @@ struct BatchOperationsView: View {
     private var emptyState: some View {
         EmptyStateView(
             icon: "checklist.unchecked",
-            title: "No Emails Selected",
-            message: "Select one or more emails from the list, then return here to perform bulk operations."
+            title: String(localized: "No Emails Selected"),
+            message: String(localized: "Select one or more emails from the list, then return here to perform bulk operations.")
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -296,7 +296,7 @@ struct BatchOperationsView: View {
             VStack(spacing: Spacing.xSmall) {
                 Picker("Category:", selection: $selectedCategory) {
                     ForEach(BulkCategory.allCases) { category in
-                        Text(category.rawValue).tag(category)
+                        Text(LocalizedStringKey(category.rawValue)).tag(category)
                     }
                 }
                 .pickerStyle(.menu)
@@ -314,7 +314,7 @@ struct BatchOperationsView: View {
             HStack(spacing: Spacing.xSmall) {
                 Picker("Category:", selection: $selectedCategory) {
                     ForEach(BulkCategory.allCases) { category in
-                        Text(category.rawValue).tag(category)
+                        Text(LocalizedStringKey(category.rawValue)).tag(category)
                     }
                 }
                 .pickerStyle(.menu)
@@ -357,7 +357,7 @@ struct BatchOperationsView: View {
             VStack(spacing: Spacing.xSmall) {
                 Picker("Format:", selection: $exportFormat) {
                     ForEach(ExportFormat.allCases) { format in
-                        Text(format.rawValue).tag(format)
+                        Text(LocalizedStringKey(format.rawValue)).tag(format)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -375,7 +375,7 @@ struct BatchOperationsView: View {
             HStack(spacing: Spacing.xSmall) {
                 Picker("Format:", selection: $exportFormat) {
                     ForEach(ExportFormat.allCases) { format in
-                        Text(format.rawValue).tag(format)
+                        Text(LocalizedStringKey(format.rawValue)).tag(format)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -586,8 +586,8 @@ struct BatchOperationsView: View {
             let exportFormat = "\(format)"
             Task { await DocumentRegistry.captureStructured(.export,
                 summary: "Bulk export — \(exportCount) emails as \(exportFormat)",
-                document: CapturedDocument(title: "Bulk Export", sections: [
-                  .init(name: "Bulk Export", fields: [
+                document: CapturedDocument(title: String(localized: "Bulk Export"), sections: [
+                  .init(name: String(localized: "Bulk Export"), fields: [
                     .init(key: "Emails", value: "\(exportCount)"),
                     .init(key: "Format", value: exportFormat)])])) }
 

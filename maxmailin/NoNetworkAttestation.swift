@@ -80,11 +80,11 @@ enum NoNetworkAttestation {
                     : "This build has networking compiled in and this platform grants network access by default.") + marker
             }
             guard sandboxed else {
-                return "This build is NOT sandboxed, so no entitlement prevents a network connection"
+                return String(localized: "This build is NOT sandboxed, so no entitlement prevents a network connection")
                     + (offlineModeCompiledIn ? " — only the NO_NETWORK_BUILD build flag does." : ".") + marker
             }
             if networkIsStructurallyImpossible {
-                return "Sandboxed with no network entitlement: this process cannot open a network connection." + marker
+                return String(localized: "Sandboxed with no network entitlement: this process cannot open a network connection.") + marker
             }
             var granted: [String] = []
             if networkClientGranted { granted.append("outgoing") }

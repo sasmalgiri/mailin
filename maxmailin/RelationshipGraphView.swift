@@ -107,7 +107,7 @@ class GraphLayout {
         // Center node for user
         graphNodes.append(GraphNode(
             id: senderLower,
-            name: "You",
+            name: String(localized: "You"),
             emailCount: emails.count,
             sentiment: 0,
             position: .zero,
@@ -382,7 +382,7 @@ struct RelationshipGraphView: View {
                 .buttonStyle(.bordered)
                 .accessibilityLabel("Rebuild the relationship graph")
             TutorialHelpButton(showTutorial: $showTutorial)
-            SaveToDocumentsButton(title: "Relationship Graph") {
+            SaveToDocumentsButton(title: String(localized: "Relationship Graph")) {
                 [.init(key: "Emails", value: "\(emails.count)")]
             }
             if isPresented != nil {
@@ -404,8 +404,8 @@ struct RelationshipGraphView: View {
             Spacer()
             EmptyStateView(
                 icon: "person.3",
-                title: "No Relationship Data",
-                message: "Import emails to see your contact network."
+                title: String(localized: "No Relationship Data"),
+                message: String(localized: "Import emails to see your contact network.")
             )
             Spacer()
         }
@@ -556,11 +556,11 @@ struct RelationshipGraphView: View {
 
     private var statsSection: some View {
         HStack(spacing: Spacing.medium) {
-            miniStat(title: "Contacts", value: "\(totalContacts)")
+            miniStat(title: String(localized: "Contacts"), value: "\(totalContacts)")
             if let most = mostActive {
-                miniStat(title: "Most Active", value: shortName(most.name))
+                miniStat(title: String(localized: "Most Active"), value: shortName(most.name))
             }
-            miniStat(title: "Total Emails", value: "\(emails.count)")
+            miniStat(title: String(localized: "Total Emails"), value: "\(emails.count)")
         }
         .accessibilityElement(children: .combine)
     }
@@ -613,20 +613,20 @@ struct RelationshipGraphView: View {
             }
 
             HStack(spacing: Spacing.medium) {
-                detailItem(label: "Total", value: "\(node.emailCount)")
-                detailItem(label: "Sent", value: "\(node.sentCount)")
-                detailItem(label: "Received", value: "\(node.receivedCount)")
+                detailItem(label: String(localized: "Total"), value: "\(node.emailCount)")
+                detailItem(label: String(localized: "Sent"), value: "\(node.sentCount)")
+                detailItem(label: String(localized: "Received"), value: "\(node.receivedCount)")
             }
 
             HStack(spacing: Spacing.medium) {
-                detailItem(label: "Sentiment", value: sentimentLabel(node.sentiment))
+                detailItem(label: String(localized: "Sentiment"), value: sentimentLabel(node.sentiment))
                 if let date = node.lastContactDate {
                     let formatter: DateFormatter = {
                         let f = DateFormatter()
                         f.dateStyle = .medium
                         return f
                     }()
-                    detailItem(label: "Last Contact", value: formatter.string(from: date))
+                    detailItem(label: String(localized: "Last Contact"), value: formatter.string(from: date))
                 }
             }
 

@@ -106,7 +106,7 @@ struct PredictiveInsightsView: View {
                         withAnimation(.easeInOut(duration: 0.2)) { selectedTab = tab }
                     } label: {
                         HStack(spacing: 4) {
-                            Text(tab.rawValue)
+                            Text(LocalizedStringKey(tab.rawValue))
                             if count > 0 {
                                 Text("\(count)")
                                     .font(.system(size: 10, weight: .bold, design: .monospaced))
@@ -199,7 +199,7 @@ struct PredictiveInsightsView: View {
                 Text(pred.reason)
                     .font(.system(size: 11)).foregroundColor(.secondary).lineLimit(2)
                 HStack(spacing: Spacing.xSmall) {
-                    Text(pred.urgency.rawValue)
+                    Text(LocalizedStringKey(pred.urgency.rawValue))
                         .font(.system(size: 9, weight: .bold)).foregroundColor(.white)
                         .padding(.horizontal, 6).padding(.vertical, 2)
                         .background(Capsule().fill(urgencyColor(pred.urgency)))
@@ -237,7 +237,7 @@ struct PredictiveInsightsView: View {
                 Text(pred.subject)
                     .font(.system(size: 13, weight: .semibold)).lineLimit(1)
                 Spacer()
-                Text(pred.outcome.rawValue)
+                Text(LocalizedStringKey(pred.outcome.rawValue))
                     .font(.system(size: 10, weight: .bold)).foregroundColor(.white)
                     .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(Capsule().fill(outcomeColor(pred.outcome)))

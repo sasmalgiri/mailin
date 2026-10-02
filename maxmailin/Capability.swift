@@ -137,9 +137,9 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
 
         var label: String {
             switch self {
-            case .stable: return "Stable"
-            case .preview: return "Preview"
-            case .experimental: return "Experimental"
+            case .stable: return String(localized: "Stable")
+            case .preview: return String(localized: "Preview")
+            case .experimental: return String(localized: "Experimental")
             }
         }
     }
@@ -200,72 +200,72 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .blobTier: return "Large-message storage"
-        case .offsetParser: return "Offset parser (no message size limit)"
-        case .locatorReads: return "Byte-range attachment & export reads"
-        case .externalStorage: return "Archive on another volume"
-        case .guidedImport: return "Pre-import review sheet"
-        case .importQueue: return "Import queue"
-        case .searchCoverageBadge: return "Search coverage note"
-        case .aiAssistant: return "Ask questions"
-        case .aiDigest: return "Digests & summaries"
-        case .anomalyDetection: return "Anomaly detection"
-        case .smartAutoTagger: return "Auto-tagging"
-        case .topicClusters: return "Topic clusters"
-        case .threadSummarizer: return "Thread summaries"
-        case .smartAlerts: return "Smart alerts"
-        case .keywordMonitor: return "Keyword monitor"
-        case .predictiveCoding: return "Predictive coding (TAR)"
-        case .custodianPanel: return "Cases & custodians"
-        case .reviewBatches: return "Review batches"
-        case .auditTrail: return "Audit trail"
-        case .eDiscovery: return "eDiscovery workflow"
-        case .batesNumbering: return "Bates numbering"
-        case .redaction: return "Redaction"
-        case .gdprReport: return "GDPR report"
-        case .chainOfCustody: return "Chain of custody"
-        case .investigationReport: return "Investigation report"
-        case .reportBuilder: return "Report builder"
-        case .reasoningStudios: return "Reasoning studios"
+        case .blobTier: return String(localized: "Large-message storage")
+        case .offsetParser: return String(localized: "Offset parser (no message size limit)")
+        case .locatorReads: return String(localized: "Byte-range attachment & export reads")
+        case .externalStorage: return String(localized: "Archive on another volume")
+        case .guidedImport: return String(localized: "Pre-import review sheet")
+        case .importQueue: return String(localized: "Import queue")
+        case .searchCoverageBadge: return String(localized: "Search coverage note")
+        case .aiAssistant: return String(localized: "Ask questions")
+        case .aiDigest: return String(localized: "Digests & summaries")
+        case .anomalyDetection: return String(localized: "Anomaly detection")
+        case .smartAutoTagger: return String(localized: "Auto-tagging")
+        case .topicClusters: return String(localized: "Topic clusters")
+        case .threadSummarizer: return String(localized: "Thread summaries")
+        case .smartAlerts: return String(localized: "Smart alerts")
+        case .keywordMonitor: return String(localized: "Keyword monitor")
+        case .predictiveCoding: return String(localized: "Predictive coding (TAR)")
+        case .custodianPanel: return String(localized: "Cases & custodians")
+        case .reviewBatches: return String(localized: "Review batches")
+        case .auditTrail: return String(localized: "Audit trail")
+        case .eDiscovery: return String(localized: "eDiscovery workflow")
+        case .batesNumbering: return String(localized: "Bates numbering")
+        case .redaction: return String(localized: "Redaction")
+        case .gdprReport: return String(localized: "GDPR report")
+        case .chainOfCustody: return String(localized: "Chain of custody")
+        case .investigationReport: return String(localized: "Investigation report")
+        case .reportBuilder: return String(localized: "Report builder")
+        case .reasoningStudios: return String(localized: "Reasoning studios")
         }
     }
 
     var detail: String {
         switch self {
         case .blobTier:
-            return "Stores raw MIME over 8 MB beside the database instead of inside a row, so a multi-gigabyte message can be archived at all."
+            return String(localized: "Stores raw MIME over 8 MB beside the database instead of inside a row, so a multi-gigabyte message can be archived at all.")
         case .offsetParser:
-            return "Indexes message boundaries and parses headers only, so import memory does not scale with message size. Removes the 100 MB single-message ceiling."
+            return String(localized: "Indexes message boundaries and parses headers only, so import memory does not scale with message size. Removes the 100 MB single-message ceiling.")
         case .locatorReads:
-            return "Reads an attachment or an export straight from its byte range in the stored source, instead of re-parsing the whole message."
+            return String(localized: "Reads an attachment or an export straight from its byte range in the stored source, instead of re-parsing the whole message.")
         case .externalStorage:
-            return "Shows where the archive lives and what it occupies; lets you choose a local folder for a NEW archive, or move the existing one there as a verified copy (byte counts, database hash, row count). Cloud and network folders are refused."
+            return String(localized: "Shows where the archive lives and what it occupies; lets you choose a local folder for a NEW archive, or move the existing one there as a verified copy (byte counts, database hash, row count). Cloud and network folders are refused.")
         case .guidedImport:
-            return "Before writing anything: the detected format, the space required, what will be indexed, and what will not."
+            return String(localized: "Before writing anything: the detected format, the space required, what will be indexed, and what will not.")
         case .importQueue:
-            return "Pending, running and finished imports in one list, each with its Complete / Partial / Failed verdict."
+            return String(localized: "Pending, running and finished imports in one list, each with its Complete / Partial / Failed verdict.")
         case .searchCoverageBadge:
-            return "Says how many messages are searchable only in part, so an empty result is not read as proof of absence."
-        case .aiAssistant: return "Questions answered with citations back to the exact messages."
-        case .aiDigest: return "Summaries of a selection, a conversation or a search result."
-        case .anomalyDetection: return "Unusual sending times, frequency spikes and first-seen domains."
-        case .smartAutoTagger: return "Suggested tags across the archive."
-        case .topicClusters: return "Groups the archive by topic."
-        case .threadSummarizer: return "Conversation overviews."
-        case .smartAlerts: return "Notifications when a rule you set matches."
-        case .keywordMonitor: return "Flags messages containing terms you choose."
-        case .predictiveCoding: return "Learns from your tagging to rank documents for review."
-        case .custodianPanel: return "Case intake, custodian records and collection scope."
-        case .reviewBatches: return "Messages organised into batches for systematic review."
-        case .auditTrail: return "Tamper-evident HMAC chain of who did what, when."
-        case .eDiscovery: return "End-to-end case management."
-        case .batesNumbering: return "Sequential production stamping."
-        case .redaction: return "Person and PII redaction with a validation pass."
-        case .gdprReport: return "Data-protection reporting."
-        case .chainOfCustody: return "Evidence tracking with a signed PDF."
-        case .investigationReport: return "The full case report as a PDF."
-        case .reportBuilder: return "Assemble a report from archive sections."
-        case .reasoningStudios: return "ACH matrix, reasoning studio, fact–evidence matrix, evidence desks, action register."
+            return String(localized: "Says how many messages are searchable only in part, so an empty result is not read as proof of absence.")
+        case .aiAssistant: return String(localized: "Questions answered with citations back to the exact messages.")
+        case .aiDigest: return String(localized: "Summaries of a selection, a conversation or a search result.")
+        case .anomalyDetection: return String(localized: "Unusual sending times, frequency spikes and first-seen domains.")
+        case .smartAutoTagger: return String(localized: "Suggested tags across the archive.")
+        case .topicClusters: return String(localized: "Groups the archive by topic.")
+        case .threadSummarizer: return String(localized: "Conversation overviews.")
+        case .smartAlerts: return String(localized: "Notifications when a rule you set matches.")
+        case .keywordMonitor: return String(localized: "Flags messages containing terms you choose.")
+        case .predictiveCoding: return String(localized: "Learns from your tagging to rank documents for review.")
+        case .custodianPanel: return String(localized: "Case intake, custodian records and collection scope.")
+        case .reviewBatches: return String(localized: "Messages organised into batches for systematic review.")
+        case .auditTrail: return String(localized: "Tamper-evident HMAC chain of who did what, when.")
+        case .eDiscovery: return String(localized: "End-to-end case management.")
+        case .batesNumbering: return String(localized: "Sequential production stamping.")
+        case .redaction: return String(localized: "Person and PII redaction with a validation pass.")
+        case .gdprReport: return String(localized: "Data-protection reporting.")
+        case .chainOfCustody: return String(localized: "Evidence tracking with a signed PDF.")
+        case .investigationReport: return String(localized: "The full case report as a PDF.")
+        case .reportBuilder: return String(localized: "Assemble a report from archive sections.")
+        case .reasoningStudios: return String(localized: "ACH matrix, reasoning studio, fact–evidence matrix, evidence desks, action register.")
         }
     }
 
@@ -274,31 +274,31 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
     var whenOff: String {
         switch self {
         case .blobTier:
-            return "Messages already stored outside the database are still read normally. New messages over 8 MB will fail to import until this is back on."
+            return String(localized: "Messages already stored outside the database are still read normally. New messages over 8 MB will fail to import until this is back on.")
         case .offsetParser:
-            return "Import returns to the streaming parser. Already-imported messages are unaffected; single messages over 100 MB are again reported as damaged rather than imported."
+            return String(localized: "Import returns to the streaming parser. Already-imported messages are unaffected; single messages over 100 MB are again reported as damaged rather than imported.")
         case .locatorReads:
-            return "Attachments and exports are served by re-parsing the stored source, as before. Nothing about the stored data changes."
+            return String(localized: "Attachments and exports are served by re-parsing the stored source, as before. Nothing about the stored data changes.")
         case .externalStorage:
-            return "The archive stays exactly where it is. Only the ability to choose a different location is hidden."
+            return String(localized: "The archive stays exactly where it is. Only the ability to choose a different location is hidden.")
         case .guidedImport:
-            return "Imports start immediately on selection, as in 2.x. The storage preflight and the receipt still run."
+            return String(localized: "Imports start immediately on selection, as in 2.x. The storage preflight and the receipt still run.")
         case .importQueue:
-            return "Import progress shows in the toolbar only. Receipts are still written and still readable from the File menu."
+            return String(localized: "Import progress shows in the toolbar only. Receipts are still written and still readable from the File menu.")
         case .searchCoverageBadge:
-            return "The note is hidden. Coverage is still recorded per message and still available on each message."
+            return String(localized: "The note is hidden. Coverage is still recorded per message and still available on each message.")
         case .predictiveCoding:
-            return "Your relevant / irrelevant tags are kept. Only the ranking stops being computed."
+            return String(localized: "Your relevant / irrelevant tags are kept. Only the ranking stops being computed.")
         case .auditTrail, .chainOfCustody:
-            return "The existing chain is kept intact and stays verifiable. No new entries are appended while this is off."
+            return String(localized: "The existing chain is kept intact and stays verifiable. No new entries are appended while this is off.")
         case .custodianPanel, .reviewBatches, .eDiscovery:
-            return "Cases, custodians, batches and legal holds are all kept. No hold is ever lifted by switching something off."
+            return String(localized: "Cases, custodians, batches and legal holds are all kept. No hold is ever lifted by switching something off.")
         case .reasoningStudios:
-            return "Every studio's saved cases, matrices and registers are kept and reappear unchanged when it is back on."
+            return String(localized: "Every studio's saved cases, matrices and registers are kept and reappear unchanged when it is back on.")
         case .batesNumbering:
-            return "Numbers already assigned are kept, and the sequence resumes where it left off."
+            return String(localized: "Numbers already assigned are kept, and the sequence resumes where it left off.")
         default:
-            return "The surface is hidden. Work already saved is kept and returns unchanged when this is switched back on."
+            return String(localized: "The surface is hidden. Work already saved is kept and returns unchanged when this is switched back on.")
         }
     }
 

@@ -67,8 +67,8 @@ struct AnomalyDetectionView: View {
                     Spacer()
                     EmptyStateView(
                         icon: "checkmark.shield",
-                        title: "No Anomalies Found",
-                        message: "No unusual patterns detected in the current email archive."
+                        title: String(localized: "No Anomalies Found"),
+                        message: String(localized: "No unusual patterns detected in the current email archive.")
                     )
                     Button("Run Analysis") { analyze(force: true) }
                         .buttonStyle(PrimaryButtonStyle())
@@ -358,8 +358,8 @@ struct AnomalyDetectionView: View {
                 let n = results.count
                 Task { await DocumentRegistry.captureStructured(.report,
                     summary: "Anomaly detection — \(n) anomalies",
-                    document: CapturedDocument(title: "Anomaly Detection", sections: [
-                      .init(name: "Anomaly Detection", fields: [.init(key: "Anomalies found", value: "\(n)")])])) }
+                    document: CapturedDocument(title: String(localized: "Anomaly Detection"), sections: [
+                      .init(name: String(localized: "Anomaly Detection"), fields: [.init(key: "Anomalies found", value: "\(n)")])])) }
             }
         }
     }

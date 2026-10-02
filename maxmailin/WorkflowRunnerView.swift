@@ -161,7 +161,7 @@ struct WorkflowRunnerView: View {
         } else if autoSave {
             return "Your work saves as you go. Press \(doneLabel) on each step when you're ready to finalize it."
         } else if autoComplete {
-            return "Steps mark themselves done once filled. Auto-save is off — press Save to store your entries."
+            return String(localized: "Steps mark themselves done once filled. Auto-save is off — press Save to store your entries.")
         } else {
             return "Auto-save and auto-complete are off — press Save to store entries, and \(doneLabel) to finalize each step."
         }
@@ -1196,7 +1196,7 @@ struct WorkflowRunnerView: View {
         ]
         let client = clientName.trimmingCharacters(in: .whitespaces)
         if !client.isEmpty { runFields.append(.init(key: "Client / matter", value: client)) }
-        sections.append(.init(name: "Run", fields: runFields))
+        sections.append(.init(name: String(localized: "Run"), fields: runFields))
 
         for op in definition.operations {
             var fields: [CapturedDocument.Field] = []

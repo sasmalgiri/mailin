@@ -243,7 +243,7 @@ class ContentViewModel: ObservableObject {
                 self.statusColor = .orange
                 self.loadingProgress = 0.0
                 self.loadingText = ""
-                for url in urls { ImportQueue.shared.markFailed(path: url.path, reason: "Free plan input limit") }
+                for url in urls { ImportQueue.shared.markFailed(path: url.path, reason: String(localized: "Free plan input limit")) }
                 return
             }
 
@@ -368,7 +368,7 @@ class ContentViewModel: ObservableObject {
                 // than inventing "Complete".
                 ImportQueue.shared.markFailed(
                     path: url.path,
-                    reason: "Import finished but no receipt was written, so its outcome could not be verified.")
+                    reason: String(localized: "Import finished but no receipt was written, so its outcome could not be verified."))
             }
         }
         // Anything still pending after the run ended never started.
@@ -921,7 +921,7 @@ class ContentViewModel: ObservableObject {
                 // never as a headers-only stub.
                 if email.rawSource.isEmpty {
                     guard let locator = RawMessageFile.locator(for: email) else {
-                        throw RawMessageError.contentUnavailable(subject: rawSubject, reason: "no stored content and no reachable original file")
+                        throw RawMessageError.contentUnavailable(subject: rawSubject, reason: String(localized: "no stored content and no reachable original file"))
                     }
                     try RawMessageFile.write(located: locator, to: fileURL, verifying: sourceLedger)
                 } else {

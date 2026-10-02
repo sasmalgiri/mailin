@@ -64,7 +64,7 @@ struct AIProvenanceView: View {
     }
 
     private var routingSection: some View {
-        section(title: "Routing") {
+        section(title: String(localized: "Routing")) {
             row("Intent", provenance.intent)
             row("Persona", provenance.persona)
             row("Model", "\(provenance.modelGeneration)\(provenance.modelAvailable ? "" : " (fallback)")")
@@ -82,7 +82,7 @@ struct AIProvenanceView: View {
     }
 
     private var evidenceSection: some View {
-        section(title: "Evidence retrieved") {
+        section(title: String(localized: "Evidence retrieved")) {
             row("Archive size", "\(provenance.archiveEmailCount) emails")
             row("Retrieved", "\(provenance.retrievedEmailIDs.count) emails")
             if provenance.ragKeyChunkCount > 0 {
@@ -94,7 +94,7 @@ struct AIProvenanceView: View {
     /// I3: every [E#] tag in the answer maps to one retrieved message, in
     /// retrieval order. Each row reopens the exact message.
     private var citationsSection: some View {
-        section(title: "Citations — [E#] → message") {
+        section(title: String(localized: "Citations — [E#] → message")) {
             if provenance.retrievedEmailIDs.isEmpty {
                 Text("No messages were retrieved for this answer.")
                     .font(Typography.caption1).foregroundColor(AppColors.secondary)
@@ -141,7 +141,7 @@ struct AIProvenanceView: View {
     }
 
     private var kgSection: some View {
-        section(title: "Knowledge graph") {
+        section(title: String(localized: "Knowledge graph")) {
             row("Edges in graph at synthesis", "\(provenance.kgEdgeCount)")
             row("Nodes cited in answer", "\(provenance.kgNodeIDs.count)")
             if !provenance.kgNodeIDs.isEmpty {
@@ -165,7 +165,7 @@ struct AIProvenanceView: View {
     }
 
     private var findingsSection: some View {
-        section(title: "Findings") {
+        section(title: String(localized: "Findings")) {
             row("Total findings", "\(provenance.totalFindings)")
             row("High relevance", "\(provenance.highRelevanceCount)")
             row("Linked to specific emails", "\(provenance.linkedFindings)")
@@ -173,7 +173,7 @@ struct AIProvenanceView: View {
     }
 
     private var synthesisSection: some View {
-        section(title: "Synthesis") {
+        section(title: String(localized: "Synthesis")) {
             row("Compression layer", "Layer \(provenance.synthesisLayerCount)")
             row("Context characters", "\(provenance.contextCharCount)")
             row("Answer characters", "\(provenance.answerCharCount)")
@@ -181,7 +181,7 @@ struct AIProvenanceView: View {
     }
 
     private var hashesSection: some View {
-        section(title: "Reproducibility hashes (SHA-256)") {
+        section(title: String(localized: "Reproducibility hashes (SHA-256)")) {
             row("Archive snapshot", provenance.archiveHash.prefix(16) + "…", mono: true)
             row("Graph snapshot", provenance.kgSnapshotHash.prefix(16) + "…", mono: true)
             row("Provenance ID", provenance.id.uuidString.prefix(12) + "…", mono: true)

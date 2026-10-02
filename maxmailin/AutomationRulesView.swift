@@ -78,7 +78,7 @@ struct AutomationRulesView: View {
                     "Run Automation Rules",
                     isPresented: $showingRunConfirmation,
                     message: "This will evaluate \(engine.rules.filter(\.isEnabled).count) enabled rule\(engine.rules.filter(\.isEnabled).count == 1 ? "" : "s") against \(emails.count) email\(emails.count == 1 ? "" : "s").",
-                    actionTitle: "Run Rules"
+                    actionTitle: String(localized: "Run Rules")
                 ) {
                     runResults = engine.applyRules(to: emails)
                     showingResults = true
@@ -104,9 +104,9 @@ struct AutomationRulesView: View {
     private var emptyState: some View {
         EmptyStateView(
             icon: "gearshape.2",
-            title: "No Automation Rules",
-            message: "Create rules to automatically categorize, tag, and flag emails based on conditions like sender, subject, sentiment, and more.",
-            actionTitle: "Create First Rule"
+            title: String(localized: "No Automation Rules"),
+            message: String(localized: "Create rules to automatically categorize, tag, and flag emails based on conditions like sender, subject, sentiment, and more."),
+            actionTitle: String(localized: "Create First Rule")
         ) {
             showingAddSheet = true
         }
@@ -422,8 +422,8 @@ private struct RunResultsSheet: View {
                 if results.isEmpty {
                     EmptyStateView(
                         icon: "checkmark.circle",
-                        title: "No Matches",
-                        message: "No emails matched the enabled automation rules."
+                        title: String(localized: "No Matches"),
+                        message: String(localized: "No emails matched the enabled automation rules.")
                     )
                 } else {
                     List {

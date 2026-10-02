@@ -440,10 +440,10 @@ struct ComposeEmailView: View {
 
     private var toolbarTitle: String {
         switch vm.mode {
-        case .new: return "New Email"
-        case .reply: return "Reply"
-        case .replyAll: return "Reply All"
-        case .forward: return "Forward"
+        case .new: return String(localized: "New Email")
+        case .reply: return String(localized: "Reply")
+        case .replyAll: return String(localized: "Reply All")
+        case .forward: return String(localized: "Forward")
         }
     }
 
@@ -670,9 +670,9 @@ struct ComposeEmailView: View {
 
             #if os(iOS)
             VStack(spacing: Spacing.xSmall) {
-                smtpField(label: "Server", placeholder: "smtp.gmail.com", text: $vm.smtpServer)
+                smtpField(label: String(localized: "Server"), placeholder: "smtp.gmail.com", text: $vm.smtpServer)
                 HStack(spacing: Spacing.xSmall) {
-                    smtpField(label: "Port", placeholder: "587", text: $vm.smtpPort)
+                    smtpField(label: String(localized: "Port"), placeholder: "587", text: $vm.smtpPort)
                         .frame(width: 120)
                     Spacer()
                     if let portNum = UInt16(vm.smtpPort) {
@@ -685,7 +685,7 @@ struct ComposeEmailView: View {
                             .cornerRadius(4)
                     }
                 }
-                smtpField(label: "Username", placeholder: "your@email.com", text: $vm.smtpUsername)
+                smtpField(label: String(localized: "Username"), placeholder: "your@email.com", text: $vm.smtpUsername)
                 HStack {
                     Text("Password")
                         .font(Typography.caption1)

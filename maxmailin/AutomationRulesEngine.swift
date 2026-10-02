@@ -44,7 +44,7 @@ enum AutomationCondition: Codable, Identifiable, Equatable {
         case .subjectContains(let v): return "Subject contains \"\(v)\""
         case .bodyContains(let v): return "Body contains \"\(v)\""
         case .domainIs(let v): return "Domain is \"\(v)\""
-        case .hasAttachment: return "Has attachment"
+        case .hasAttachment: return String(localized: "Has attachment")
         case .sentimentAbove(let v): return "Sentiment above \(String(format: "%.1f", v))"
         case .sentimentBelow(let v): return "Sentiment below \(String(format: "%.1f", v))"
         case .dateAfter(let v): return "Date after \(AutomationCondition.dateFormatter.string(from: v))"
@@ -136,7 +136,7 @@ enum AutomationAction: Codable, Identifiable, Equatable {
         case .addTag(let v): return "Add tag \"\(v)\""
         case .setCategory(let v): return "Set category \"\(v)\""
         case .markPriority(let v): return "Mark priority \"\(v)\""
-        case .flagForReview: return "Flag for review"
+        case .flagForReview: return String(localized: "Flag for review")
         }
     }
 
@@ -206,7 +206,7 @@ final class AutomationRulesEngine: ObservableObject {
 
     static let defaultRules: [AutomationRule] = [
         AutomationRule(
-            name: "Newsletters",
+            name: String(localized: "Newsletters"),
             isEnabled: true,
             conditions: [
                 .subjectContains("newsletter"),
@@ -218,7 +218,7 @@ final class AutomationRulesEngine: ObservableObject {
             ]
         ),
         AutomationRule(
-            name: "High Priority",
+            name: String(localized: "High Priority"),
             isEnabled: true,
             conditions: [
                 .subjectContains("urgent"),
@@ -230,7 +230,7 @@ final class AutomationRulesEngine: ObservableObject {
             ]
         ),
         AutomationRule(
-            name: "Suspicious Emails",
+            name: String(localized: "Suspicious Emails"),
             isEnabled: true,
             conditions: [
                 .bodyContains("verify your account"),

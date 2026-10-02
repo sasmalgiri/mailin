@@ -225,7 +225,7 @@ struct IOCExtractorView: View {
                                 .lineLimit(1)
                                 .textSelection(.enabled)
                             HStack(spacing: 4) {
-                                Text(entry.type.rawValue)
+                                Text(LocalizedStringKey(entry.type.rawValue))
                                     .font(.caption2)
                                     .fontWeight(.medium)
                                     .padding(.horizontal, 5)

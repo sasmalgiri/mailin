@@ -134,11 +134,11 @@ struct SecurityAnalysisFeatures {
                 totalScore += sev * 2
             }
             if authResult.dkimResult == .fail {
-                signals.append(ThreatSignal(category: .authentication, severity: 0.7, detail: "DKIM reported as failing (per Authentication-Results header)"))
+                signals.append(ThreatSignal(category: .authentication, severity: 0.7, detail: String(localized: "DKIM reported as failing (per Authentication-Results header)")))
                 totalScore += 1.4
             }
             if authResult.dmarcResult == .fail {
-                signals.append(ThreatSignal(category: .authentication, severity: 0.9, detail: "DMARC policy violation"))
+                signals.append(ThreatSignal(category: .authentication, severity: 0.9, detail: String(localized: "DMARC policy violation")))
                 totalScore += 1.8
             }
 
@@ -172,7 +172,7 @@ struct SecurityAnalysisFeatures {
             }
 
             if body.contains("password") && (body.contains("attached") || body.contains("enclosed") || body.contains("zip")) {
-                signals.append(ThreatSignal(category: .content, severity: 0.7, detail: "Password-protected attachment pattern"))
+                signals.append(ThreatSignal(category: .content, severity: 0.7, detail: String(localized: "Password-protected attachment pattern")))
                 totalScore += 1.0
             }
 

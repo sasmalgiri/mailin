@@ -1282,7 +1282,7 @@ struct ModernDateField: View {
         @State private var date = Date(timeIntervalSince1970: 1_431_648_000)  // May 2015
         var body: some View {
             VStack(spacing: Spacing.xSmall) {
-                ModernDateField(label: "Demo", date: $date)
+                ModernDateField(label: String(localized: "Demo"), date: $date)
             }
             .padding(40)
             .onAppear { }
@@ -1297,9 +1297,9 @@ struct ModernDateField: View {
         @State private var end = Date(timeIntervalSince1970: 1_762_200_000)
         var body: some View {
             HStack(spacing: Spacing.xSmall) {
-                ModernDateField(label: "Start date filter", date: $start)
+                ModernDateField(label: String(localized: "Start date filter"), date: $start)
                 Text("–").font(Typography.caption1).foregroundColor(AppColors.secondary)
-                ModernDateField(label: "End date filter", date: $end)
+                ModernDateField(label: String(localized: "End date filter"), date: $end)
             }
             .padding()
         }

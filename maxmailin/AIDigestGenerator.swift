@@ -36,9 +36,9 @@ struct AIDigestGenerator {
 
             var label: String {
                 switch self {
-                case .low: return "Low"
-                case .medium: return "Medium"
-                case .high: return "High"
+                case .low: return String(localized: "Low")
+                case .medium: return String(localized: "Medium")
+                case .high: return String(localized: "High")
                 }
             }
         }
@@ -154,7 +154,7 @@ struct AIDigestGenerator {
                     )
                 }
                 if !items.isEmpty {
-                    sections.append(DigestSection(title: "AI Insights", icon: "sparkles", items: items))
+                    sections.append(DigestSection(title: String(localized: "AI Insights"), icon: "sparkles", items: items))
                 }
             }
         }
@@ -232,14 +232,14 @@ struct AIDigestGenerator {
         if !topSenders.isEmpty {
             let senderList = topSenders.map { "\($0.key) (\($0.value))" }.joined(separator: ", ")
             items.append(DigestItem(
-                headline: "Top senders",
+                headline: String(localized: "Top senders"),
                 detail: senderList,
                 emailIDs: [],
                 priority: .low
             ))
         }
 
-        return DigestSection(title: "Statistics", icon: "chart.bar.fill", items: items)
+        return DigestSection(title: String(localized: "Statistics"), icon: "chart.bar.fill", items: items)
     }
 
     // MARK: - 2. Key Conversations
@@ -275,7 +275,7 @@ struct AIDigestGenerator {
             )
         }
 
-        return DigestSection(title: "Key Conversations", icon: "bubble.left.and.bubble.right.fill", items: items)
+        return DigestSection(title: String(localized: "Key Conversations"), icon: "bubble.left.and.bubble.right.fill", items: items)
     }
 
     // MARK: - 3. Action Items
@@ -318,7 +318,7 @@ struct AIDigestGenerator {
         guard !items.isEmpty else { return nil }
 
         let sortedItems = items.sorted { $0.priority > $1.priority }
-        return DigestSection(title: "Action Items", icon: "exclamationmark.bubble.fill", items: Array(sortedItems.prefix(10)))
+        return DigestSection(title: String(localized: "Action Items"), icon: "exclamationmark.bubble.fill", items: Array(sortedItems.prefix(10)))
     }
 
     // MARK: - 4. New Contacts
@@ -365,7 +365,7 @@ struct AIDigestGenerator {
                 )
             }
 
-        return DigestSection(title: "New Contacts", icon: "person.badge.plus", items: items)
+        return DigestSection(title: String(localized: "New Contacts"), icon: "person.badge.plus", items: items)
     }
 
     // MARK: - 5. Sentiment Summary
@@ -402,7 +402,7 @@ struct AIDigestGenerator {
             ))
         }
 
-        return DigestSection(title: "Sentiment Summary", icon: "face.smiling", items: items)
+        return DigestSection(title: String(localized: "Sentiment Summary"), icon: "face.smiling", items: items)
     }
 
     // MARK: - 6. Attachments Overview
@@ -444,7 +444,7 @@ struct AIDigestGenerator {
                 .map { "\($0.key): \($0.value)" }
                 .joined(separator: ", ")
             items.append(DigestItem(
-                headline: "File types",
+                headline: String(localized: "File types"),
                 detail: typeBreakdown,
                 emailIDs: [],
                 priority: .low
@@ -468,7 +468,7 @@ struct AIDigestGenerator {
             ))
         }
 
-        return DigestSection(title: "Attachments Overview", icon: "paperclip", items: items)
+        return DigestSection(title: String(localized: "Attachments Overview"), icon: "paperclip", items: items)
     }
 
     // MARK: - Helpers
@@ -568,7 +568,7 @@ struct AIDigestGenerator {
             )
         }
 
-        return DigestSection(title: "Predictions & Alerts", icon: "chart.line.uptrend.xyaxis", items: digestItems)
+        return DigestSection(title: String(localized: "Predictions & Alerts"), icon: "chart.line.uptrend.xyaxis", items: digestItems)
     }
 
     // MARK: - What's New (v3.4.1)
@@ -610,7 +610,7 @@ struct AIDigestGenerator {
 
         guard !items.isEmpty else { return nil }
         items.sort { $0.priority > $1.priority }
-        return DigestSection(title: "What's New", icon: "bell.badge", items: Array(items.prefix(8)))
+        return DigestSection(title: String(localized: "What's New"), icon: "bell.badge", items: Array(items.prefix(8)))
     }
     #endif
 }

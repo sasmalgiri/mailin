@@ -69,8 +69,8 @@ struct PredictiveCodingView: View {
         if rel + irr > 0 {
             Task { await DocumentRegistry.captureStructured(.report,
                 summary: "Predictive coding — \(rel) relevant, \(irr) irrelevant",
-                document: CapturedDocument(title: "Predictive Coding (TAR)", sections: [
-                  .init(name: "TAR Session", fields: [
+                document: CapturedDocument(title: String(localized: "Predictive Coding (TAR)"), sections: [
+                  .init(name: String(localized: "TAR Session"), fields: [
                     .init(key: "Relevant", value: "\(rel)"),
                     .init(key: "Irrelevant", value: "\(irr)"),
                     .init(key: "Seed set", value: "\(rel + irr)")])])) }
@@ -80,10 +80,10 @@ struct PredictiveCodingView: View {
 
     private var statsBar: some View {
         HStack(spacing: Spacing.large) {
-            StatPill(label: "Relevant", count: engine.relevantIDs.count, color: .green)
-            StatPill(label: "Irrelevant", count: engine.irrelevantIDs.count, color: .red)
-            StatPill(label: "Predicted", count: engine.predictions.count, color: .blue)
-            StatPill(label: "Suggested", count: engine.suggestedForReview.count, color: .orange)
+            StatPill(label: String(localized: "Relevant"), count: engine.relevantIDs.count, color: .green)
+            StatPill(label: String(localized: "Irrelevant"), count: engine.irrelevantIDs.count, color: .red)
+            StatPill(label: String(localized: "Predicted"), count: engine.predictions.count, color: .blue)
+            StatPill(label: String(localized: "Suggested"), count: engine.suggestedForReview.count, color: .orange)
         }
         .padding(Spacing.small)
         .background(AppColors.backgroundSecondary)

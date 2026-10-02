@@ -177,7 +177,7 @@ struct AIMetricsView: View {
     }
 
     private var ratesSection: some View {
-        section(title: "Outcomes over the whole window") {
+        section(title: String(localized: "Outcomes over the whole window")) {
             row("Fell back to the NLP baseline", percent(summary.fallbackRate),
                 icon: summary.fallbackRate > 0 ? "arrow.uturn.backward" : nil, tint: .orange)
             row("Failed", percent(summary.failureRate),
@@ -190,7 +190,7 @@ struct AIMetricsView: View {
     }
 
     private var engineSection: some View {
-        section(title: "By engine") {
+        section(title: String(localized: "By engine")) {
             engineHeaderRow
             ForEach(engineStats) { stat in
                 HStack(alignment: .firstTextBaseline, spacing: Spacing.small) {
@@ -231,7 +231,7 @@ struct AIMetricsView: View {
     }
 
     private var recentSection: some View {
-        section(title: "Recent queries") {
+        section(title: String(localized: "Recent queries")) {
             ForEach(slice.prefix(100)) { record in
                 recentRow(record)
                 if record.id != slice.prefix(100).last?.id {

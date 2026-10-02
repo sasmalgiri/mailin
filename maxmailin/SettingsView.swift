@@ -458,10 +458,10 @@ struct SettingsView: View {
     #if os(iOS)
     private var notificationStatusLabel: String {
         switch notificationStatus {
-        case .authorized, .provisional, .ephemeral: return "Enabled"
-        case .denied: return "Blocked in System Settings"
-        case .notDetermined: return "Not Enabled"
-        @unknown default: return "Unknown"
+        case .authorized, .provisional, .ephemeral: return String(localized: "Enabled")
+        case .denied: return String(localized: "Blocked in System Settings")
+        case .notDetermined: return String(localized: "Not Enabled")
+        @unknown default: return String(localized: "Unknown")
         }
     }
 
@@ -724,9 +724,9 @@ struct SettingsView: View {
         Form {
             Section {
                 VStack(alignment: .leading, spacing: Spacing.medium) {
-                    helpCard(icon: "1.circle.fill", title: "Import an Archive", description: "Use File > Open (⌘O) or drag-and-drop an .mbox, .eml, .msg, or .pst file into the window.", color: .blue)
-                    helpCard(icon: "2.circle.fill", title: "Browse & Filter", description: "Use the filter bar to narrow results by tag, date, sender, or attachment type. Toggle AI and Pro for more filters.", color: .purple)
-                    helpCard(icon: "3.circle.fill", title: "Analyze & Export", description: "Click any email to view details. Use the Analysis and Export menus for advanced tools.", color: .green)
+                    helpCard(icon: "1.circle.fill", title: String(localized: "Import an Archive"), description: String(localized: "Use File > Open (⌘O) or drag-and-drop an .mbox, .eml, .msg, or .pst file into the window."), color: .blue)
+                    helpCard(icon: "2.circle.fill", title: String(localized: "Browse & Filter"), description: String(localized: "Use the filter bar to narrow results by tag, date, sender, or attachment type. Toggle AI and Pro for more filters."), color: .purple)
+                    helpCard(icon: "3.circle.fill", title: String(localized: "Analyze & Export"), description: String(localized: "Click any email to view details. Use the Analysis and Export menus for advanced tools."), color: .green)
                 }
             } header: {
                 Label("Quick Start", systemImage: "play.circle")
@@ -734,11 +734,11 @@ struct SettingsView: View {
             }
 
             Section {
-                helpRow(icon: "brain", title: "AI Button", description: "Enables AI-powered tags: sentiment, priority, phishing detection, and email classification.", color: .purple)
-                helpRow(icon: "gearshape", title: "Pro Button", description: "Shows forensic, legal, and evidence features: Bates numbering, legal hold, chain of custody.", color: .orange)
-                helpRow(icon: "tag", title: "Tag Pills", description: "Click any tag on an email to see all applicable tags. Set manual tags to override AI suggestions.", color: .teal)
-                helpRow(icon: "line.3.horizontal.decrease.circle", title: "Filter Chips", description: "Add filter chips from the + menu. Active chips narrow the visible email list. Click × to remove.", color: .blue)
-                helpRow(icon: "magnifyingglass", title: "Search Syntax", description: "Use AND, OR, NOT for boolean search. Wrap regex in /slashes/. Use \"word1\" NEAR/5 \"word2\" for proximity.", color: .green)
+                helpRow(icon: "brain", title: String(localized: "AI Button"), description: String(localized: "Enables AI-powered tags: sentiment, priority, phishing detection, and email classification."), color: .purple)
+                helpRow(icon: "gearshape", title: String(localized: "Pro Button"), description: String(localized: "Shows forensic, legal, and evidence features: Bates numbering, legal hold, chain of custody."), color: .orange)
+                helpRow(icon: "tag", title: String(localized: "Tag Pills"), description: String(localized: "Click any tag on an email to see all applicable tags. Set manual tags to override AI suggestions."), color: .teal)
+                helpRow(icon: "line.3.horizontal.decrease.circle", title: String(localized: "Filter Chips"), description: String(localized: "Add filter chips from the + menu. Active chips narrow the visible email list. Click × to remove."), color: .blue)
+                helpRow(icon: "magnifyingglass", title: String(localized: "Search Syntax"), description: String(localized: "Use AND, OR, NOT for boolean search. Wrap regex in /slashes/. Use \"word1\" NEAR/5 \"word2\" for proximity."), color: .green)
             } header: {
                 Label("Feature Guide", systemImage: "lightbulb")
                     .font(.headline)

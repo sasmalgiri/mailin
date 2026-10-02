@@ -593,7 +593,7 @@ struct PersonalAnalysisFeatures {
             let displayHour = peakHour.offset == 0 ? 12 : (peakHour.offset > 12 ? peakHour.offset - 12 : peakHour.offset)
             insights.append(EmailHabitInsight(
                 id: "peak_hour",
-                title: "Peak Email Hour",
+                title: String(localized: "Peak Email Hour"),
                 detail: "Most emails are sent/received at \(displayHour) \(period) (\(peakHour.element) emails)",
                 metric: "\(displayHour) \(period)",
                 category: .timing
@@ -604,7 +604,7 @@ struct PersonalAnalysisFeatures {
         if let peakDay = dayCounts.enumerated().max(by: { $0.element < $1.element }) {
             insights.append(EmailHabitInsight(
                 id: "peak_day",
-                title: "Busiest Day",
+                title: String(localized: "Busiest Day"),
                 detail: "\(dayNames[peakDay.offset]) is the busiest email day with \(peakDay.element) emails",
                 metric: dayNames[peakDay.offset],
                 category: .timing
@@ -617,7 +617,7 @@ struct PersonalAnalysisFeatures {
             let weekendPct = Double(weekendCount) / Double(max(1, weekendCount + weekdayCount)) * 100
             insights.append(EmailHabitInsight(
                 id: "weekend_ratio",
-                title: "Weekend Activity",
+                title: String(localized: "Weekend Activity"),
                 detail: "\(Int(weekendPct))% of emails occur on weekends (\(weekendCount) emails)",
                 metric: "\(Int(weekendPct))%",
                 category: .timing
@@ -636,7 +636,7 @@ struct PersonalAnalysisFeatures {
                 let direction = change > 0 ? "increased" : "decreased"
                 insights.append(EmailHabitInsight(
                     id: "volume_trend",
-                    title: "Volume Trend",
+                    title: String(localized: "Volume Trend"),
                     detail: "Email volume has \(direction) by \(abs(Int(change)))% in recent months",
                     metric: "\(change > 0 ? "+" : "")\(Int(change))%",
                     category: .volume
@@ -650,7 +650,7 @@ struct PersonalAnalysisFeatures {
             let sentRatio = Double(sentCount) / Double(emails.count) * 100
             insights.append(EmailHabitInsight(
                 id: "sent_ratio",
-                title: "Send vs Receive",
+                title: String(localized: "Send vs Receive"),
                 detail: "You sent \(Int(sentRatio))% of emails (\(sentCount) sent, \(receivedCount) received)",
                 metric: "\(Int(sentRatio))% sent",
                 category: .volume
@@ -662,7 +662,7 @@ struct PersonalAnalysisFeatures {
             let threadRate = Double(threaded.count) / Double(emails.count) * 100
             insights.append(EmailHabitInsight(
                 id: "thread_rate",
-                title: "Conversation Rate",
+                title: String(localized: "Conversation Rate"),
                 detail: "\(Int(threadRate))% of emails are part of ongoing conversations",
                 metric: "\(Int(threadRate))%",
                 category: .responsiveness

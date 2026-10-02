@@ -84,8 +84,8 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
         v = AnyView(v.onChange(of: appState.showDuplicateManager) { _, shown in
                 guard shown else { return }
                 appState.showDuplicateManager = false
-                ToolWindowPresenter.shared.open(title: "Duplicates") { AnyView(Group {
-                DuplicateManagerView(model: modelVM, isPresented: ToolWindowPresenter.closeBinding(title: "Duplicates"))
+                ToolWindowPresenter.shared.open(title: String(localized: "Duplicates")) { AnyView(Group {
+                DuplicateManagerView(model: modelVM, isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Duplicates")))
                     #if os(macOS)
                     .toolWindowFrame()
                     #else
@@ -107,9 +107,9 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
         v = AnyView(v.onChange(of: appState.showPredictiveCoding) { _, shown in
                 guard shown else { return }
                 appState.showPredictiveCoding = false
-                ToolWindowPresenter.shared.open(title: "Predictive Coding") { AnyView(Group {
+                ToolWindowPresenter.shared.open(title: String(localized: "Predictive Coding")) { AnyView(Group {
                 ArchiveWorkingSetView(query: currentQuery) { emails in
-                    PredictiveCodingView(emails: emails, engine: predictiveEngine, isPresented: ToolWindowPresenter.closeBinding(title: "Predictive Coding"))
+                    PredictiveCodingView(emails: emails, engine: predictiveEngine, isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Predictive Coding")))
                 }
                     #if os(macOS)
                     .toolWindowFrame()
@@ -134,8 +134,8 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
         v = AnyView(v.onChange(of: appState.showCustodianPanel) { _, shown in
                 guard shown else { return }
                 appState.showCustodianPanel = false
-                ToolWindowPresenter.shared.open(title: "Custodians") { AnyView(Group {
-                CustodianPanelView(manager: custodianManager, isPresented: ToolWindowPresenter.closeBinding(title: "Custodians"))
+                ToolWindowPresenter.shared.open(title: String(localized: "Custodians")) { AnyView(Group {
+                CustodianPanelView(manager: custodianManager, isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Custodians")))
                     #if os(macOS)
                     .toolWindowFrame()
                     #else
@@ -157,9 +157,9 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
         v = AnyView(v.onChange(of: appState.showReviewBatches) { _, shown in
                 guard shown else { return }
                 appState.showReviewBatches = false
-                ToolWindowPresenter.shared.open(title: "Review Batches") { AnyView(Group {
+                ToolWindowPresenter.shared.open(title: String(localized: "Review Batches")) { AnyView(Group {
                 ArchiveWorkingSetView(query: currentQuery) { emails in
-                    ReviewBatchPanelView(emails: emails, manager: reviewBatchManager, isPresented: ToolWindowPresenter.closeBinding(title: "Review Batches"))
+                    ReviewBatchPanelView(emails: emails, manager: reviewBatchManager, isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Review Batches")))
                 }
                     #if os(macOS)
                     .toolWindowFrame()
@@ -197,7 +197,7 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
                     #if os(macOS)
                     if let url = PlatformFileSaver.savePanel(suggestedName: "headers_export.csv") {
                         let scope: ArchiveSelectionScope = .query(modelVM.currentArchiveQuery, exclusions: [])
-                        ExportRunCenter.shared.run(title: "Exporting headers CSV") {
+                        ExportRunCenter.shared.run(title: String(localized: "Exporting headers CSV")) {
                             _ = try? await ArchiveExportService.shared.exportHeadersCSV(
                                 scope: scope, to: url,
                                 onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
@@ -225,7 +225,7 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
         v = AnyView(v.onChange(of: appState.showAttachmentGrid) { _, shown in
                 guard shown else { return }
                 appState.showAttachmentGrid = false
-                ToolWindowPresenter.shared.open(title: "Attachments") { AnyView(Group {
+                ToolWindowPresenter.shared.open(title: String(localized: "Attachments")) { AnyView(Group {
                 ArchiveWorkingSetView(query: currentQuery) { emails in
                     AttachmentGridView(emails: emails)
                 }
@@ -252,9 +252,9 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
         v = AnyView(v.onChange(of: appState.showTimeline) { _, shown in
                 guard shown else { return }
                 appState.showTimeline = false
-                ToolWindowPresenter.shared.open(title: "Email Timeline") { AnyView(Group {
+                ToolWindowPresenter.shared.open(title: String(localized: "Email Timeline")) { AnyView(Group {
                 // nil emails → the timeline streams the archive from the store.
-                EmailTimelineView(isPresented: ToolWindowPresenter.closeBinding(title: "Email Timeline"))
+                EmailTimelineView(isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Email Timeline")))
                     .resizableSheet()
                     #if os(iOS)
                     .presentationDetents([.large])
@@ -275,9 +275,9 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
         v = AnyView(v.onChange(of: appState.showRelationshipGraph) { _, shown in
                 guard shown else { return }
                 appState.showRelationshipGraph = false
-                ToolWindowPresenter.shared.open(title: "Relationship Graph") { AnyView(Group {
+                ToolWindowPresenter.shared.open(title: String(localized: "Relationship Graph")) { AnyView(Group {
                 ArchiveWorkingSetView(query: currentQuery) { emails in
-                    RelationshipGraphView(emails: emails, senderEmail: senderEmail, isPresented: ToolWindowPresenter.closeBinding(title: "Relationship Graph"))
+                    RelationshipGraphView(emails: emails, senderEmail: senderEmail, isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Relationship Graph")))
                 }
                     .resizableSheet()
                     #if os(iOS)
@@ -300,7 +300,7 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
         v = AnyView(v.onChange(of: appState.showArchiveComparison) { _, shown in
                 guard shown else { return }
                 appState.showArchiveComparison = false
-                ToolWindowPresenter.shared.open(title: "Archive Comparison") { AnyView(Group {
+                ToolWindowPresenter.shared.open(title: String(localized: "Archive Comparison")) { AnyView(Group {
                 ArchiveWorkingSetView(query: currentQuery) { emails in
                     ArchiveComparisonSheetWrapper(archiveA: emails)
                 }
@@ -327,9 +327,9 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
         v = AnyView(v.onChange(of: appState.showInvestigationReport) { _, shown in
                 guard shown else { return }
                 appState.showInvestigationReport = false
-                ToolWindowPresenter.shared.open(title: "Investigation Reports") { AnyView(Group {
+                ToolWindowPresenter.shared.open(title: String(localized: "Investigation Reports")) { AnyView(Group {
                 ArchiveWorkingSetView(query: currentQuery) { emails in
-                    InvestigationReportConfigSheet(emails: emails, senderEmail: senderEmail, isPresented: ToolWindowPresenter.closeBinding(title: "Investigation Reports"))
+                    InvestigationReportConfigSheet(emails: emails, senderEmail: senderEmail, isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Investigation Reports")))
                 }
                     .resizableSheet()
                     #if os(macOS)
@@ -369,7 +369,7 @@ struct V7SheetsModifier: ViewModifier {
         v = AnyView(v.onChange(of: appState.showAutomationRules) { _, shown in
                 guard shown else { return }
                 appState.showAutomationRules = false
-                ToolWindowPresenter.shared.open(title: "Automation Rules") { AnyView(Group {
+                ToolWindowPresenter.shared.open(title: String(localized: "Automation Rules")) { AnyView(Group {
                 ArchiveWorkingSetView(query: query) { emails in
                     AutomationRulesView(emails: emails)
                 }
@@ -394,7 +394,7 @@ struct V7SheetsModifier: ViewModifier {
         v = AnyView(v.onChange(of: appState.showBatchOperations) { _, shown in
                 guard shown else { return }
                 appState.showBatchOperations = false
-                ToolWindowPresenter.shared.open(title: "Batch Operations") { AnyView(Group {
+                ToolWindowPresenter.shared.open(title: String(localized: "Batch Operations")) { AnyView(Group {
                 ArchiveWorkingSetView(query: query) { emails in
                     BatchOperationsView(
                         emails: emails,
@@ -410,7 +410,7 @@ struct V7SheetsModifier: ViewModifier {
                         onExportRequested: { emailsToExport, format in
                             appState.triggerExport = true
                         },
-                        isPresented: ToolWindowPresenter.closeBinding(title: "Batch Operations")
+                        isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Batch Operations"))
                     )
                 }
                 .resizableSheet()
@@ -449,9 +449,9 @@ struct V7SheetsModifier: ViewModifier {
         v = AnyView(v.onChange(of: appState.showThreadSummarizer) { _, shown in
                 guard shown else { return }
                 appState.showThreadSummarizer = false
-                ToolWindowPresenter.shared.open(title: "Thread Summarizer") { AnyView(Group {
+                ToolWindowPresenter.shared.open(title: String(localized: "Thread Summarizer")) { AnyView(Group {
                 ArchiveWorkingSetView(query: query) { emails in
-                    ThreadSummarizerView(threadEmails: emails, isPresented: ToolWindowPresenter.closeBinding(title: "Thread Summarizer"))
+                    ThreadSummarizerView(threadEmails: emails, isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Thread Summarizer")))
                 }
                     .resizableSheet()
                     #if os(macOS)
@@ -474,9 +474,9 @@ struct V7SheetsModifier: ViewModifier {
         v = AnyView(v.onChange(of: appState.showSmartAlerts) { _, shown in
                 guard shown else { return }
                 appState.showSmartAlerts = false
-                ToolWindowPresenter.shared.open(title: "Smart Alerts") { AnyView(Group {
+                ToolWindowPresenter.shared.open(title: String(localized: "Smart Alerts")) { AnyView(Group {
                 ArchiveWorkingSetView(query: query) { emails in
-                    SmartAlertsView(emails: emails, isPresented: ToolWindowPresenter.closeBinding(title: "Smart Alerts"))
+                    SmartAlertsView(emails: emails, isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Smart Alerts")))
                 }
                     .resizableSheet()
                     #if os(macOS)
@@ -513,13 +513,13 @@ struct V7ForensicSheetsModifier: ViewModifier {
                 guard shown else { return }
                 appState.showEDiscovery = false
                 let capturedQuery = query
-                ToolWindowPresenter.shared.open(title: "E-Discovery Workflow") { AnyView(Group {
+                ToolWindowPresenter.shared.open(title: String(localized: "E-Discovery Workflow")) { AnyView(Group {
                     ArchiveWorkingSetView(query: capturedQuery) { emails in
                         EDiscoveryWorkflowView(
                             emails: emails,
                             isPresented: Binding(
                                 get: { true },
-                                set: { if !$0 { ToolWindowPresenter.shared.close(title: "E-Discovery Workflow") } }
+                                set: { if !$0 { ToolWindowPresenter.shared.close(title: String(localized: "E-Discovery Workflow")) } }
                             ))
                     }
                 }) }
@@ -536,7 +536,7 @@ struct V7ForensicSheetsModifier: ViewModifier {
         v = AnyView(v.onChange(of: appState.showBatesNumbering) { _, shown in
                 guard shown else { return }
                 appState.showBatesNumbering = false
-                ToolWindowPresenter.shared.open(title: "Bates Numbering") { AnyView(Group {
+                ToolWindowPresenter.shared.open(title: String(localized: "Bates Numbering")) { AnyView(Group {
                 ArchiveWorkingSetView(query: query) { emails in
                     BatesConfigView(emails: emails)
                 }
@@ -561,7 +561,7 @@ struct V7ForensicSheetsModifier: ViewModifier {
         v = AnyView(v.onChange(of: appState.showRedaction) { _, shown in
                 guard shown else { return }
                 appState.showRedaction = false
-                ToolWindowPresenter.shared.open(title: "Redaction") { AnyView(Group {
+                ToolWindowPresenter.shared.open(title: String(localized: "Redaction")) { AnyView(Group {
                 ArchiveWorkingSetView(query: query) { emails in
                     RedactionConfigView(emails: emails)
                 }
@@ -586,9 +586,9 @@ struct V7ForensicSheetsModifier: ViewModifier {
         v = AnyView(v.onChange(of: appState.showGDPRReport) { _, shown in
                 guard shown else { return }
                 appState.showGDPRReport = false
-                ToolWindowPresenter.shared.open(title: "GDPR Compliance") { AnyView(Group {
+                ToolWindowPresenter.shared.open(title: String(localized: "GDPR Compliance")) { AnyView(Group {
                 ArchiveWorkingSetView(query: query) { emails in
-                    GDPRReportConfigView(emails: emails, isPresented: ToolWindowPresenter.closeBinding(title: "GDPR Compliance"))
+                    GDPRReportConfigView(emails: emails, isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "GDPR Compliance")))
                 }
                     .resizableSheet()
                     #if os(macOS)
@@ -611,9 +611,9 @@ struct V7ForensicSheetsModifier: ViewModifier {
         v = AnyView(v.onChange(of: appState.showChainOfCustody) { _, shown in
                 guard shown else { return }
                 appState.showChainOfCustody = false
-                ToolWindowPresenter.shared.open(title: "Chain of Custody") { AnyView(Group {
+                ToolWindowPresenter.shared.open(title: String(localized: "Chain of Custody")) { AnyView(Group {
                 ArchiveWorkingSetView(query: query) { emails in
-                    ChainOfCustodyView(emails: emails, isPresented: ToolWindowPresenter.closeBinding(title: "Chain of Custody"))
+                    ChainOfCustodyView(emails: emails, isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Chain of Custody")))
                 }
                     .resizableSheet()
                     #if os(macOS)
@@ -647,9 +647,9 @@ struct V8SheetsModifier: ViewModifier {
         v = AnyView(v.onChange(of: appState.showNearDuplicates) { _, shown in
                 guard shown else { return }
                 appState.showNearDuplicates = false
-                ToolWindowPresenter.shared.open(title: "Near-Duplicates") { AnyView(Group {
+                ToolWindowPresenter.shared.open(title: String(localized: "Near-Duplicates")) { AnyView(Group {
                 ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
-                    NearDuplicateDetectionView(emails: emails, isPresented: ToolWindowPresenter.closeBinding(title: "Near-Duplicates"))
+                    NearDuplicateDetectionView(emails: emails, isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Near-Duplicates")))
                 }
                     .resizableSheet()
             }) }
@@ -666,8 +666,8 @@ struct V8SheetsModifier: ViewModifier {
         v = AnyView(v.onChange(of: appState.showAnomalyDetection) { _, shown in
                 guard shown else { return }
                 appState.showAnomalyDetection = false
-                ToolWindowPresenter.shared.open(title: "Anomaly Detection") { AnyView(Group {
-                AnomalyDetectionView(isPresented: ToolWindowPresenter.closeBinding(title: "Anomaly Detection"))
+                ToolWindowPresenter.shared.open(title: String(localized: "Anomaly Detection")) { AnyView(Group {
+                AnomalyDetectionView(isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Anomaly Detection")))
                     .resizableSheet()
             }) }
             })
@@ -681,8 +681,8 @@ struct V8SheetsModifier: ViewModifier {
         v = AnyView(v.onChange(of: appState.showSmartAutoTagger) { _, shown in
                 guard shown else { return }
                 appState.showSmartAutoTagger = false
-                ToolWindowPresenter.shared.open(title: "Smart Auto-Tagger") { AnyView(Group {
-                SmartAutoTaggerView(isPresented: ToolWindowPresenter.closeBinding(title: "Smart Auto-Tagger"))
+                ToolWindowPresenter.shared.open(title: String(localized: "Smart Auto-Tagger")) { AnyView(Group {
+                SmartAutoTaggerView(isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Smart Auto-Tagger")))
                     .resizableSheet()
             }) }
             })
@@ -696,10 +696,10 @@ struct V8SheetsModifier: ViewModifier {
         v = AnyView(v.onChange(of: appState.showAIDigest) { _, shown in
                 guard shown else { return }
                 appState.showAIDigest = false
-                ToolWindowPresenter.shared.open(title: "AI Digest") { AnyView(Group {
+                ToolWindowPresenter.shared.open(title: String(localized: "AI Digest")) { AnyView(Group {
                 // Zero-array digest: the generator streams a bounded working
                 // set of the selected period from the store itself.
-                AIDigestView(isPresented: ToolWindowPresenter.closeBinding(title: "AI Digest"))
+                AIDigestView(isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "AI Digest")))
                     .resizableSheet()
             }) }
             })
@@ -727,7 +727,7 @@ struct V9SheetsModifier: ViewModifier {
         v = AnyView(v.onChange(of: appState.showExecutiveDashboard) { _, shown in
                 guard shown else { return }
                 appState.showExecutiveDashboard = false
-                ToolWindowPresenter.shared.open(title: "Executive Dashboard") { AnyView(Group {
+                ToolWindowPresenter.shared.open(title: String(localized: "Executive Dashboard")) { AnyView(Group {
                 // Query injection: the dashboard streams the current scope
                 // from SQLite in bounded pages (no array plumbing).
                 ExecutiveDashboardView(query: modelVM.currentArchiveQuery, isPresented: ToolWindowPresenter.closeBinding(title: "Executive Dashboard"))
@@ -746,8 +746,8 @@ struct V9SheetsModifier: ViewModifier {
         v = AnyView(v.onChange(of: appState.showReportBuilder) { _, shown in
                 guard shown else { return }
                 appState.showReportBuilder = false
-                ToolWindowPresenter.shared.open(title: "Report Builder") { AnyView(Group {
-                ReportBuilderView(isPresented: ToolWindowPresenter.closeBinding(title: "Report Builder"))
+                ToolWindowPresenter.shared.open(title: String(localized: "Report Builder")) { AnyView(Group {
+                ReportBuilderView(isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Report Builder")))
                     .resizableSheet()
             }) }
             })
@@ -761,9 +761,9 @@ struct V9SheetsModifier: ViewModifier {
         v = AnyView(v.onChange(of: appState.showKeywordMonitor) { _, shown in
                 guard shown else { return }
                 appState.showKeywordMonitor = false
-                ToolWindowPresenter.shared.open(title: "Keyword Monitor") { AnyView(Group {
+                ToolWindowPresenter.shared.open(title: String(localized: "Keyword Monitor")) { AnyView(Group {
                 ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
-                    KeywordMonitorView(emails: emails, isPresented: ToolWindowPresenter.closeBinding(title: "Keyword Monitor"))
+                    KeywordMonitorView(emails: emails, isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Keyword Monitor")))
                 }
                     .resizableSheet()
             }) }
@@ -780,8 +780,8 @@ struct V9SheetsModifier: ViewModifier {
         v = AnyView(v.onChange(of: appState.showCommunicationPatterns) { _, shown in
                 guard shown else { return }
                 appState.showCommunicationPatterns = false
-                ToolWindowPresenter.shared.open(title: "Communication Patterns") { AnyView(Group {
-                CommunicationPatternsView(senderEmail: senderEmail, isPresented: ToolWindowPresenter.closeBinding(title: "Communication Patterns"))
+                ToolWindowPresenter.shared.open(title: String(localized: "Communication Patterns")) { AnyView(Group {
+                CommunicationPatternsView(senderEmail: senderEmail, isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Communication Patterns")))
                     .resizableSheet()
             }) }
             })
@@ -829,7 +829,7 @@ struct V9UtilitySheetsModifier: ViewModifier {
             .onChange(of: appState.showAllAttachmentsGallery) { _, shown in
                 guard shown else { return }
                 appState.showAllAttachmentsGallery = false
-                ToolWindowPresenter.shared.open(title: "Attachment Gallery") { AnyView(Group {
+                ToolWindowPresenter.shared.open(title: String(localized: "Attachment Gallery")) { AnyView(Group {
                 ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
                     AllAttachmentsGalleryView(emails: emails)
                 }
@@ -848,7 +848,7 @@ struct V9UtilitySheetsModifier: ViewModifier {
             .onChange(of: appState.showIOCExtractor) { _, shown in
                 guard shown else { return }
                 appState.showIOCExtractor = false
-                ToolWindowPresenter.shared.open(title: "IOC Extractor") { AnyView(Group {
+                ToolWindowPresenter.shared.open(title: String(localized: "IOC Extractor")) { AnyView(Group {
                 ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
                     IOCExtractorView(emails: emails)
                 }
@@ -1311,7 +1311,7 @@ struct InvestigationReportConfigSheet: View {
                 Task { await DocumentRegistry.captureStructured(.report,
                     summary: "Investigation Report: \(title) — \(count) emails",
                     document: CapturedDocument(title: title, sections: [
-                      .init(name: "Investigation Report", fields: [
+                      .init(name: String(localized: "Investigation Report"), fields: [
                         .init(key: "Title", value: title),
                         .init(key: "Examiner", value: examiner.isEmpty ? "—" : examiner),
                         .init(key: "Emails analyzed", value: "\(count)"),

@@ -23,12 +23,12 @@ enum EDiscoveryPhase: Int, CaseIterable, Identifiable, Codable {
 
     var title: String {
         switch self {
-        case .identification: return "Identification"
-        case .preservation:   return "Preservation"
-        case .collection:     return "Collection"
-        case .processing:     return "Processing"
-        case .review:         return "Review"
-        case .production:     return "Production"
+        case .identification: return String(localized: "Identification")
+        case .preservation:   return String(localized: "Preservation")
+        case .collection:     return String(localized: "Collection")
+        case .processing:     return String(localized: "Processing")
+        case .review:         return String(localized: "Review")
+        case .production:     return String(localized: "Production")
         }
     }
 
@@ -46,17 +46,17 @@ enum EDiscoveryPhase: Int, CaseIterable, Identifiable, Codable {
     var description: String {
         switch self {
         case .identification:
-            return "Locate potentially responsive data by defining search criteria, custodians, and date ranges."
+            return String(localized: "Locate potentially responsive data by defining search criteria, custodians, and date ranges.")
         case .preservation:
-            return "Apply legal holds and preserve relevant data to prevent spoliation."
+            return String(localized: "Apply legal holds and preserve relevant data to prevent spoliation.")
         case .collection:
-            return "Gather data from identified sources into the review environment."
+            return String(localized: "Gather data from identified sources into the review environment.")
         case .processing:
-            return "Deduplicate, extract text, run NLP analysis, and prepare data for review."
+            return String(localized: "Deduplicate, extract text, run NLP analysis, and prepare data for review.")
         case .review:
-            return "Review documents for relevance, privilege, and responsiveness. Tag and annotate."
+            return String(localized: "Review documents for relevance, privilege, and responsiveness. Tag and annotate.")
         case .production:
-            return "Generate load files, apply Bates numbering, and export production sets."
+            return String(localized: "Generate load files, apply Bates numbering, and export production sets.")
         }
     }
 
@@ -409,8 +409,8 @@ struct EDiscoveryWorkflowView: View {
         .adaptiveDestructiveConfirmation(
             "Reset Workflow",
             isPresented: $showResetConfirmation,
-            message: "This will reset all phases, checklists, and notes. This cannot be undone.",
-            actionTitle: "Reset"
+            message: String(localized: "This will reset all phases, checklists, and notes. This cannot be undone."),
+            actionTitle: String(localized: "Reset")
         ) {
             manager.resetWorkflow()
         }
@@ -418,7 +418,7 @@ struct EDiscoveryWorkflowView: View {
             "Release Legal Hold",
             isPresented: $showingReleaseConfirmation,
             message: "This will remove legal hold protection from all \(emails.count) emails. They will no longer be protected from modification or deletion. This action is logged in the forensic audit trail.",
-            actionTitle: "Release Hold"
+            actionTitle: String(localized: "Release Hold")
         ) {
             for email in emails {
                 CustodianManager.shared.removeLegalHold(email.id)
@@ -627,7 +627,7 @@ struct EDiscoveryWorkflowView: View {
                     VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
                         Text(phase.title)
                             .font(Typography.title3)
-                        Text(status.rawValue)
+                        Text(LocalizedStringKey(status.rawValue))
                             .font(Typography.caption1)
                             .foregroundColor(status.color)
                     }
@@ -1014,7 +1014,7 @@ struct EDiscoveryWorkflowView: View {
                     .foregroundColor(AppColors.secondary)
                 ForEach(categories, id: \.key) { category, count in
                     HStack {
-                        Text(category.rawValue)
+                        Text(LocalizedStringKey(category.rawValue))
                             .font(Typography.callout)
                         Spacer()
                         Text("\(count)")
@@ -1455,60 +1455,60 @@ struct EDiscoveryWorkflowView: View {
 
                         tutorialPhaseRow(
                             number: "1",
-                            title: "Identification",
+                            title: String(localized: "Identification"),
                             icon: "magnifyingglass",
                             color: .blue,
-                            what: "Define who and what you're looking for.",
+                            what: String(localized: "Define who and what you're looking for."),
                             how: "Set custodians and date ranges in Case Info (top of workflow), then click \"Run Search\". The search filters your emails by those criteria and shows matching results with domain breakdown.",
                             tip: "Leave custodians empty to search all emails. Add names or email addresses to narrow scope."
                         )
 
                         tutorialPhaseRow(
                             number: "2",
-                            title: "Preservation",
+                            title: String(localized: "Preservation"),
                             icon: "lock.shield",
                             color: .green,
-                            what: "Lock evidence to prevent tampering.",
+                            what: String(localized: "Lock evidence to prevent tampering."),
                             how: "Click \"Apply Legal Hold\". This computes SHA-256 cryptographic hashes for every email and stores them in the forensic audit trail. Any future changes will be detected.",
                             tip: "This creates a tamper-evident chain of custody — required for court admissibility."
                         )
 
                         tutorialPhaseRow(
                             number: "3",
-                            title: "Collection",
+                            title: String(localized: "Collection"),
                             icon: "tray.and.arrow.down",
                             color: .purple,
-                            what: "Verify the integrity of imported emails.",
+                            what: String(localized: "Verify the integrity of imported emails."),
                             how: "Click \"Verify & Seal Collection\". This computes SHA-256 hashes for all emails and verifies them against stored values. Shows how many passed, failed, or are newly sealed.",
                             tip: "If any emails show \"Failed\" — that means the content changed since preservation. Investigate immediately."
                         )
 
                         tutorialPhaseRow(
                             number: "4",
-                            title: "Processing",
+                            title: String(localized: "Processing"),
                             icon: "gearshape.2",
                             color: .orange,
-                            what: "Classify and analyze email content.",
+                            what: String(localized: "Classify and analyze email content."),
                             how: "Click \"Run NLP Analysis\". The NLP engine classifies emails into categories (personal, transactional, newsletter, etc.) and shows the breakdown. Optionally click \"Enhance with AI\" for deeper insights on macOS 26+.",
                             tip: "The classification preview updates automatically — use it to understand your data before review."
                         )
 
                         tutorialPhaseRow(
                             number: "5",
-                            title: "Review",
+                            title: String(localized: "Review"),
                             icon: "doc.text.magnifyingglass",
                             color: .red,
-                            what: "Review documents and flag privileged materials.",
+                            what: String(localized: "Review documents and flag privileged materials."),
                             how: "Click \"Create Review Batches\". This groups emails by NLP category and runs a privilege scan to flag potentially privileged communications (attorney-client, work product). Review flagged emails before production.",
                             tip: "Use the Forensic Review or Legal Review tools from the sidebar to tag individual emails as relevant, privileged, or irrelevant."
                         )
 
                         tutorialPhaseRow(
                             number: "6",
-                            title: "Production",
+                            title: String(localized: "Production"),
                             icon: "shippingbox",
                             color: .teal,
-                            what: "Export deliverables for opposing counsel or court.",
+                            what: String(localized: "Export deliverables for opposing counsel or court."),
                             how: "Three export options:\n• Generate Load File — Concordance DAT format (industry standard)\n• Export — Full production CSV with all metadata\n• Privilege Log — List of withheld privileged documents with reasons",
                             tip: "Apply Bates numbering first (check the checklist item) for sequential document identification."
                         )

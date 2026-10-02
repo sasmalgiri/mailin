@@ -209,7 +209,7 @@ struct ArchiveListPane: View {
                 Button {
                     StoreManager.live?.requestPurchase(
                         .personal,
-                        feature: "Full Archive",
+                        feature: String(localized: "Full Archive"),
                         reason: "The Free plan browses the first \(model.accessibleCount) emails of any list or search. Personal and Professional browse all \(model.totalCount).",
                         target: .main)
                 } label: {

@@ -108,7 +108,7 @@ class SmartAutoTagger: ObservableObject {
         merged.append(TagSuggestion(
             tag: ai.category,
             confidence: 0.95,
-            reason: "Classified by Apple AI"
+            reason: String(localized: "Classified by Apple AI")
         ))
 
         // Add AI sentiment if present (replaces NLP sentiment)
@@ -116,7 +116,7 @@ class SmartAutoTagger: ObservableObject {
             merged.append(TagSuggestion(
                 tag: sentiment,
                 confidence: 0.9,
-                reason: "Sentiment by Apple AI"
+                reason: String(localized: "Sentiment by Apple AI")
             ))
         }
 
@@ -125,7 +125,7 @@ class SmartAutoTagger: ObservableObject {
             merged.append(TagSuggestion(
                 tag: priority,
                 confidence: 0.9,
-                reason: "Priority by Apple AI"
+                reason: String(localized: "Priority by Apple AI")
             ))
         }
 
@@ -186,7 +186,7 @@ class SmartAutoTagger: ObservableObject {
             tags[ref.tagIdx] = TagSuggestion(
                 tag: "\(typePrefix): \(enrichedEntity.name)\(contextSuffix)",
                 confidence: min(1.0, tags[ref.tagIdx].confidence + 0.1),
-                reason: "Entity refined by Apple AI"
+                reason: String(localized: "Entity refined by Apple AI")
             )
             updated[ref.batchIdx] = (updated[ref.batchIdx].0, tags)
         }

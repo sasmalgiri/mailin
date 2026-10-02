@@ -29,17 +29,17 @@ enum DocumentType: String {
 
     var displayName: String {
         switch self {
-        case .importRun: return "Import"
-        case .triageVerdict: return "Triage Verdict"
-        case .export: return "Export"
-        case .report: return "Report"
-        case .storyVersion: return "Story Version"
-        case .cleanup: return "Cleanup"
-        case .legalHold: return "Legal Hold"
-        case .timeline: return "Timeline"
-        case .subjectResponse: return "Subject Response"
-        case .threatHunt: return "Threat Hunt"
-        case .entityMap: return "Entity Map"
+        case .importRun: return String(localized: "Import")
+        case .triageVerdict: return String(localized: "Triage Verdict")
+        case .export: return String(localized: "Export")
+        case .report: return String(localized: "Report")
+        case .storyVersion: return String(localized: "Story Version")
+        case .cleanup: return String(localized: "Cleanup")
+        case .legalHold: return String(localized: "Legal Hold")
+        case .timeline: return String(localized: "Timeline")
+        case .subjectResponse: return String(localized: "Subject Response")
+        case .threatHunt: return String(localized: "Threat Hunt")
+        case .entityMap: return String(localized: "Entity Map")
         }
     }
 

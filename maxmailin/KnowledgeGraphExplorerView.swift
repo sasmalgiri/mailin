@@ -61,7 +61,7 @@ struct KnowledgeGraphExplorerView: View {
                 }
                 .buttonStyle(.bordered)
             }
-            SaveToDocumentsButton(title: "Knowledge Graph") {
+            SaveToDocumentsButton(title: String(localized: "Knowledge Graph")) {
                 [.init(key: "Emails", value: "\(emails.count)")]
             }
             TutorialHelpButton(showTutorial: $showTutorial)
@@ -120,7 +120,7 @@ struct KnowledgeGraphExplorerView: View {
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) { selectedTab = tab }
                     } label: {
-                        Text(tab.rawValue)
+                        Text(LocalizedStringKey(tab.rawValue))
                             .font(.system(size: 12, weight: selectedTab == tab ? .semibold : .medium))
                             .foregroundColor(selectedTab == tab ? .white : .primary)
                             .padding(.horizontal, 12)
@@ -228,7 +228,7 @@ struct KnowledgeGraphExplorerView: View {
                         .font(.system(size: 12, weight: .medium))
                         .lineLimit(1)
                     Spacer()
-                    Text(edge.type.rawValue)
+                    Text(LocalizedStringKey(edge.type.rawValue))
                         .font(.system(size: 9)).foregroundColor(.secondary)
                         .padding(.horizontal, 6).padding(.vertical, 2)
                         .background(Capsule().fill(.purple.opacity(0.1)))

@@ -192,23 +192,23 @@ struct PersonalEmailOrganizerView: View {
 
         coordinator.begin(steps: 10, color: .blue)
 
-        coordinator.advance(step: 1, label: "Classifying emails...")
+        coordinator.advance(step: 1, label: String(localized: "Classifying emails..."))
         guard let cats = await coordinator.runDetached({ EmailNLPEngine.classifyAll(emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 2, label: "Categorizing per email...")
+        coordinator.advance(step: 2, label: String(localized: "Categorizing per email..."))
         guard let perEmail = await coordinator.runDetached({
             var pe: [UUID: EmailNLPEngine.EmailCategory] = [:]
             for e in emailsCopy { pe[e.id] = EmailNLPEngine.classify(e) }
             return pe
         }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 3, label: "Scoring priorities...")
+        coordinator.advance(step: 3, label: String(localized: "Scoring priorities..."))
         guard let prio = await coordinator.runDetached({ EmailNLPEngine.scoreAllPriorities(emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 4, label: "Building contact insights...")
+        coordinator.advance(step: 4, label: String(localized: "Building contact insights..."))
         guard let insights = await coordinator.runDetached({ EmailNLPEngine.contactInsights(from: emailsCopy, limit: 20) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 5, label: "Detecting anomalies...")
+        coordinator.advance(step: 5, label: String(localized: "Detecting anomalies..."))
         guard let anom = await coordinator.runDetached({ AnomalyDetectionEngine.detectAnomalies(in: emailsCopy) }) else { coordinator.finish(); return }
 
         nlpCategories = cats; nlpClassified = perEmail; priorities = prio
@@ -233,19 +233,19 @@ struct PersonalEmailOrganizerView: View {
 
         if !coordinator.isActive { coordinator.begin(steps: 10, color: .blue); coordinator.advance(step: 5, label: "") }
 
-        coordinator.advance(step: 6, label: "Extracting action items...")
+        coordinator.advance(step: 6, label: String(localized: "Extracting action items..."))
         guard let items = await coordinator.runDetached({ PersonalAnalysisFeatures.extractActionItems(from: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 7, label: "Detecting subscriptions...")
+        coordinator.advance(step: 7, label: String(localized: "Detecting subscriptions..."))
         guard let subs = await coordinator.runDetached({ PersonalAnalysisFeatures.detectSubscriptions(in: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 8, label: "Scoring contact relationships...")
+        coordinator.advance(step: 8, label: String(localized: "Scoring contact relationships..."))
         guard let rels = await coordinator.runDetached({ PersonalAnalysisFeatures.scoreContactRelationships(emails: emailsCopy, userEmail: nil) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 9, label: "Detecting response urgency...")
+        coordinator.advance(step: 9, label: String(localized: "Detecting response urgency..."))
         guard let urg = await coordinator.runDetached({ PersonalAnalysisFeatures.detectResponseUrgency(emails: emailsCopy) }) else { coordinator.finish(); return }
 
-        coordinator.advance(step: 10, label: "Analyzing email habits...")
+        coordinator.advance(step: 10, label: String(localized: "Analyzing email habits..."))
         guard let habits = await coordinator.runDetached({ PersonalAnalysisFeatures.analyzeEmailHabits(emails: emailsCopy) }) else { coordinator.finish(); return }
 
         actionItems = items; subscriptions = subs; contactRelationships = rels
@@ -269,7 +269,7 @@ struct PersonalEmailOrganizerView: View {
                 } label: {
                     HStack(spacing: 3) {
                         Image(systemName: tab.icon).font(.system(size: 9))
-                        Text(tab.rawValue).font(.system(size: 9, weight: activeTab == tab ? .bold : .medium))
+                        Text(LocalizedStringKey(tab.rawValue)).font(.system(size: 9, weight: activeTab == tab ? .bold : .medium))
                     }
                     .foregroundColor(activeTab == tab ? .blue : .secondary)
                     .padding(.horizontal, 6).padding(.vertical, 3)
@@ -581,7 +581,7 @@ struct PersonalEmailOrganizerView: View {
                 Text("\(count)")
                     .font(.system(size: 14, weight: .bold, design: .rounded))
                     .foregroundColor(category.color)
-                Text(category.rawValue)
+                Text(LocalizedStringKey(category.rawValue))
                     .font(.system(size: 9))
                     .foregroundColor(.secondary)
             }
@@ -709,10 +709,10 @@ struct PersonalEmailOrganizerView: View {
             Text("Your Email Network").font(.system(size: 11, weight: .semibold)).foregroundColor(.cyan)
                 .help("A summary of everyone and everything in your email archive — people, organizations, topics, and how they're all connected")
             HStack(spacing: 12) {
-                networkStat("\(stats.people)", label: "People", color: .blue, helpText: "Unique people detected across all emails")
-                networkStat("\(stats.orgs)", label: "Organizations", color: .orange, helpText: "Organizations identified from email domains and signatures")
-                networkStat("\(stats.topics)", label: "Topics", color: .teal, helpText: "Distinct topics extracted from email subjects and content")
-                networkStat("\(stats.edges)", label: "Links", color: .purple, helpText: "Connections between people, organizations, and topics")
+                networkStat("\(stats.people)", label: String(localized: "People"), color: .blue, helpText: String(localized: "Unique people detected across all emails"))
+                networkStat("\(stats.orgs)", label: String(localized: "Organizations"), color: .orange, helpText: String(localized: "Organizations identified from email domains and signatures"))
+                networkStat("\(stats.topics)", label: String(localized: "Topics"), color: .teal, helpText: String(localized: "Distinct topics extracted from email subjects and content"))
+                networkStat("\(stats.edges)", label: String(localized: "Links"), color: .purple, helpText: String(localized: "Connections between people, organizations, and topics"))
             }
         }
         .padding(10)
@@ -817,7 +817,7 @@ struct PersonalEmailOrganizerView: View {
                             VStack(spacing: 4) {
                                 Image(systemName: cat.icon).font(.system(size: 16)).foregroundColor(cat.color)
                                 Text("\(count)").font(.system(size: 14, weight: .bold)).foregroundColor(cat.color)
-                                Text(cat.rawValue).font(.system(size: 9)).foregroundColor(.secondary)
+                                Text(LocalizedStringKey(cat.rawValue)).font(.system(size: 9)).foregroundColor(.secondary)
                             }
                             .frame(maxWidth: .infinity)
                             .padding(10)
@@ -942,11 +942,11 @@ struct PersonalEmailOrganizerView: View {
 
                 HStack(spacing: 12) {
                     cleanupCard("Potential Duplicates", value: "\(duplicateCount)", icon: "doc.on.doc", color: .indigo,
-                                description: "Emails with identical subjects and senders")
+                                description: String(localized: "Emails with identical subjects and senders"))
                     cleanupCard("Large Emails", value: "\(largeEmails.count)", icon: "externaldrive", color: .orange,
-                                description: "Emails over 100KB in body size")
+                                description: String(localized: "Emails over 100KB in body size"))
                     cleanupCard("No Subject", value: "\(noSubject.count)", icon: "text.badge.xmark", color: .red,
-                                description: "Emails missing a subject line")
+                                description: String(localized: "Emails missing a subject line"))
                 }
 
                 Divider()
@@ -1112,7 +1112,7 @@ struct PersonalEmailOrganizerView: View {
                     VStack(spacing: 3) {
                         Image(systemName: type.icon).font(.system(size: 12)).foregroundColor(sevColor)
                         Text("\(items.count)").font(.system(size: 12, weight: .bold)).foregroundColor(sevColor)
-                        Text(type.rawValue).font(.system(size: 8)).foregroundColor(.secondary).lineLimit(1)
+                        Text(LocalizedStringKey(type.rawValue)).font(.system(size: 8)).foregroundColor(.secondary).lineLimit(1)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(6)
@@ -1347,7 +1347,7 @@ struct PersonalEmailOrganizerView: View {
                                 .frame(width: 3, height: 32)
                             VStack(alignment: .leading, spacing: 2) {
                                 HStack(spacing: 4) {
-                                    Text(item.actionType.rawValue)
+                                    Text(LocalizedStringKey(item.actionType.rawValue))
                                         .font(.system(size: 8, weight: .bold))
                                         .foregroundColor(.white)
                                         .padding(.horizontal, 5).padding(.vertical, 1)
@@ -1505,7 +1505,7 @@ struct PersonalEmailOrganizerView: View {
                             Text(contact.name)
                                 .font(.system(size: 10, weight: .medium))
                                 .lineLimit(1)
-                            Text(contact.relationship.rawValue)
+                            Text(LocalizedStringKey(contact.relationship.rawValue))
                                 .font(.system(size: 7, weight: .bold))
                                 .foregroundColor(.white)
                                 .padding(.horizontal, 4).padding(.vertical, 1)
@@ -1580,7 +1580,7 @@ struct PersonalEmailOrganizerView: View {
                     if count > 0 {
                         VStack(spacing: 2) {
                             Text("\(count)").font(.system(size: 12, weight: .bold, design: .rounded)).foregroundColor(subscriptionCategoryColor(cat))
-                            Text(cat.rawValue).font(.system(size: 8)).foregroundColor(.secondary)
+                            Text(LocalizedStringKey(cat.rawValue)).font(.system(size: 8)).foregroundColor(.secondary)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(6)
@@ -1597,7 +1597,7 @@ struct PersonalEmailOrganizerView: View {
                             Text(sub.senderName)
                                 .font(.system(size: 10, weight: .medium))
                                 .lineLimit(1)
-                            Text(sub.category.rawValue)
+                            Text(LocalizedStringKey(sub.category.rawValue))
                                 .font(.system(size: 7, weight: .bold))
                                 .foregroundColor(.white)
                                 .padding(.horizontal, 4).padding(.vertical, 1)
@@ -1613,7 +1613,7 @@ struct PersonalEmailOrganizerView: View {
                             Text(sub.senderDomain)
                                 .font(.system(size: 8, design: .monospaced))
                                 .foregroundColor(.secondary).lineLimit(1)
-                            Text(sub.frequency.rawValue)
+                            Text(LocalizedStringKey(sub.frequency.rawValue))
                                 .font(.system(size: 8))
                                 .foregroundColor(.secondary)
                         }
@@ -1668,7 +1668,7 @@ struct PersonalEmailOrganizerView: View {
                         Text(insight.metric)
                             .font(.system(size: 14, weight: .bold, design: .rounded))
                             .foregroundColor(habitCategoryColor(insight.category))
-                        Text(insight.category.rawValue)
+                        Text(LocalizedStringKey(insight.category.rawValue))
                             .font(.system(size: 7, weight: .medium))
                             .foregroundColor(.secondary)
                     }

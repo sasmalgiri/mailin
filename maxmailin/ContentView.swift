@@ -118,7 +118,7 @@ struct ContentView: View {
                 get: { importAllowanceDenial != nil },
                 set: { if !$0 { importAllowanceDenial = nil } })) {
                 Button("See Plans") {
-                    storeManager.requestPurchase(.personal, feature: "Import more than 100 MB",
+                    storeManager.requestPurchase(.personal, feature: String(localized: "Import more than 100 MB"),
                                                  reason: importAllowanceDenial?.message)
                     importAllowanceDenial = nil
                 }
@@ -303,7 +303,7 @@ struct ContentView: View {
         .onChange(of: appState.showReplyStatsSheet) { _, shown in
             guard shown else { return }
             appState.showReplyStatsSheet = false
-            ToolWindowPresenter.shared.open(title: "Reply Statistics") { AnyView(Group {
+            ToolWindowPresenter.shared.open(title: String(localized: "Reply Statistics")) { AnyView(Group {
             ReplyStatsView(senderEmail: viewModel.senderEmail)
                 #if os(macOS)
                 .toolWindowFrame()
@@ -331,7 +331,7 @@ struct ContentView: View {
             // §3.3 R1: Email Analytics is a Page 2 tool; a stale shortcut
             // (⇧⌘G) must not open it while AI Insights is off.
             guard modules.isEnabled(.aiInsights) else { return }
-            ToolWindowPresenter.shared.open(title: "Email Analytics") { AnyView(Group {
+            ToolWindowPresenter.shared.open(title: String(localized: "Email Analytics")) { AnyView(Group {
             EmailAnalyticsView(query: modelVM.currentArchiveQuery)
                 #if os(macOS)
                 .resizableSheet()
@@ -1997,7 +1997,7 @@ struct ContentView: View {
                     // failure, never a headers-only stub.
                     if email.rawSource.isEmpty {
                         guard let locator = RawMessageFile.locator(for: email) else {
-                            throw RawMessageError.contentUnavailable(subject: rawSubject, reason: "no stored content and no reachable original file")
+                            throw RawMessageError.contentUnavailable(subject: rawSubject, reason: String(localized: "no stored content and no reachable original file"))
                         }
                         try RawMessageFile.write(located: locator, to: fileURL, verifying: sourceLedger)
                     } else {
@@ -2456,33 +2456,33 @@ struct ContentView: View {
                             // Page 2 (AI Insights) work — shown only when that
                             // page is on (owner, 2026-09-28).
                             if modules.isEnabled(.aiInsights) {
-                                detailToolButton(title: "AI Assistant", icon: "sparkles", color: .purple) {
+                                detailToolButton(title: String(localized: "AI Assistant"), icon: "sparkles", color: .purple) {
                                     appState.showAIAssistant = true
                                 }
                             }
                             if modules.isEnabled(.aiInsights) {
-                                detailToolButton(title: "Analytics", icon: "chart.bar", color: .blue) {
+                                detailToolButton(title: String(localized: "Analytics"), icon: "chart.bar", color: .blue) {
                                     appState.showAnalytics = true
                                 }
                             }
                             if modules.isEnabled(.aiInsights) {
-                                detailToolButton(title: "Topics", icon: "circle.grid.3x3", color: appState.dockedBottomPanel == .topics ? .teal.opacity(0.5) : .teal) {
+                                detailToolButton(title: String(localized: "Topics"), icon: "circle.grid.3x3", color: appState.dockedBottomPanel == .topics ? .teal.opacity(0.5) : .teal) {
                                     withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? .subjects : .topics }
                                 }
                             }
-                            detailToolButton(title: "Subjects", icon: "list.bullet.rectangle.portrait", color: appState.dockedBottomPanel == .subjects ? .orange.opacity(0.5) : .orange) {
+                            detailToolButton(title: String(localized: "Subjects"), icon: "list.bullet.rectangle.portrait", color: appState.dockedBottomPanel == .subjects ? .orange.opacity(0.5) : .orange) {
                                 withAnimation { appState.dockedBottomPanel = .subjects }
                             }
-                            detailToolButton(title: "Duplicates", icon: "doc.on.doc", color: .indigo) {
+                            detailToolButton(title: String(localized: "Duplicates"), icon: "doc.on.doc", color: .indigo) {
                                 if storeManager.requirePremium() { appState.showDuplicateManager = true }
                             }
-                            detailToolButton(title: "Replies", icon: "arrow.turn.up.left", color: .green) {
+                            detailToolButton(title: String(localized: "Replies"), icon: "arrow.turn.up.left", color: .green) {
                                 appState.showReplyStats = true
                             }
-                            detailToolButton(title: "Compare", icon: "rectangle.on.rectangle.angled", color: .cyan) {
+                            detailToolButton(title: String(localized: "Compare"), icon: "rectangle.on.rectangle.angled", color: .cyan) {
                                 appState.showArchiveComparison = true
                             }
-                            detailToolButton(title: "Export", icon: "square.and.arrow.up", color: .brown) {
+                            detailToolButton(title: String(localized: "Export"), icon: "square.and.arrow.up", color: .brown) {
                                 exportFilteredEmailsAsEML()
                             }
                         }
@@ -2520,43 +2520,43 @@ struct ContentView: View {
                                 detailToolButton(title: "e-Discovery", icon: "checklist", color: .blue, tip: "Manage legal discovery workflows — search, review, and produce documents for litigation") {
                                     if storeManager.requireProfessional() { appState.showEDiscovery = true }
                                 }
-                                detailToolButton(title: "Chain of Custody", icon: "link", color: .orange, tip: "Track who accessed, modified, or exported evidence and when") {
+                                detailToolButton(title: String(localized: "Chain of Custody"), icon: "link", color: .orange, tip: "Track who accessed, modified, or exported evidence and when") {
                                     if storeManager.requireProfessional() { appState.showChainOfCustody = true }
                                 }
-                                detailToolButton(title: "Audit Trail", icon: "clock.arrow.circlepath", color: .orange, tip: "View a complete log of all review actions taken on documents") {
+                                detailToolButton(title: String(localized: "Audit Trail"), icon: "clock.arrow.circlepath", color: .orange, tip: "View a complete log of all review actions taken on documents") {
                                     if storeManager.requireProfessional() { appState.showAuditTrail = true }
                                 }
-                                detailToolButton(title: "IOC Extractor", icon: "exclamationmark.shield", color: .red, tip: "Extract Indicators of Compromise — suspicious IPs, URLs, domains, and file hashes from emails") {
+                                detailToolButton(title: String(localized: "IOC Extractor"), icon: "exclamationmark.shield", color: .red, tip: "Extract Indicators of Compromise — suspicious IPs, URLs, domains, and file hashes from emails") {
                                     if storeManager.requireProfessional() { appState.showIOCExtractor = true }
                                 }
-                                detailToolButton(title: "Anomalies", icon: "waveform.path.ecg", color: .red, tip: "Detect unusual patterns — odd sending times, frequency spikes, or behavioral changes") {
+                                detailToolButton(title: String(localized: "Anomalies"), icon: "waveform.path.ecg", color: .red, tip: "Detect unusual patterns — odd sending times, frequency spikes, or behavioral changes") {
                                     if storeManager.requirePremium() { appState.showAnomalyDetection = true }
                                 }
-                                detailToolButton(title: "Keyword Monitor", icon: "text.magnifyingglass", color: .teal, tip: "Set up keyword alerts to flag emails containing specific terms") {
+                                detailToolButton(title: String(localized: "Keyword Monitor"), icon: "text.magnifyingglass", color: .teal, tip: "Set up keyword alerts to flag emails containing specific terms") {
                                     if storeManager.requirePremium() { appState.showKeywordMonitor = true }
                                 }
-                                detailToolButton(title: "Near Duplicates", icon: "square.on.square.dashed", color: .indigo, tip: "Find emails that are almost identical — catches forwarded, replied, or slightly edited copies") {
+                                detailToolButton(title: String(localized: "Near Duplicates"), icon: "square.on.square.dashed", color: .indigo, tip: "Find emails that are almost identical — catches forwarded, replied, or slightly edited copies") {
                                     if storeManager.requirePremium() { appState.showNearDuplicates = true }
                                 }
-                                detailToolButton(title: "Predictive Coding", icon: "brain", color: .pink, tip: "AI-assisted document review — learns from your tagging to suggest relevant documents") {
+                                detailToolButton(title: String(localized: "Predictive Coding"), icon: "brain", color: .pink, tip: "AI-assisted document review — learns from your tagging to suggest relevant documents") {
                                     if storeManager.requireProfessional() { appState.showPredictiveCoding = true }
                                 }
-                                detailToolButton(title: "Review Batches", icon: "list.bullet.rectangle", color: .mint, tip: "Organize emails into review batches for systematic team review") {
+                                detailToolButton(title: String(localized: "Review Batches"), icon: "list.bullet.rectangle", color: .mint, tip: "Organize emails into review batches for systematic team review") {
                                     if storeManager.requireProfessional() { appState.showReviewBatches = true }
                                 }
-                                detailToolButton(title: "Custodians", icon: "person.badge.key", color: .cyan, tip: "Manage custodians — the people responsible for the documents under review") {
+                                detailToolButton(title: String(localized: "Custodians"), icon: "person.badge.key", color: .cyan, tip: "Manage custodians — the people responsible for the documents under review") {
                                     if storeManager.requireProfessional() { appState.showCustodianPanel = true }
                                 }
-                                detailToolButton(title: "Bates Numbers", icon: "number", color: .purple, tip: "Assign unique tracking numbers to documents for legal reference") {
+                                detailToolButton(title: String(localized: "Bates Numbers"), icon: "number", color: .purple, tip: "Assign unique tracking numbers to documents for legal reference") {
                                     if storeManager.requireProfessional() { appState.showBatesNumbering = true }
                                 }
-                                detailToolButton(title: "Report Builder", icon: "doc.text.magnifyingglass", color: .red, tip: "Generate investigation reports with findings, timelines, and evidence summaries") {
+                                detailToolButton(title: String(localized: "Report Builder"), icon: "doc.text.magnifyingglass", color: .red, tip: "Generate investigation reports with findings, timelines, and evidence summaries") {
                                     if storeManager.requireProfessional() { appState.showInvestigationReport = true }
                                 }
-                                detailToolButton(title: "GDPR Report", icon: "hand.raised", color: .green, tip: "Generate data privacy compliance reports for GDPR and similar regulations") {
+                                detailToolButton(title: String(localized: "GDPR Report"), icon: "hand.raised", color: .green, tip: "Generate data privacy compliance reports for GDPR and similar regulations") {
                                     if storeManager.requireProfessional() { appState.showGDPRReport = true }
                                 }
-                                detailToolButton(title: "Redaction", icon: "eye.slash", color: .gray, tip: "Mark sensitive information for redaction before producing documents") {
+                                detailToolButton(title: String(localized: "Redaction"), icon: "eye.slash", color: .gray, tip: "Mark sensitive information for redaction before producing documents") {
                                     if storeManager.requirePremium() { appState.showRedaction = true }
                                 }
                                 detailToolButton(
@@ -2607,16 +2607,16 @@ struct ContentView: View {
                         GridItem(.flexible()), GridItem(.flexible()),
                         GridItem(.flexible()), GridItem(.flexible())
                     ], spacing: Spacing.small) {
-                        detailToolButton(title: "Preferences", icon: "gearshape", color: .gray) {
+                        detailToolButton(title: String(localized: "Preferences"), icon: "gearshape", color: .gray) {
                             openSettingsAction()
                         }
-                        detailToolButton(title: "What's New", icon: "sparkles.rectangle.stack", color: .purple) {
+                        detailToolButton(title: String(localized: "What's New"), icon: "sparkles.rectangle.stack", color: .purple) {
                             appState.showWhatsNew = true
                         }
-                        detailToolButton(title: "Shortcuts", icon: "keyboard", color: .gray) {
+                        detailToolButton(title: String(localized: "Shortcuts"), icon: "keyboard", color: .gray) {
                             appState.showKeyboardShortcuts = true
                         }
-                        detailToolButton(title: "Commands", icon: "terminal", color: .indigo) {
+                        detailToolButton(title: String(localized: "Commands"), icon: "terminal", color: .indigo) {
                             appState.showCommandPalette = true
                         }
                     }
@@ -2796,7 +2796,7 @@ struct ContentView: View {
         return HStack(spacing: 0) {
             if modules.isEnabled(.aiInsights) {
                 dockedTabButton(
-                    title: "Topics",
+                    title: String(localized: "Topics"),
                     icon: "circle.grid.3x3",
                     isActive: appState.dockedBottomPanel == .topics
                 ) {
@@ -2805,7 +2805,7 @@ struct ContentView: View {
             }
 
             dockedTabButton(
-                title: "Subjects",
+                title: String(localized: "Subjects"),
                 icon: "list.bullet.rectangle.portrait",
                 isActive: appState.dockedBottomPanel == .subjects
             ) {
@@ -2917,12 +2917,12 @@ struct ContentView: View {
             }
             if personaManager.showSection(.dateRange) {
                 HStack(spacing: Spacing.xSmall) {
-                    ModernDateField(label: "Start date — hide emails older than this (click for calendar)", date: $modelVM.startDate)
+                    ModernDateField(label: String(localized: "Start date — hide emails older than this (click for calendar)"), date: $modelVM.startDate)
                         .onChange(of: modelVM.startDate) { _, _ in modelVM.dateBoundsChanged() }
                     Text("–")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
-                    ModernDateField(label: "End date — hide emails newer than this (click for calendar)", date: $modelVM.endDate)
+                    ModernDateField(label: String(localized: "End date — hide emails newer than this (click for calendar)"), date: $modelVM.endDate)
                         .onChange(of: modelVM.endDate) { _, _ in modelVM.dateBoundsChanged() }
                     Spacer()
                 }
@@ -2935,23 +2935,23 @@ struct ContentView: View {
             Divider()
 
             if personaManager.showSection(.senders) {
-                SidebarSectionHeader(title: "From (Senders)", icon: "arrow.up.forward", color: AppColors.sentEmail, helpText: "Filter emails by sender address")
+                SidebarSectionHeader(title: String(localized: "From (Senders)"), icon: "arrow.up.forward", color: AppColors.sentEmail, helpText: String(localized: "Filter emails by sender address"))
                 multiToggleList(items: modelVM.allFromEmails, selection: $modelVM.selectedFromEmails, helpVerb: "sent by")
             }
 
             if personaManager.showSection(.recipients) {
-                SidebarSectionHeader(title: "To (Recipients)", icon: "arrow.down.backward", color: AppColors.receivedEmail, helpText: "Filter emails by recipient address")
+                SidebarSectionHeader(title: String(localized: "To (Recipients)"), icon: "arrow.down.backward", color: AppColors.receivedEmail, helpText: String(localized: "Filter emails by recipient address"))
                 multiToggleList(items: modelVM.allToEmails, selection: $modelVM.selectedToEmails, helpVerb: "addressed to")
             }
 
             if !modelVM.allTags.isEmpty && personaManager.showSection(.labels) {
-                SidebarSectionHeader(title: "Labels", icon: "tag", color: .purple, helpText: "Filter emails by Gmail labels or tags")
+                SidebarSectionHeader(title: String(localized: "Labels"), icon: "tag", color: .purple, helpText: String(localized: "Filter emails by Gmail labels or tags"))
                 multiToggleList(items: modelVM.allTags, selection: $modelVM.selectedTags, helpVerb: "labeled")
             }
 
             // AI-detected tags are Page 2 output; the section follows the page.
             if !modelVM.smartTagCounts.isEmpty, modules.isEnabled(.aiInsights) {
-                SidebarSectionHeader(title: "Smart Tags", icon: "tag.fill", color: .purple, helpText: "Filter by AI-detected category, priority, sentiment, or forensic tag")
+                SidebarSectionHeader(title: String(localized: "Smart Tags"), icon: "tag.fill", color: .purple, helpText: String(localized: "Filter by AI-detected category, priority, sentiment, or forensic tag"))
                 VStack(alignment: .leading, spacing: Spacing.xxSmall) {
                     ForEach(modelVM.smartTagCounts, id: \.tag) { entry in
                         Button {
@@ -2965,7 +2965,7 @@ struct ContentView: View {
                                 Image(systemName: entry.tag.icon)
                                     .font(.caption2)
                                     .foregroundColor(entry.tag.color)
-                                Text(entry.tag.rawValue)
+                                Text(LocalizedStringKey(entry.tag.rawValue))
                                     .font(Typography.caption1)
                                 Spacer()
                                 Text("\(entry.count)")
@@ -3000,7 +3000,7 @@ struct ContentView: View {
             }
 
             if forensicManager.isEnabled || personaManager.selectedPersona == .legal || personaManager.selectedPersona == .forensic {
-                SidebarSectionHeader(title: "Evidence Tags", icon: "shield.checkered", color: .orange, helpText: "Filter by forensic evidence tag")
+                SidebarSectionHeader(title: String(localized: "Evidence Tags"), icon: "shield.checkered", color: .orange, helpText: String(localized: "Filter by forensic evidence tag"))
                 VStack(alignment: .leading, spacing: Spacing.xxSmall) {
                     Button {
                         modelVM.selectedEvidenceTag = nil
@@ -3034,7 +3034,7 @@ struct ContentView: View {
                                     Image(systemName: tag.icon)
                                         .font(.caption2)
                                         .foregroundColor(tag.color)
-                                    Text(tag.rawValue)
+                                    Text(LocalizedStringKey(tag.rawValue))
                                         .font(Typography.caption1)
                                     Spacer()
                                     Text("\(count)")
@@ -3061,7 +3061,7 @@ struct ContentView: View {
             }
 
             if !modelVM.sortedSendersByReplyCount.isEmpty && personaManager.showSection(.replyFrequency) {
-                SidebarSectionHeader(title: "Reply Frequency", icon: "envelope.arrow.triangle.branch", color: AppColors.primary, helpText: "Senders ranked by how often you replied to them")
+                SidebarSectionHeader(title: String(localized: "Reply Frequency"), icon: "envelope.arrow.triangle.branch", color: AppColors.primary, helpText: String(localized: "Senders ranked by how often you replied to them"))
                 ScrollView {
                     VStack(alignment: .leading, spacing: Spacing.xSmall) {
                         ForEach(modelVM.sortedSendersByReplyCount, id: \.email) { entry in
@@ -3086,7 +3086,7 @@ struct ContentView: View {
             }
 
             if !modelVM.allDomains.isEmpty && personaManager.showSection(.domains) {
-                SidebarSectionHeader(title: "Domains", icon: "globe", color: .teal, helpText: "Filter emails by sender/recipient domain")
+                SidebarSectionHeader(title: String(localized: "Domains"), icon: "globe", color: .teal, helpText: String(localized: "Filter emails by sender/recipient domain"))
                 multiToggleList(items: modelVM.allDomains, selection: $modelVM.selectedDomains)
             }
         }
@@ -3331,8 +3331,8 @@ struct ContentView: View {
                     .font(Typography.headline)
                     .foregroundColor(AppColors.primary)
 
-                onboardingStep(number: "1", icon: "folder.badge.plus", title: "Import an archive", subtitle: sizeClass == .compact ? nil : "Open .mbox, .eml, or .zip files from Gmail Takeout, Thunderbird, Apple Mail, Outlook, Postbox, and more")
-                onboardingStep(number: "2", icon: "at", title: "Enter your email (optional)", subtitle: sizeClass == .compact ? nil : "Helps identify sent vs received. Leave blank and mailin will auto-detect from your archive.")
+                onboardingStep(number: "1", icon: "folder.badge.plus", title: String(localized: "Import an archive"), subtitle: sizeClass == .compact ? nil : "Open .mbox, .eml, or .zip files from Gmail Takeout, Thunderbird, Apple Mail, Outlook, Postbox, and more")
+                onboardingStep(number: "2", icon: "at", title: String(localized: "Enter your email (optional)"), subtitle: sizeClass == .compact ? nil : "Helps identify sent vs received. Leave blank and mailin will auto-detect from your archive.")
                 onboardingStep(number: "3", icon: "line.3.horizontal.decrease.circle", title: personaStep3Title, subtitle: sizeClass == .compact ? nil : personaStep3Subtitle)
                 onboardingStep(number: "4", icon: personaStep4Icon, title: personaStep4Title, subtitle: sizeClass == .compact ? nil : personaStep4Subtitle)
             }
@@ -3582,12 +3582,12 @@ struct ContentView: View {
 
     private var personaPrivacyNote: String {
         switch personaManager.selectedPersona {
-        case .forensic: return "All processing stays on-device. Cloud AI is disabled in forensic mode to maintain chain of custody."
-        case .legal: return "Documents never leave your Mac. Privilege review stays confidential."
-        case .itAdmin: return "All header analysis happens locally. No email content is transmitted externally."
-        case .journalist: return "Source material stays on your Mac. No data is shared with external servers."
-        case .researcher: return "Your corpus stays on your Mac. Analysis and citations are produced locally."
-        case .personal, .general: return "No data ever leaves your device. All analysis is performed locally."
+        case .forensic: return String(localized: "All processing stays on-device. Cloud AI is disabled in forensic mode to maintain chain of custody.")
+        case .legal: return String(localized: "Documents never leave your Mac. Privilege review stays confidential.")
+        case .itAdmin: return String(localized: "All header analysis happens locally. No email content is transmitted externally.")
+        case .journalist: return String(localized: "Source material stays on your Mac. No data is shared with external servers.")
+        case .researcher: return String(localized: "Your corpus stays on your Mac. Analysis and citations are produced locally.")
+        case .personal, .general: return String(localized: "No data ever leaves your device. All analysis is performed locally.")
         }
     }
 
@@ -3595,23 +3595,23 @@ struct ContentView: View {
 
     private var personaStep3Title: String {
         switch personaManager.selectedPersona {
-        case .forensic: return "Analyze & tag"
-        case .legal: return "Review & code"
-        case .itAdmin: return "Inspect headers"
-        case .journalist: return "Find patterns"
-        case .researcher: return "Screen & code"
-        case .personal, .general: return "Filter & explore"
+        case .forensic: return String(localized: "Analyze & tag")
+        case .legal: return String(localized: "Review & code")
+        case .itAdmin: return String(localized: "Inspect headers")
+        case .journalist: return String(localized: "Find patterns")
+        case .researcher: return String(localized: "Screen & code")
+        case .personal, .general: return String(localized: "Filter & explore")
         }
     }
 
     private var personaStep3Subtitle: String {
         switch personaManager.selectedPersona {
-        case .forensic: return "Tag evidence, verify integrity hashes, and build your audit trail"
-        case .legal: return "Code documents for privilege, relevance, and responsiveness"
-        case .itAdmin: return "Examine MIME structure, routing headers, and authentication results"
-        case .journalist: return "Discover connections, timelines, and communication patterns"
-        case .researcher: return "Screen the corpus in or out, code passages, and keep every decision on record"
-        case .personal, .general: return "Filter by sender, recipient, date range, or reply frequency"
+        case .forensic: return String(localized: "Tag evidence, verify integrity hashes, and build your audit trail")
+        case .legal: return String(localized: "Code documents for privilege, relevance, and responsiveness")
+        case .itAdmin: return String(localized: "Examine MIME structure, routing headers, and authentication results")
+        case .journalist: return String(localized: "Discover connections, timelines, and communication patterns")
+        case .researcher: return String(localized: "Screen the corpus in or out, code passages, and keep every decision on record")
+        case .personal, .general: return String(localized: "Filter by sender, recipient, date range, or reply frequency")
         }
     }
 
@@ -3628,23 +3628,23 @@ struct ContentView: View {
 
     private var personaStep4Title: String {
         switch personaManager.selectedPersona {
-        case .forensic: return "Export evidence"
-        case .legal: return "Produce documents"
-        case .itAdmin: return "Export & diagnose"
-        case .journalist: return "Ask AI"
-        case .researcher: return "Build chronologies"
-        case .personal, .general: return "Ask AI"
+        case .forensic: return String(localized: "Export evidence")
+        case .legal: return String(localized: "Produce documents")
+        case .itAdmin: return String(localized: "Export & diagnose")
+        case .journalist: return String(localized: "Ask AI")
+        case .researcher: return String(localized: "Build chronologies")
+        case .personal, .general: return String(localized: "Ask AI")
         }
     }
 
     private var personaStep4Subtitle: String {
         switch personaManager.selectedPersona {
-        case .forensic: return "Generate Bates-stamped PDFs, forensic reports, and Concordance load files"
-        case .legal: return "Export Bates-numbered production sets, privilege logs, and redacted copies"
-        case .itAdmin: return "Export CSV data, analyze routing, and identify authentication failures"
-        case .journalist: return "Use AI to summarize threads, find contradictions, and build timelines"
-        case .researcher: return "Build cited chronologies, compare accounts, and export the coded dataset"
-        case .personal, .general: return "Use the AI assistant to summarize, analyze sentiment, or ask questions"
+        case .forensic: return String(localized: "Generate Bates-stamped PDFs, forensic reports, and Concordance load files")
+        case .legal: return String(localized: "Export Bates-numbered production sets, privilege logs, and redacted copies")
+        case .itAdmin: return String(localized: "Export CSV data, analyze routing, and identify authentication failures")
+        case .journalist: return String(localized: "Use AI to summarize threads, find contradictions, and build timelines")
+        case .researcher: return String(localized: "Build cited chronologies, compare accounts, and export the coded dataset")
+        case .personal, .general: return String(localized: "Use the AI assistant to summarize, analyze sentiment, or ask questions")
         }
     }
 
@@ -3766,7 +3766,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
                 importAllowanceDenial = denial
                 viewModel.statusMessage = "Import refused: Free plan input limit."
                 viewModel.statusColor = .orange
-                storeManager.requestPurchase(.personal, feature: "Import more than 100 MB",
+                storeManager.requestPurchase(.personal, feature: String(localized: "Import more than 100 MB"),
                                              reason: denial.message)
                 return
             }
@@ -3919,7 +3919,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
                 onProgress: self.exportProgress)
             if result.cancelled { return "EML export \(Self.exportCancelledSuffix)" }
             ForensicManager.shared.logAction("Export Selection", detail: "Exported \(result.recordsWritten) selected emails as EML")
-            return await self.cappedExportMessage(written: result.recordsWritten, scope: scope, what: "selected emails")
+            return await self.cappedExportMessage(written: result.recordsWritten, scope: scope, what: String(localized: "selected emails"))
         }
         #endif
     }
@@ -3943,7 +3943,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
                 onProgress: self.exportProgress)
             if result.cancelled { return "PDF export \(Self.exportCancelledSuffix)" }
             ForensicManager.shared.logAction("Individual PDF Export", detail: "\(result.recordsWritten) exported")
-            return await self.cappedExportMessage(written: result.recordsWritten, scope: scope, what: "PDFs")
+            return await self.cappedExportMessage(written: result.recordsWritten, scope: scope, what: String(localized: "PDFs"))
         }
         #endif
     }
@@ -4003,7 +4003,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             #if os(iOS)
             self.iOSShareFile(at: url)
             #endif
-            return await self.cappedExportMessage(written: result.recordsWritten, scope: scope, what: "emails as CSV")
+            return await self.cappedExportMessage(written: result.recordsWritten, scope: scope, what: String(localized: "emails as CSV"))
         }
     }
 
@@ -4440,7 +4440,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
         }
         #else
         let vm = viewModel
-        ExportRunCenter.shared.run(title: "Exporting MSG") {
+        ExportRunCenter.shared.run(title: String(localized: "Exporting MSG")) {
             // iOS shares a single .msg — hydrate just the first match.
             let first = try? await ArchiveDataService.shared
                 .page(query: modelVM.currentArchiveQuery, cursor: nil, limit: 1).summaries.first
@@ -4479,7 +4479,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
         }
         #else
         let vm = viewModel
-        ExportRunCenter.shared.run(title: "Exporting PST") {
+        ExportRunCenter.shared.run(title: String(localized: "Exporting PST")) {
             do {
                 let tmpURL = FileManager.default.temporaryDirectory
                     .appendingPathComponent("export.pst")
@@ -4739,12 +4739,12 @@ private func handleMultipleFiles(_ urls: [URL]) {
 
     #if os(macOS)
     private func openAuditTrailWindow() {
-        ToolWindowPresenter.shared.open(title: "Audit Trail") {
+        ToolWindowPresenter.shared.open(title: String(localized: "Audit Trail")) {
             AnyView(AuditTrailView(
                 forensicManager: forensicManager,
                 storeManager: storeManager,
                 onExport: { exportAuditLog() },
-                onClose: { ToolWindowPresenter.shared.close(title: "Audit Trail") }))
+                onClose: { ToolWindowPresenter.shared.close(title: String(localized: "Audit Trail")) }))
         }
     }
     #endif

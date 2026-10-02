@@ -68,118 +68,118 @@ struct CommandPaletteView: View {
     private var allCommands: [PaletteCommand] {
         [
             // Analysis
-            PaletteCommand(name: "Ask AI", icon: "sparkles", shortcut: "\u{2318}K", category: "Analysis") {
+            PaletteCommand(name: String(localized: "Ask AI"), icon: "sparkles", shortcut: "\u{2318}K", category: "Analysis") {
                 execute("askAI")
             },
-            PaletteCommand(name: "Visual Analytics", icon: "chart.bar.fill", shortcut: "\u{21E7}\u{2318}G", category: "Analysis") {
+            PaletteCommand(name: String(localized: "Visual Analytics"), icon: "chart.bar.fill", shortcut: "\u{21E7}\u{2318}G", category: "Analysis") {
                 execute("analytics")
             },
-            PaletteCommand(name: "Topic Clusters", icon: "rectangle.3.group.bubble", shortcut: nil, category: "Analysis") {
+            PaletteCommand(name: String(localized: "Topic Clusters"), icon: "rectangle.3.group.bubble", shortcut: nil, category: "Analysis") {
                 execute("topicClusters")
             },
-            PaletteCommand(name: "Duplicates", icon: "doc.on.doc", shortcut: nil, category: "Analysis") {
+            PaletteCommand(name: String(localized: "Duplicates"), icon: "doc.on.doc", shortcut: nil, category: "Analysis") {
                 execute("duplicates")
             },
-            PaletteCommand(name: "Predictive Coding", icon: "brain.head.profile", shortcut: nil, category: "Analysis") {
+            PaletteCommand(name: String(localized: "Predictive Coding"), icon: "brain.head.profile", shortcut: nil, category: "Analysis") {
                 execute("predictiveCoding")
             },
-            PaletteCommand(name: "Timeline", icon: "calendar.day.timeline.leading", shortcut: "\u{21E7}\u{2318}T", category: "Analysis") {
+            PaletteCommand(name: String(localized: "Timeline"), icon: "calendar.day.timeline.leading", shortcut: "\u{21E7}\u{2318}T", category: "Analysis") {
                 execute("timeline")
             },
-            PaletteCommand(name: "Relationship Graph", icon: "point.3.connected.trianglepath.dotted", shortcut: "\u{21E7}\u{2318}J", category: "Analysis") {
+            PaletteCommand(name: String(localized: "Relationship Graph"), icon: "point.3.connected.trianglepath.dotted", shortcut: "\u{21E7}\u{2318}J", category: "Analysis") {
                 execute("relationshipGraph")
             },
-            PaletteCommand(name: "Smart Alerts", icon: "bell.badge.fill", shortcut: nil, category: "Analysis") {
+            PaletteCommand(name: String(localized: "Smart Alerts"), icon: "bell.badge.fill", shortcut: nil, category: "Analysis") {
                 execute("smartAlerts")
             },
-            PaletteCommand(name: "Anomaly Detection", icon: "exclamationmark.triangle", shortcut: nil, category: "Analysis") {
+            PaletteCommand(name: String(localized: "Anomaly Detection"), icon: "exclamationmark.triangle", shortcut: nil, category: "Analysis") {
                 execute("anomalyDetection")
             },
-            PaletteCommand(name: "Auto-Tagger", icon: "tag.fill", shortcut: nil, category: "Analysis") {
+            PaletteCommand(name: String(localized: "Auto-Tagger"), icon: "tag.fill", shortcut: nil, category: "Analysis") {
                 execute("autoTagger")
             },
-            PaletteCommand(name: "Email Digest", icon: "text.document", shortcut: nil, category: "Analysis") {
+            PaletteCommand(name: String(localized: "Email Digest"), icon: "text.document", shortcut: nil, category: "Analysis") {
                 execute("emailDigest")
             },
-            PaletteCommand(name: "Near-Duplicates", icon: "doc.on.doc.fill", shortcut: nil, category: "Analysis") {
+            PaletteCommand(name: String(localized: "Near-Duplicates"), icon: "doc.on.doc.fill", shortcut: nil, category: "Analysis") {
                 execute("nearDuplicates")
             },
-            PaletteCommand(name: "Communication Patterns", icon: "waveform.path.ecg", shortcut: nil, category: "Analysis") {
+            PaletteCommand(name: String(localized: "Communication Patterns"), icon: "waveform.path.ecg", shortcut: nil, category: "Analysis") {
                 execute("commPatterns")
             },
-            PaletteCommand(name: "Executive Dashboard", icon: "gauge.with.dots.needle.bottom.50percent", shortcut: nil, category: "Analysis") {
+            PaletteCommand(name: String(localized: "Executive Dashboard"), icon: "gauge.with.dots.needle.bottom.50percent", shortcut: nil, category: "Analysis") {
                 execute("dashboard")
             },
 
             // Forensic
-            PaletteCommand(name: "Toggle Forensic Mode", icon: "shield.checkered", shortcut: "\u{21E7}\u{2318}F", category: "Forensic") {
+            PaletteCommand(name: String(localized: "Toggle Forensic Mode"), icon: "shield.checkered", shortcut: "\u{21E7}\u{2318}F", category: "Forensic") {
                 execute("forensicMode")
             },
-            PaletteCommand(name: "E-Discovery", icon: "magnifyingglass.circle", shortcut: nil, category: "Forensic") {
+            PaletteCommand(name: String(localized: "E-Discovery"), icon: "magnifyingglass.circle", shortcut: nil, category: "Forensic") {
                 execute("eDiscovery")
             },
-            PaletteCommand(name: "Bates Numbering", icon: "number", shortcut: nil, category: "Forensic") {
+            PaletteCommand(name: String(localized: "Bates Numbering"), icon: "number", shortcut: nil, category: "Forensic") {
                 execute("batesNumbering")
             },
-            PaletteCommand(name: "PII Redaction", icon: "eye.slash.fill", shortcut: nil, category: "Forensic") {
+            PaletteCommand(name: String(localized: "PII Redaction"), icon: "eye.slash.fill", shortcut: nil, category: "Forensic") {
                 execute("redaction")
             },
-            PaletteCommand(name: "GDPR Report", icon: "doc.text.magnifyingglass", shortcut: nil, category: "Forensic") {
+            PaletteCommand(name: String(localized: "GDPR Report"), icon: "doc.text.magnifyingglass", shortcut: nil, category: "Forensic") {
                 execute("gdprReport")
             },
-            PaletteCommand(name: "Chain of Custody", icon: "link", shortcut: nil, category: "Forensic") {
+            PaletteCommand(name: String(localized: "Chain of Custody"), icon: "link", shortcut: nil, category: "Forensic") {
                 execute("chainOfCustody")
             },
-            PaletteCommand(name: "Custodian Manager", icon: "person.2.badge.gearshape", shortcut: nil, category: "Forensic") {
+            PaletteCommand(name: String(localized: "Custodian Manager"), icon: "person.2.badge.gearshape", shortcut: nil, category: "Forensic") {
                 execute("custodianManager")
             },
-            PaletteCommand(name: "Review Batches", icon: "tray.2.fill", shortcut: nil, category: "Forensic") {
+            PaletteCommand(name: String(localized: "Review Batches"), icon: "tray.2.fill", shortcut: nil, category: "Forensic") {
                 execute("reviewBatches")
             },
-            PaletteCommand(name: "Investigation Report", icon: "doc.richtext", shortcut: nil, category: "Forensic") {
+            PaletteCommand(name: String(localized: "Investigation Report"), icon: "doc.richtext", shortcut: nil, category: "Forensic") {
                 execute("investigationReport")
             },
 
             // Export
-            PaletteCommand(name: "Export Filtered", icon: "square.and.arrow.up", shortcut: "\u{21E7}\u{2318}E", category: "Export") {
+            PaletteCommand(name: String(localized: "Export Filtered"), icon: "square.and.arrow.up", shortcut: "\u{21E7}\u{2318}E", category: "Export") {
                 execute("exportFiltered")
             },
-            PaletteCommand(name: "Export vCard", icon: "person.crop.rectangle.fill", shortcut: nil, category: "Export") {
+            PaletteCommand(name: String(localized: "Export vCard"), icon: "person.crop.rectangle.fill", shortcut: nil, category: "Export") {
                 execute("exportVCard")
             },
-            PaletteCommand(name: "Export ICS", icon: "calendar", shortcut: nil, category: "Export") {
+            PaletteCommand(name: String(localized: "Export ICS"), icon: "calendar", shortcut: nil, category: "Export") {
                 execute("exportICS")
             },
-            PaletteCommand(name: "Export MSG", icon: "envelope.fill", shortcut: nil, category: "Export") {
+            PaletteCommand(name: String(localized: "Export MSG"), icon: "envelope.fill", shortcut: nil, category: "Export") {
                 execute("exportMSG")
             },
-            PaletteCommand(name: "Export PST", icon: "archivebox.fill", shortcut: nil, category: "Export") {
+            PaletteCommand(name: String(localized: "Export PST"), icon: "archivebox.fill", shortcut: nil, category: "Export") {
                 execute("exportPST")
             },
-            PaletteCommand(name: "Export Relativity", icon: "tray.and.arrow.up.fill", shortcut: nil, category: "Export") {
+            PaletteCommand(name: String(localized: "Export Relativity"), icon: "tray.and.arrow.up.fill", shortcut: nil, category: "Export") {
                 execute("exportRelativity")
             },
 
             // View
-            PaletteCommand(name: "Toggle Sidebar", icon: "sidebar.leading", shortcut: "\u{2325}\u{2318}S", category: "View") {
+            PaletteCommand(name: String(localized: "Toggle Sidebar"), icon: "sidebar.leading", shortcut: "\u{2325}\u{2318}S", category: "View") {
                 execute("toggleSidebar")
             },
-            PaletteCommand(name: "Keyword Monitor", icon: "text.magnifyingglass", shortcut: nil, category: "View") {
+            PaletteCommand(name: String(localized: "Keyword Monitor"), icon: "text.magnifyingglass", shortcut: nil, category: "View") {
                 execute("keywordMonitor")
             },
-            PaletteCommand(name: "Report Builder", icon: "doc.badge.gearshape", shortcut: nil, category: "View") {
+            PaletteCommand(name: String(localized: "Report Builder"), icon: "doc.badge.gearshape", shortcut: nil, category: "View") {
                 execute("reportBuilder")
             },
-            PaletteCommand(name: "Workspaces", icon: "square.stack.3d.up", shortcut: nil, category: "View") {
+            PaletteCommand(name: String(localized: "Workspaces"), icon: "square.stack.3d.up", shortcut: nil, category: "View") {
                 execute("workspaces")
             },
-            PaletteCommand(name: "All Attachments", icon: "paperclip.circle", shortcut: nil, category: "View") {
+            PaletteCommand(name: String(localized: "All Attachments"), icon: "paperclip.circle", shortcut: nil, category: "View") {
                 execute("allAttachments")
             },
-            PaletteCommand(name: "IOC Extractor", icon: "shield.lefthalf.filled", shortcut: nil, category: "Forensic") {
+            PaletteCommand(name: String(localized: "IOC Extractor"), icon: "shield.lefthalf.filled", shortcut: nil, category: "Forensic") {
                 execute("iocExtractor")
             },
-            PaletteCommand(name: "Guided Search", icon: "questionmark.circle", shortcut: nil, category: "View") {
+            PaletteCommand(name: String(localized: "Guided Search"), icon: "questionmark.circle", shortcut: nil, category: "View") {
                 execute("guidedSearch")
             },
         ]

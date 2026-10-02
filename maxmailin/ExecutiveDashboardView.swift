@@ -50,8 +50,8 @@ struct ExecutiveDashboardView: View {
                     Spacer()
                     EmptyStateView(
                         icon: "gauge.open.with.lines.needle.33percent",
-                        title: "No Data",
-                        message: "Import an email archive to view the executive dashboard."
+                        title: String(localized: "No Data"),
+                        message: String(localized: "Import an email archive to view the executive dashboard.")
                     )
                     Spacer()
                 }
@@ -83,7 +83,7 @@ struct ExecutiveDashboardView: View {
             }
             Spacer()
             TutorialHelpButton(showTutorial: $showTutorial)
-            SaveToDocumentsButton(title: "Executive Dashboard") {
+            SaveToDocumentsButton(title: String(localized: "Executive Dashboard")) {
                 [.init(key: "Emails", value: "\(dashboardData?.totalEmails ?? 0)")]
             }
             if isPresented != nil {
@@ -113,25 +113,25 @@ struct ExecutiveDashboardView: View {
     private func topStatCards(data: DashboardData) -> some View {
         LazyVGrid(columns: dashboardStatColumns, spacing: Spacing.small) {
             AnimatedStatCard(
-                title: "Total Emails",
+                title: String(localized: "Total Emails"),
                 value: "\(data.totalEmails)",
                 icon: "envelope.fill",
                 color: .blue
             )
             AnimatedStatCard(
-                title: "Unique Contacts",
+                title: String(localized: "Unique Contacts"),
                 value: "\(data.uniqueContacts)",
                 icon: "person.2.fill",
                 color: .green
             )
             AnimatedStatCard(
-                title: "Avg Sentiment",
+                title: String(localized: "Avg Sentiment"),
                 value: String(format: "%.2f", data.averageSentiment),
                 icon: "heart.fill",
                 color: data.averageSentiment > 0.4 ? .green : (data.averageSentiment < -0.4 ? .red : .orange)
             )
             AnimatedStatCard(
-                title: "Response Rate",
+                title: String(localized: "Response Rate"),
                 value: String(format: "%.0f%%", data.responseRate * 100),
                 icon: "arrowshape.turn.up.left.fill",
                 color: .orange

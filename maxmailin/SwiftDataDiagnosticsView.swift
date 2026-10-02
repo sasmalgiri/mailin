@@ -165,7 +165,7 @@ struct SwiftDataDiagnosticsView: View {
 
     private var coordinatorStatusText: String {
         switch coordinator.status {
-        case .idle: return "Idle"
+        case .idle: return String(localized: "Idle")
         case .hashing(let file): return "Hashing \(file)…"
         case .parsing(let file): return "Parsing \(file)…"
         case .persisting(let p, let t): return "Persisting \(p)/\(t)"
@@ -175,7 +175,7 @@ struct SwiftDataDiagnosticsView: View {
                 ? "Completed — \(n) imported, \(skipped) already in store"
                 : "Completed — \(n) emails imported"
         case .failed(let m): return "Failed: \(m)"
-        case .cancelled: return "Cancelled"
+        case .cancelled: return String(localized: "Cancelled")
         }
     }
 
@@ -205,12 +205,12 @@ struct SwiftDataDiagnosticsView: View {
 
     private var migrationStatusText: String {
         switch migration.status {
-        case .idle: return "Idle"
-        case .checking: return "Checking for legacy archive…"
+        case .idle: return String(localized: "Idle")
+        case .checking: return String(localized: "Checking for legacy archive…")
         case .migrating:
             return "Migrating \(migration.migratedCount)/\(migration.totalCount) (\(Int(migration.progressFraction * 100))%)"
-        case .completed: return "Completed"
-        case .skipped: return "No legacy archive — nothing to migrate"
+        case .completed: return String(localized: "Completed")
+        case .skipped: return String(localized: "No legacy archive — nothing to migrate")
         case .failed(let m): return "Failed: \(m)"
         }
     }

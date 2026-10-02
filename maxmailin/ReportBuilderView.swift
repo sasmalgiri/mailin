@@ -460,15 +460,15 @@ struct ReportBuilderView: View {
     @State private var saveError: String?
 
     private static let defaultSections: [ReportSection] = [
-        ReportSection(name: "Executive Summary", icon: "doc.text.fill", isEnabled: true),
-        ReportSection(name: "Email Volume Statistics", icon: "chart.bar.fill", isEnabled: true),
-        ReportSection(name: "Top Contacts", icon: "person.2.fill", isEnabled: true),
-        ReportSection(name: "Sentiment Analysis", icon: "heart.fill", isEnabled: true),
-        ReportSection(name: "Category Distribution", icon: "chart.pie.fill", isEnabled: true),
-        ReportSection(name: "Timeline Visualization", icon: "calendar", isEnabled: true),
-        ReportSection(name: "Security Findings", icon: "lock.shield", isEnabled: true),
-        ReportSection(name: "Anomaly Detection Results", icon: "exclamationmark.triangle", isEnabled: true),
-        ReportSection(name: "Attachment Overview", icon: "paperclip", isEnabled: false),
+        ReportSection(name: String(localized: "Executive Summary"), icon: "doc.text.fill", isEnabled: true),
+        ReportSection(name: String(localized: "Email Volume Statistics"), icon: "chart.bar.fill", isEnabled: true),
+        ReportSection(name: String(localized: "Top Contacts"), icon: "person.2.fill", isEnabled: true),
+        ReportSection(name: String(localized: "Sentiment Analysis"), icon: "heart.fill", isEnabled: true),
+        ReportSection(name: String(localized: "Category Distribution"), icon: "chart.pie.fill", isEnabled: true),
+        ReportSection(name: String(localized: "Timeline Visualization"), icon: "calendar", isEnabled: true),
+        ReportSection(name: String(localized: "Security Findings"), icon: "lock.shield", isEnabled: true),
+        ReportSection(name: String(localized: "Anomaly Detection Results"), icon: "exclamationmark.triangle", isEnabled: true),
+        ReportSection(name: String(localized: "Attachment Overview"), icon: "paperclip", isEnabled: false),
     ]
 
     var body: some View {
@@ -576,11 +576,11 @@ struct ReportBuilderView: View {
 
                     if useDateRange {
                         HStack {
-                            ModernDateField(label: "From", date: $dateFrom)
+                            ModernDateField(label: String(localized: "From"), date: $dateFrom)
                             Text("to")
                                 .font(Typography.caption1)
                                 .foregroundColor(AppColors.secondary)
-                            ModernDateField(label: "To", date: $dateTo)
+                            ModernDateField(label: String(localized: "To"), date: $dateTo)
                         }
                     }
                 }

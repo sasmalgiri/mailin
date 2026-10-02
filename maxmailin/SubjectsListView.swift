@@ -82,7 +82,7 @@ struct SubjectsListView: View {
                             sortOrder = order
                         } label: {
                             HStack {
-                                Text(order.rawValue)
+                                Text(LocalizedStringKey(order.rawValue))
                                 if sortOrder == order {
                                     Image(systemName: "checkmark")
                                 }

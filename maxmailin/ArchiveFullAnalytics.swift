@@ -80,9 +80,9 @@ final class ArchiveFullAnalyticsService {
         data.avgSentiment = sentiment.average
         data.sentimentLabel = sentiment.label
         data.sentimentBuckets = [
-            SentimentBucket(label: "Positive", count: sentiment.positive, color: .green),
-            SentimentBucket(label: "Neutral", count: sentiment.neutral, color: .gray),
-            SentimentBucket(label: "Negative", count: sentiment.negative, color: .red)
+            SentimentBucket(label: String(localized: "Positive"), count: sentiment.positive, color: .green),
+            SentimentBucket(label: String(localized: "Neutral"), count: sentiment.neutral, color: .gray),
+            SentimentBucket(label: String(localized: "Negative"), count: sentiment.negative, color: .red)
         ]
         data.languages = await EmailNLPEngine.detectLanguagesHybrid(in: emails)
         data.topTopics = EmailNLPEngine.extractTopics(from: emails, limit: 12)

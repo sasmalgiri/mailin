@@ -164,7 +164,7 @@ final class BackgroundAnalysisManager: ObservableObject {
             findings.append(BackgroundFinding(
                 category: "phishing",
                 title: "\(highRiskPhishing.count) High-Risk Phishing Email\(highRiskPhishing.count == 1 ? "" : "s")",
-                detail: "Subjects: " + highRiskPhishing.prefix(3).compactMap { $0.email.headers["Subject"] }.joined(separator: ", "),
+                detail: String(localized: "Subjects: ") + highRiskPhishing.prefix(3).compactMap { $0.email.headers["Subject"] }.joined(separator: ", "),
                 severity: 0.9,
                 timestamp: timestamp
             ))
@@ -197,7 +197,7 @@ final class BackgroundAnalysisManager: ObservableObject {
                 let direction = shift > 0 ? "positive" : "negative"
                 findings.append(BackgroundFinding(
                     category: "sentiment",
-                    title: "Sentiment Shift Detected",
+                    title: String(localized: "Sentiment Shift Detected"),
                     detail: "Overall tone shifted \(direction) by \(String(format: "%.1f", abs(shift) * 100))%",
                     severity: min(abs(shift), 1.0),
                     timestamp: timestamp

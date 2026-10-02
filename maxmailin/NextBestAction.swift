@@ -52,7 +52,7 @@ enum NextBestAction {
         if s.archiveEmpty {
             out.append(Suggestion(
                 icon: "square.and.arrow.down",
-                title: "Import your first archive",
+                title: String(localized: "Import your first archive"),
                 rationale: "Bring in an .mbox, .pst, or a folder of emails — everything else in mailin works from here, entirely on this device.",
                 cta: "Import", hub: .emailInbox))
             return out   // don't crowd the empty state with more
@@ -63,7 +63,7 @@ enum NextBestAction {
         if !s.startedPersonaWorkflow {
             out.append(Suggestion(
                 icon: "flowchart",
-                title: "Start your guided workflow",
+                title: String(localized: "Start your guided workflow"),
                 rationale: workflowRationale(s.persona),
                 cta: "Show workflows", hub: nil, opensWorkflows: true))
         }
@@ -73,14 +73,14 @@ enum NextBestAction {
         case "forensic":
             out.append(Suggestion(
                 icon: "checkmark.seal",
-                title: "Verify evidence integrity",
+                title: String(localized: "Verify evidence integrity"),
                 rationale: "Compute and check per-email SHA-256 hashes so the chain of custody holds up — the log incomplete hashes break.",
                 cta: "Open", hub: .chainOfCustody))
         case "legal":
             if s.privilegeGaps == 0 {
                 out.append(Suggestion(
                     icon: "chart.bar.doc.horizontal",
-                    title: "Track review velocity & privilege gaps",
+                    title: String(localized: "Track review velocity & privilege gaps"),
                     rationale: "The Review Dashboard shows progress and flags any privileged email missing its log entry — before it becomes the gap opposing counsel finds.",
                     cta: "Open", hub: .reviewDashboard))
             }
@@ -88,14 +88,14 @@ enum NextBestAction {
             if s.watchFolderOff {
                 out.append(Suggestion(
                     icon: "eye",
-                    title: "Turn on the watch folder",
+                    title: String(localized: "Turn on the watch folder"),
                     rationale: "Point it at where reported emails land and they auto-import into the triage queue — no manual step per report.",
                     cta: "Open", hub: .phishingTriage))
             }
         case "journalist":
             out.append(Suggestion(
                 icon: "doc.text.magnifyingglass",
-                title: "Build a cited Story File",
+                title: String(localized: "Build a cited Story File"),
                 rationale: "Turn your annotated findings into a Markdown story where every claim carries its source email — the receipts, built as you write.",
                 cta: "Open", hub: .storyFile))
         case "personal":

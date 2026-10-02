@@ -18,19 +18,19 @@ struct GettingStartedView: View {
     private let pages: [TourPage] = [
         TourPage(
             icon: "tray.and.arrow.down",
-            title: "1. Import your emails",
+            title: String(localized: "1. Import your emails"),
             body: "Open an .mbox, .eml, .pst, or other email archive from Files. Everything stays on this device — nothing is uploaded.",
             tint: .blue
         ),
         TourPage(
             icon: "magnifyingglass",
-            title: "2. Search and read",
+            title: String(localized: "2. Search and read"),
             body: "Use the search bar to filter by sender, subject, or words inside the message. Tap an email to read the full thread and view attachments.",
             tint: .indigo
         ),
         TourPage(
             icon: "chart.bar.fill",
-            title: "3. Get insights (optional)",
+            title: String(localized: "3. Get insights (optional)"),
             body: "When you're ready, switch to a power workspace from the home picker — Forensic, Legal, IT, or Journalist — to unlock analytics, AI, and reports.",
             tint: .purple
         )

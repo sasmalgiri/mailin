@@ -446,7 +446,7 @@ struct ChainOfCustodyView: View {
 
             VStack(alignment: .leading, spacing: Spacing.xxxSmall) {
                 HStack {
-                    Text(event.eventType.rawValue)
+                    Text(LocalizedStringKey(event.eventType.rawValue))
                         .font(Typography.callout)
                         .fontWeight(.semibold)
                     Spacer()

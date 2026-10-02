@@ -317,7 +317,7 @@ struct FactEvidenceEditorView: View {
                 Text(fact.statement)
                     .font(Typography.caption1.weight(.semibold))
                 Spacer()
-                Text(status.rawValue)
+                Text(LocalizedStringKey(status.rawValue))
                     .font(.caption2.weight(.bold))
                     .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(status.color.opacity(0.15))
@@ -456,7 +456,7 @@ struct FactEvidenceEditorView: View {
         defer { isPosting = false }
 
         var sections: [CapturedDocument.Section] = []
-        sections.append(.init(name: "Method", fields: [
+        sections.append(.init(name: String(localized: "Method"), fields: [
             .init(key: "Technique", value: "Fact–evidence matrix: each fact mapped to supporting and opposing emails with locators; both sides preserved."),
             .init(key: "Open items", value: "Facts without evidence are recorded as OPEN — absence of evidence is not evidence of absence."),
         ]))
@@ -476,7 +476,7 @@ struct FactEvidenceEditorView: View {
             sections.append(.init(name: fact.statement, fields: fields))
         }
         if !model.notes.trimmingCharacters(in: .whitespaces).isEmpty {
-            sections.append(.init(name: "Notes", fields: [.init(key: "Author notes", value: model.notes)]))
+            sections.append(.init(name: String(localized: "Notes"), fields: [.init(key: "Author notes", value: model.notes)]))
         }
 
         let refs = model.evidence.compactMap(\.messageID).joined(separator: " ")

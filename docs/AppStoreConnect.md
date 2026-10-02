@@ -73,7 +73,7 @@ mbox,eml,pst,msg,email,archive,analyzer,gmail,takeout,forensic,nlp,sentiment,exp
 ## Promotional Text (170 characters max, can be updated without new version)
 
 ```
-Analyze email archives privately on Mac, iPhone, and iPad. Import Gmail, Outlook, Thunderbird, or Apple Mail — on-device AI insights, forensic tools, no cloud.
+Analyze email archives privately on Mac, iPhone, and iPad. Import Gmail, Outlook, Thunderbird, or Apple Mail — on-device AI insights, forensic tools, 11 languages.
 ```
 
 ---

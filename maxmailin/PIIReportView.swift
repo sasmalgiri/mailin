@@ -122,7 +122,7 @@ struct PIIReportView: View {
             if !findings.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: Spacing.xxSmall) {
-                        piiChip(label: "All", count: findings.count, isOn: selectedType == nil) {
+                        piiChip(label: String(localized: "All"), count: findings.count, isOn: selectedType == nil) {
                             selectedType = nil
                         }
                         ForEach(typeCounts, id: \.type) { entry in
@@ -357,9 +357,9 @@ enum PIIAICleanupPolicy {
 import FoundationModels
 
 @available(macOS 26, iOS 26, *)
-@Generable(description: "Which numbered entries are NOT real personal data")
+@Generable(description: String(localized: "Which numbered entries are NOT real personal data"))
 private struct PIIJunkVerdict {
-    @Guide(description: "Zero-based numbers of entries that are NOT genuine PII — Unix timestamps, order/reference/tracking/serial numbers, message IDs, version strings. Empty if every entry is real.")
+    @Guide(description: String(localized: "Zero-based numbers of entries that are NOT genuine PII — Unix timestamps, order/reference/tracking/serial numbers, message IDs, version strings. Empty if every entry is real."))
     var junkEntryNumbers: [Int]
 }
 

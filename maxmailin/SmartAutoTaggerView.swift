@@ -73,8 +73,8 @@ struct SmartAutoTaggerView: View {
                     Spacer()
                     EmptyStateView(
                         icon: "tag",
-                        title: "No Tags Generated",
-                        message: "Import an email archive to generate smart tag suggestions."
+                        title: String(localized: "No Tags Generated"),
+                        message: String(localized: "Import an email archive to generate smart tag suggestions.")
                     )
                     Button("Generate Tags") { startTagging() }
                         .buttonStyle(PrimaryButtonStyle())

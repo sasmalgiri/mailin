@@ -355,7 +355,7 @@ struct ForensicAnalysisFeatures {
                         id: UUID(),
                         patternType: .timestampAnomaly,
                         severity: 0.3,
-                        description: "Missing timezone in Date header — may indicate header manipulation",
+                        description: String(localized: "Missing timezone in Date header — may indicate header manipulation"),
                         affectedEmails: [email],
                         indicators: ["Date header: \(dateStr)", "No timezone offset found"]
                     ))
@@ -611,7 +611,7 @@ struct ForensicAnalysisFeatures {
                     email: email,
                     anomalyType: .missingMessageID,
                     severity: 0.6,
-                    detail: "Email lacks Message-ID header",
+                    detail: String(localized: "Email lacks Message-ID header"),
                     forensicSignificance: "Missing Message-ID may indicate header stripping, fabrication, or non-standard mail client"
                 ))
             }
@@ -684,7 +684,7 @@ struct ForensicAnalysisFeatures {
                         email: email,
                         anomalyType: .encodingAnomaly,
                         severity: 0.5,
-                        detail: "Unusual character encoding detected in Content-Type",
+                        detail: String(localized: "Unusual character encoding detected in Content-Type"),
                         forensicSignificance: "Rare encoding may be used to evade content filtering or hide text"
                     ))
                 }

@@ -49,11 +49,11 @@ enum ACHRating: String, Codable, CaseIterable, Identifiable {
 
     var help: String {
         switch self {
-        case .cc: return "Strongly consistent with the hypothesis"
-        case .c: return "Consistent"
-        case .n: return "Neutral / not applicable"
-        case .i: return "Inconsistent"
-        case .ii: return "Strongly inconsistent"
+        case .cc: return String(localized: "Strongly consistent with the hypothesis")
+        case .c: return String(localized: "Consistent")
+        case .n: return String(localized: "Neutral / not applicable")
+        case .i: return String(localized: "Inconsistent")
+        case .ii: return String(localized: "Strongly inconsistent")
         }
     }
 }
@@ -77,7 +77,7 @@ struct ACHEvidence: Identifiable, Codable, Equatable {
     var isCited: Bool { emailID != nil }
 
     var locatorLine: String {
-        guard isCited else { return "ASSUMPTION (uncited)" }
+        guard isCited else { return String(localized: "ASSUMPTION (uncited)") }
         var parts: [String] = []
         if let messageID, !messageID.isEmpty { parts.append("Message-ID: \(messageID)") }
         if let dateLine, !dateLine.isEmpty { parts.append(dateLine) }
@@ -585,28 +585,28 @@ struct ACHMatrixEditorView: View {
         defer { isPosting = false }
 
         var sections: [CapturedDocument.Section] = []
-        sections.append(.init(name: "Method", fields: [
+        sections.append(.init(name: String(localized: "Method"), fields: [
             .init(key: "Technique", value: "Analysis of Competing Hypotheses (fewest-inconsistencies ranking)"),
             .init(key: "Limitation", value: "The ranking identifies the least-refuted hypothesis; it does not prove any hypothesis. Human confirmation recorded."),
         ]))
-        sections.append(.init(name: "Ranking", fields:
+        sections.append(.init(name: String(localized: "Ranking"), fields:
             model.ranking.enumerated().map { idx, entry in
                 .init(key: "\(idx + 1). \(entry.hypothesis.title)", value: "inconsistency score \(entry.score)")
             }
         ))
-        sections.append(.init(name: "Evidence", fields:
+        sections.append(.init(name: String(localized: "Evidence"), fields:
             model.evidence.map { e in
                 .init(key: e.summary, value: e.locatorLine)
             }
         ))
         if !model.assumptionsNote.trimmingCharacters(in: .whitespaces).isEmpty {
-            sections.append(.init(name: "Assumptions", fields: [
+            sections.append(.init(name: String(localized: "Assumptions"), fields: [
                 .init(key: "Noted", value: model.assumptionsNote)
             ]))
         }
         let uncited = model.evidence.filter { !$0.isCited }
         if !uncited.isEmpty {
-            sections.append(.init(name: "Uncited assumptions", fields:
+            sections.append(.init(name: String(localized: "Uncited assumptions"), fields:
                 uncited.map { .init(key: $0.summary, value: "no email locator") }
             ))
         }

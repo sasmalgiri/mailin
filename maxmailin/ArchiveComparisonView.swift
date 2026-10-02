@@ -59,7 +59,7 @@ struct ArchiveComparisonView: View {
                 progressBody
             case .failed(let message):
                 EmptyStateView(icon: "exclamationmark.triangle",
-                               title: "Comparison could not run",
+                               title: String(localized: "Comparison could not run"),
                                message: message)
             case .ready:
                 ScrollView {
@@ -92,7 +92,7 @@ struct ArchiveComparisonView: View {
                 .font(Typography.headline)
             Spacer()
             TutorialHelpButton(showTutorial: $showTutorial)
-            SaveToDocumentsButton(title: "Archive Compare") {
+            SaveToDocumentsButton(title: String(localized: "Archive Compare")) {
                 let t = totals ?? .init()
                 return [
                     .init(key: "\(nameA) messages", value: "\(t.countA)"),
@@ -144,10 +144,10 @@ struct ArchiveComparisonView: View {
 
     private var progressText: String {
         switch phase {
-        case .idle: return "Preparing…"
+        case .idle: return String(localized: "Preparing…")
         case .indexingCurrent(let n): return "Indexing \(nameA)… \(n) messages"
         case .readingSecond(let n): return "Reading \(nameB)… \(n) messages"
-        case .matching: return "Matching…"
+        case .matching: return String(localized: "Matching…")
         case .ready, .failed: return ""
         }
     }
@@ -179,7 +179,7 @@ struct ArchiveComparisonView: View {
     @ViewBuilder
     private func summaryCards(_ t: ArchiveComparisonEngine.Totals) -> some View {
         statCard(title: "Only in \(nameA)", count: t.onlyInA, color: .blue, icon: "a.circle.fill")
-        statCard(title: "Common", count: t.common, color: .green, icon: "equal.circle.fill")
+        statCard(title: String(localized: "Common"), count: t.common, color: .green, icon: "equal.circle.fill")
         statCard(title: "Only in \(nameB)", count: t.onlyInB, color: .orange, icon: "b.circle.fill")
     }
 
@@ -240,9 +240,9 @@ struct ArchiveComparisonView: View {
                     .font(Typography.callout)
                     .fontWeight(.semibold)
             }
-            statsRow(label: "Total Emails", value: "\(stats.total)")
-            statsRow(label: "Date Range", value: Self.dateRange(stats))
-            statsRow(label: "Unique Senders", value: "\(stats.uniqueSenders)")
+            statsRow(label: String(localized: "Total Emails"), value: "\(stats.total)")
+            statsRow(label: String(localized: "Date Range"), value: Self.dateRange(stats))
+            statsRow(label: String(localized: "Unique Senders"), value: "\(stats.uniqueSenders)")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -337,7 +337,7 @@ struct ArchiveComparisonView: View {
 
     private func comparisonRow(_ row: ArchiveComparisonEngine.Row) -> some View {
         HStack(spacing: Spacing.xSmall) {
-            Text(row.source.rawValue)
+            Text(LocalizedStringKey(row.source.rawValue))
                 .font(.system(.caption2, design: .rounded))
                 .fontWeight(.bold)
                 .foregroundColor(.white)

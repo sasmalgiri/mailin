@@ -58,7 +58,7 @@ enum EmailHistoryBuilder {
             timeline.append(EmailHistoryEvent(
                 date: sent, icon: i.messageType == "sent" ? "paperplane" : "tray.and.arrow.down",
                 title: i.messageType == "sent" ? "Sent" : "Received",
-                detail: "The email's own date header."))
+                detail: String(localized: "The email's own date header.")))
         }
         if let imported = i.importedAt {
             var detail = "Entered this archive"
@@ -67,7 +67,7 @@ enum EmailHistoryBuilder {
             if let sha = i.sourceSHA256 { detail += ". Source file SHA-256 \(sha.prefix(12))…" }
             timeline.append(EmailHistoryEvent(
                 date: imported, icon: "square.and.arrow.down",
-                title: "Imported", detail: detail))
+                title: String(localized: "Imported"), detail: detail))
         }
         if let annotation = i.annotation {
             timeline.append(EmailHistoryEvent(
@@ -85,18 +85,18 @@ enum EmailHistoryBuilder {
         if let sha = i.contentSHA256 {
             state.append(EmailHistoryEvent(
                 date: nil, icon: "number",
-                title: "Content fingerprint",
+                title: String(localized: "Content fingerprint"),
                 detail: "SHA-256 \(sha.prefix(16))… — proves the content hasn't changed since import."))
         }
         if let tag = i.evidenceTag, tag.lowercased() != "none" {
             state.append(EmailHistoryEvent(
                 date: nil, icon: "tag.fill", title: "Evidence: \(tag)",
-                detail: "Coding applied in forensic review."))
+                detail: String(localized: "Coding applied in forensic review.")))
         }
         if let bates = i.batesNumber {
             state.append(EmailHistoryEvent(
                 date: nil, icon: "number.square", title: "Bates \(bates)",
-                detail: "Permanent production identifier for legal proceedings."))
+                detail: String(localized: "Permanent production identifier for legal proceedings.")))
         }
         if let custodian = i.custodian {
             state.append(EmailHistoryEvent(
@@ -104,8 +104,8 @@ enum EmailHistoryBuilder {
                 detail: i.underLegalHold ? "Under legal hold — protected from deletion." : "Assigned custodian."))
         } else if i.underLegalHold {
             state.append(EmailHistoryEvent(
-                date: nil, icon: "lock.shield", title: "Under legal hold",
-                detail: "Protected from modification and deletion."))
+                date: nil, icon: "lock.shield", title: String(localized: "Under legal hold"),
+                detail: String(localized: "Protected from modification and deletion.")))
         }
         var flags: [String] = []
         if i.isPinned { flags.append("Pinned") }
@@ -114,28 +114,28 @@ enum EmailHistoryBuilder {
         if i.isTrashed { flags.append("In Trash") }
         if !flags.isEmpty {
             state.append(EmailHistoryEvent(
-                date: nil, icon: "flag", title: "Review state",
+                date: nil, icon: "flag", title: String(localized: "Review state"),
                 detail: flags.joined(separator: " · ")))
         }
         if !i.userTags.isEmpty {
             state.append(EmailHistoryEvent(
-                date: nil, icon: "tag", title: "Your tags",
+                date: nil, icon: "tag", title: String(localized: "Your tags"),
                 detail: i.userTags.sorted().joined(separator: ", ")))
         }
         if !i.manualLabels.isEmpty {
             state.append(EmailHistoryEvent(
-                date: nil, icon: "hand.point.up.left", title: "Manual labels",
+                date: nil, icon: "hand.point.up.left", title: String(localized: "Manual labels"),
                 detail: i.manualLabels.sorted().joined(separator: ", ")))
         }
         if !i.removedAILabels.isEmpty {
             state.append(EmailHistoryEvent(
-                date: nil, icon: "minus.circle", title: "AI labels you removed",
+                date: nil, icon: "minus.circle", title: String(localized: "AI labels you removed"),
                 detail: i.removedAILabels.sorted().joined(separator: ", ")))
         }
         if let classification = i.aiClassification {
             state.append(EmailHistoryEvent(
                 date: nil, icon: "sparkles", title: "AI category: \(classification)",
-                detail: "On-device analysis; correctable from the list."))
+                detail: String(localized: "On-device analysis; correctable from the list.")))
         }
         return (timeline, state)
     }

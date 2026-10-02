@@ -41,10 +41,10 @@ enum AppModule: String, CaseIterable, Codable, Sendable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .archive: return "Archive"
-        case .aiInsights: return "AI Insights"
-        case .professional: return "Professional Workflows"
-        case .liveMail: return "Live Mail"
+        case .archive: return String(localized: "Archive")
+        case .aiInsights: return String(localized: "AI Insights")
+        case .professional: return String(localized: "Professional Workflows")
+        case .liveMail: return String(localized: "Live Mail")
         }
     }
 
@@ -397,7 +397,7 @@ final class ModuleRegistry {
     func activation(_ module: AppModule) -> ModuleActivation {
         _ = policyRevision   // observation dependency: policy changes re-render
         if excludedByBuild.contains(module) {
-            return .unavailable(reason: "not included in this edition")
+            return .unavailable(reason: String(localized: "not included in this edition"))
         }
         if let org = orgDisabledReason(module) {
             return .unavailable(reason: org)
@@ -454,7 +454,7 @@ final class ModuleRegistry {
             case .pageOff(let module):
                 return "\(module.displayName) is switched off."
             case .switchedOff:
-                return "Switched off."
+                return String(localized: "Switched off.")
             case .dependencyOff(let dependency):
                 return "Needs “\(dependency.displayName)”, which is switched off."
             }

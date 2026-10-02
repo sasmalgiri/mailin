@@ -22,9 +22,9 @@ enum TriageVerdict: String, CaseIterable {
 
     var displayName: String {
         switch self {
-        case .confirmedPhishing: return "Confirmed Phishing"
-        case .safe: return "Safe"
-        case .needsInfo: return "Needs Info"
+        case .confirmedPhishing: return String(localized: "Confirmed Phishing")
+        case .safe: return String(localized: "Safe")
+        case .needsInfo: return String(localized: "Needs Info")
         }
     }
 
