@@ -343,6 +343,14 @@ final class ExportJobRunner {
         center.run(title: request.title) { [weak self] in
             guard let self else { return }
             var request = request
+            // Purchase policy is evaluated when the run STARTS, not when the
+            // request was built: a resume from a receipt, or a request kept
+            // open across a purchase or an expiry, carries a stale cap. The
+            // current tier decides; a Free resume past the cap writes nothing
+            // further and ends in a truncated receipt (fail closed).
+            if let storeManager = self.storeManager {
+                request.cap = Self.enforcedCap(savedCap: request.cap, isPremium: storeManager.isPremium)
+            }
             do {
                 request = try await Self.prepare(request)
                 // Fourth review Q2: a validated resume starts AT its
@@ -367,6 +375,14 @@ final class ExportJobRunner {
                                      resume: resume)
             }
         }
+    }
+
+    /// The cap a run must honour given the tier in force NOW. The saved cap
+    /// only tells us what the request thought at build time; the current
+    /// entitlement wins in both directions — a Free run that was built while
+    /// Personal was active is capped, a Personal run built while Free is not.
+    nonisolated static func enforcedCap(savedCap: Int?, isPremium: Bool) -> Int? {
+        isPremium ? nil : StoreManager.freeEmailLimit
     }
 
     private func progress(_ done: Int, _ total: Int) {

@@ -162,7 +162,7 @@ Requires iOS 17.6+ / macOS 14.6+. Free tier included, no signup.
 
 | | Free | Personal | Professional |
 |---|---|---|---|
-| Emails | 500 | Unlimited | Unlimited |
+| Emails | First 500 results of any list or search | Unlimited | Unlimited |
 | AI Queries | 5/day | Unlimited | Unlimited |
 | Search & Filter | Full | Full | Full |
 | Analytics | Basic | Full | Full |

@@ -168593,66 +168593,66 @@
         }
       }
     },
-    "No purchase. Import up to 100 MB, browse the first 500 emails, 5 Ask queries a day.": {
+    "No purchase. Import up to 100 MB, browse the first 500 results of any list or search, 5 Ask queries a day.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Kein Kauf. Bis zu 100 MB importieren, die ersten 500 E-Mails durchsuchen, 5 Fragen-Abfragen pro Tag."
+            "value": "Kein Kauf. Bis zu 100 MB importieren, die ersten 500 Ergebnisse jeder Liste oder Suche durchsuchen, 5 Fragen-Abfragen pro Tag."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Sin compra. Importa hasta 100 MB, explora los primeros 500 correos, 5 consultas de Preguntar al día."
+            "value": "Sin compra. Importa hasta 100 MB, explora los primeros 500 resultados de cualquier lista o búsqueda, 5 consultas de Preguntar al día."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Sans achat. Importez jusqu'à 100 Mo, parcourez les 500 premiers e-mails, 5 requêtes Demander par jour."
+            "value": "Sans achat. Importez jusqu'à 100 Mo, parcourez les 500 premiers résultats de toute liste ou recherche, 5 requêtes Demander par jour."
           }
         },
         "hi": {
           "stringUnit": {
             "state": "translated",
-            "value": "कोई खरीद नहीं। 100 MB तक आयात करें, पहले 500 ईमेल ब्राउज़ करें, प्रतिदिन 5 पूछें क्वेरी।"
+            "value": "कोई खरीद नहीं। 100 MB तक आयात करें, किसी भी सूची या खोज के पहले 500 परिणाम ब्राउज़ करें, प्रतिदिन 5 पूछें क्वेरी।"
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Nessun acquisto. Importa fino a 100 MB, sfoglia le prime 500 email, 5 richieste a Chiedi al giorno."
+            "value": "Nessun acquisto. Importa fino a 100 MB, sfoglia i primi 500 risultati di qualsiasi elenco o ricerca, 5 richieste a Chiedi al giorno."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "購入なし。最大 100 MB の読み込み、先頭 500 件のメールの閲覧、1 日 5 回の「質問」。"
+            "value": "購入なし。最大 100 MB の読み込み、任意のリストや検索の先頭 500 件の閲覧、1 日 5 回の「質問」。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "구매 없음. 최대 100MB 가져오기, 처음 500개 이메일 탐색, 하루 5회 질문하기."
+            "value": "구매 없음. 최대 100MB 가져오기, 모든 목록 또는 검색의 처음 500개 결과 탐색, 하루 5회 질문하기."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Sem compra. Importe até 100 MB, navegue pelos primeiros 500 e-mails, 5 consultas em Perguntar por dia."
+            "value": "Sem compra. Importe até 100 MB, navegue pelos primeiros 500 resultados de qualquer lista ou busca, 5 consultas em Perguntar por dia."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "未购买。导入最多 100 MB，浏览前 500 封邮件，每天 5 次提问。"
+            "value": "未购买。导入最多 100 MB，浏览任意列表或搜索的前 500 条结果，每天 5 次提问。"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "未購買。匯入最多 100 MB，瀏覽前 500 封郵件，每天 5 次提問。"
+            "value": "未購買。匯入最多 100 MB，瀏覽任何列表或搜尋的前 500 筆結果，每天 5 次提問。"
           }
         }
       }

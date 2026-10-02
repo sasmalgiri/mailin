@@ -777,6 +777,20 @@ struct PurchaseGateTests {
     func freeDepthIsOneNumber() {
         #expect(StoreManager.freeEmailLimit == 500)
     }
+
+    @Test("An export run honours the tier in force when it starts, not the cap saved in its request")
+    func exportCapFollowsCurrentTier() {
+        // A request built (or a receipt written) while Personal was active
+        // carries no cap; if the entitlement has lapsed by the time it is
+        // started or resumed, the Free cap applies anyway.
+        #expect(ExportJobRunner.enforcedCap(savedCap: nil, isPremium: false) == StoreManager.freeEmailLimit)
+        // A request built while Free carries the cap; once Personal is bought
+        // the resume runs to the end of the selection.
+        #expect(ExportJobRunner.enforcedCap(savedCap: StoreManager.freeEmailLimit, isPremium: true) == nil)
+        // No change in tier, no change in behaviour.
+        #expect(ExportJobRunner.enforcedCap(savedCap: StoreManager.freeEmailLimit, isPremium: false) == StoreManager.freeEmailLimit)
+        #expect(ExportJobRunner.enforcedCap(savedCap: nil, isPremium: true) == nil)
+    }
 }
 
 // MARK: - Purchase presentation coordinator (directive 2026-09-30, part 2)
