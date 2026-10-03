@@ -317,10 +317,16 @@ struct SettingsView: View {
             UIApplication.shared.open(url)
         }
         #else
-        let pane = URL(string: "x-apple.systempreferences:com.apple.Localization-Settings.extension")
-        let fallback = URL(string: "x-apple.systempreferences:com.apple.preference.general")
-        if let url = pane ?? fallback {
-            NSWorkspace.shared.open(url)
+        // Language & Region first; if that pane cannot be opened on this
+        // system, the General pane it lives under; if even that fails, the
+        // System Settings app itself.
+        let candidates = [
+            "x-apple.systempreferences:com.apple.Localization-Settings.extension",
+            "x-apple.systempreferences:com.apple.preference.general",
+            "x-apple.systempreferences:"
+        ].compactMap(URL.init(string:))
+        for url in candidates where NSWorkspace.shared.open(url) {
+            return
         }
         #endif
     }
