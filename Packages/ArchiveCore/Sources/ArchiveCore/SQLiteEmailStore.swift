@@ -2202,7 +2202,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
                         continue
                     }
                     let ordinal: Int64? = firstOrdinal.map { Int64($0 + offset + i) }
-                    let date = Self.parsedDate(from: email.headers["Date"]) ?? Date.distantPast
+                    let date = MBOXParser.effectiveDate(for: email) ?? Date.distantPast
                     let dateInt = Int64(date.timeIntervalSince1970.rounded())
 
                     sqlite3_reset(insertEmail); sqlite3_clear_bindings(insertEmail)

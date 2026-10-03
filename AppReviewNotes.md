@@ -18,7 +18,7 @@ WHAT TO LOOK FOR (VERSION 3.0)
 - Search "project" or "invoice": results say where they matched and how much of the archive the index covered.
 - Export (toolbar > Export): a pre-flight sheet shows the space needed; the run ends in a receipt with the file's SHA-256. Cancel mid-way and the receipt offers Resume.
 - AI Insights and Professional Workflows are OPTIONAL pages, off on a fresh install. The page switcher at the top explains what each needs and turns it on. AI Insights runs on-device (Apple NaturalLanguage; Apple Intelligence on macOS 26+).
-- The Live Mail page is a placeholder in 3.0: no account can be added and no mail server is contacted; the page says so.
+- There is no Live Mail page in this build: the page switcher shows Archive, AI Insights and Professional Workflows only. No account can be added and no mail server is contacted.
 
 OFFLINE-FIRST
 mailin works completely offline. No account creation, no login, no developer server, no network calls for anything to do with the archive. There is no cloud AI: the app has no network entitlement and cannot contact any server.

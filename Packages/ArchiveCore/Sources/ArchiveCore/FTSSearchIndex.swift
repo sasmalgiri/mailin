@@ -1236,8 +1236,7 @@ actor FTSSearchIndex {
     // MARK: - Year extraction
 
     private static func year(for email: MBOXParser.RawEmail) -> Int {
-        guard let raw = email.headers["Date"],
-              let date = MBOXParser.parseDate(raw) else { return 0 }
+        guard let date = MBOXParser.effectiveDate(for: email) else { return 0 }
         let cal = Calendar(identifier: .gregorian)
         let y = cal.component(.year, from: date)
         // Calendar can return zero or negative years for pre-AD dates or

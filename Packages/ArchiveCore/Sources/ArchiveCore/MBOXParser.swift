@@ -512,7 +512,12 @@ struct MBOXParser {
         let from = mappedHeaders["From"] ?? ""
         let type = !senderEmail.isEmpty && from.lowercased().contains(senderEmail.lowercased()) ? "sent" : "received"
 
-        let timestamp = parseDate(mappedHeaders["Date"]).map { cachedISOFormatter.string(from: $0) } ?? "1970-01-01T00:00:00Z"
+        // The Date header is kept exactly as found (it is evidence). When it
+        // is missing or unreadable, the timestamp falls back to the delivery
+        // time the message itself carries (Received, then the mbox envelope),
+        // so the archive can still date and sort it.
+        let timestamp = (parseDate(mappedHeaders["Date"]) ?? fallbackDate(headers: mappedHeaders, rawMessage: fullRaw))
+            .map { cachedISOFormatter.string(from: $0) } ?? undatedTimestamp
         let domains = extractDomains(from: mappedHeaders)
 
         var tags: [String] = []
@@ -753,6 +758,48 @@ struct MBOXParser {
             }
             return cachedISOFormatter.date(from: cleaned)
         }
+    }
+
+    /// The timestamp a message gets when no date can be found anywhere in it.
+    static let undatedTimestamp = "1970-01-01T00:00:00Z"
+
+    /// A date for a message whose `Date` header is missing or unreadable
+    /// (Gmail chat transcripts, some forwarded and generated mail): the time in
+    /// its `Received` header (the text after the last `;`), then the date on the
+    /// mbox `From ` envelope line. The synthetic envelope added for bare
+    /// RFC 822 files (1 Jan 1970) is not a date and is ignored.
+    static func fallbackDate(headers: [String: String], rawMessage: String) -> Date? {
+        if let received = headers["Received"], let semicolon = received.lastIndex(of: ";") {
+            let tail = received[received.index(after: semicolon)...]
+                .components(separatedBy: .whitespacesAndNewlines)
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+            if let date = parseDate(tail) { return date }
+        }
+        guard rawMessage.hasPrefix("From ") else { return nil }
+        let envelope = rawMessage.prefix(while: { $0 != "\n" && $0 != "\r" })
+        // "From <sender> <asctime>", where asctime may carry a zone:
+        // "Fri Jun 20 02:34:13 +0000 2014" or "Tue Mar 14 09:41:00 2017".
+        let fields = envelope.split(separator: " ", omittingEmptySubsequences: true).dropFirst(2)
+        guard fields.count >= 5 else { return nil }
+        let text = fields.joined(separator: " ")
+        let date: Date? = dateFormatterQueue.sync {
+            for format in ["EEE MMM d HH:mm:ss Z yyyy", "EEE MMM d HH:mm:ss yyyy"] {
+                threadLocalFormatter.dateFormat = format
+                if let date = threadLocalFormatter.date(from: text) { return date }
+            }
+            return nil
+        }
+        guard let date, date.timeIntervalSince1970 > 0 else { return nil }
+        return date
+    }
+
+    /// The date the archive stores for `email`: its `Date` header, else the
+    /// fallback recorded in its timestamp at parse time, else nil.
+    static func effectiveDate(for email: RawEmail) -> Date? {
+        if let date = parseDate(email.headers["Date"]) { return date }
+        guard email.timestamp != undatedTimestamp, let date = cachedISOFormatter.date(from: email.timestamp) else { return nil }
+        return date
     }
 
     static func extractDomains(from headers: [String: String]) -> [String] {

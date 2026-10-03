@@ -140,7 +140,7 @@ TESTING:
 NETWORK:
 - No account, no login, no developer server. The archive never leaves the device.
 - No cloud AI. The app has no network entitlement and cannot contact any server.
-- The Live Mail page is a placeholder in 3.0: no account can be added and no mail server is contacted; the page says so.
+- There is no Live Mail page in this build: the page switcher shows Archive, AI Insights and Professional Workflows only. No account can be added and no mail server is contacted.
 - StoreKit is the only other network use.
 
 PRIVACY:

@@ -368,4 +368,444 @@ final class MailinClickThroughUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 0.3)
     }
     #endif
+
+    // MARK: - Real-mailbox import + every-button crawl (macOS and iOS)
+
+    /// One row of the crawl report.
+    private struct CrawlRow {
+        let page: String
+        let button: String
+        let outcome: String
+    }
+
+    private func press(_ element: XCUIElement) {
+        #if os(macOS)
+        element.click()
+        #else
+        element.tap()
+        #endif
+    }
+
+    /// Imports a real mailbox through the user's path (Import button, the
+    /// system file picker, the import sheet's Start button), then visits each
+    /// page and presses every visible button once, recording what happened.
+    /// Destructive and purchase buttons are listed but never pressed.
+    ///
+    /// macOS: the mailbox path comes from the runner environment
+    /// (`TEST_RUNNER_MAILIN_UITEST_MBOX=/path/Sent.mbox`). iOS: the file must
+    /// already be in the simulator's On My iPad storage; its name comes from
+    /// the same variable (default "Sent"). The only hard failure is a crash;
+    /// every other outcome is reported for review.
+    func testRealMailbox_importThenPressEveryButton() throws {
+        let env = ProcessInfo.processInfo.environment["MAILIN_UITEST_MBOX"] ?? ""
+        #if os(macOS)
+        guard !env.isEmpty else {
+            throw XCTSkip("Set TEST_RUNNER_MAILIN_UITEST_MBOX to a mailbox file to run the crawl.")
+        }
+        #endif
+        _ = app.buttons.firstMatch.waitForExistence(timeout: 120)
+        var rows: [CrawlRow] = []
+
+        // ── 1. Import through the real UI ──
+        // The app reopens on the page it was last on; import from Archive.
+        _ = openPage("Archive")
+        let started = Date()
+        let fileName = env.isEmpty ? "Sent" : ((env as NSString).lastPathComponent as NSString).deletingPathExtension
+        let importOutcome = importMailbox(path: env, fileName: fileName)
+        rows.append(CrawlRow(page: "Archive", button: "Import \(fileName).mbox",
+                             outcome: "\(importOutcome) (\(Int(Date().timeIntervalSince(started))) s)"))
+        snapshotScreen("after-import")
+
+        // ── 2. Every button on every page ──
+        for page in ["Archive", "AI Insights", "Professional Workflows", "Live Mail"] {
+            guard openPage(page) else {
+                rows.append(CrawlRow(page: page, button: "(page)", outcome: "could not open page"))
+                continue
+            }
+            snapshotScreen("page-\(page)")
+            rows += crawlButtons(onPage: page)
+        }
+
+        #if os(macOS)
+        // ── 3. Menu bar: every top-level menu opens and lists its commands ──
+        rows += crawlMenuBar()
+        #endif
+
+        // ── Report ──
+        var report = "| Page | Button | Outcome |\n|---|---|---|\n"
+        for row in rows {
+            let b = row.button.replacingOccurrences(of: "|", with: "/").replacingOccurrences(of: "\n", with: " ")
+            let o = row.outcome.replacingOccurrences(of: "|", with: "/")
+            report += "| \(row.page) | \(b) | \(o) |\n"
+        }
+        let crashes = rows.filter { $0.outcome.hasPrefix("CRASH") }
+        let skipped = rows.filter { $0.outcome.hasPrefix("skipped") }.count
+        report += "\nRows: \(rows.count); skipped: \(skipped); crashes: \(crashes.count)\n"
+        print("CRAWL-REPORT>>>\n\(report)<<<CRAWL-REPORT")
+        let attachment = XCTAttachment(string: report)
+        attachment.name = "crawl-report.md"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertTrue(crashes.isEmpty, "buttons that crashed the app: \(crashes.map { "\($0.page) ▸ \($0.button)" })")
+    }
+
+    private func snapshotScreen(_ name: String) {
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    /// Drives Import ▸ file picker ▸ the file ▸ Open ▸ Start import, then
+    /// waits for the import queue to drain. Returns a one-line outcome.
+    private func importMailbox(path: String, fileName: String) -> String {
+        // The three-pane shell has a sidebar Import button; the iPad layout
+        // offers "Add more email files" / "New Import" instead.
+        let candidates = [app.buttons["archive.sidebar.import"].firstMatch,
+                          app.buttons["Add more email files"].firstMatch,
+                          app.buttons["New Import"].firstMatch]
+        var pressedImport = false
+        for candidate in candidates where !pressedImport {
+            if candidate.waitForExistence(timeout: 4), candidate.isHittable { press(candidate); pressedImport = true }
+        }
+        if !pressedImport {
+            #if os(macOS)
+            app.typeKey("o", modifierFlags: .command)
+            #else
+            return "FAIL: no Import button found"
+            #endif
+        }
+
+        #if os(macOS)
+        let panel = app.sheets.firstMatch.waitForExistence(timeout: 10) ? app.sheets.firstMatch : app.dialogs.firstMatch
+        guard panel.waitForExistence(timeout: 10) else { return "FAIL: open panel did not appear" }
+        panel.typeKey("g", modifierFlags: [.command, .shift])
+        Thread.sleep(forTimeInterval: 1.0)
+        app.typeText(path)
+        app.typeKey(.return, modifierFlags: [])
+        Thread.sleep(forTimeInterval: 1.5)
+        let open = panel.buttons["Open"].firstMatch
+        if open.exists, open.isEnabled { open.click() } else { app.typeKey(.return, modifierFlags: []) }
+        #else
+        // Files picker: Browse ▸ On My iPad/iPhone ▸ the file ▸ Open.
+        Thread.sleep(forTimeInterval: 2.0)
+        let browse = app.buttons["Browse"].firstMatch
+        if browse.waitForExistence(timeout: 10) { browse.tap(); Thread.sleep(forTimeInterval: 1.0) }
+        let local = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'On My'")).firstMatch
+        if local.waitForExistence(timeout: 10) { local.tap(); Thread.sleep(forTimeInterval: 1.5) }
+        let file = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", fileName)).firstMatch
+        guard file.waitForExistence(timeout: 15) else {
+            print("UITEST-PICKER-HIERARCHY >>>\n\(app.debugDescription)\n<<< UITEST-PICKER-HIERARCHY")
+            return "FAIL: \(fileName) not shown in the file picker"
+        }
+        file.tap()
+        Thread.sleep(forTimeInterval: 1.0)
+        let open = app.buttons["Open"].firstMatch
+        if open.waitForExistence(timeout: 5), open.isEnabled { open.tap() }
+        #endif
+
+        let start = app.buttons["Start import"].firstMatch
+        guard start.waitForExistence(timeout: 30) else { return "FAIL: import sheet did not appear after choosing the file" }
+        press(start)
+
+        // Settled = the live import queue appeared and went away. Poll up
+        // to 15 minutes; give up waiting for the queue after one minute.
+        let begin = Date()
+        var sawQueue = false
+        while Date().timeIntervalSince(begin) < 900 {
+            if app.state != .runningForeground { return "CRASH during import" }
+            let queue = app.descendants(matching: .any)["import.queue.live"].firstMatch
+            if queue.exists { sawQueue = true }
+            if sawQueue && !queue.exists { break }
+            if !sawQueue, Date().timeIntervalSince(begin) > 60 { break }
+            Thread.sleep(forTimeInterval: 3)
+        }
+        Thread.sleep(forTimeInterval: 2)
+        // The archive count is on the sidebar's "All Emails, N" row; the
+        // list itself is lazy, so its rendered cells are not the total.
+        let queueNote = sawQueue ? "queue drained" : "queue never shown"
+        let allEmails = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'All Emails'")).firstMatch
+        let source = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", fileName)).firstMatch
+        let total = allEmails.exists ? allEmails.label : "All Emails row not visible"
+        let fromFile = source.exists ? source.label : "\(fileName) source row not visible"
+        return "imported, \(queueNote); sidebar: \(total); \(fromFile)"
+    }
+
+    /// Selects a page on the page strip, turning it on through the
+    /// activation sheet if it is off.
+    private func openPage(_ name: String) -> Bool {
+        recoverIfNeeded()
+        dismissEverything()
+        let tab = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
+        guard tab.waitForExistence(timeout: 5), tab.isHittable else {
+            let labels = (try? app.snapshot()).map { snap -> [String] in
+                var out: [String] = []
+                func walk(_ s: XCUIElementSnapshot) { if s.elementType == .button { out.append(s.label) }; s.children.forEach(walk) }
+                walk(snap); return out
+            } ?? []
+            print("UITEST-PAGE-MISSING \(name) exists=\(tab.exists); buttons on screen: \(labels.prefix(60))")
+            return false
+        }
+        press(tab)
+        let turnOn = app.buttons["Turn on \(name)"].firstMatch
+        if turnOn.waitForExistence(timeout: 3) {
+            press(turnOn)
+            Thread.sleep(forTimeInterval: 1.5)
+        }
+        Thread.sleep(forTimeInterval: 1.0)
+        return true
+    }
+
+    /// Labels never pressed: they delete, reset, buy, quit or leave the page.
+    private static let skipPattern = try! NSRegularExpression(
+        pattern: #"(?i)\b(delete|remove|erase|clear|reset|forget|purge|wipe|empty|quit|sign out|log ?out|buy|purchase|subscribe|restore purchases|manage subscription|turn off|disable|send|move archive|relocate|lift hold|release|revoke|close|minimi[sz]e|zoom|full ?screen)\b"#)
+
+    private static let pageNames = ["Archive", "AI Insights", "Professional Workflows", "Live Mail"]
+
+    /// Every distinct, enabled control a user can press on screen now.
+    private func visibleControls() -> [(id: String, label: String)] {
+        #if os(macOS)
+        let root = app.windows.firstMatch
+        #else
+        let root: XCUIElement = app
+        #endif
+        guard let snapshot = try? root.snapshot() else { return [] }
+        var seen = Set<String>()
+        var out: [(id: String, label: String)] = []
+        func walk(_ s: XCUIElementSnapshot) {
+            if s.elementType == .keyboard { return }
+            // Toggles and radio buttons are left alone: pressing them would
+            // change the user's settings, not test a button.
+            if s.elementType == .button || s.elementType == .menuButton || s.elementType == .popUpButton {
+                let label = s.label.trimmingCharacters(in: .whitespacesAndNewlines)
+                let id = s.identifier
+                let key = id + "|" + label
+                // Email rows ("… from …", long labels) would turn a big
+                // archive into thousands of presses; one row is enough.
+                let isRow = label.count > 70 || label.contains(" from ")
+                if s.isEnabled, !(label.isEmpty && id.isEmpty), !isRow,
+                   !Self.pageNames.contains(where: { label.hasPrefix($0) }),
+                   id != "archive.sidebar.import", !seen.contains(key) {
+                    seen.insert(key)
+                    out.append((id, label))
+                }
+            }
+            s.children.forEach(walk)
+        }
+        walk(snapshot)
+        return out
+    }
+
+    /// Presses every distinct, enabled button visible on the page.
+    private func crawlButtons(onPage page: String) -> [CrawlRow] {
+        var rows: [CrawlRow] = []
+        let targets = visibleControls()
+        let cap = 150
+        for target in targets.prefix(cap) {
+            let name = target.label.isEmpty ? target.id : target.label
+            if Self.skipPattern.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)) != nil {
+                rows.append(CrawlRow(page: page, button: name, outcome: "skipped (destructive, purchase or window control)"))
+                continue
+            }
+            recoverIfNeeded()
+            let element = resolve(target)
+            guard element.exists else { rows.append(CrawlRow(page: page, button: name, outcome: "gone after an earlier press")); continue }
+            // `isHittable` raises a test failure (not false) when the element
+            // has no hit point at all; check the frame against the window first.
+            let bounds = app.windows.firstMatch.frame
+            var visible = !element.frame.isEmpty && bounds.intersects(element.frame) && element.isHittable
+            // Below the fold: scroll the page up (at most three swipes).
+            var swipes = 0
+            while !visible && swipes < 3 && !element.frame.isEmpty && element.frame.minY > bounds.midY {
+                #if os(iOS)
+                app.windows.firstMatch.swipeUp(velocity: .slow)
+                #else
+                app.windows.firstMatch.scroll(byDeltaX: 0, deltaY: -300)
+                #endif
+                Thread.sleep(forTimeInterval: 0.6)
+                swipes += 1
+                visible = !element.frame.isEmpty && bounds.intersects(element.frame) && element.isHittable
+            }
+            guard visible else {
+                rows.append(CrawlRow(page: page, button: name, outcome: "not hittable (off-screen or covered; scroll needed)")); continue
+            }
+
+            dismissEverything()
+            let popoverBefore = popoverOpen()
+            let before = Set(visibleControls().map { $0.id + "|" + $0.label })
+            #if os(macOS)
+            let windowsBefore = app.windows.count
+            let sheetsBefore = app.sheets.count
+            #endif
+            press(element)
+            Thread.sleep(forTimeInterval: 1.5)
+
+            if app.state != .runningForeground {
+                rows.append(CrawlRow(page: page, button: name, outcome: "CRASH — app quit after the press"))
+                app.launch(); _ = app.wait(for: .runningForeground, timeout: 30); _ = openPage(page)
+                continue
+            }
+            var outcome: String
+            #if os(macOS)
+            if app.menus.firstMatch.exists {
+                outcome = "opened a menu (\(app.menus.firstMatch.menuItems.count) items)"
+            } else if app.popovers.firstMatch.exists {
+                outcome = "opened a popover"
+            } else if app.sheets.count > sheetsBefore {
+                outcome = "opened a sheet"
+            } else if app.windows.count > windowsBefore {
+                outcome = "opened window “\(app.windows.firstMatch.title)”"
+            } else if app.dialogs.firstMatch.exists {
+                outcome = "opened a dialog"
+            } else {
+                outcome = changeSummary(before: before)
+            }
+            #else
+            if app.alerts.firstMatch.exists {
+                outcome = "opened an alert “\(app.alerts.firstMatch.label)”"
+            } else if filePickerOpen() {
+                outcome = "opened the file picker"
+            } else if popoverOpen() && !popoverBefore {
+                outcome = "opened a menu or popover"
+            } else {
+                outcome = changeSummary(before: before)
+            }
+            #endif
+            rows.append(CrawlRow(page: page, button: name, outcome: outcome))
+            dismissEverything()
+            returnToPage(page)
+        }
+        if targets.count > cap {
+            rows.append(CrawlRow(page: page, button: "(\(targets.count - cap) more)", outcome: "not pressed: per-page cap of \(cap)"))
+        }
+        return rows
+    }
+
+    /// "Screen changed" vs "no visible change", from the controls on screen.
+    private func changeSummary(before: Set<String>) -> String {
+        let after = Set(visibleControls().map { $0.id + "|" + $0.label })
+        let added = after.subtracting(before)
+        if added.isEmpty && after == before { return "no visible change (may act in place)" }
+        let sample = added.prefix(3).map { $0.split(separator: "|").last.map(String.init) ?? $0 }.joined(separator: ", ")
+        return "screen changed (+\(added.count) controls\(sample.isEmpty ? "" : ": \(sample)"))"
+    }
+
+    private func resolve(_ target: (id: String, label: String)) -> XCUIElement {
+        #if os(macOS)
+        let root = app.windows.firstMatch
+        #else
+        let root: XCUIElement = app
+        #endif
+        if !target.id.isEmpty {
+            let byID = root.descendants(matching: .any).matching(identifier: target.id).firstMatch
+            if byID.exists { return byID }
+        }
+        return root.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", target.label)).firstMatch
+    }
+
+    /// Closes whatever the last press opened: alerts, menus, popovers,
+    /// sheets, secondary windows, pushed screens.
+    private func dismissEverything() {
+        for _ in 0..<4 {
+            var acted = false
+            #if os(macOS)
+            if app.menus.firstMatch.exists || app.popovers.firstMatch.exists || app.dialogs.firstMatch.exists {
+                app.typeKey(.escape, modifierFlags: []); acted = true
+            }
+            if app.sheets.firstMatch.exists {
+                let sheet = app.sheets.firstMatch
+                var hit = false
+                for title in ["Done", "Cancel", "Not now", "OK"] where !hit {
+                    let b = sheet.buttons[title].firstMatch
+                    if b.exists, b.isHittable { b.click(); hit = true }
+                }
+                if !hit { app.typeKey(.escape, modifierFlags: []) }
+                acted = true
+            }
+            if app.windows.count > 1 {
+                app.windows.firstMatch.typeKey("w", modifierFlags: .command); acted = true
+            }
+            #else
+            if filePickerOpen() {
+                let cancel = app.navigationBars.buttons["Cancel"].firstMatch
+                if cancel.exists { cancel.tap() } else { app.buttons["Cancel"].firstMatch.tap() }
+                acted = true
+            } else if app.alerts.firstMatch.exists {
+                let buttons = app.alerts.firstMatch.buttons
+                let cancel = buttons["Cancel"].firstMatch
+                (cancel.exists ? cancel : buttons.element(boundBy: max(0, buttons.count - 1))).tap(); acted = true
+            } else if app.otherElements["PopoverDismissRegion"].exists {
+                app.otherElements["PopoverDismissRegion"].firstMatch.tap(); acted = true
+            } else {
+                for title in ["Done", "Close", "Cancel", "Not now", "OK", "Got It"] {
+                    let b = app.buttons[title].firstMatch
+                    if b.exists, b.isHittable { b.tap(); acted = true; break }
+                }
+            }
+            #endif
+            if !acted { break }
+            Thread.sleep(forTimeInterval: 0.6)
+        }
+    }
+
+    private func popoverOpen() -> Bool {
+        #if os(iOS)
+        return app.otherElements["PopoverDismissRegion"].exists
+        #else
+        return app.popovers.firstMatch.exists
+        #endif
+    }
+
+    /// The system document picker (Recents/Browse tabs, a Cancel button).
+    private func filePickerOpen() -> Bool {
+        #if os(iOS)
+        return app.buttons["Browse"].exists && app.buttons["Cancel"].exists
+        #else
+        return false
+        #endif
+    }
+
+    private func returnToPage(_ page: String) {
+        #if os(iOS)
+        // A pushed screen: go back until the page strip is reachable.
+        for _ in 0..<3 {
+            let tab = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", page)).firstMatch
+            if tab.exists, tab.isHittable { break }
+            let back = app.navigationBars.buttons.element(boundBy: 0)
+            if back.exists, back.isHittable { back.tap() } else { app.swipeDown(velocity: .fast) }
+            Thread.sleep(forTimeInterval: 0.6)
+        }
+        #endif
+        let tab = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", page)).firstMatch
+        if tab.exists, tab.isHittable, !tab.isSelected { press(tab); Thread.sleep(forTimeInterval: 0.6) }
+    }
+
+    private func recoverIfNeeded() {
+        if app.state != .runningForeground {
+            app.launch(); _ = app.wait(for: .runningForeground, timeout: 30)
+        }
+        #if os(macOS)
+        if app.windows.count == 0 { app.typeKey("n", modifierFlags: .command); Thread.sleep(forTimeInterval: 1) }
+        #endif
+        app.activate()
+    }
+
+    #if os(macOS)
+    /// Opens each top-level menu-bar menu and records its command count.
+    private func crawlMenuBar() -> [CrawlRow] {
+        var rows: [CrawlRow] = []
+        let items = app.menuBars.firstMatch.menuBarItems.allElementsBoundByIndex
+        for item in items where !item.title.isEmpty && item.title != "Apple" {
+            item.click()
+            Thread.sleep(forTimeInterval: 0.4)
+            let menu = item.menus.firstMatch
+            let count = menu.exists ? menu.menuItems.count : 0
+            let enabled = menu.exists ? menu.menuItems.allElementsBoundByIndex.filter { $0.isEnabled }.count : 0
+            rows.append(CrawlRow(page: "Menu bar", button: item.title, outcome: "menu opens: \(count) commands, \(enabled) enabled"))
+            app.typeKey(.escape, modifierFlags: [])
+        }
+        return rows
+    }
+    #endif
 }
