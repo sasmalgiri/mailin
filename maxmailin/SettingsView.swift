@@ -296,6 +296,35 @@ struct SettingsView: View {
         .padding()
     }
 
+    // MARK: - Interface language
+
+    /// The language the interface is actually showing, named in that language
+    /// (e.g. "Deutsch"). `Bundle.main.preferredLocalizations` is the OS's
+    /// pick from the app's 11 localizations after the system and per-app
+    /// language settings are applied, so it is the truth, not a guess.
+    static var interfaceLanguageName: String {
+        let identifier = Bundle.main.preferredLocalizations.first ?? "en"
+        let name = Locale(identifier: identifier).localizedString(forIdentifier: identifier) ?? identifier
+        return name.prefix(1).uppercased() + name.dropFirst()
+    }
+
+    /// Opens the system setting that chooses mailin's language: the app's own
+    /// page in the Settings app on iOS (which carries the Language row), the
+    /// Language & Region pane on macOS.
+    static func openSystemLanguageSettings() {
+        #if os(iOS)
+        if let url = URL(string: UIApplication.openSettingsURLString) {
+            UIApplication.shared.open(url)
+        }
+        #else
+        let pane = URL(string: "x-apple.systempreferences:com.apple.Localization-Settings.extension")
+        let fallback = URL(string: "x-apple.systempreferences:com.apple.preference.general")
+        if let url = pane ?? fallback {
+            NSWorkspace.shared.open(url)
+        }
+        #endif
+    }
+
     // MARK: - General Settings
     private var generalSettings: some View {
         Form {
@@ -376,6 +405,39 @@ struct SettingsView: View {
                 tombstoneCount = (try? await SQLiteEmailStore.shared.tombstoneCount()) ?? 0
             }
 
+            // Interface language: the app follows the system (or per-app)
+            // language the OS picks from its 11 localizations. There is no
+            // in-app picker by design; this row names the language in use and
+            // takes the user straight to the system setting that changes it.
+            Section {
+                HStack {
+                    Text("Interface language")
+                    Spacer()
+                    Text(Self.interfaceLanguageName)
+                        .foregroundColor(.secondary)
+                        .accessibilityLabel(Text("Interface language: \(Self.interfaceLanguageName)"))
+                }
+                Button {
+                    Self.openSystemLanguageSettings()
+                } label: {
+                    Label("Change Language…", systemImage: "globe")
+                }
+                .help("Opens the system setting where mailin's language is chosen")
+            } header: {
+                Text("Language")
+                    .font(.headline)
+            } footer: {
+                #if os(iOS)
+                Text("mailin follows your system language and is available in 11 languages. To use a different language for mailin only, open Settings ▸ mailin ▸ Language. The change applies the next time mailin opens.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                #else
+                Text("mailin follows your system language and is available in 11 languages. To use a different language for mailin only, add mailin under System Settings ▸ General ▸ Language & Region ▸ Applications. The change applies the next time mailin opens.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                #endif
+            }
+
             #if os(macOS)
             Section {
                 Toggle("Menu Bar Quick Search", isOn: $menuBarSearchEnabled)
@@ -405,7 +467,7 @@ struct SettingsView: View {
                 Text("Weekly Digest")
                     .font(.headline)
             } footer: {
-                Text("One local notification per week with new-match counts for your saved searches. Computed entirely on-device; nothing leaves your Mac.")
+                Text("One local notification per week with new-match counts for your saved searches. Computed entirely on-device; nothing leaves your device.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }

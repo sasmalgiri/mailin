@@ -53926,6 +53926,70 @@
         }
       }
     },
+    "Change Language…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sprache ändern …"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cambiar idioma…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changer de langue…"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "भाषा बदलें…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cambia lingua…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "言語を変更…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "언어 변경…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alterar idioma…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更改语言…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更改語言⋯"
+          }
+        }
+      }
+    },
     "Change to %@": {
       "localizations": {
         "de": {
@@ -141131,6 +141195,134 @@
         }
       }
     },
+    "Interface language": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sprache der Oberfläche"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Idioma de la interfaz"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Langue de l'interface"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "इंटरफ़ेस भाषा"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lingua dell'interfaccia"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "インターフェイスの言語"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "인터페이스 언어"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Idioma da interface"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "界面语言"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "介面語言"
+          }
+        }
+      }
+    },
+    "Interface language: %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sprache der Oberfläche: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Idioma de la interfaz: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Langue de l'interface : %@"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "इंटरफ़ेस भाषा: %@"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lingua dell'interfaccia: %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "インターフェイスの言語: %@"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "인터페이스 언어: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Idioma da interface: %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "界面语言：%@"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "介面語言：%@"
+          }
+        }
+      }
+    },
     "Interpreting your request…": {
       "localizations": {
         "de": {
@@ -174366,66 +174558,66 @@
         }
       }
     },
-    "One local notification per week with new-match counts for your saved searches. Computed entirely on-device; nothing leaves your Mac.": {
+    "One local notification per week with new-match counts for your saved searches. Computed entirely on-device; nothing leaves your device.": {
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Eine lokale Mitteilung pro Woche mit der Zahl neuer Treffer für Ihre gesicherten Suchen. Vollständig auf dem Gerät berechnet; nichts verlässt Ihren Mac."
+            "value": "Eine lokale Mitteilung pro Woche mit der Zahl neuer Treffer für Ihre gesicherten Suchen. Vollständig auf dem Gerät berechnet; nichts verlässt Ihr Gerät."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Una notificación local por semana con el número de nuevas coincidencias de tus búsquedas guardadas. Calculada por completo en el dispositivo; nada sale de tu Mac."
+            "value": "Una notificación local por semana con el número de nuevas coincidencias de tus búsquedas guardadas. Calculada por completo en el dispositivo; nada sale de tu dispositivo."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Une notification locale par semaine avec le nombre de nouvelles correspondances pour vos recherches enregistrées. Calculée entièrement sur l'appareil ; rien ne quitte votre Mac."
+            "value": "Une notification locale par semaine avec le nombre de nouvelles correspondances pour vos recherches enregistrées. Calculée entièrement sur l'appareil ; rien ne quitte votre appareil."
           }
         },
         "hi": {
           "stringUnit": {
             "state": "translated",
-            "value": "आपकी सहेजी खोजों के नए मिलानों की संख्या के साथ प्रति सप्ताह एक स्थानीय सूचना। पूरी तरह डिवाइस पर गणना; कुछ भी आपके Mac से बाहर नहीं जाता।"
+            "value": "आपकी सहेजी खोजों के नए मिलानों की संख्या के साथ प्रति सप्ताह एक स्थानीय सूचना। पूरी तरह डिवाइस पर गणना; कुछ भी आपके डिवाइस से बाहर नहीं जाता।"
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Una notifica locale a settimana con il numero di nuove corrispondenze per le tue ricerche salvate. Calcolata interamente sul dispositivo; nulla lascia il tuo Mac."
+            "value": "Una notifica locale a settimana con il numero di nuove corrispondenze per le tue ricerche salvate. Calcolata interamente sul dispositivo; nulla lascia il tuo dispositivo."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "保存済み検索の新着一致数を週 1 回ローカル通知でお知らせします。完全にデバイス上で計算され、Mac の外には何も出ません。"
+            "value": "保存済み検索の新着一致数を週 1 回ローカル通知でお知らせします。完全にデバイス上で計算され、デバイスの外には何も出ません。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "저장된 검색의 새 일치 수를 담은 로컬 알림을 일주일에 한 번 보냅니다. 전적으로 기기에서 계산되며 Mac 밖으로 아무것도 나가지 않습니다."
+            "value": "저장된 검색의 새 일치 수를 담은 로컬 알림을 일주일에 한 번 보냅니다. 전적으로 기기에서 계산되며 기기 밖으로 아무것도 나가지 않습니다."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Uma notificação local por semana com a contagem de novas correspondências das suas buscas salvas. Calculada inteiramente no dispositivo; nada sai do seu Mac."
+            "value": "Uma notificação local por semana com a contagem de novas correspondências das suas buscas salvas. Calculada inteiramente no dispositivo; nada sai do seu dispositivo."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "每周一条本地通知，包含您已存搜索的新匹配数量。完全在设备上计算；不会有任何内容离开您的 Mac。"
+            "value": "每周一条本地通知，包含您已存搜索的新匹配数量。完全在设备上计算；不会有任何内容离开您的设备。"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "每週一則本機通知，包含您已儲存搜尋的新相符數量。完全在裝置上計算；不會有任何內容離開您的 Mac。"
+            "value": "每週一則本機通知，包含您已儲存搜尋的新相符數量。完全在裝置上計算；不會有任何內容離開您的裝置。"
           }
         }
       }
@@ -177121,6 +177313,70 @@
           "stringUnit": {
             "state": "translated",
             "value": "開啟 mailin 郵件封存分析器"
+          }
+        }
+      }
+    },
+    "Opens the system setting where mailin's language is chosen": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öffnet die Systemeinstellung, in der die Sprache von mailin gewählt wird"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abre el ajuste del sistema donde se elige el idioma de mailin"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ouvre le réglage système où la langue de mailin est choisie"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "वह सिस्टम सेटिंग खोलता है जहाँ mailin की भाषा चुनी जाती है"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apre l'impostazione di sistema in cui si sceglie la lingua di mailin"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mailin の言語を選ぶシステム設定を開きます"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mailin의 언어를 선택하는 시스템 설정을 엽니다"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Abre o ajuste do sistema onde o idioma do mailin é escolhido"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开选择 mailin 语言的系统设置"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "開啟選擇 mailin 語言的系統設定"
           }
         }
       }
@@ -288156,6 +288412,134 @@
           "stringUnit": {
             "state": "translated",
             "value": "mailin 不收集任何資料。所有處理均在裝置上進行。使用「刪除我的所有資料」行使您的資料刪除權（GDPR 第 17 條 / CCPA）。"
+          }
+        }
+      }
+    },
+    "mailin follows your system language and is available in 11 languages. To use a different language for mailin only, add mailin under System Settings ▸ General ▸ Language & Region ▸ Applications. The change applies the next time mailin opens.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mailin folgt Ihrer Systemsprache und ist in 11 Sprachen verfügbar. Um nur für mailin eine andere Sprache zu verwenden, fügen Sie mailin unter Systemeinstellungen ▸ Allgemein ▸ Sprache & Region ▸ Apps hinzu. Die Änderung gilt beim nächsten Öffnen von mailin."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mailin sigue el idioma de tu sistema y está disponible en 11 idiomas. Para usar otro idioma solo en mailin, añade mailin en Ajustes del Sistema ▸ General ▸ Idioma y región ▸ Aplicaciones. El cambio se aplica la próxima vez que abras mailin."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mailin suit la langue de votre système et est disponible en 11 langues. Pour utiliser une autre langue uniquement dans mailin, ajoutez mailin dans Réglages Système ▸ Général ▸ Langue et région ▸ Applications. Le changement s'applique à la prochaine ouverture de mailin."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mailin आपके सिस्टम की भाषा का अनुसरण करता है और 11 भाषाओं में उपलब्ध है। केवल mailin के लिए दूसरी भाषा उपयोग करने हेतु सिस्टम सेटिंग्स ▸ सामान्य ▸ भाषा और क्षेत्र ▸ ऐप्लिकेशन में mailin जोड़ें। परिवर्तन अगली बार mailin खोलने पर लागू होगा।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mailin segue la lingua del sistema ed è disponibile in 11 lingue. Per usare una lingua diversa solo in mailin, aggiungi mailin in Impostazioni di Sistema ▸ Generali ▸ Lingua e Zona ▸ Applicazioni. La modifica si applica alla prossima apertura di mailin."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mailin はシステムの言語に従い、11 の言語で利用できます。mailin だけ別の言語にするには、「システム設定」▸「一般」▸「言語と地域」▸「アプリケーション」に mailin を追加してください。変更は次回 mailin を開いたときに適用されます。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mailin은 시스템 언어를 따르며 11개 언어로 제공됩니다. mailin에서만 다른 언어를 사용하려면 시스템 설정 ▸ 일반 ▸ 언어 및 지역 ▸ 응용 프로그램에 mailin을 추가하십시오. 변경 사항은 다음에 mailin을 열 때 적용됩니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O mailin segue o idioma do seu sistema e está disponível em 11 idiomas. Para usar outro idioma apenas no mailin, adicione o mailin em Ajustes do Sistema ▸ Geral ▸ Idioma e Região ▸ Aplicativos. A alteração vale na próxima vez que o mailin for aberto."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mailin 跟随系统语言，并提供 11 种语言。若只想让 mailin 使用其他语言，请在“系统设置”▸“通用”▸“语言与地区”▸“应用程序”中添加 mailin。更改将在下次打开 mailin 时生效。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mailin 會跟隨系統語言，並提供 11 種語言。若只想讓 mailin 使用其他語言，請在「系統設定」▸「一般」▸「語言與地區」▸「應用程式」中加入 mailin。變更會在下次開啟 mailin 時生效。"
+          }
+        }
+      }
+    },
+    "mailin follows your system language and is available in 11 languages. To use a different language for mailin only, open Settings ▸ mailin ▸ Language. The change applies the next time mailin opens.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mailin folgt Ihrer Systemsprache und ist in 11 Sprachen verfügbar. Um nur für mailin eine andere Sprache zu verwenden, öffnen Sie Einstellungen ▸ mailin ▸ Sprache. Die Änderung gilt beim nächsten Öffnen von mailin."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mailin sigue el idioma de tu sistema y está disponible en 11 idiomas. Para usar otro idioma solo en mailin, abre Ajustes ▸ mailin ▸ Idioma. El cambio se aplica la próxima vez que abras mailin."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mailin suit la langue de votre système et est disponible en 11 langues. Pour utiliser une autre langue uniquement dans mailin, ouvrez Réglages ▸ mailin ▸ Langue. Le changement s'applique à la prochaine ouverture de mailin."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mailin आपके सिस्टम की भाषा का अनुसरण करता है और 11 भाषाओं में उपलब्ध है। केवल mailin के लिए दूसरी भाषा उपयोग करने हेतु सेटिंग्स ▸ mailin ▸ भाषा खोलें। परिवर्तन अगली बार mailin खोलने पर लागू होगा।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mailin segue la lingua del sistema ed è disponibile in 11 lingue. Per usare una lingua diversa solo in mailin, apri Impostazioni ▸ mailin ▸ Lingua. La modifica si applica alla prossima apertura di mailin."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mailin はシステムの言語に従い、11 の言語で利用できます。mailin だけ別の言語にするには、「設定」▸「mailin」▸「言語」を開いてください。変更は次回 mailin を開いたときに適用されます。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mailin은 시스템 언어를 따르며 11개 언어로 제공됩니다. mailin에서만 다른 언어를 사용하려면 설정 ▸ mailin ▸ 언어를 여십시오. 변경 사항은 다음에 mailin을 열 때 적용됩니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O mailin segue o idioma do seu sistema e está disponível em 11 idiomas. Para usar outro idioma apenas no mailin, abra Ajustes ▸ mailin ▸ Idioma. A alteração vale na próxima vez que o mailin for aberto."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mailin 跟随系统语言，并提供 11 种语言。若只想让 mailin 使用其他语言，请打开“设置”▸“mailin”▸“语言”。更改将在下次打开 mailin 时生效。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "mailin 會跟隨系統語言，並提供 11 種語言。若只想讓 mailin 使用其他語言，請開啟「設定」▸「mailin」▸「語言」。變更會在下次開啟 mailin 時生效。"
           }
         }
       }
