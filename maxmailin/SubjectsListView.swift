@@ -164,7 +164,7 @@ struct SubjectsListView: View {
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(item.subject), from \(senderName(item.from))")
-        .accessibilityHint(isFiltered ? "Double tap to clear filter" : "Double tap to filter by this email")
+        .accessibilityHint(isFiltered ? String(localized: "Double tap to clear filter") : String(localized: "Double tap to filter by this email"))
         .accessibilityAddTraits(isFiltered ? .isSelected : [])
     }
 

@@ -1149,7 +1149,7 @@ struct InvestigationReportConfigSheet: View {
                                 }
                             } label: {
                                 HStack(spacing: 4) {
-                                    Text(showEmailSelector ? "Hide Emails" : "Choose Emails")
+                                    Text(showEmailSelector ? String(localized: "Hide Emails") : String(localized: "Choose Emails"))
                                         .font(Typography.caption1)
                                     Image(systemName: showEmailSelector ? "chevron.up" : "chevron.down")
                                         .font(.system(size: 9))
@@ -1280,7 +1280,7 @@ struct InvestigationReportConfigSheet: View {
                                             .scaleEffect(0.7)
                                             .frame(width: 16, height: 16)
                                     }
-                                    Text(isGenerating ? "Generating..." : "Generate PDF Report")
+                                    Text(isGenerating ? String(localized: "Generating...") : String(localized: "Generate PDF Report"))
                                 }
                             }
                             .buttonStyle(PrimaryButtonStyle())

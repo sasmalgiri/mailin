@@ -27,7 +27,7 @@ enum MailClient: String, CaseIterable, Identifiable {
     case appleMail
     case thunderbird
     var id: String { rawValue }
-    var name: String { self == .appleMail ? "Apple Mail" : "Thunderbird" }
+    var name: String { self == .appleMail ? String(localized: "Apple Mail") : String(localized: "Thunderbird") }
     var symbol: String { self == .appleMail ? "envelope" : "bird" }
 }
 
@@ -243,7 +243,7 @@ struct MailClientExportSheet: View {
             }
             Divider()
             HStack {
-                Button(result == nil ? "Cancel" : "Done", role: .cancel, action: onDone).keyboardShortcut(.cancelAction)
+                Button(result == nil ? String(localized: "Cancel") : String(localized: "Done"), role: .cancel, action: onDone).keyboardShortcut(.cancelAction)
                 Spacer()
                 Button("Choose a folder…") { chooseFolder() }.disabled(isRunning)
                 Button("Export and verify") { Task { await run() } }

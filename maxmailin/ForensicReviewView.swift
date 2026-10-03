@@ -269,7 +269,7 @@ struct ForensicReviewView: View {
                         .foregroundColor(showCodingPanel ? .blue : .secondary)
                 }
                 .buttonStyle(.plain)
-                .help(showCodingPanel ? "Hide coding panel" : "Show coding panel")
+                .help(showCodingPanel ? String(localized: "Hide coding panel") : String(localized: "Show coding panel"))
 
                 TutorialHelpButton(showTutorial: $showTutorial)
             }

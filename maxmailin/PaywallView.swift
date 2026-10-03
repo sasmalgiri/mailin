@@ -199,16 +199,20 @@ struct PaywallView: View {
 
     private var headerTitle: String {
         if ownsEverything { return String(localized: "Your plan") }
-        if let feature = request?.feature { return "Unlock \(feature)" }
-        return store.effectiveTier == .personal ? "Upgrade to Professional" : "Unlock mailin"
+        if let feature = request?.feature { return String(localized: "Unlock \(feature)") }
+        return store.effectiveTier == .personal
+            ? String(localized: "Upgrade to Professional")
+            : String(localized: "Unlock mailin")
     }
 
     private var headerSubtitle: String {
-        if ownsEverything { return "Professional\(store.isLifetimePurchase ? " · Lifetime" : "")" }
+        if ownsEverything {
+            return store.isLifetimePurchase ? String(localized: "Professional · Lifetime") : "Professional"
+        }
         if store.effectiveTier == .personal {
             return store.isLifetimePurchase
-                ? "You own Personal for life. Professional adds the legal and forensic tools; it is a separate purchase at its listed price."
-                : "You have Personal. Professional adds the legal and forensic tools."
+                ? String(localized: "You own Personal for life. Professional adds the legal and forensic tools; it is a separate purchase at its listed price.")
+                : String(localized: "You have Personal. Professional adds the legal and forensic tools.")
         }
         return String(localized: "Subscribe monthly or yearly, or buy once for lifetime access. Prices are shown by the App Store in your currency.")
     }
@@ -240,6 +244,10 @@ struct PaywallView: View {
             .foregroundColor(AppColors.secondary)
         }
         .padding(.vertical, Spacing.large)
+        // The hero background must span the sheet, not hug the text: on a
+        // regular-width iPad the owned-state header otherwise paints a
+        // narrow column and the caption row ends on its hard edge.
+        .frame(maxWidth: .infinity)
         .adaptiveHeroBackground(colors: [.orange, .yellow, .orange, .red])
     }
 
@@ -310,8 +318,8 @@ struct PaywallView: View {
             featureRow("View & filter emails", free: true, personal: true, pro: true)
             featureRow("Boolean/regex/proximity search", free: true, personal: true, pro: true)
             featureRow("Conversation threading", free: true, personal: true, pro: true)
-            featureRow("AI Assistant", free: "5/day", personal: true, pro: true)
-            featureRow("AI Smart Filters", free: "5/day", personal: true, pro: true)
+            featureRow("AI Assistant", free: String(localized: "5/day"), personal: true, pro: true)
+            featureRow("AI Smart Filters", free: String(localized: "5/day"), personal: true, pro: true)
             featureRow("Analytics & charts", free: true, personal: true, pro: true)
             featureRow("Export (EML/CSV)", free: "10", personal: true, pro: true)
             featureRow("Download attachments", free: "10", personal: true, pro: true)
@@ -337,7 +345,10 @@ struct PaywallView: View {
         .adaptiveCard(cornerRadius: CornerRadius.large)
     }
 
-    private func featureRow(_ name: String, free: Bool, personal: Bool, pro: Bool) -> some View {
+    // Feature names are `LocalizedStringResource` so the literals at the call
+    // sites are extracted and looked up; a plain `String` parameter would
+    // show English in every language.
+    private func featureRow(_ name: LocalizedStringResource, free: Bool, personal: Bool, pro: Bool) -> some View {
         HStack {
             Text(name)
                 #if os(iOS)
@@ -365,7 +376,7 @@ struct PaywallView: View {
         .padding(.vertical, Spacing.xxxSmall)
     }
 
-    private func featureRow(_ name: String, free: String, personal: Bool, pro: Bool) -> some View {
+    private func featureRow(_ name: LocalizedStringResource, free: String, personal: Bool, pro: Bool) -> some View {
         HStack {
             Text(name)
                 #if os(iOS)
@@ -465,7 +476,9 @@ struct PaywallView: View {
         guard twelveMonths > yearly.price else { return nil }
         let fraction = (twelveMonths - yearly.price) / twelveMonths
         let percent = Int((NSDecimalNumber(decimal: fraction).doubleValue * 100).rounded())
-        return percent >= 5 ? "Save \(percent)%" : nil
+        // "25% off" rather than "Save 25%": the verb "save" collides with the
+        // file-saving sense in most languages.
+        return percent >= 5 ? String(localized: "\(percent.formatted(.percent)) off") : nil
     }
 
     // MARK: - Purchase Cards
@@ -493,7 +506,7 @@ struct PaywallView: View {
                     purchaseCard(personal, tierName: "Personal", badge: nil, color: .blue)
                 }
                 if store.effectiveTier < .professional, let professional = store.professionalProduct(for: selectedPeriod) {
-                    purchaseCard(professional, tierName: "Professional", badge: "Most Popular", color: .purple)
+                    purchaseCard(professional, tierName: "Professional", badge: String(localized: "Most Popular"), color: .purple)
                 }
             } else if store.productLoadError != nil {
                 productLoadErrorView
@@ -562,9 +575,9 @@ struct PaywallView: View {
 
     private var pricingSuffix: String {
         switch selectedPeriod {
-        case .monthly: return "/month"
-        case .yearly: return "/year"
-        case .lifetime: return "one-time"
+        case .monthly: return String(localized: "/month")
+        case .yearly: return String(localized: "/year")
+        case .lifetime: return String(localized: "one-time")
         }
     }
 
@@ -631,16 +644,16 @@ struct PaywallView: View {
         let billing: String
         if let period = product.subscription?.subscriptionPeriod {
             switch period.unit {
-            case .month: billing = period.value == 1 ? " / month" : " / \(period.value) months"
-            case .year: billing = period.value == 1 ? " / year" : " / \(period.value) years"
-            case .week: billing = " / week"
-            case .day: billing = " / day"
+            case .month: billing = period.value == 1 ? String(localized: " / month") : String(localized: " / \(period.value) months")
+            case .year: billing = period.value == 1 ? String(localized: " / year") : String(localized: " / \(period.value) years")
+            case .week: billing = String(localized: " / week")
+            case .day: billing = String(localized: " / day")
             @unknown default: billing = ""
             }
         } else {
-            billing = " once"
+            billing = String(localized: " once")
         }
-        return "Buy \(tierName) — \(product.displayPrice)\(billing)"
+        return String(localized: "Buy \(tierName) — \(product.displayPrice)\(billing)")
     }
 
     // MARK: - Shared Views
@@ -734,12 +747,12 @@ struct PaywallView: View {
             }
 
             if !ownsEverything {
-                Button(store.effectiveTier == .free ? "Continue with Free Version" : "Not now") {
+                Button(store.effectiveTier == .free ? String(localized: "Continue with Free Version") : String(localized: "Not now")) {
                     closePaywall()
                 }
                 .font(Typography.caption1)
                 .foregroundColor(AppColors.secondary)
-                .accessibilityLabel(store.effectiveTier == .free ? "Continue using the free version" : "Close without upgrading")
+                .accessibilityLabel(store.effectiveTier == .free ? String(localized: "Continue using the free version") : String(localized: "Close without upgrading"))
                 .accessibilityIdentifier("paywall.continueFree")
             }
         }

@@ -219,15 +219,15 @@ class BiometricLockManager: ObservableObject {
 
     private func biometricUnavailableMessage(for error: NSError?) -> String {
         guard let laError = error as? LAError else {
-            return "Biometric authentication is not available."
+            return String(localized: "Biometric authentication is not available.")
         }
         switch laError.code {
         case .biometryNotEnrolled:
-            return "No biometric authentication is enrolled. Please set it up in System Settings."
+            return String(localized: "No biometric authentication is enrolled. Please set it up in System Settings.")
         case .biometryLockout:
-            return "Biometric authentication is temporarily locked out."
+            return String(localized: "Biometric authentication is temporarily locked out.")
         case .biometryNotAvailable:
-            return "Biometric authentication is not available on this device."
+            return String(localized: "Biometric authentication is not available on this device.")
         default:
             return laError.localizedDescription
         }

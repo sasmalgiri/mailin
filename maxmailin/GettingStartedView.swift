@@ -71,7 +71,7 @@ struct GettingStartedView: View {
                 Spacer()
                 #endif
 
-                Button(index == pages.count - 1 ? "Get Started" : "Next") {
+                Button(index == pages.count - 1 ? String(localized: "Get Started") : String(localized: "Next")) {
                     if index == pages.count - 1 {
                         hasSeen = true
                         isPresented = false

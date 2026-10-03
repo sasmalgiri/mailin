@@ -245,7 +245,7 @@ struct DuplicateManagerView: View {
                 .accessibilityLabel("Select all but first copy for removal")
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("\(isExact ? "Exact" : "Near") duplicate group: \(group.first?.headers["Subject"] ?? "No Subject"), \(group.count) copies")
+            .accessibilityLabel("\(isExact ? String(localized: "Exact") : String(localized: "Near")) duplicate group: \(group.first?.headers["Subject"] ?? "No Subject"), \(group.count) copies")
 
             ForEach(group) { email in
                 HStack(spacing: Spacing.xSmall) {

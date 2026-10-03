@@ -392,7 +392,7 @@ struct ChainOfCustodyView: View {
                     if isVerifying {
                         ProgressView().scaleEffect(0.7).frame(width: 16, height: 16)
                     }
-                    Text(isVerifying ? "Verifying..." : "Verify Integrity")
+                    Text(isVerifying ? String(localized: "Verifying...") : String(localized: "Verify Integrity"))
                 }
             }
             .buttonStyle(PrimaryButtonStyle())

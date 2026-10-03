@@ -561,7 +561,7 @@ struct EvidenceDeskEditorView: View {
                     if isPosting {
                         ProgressView().controlSize(.small)
                     } else {
-                        Label(model.postedDocumentNumber == nil ? "Post numbered desk document" : "Post revision", systemImage: "number.square")
+                        Label(model.postedDocumentNumber == nil ? String(localized: "Post numbered desk document") : String(localized: "Post revision"), systemImage: "number.square")
                     }
                 }
                 .buttonStyle(.borderedProminent)

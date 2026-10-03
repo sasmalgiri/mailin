@@ -142,7 +142,7 @@ struct WelcomeHubView: View {
                 } label: {
                     HStack(spacing: Spacing.xxSmall) {
                         Image(systemName: "sparkles")
-                        Text(storeManager.effectiveTier == .free ? "See Plans" : "Upgrade to Professional")
+                        Text(storeManager.effectiveTier == .free ? String(localized: "See Plans") : String(localized: "Upgrade to Professional"))
                     }
                     .font(Typography.caption1.weight(.semibold))
                     .foregroundStyle(.white)

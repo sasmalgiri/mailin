@@ -592,7 +592,7 @@ struct EDiscoveryWorkflowView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("\(phase.title), \(status.rawValue)")
-                        .accessibilityHint(isCurrent ? "Currently selected phase" : "Tap to select this phase")
+                        .accessibilityHint(isCurrent ? String(localized: "Currently selected phase") : String(localized: "Tap to select this phase"))
 
                         // Connector line (trailing)
                         if phase != EDiscoveryPhase.allCases.last {
@@ -840,7 +840,7 @@ struct EDiscoveryWorkflowView: View {
             Button {
                 runIdentificationSearch()
             } label: {
-                Label(identificationResults == nil ? "Run Search" : "Re-Run Search", systemImage: "magnifyingglass")
+                Label(identificationResults == nil ? String(localized: "Run Search") : String(localized: "Re-Run Search"), systemImage: "magnifyingglass")
             }
             .buttonStyle(PrimaryButtonStyle())
             .accessibilityLabel("Run search across all emails with current criteria")
@@ -995,7 +995,7 @@ struct EDiscoveryWorkflowView: View {
             Button {
                 verifyCollection()
             } label: {
-                Label(collectionVerification == nil ? "Verify & Seal Collection" : "Re-Verify Collection", systemImage: "checkmark.shield")
+                Label(collectionVerification == nil ? String(localized: "Verify & Seal Collection") : String(localized: "Re-Verify Collection"), systemImage: "checkmark.shield")
             }
             .buttonStyle(PrimaryButtonStyle())
             .disabled(isVerifyingCollection)
@@ -1151,7 +1151,7 @@ struct EDiscoveryWorkflowView: View {
             Button {
                 createReviewBatches()
             } label: {
-                Label(reviewBatches == nil ? "Create Review Batches" : "Refresh Batches", systemImage: "rectangle.stack.badge.play")
+                Label(reviewBatches == nil ? String(localized: "Create Review Batches") : String(localized: "Refresh Batches"), systemImage: "rectangle.stack.badge.play")
             }
             .buttonStyle(PrimaryButtonStyle())
             .accessibilityLabel("Create review batches using NLP classification and privilege scanning")
@@ -1390,7 +1390,7 @@ struct EDiscoveryWorkflowView: View {
         case .review:
             return "Click \"Create Review Batches\" to group emails by category and scan for privileged materials."
         case .production:
-            return "Generate a Load File (DAT), Export (CSV), or Privilege Log to produce deliverables."
+            return String(localized: "Generate a Load File (DAT), Export (CSV), or Privilege Log to produce deliverables.")
         }
     }
 

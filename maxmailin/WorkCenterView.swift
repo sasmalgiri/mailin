@@ -194,7 +194,7 @@ struct WorkCenterView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help(item.destination != nil ? "Open the tool for this item" : "Background progress — no action needed")
+                    .help(item.destination != nil ? String(localized: "Open the tool for this item") : String(localized: "Background progress — no action needed"))
                 }
             }
         }
@@ -286,14 +286,14 @@ struct WorkCenterView: View {
                 jobRow(
                     icon: watchManager.isWatching ? "eye.fill" : "eye.slash",
                     title: String(localized: "Watch folder"),
-                    status: watchManager.isWatching ? "Watching" : "Off",
+                    status: watchManager.isWatching ? "Watching" : String(localized: "Off"),
                     detail: watchManager.isWatching
                         ? "Auto-importing new .eml/.mbox files into the triage queue."
                         : "Configure it in Phishing Triage to auto-import reported emails.",
                     action: nil)
                 jobRow(
                     icon: "newspaper", title: String(localized: "Weekly digest"),
-                    status: digestEnabled ? "Scheduled" : "Off",
+                    status: digestEnabled ? "Scheduled" : String(localized: "Off"),
                     detail: digestEnabled
                         ? "Summarizes saved-search activity once a week."
                         : "Enable in Settings ▸ Notifications for a weekly saved-search summary.",
@@ -620,7 +620,7 @@ struct WorkCenterView: View {
                     .help("Copy every field as CSV — paste into Excel/Numbers")
                     #if os(macOS)
                     Button { exportCSV(table, number: doc.number) } label: {
-                        Label(csvSaved ? "Saved" : "Export CSV…", systemImage: "square.and.arrow.down")
+                        Label(csvSaved ? String(localized: "Saved") : String(localized: "Export CSV…"), systemImage: "square.and.arrow.down")
                     }
                     .controlSize(.small).disabled(csvSaved)
                     #endif
@@ -767,7 +767,7 @@ struct WorkCenterView: View {
                 }
                 .labelsHidden().frame(maxWidth: 220)
                 Button { Task { await buildReport() } } label: {
-                    Label(buildingReport ? "Building…" : "Build report", systemImage: "wand.and.stars")
+                    Label(buildingReport ? String(localized: "Building…") : String(localized: "Build report"), systemImage: "wand.and.stars")
                 }
                 .controlSize(.small).disabled(buildingReport)
                 Spacer()

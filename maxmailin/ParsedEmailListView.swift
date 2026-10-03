@@ -277,7 +277,7 @@ struct ParsedEmailListView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
-                TextField(model.isNaturalLanguageMode ? "Ask naturally..." : "Search emails...", text: $model.searchText)
+                TextField(model.isNaturalLanguageMode ? String(localized: "Ask naturally...") : String(localized: "Search emails..."), text: $model.searchText)
                     .font(.subheadline)
                     .focused($isSearchFieldFocused)
                     .onChange(of: model.searchText) { _, newValue in
@@ -328,7 +328,7 @@ struct ParsedEmailListView: View {
                     }
                 }
                 Button { model.groupByThread.toggle() } label: {
-                    Label(model.groupByThread ? "Ungroup Threads" : "Group by Thread", systemImage: "bubble.left.and.bubble.right")
+                    Label(model.groupByThread ? String(localized: "Ungroup Threads") : String(localized: "Group by Thread"), systemImage: "bubble.left.and.bubble.right")
                 }
                 Divider()
                 ForEach(ParsedEmailListViewModel.SortOption.allCases, id: \.self) { option in
@@ -430,7 +430,7 @@ struct ParsedEmailListView: View {
                         Button {
                             showAnalyticsSheet = true
                         } label: {
-                            Label(personaManager.config.showAnalyticsProminent ? "Discover Patterns" : "Analytics",
+                            Label(personaManager.config.showAnalyticsProminent ? String(localized: "Discover Patterns") : String(localized: "Analytics"),
                                   systemImage: personaManager.config.showAnalyticsProminent ? "sparkle.magnifyingglass" : "chart.bar.xaxis")
                                 .font(personaManager.config.showAnalyticsProminent ? .footnote : .caption)
                                 .fontWeight(.semibold)
@@ -620,13 +620,13 @@ struct ParsedEmailListView: View {
                     .foregroundColor(AppColors.secondary)
                 TextField(model.isNaturalLanguageMode ? {
                     #if os(iOS)
-                    return "Ask naturally..."
+                    return String(localized: "Ask naturally...")
                     #else
                     return "Ask naturally, e.g. \"John's emails from last week with attachments\""
                     #endif
                 }() : {
                     #if os(iOS)
-                    return "Search emails..."
+                    return String(localized: "Search emails...")
                     #else
                     return "Search — try from:name, AND/OR/NOT, \"exact phrase\", or /regex/"
                     #endif
@@ -637,8 +637,8 @@ struct ParsedEmailListView: View {
                     .help(model.isNaturalLanguageMode
                           ? "Ask in plain words — e.g. “invoices from Priya last March” — mailin turns it into a search"
                           : "Searches subjects, senders and full text across the whole archive. Power operators: from: to: subject: tag: type:sent has:attachment in:attachments before:2024-01-01 — quotes for exact phrases")
-                    .accessibilityLabel(model.isNaturalLanguageMode ? "Natural language search" : "Search emails")
-                    .accessibilityHint(model.isNaturalLanguageMode ? "Type a natural language query to filter emails" : "Supports operators: from:, to:, subject:, has:attachment, before:, after:")
+                    .accessibilityLabel(model.isNaturalLanguageMode ? String(localized: "Natural language search") : String(localized: "Search emails"))
+                    .accessibilityHint(model.isNaturalLanguageMode ? String(localized: "Type a natural language query to filter emails") : String(localized: "Supports operators: from:, to:, subject:, has:attachment, before:, after:"))
                     .onChange(of: model.searchText) { _, newValue in
                         model.searchTextDidChange()
                         if !newValue.isEmpty {
@@ -680,9 +680,9 @@ struct ParsedEmailListView: View {
                 }
                 .buttonStyle(.plain)
                 #if os(macOS)
-                .help(model.isNaturalLanguageMode ? "Switch to keyword search" : "Switch to natural language search")
+                .help(model.isNaturalLanguageMode ? String(localized: "Switch to keyword search") : String(localized: "Switch to natural language search"))
                 #endif
-                .accessibilityLabel(model.isNaturalLanguageMode ? "Natural language mode active" : "Enable natural language mode")
+                .accessibilityLabel(model.isNaturalLanguageMode ? String(localized: "Natural language mode active") : String(localized: "Enable natural language mode"))
                 }
 
                 if !model.searchText.isEmpty {
@@ -943,7 +943,7 @@ struct ParsedEmailListView: View {
                     HStack(spacing: 2) {
                         Image(systemName: aiTagsApplied ? "brain.fill" : "brain")
                             .font(.system(size: 10))
-                        Text(aiTagsApplied ? "AI On" : "AI")
+                        Text(aiTagsApplied ? String(localized: "AI On") : "AI")
                             .font(.system(size: 9, weight: .medium))
                     }
                     .foregroundColor(aiTagsApplied ? .white : AppColors.primary)
@@ -978,7 +978,7 @@ struct ParsedEmailListView: View {
                     HStack(spacing: 2) {
                         Image(systemName: showAdvancedFeatures ? "gearshape.fill" : "gearshape")
                             .font(.system(size: 10))
-                        Text(showAdvancedFeatures ? "Pro" : "Pro")
+                        Text(showAdvancedFeatures ? String(localized: "Pro") : String(localized: "Pro"))
                             .font(.system(size: 9, weight: .medium))
                     }
                     .foregroundColor(showAdvancedFeatures ? .white : AppColors.secondary)
@@ -990,7 +990,7 @@ struct ParsedEmailListView: View {
                 .buttonStyle(.plain)
                 .popoverTip(ProToggleTip(), arrowEdge: .bottom)
                 #if os(macOS)
-                .help(showAdvancedFeatures ? "Advanced features visible — click to simplify" : "Show forensic, legal & advanced features")
+                .help(showAdvancedFeatures ? String(localized: "Advanced features visible — click to simplify") : String(localized: "Show forensic, legal & advanced features"))
                 #endif
                 }
 

@@ -1117,7 +1117,7 @@ struct AIAssistantView: View {
         .background(AppColors.backgroundSecondary)
         .cornerRadius(CornerRadius.large)
         .opacity(isStreaming && text == "Thinking..." ? 0.5 : 1.0)
-        .accessibilityLabel(isStreaming ? "AI is thinking" : "AI response")
+        .accessibilityLabel(isStreaming ? String(localized: "AI is thinking") : String(localized: "AI response"))
     }
 
     private func inlineEmailLink(email: MBOXParser.RawEmail) -> some View {
@@ -1532,7 +1532,7 @@ struct AIAssistantView: View {
                 .foregroundStyle(canSend ? Color.blue : AppColors.secondary.opacity(0.3))
                 .disabled(!canSend)
                 .keyboardShortcut(.return, modifiers: [])
-                .accessibilityLabel(isProcessing ? "Processing query" : "Send question")
+                .accessibilityLabel(isProcessing ? String(localized: "Processing query") : String(localized: "Send question"))
             }
             .padding(.horizontal, Spacing.medium)
             .padding(.vertical, 12)
@@ -2919,7 +2919,7 @@ struct AIAssistantView: View {
                 result += "."
                 return result
             }
-            return "I couldn't find any date information in these emails."
+            return String(localized: "I couldn't find any date information in these emails.")
         }
 
         if lower.contains("reply") || lower.contains("statistic") {
@@ -4220,7 +4220,7 @@ struct AIAssistantView: View {
             let received = scopedEmails.filter { $0.messageType == "received" }.count
             return "Hello! I'm your email assistant. You have **\(scopedEmails.count) emails** loaded (\(sent) sent, \(received) received).\n\nI can help you with:\n- **Search**: \"Find emails about budget\" or \"emails from Sarah\"\n- **Analytics**: \"Who emails me most?\" or \"What topics come up?\"\n- **Sentiment**: \"What's the tone of my emails?\"\n- **Security**: \"Scan for phishing\" or \"Check for sensitive data\"\n- **Summary**: \"Give me a full overview\"\n\nWhat would you like to know?"
         case .acknowledgment:
-            return "Glad to help! Feel free to ask anything about your emails — search, analytics, security scans, or summaries."
+            return String(localized: "Glad to help! Feel free to ask anything about your emails — search, analytics, security scans, or summaries.")
         case .notConversational:
             break
         }
@@ -4499,7 +4499,7 @@ struct AIAssistantView: View {
 
         // MARK: - "Thank you" / acknowledgements
         if lower.hasPrefix("thank") || lower == "thanks" || lower == "ok" || lower == "okay" || lower == "got it" || lower == "cool" || lower == "great" || lower == "nice" {
-            return "You're welcome! Let me know if you'd like to explore anything else about your emails."
+            return String(localized: "You're welcome! Let me know if you'd like to explore anything else about your emails.")
         }
 
         if lower == "help" || lower == "?" || lower.hasPrefix("what can you") || lower.hasPrefix("what do you") {

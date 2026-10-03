@@ -224,10 +224,10 @@ struct AboutView: View {
 
     private func titleForSheet(_ sheet: LegalSheet) -> String {
         switch sheet {
-        case .privacy: return "Privacy Policy"
-        case .terms: return "Terms of Use"
-        case .licenses: return "Third-Party Notices"
-        case .forensic: return "Forensic Disclaimer"
+        case .privacy: return String(localized: "Privacy Policy")
+        case .terms: return String(localized: "Terms of Use")
+        case .licenses: return String(localized: "Third-Party Notices")
+        case .forensic: return String(localized: "Forensic Disclaimer")
         case .accessibility: return "Accessibility"
         }
     }

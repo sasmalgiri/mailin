@@ -312,14 +312,14 @@ struct AIMetricsView: View {
     /// The `intent` strings written by `AIAssistantView.beginMetrics`.
     static func displayName(for intent: String) -> String {
         switch intent {
-        case "appleAIMoE": return "Apple AI MoE"
-        case "appleAI": return "Apple AI"
+        case "appleAIMoE": return String(localized: "Apple AI MoE")
+        case "appleAI": return String(localized: "Apple AI")
         case "hybrid": return "Hybrid"
-        case "cloudAI": return "Cloud AI"
+        case "cloudAI": return String(localized: "Cloud AI")
         case "nlp": return "NLP"
-        case "greeting": return "Greeting shortcut"
-        case "acknowledgment": return "Acknowledgment shortcut"
-        case "smartQuery": return "Smart-query shortcut"
+        case "greeting": return String(localized: "Greeting shortcut")
+        case "acknowledgment": return String(localized: "Acknowledgment shortcut")
+        case "smartQuery": return String(localized: "Smart-query shortcut")
         default: return intent
         }
     }

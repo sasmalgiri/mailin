@@ -574,7 +574,7 @@ struct ITAdminAnalysisView: View {
                 Image(systemName: hasTLS ? "lock.fill" : "lock.open")
                     .font(.system(size: 14))
                     .foregroundColor(hasTLS ? .green : .red)
-                Text(hasTLS ? "TLS encryption detected in transit" : "No TLS encryption detected")
+                Text(hasTLS ? String(localized: "TLS encryption detected in transit") : String(localized: "No TLS encryption detected"))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(hasTLS ? .green : .red)
             }

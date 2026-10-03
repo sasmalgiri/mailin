@@ -287,7 +287,7 @@ class ForensicReviewManager: ObservableObject {
         let privilegedEmails = emails.filter { forensic.tagForEmail($0.id) == .privileged }
 
         guard !privilegedEmails.isEmpty else {
-            return "No emails tagged as Privileged."
+            return String(localized: "No emails tagged as Privileged.")
         }
 
         var log = "PRIVILEGE LOG\n"

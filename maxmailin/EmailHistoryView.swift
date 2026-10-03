@@ -101,7 +101,7 @@ enum EmailHistoryBuilder {
         if let custodian = i.custodian {
             state.append(EmailHistoryEvent(
                 date: nil, icon: "person.badge.shield.checkmark", title: "Custodian: \(custodian)",
-                detail: i.underLegalHold ? "Under legal hold — protected from deletion." : "Assigned custodian."))
+                detail: i.underLegalHold ? String(localized: "Under legal hold — protected from deletion.") : String(localized: "Assigned custodian.")))
         } else if i.underLegalHold {
             state.append(EmailHistoryEvent(
                 date: nil, icon: "lock.shield", title: String(localized: "Under legal hold"),

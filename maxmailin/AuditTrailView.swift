@@ -151,7 +151,7 @@ struct AuditTrailView: View {
                 Button {
                     Task { await generateDailyReport() }
                 } label: {
-                    Label(isGeneratingDailyReport ? "Verifying…" : "Daily Report",
+                    Label(isGeneratingDailyReport ? String(localized: "Verifying…") : String(localized: "Daily Report"),
                           systemImage: "doc.badge.clock")
                 }
                 .disabled(isGeneratingDailyReport)
@@ -412,7 +412,7 @@ struct AuditTrailView: View {
         PlatformClipboard.copyString(CaseActivityReportBuilder.build(inputs))
         forensicManager.logAction(
             "Daily activity report generated",
-            detail: "Chain \(chainOK == true ? "verified" : chainOK == false ? "FAILED verification" : "not verifiable"); report copied to clipboard")
+            detail: "Chain \(chainOK == true ? "verified" : chainOK == false ? String(localized: "FAILED verification") : "not verifiable"); report copied to clipboard")
         dailyReportNote = chainOK == false
             ? "Report copied — WARNING: the audit chain FAILED verification."
             : "Report copied — paste it into the case file."

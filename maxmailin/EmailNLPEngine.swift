@@ -834,7 +834,7 @@ struct EmailNLPEngine {
 
     static func summarizeEmail(_ email: MBOXParser.RawEmail) -> String {
         guard let body = bodyText(for: email), !body.isEmpty else {
-            return "No content to summarize."
+            return String(localized: "No content to summarize.")
         }
 
         let tagger = NLTagger(tagSchemes: [.sentimentScore])

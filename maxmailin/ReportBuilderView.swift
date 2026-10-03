@@ -225,7 +225,7 @@ struct ReportGenerator {
         case "Attachment Overview":
             return buildAttachmentOverview(emails: emails)
         default:
-            return "No data available for this section."
+            return String(localized: "No data available for this section.")
         }
     }
 
@@ -261,7 +261,7 @@ struct ReportGenerator {
         }.sorted { $0.1 < $1.1 }
 
         guard let first = datedEmails.first, let last = datedEmails.last else {
-            return "No date information available."
+            return String(localized: "No date information available.")
         }
         let formatter = DateFormatter()
         formatter.dateStyle = .medium

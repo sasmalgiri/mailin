@@ -241,7 +241,7 @@ private struct PageSwitcher: View {
                       ? page.displayName
                       : "\(page.displayName) is off — click to see what it includes")
                 .accessibilityAddTraits(page == selection ? [.isSelected] : [])
-                .accessibilityHint(isEnabled(page) ? "" : "Off. Opens a summary before turning it on.")
+                .accessibilityHint(isEnabled(page) ? "" : String(localized: "Off. Opens a summary before turning it on."))
             }
             Spacer()
         }

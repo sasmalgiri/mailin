@@ -571,7 +571,7 @@ struct EmailDetailView: View {
                         downloadAllAttachments()
                     }
                 } label: {
-                    Label(storeManager.isPremium ? "Download All Attachments" : "Download All (Pro)", systemImage: "arrow.down.circle.fill")
+                    Label(storeManager.isPremium ? String(localized: "Download All Attachments") : String(localized: "Download All (Pro)"), systemImage: "arrow.down.circle.fill")
                 }
                 .buttonStyle(PrimaryButtonStyle())
                 .padding(.vertical, Spacing.xxSmall)
@@ -663,7 +663,7 @@ struct EmailDetailView: View {
                 )
                 .environmentObject(storeManager)
             } label: {
-                Label(storeManager.isPremium ? "Export Email" : "Export Email (Pro)", systemImage: "square.and.arrow.up")
+                Label(storeManager.isPremium ? String(localized: "Export Email") : String(localized: "Export Email (Pro)"), systemImage: "square.and.arrow.up")
             }
             #if os(macOS)
             .menuStyle(.borderedButton)
@@ -700,7 +700,7 @@ struct EmailDetailView: View {
             }
         case .batesPDF:
             Button { if storeManager.requireProfessional() { exportBatesStampedPDF() } } label: {
-                Label(storeManager.isProfessional ? "Bates-Stamped PDF" : "Bates-Stamped PDF (Pro)", systemImage: "number.square")
+                Label(storeManager.isProfessional ? String(localized: "Bates-Stamped PDF") : String(localized: "Bates-Stamped PDF (Pro)"), systemImage: "number.square")
             }
         case .forensicReport:
             Button { if storeManager.requireProfessional() { exportForensicReport() } } label: {
@@ -1223,12 +1223,12 @@ struct EmailDetailView: View {
                             } else {
                                 Image(systemName: "sparkles")
                             }
-                            Text(isGeneratingReply ? "Stop" : "Generate Reply")
+                            Text(isGeneratingReply ? String(localized: "Stop") : String(localized: "Generate Reply"))
                         }
                         .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(PrimaryButtonStyle())
-                    .help(isGeneratingReply ? "Stop generating — keeps the draft so far" : "Draft a reply with on-device AI")
+                    .help(isGeneratingReply ? String(localized: "Stop generating — keeps the draft so far") : String(localized: "Draft a reply with on-device AI"))
                 }
                 #endif
 

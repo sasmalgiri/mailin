@@ -324,7 +324,7 @@ struct KeywordMonitorView: View {
                             .scaleEffect(0.7)
                     }
                     Image(systemName: "magnifyingglass")
-                    Text(isScanning ? "Scanning..." : "Scan Archive")
+                    Text(isScanning ? String(localized: "Scanning...") : String(localized: "Scan Archive"))
                 }
                 .frame(maxWidth: .infinity)
             }

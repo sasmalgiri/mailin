@@ -166,7 +166,7 @@ private struct ExpertEditSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(existingID == nil ? "New Custom Expert" : "Edit Expert")
+            Text(existingID == nil ? String(localized: "New Custom Expert") : String(localized: "Edit Expert"))
                 .font(.headline)
 
             VStack(alignment: .leading, spacing: 4) {

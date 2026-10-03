@@ -1339,114 +1339,114 @@ enum WorkflowCatalog {
     static func purpose(for defID: String) -> String {
         switch defID {
         case "builtin.forensic.intake":
-            return "Take in a mailbox as evidence and work it end to end — receive, hash, examine, analyze, report — with the chain of custody written for you."
+            return String(localized: "Take in a mailbox as evidence and work it end to end — receive, hash, examine, analyze, report — with the chain of custody written for you.")
         case "builtin.forensic.timeline":
-            return "Reconstruct what happened and when, then export a defensible timeline exhibit for the case file."
+            return String(localized: "Reconstruct what happened and when, then export a defensible timeline exhibit for the case file.")
         case "builtin.forensic.keywordsweep":
-            return "Run a search-term list across the evidence, triage the hits, and turn them into cited findings."
+            return String(localized: "Run a search-term list across the evidence, triage the hits, and turn them into cited findings.")
         case "builtin.forensic.custodyverify":
-            return "Re-hash the evidence and prove nothing changed since intake — then seal a chain-of-custody report."
+            return String(localized: "Re-hash the evidence and prove nothing changed since intake — then seal a chain-of-custody report.")
         case "builtin.legal.production":
-            return "Run a document production the defensible way — review, privilege-log, Bates, produce — with the privilege gate enforced before you release."
+            return String(localized: "Run a document production the defensible way — review, privilege-log, Bates, produce — with the privilege gate enforced before you release.")
         case "builtin.legal.hold":
-            return "Put a legal hold in place and prove it: identify custodians, issue the notice, track acknowledgements, preserve the data."
+            return String(localized: "Put a legal hold in place and prove it: identify custodians, issue the notice, track acknowledgements, preserve the data.")
         case "builtin.legal.eca":
-            return "Assess a matter before the expensive review — cull, sample, estimate scope — and decide how to proceed on evidence, not a guess."
+            return String(localized: "Assess a matter before the expensive review — cull, sample, estimate scope — and decide how to proceed on evidence, not a guess.")
         case "builtin.legal.dsar":
-            return "Answer a data-subject/GDPR request on the clock — locate the data, redact everyone else's, and produce a clean response pack."
+            return String(localized: "Answer a data-subject/GDPR request on the clock — locate the data, redact everyone else's, and produce a clean response pack.")
         case "builtin.it.phishing":
-            return "Work a single reported email start to finish — analyze, verdict, contain, close — and post the verdict number your ticket cites."
+            return String(localized: "Work a single reported email start to finish — analyze, verdict, contain, close — and post the verdict number your ticket cites.")
         case "builtin.it.threathunt":
-            return "Hunt the archive proactively on a hypothesis, extract indicators, and report what you found — before anyone reports it to you."
+            return String(localized: "Hunt the archive proactively on a hypothesis, extract indicators, and report what you found — before anyone reports it to you.")
         case "builtin.it.campaign":
-            return "Handle one phishing campaign that generated many reports as a single incident: cluster, verdict once, contain in bulk."
+            return String(localized: "Handle one phishing campaign that generated many reports as a single incident: cluster, verdict once, contain in bulk.")
         case "builtin.journalist.story":
-            return "Build a story from a leak the honest way — verify provenance, annotate cited findings, compile and fact-check a sourced draft."
+            return String(localized: "Build a story from a leak the honest way — verify provenance, annotate cited findings, compile and fact-check a sourced draft.")
         case "builtin.journalist.network":
-            return "Map who knew whom — extract the entities, chart the connections, and turn the network into the spine of your story."
+            return String(localized: "Map who knew whom — extract the entities, chart the connections, and turn the network into the spine of your story.")
         case "builtin.journalist.factcheck":
-            return "Stand up every claim before publication — corroborate independently, give subjects a right of reply, then sign off."
+            return String(localized: "Stand up every claim before publication — corroborate independently, give subjects a right of reply, then sign off.")
         case "builtin.journalist.publish":
-            return "Strip anything that could identify a source, verify the set is clean, and prepare a publish-safe export."
+            return String(localized: "Strip anything that could identify a source, verify the set is clean, and prepare a publish-safe export.")
         case "builtin.it.bec":
-            return "Work a suspected mailbox takeover end to end — scope, analyze rules/logins, verdict, contain and recover, report."
+            return String(localized: "Work a suspected mailbox takeover end to end — scope, analyze rules/logins, verdict, contain and recover, report.")
         case "builtin.personal.findexport":
-            return "Find the emails you need and save them out — search, select, export, and confirm."
+            return String(localized: "Find the emails you need and save them out — search, select, export, and confirm.")
         case "builtin.personal.declutter":
-            return "Tame the inbox — find newsletters and promos, unsubscribe, and clear out the old clutter."
+            return String(localized: "Tame the inbox — find newsletters and promos, unsubscribe, and clear out the old clutter.")
         case "builtin.forensic.exhibit":
-            return "Turn tagged evidence into a court-ready package — select, redact, Bates-stamp, and export with a cover report."
+            return String(localized: "Turn tagged evidence into a court-ready package — select, redact, Bates-stamp, and export with a cover report.")
         case "builtin.forensic.insider":
-            return "Judge a subject across comms patterns, anomalies, and risky terms — and record the finding for HR/legal."
+            return String(localized: "Judge a subject across comms patterns, anomalies, and risky terms — and record the finding for HR/legal.")
         case "builtin.legal.privqc":
-            return "The pre-production safety pass — QC the privilege log, redact, stamp, and sign off before anything ships."
+            return String(localized: "The pre-production safety pass — QC the privilege log, redact, stamp, and sign off before anything ships.")
         case "builtin.legal.compliance":
-            return "Audit the set for personal data — scan, classify sensitivity, remediate, and report compliance."
+            return String(localized: "Audit the set for personal data — scan, classify sensitivity, remediate, and report compliance.")
         case "builtin.it.authaudit":
-            return "Check your senders' SPF/DKIM/DMARC posture, look for spoofing, and report fixes."
+            return String(localized: "Check your senders' SPF/DKIM/DMARC posture, look for spoofing, and report fixes.")
         case "builtin.it.metrics":
-            return "Turn a period's triage activity into an executive security briefing — metrics, trends, report."
+            return String(localized: "Turn a period's triage activity into an executive security briefing — metrics, trends, report.")
         case "builtin.journalist.tips":
-            return "Triage a pile of tips into real leads — ingest, cluster by theme, prioritize, and start the story."
+            return String(localized: "Triage a pile of tips into real leads — ingest, cluster by theme, prioritize, and start the story.")
         case "builtin.journalist.datapack":
-            return "Build a data-driven story — analyze the numbers, visualize, draft the narrative, export the pack."
+            return String(localized: "Build a data-driven story — analyze the numbers, visualize, draft the narrative, export the pack.")
         case "builtin.personal.receipts":
-            return "Round up receipts and records — search, select, collect attachments, and export them in one go."
+            return String(localized: "Round up receipts and records — search, select, collect attachments, and export them in one go.")
         case "builtin.personal.cleanup":
-            return "Tidy a personal archive — import, dedupe, categorize, and export a clean backup."
+            return String(localized: "Tidy a personal archive — import, dedupe, categorize, and export a clean backup.")
         case "builtin.forensic.headers":
-            return "Read the raw headers, trace the routing, and prove whether a message is authentic or spoofed."
+            return String(localized: "Read the raw headers, trace the routing, and prove whether a message is authentic or spoofed.")
         case "builtin.forensic.cull":
-            return "Shrink the evidence set defensibly — drop exact and near-duplicates and out-of-range dates, then record the cull."
+            return String(localized: "Shrink the evidence set defensibly — drop exact and near-duplicates and out-of-range dates, then record the cull.")
         case "builtin.forensic.iocreport":
-            return "Mine the mail for indicators of compromise, judge which are real, and export a reported set."
+            return String(localized: "Mine the mail for indicators of compromise, judge which are real, and export a reported set.")
         case "builtin.forensic.affidavit":
-            return "Turn your findings into a signed expert report, with evidence integrity verified before you attest."
+            return String(localized: "Turn your findings into a signed expert report, with evidence integrity verified before you attest.")
         case "builtin.legal.collection":
-            return "Collect the custodians' mail into the case and prove the collection was complete."
+            return String(localized: "Collect the custodians' mail into the case and prove the collection was complete.")
         case "builtin.legal.processing":
-            return "Get a collected set review-ready — deduplicate, thread, and record what processing changed."
+            return String(localized: "Get a collected set review-ready — deduplicate, thread, and record what processing changed.")
         case "builtin.legal.firstpass":
-            return "Run the first-pass responsiveness review — batch it, code it, watch the pace, and report progress."
+            return String(localized: "Run the first-pass responsiveness review — batch it, code it, watch the pace, and report progress.")
         case "builtin.legal.clawback":
-            return "Recover inadvertently produced material — identify it, notify opposing counsel, redact or remove, and log it."
+            return String(localized: "Recover inadvertently produced material — identify it, notify opposing counsel, redact or remove, and log it.")
         case "builtin.it.quarantine":
-            return "Work the quarantine queue — analyze the held mail, verdict each one, and release the clean or hold the rest."
+            return String(localized: "Work the quarantine queue — analyze the held mail, verdict each one, and release the clean or hold the rest.")
         case "builtin.it.rules":
-            return "Audit mailboxes for hostile auto-forward and hidden inbox rules that signal a compromise, and report them."
+            return String(localized: "Audit mailboxes for hostile auto-forward and hidden inbox rules that signal a compromise, and report them.")
         case "builtin.it.blocklist":
-            return "Turn confirmed indicators into a validated blocklist your mail gateway can import."
+            return String(localized: "Turn confirmed indicators into a validated blocklist your mail gateway can import.")
         case "builtin.it.dlp":
-            return "Hunt for data leaving the org — scan sensitive terms, analyze outbound traffic, and report suspected exfiltration."
+            return String(localized: "Hunt for data leaving the org — scan sensitive terms, analyze outbound traffic, and report suspected exfiltration.")
         case "builtin.journalist.provenance":
-            return "Establish where leaked material came from — verify it is genuine, corroborate the source, and record the finding."
+            return String(localized: "Establish where leaked material came from — verify it is genuine, corroborate the source, and record the finding.")
         case "builtin.journalist.foia":
-            return "Run a public-records request end to end — draft it, track responses, review what's released, and log the outcome."
+            return String(localized: "Run a public-records request end to end — draft it, track responses, review what's released, and log the outcome.")
         case "builtin.journalist.quotes":
-            return "Pull quotable statements, read the surrounding threads for context, and attribute each quote to who said it."
+            return String(localized: "Pull quotable statements, read the surrounding threads for context, and attribute each quote to who said it.")
         case "builtin.journalist.crossref":
-            return "Cross-reference two datasets — compare them, map where they overlap, and report what the links reveal."
+            return String(localized: "Cross-reference two datasets — compare them, map where they overlap, and report what the links reveal.")
         case "builtin.personal.backup":
-            return "Make a lean, verified backup of your mail — pick the scope, dedupe, export, and confirm it opens."
+            return String(localized: "Make a lean, verified backup of your mail — pick the scope, dedupe, export, and confirm it opens.")
         case "builtin.personal.attachments":
-            return "Find and save the attachments you need — search, browse the gallery, select, and export."
+            return String(localized: "Find and save the attachments you need — search, browse the gallery, select, and export.")
         case "builtin.personal.contacts":
-            return "Round up your key contacts — analyze who you talk to, spot the patterns, pick the keepers, and export them."
+            return String(localized: "Round up your key contacts — analyze who you talk to, spot the patterns, pick the keepers, and export them.")
         // The four workflows added in the v3 cycle. They shipped without
         // purpose lines and fell through to the generic fallback, which
         // `testWorkflowPurpose_presentAndSpecific` correctly refused: a
         // catalogue entry the user cannot tell apart from any other is not
         // discoverable.
         case "builtin.researcher.protocol":
-            return "Set out your research protocol before you look — the question, the inclusion rules, and how you will code what you find."
+            return String(localized: "Set out your research protocol before you look — the question, the inclusion rules, and how you will code what you find.")
         case "builtin.researcher.screening":
-            return "Screen the corpus include/exclude against your stated criteria, recording a reason for every exclusion."
+            return String(localized: "Screen the corpus include/exclude against your stated criteria, recording a reason for every exclusion.")
         case "builtin.researcher.coding":
-            return "Extract and code the material against your scheme, so the same message coded twice lands the same way."
+            return String(localized: "Extract and code the material against your scheme, so the same message coded twice lands the same way.")
         case "builtin.forensic.evidenceplan":
-            return "Turn open questions into a collection plan — hypotheses, the requests that would test them, priority order, and who authorised the scope."
+            return String(localized: "Turn open questions into a collection plan — hypotheses, the requests that would test them, priority order, and who authorised the scope.")
         default:
-            return "A guided recipe that does the job step by step and keeps a numbered record for you."
+            return String(localized: "A guided recipe that does the job step by step and keeps a numbered record for you.")
         }
     }
 }

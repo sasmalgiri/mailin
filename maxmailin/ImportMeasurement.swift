@@ -212,7 +212,7 @@ struct ImportMeasurementView: View {
             }
 
             Section("Run") {
-                Button(isRunning ? "Measuring…" : "Measure import") { Task { await run() } }
+                Button(isRunning ? String(localized: "Measuring…") : String(localized: "Measure import")) { Task { await run() } }
                     .disabled(file == nil || isRunning)
                     .keyboardShortcut(.defaultAction)
                     .accessibilityIdentifier("measurement.run")
@@ -245,7 +245,7 @@ struct ImportMeasurementView: View {
                     figure("Batches", "\(result.batches)")
                     ForEach(result.notes, id: \.self) { Text($0).font(.caption).foregroundStyle(.secondary) }
                     HStack {
-                        Button(copied ? "Copied" : "Copy as text") {
+                        Button(copied ? String(localized: "Copied") : String(localized: "Copy as text")) {
                             PlatformClipboard.copyString(result.plainText())
                             copied = true
                             Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }

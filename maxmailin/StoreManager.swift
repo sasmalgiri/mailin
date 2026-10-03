@@ -104,10 +104,11 @@ enum ImportAllowance {
         /// The sentence the alert, the sheet and the status line all use.
         var message: String {
             let f = { (n: Int) in ByteCountFormatter.string(fromByteCount: Int64(n), countStyle: .file) }
+            let limit = f(limitBytes), requested = f(requestedBytes), ingested = f(ingestedBytes), remaining = f(remainingBytes)
             if ingestedBytes == 0 {
-                return "The Free plan imports up to \(f(limitBytes)) of input. These files total \(f(requestedBytes)). Personal and Professional have no input limit."
+                return String(localized: "The Free plan imports up to \(limit) of input. These files total \(requested). Personal and Professional have no input limit.")
             }
-            return "The Free plan imports up to \(f(limitBytes)) of input in total. This archive already holds \(f(ingestedBytes)); these files would add \(f(requestedBytes)), \(f(remainingBytes)) remain. Personal and Professional have no input limit."
+            return String(localized: "The Free plan imports up to \(limit) of input in total. This archive already holds \(ingested); these files would add \(requested), \(remaining) remain. Personal and Professional have no input limit.")
         }
     }
 
@@ -583,9 +584,9 @@ class StoreManager: ObservableObject {
     /// upgrade call in the same two words.
     static func planBadgeLabel(tier: PurchaseTier, lifetime: Bool) -> String {
         switch tier {
-        case .free: return "Free · Upgrade"
-        case .personal: return lifetime ? "Personal · Lifetime" : "Personal"
-        case .professional: return lifetime ? "Professional · Lifetime" : "Professional"
+        case .free: return String(localized: "Free · Upgrade")
+        case .personal: return lifetime ? String(localized: "Personal · Lifetime") : "Personal"
+        case .professional: return lifetime ? String(localized: "Professional · Lifetime") : "Professional"
         }
     }
 

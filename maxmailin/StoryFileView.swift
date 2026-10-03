@@ -43,7 +43,7 @@ struct StoryFileView: View {
                     PlatformClipboard.copyString(markdown)
                     copied = true
                 } label: {
-                    Label(copied ? "Copied" : "Copy Markdown", systemImage: "doc.on.doc")
+                    Label(copied ? String(localized: "Copied") : String(localized: "Copy Markdown"), systemImage: "doc.on.doc")
                 }
                 .disabled(isLoading)
                 .help("Copy the whole story file as Markdown")

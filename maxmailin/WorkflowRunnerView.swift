@@ -365,7 +365,7 @@ struct WorkflowRunnerView: View {
 
     private func chipHelp(_ op: WorkflowOperation, state: StepState) -> String {
         switch state {
-        case .done: return "Done — click to review or edit this step"
+        case .done: return String(localized: "Done — click to review or edit this step")
         case .current: return "You are here — \(op.hint)"
         case .locked: return "Locked — \(lockedReasons(op).first ?? "finish the earlier step first")"
         case .upcoming: return "Coming up — \(op.hint)"

@@ -368,7 +368,7 @@ struct TopicClustersView: View {
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(cluster.label), \(cluster.emailIDs.count) emails")
-        .accessibilityHint(isSelected ? "Double tap to deselect" : "Double tap to filter by this topic")
+        .accessibilityHint(isSelected ? String(localized: "Double tap to deselect") : String(localized: "Double tap to filter by this topic"))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 

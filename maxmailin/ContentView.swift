@@ -704,7 +704,7 @@ struct ContentView: View {
                     sidebarRow(.custodianPanel, "Custodian Panel", "person.badge.key")
                     sidebarRow(.redaction, "Redaction", "eye.slash")
                 } header: {
-                    Text(personaManager.selectedPersona == .forensic ? "Forensic" : "Legal & Forensic")
+                    Text(personaManager.selectedPersona == .forensic ? "Forensic" : String(localized: "Legal & Forensic"))
                 }
             }
 
@@ -1647,7 +1647,7 @@ struct ContentView: View {
                             } label: {
                                 Image(systemName: forensicManager.isEnabled ? "shield.checkered" : "shield")
                             }
-                            .accessibilityLabel(forensicManager.isEnabled ? "Disable Forensic Mode" : "Enable Forensic Mode")
+                            .accessibilityLabel(forensicManager.isEnabled ? String(localized: "Disable Forensic Mode") : String(localized: "Enable Forensic Mode"))
                             Button { showNewImportConfirmation = true } label: {
                                 Image(systemName: "house")
                             }
@@ -2510,7 +2510,7 @@ struct ContentView: View {
                                 GridItem(.flexible()), GridItem(.flexible()),
                                 GridItem(.flexible()), GridItem(.flexible())
                             ], spacing: Spacing.small) {
-                                detailToolButton(title: forensicManager.isEnabled ? "Forensic ON" : "Forensic OFF", icon: forensicManager.isEnabled ? "shield.checkered" : "shield", color: forensicManager.isEnabled ? .orange : .gray, tip: "Toggle forensic mode — enables evidence tagging, Bates numbering, and chain of custody tracking") {
+                                detailToolButton(title: forensicManager.isEnabled ? String(localized: "Forensic ON") : String(localized: "Forensic OFF"), icon: forensicManager.isEnabled ? "shield.checkered" : "shield", color: forensicManager.isEnabled ? .orange : .gray, tip: "Toggle forensic mode — enables evidence tagging, Bates numbering, and chain of custody tracking") {
                                     if forensicManager.isEnabled {
                                         forensicManager.isEnabled = false
                                     } else if storeManager.requireProfessional() {
@@ -3155,7 +3155,7 @@ struct ContentView: View {
                         Button {
                             if storeManager.requireProfessional() { exportBulkForensicCSV() }
                         } label: {
-                            Label(storeManager.isProfessional ? "Bates CSV (numbered + hashes)" : "Bates CSV (Pro)", systemImage: "tablecells")
+                            Label(storeManager.isProfessional ? String(localized: "Bates CSV (numbered + hashes)") : String(localized: "Bates CSV (Pro)"), systemImage: "tablecells")
                         }
                         Button {
                             if storeManager.requireProfessional() { exportConcordanceDAT() }
@@ -3201,7 +3201,7 @@ struct ContentView: View {
                             Button {
                                 if storeManager.requireProfessional() { exportAuditLog() }
                             } label: {
-                                Label(storeManager.isProfessional ? "Audit Log (tamper-evident)" : "Audit Log (Pro)", systemImage: "list.bullet.rectangle")
+                                Label(storeManager.isProfessional ? String(localized: "Audit Log (tamper-evident)") : String(localized: "Audit Log (Pro)"), systemImage: "list.bullet.rectangle")
                             }
                         }
                         Button {
@@ -3224,19 +3224,19 @@ struct ContentView: View {
                                 appState.showReviewBatches = true
                             }
                         } label: {
-                            Label(storeManager.isProfessional ? "Review Batches" : "Review Batches (Pro)", systemImage: "rectangle.stack.badge.play")
+                            Label(storeManager.isProfessional ? String(localized: "Review Batches") : String(localized: "Review Batches (Pro)"), systemImage: "rectangle.stack.badge.play")
                         }
                     }
                     Section("Review Sharing") {
                         Button {
                             if storeManager.requireProfessional() { exportReviewState() }
                         } label: {
-                            Label(storeManager.isProfessional ? "Export Review State" : "Export Review State (Pro)", systemImage: "square.and.arrow.up.on.square")
+                            Label(storeManager.isProfessional ? String(localized: "Export Review State") : String(localized: "Export Review State (Pro)"), systemImage: "square.and.arrow.up.on.square")
                         }
                         Button {
                             if storeManager.requireProfessional() { importReviewState() }
                         } label: {
-                            Label(storeManager.isProfessional ? "Import Review State" : "Import Review State (Pro)", systemImage: "square.and.arrow.down.on.square")
+                            Label(storeManager.isProfessional ? String(localized: "Import Review State") : String(localized: "Import Review State (Pro)"), systemImage: "square.and.arrow.down.on.square")
                         }
                     }
                 } label: {
@@ -3247,8 +3247,8 @@ struct ContentView: View {
                 .menuStyle(.borderedButton)
                 #endif
                 .controlSize(.small)
-                .help(isLegalOnly ? "Export production sets: Bates-numbered CSV, Concordance load files, and tagged documents" : "Export forensic data: CSV with Bates numbers and hashes, Concordance load files, or the tamper-evident audit log")
-                .accessibilityLabel(isLegalOnly ? "Production export options" : "Forensic export options")
+                .help(isLegalOnly ? String(localized: "Export production sets: Bates-numbered CSV, Concordance load files, and tagged documents") : String(localized: "Export forensic data: CSV with Bates numbers and hashes, Concordance load files, or the tamper-evident audit log"))
+                .accessibilityLabel(isLegalOnly ? String(localized: "Production export options") : String(localized: "Forensic export options"))
             }
         }
         .padding(.vertical, Spacing.small)

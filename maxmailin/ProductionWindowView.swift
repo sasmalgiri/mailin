@@ -92,7 +92,7 @@ struct ProductionWindowView: View {
                 }
             }
             Section {
-                Button(isRunning ? "Producing…" : "Produce") { Task { await run() } }
+                Button(isRunning ? String(localized: "Producing…") : String(localized: "Produce")) { Task { await run() } }
                     .buttonStyle(.borderedProminent)
                     .disabled(destination == nil || isRunning || title.trimmingCharacters(in: .whitespaces).isEmpty)
                     .keyboardShortcut(.defaultAction)

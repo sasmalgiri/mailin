@@ -306,7 +306,7 @@ struct NearDuplicateDetectionView: View {
                         .padding(.vertical, 2)
                         .background(similarityColor(group.similarityScore).opacity(0.12))
                         .cornerRadius(CornerRadius.small)
-                        .help(group.similarityScore >= 0.9 ? "Near-identical content — safe to remove duplicates" : "Significant overlap — review differences before removing")
+                        .help(group.similarityScore >= 0.9 ? String(localized: "Near-identical content — safe to remove duplicates") : String(localized: "Significant overlap — review differences before removing"))
 
                     Text("\(group.duplicates.count) duplicate\(group.duplicates.count == 1 ? "" : "s")")
                         .font(Typography.caption2)

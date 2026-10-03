@@ -225,7 +225,7 @@ struct ExportPreflightSheet: View {
             Spacer()
             Button("Cancel", action: onCancel)
                 .keyboardShortcut(.cancelAction)
-            Button(request.skipFirst > 0 ? "Resume" : "Start") { onStart(request) }
+            Button(request.skipFirst > 0 ? String(localized: "Resume") : String(localized: "Start")) { onStart(request) }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
                 .disabled(estimating || (estimate?.isInsufficient ?? false))
@@ -270,11 +270,11 @@ final class ExportJobRunner {
         var errorDescription: String? {
             switch self {
             case .selectionChanged:
-                return "The archive changed since this export stopped, so it cannot be continued from where it was. Start the export again."
+                return String(localized: "The archive changed since this export stopped, so it cannot be continued from where it was. Start the export again.")
             case .unbound:
-                return "This export's receipt does not record which selection it was writing, so it cannot be continued safely. Start the export again."
+                return String(localized: "This export's receipt does not record which selection it was writing, so it cannot be continued safely. Start the export again.")
             case .boundaryMissing:
-                return "This export's receipt does not record where its partial file ended, so it cannot be continued safely. Start the export again."
+                return String(localized: "This export's receipt does not record where its partial file ended, so it cannot be continued safely. Start the export again.")
             }
         }
     }

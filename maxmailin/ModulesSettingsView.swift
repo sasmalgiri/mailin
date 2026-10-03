@@ -173,25 +173,13 @@ struct ModulesSettingsView: View {
     private static func disableExplanation(for module: AppModule) -> String {
         switch module {
         case .archive:
-            return "Archive cannot be turned off."
+            return String(localized: "Archive cannot be turned off.")
         case .aiInsights:
-            return """
-                Running analysis and scheduled digests stop, and the model is unloaded. \
-                Saved summaries and reports are kept, and your archive is untouched.
-                """
+            return String(localized: "Running analysis and scheduled digests stop, and the model is unloaded. Saved summaries and reports are kept, and your archive is untouched.")
         case .professional:
-            return """
-                Running workflows pause and the page is hidden. Cases, custodians, legal \
-                holds, numbered documents and the audit chain are all kept — nothing is \
-                deleted and no hold is lifted. The audit chain records that it resumes \
-                when you turn this back on.
-                """
+            return String(localized: "Running workflows pause and the page is hidden. Cases, custodians, legal holds, numbered documents and the audit chain are all kept — nothing is deleted and no hold is lifted. The audit chain records that it resumes when you turn this back on.")
         case .liveMail:
-            return """
-                Syncing and sending stop and accounts are disconnected locally. Nothing is \
-                deleted from your mail server. Downloaded mail stays in this app's cache \
-                until you remove an account explicitly.
-                """
+            return String(localized: "Syncing and sending stop and accounts are disconnected locally. Nothing is deleted from your mail server. Downloaded mail stays in this app's cache until you remove an account explicitly.")
         }
     }
 }

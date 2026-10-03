@@ -751,7 +751,7 @@ struct KnowledgeGraphQueryTool: Tool {
 
     func call(arguments: Arguments) async throws -> String {
         guard let graph = FoundationModelEngine.getKnowledgeGraph(), graph.nodeCount > 0 else {
-            return "Knowledge graph not available. Import emails first to build the graph."
+            return String(localized: "Knowledge graph not available. Import emails first to build the graph.")
         }
 
         let qt = arguments.queryType?.lowercased() ?? "relationships"

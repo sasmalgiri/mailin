@@ -120,8 +120,8 @@ struct AttachmentGridView: View {
     private var emptyState: some View {
         EmptyStateView(
             icon: "paperclip",
-            title: searchText.isEmpty ? "No Attachments" : "No Matching Attachments",
-            message: searchText.isEmpty ? "Parsed emails contain no attachments." : "Try a different search term."
+            title: searchText.isEmpty ? String(localized: "No Attachments") : String(localized: "No Matching Attachments"),
+            message: searchText.isEmpty ? String(localized: "Parsed emails contain no attachments.") : String(localized: "Try a different search term.")
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

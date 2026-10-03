@@ -566,7 +566,7 @@ struct ACHMatrixEditorView: View {
                     if isPosting {
                         ProgressView().controlSize(.small)
                     } else {
-                        Label(model.postedDocumentNumber == nil ? "Post numbered ACH document" : "Post revision", systemImage: "number.square")
+                        Label(model.postedDocumentNumber == nil ? String(localized: "Post numbered ACH document") : String(localized: "Post revision"), systemImage: "number.square")
                     }
                 }
                 .buttonStyle(.borderedProminent)

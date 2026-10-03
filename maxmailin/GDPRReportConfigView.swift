@@ -111,7 +111,7 @@ struct GDPRReportConfigView: View {
                                             .scaleEffect(0.7)
                                             .frame(width: 16, height: 16)
                                     }
-                                    Text(isGenerating ? "Generating..." : "Generate GDPR Report")
+                                    Text(isGenerating ? String(localized: "Generating...") : String(localized: "Generate GDPR Report"))
                                 }
                             }
                             .buttonStyle(PrimaryButtonStyle())

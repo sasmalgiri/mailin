@@ -346,7 +346,7 @@ struct ReasoningCaseEditorView: View {
                     .font(.caption2.weight(.bold))
                     .frame(width: 52, alignment: .leading)
                     .foregroundStyle(cell.isComplete ? Color.green : Color.orange)
-                TextField(cell.markedUnknown ? "UNKNOWN" : "Answer from the evidence…", text: Binding(
+                TextField(cell.markedUnknown ? "UNKNOWN" : String(localized: "Answer from the evidence…"), text: Binding(
                     get: { model.cell(key).answer },
                     set: { model.fiveW[key, default: FiveWCell()].answer = $0 }
                 ))
@@ -573,7 +573,7 @@ struct ReasoningCaseEditorView: View {
                     if isPosting {
                         ProgressView().controlSize(.small)
                     } else {
-                        Label(model.postedDocumentNumber == nil ? "Post numbered reasoning document" : "Post revision", systemImage: "number.square")
+                        Label(model.postedDocumentNumber == nil ? String(localized: "Post numbered reasoning document") : String(localized: "Post revision"), systemImage: "number.square")
                     }
                 }
                 .buttonStyle(.borderedProminent)

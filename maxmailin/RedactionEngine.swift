@@ -400,7 +400,7 @@ struct RedactionConfigView: View {
                         }
                         .toggleStyle(.switch)
                         .accessibilityLabel("\(rule.type.rawValue) redaction")
-                        .accessibilityHint(rule.isEnabled ? "Enabled" : "Disabled")
+                        .accessibilityHint(rule.isEnabled ? String(localized: "Enabled") : String(localized: "Disabled"))
                     }
                     .padding(.vertical, Spacing.xxSmall)
                 }

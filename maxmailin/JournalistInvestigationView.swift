@@ -210,7 +210,7 @@ struct JournalistInvestigationView: View {
             anomalies = AnomalyDetectionEngine.detectAnomalies(in: emailsCopy)
             nlpSentiment = sentiment
             var cache: [UUID: SentimentResult] = [:]
-            for r in sentiment { let s = r.score; cache[r.email.id] = SentimentResult(score: s, label: s > 0.2 ? "Positive" : s < -0.2 ? "Negative" : "Neutral") }
+            for r in sentiment { let s = r.score; cache[r.email.id] = SentimentResult(score: s, label: s > 0.2 ? "Positive" : s < -0.2 ? String(localized: "Negative") : String(localized: "Neutral")) }
             sentimentCache = cache; hasSentimentAnalysis = true; hasV3Analysis = true; isV3Loading = false; return
         }
 
@@ -230,7 +230,7 @@ struct JournalistInvestigationView: View {
 
         nlpSentiment = sentiment; nlpTopics = topics; contactInsights = insights; anomalies = anom
         var cache: [UUID: SentimentResult] = [:]
-        for r in sentiment { let s = r.score; cache[r.email.id] = SentimentResult(score: s, label: s > 0.2 ? "Positive" : s < -0.2 ? "Negative" : "Neutral") }
+        for r in sentiment { let s = r.score; cache[r.email.id] = SentimentResult(score: s, label: s > 0.2 ? "Positive" : s < -0.2 ? String(localized: "Negative") : String(localized: "Neutral")) }
         sentimentCache = cache; hasSentimentAnalysis = true; hasV3Analysis = true; isV3Loading = false
     }
 
@@ -846,7 +846,7 @@ struct JournalistInvestigationView: View {
         return ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 sectionTitle("Topic Discovery", icon: "text.magnifyingglass", color: .purple)
-                Text(hasV3Analysis ? "Topics automatically extracted from email content using advanced text analysis." : "Topics extracted from email subject lines.")
+                Text(hasV3Analysis ? String(localized: "Topics automatically extracted from email content using advanced text analysis.") : String(localized: "Topics extracted from email subject lines."))
                     .font(.system(size: 10)).foregroundColor(.secondary)
 
                 if isV3Loading {

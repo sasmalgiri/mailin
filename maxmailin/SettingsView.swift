@@ -277,14 +277,14 @@ struct SettingsView: View {
                 HStack {
                     Text("Forensic Mode")
                     Spacer()
-                    Text(personaManager.config.showForensicByDefault ? "Auto-enabled" : "Manual")
+                    Text(personaManager.config.showForensicByDefault ? String(localized: "Auto-enabled") : String(localized: "Manual"))
                         .foregroundColor(.secondary)
                 }
 
                 HStack {
                     Text("AI Features")
                     Spacer()
-                    Text(personaManager.config.enableAIByDefault ? "Enabled" : "On Request")
+                    Text(personaManager.config.enableAIByDefault ? String(localized: "Enabled") : String(localized: "On Request"))
                         .foregroundColor(.secondary)
                 }
             } header: {
@@ -610,7 +610,7 @@ struct SettingsView: View {
                 // Full Fidelity Restore — heals archives migrated from v1
                 // (labels/attachments/raw source restored IN PLACE from the
                 // original files; no duplicates, review state untouched).
-                Button(fidelityHealRunning ? "Restoring…" : "Restore Full Fidelity from Original Files…") {
+                Button(fidelityHealRunning ? String(localized: "Restoring…") : String(localized: "Restore Full Fidelity from Original Files…")) {
                     runFidelityHeal()
                 }
                 .disabled(fidelityHealRunning)

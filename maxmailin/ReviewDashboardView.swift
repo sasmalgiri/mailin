@@ -139,7 +139,7 @@ struct ReviewDashboardView: View {
                         copied = true
                     }
                 } label: {
-                    Label(copied ? "Copied" : "Copy Defensibility Summary", systemImage: "doc.on.doc")
+                    Label(copied ? String(localized: "Copied") : String(localized: "Copy Defensibility Summary"), systemImage: "doc.on.doc")
                 }
                 .help("The production-ready numbers: assignment, velocity, and privilege-log status as plain text")
                 Button { if let onClose { onClose() } else { dismiss() } } label: {

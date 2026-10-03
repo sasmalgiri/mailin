@@ -1575,13 +1575,13 @@ struct LegalReviewWorkspaceView: View {
     private func aiSuggestionReason(for email: MBOXParser.RawEmail) -> String {
         let body = email.plainBody.lowercased()
         if body.contains("attorney") || body.contains("legal advice") || body.contains("privileged") {
-            return "Contains attorney-client communication markers"
+            return String(localized: "Contains attorney-client communication markers")
         }
         if body.contains("work product") || body.contains("draft") || body.contains("litigation strategy") {
-            return "Contains work product indicators"
+            return String(localized: "Contains work product indicators")
         }
         if body.contains("joint defense") || body.contains("common interest") {
-            return "Contains joint defense agreement language"
+            return String(localized: "Contains joint defense agreement language")
         }
         return ""
     }

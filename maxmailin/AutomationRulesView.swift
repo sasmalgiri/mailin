@@ -218,7 +218,7 @@ private struct RuleEditorSheet: View {
                 actionsSection
             }
             .formStyle(.grouped)
-            .navigationTitle(isEditing ? "Edit Rule" : "New Rule")
+            .navigationTitle(isEditing ? String(localized: "Edit Rule") : String(localized: "New Rule"))
             #if os(macOS)
             .frame(minWidth: 480, idealWidth: 540, minHeight: 450, idealHeight: 550)
             #endif
@@ -230,12 +230,12 @@ private struct RuleEditorSheet: View {
                     .accessibilityLabel("Cancel and discard changes")
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(isEditing ? "Save" : "Add Rule") {
+                    Button(isEditing ? String(localized: "Save") : String(localized: "Add Rule")) {
                         saveRule()
                         dismiss()
                     }
                     .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || conditions.isEmpty || actions.isEmpty)
-                    .accessibilityLabel(isEditing ? "Save rule changes" : "Add new rule")
+                    .accessibilityLabel(isEditing ? String(localized: "Save rule changes") : String(localized: "Add new rule"))
                 }
             }
             .onAppear {

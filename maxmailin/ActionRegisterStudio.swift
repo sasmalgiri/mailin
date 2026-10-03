@@ -372,7 +372,7 @@ struct ActionRegisterEditorView: View {
                     if isPosting {
                         ProgressView().controlSize(.small)
                     } else {
-                        Label(model.postedDocumentNumber == nil ? "Post numbered register document" : "Post revision", systemImage: "number.square")
+                        Label(model.postedDocumentNumber == nil ? String(localized: "Post numbered register document") : String(localized: "Post revision"), systemImage: "number.square")
                     }
                 }
                 .buttonStyle(.borderedProminent)
