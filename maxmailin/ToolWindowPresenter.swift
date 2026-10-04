@@ -50,7 +50,11 @@ final class ToolWindowPresenter {
             root = AnyView(root.environment(modules))
         }
         if let store = StoreManager.live {
-            root = AnyView(root.environmentObject(store).purchasePresenter(target: .window(title)))
+            // Order matters: the environment flows DOWN, so the store must be
+            // attached OUTSIDE the purchase presenter, which reads it. The
+            // reverse order crashed every tool window ("No ObservableObject
+            // of type StoreManager found"), e.g. Compare, found 2026-10-04.
+            root = AnyView(root.purchasePresenter(target: .window(title)).environmentObject(store))
         }
         window.contentView = NSHostingView(rootView: root)
         window.center()

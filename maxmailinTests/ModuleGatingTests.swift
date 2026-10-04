@@ -1281,3 +1281,36 @@ struct StoreKitPurchaseFlowTests {
     }
 }
 #endif
+
+#if os(macOS)
+import AppKit
+import SwiftUI
+
+/// Every Mac tool window is a new SwiftUI root built by ToolWindowPresenter.
+/// Found 2026-10-04 (owner clicking Compare): the store was attached INSIDE
+/// the purchase presenter that reads it, so every tool window crashed with
+/// "No ObservableObject of type StoreManager found" the moment it rendered.
+@Suite("Tool windows render with the store attached")
+@MainActor
+struct ToolWindowEnvironmentTests {
+    @Test("A tool window renders its root (purchase presenter included) without crashing")
+    func toolWindowRendersWithStore() throws {
+        let store = StoreManager(testTier: .free)
+        let previous = StoreManager.live
+        StoreManager.live = store
+        defer { StoreManager.live = previous }
+
+        let title = "ToolWindowEnvironmentTests-\(UUID().uuidString)"
+        ToolWindowPresenter.shared.open(title: title, size: CGSize(width: 700, height: 540)) {
+            Text("probe")
+        }
+        let window = try #require(NSApp.windows.first { $0.title == title }, "the tool window opened")
+        // Rendering evaluates PurchasePresenterModifier.body, which reads the store.
+        window.contentView?.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        #expect(window.contentView != nil)
+        ToolWindowPresenter.shared.close(title: title)
+    }
+}
+#endif
+

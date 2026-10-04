@@ -998,4 +998,223 @@ final class MailinClickThroughUITests: XCTestCase {
         XCTAssertFalse(rows.contains { $0.contains("CRASH") || $0.contains("FAIL") }, report)
     }
     #endif
+
+    #if os(iOS)
+    // MARK: - Deep crawl: every button, two levels (iPad)
+
+    /// Scrolls `e` into view by dragging the column or strip it sits in.
+    /// Returns false when it cannot be brought on screen or stays covered.
+    /// The smallest on-screen scroll area lying under `f` on the axis that
+    /// needs scrolling (so inside a sheet we scroll the sheet, not the page).
+    private func scrollArea(for f: CGRect, vertical: Bool) -> CGRect {
+        let w = app.windows.firstMatch.frame
+        guard let snap = try? app.snapshot() else { return w }
+        var best = w
+        func walk(_ s: XCUIElementSnapshot) {
+            if s.elementType == .scrollView || s.elementType == .table || s.elementType == .collectionView {
+                let r = s.frame.intersection(w)
+                let spans = vertical ? (r.minX <= f.midX && f.midX <= r.maxX) : (r.minY <= f.midY && f.midY <= r.maxY)
+                if !r.isEmpty, spans, r.width > 60, r.height > 60, r.width * r.height < best.width * best.height { best = r }
+            }
+            s.children.forEach(walk)
+        }
+        walk(snap)
+        return best
+    }
+
+    private func reveal(_ e: XCUIElement) -> Bool {
+        for _ in 0..<6 {
+            guard e.exists else { return false }
+            let f = e.frame, w = app.windows.firstMatch.frame
+            if f.isEmpty { return false }
+            if w.insetBy(dx: 4, dy: 4).contains(CGPoint(x: f.midX, y: f.midY)) {
+                if e.isHittable { return true }
+                // On screen but outside its own scroll area (e.g. below a sheet's fold).
+            }
+            let vertical = f.midY > w.maxY - 4 || f.midY < w.minY + 4 || !(w.minX...w.maxX).contains(f.midX) == false
+            let area = scrollArea(for: f, vertical: vertical)
+            let x = min(max(f.midX, area.minX + 20), area.maxX - 20)
+            let y = min(max(f.midY, area.minY + 20), area.maxY - 20)
+            if f.midY > area.maxY - 4 { drag(fromX: x, toX: x, y: 0, fromY: area.maxY - 30, toY: area.minY + 30) }
+            else if f.midY < area.minY + 4 { drag(fromX: x, toX: x, y: 0, fromY: area.minY + 30, toY: area.maxY - 30) }
+            else if f.midX > area.maxX - 4 { drag(fromX: area.maxX - 30, toX: area.minX + 30, y: 0, fromY: y, toY: y) }
+            else if f.midX < area.minX + 4 { drag(fromX: area.minX + 30, toX: area.maxX - 30, y: 0, fromY: y, toY: y) }
+            else { return false }   // inside its area yet not hittable: covered
+            Thread.sleep(forTimeInterval: 0.6)
+        }
+        return e.exists && e.isHittable
+    }
+
+    /// Among elements matching `target`, the one a user could tap now, else
+    /// the first match (labels like "Done" repeat across hidden screens).
+    private func resolveVisible(_ target: (id: String, label: String)) -> XCUIElement {
+        let w = app.windows.firstMatch.frame
+        let query = target.id.isEmpty
+            ? app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", target.label))
+            : app.descendants(matching: .any).matching(identifier: target.id)
+        let n = min(query.count, 12)
+        for i in 0..<n {
+            let el = query.element(boundBy: i)
+            let f = el.frame
+            if !f.isEmpty, w.contains(CGPoint(x: f.midX, y: f.midY)), el.isHittable { return el }
+        }
+        return n > 0 ? query.element(boundBy: 0) : resolve(target)
+    }
+
+    /// Closes one level of whatever is on top.
+    private func dismissOnce() {
+        if app.alerts.firstMatch.exists {
+            let b = app.alerts.firstMatch.buttons
+            let cancel = b["Cancel"].firstMatch
+            (cancel.exists ? cancel : b.element(boundBy: max(0, b.count - 1))).tap(); return
+        }
+        if filePickerOpen() {
+            let cancel = app.navigationBars.buttons["Cancel"].firstMatch
+            (cancel.exists ? cancel : app.buttons["Cancel"].firstMatch).tap(); return
+        }
+        if popoverOpen() { app.otherElements["PopoverDismissRegion"].firstMatch.tap(); return }
+        for title in ["Done", "Close", "Cancel", "Not now", "OK"] {
+            let b = resolveVisible((id: "", label: title))
+            if b.exists, !b.frame.isEmpty, app.windows.firstMatch.frame.contains(CGPoint(x: b.frame.midX, y: b.frame.midY)), b.isHittable { b.tap(); return }
+        }
+        let gotIt = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Got It'")).firstMatch
+        if gotIt.exists, gotIt.isHittable { gotIt.tap(); return }
+        let back = app.navigationBars.buttons.element(boundBy: 0)
+        if back.exists, back.isHittable { back.tap(); return }
+        app.swipeDown(velocity: .fast)
+    }
+
+    private static let deepSkip = try! NSRegularExpression(
+        pattern: #"(?i)(\b(delete|remove|erase|clear|reset|forget|purge|wipe|empty|quit|sign out|log ?out|buy|purchase|subscribe|restore purchases|manage subscription|turn off|disable|send|move archive|relocate|lift hold|release|revoke)\b|new import|start new import|add more email files|add files)"#)
+
+    private func isSkipped(_ name: String) -> Bool {
+        Self.deepSkip.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)) != nil
+    }
+
+    private func keys() -> Set<String> { Set(visibleControls().map { $0.id + "|" + $0.label }) }
+
+    /// What a press did, judged against the controls on screen before it.
+    private func outcome(before: Set<String>, popoverBefore: Bool) -> (text: String, opened: Bool, added: [String]) {
+        if app.state != .runningForeground { return ("CRASH — app quit after the press", false, []) }
+        if app.alerts.firstMatch.exists {
+            let buttons = app.alerts.firstMatch.buttons.allElementsBoundByIndex.map(\.label)
+            return ("opened alert “\(app.alerts.firstMatch.label)” [\(buttons.joined(separator: ", "))]", true, [])
+        }
+        if filePickerOpen() { return ("opened the file picker", true, []) }
+        let after = keys()
+        let added = Array(after.subtracting(before))
+        if popoverOpen() && !popoverBefore { return ("opened a menu/popover (\(added.count) items)", true, added) }
+        if added.isEmpty && after == before { return ("no visible change (acts in place)", false, []) }
+        let sample = added.prefix(3).map { $0.split(separator: "|").last.map(String.init) ?? $0 }.joined(separator: ", ")
+        return ("screen changed (+\(added.count): \(sample))", added.count >= 2, added)
+    }
+
+    func testDeepCrawl_everyButtonTwoLevels() {
+        _ = app.buttons.firstMatch.waitForExistence(timeout: 120)
+        var rows: [String] = []
+        var pressedTop = Set<String>()
+        let childCap = 25, topCap = 150
+
+        for page in Self.pageNames where page != "Live Mail" {
+            guard openPage(page) else { rows.append("| \(page) | (page) | could not open |"); continue }
+            let targets = visibleControls()
+            for target in targets.prefix(topCap) {
+                let key = target.id + "|" + target.label
+                let name = target.label.isEmpty ? target.id : target.label
+                if pressedTop.contains(key) { continue }       // same control on an earlier page
+                pressedTop.insert(key)
+                if isSkipped(name) { rows.append("| \(page) | \(name) | skipped (destructive, purchase or import) |"); continue }
+                recoverIfNeeded()
+                dismissEverything()
+                let parent = resolveVisible(target)
+                guard parent.exists else { rows.append("| \(page) | \(name) | not present after earlier presses |"); continue }
+                guard reveal(parent) else { rows.append("| \(page) | \(name) | NOT REACHABLE (covered or cannot scroll to it) |"); continue }
+                let popBefore = popoverOpen()
+                let before = keys()
+                print("CRAWL-STEP \(Date()) \(page) ▸ \(name)")
+                parent.tap()
+                Thread.sleep(forTimeInterval: 1.2)
+                let top = outcome(before: before, popoverBefore: popBefore)
+                rows.append("| \(page) | \(name) | \(top.text) |")
+                if top.text.hasPrefix("CRASH") {
+                    app.launch(); _ = app.wait(for: .runningForeground, timeout: 30); _ = openPage(page); continue
+                }
+
+                // ── Level 2: everything the press opened (alerts are only listed) ──
+                if top.opened && !app.alerts.firstMatch.exists && !filePickerOpen() {
+                    let container = keys()
+                    let children = top.added.compactMap { k -> (id: String, label: String)? in
+                        let parts = k.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+                        guard parts.count == 2 else { return nil }
+                        return (parts[0], parts[1])
+                    }
+                    let anchors = Array(children.prefix(3))
+                    for child in children.prefix(childCap) {
+                        let cname = child.label.isEmpty ? child.id : child.label
+                        if isSkipped(cname) { rows.append("| \(page) | \(name) ▸ \(cname) | skipped |"); continue }
+                        // Container still open? If not, reopen it from the parent.
+                        if !anchors.contains(where: { a in let e = resolveVisible(a); return e.exists && !e.frame.isEmpty && app.windows.firstMatch.frame.contains(CGPoint(x: e.frame.midX, y: e.frame.midY)) }) {
+                            dismissEverything(); returnToPage(page)
+                            let again = resolveVisible(target)
+                            guard again.exists, reveal(again) else { rows.append("| \(page) | \(name) ▸ … | container could not be reopened; rest not pressed |"); break }
+                            again.tap(); Thread.sleep(forTimeInterval: 1.2)
+                        }
+                        let el = resolveVisible(child)
+                        guard el.exists else { rows.append("| \(page) | \(name) ▸ \(cname) | gone after an earlier press |"); continue }
+                        guard reveal(el) else { rows.append("| \(page) | \(name) ▸ \(cname) | NOT REACHABLE |"); continue }
+                        let cPop = popoverOpen()
+                        let cBefore = keys()
+                        print("CRAWL-STEP \(Date()) \(page) ▸ \(name) ▸ \(cname)")
+                        el.tap()
+                        Thread.sleep(forTimeInterval: 1.2)
+                        let res = outcome(before: cBefore, popoverBefore: cPop)
+                        rows.append("| \(page) | \(name) ▸ \(cname) | \(res.text) |")
+                        if res.text.hasPrefix("CRASH") {
+                            app.launch(); _ = app.wait(for: .runningForeground, timeout: 30); _ = openPage(page); break
+                        }
+                        // Close only what the child opened, then carry on in the container.
+                        let now = keys()
+                        if res.opened || !now.subtracting(container).isEmpty && now.isSuperset(of: container) == false {
+                            dismissOnce(); Thread.sleep(forTimeInterval: 0.6)
+                        }
+                    }
+                }
+                dismissEverything()
+                returnToPage(page)
+            }
+            if targets.count > topCap { rows.append("| \(page) | (\(targets.count - topCap) more) | not pressed: cap |") }
+        }
+
+        let crashes = rows.filter { $0.contains("CRASH") }
+        let unreachable = rows.filter { $0.contains("NOT REACHABLE") }
+        let report = "| Page | Button | Outcome |\n|---|---|---|\n" + rows.joined(separator: "\n")
+            + "\n\nRows: \(rows.count); crashes: \(crashes.count); not reachable: \(unreachable.count)\n"
+        print("DEEP-CRAWL>>>\n\(report)<<<DEEP-CRAWL")
+        let att = XCTAttachment(string: report); att.name = "deep-crawl.md"; att.lifetime = .keepAlways; add(att)
+        XCTAssertTrue(crashes.isEmpty, "crashes: \(crashes)")
+    }
+    #endif
+
+    #if os(iOS)
+    /// Deep crawl 2026-10-04: Archive ▸ AI Assistant ▸ Show tutorial, then a
+    /// tap outside, and the app was gone. Reproduce that exact sequence.
+    func testRepro_aiAssistantTutorialDismiss() {
+        _ = app.buttons.firstMatch.waitForExistence(timeout: 120)
+        _ = openPage("Archive")
+        let ai = resolveVisible((id: "", label: "AI Assistant"))
+        XCTAssertTrue(ai.exists && reveal(ai), "AI Assistant button reachable")
+        ai.tap(); Thread.sleep(forTimeInterval: 2)
+        print("REPRO after AI Assistant: popover=\(popoverOpen()) state=\(app.state.rawValue)")
+        let help = resolveVisible((id: "", label: "Show tutorial"))
+        XCTAssertTrue(help.exists && reveal(help), "Show tutorial reachable")
+        help.tap(); Thread.sleep(forTimeInterval: 2)
+        snapshotScreen("repro-tutorial-open")
+        print("REPRO after tutorial: popover=\(popoverOpen()) state=\(app.state.rawValue)")
+        if popoverOpen() { app.otherElements["PopoverDismissRegion"].firstMatch.tap() } else { dismissOnce() }
+        Thread.sleep(forTimeInterval: 3)
+        print("REPRO after dismiss: state=\(app.state.rawValue)")
+        XCTAssertEqual(app.state, .runningForeground, "the app is still running after dismissing the tutorial")
+        snapshotScreen("repro-after-dismiss")
+    }
+    #endif
 }
