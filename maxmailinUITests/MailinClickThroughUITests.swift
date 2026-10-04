@@ -808,4 +808,178 @@ final class MailinClickThroughUITests: XCTestCase {
         return rows
     }
     #endif
+
+    #if os(iOS)
+    // MARK: - Core actions the crawl could not reach (iPad)
+
+    /// Brings an element in the Professional page's horizontal tool strip on
+    /// screen by swiping the strip, at most six times.
+    private func revealInStrip(_ element: XCUIElement) -> Bool {
+        // `isHittable` raises (not false) for an element with no hit point,
+        // so check the frame against the window first.
+        func onScreen() -> Bool {
+            guard element.exists else { return false }
+            let f = element.frame, w = app.windows.firstMatch.frame
+            guard !f.isEmpty, w.contains(CGPoint(x: f.midX, y: f.midY)) else { return false }
+            return element.isHittable
+        }
+        for _ in 0..<14 {
+            if onScreen() { return true }
+            // Drag along the strip's own row, toward the element.
+            let w = app.windows.firstMatch.frame
+            let f = element.frame
+            guard !f.isEmpty else { break }
+            let goRight = f.midX < w.minX
+            drag(fromX: goRight ? w.minX + 120 : w.maxX - 120, toX: goRight ? w.maxX - 120 : w.minX + 120, y: f.midY,
+                 fromY: f.midY, toY: f.midY)
+            Thread.sleep(forTimeInterval: 0.6)
+        }
+        return onScreen()
+    }
+
+    /// A press-and-drag between two absolute points in the main window.
+    private func drag(fromX: CGFloat, toX: CGFloat, y: CGFloat, fromY: CGFloat, toY: CGFloat) {
+        let origin = app.windows.firstMatch.coordinate(withNormalizedOffset: .zero)
+        let start = origin.withOffset(CGVector(dx: fromX, dy: fromY))
+        let end = origin.withOffset(CGVector(dx: toX, dy: toY))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .default, thenHoldForDuration: 0.1)
+    }
+
+    private func relaunch(_ extra: [String]) {
+        app.terminate()
+        app.launchArguments = ["--uitest"] + extra
+        app.launch()
+        _ = app.wait(for: .runningForeground, timeout: 30)
+        _ = app.buttons.firstMatch.waitForExistence(timeout: 60)
+    }
+
+    /// Runs one export format from the Archive footer through pre-flight to
+    /// its receipt. Returns the receipt's verdict text, or why it stopped.
+    private func exportThroughReceipt(_ menuTitle: String) -> String {
+        _ = openPage("Archive")
+        let menu = app.buttons["Export filtered emails"].firstMatch
+        guard menu.waitForExistence(timeout: 10) else { return "FAIL: no Export menu" }
+        var swipes = 0
+        func menuOnScreen() -> Bool {
+            let f = menu.frame, w = app.windows.firstMatch.frame
+            return !f.isEmpty && w.contains(CGPoint(x: f.midX, y: f.midY)) && menu.isHittable
+        }
+        // The menu sits at the foot of the sidebar column: drag that column up.
+        while !menuOnScreen() && swipes < 6 {
+            let w = app.windows.firstMatch.frame
+            let x = menu.frame.isEmpty ? w.minX + 150 : menu.frame.midX
+            drag(fromX: x, toX: x, y: 0, fromY: w.maxY - 200, toY: w.minY + 250)
+            swipes += 1; Thread.sleep(forTimeInterval: 0.6)
+        }
+        guard menuOnScreen() else {
+            let w = app.windows.firstMatch.frame
+            return "FAIL: Export menu not reachable (frame \(menu.frame), window \(w), on screen false)"
+        }
+        menu.tap()
+        let item = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", menuTitle)).firstMatch
+        guard item.waitForExistence(timeout: 5) else { return "FAIL: menu has no \(menuTitle)" }
+        item.tap()
+        let start = app.buttons["export.preflight.start"].firstMatch
+        guard start.waitForExistence(timeout: 15) else {
+            snapshotScreen("export-no-preflight-\(menuTitle)")
+            let labels = (try? app.snapshot()).map { snap -> [String] in
+                var out: [String] = []
+                func walk(_ s: XCUIElementSnapshot) {
+                    if [.button, .staticText, .alert, .sheet].contains(s.elementType), !s.label.isEmpty { out.append("\(s.elementType.rawValue):\(s.label)") }
+                    s.children.forEach(walk)
+                }
+                walk(snap); return out
+            } ?? []
+            print("UITEST-NO-PREFLIGHT \(menuTitle) >>> \(labels.prefix(80))")
+            return "FAIL: pre-flight sheet did not appear"
+        }
+        let preflightText = (try? app.otherElements["export.preflight"].firstMatch.snapshot())
+            .map { snap -> String in
+                var parts: [String] = []
+                func walk(_ s: XCUIElementSnapshot) { if s.elementType == .staticText { parts.append(s.label) }; s.children.forEach(walk) }
+                walk(snap); return parts.joined(separator: " / ")
+            } ?? ""
+        start.tap()
+        // iOS hands the finished file to the share sheet; close it, then read the receipt.
+        let deadline = Date().addingTimeInterval(300)
+        while Date() < deadline {
+            if app.state != .runningForeground { return "CRASH during export" }
+            let close = app.buttons["Close"].firstMatch
+            if app.otherElements["ActivityListView"].exists || app.navigationBars["UIActivityContentView"].exists {
+                if close.exists { close.tap() } else { app.swipeDown(velocity: .fast) }
+            }
+            if app.descendants(matching: .any)["export.receipt"].firstMatch.exists { break }
+            Thread.sleep(forTimeInterval: 1)
+        }
+        let verdict = app.descendants(matching: .any)["export.receipt.verdict"].firstMatch
+        let text = verdict.exists ? verdict.label : "no receipt within 5 minutes"
+        snapshotScreen("export-\(menuTitle)")
+        return "pre-flight: \(preflightText) ▸ receipt: \(text)"
+    }
+
+    func testCoreActions_exportAndProfessionalTools() {
+        var rows: [String] = []
+
+        // ── Professional (Debug unlock): the actions the crawl missed ──
+        rows.append("CSV export: " + exportThroughReceipt("Spreadsheet (.csv)"))
+        dismissEverything()
+        rows.append("mbox export: " + exportThroughReceipt("mbox Archive"))
+        dismissEverything()
+
+        _ = openPage("Professional Workflows")
+        let tools = ["eDiscovery": "eDiscovery", "batesNumbering": "Bates Numbering", "redaction": "Redaction",
+                     "reviewBatches": "Review Batches", "investigationReport": "Investigation Report"]
+        for (raw, title) in tools.sorted(by: { $0.key < $1.key }) {
+            let tile = app.buttons["professional.tool.\(raw)"].firstMatch
+            guard revealInStrip(tile) else { rows.append("\(title): FAIL not reachable in the tool strip"); continue }
+            tile.tap()
+            let done = app.buttons["Done"].firstMatch
+            let opened = done.waitForExistence(timeout: 10)
+            snapshotScreen("tool-\(raw)")
+            rows.append("\(title): " + (opened ? "opened its tool sheet" : "FAIL no tool sheet within 10 s"))
+            if app.state != .runningForeground { rows.append("\(title): CRASH"); relaunch([]); _ = openPage("Professional Workflows"); continue }
+            dismissEverything()
+        }
+        let production = app.buttons["professional.production"].firstMatch
+        if revealInStrip(production) {
+            production.tap()
+            let opened = app.buttons["Done"].firstMatch.waitForExistence(timeout: 10)
+            snapshotScreen("tool-production")
+            rows.append("Production…: " + (opened ? "opened (on iPad this is the Bates Numbering sheet)" : "FAIL nothing opened"))
+            dismissEverything()
+        } else { rows.append("Production…: FAIL not reachable") }
+
+        // ── Free tier: the same buttons must ask for a purchase ──
+        relaunch(["-mailinSimulateTier", "free"])
+        let badge = app.buttons["plan.badge"].firstMatch
+        rows.append("Free badge: " + (badge.waitForExistence(timeout: 10) ? badge.label : "FAIL no plan badge"))
+        _ = openPage("Professional Workflows")
+        for (raw, title) in [("batesNumbering", "Bates Numbering"), ("redaction", "Redaction")] {
+            let tile = app.buttons["professional.tool.\(raw)"].firstMatch
+            guard revealInStrip(tile) else { rows.append("Free \(title): FAIL not reachable"); continue }
+            tile.tap()
+            let paywall = app.descendants(matching: .any)["paywall"].firstMatch.waitForExistence(timeout: 8)
+            snapshotScreen("free-\(raw)")
+            rows.append("Free \(title): " + (paywall ? "paywall shown" : "FAIL opened without a purchase"))
+            let close = app.buttons["paywall.close"].firstMatch
+            if close.exists { close.tap(); Thread.sleep(forTimeInterval: 0.8) } else { dismissEverything() }
+        }
+        let freeProduction = app.buttons["professional.production"].firstMatch
+        if revealInStrip(freeProduction) {
+            freeProduction.tap()
+            let paywall = app.descendants(matching: .any)["paywall"].firstMatch.waitForExistence(timeout: 8)
+            rows.append("Free Production…: " + (paywall ? "paywall shown" : "FAIL opened without a purchase"))
+            let close = app.buttons["paywall.close"].firstMatch
+            if close.exists { close.tap(); Thread.sleep(forTimeInterval: 0.8) }
+        }
+        rows.append("Free CSV export: " + exportThroughReceipt("Spreadsheet (.csv)"))
+
+        let report = rows.map { "- " + $0 }.joined(separator: "\n")
+        print("CORE-ACTIONS>>>\n\(report)\n<<<CORE-ACTIONS")
+        let attachment = XCTAttachment(string: report)
+        attachment.name = "core-actions.md"; attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertFalse(rows.contains { $0.contains("CRASH") || $0.contains("FAIL") }, report)
+    }
+    #endif
 }

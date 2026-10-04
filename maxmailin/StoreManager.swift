@@ -511,6 +511,10 @@ class StoreManager: ObservableObject {
         for await result in Transaction.currentEntitlements {
             guard let transaction = try? checkVerified(result) else { continue }
             guard transaction.revocationDate == nil else { continue }
+            // A lapsed subscription grants nothing, even if StoreKit's
+            // entitlement list still carries it (seen in the StoreKit test
+            // environment right after expiry).
+            if let expiry = transaction.expirationDate, expiry <= Date() { continue }
 
             let isProProduct = StoreManager.professionalProductIDs.contains(transaction.productID)
             let isPersonalProduct = StoreManager.personalProductIDs.contains(transaction.productID)
@@ -543,6 +547,24 @@ class StoreManager: ObservableObject {
         currentTier = highestTier
         isLifetimePurchase = hasLifetime
         subscriptionExpirationDate = hasLifetime ? nil : latestExpiration
+        scheduleExpiryRecheck(at: latestExpiration)
+    }
+
+    /// Expiry is not a transaction update, so nothing would otherwise tell a
+    /// running app that a subscription has lapsed until it is next activated
+    /// (a Mac app can stay active for days). Re-read entitlements the moment
+    /// the latest subscription period ends.
+    private var expiryRecheck: Task<Void, Never>?
+
+    private func scheduleExpiryRecheck(at expiry: Date?) {
+        expiryRecheck?.cancel()
+        guard let expiry else { expiryRecheck = nil; return }
+        let delay = max(0.5, expiry.timeIntervalSinceNow + 0.5)
+        expiryRecheck = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            await self?.checkEntitlements()
+        }
     }
 
     // MARK: - Subscription Management

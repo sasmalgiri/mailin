@@ -11,6 +11,8 @@
 import Testing
 import Foundation
 import NaturalLanguage
+import StoreKit
+import StoreKitTest
 @testable import maxmailin
 
 @MainActor
@@ -1102,3 +1104,180 @@ struct InterfaceLocalizationTests {
         }
     }
 }
+
+
+// MARK: - Real StoreKit 2 purchase flows (local StoreKit test environment)
+
+/// Purchases, upgrades, refunds, expiry, Ask to Buy and Restore Purchases run
+/// through StoreKit 2 against `maxmailin/Products.storekit` with
+/// `SKTestSession`, and the app's own `StoreManager` decides the tier from
+/// `Transaction.currentEntitlements` with the Debug all-unlocked shortcut
+/// switched off — the same code path the App Store build takes. What this
+/// does NOT cover: the App Store sandbox and Apple Account sign-in, which
+/// need TestFlight.
+#if os(iOS)
+// iOS only: on macOS `Product.purchase()` needs a window to anchor its
+// confirmation sheet, and the hosted test runner has none, so it waits
+// minutes and fails. The entitlement code under test is shared.
+@Suite("StoreKit purchase flows (local StoreKit test environment)", .serialized)
+@MainActor
+struct StoreKitPurchaseFlowTests {
+
+    private static var configURL: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("maxmailin/Products.storekit")
+    }
+
+    private func freshSession() throws -> SKTestSession {
+        let session = try SKTestSession(contentsOf: Self.configURL)
+        session.resetToDefaultState()
+        session.clearTransactions()
+        session.disableDialogs = true
+        session.askToBuyEnabled = false
+        return session
+    }
+
+    /// The live manager as the App Store build runs it: StoreKit products,
+    /// StoreKit entitlements, no Debug unlock.
+    private func liveStore() async -> StoreManager {
+        let store = StoreManager()
+        store.debugUnlocksAllTiers = false
+        await store.loadProducts()
+        await store.checkEntitlements()
+        return store
+    }
+
+    private func product(_ id: String, in store: StoreManager) throws -> Product {
+        try #require(store.products.first { $0.id == id }, "product \(id) loads from the StoreKit file")
+    }
+
+    /// Polls until `condition` holds (the transaction listener is async).
+    private func eventually(_ seconds: Double = 8, _ condition: () -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if condition() { return true }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        return condition()
+    }
+
+    @Test("A fresh install is Free: all six products load, nothing is unlocked, exports are capped")
+    func freshInstallIsFree() async throws {
+        let session = try freshSession()
+        defer { session.clearTransactions() }
+        let store = await liveStore()
+        #expect(Set(store.products.map(\.id)) == StoreManager.allProductIDs)
+        #expect(store.effectiveTier == .free)
+        #expect(!store.isPremium)
+        #expect(try ExportJobRunner.enforcedCap(savedCap: nil, isPremium: store.isPremium) == StoreManager.freeEmailLimit)
+    }
+
+    @Test("Buying Personal yearly unlocks Personal (not Professional) with a renewal date")
+    func buyPersonalYearly() async throws {
+        let session = try freshSession()
+        defer { session.clearTransactions() }
+        let store = await liveStore()
+        let outcome = await store.purchase(try product(StoreManager.personalYearlyID, in: store))
+        #expect(outcome == .success(.personal), "outcome: \(outcome)")
+        #expect(store.isPremium)
+        #expect(!store.isProfessional)
+        #expect(!store.isLifetimePurchase)
+        #expect(store.subscriptionExpirationDate != nil)
+        #expect(try ExportJobRunner.enforcedCap(savedCap: StoreManager.freeEmailLimit, isPremium: store.isPremium) == nil)
+    }
+
+    @Test("Upgrading Personal to Professional lifetime unlocks Professional for life")
+    func upgradeToProfessionalLifetime() async throws {
+        let session = try freshSession()
+        defer { session.clearTransactions() }
+        let store = await liveStore()
+        _ = await store.purchase(try product(StoreManager.personalMonthlyID, in: store))
+        let outcome = await store.purchase(try product(StoreManager.professionalLifetimeID, in: store))
+        #expect(outcome == .success(.professional), "outcome: \(outcome)")
+        #expect(store.isProfessional)
+        #expect(store.isLifetimePurchase)
+        #expect(store.subscriptionExpirationDate == nil)
+    }
+
+    @Test("A refunded (revoked) purchase takes access away")
+    func refundRevokesAccess() async throws {
+        let session = try freshSession()
+        defer { session.clearTransactions() }
+        let store = await liveStore()
+        _ = await store.purchase(try product(StoreManager.personalLifetimeID, in: store))
+        #expect(store.isPremium)
+        let transaction = try #require(session.allTransactions().first { $0.productIdentifier == StoreManager.personalLifetimeID })
+        try session.refundTransaction(identifier: transaction.identifier)
+        await store.checkEntitlements()
+        #expect(await eventually { store.effectiveTier == .free }, "tier after refund: \(store.effectiveTier)")
+    }
+
+    @Test("A cancelled subscription lapses on its own at the end of the period, with the app left running")
+    func cancelledSubscriptionLapsesWhileRunning() async throws {
+        let session = try freshSession()
+        defer { session.clearTransactions(); session.timeRate = .realTime }
+        // One monthly period = 30 real seconds.
+        session.timeRate = .monthlyRenewalEveryThirtySeconds
+        let store = await liveStore()
+        _ = await store.purchase(try product(StoreManager.professionalMonthlyID, in: store))
+        #expect(store.isProfessional)
+        let sub = try #require(session.allTransactions().first { $0.productIdentifier == StoreManager.professionalMonthlyID })
+        try session.disableAutoRenewForTransaction(identifier: sub.identifier)
+        // No checkEntitlements call from here on: the app must notice by itself.
+        #expect(await eventually(60) { store.effectiveTier == .free },
+                "tier after the period ended: \(store.effectiveTier); expiry \(String(describing: store.subscriptionExpirationDate)); now \(Date())")
+    }
+
+    @Test("An expired subscription grants nothing once the app is next active")
+    func expiredSubscriptionOnActivation() async throws {
+        let session = try freshSession()
+        defer { session.clearTransactions() }
+        let store = await liveStore()
+        _ = await store.purchase(try product(StoreManager.personalMonthlyID, in: store))
+        #expect(store.isPremium)
+        let sub = try #require(session.allTransactions().first { $0.productIdentifier == StoreManager.personalMonthlyID })
+        try session.disableAutoRenewForTransaction(identifier: sub.identifier)
+        try session.expireSubscription(productIdentifier: StoreManager.personalMonthlyID)
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        await store.checkEntitlements()   // what the app does on becoming active
+        #expect(store.effectiveTier == .free, "tier: \(store.effectiveTier)")
+    }
+
+    @Test("Ask to Buy: pending unlocks nothing; approval unlocks through the transaction listener")
+    func askToBuyPendingThenApproved() async throws {
+        let session = try freshSession()
+        defer { session.clearTransactions() }
+        session.askToBuyEnabled = true
+        let store = await liveStore()
+        let outcome = await store.purchase(try product(StoreManager.personalYearlyID, in: store))
+        #expect(outcome == .pending, "outcome: \(outcome)")
+        #expect(store.purchasePending)
+        #expect(store.effectiveTier == .free, "nothing unlocks while pending")
+        let pending = try #require(session.allTransactions().first { $0.productIdentifier == StoreManager.personalYearlyID })
+        try session.approveAskToBuyTransaction(identifier: pending.identifier)
+        #expect(await eventually { store.effectiveTier == .personal }, "tier after approval: \(store.effectiveTier)")
+    }
+
+    @Test("Restore Purchases on a new install finds the purchase; with none it says so")
+    func restorePurchases() async throws {
+        let session = try freshSession()
+        defer { session.clearTransactions() }
+        let buyer = await liveStore()
+        _ = await buyer.purchase(try product(StoreManager.professionalYearlyID, in: buyer))
+
+        // A second manager stands in for the same Apple Account on a fresh install.
+        let reinstall = StoreManager()
+        reinstall.debugUnlocksAllTiers = false
+        let restored = await reinstall.restorePurchases()
+        #expect(restored == .restored(.professional), "restore outcome: \(restored)")
+        #expect(reinstall.lastRestoreOutcome == restored)
+
+        session.clearTransactions()
+        let nobody = StoreManager()
+        nobody.debugUnlocksAllTiers = false
+        let none = await nobody.restorePurchases()
+        #expect(none == .nothingFound, "restore with no purchases: \(none)")
+    }
+}
+#endif
