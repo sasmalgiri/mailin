@@ -879,8 +879,13 @@ final class MailinClickThroughUITests: XCTestCase {
         let item = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", menuTitle)).firstMatch
         guard item.waitForExistence(timeout: 5) else { return "FAIL: menu has no \(menuTitle)" }
         item.tap()
-        let start = app.buttons["export.preflight.start"].firstMatch
-        guard start.waitForExistence(timeout: 15) else {
+        // iOS does not expose the button's identifier inside the sheet; its
+        // label ("Start") is what VoiceOver and the test both see.
+        let byID = app.buttons["export.preflight.start"].firstMatch
+        let byLabel = app.buttons["Start"].firstMatch
+        let appeared = byID.waitForExistence(timeout: 10) || byLabel.waitForExistence(timeout: 5)
+        let start = byID.exists ? byID : byLabel
+        guard appeared else {
             snapshotScreen("export-no-preflight-\(menuTitle)")
             let labels = (try? app.snapshot()).map { snap -> [String] in
                 var out: [String] = []
@@ -893,11 +898,13 @@ final class MailinClickThroughUITests: XCTestCase {
             print("UITEST-NO-PREFLIGHT \(menuTitle) >>> \(labels.prefix(80))")
             return "FAIL: pre-flight sheet did not appear"
         }
-        let preflightText = (try? app.otherElements["export.preflight"].firstMatch.snapshot())
+        let preflightText = (try? app.snapshot())
             .map { snap -> String in
                 var parts: [String] = []
                 func walk(_ s: XCUIElementSnapshot) { if s.elementType == .staticText { parts.append(s.label) }; s.children.forEach(walk) }
-                walk(snap); return parts.joined(separator: " / ")
+                walk(snap)
+                return parts.filter { $0.contains("emails as") || $0.contains("free tier") || $0.contains("needed") }
+                    .joined(separator: " / ")
             } ?? ""
         start.tap()
         // iOS hands the finished file to the share sheet; close it, then read the receipt.
@@ -911,8 +918,17 @@ final class MailinClickThroughUITests: XCTestCase {
             if app.descendants(matching: .any)["export.receipt"].firstMatch.exists { break }
             Thread.sleep(forTimeInterval: 1)
         }
-        let verdict = app.descendants(matching: .any)["export.receipt.verdict"].firstMatch
-        let text = verdict.exists ? verdict.label : "no receipt within 5 minutes"
+        // The receipt card's text (iOS does not expose its identifiers).
+        let receiptShown = app.descendants(matching: .any)["export.receipt"].firstMatch.exists
+        let receiptText = (try? app.snapshot()).map { snap -> String in
+            var parts: [String] = []
+            func walk(_ s: XCUIElementSnapshot) { if s.elementType == .staticText { parts.append(s.label) }; s.children.forEach(walk) }
+            walk(snap)
+            return parts.filter { $0.localizedCaseInsensitiveContains("written") || $0.localizedCaseInsensitiveContains("export")
+                && ($0.contains("emails") || $0.contains("complete") || $0.contains("SHA")) || $0.contains("SHA-256") }
+                .prefix(4).joined(separator: " / ")
+        } ?? ""
+        let text = receiptShown ? (receiptText.isEmpty ? "receipt shown" : receiptText) : "no receipt within 5 minutes"
         snapshotScreen("export-\(menuTitle)")
         return "pre-flight: \(preflightText) ▸ receipt: \(text)"
     }
