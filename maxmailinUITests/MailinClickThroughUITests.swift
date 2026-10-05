@@ -848,7 +848,7 @@ final class MailinClickThroughUITests: XCTestCase {
     /// closing anything a press opens, then closes the window.
     private func crawlToolWindow(title: String, page: String, parent: String) -> [CrawlRow] {
         var rows: [CrawlRow] = []
-        let window = app.windows[title].firstMatch
+        let window = app.windows.matching(NSPredicate(format: "title == %@", title)).firstMatch
         guard window.waitForExistence(timeout: 5), let snap = try? window.snapshot() else {
             return [CrawlRow(page: page, button: "\(parent) ▸ (window)", outcome: "window could not be read")]
         }
@@ -1397,7 +1397,8 @@ final class MailinClickThroughUITests: XCTestCase {
     }
 
     private func click(at frame: CGRect, inWindow title: String, windowFrame: CGRect) {
-        let origin = app.windows[title].firstMatch.coordinate(withNormalizedOffset: .zero)
+        let byTitle = app.windows.matching(NSPredicate(format: "title == %@", title)).firstMatch
+        let origin = (byTitle.exists ? byTitle : app.windows.firstMatch).coordinate(withNormalizedOffset: .zero)
         origin.withOffset(CGVector(dx: frame.midX - windowFrame.minX, dy: frame.midY - windowFrame.minY)).click()
     }
 
@@ -1452,11 +1453,31 @@ final class MailinClickThroughUITests: XCTestCase {
             guard before.windows.contains(windowTitle), let winFrame = before.windowFrames[windowTitle] else {
                 rows.append(CrawlRow(page: page, button: path, outcome: "window closed by an earlier press")); break
             }
-            guard let now = before.buttons.first(where: { $0.key == target.key }) else {
+            guard var now = before.buttons.first(where: { $0.key == target.key }) else {
                 rows.append(CrawlRow(page: page, button: path, outcome: "gone after an earlier press")); continue
             }
-            guard !now.frame.isEmpty, winFrame.insetBy(dx: 2, dy: 2).contains(CGPoint(x: now.frame.midX, y: now.frame.midY)) else {
-                rows.append(CrawlRow(page: page, button: path, outcome: "not visible (scroll needed)")); continue
+            // Off-screen: scroll the area it sits in (mouse wheel at a point on
+            // its row or column inside the window), up to five times.
+            var scrolls = 0
+            func onScreen(_ f: CGRect) -> Bool { !f.isEmpty && winFrame.insetBy(dx: 4, dy: 4).contains(CGPoint(x: f.midX, y: f.midY)) }
+            while !onScreen(now.frame) && !now.frame.isEmpty && scrolls < 5 && app.state == .runningForeground {
+                let f = now.frame
+                let x = min(max(f.midX, winFrame.minX + 40), winFrame.maxX - 40)
+                let y = min(max(f.midY, winFrame.minY + 60), winFrame.maxY - 40)
+                let window = app.windows.matching(NSPredicate(format: "title == %@", windowTitle)).firstMatch
+                let point = (window.exists ? window : app.windows.firstMatch).coordinate(withNormalizedOffset: .zero)
+                    .withOffset(CGVector(dx: x - winFrame.minX, dy: y - winFrame.minY))
+                if f.midY > winFrame.maxY - 4 { point.scroll(byDeltaX: 0, deltaY: -300) }
+                else if f.midY < winFrame.minY + 4 { point.scroll(byDeltaX: 0, deltaY: 300) }
+                else if f.midX > winFrame.maxX - 4 { point.scroll(byDeltaX: -300, deltaY: 0) }
+                else { point.scroll(byDeltaX: 300, deltaY: 0) }
+                Thread.sleep(forTimeInterval: 0.6)
+                scrolls += 1
+                guard let st = macState(buttonsIn: windowTitle), let moved = st.buttons.first(where: { $0.key == target.key }) else { break }
+                now = moved
+            }
+            guard onScreen(now.frame) else {
+                rows.append(CrawlRow(page: page, button: path, outcome: "not visible (could not scroll to it)")); continue
             }
             // Coordinate clicks land on whatever is in front: only click when
             // maxmailin itself is frontmost (otherwise they hit Xcode).
@@ -1499,10 +1520,20 @@ final class MailinClickThroughUITests: XCTestCase {
     func testRepro_macAISuggestionClick() {
         recoverIfNeeded()
         _ = openPage("AI Insights")
-        let suggestion = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Ask: '")).firstMatch
+        let which = ProcessInfo.processInfo.environment["MAILIN_REPRO_SUGGESTION"] ?? "Ask: "
+        let suggestion = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", which)).firstMatch
         guard suggestion.waitForExistence(timeout: 20) else { XCTFail("no suggestion shown"); return }
-        if suggestion.isHittable { suggestion.click() } else { suggestion.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click() }
-        for i in 0..<6 {
+        if ProcessInfo.processInfo.environment["MAILIN_REPRO_RAPID"] == "1" {
+            // The crawl's sequence: several suggestions within seconds.
+            let all = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Ask: '"))
+            let n = min(all.count, 5)
+            for i in 0..<n {
+                let b = all.element(boundBy: i)
+                if b.exists, b.isHittable { b.click(); print("REPRO-MAC rapid click \(i) enabled=\(b.isEnabled)") }
+                Thread.sleep(forTimeInterval: 1.5)
+            }
+        } else if suggestion.isHittable { suggestion.click() } else { suggestion.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click() }
+        for i in 0..<20 {
             Thread.sleep(forTimeInterval: 1)
             _ = try? app.snapshot()          // what an accessibility client does
             print("REPRO-MAC tick \(i) state=\(app.state.rawValue)")

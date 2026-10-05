@@ -55,6 +55,11 @@ struct AIAssistantView: View {
 
     @State private var prompt = ""
     @State private var isProcessing = false
+    /// A suggestion was tapped and its question has not started answering
+    /// yet. Suggestions stay on screen until the first answer lands, so
+    /// without this a second tap started a second concurrent ask (and the
+    /// churn crashed macOS accessibility, Mac crawl 2026-10-05).
+    @State private var suggestionInFlight = false
     @State private var conversationHistory: [(query: String, answer: String, timestamp: Date, relatedEmailIDs: [UUID])] = []
     @State private var selectedEngine: AIEngine = .auto
     @State private var emailScope: EmailScope = .filtered
@@ -274,7 +279,11 @@ struct AIAssistantView: View {
         .onChange(of: emailScope) { _, newScope in
             Task { await hydrateWorkingSet(for: newScope) }
         }
+        .onChange(of: isProcessing) { _, processing in
+            if !processing { suggestionInFlight = false }
+        }
         .onChange(of: conversationHistory.count) { _, _ in
+            suggestionInFlight = false
             guard let last = conversationHistory.last, !last.relatedEmailIDs.isEmpty else { return }
             Task { await hydrateRelated(ids: last.relatedEmailIDs) }
         }
@@ -794,15 +803,18 @@ struct AIAssistantView: View {
             VStack(spacing: Spacing.xSmall) {
                 ForEach(sampleQuestions, id: \.self) { question in
                     Button {
-                        // Defer: askAI() replaces this whole list with the
-                        // conversation. Removing the pressed button inside its
-                        // own action left macOS accessibility holding a
-                        // destroyed element (EXC_BAD_ACCESS in
-                        // _accessibilityFindRoleFromProtocol, found by the Mac
-                        // crawl 2026-10-05). Let the press finish first.
+                        // One question at a time; and defer, because askAI()
+                        // replaces this whole list with the conversation and
+                        // removing the pressed button inside its own action
+                        // left macOS accessibility holding a destroyed element.
+                        guard !suggestionInFlight && !isProcessing else { return }
+                        suggestionInFlight = true
                         Task { @MainActor in
                             prompt = question
                             askAI()
+                            // Nothing started (e.g. the daily allowance opened
+                            // the paywall): give the suggestions back.
+                            if !isProcessing && currentTask == nil { suggestionInFlight = false }
                         }
                     } label: {
                         HStack(spacing: Spacing.xSmall) {
@@ -825,6 +837,7 @@ struct AIAssistantView: View {
                     .hoverEffect(scale: 1.01)
                     .accessibilityLabel("Ask: \(question)")
                     .accessibilityHint("Send this question to the AI assistant")
+                    .disabled(suggestionInFlight || isProcessing)
                 }
             }
             #if os(iOS)
@@ -2026,7 +2039,7 @@ struct AIAssistantView: View {
 
     private func askAI() {
         let query = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return }
+        guard !query.isEmpty, !isProcessing else { return }
 
         switch Self.classifyConversational(query) {
         case .greeting:
