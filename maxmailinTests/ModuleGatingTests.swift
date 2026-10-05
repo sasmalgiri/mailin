@@ -1339,3 +1339,38 @@ struct ToolWindowEnvironmentTests {
 }
 #endif
 
+@Suite("Professional page profession filter")
+@MainActor
+struct ProfessionFilterTests {
+    @Test("Every tool appears for at least one profession, and All tools shows everything")
+    func everyToolHasAProfession() {
+        for destination in ProfessionalPageView.toolDestinations {
+            #expect(ProfessionalPageView.isRelevant(destination, to: nil))
+            let owners = ProfessionalPageView.professions.filter { ProfessionalPageView.isRelevant(destination, to: $0) }
+            #expect(!owners.isEmpty, "\(destination.rawValue) is shown to no profession")
+        }
+        #expect(ProfessionalPageView.showsProduction(for: nil))
+        #expect(ProfessionalPageView.showsProduction(for: .legal))
+    }
+
+    @Test("Choosing a profession narrows the strip")
+    func professionNarrows() {
+        for p in ProfessionalPageView.professions {
+            let shown = ProfessionalPageView.toolDestinations.filter { ProfessionalPageView.isRelevant($0, to: p) }
+            #expect(shown.count < ProfessionalPageView.toolDestinations.count, "\(p.rawValue) shows every tool")
+        }
+    }
+}
+
+@Suite("AI suggestion sender names")
+struct AISuggestionSenderTests {
+    @Test("Display name without quotes, else the address, else empty")
+    func senderNames() {
+        #expect(AIAssistantView.senderDisplayName("\"Ann Lee\" <ann@example.org>") == "Ann Lee")
+        #expect(AIAssistantView.senderDisplayName("Ann Lee <ann@example.org>") == "Ann Lee")
+        #expect(AIAssistantView.senderDisplayName("<ann@example.org>") == "ann@example.org")
+        #expect(AIAssistantView.senderDisplayName("ann@example.org") == "ann@example.org")
+        #expect(AIAssistantView.senderDisplayName("") == "")
+    }
+}
+

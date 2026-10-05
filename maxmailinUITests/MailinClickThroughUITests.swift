@@ -1564,4 +1564,71 @@ final class MailinClickThroughUITests: XCTestCase {
         }
     }
     #endif
+
+    #if os(macOS)
+    /// Owner, 2026-10-05: "have you checked the result of the AI answers?"
+    /// Asks real questions on the archive and records every answer verbatim.
+    func testAIAnswers_recordForReview() {
+        recoverIfNeeded()
+        _ = openPage("AI Insights")
+        let askTab = app.buttons["Ask"].firstMatch
+        if askTab.waitForExistence(timeout: 5), askTab.isHittable { askTab.click() }
+        var report = ""
+        var asked = Set<String>()
+        for n in 0..<10 {
+            // Back to the suggestion list: clear any previous conversation.
+            let clear = app.buttons.matching(NSPredicate(format: "label == 'Bin' OR label CONTAINS[c] 'Clear conversation'")).firstMatch
+            if clear.exists, clear.isEnabled, clear.isHittable { clear.click(); Thread.sleep(forTimeInterval: 1) }
+            let suggestions = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Ask: '")).allElementsBoundByIndex
+            guard let next = suggestions.first(where: { !asked.contains($0.label) }) else { break }
+            let q = String(next.label.dropFirst("Ask: ".count))
+            asked.insert(next.label)
+            var tries = 0
+            while !next.isHittable && tries < 6 {
+                app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).scroll(byDeltaX: 0, deltaY: -250)
+                Thread.sleep(forTimeInterval: 0.5); tries += 1
+            }
+            guard next.isHittable else { report += "\n## Q\(n+1): \(q)\n(could not reach the suggestion)\n"; continue }
+            app.activate(); Thread.sleep(forTimeInterval: 1)
+            print("AI-DEBUG before click: \(next.label) enabled=\(next.isEnabled) hittable=\(next.isHittable)")
+            next.click()
+            let started = Date()
+            Thread.sleep(forTimeInterval: 1)
+            // A suggestion that did not start (first click only activated the
+            // window): click it once more.
+            if next.exists, next.isHittable, app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Ask: '")).count > 1 {
+                next.click(); Thread.sleep(forTimeInterval: 1)
+            }
+            print("AI-DEBUG 1s after: thinking=\(app.staticTexts["Thinking..."].exists) suggestionsLeft=\(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Ask: '")).count) bubbles=\(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", String(q.prefix(20)))).count)")
+            Thread.sleep(forTimeInterval: 2)
+            while Date().timeIntervalSince(started) < 150 {
+                let busy = app.staticTexts["Thinking..."].exists || app.buttons["Processing query"].exists
+                    || app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'Answering'")).firstMatch.exists
+                if !busy { break }
+                Thread.sleep(forTimeInterval: 2)
+            }
+            Thread.sleep(forTimeInterval: 20)   // slow engines finish streaming
+            var texts: [String] = []
+            if let snap = try? app.windows.firstMatch.snapshot() {
+                func walk(_ e: XCUIElementSnapshot) {
+                    if e.elementType == .staticText || e.elementType == .textView {
+                        let t = (e.value as? String) ?? e.label
+                        if !t.isEmpty { texts.append(t) }
+                    }
+                    e.children.forEach(walk)
+                }
+                walk(snap)
+            }
+            let from = texts.lastIndex(where: { $0.contains(q.prefix(30)) }).map { $0 + 1 } ?? max(0, texts.count - 40)
+            var lines: [String] = []
+            for t in texts[from...] where lines.last != t { lines.append(t) }
+            let answer = lines.prefix(60).joined(separator: "\n")
+            report += "\n## Q\(n+1): \(q)  (\(Int(Date().timeIntervalSince(started))) s)\n\(answer)\n"
+            snapshotScreen("ai-answer-\(n+1)")
+            if app.state == .notRunning { report += "\n(app quit)\n"; break }
+        }
+        print("AI-ANSWERS>>>\(report)\n<<<AI-ANSWERS")
+        let att = XCTAttachment(string: report); att.name = "ai-answers.md"; att.lifetime = .keepAlways; add(att)
+    }
+    #endif
 }

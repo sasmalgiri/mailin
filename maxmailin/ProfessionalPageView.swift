@@ -18,6 +18,10 @@ struct ProfessionalPageView: View {
     @EnvironmentObject private var storeManager: StoreManager
     @Environment(\.purchasePresentationTarget) private var purchaseTarget
     @State private var presented: HubDestination?
+    /// The profession the tool strip is narrowed to ("" = not chosen yet,
+    /// "all" = every tool). Owner, 2026-10-05: one profession at a time
+    /// keeps the page uncluttered; nothing is removed, "All tools" shows it all.
+    @AppStorage("professionalPageProfession") private var professionRaw = ""
 
     struct Tool: Identifiable {
         let destination: HubDestination
@@ -97,26 +101,92 @@ struct ProfessionalPageView: View {
                     Divider().frame(height: 18)
                 }
                 #endif
-                Text("Studios").font(.caption).foregroundStyle(.secondary)
-                ForEach(Self.studios) { tool in toolButton(tool) }
+                professionPicker
                 Divider().frame(height: 18)
-                Text("Tools").font(.caption).foregroundStyle(.secondary)
-                ForEach(Self.tools) { tool in toolButton(tool) }
-                Divider().frame(height: 18)
-                Button {
-                    openProductionWindow()
-                } label: {
-                    Label("Production…", systemImage: storeManager.isProfessional ? "shippingbox" : "lock.fill")
+                let studios = Self.studios.filter { Self.isRelevant($0.destination, to: profession) }
+                let tools = Self.tools.filter { Self.isRelevant($0.destination, to: profession) }
+                if !studios.isEmpty {
+                    Text("Studios").font(.caption).foregroundStyle(.secondary)
+                    ForEach(studios) { tool in toolButton(tool) }
+                    Divider().frame(height: 18)
                 }
-                .help(storeManager.isProfessional
-                      ? "Produce a Bates-stamped set with a hash manifest, an exclusion log and a numbered production record"
-                      : "Production needs the Professional purchase")
-                .accessibilityIdentifier("professional.production")
+                if !tools.isEmpty {
+                    Text("Tools").font(.caption).foregroundStyle(.secondary)
+                    ForEach(tools) { tool in toolButton(tool) }
+                }
+                if Self.showsProduction(for: profession) {
+                    Divider().frame(height: 18)
+                    Button {
+                        openProductionWindow()
+                    } label: {
+                        Label("Production…", systemImage: storeManager.isProfessional ? "shippingbox" : "lock.fill")
+                    }
+                    .help(storeManager.isProfessional
+                          ? "Produce a Bates-stamped set with a hash manifest, an exclusion log and a numbered production record"
+                          : "Production needs the Professional purchase")
+                    .accessibilityIdentifier("professional.production")
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
         }
         .controlSize(.small)
+    }
+
+    // MARK: - Profession filter
+
+    /// Professions that narrow the strip (Personal use has no Professional tools of its own).
+    static let professions: [PersonaManager.Persona] = [.legal, .forensic, .itAdmin, .journalist, .researcher]
+
+    /// nil = all tools. Not chosen yet: start from the user's persona when it
+    /// is a professional one, else show everything.
+    private var profession: PersonaManager.Persona? {
+        if professionRaw == "all" { return nil }
+        if let chosen = PersonaManager.Persona(rawValue: professionRaw), Self.professions.contains(chosen) { return chosen }
+        let persona = PersonaManager.shared.selectedPersona
+        return Self.professions.contains(persona) ? persona : nil
+    }
+
+    /// Which tools each profession sees. Every tool belongs to at least one.
+    static func isRelevant(_ destination: HubDestination, to profession: PersonaManager.Persona?) -> Bool {
+        guard let profession else { return true }
+        let byProfession: [PersonaManager.Persona: Set<HubDestination>] = [
+            .legal: [.custodianPanel, .eDiscovery, .batesNumbering, .redaction, .reviewBatches, .chainOfCustody, .factMatrix],
+            .forensic: [.chainOfCustody, .investigationReport, .custodianPanel, .redaction, .achMatrix, .evidenceDesks, .reasoningStudio],
+            .itAdmin: [.investigationReport, .chainOfCustody, .actionRegister, .reasoningStudio, .achMatrix],
+            .journalist: [.evidenceDesks, .factMatrix, .achMatrix, .redaction, .actionRegister],
+            .researcher: [.factMatrix, .evidenceDesks, .reasoningStudio, .achMatrix, .actionRegister],
+        ]
+        return byProfession[profession]?.contains(destination) ?? true
+    }
+
+    /// Production (a Bates-stamped set for opposing counsel) is legal work.
+    static func showsProduction(for profession: PersonaManager.Persona?) -> Bool {
+        profession == nil || profession == .legal || profession == .forensic
+    }
+
+    private var professionPicker: some View {
+        Menu {
+            ForEach(Self.professions, id: \.self) { p in
+                Button {
+                    professionRaw = p.rawValue
+                } label: {
+                    if profession == p { Label(p.displayName, systemImage: "checkmark") } else { Label(p.displayName, systemImage: p.icon) }
+                }
+            }
+            Divider()
+            Button {
+                professionRaw = "all"
+            } label: {
+                if profession == nil { Label("All tools", systemImage: "checkmark") } else { Label("All tools", systemImage: "square.grid.2x2") }
+            }
+        } label: {
+            Label(profession?.displayName ?? String(localized: "All tools"),
+                  systemImage: profession?.icon ?? "square.grid.2x2")
+        }
+        .fixedSize()
+        .help("Show only the tools for one profession")
+        .accessibilityIdentifier("professional.profession")
     }
 
     private func toolButton(_ tool: Tool) -> some View {

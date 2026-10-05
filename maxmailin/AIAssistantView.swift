@@ -55,11 +55,6 @@ struct AIAssistantView: View {
 
     @State private var prompt = ""
     @State private var isProcessing = false
-    /// A suggestion was tapped and its question has not started answering
-    /// yet. Suggestions stay on screen until the first answer lands, so
-    /// without this a second tap started a second concurrent ask (and the
-    /// churn crashed macOS accessibility, Mac crawl 2026-10-05).
-    @State private var suggestionInFlight = false
     @State private var conversationHistory: [(query: String, answer: String, timestamp: Date, relatedEmailIDs: [UUID])] = []
     @State private var selectedEngine: AIEngine = .auto
     @State private var emailScope: EmailScope = .filtered
@@ -279,11 +274,7 @@ struct AIAssistantView: View {
         .onChange(of: emailScope) { _, newScope in
             Task { await hydrateWorkingSet(for: newScope) }
         }
-        .onChange(of: isProcessing) { _, processing in
-            if !processing { suggestionInFlight = false }
-        }
         .onChange(of: conversationHistory.count) { _, _ in
-            suggestionInFlight = false
             guard let last = conversationHistory.last, !last.relatedEmailIDs.isEmpty else { return }
             Task { await hydrateRelated(ids: last.relatedEmailIDs) }
         }
@@ -807,14 +798,10 @@ struct AIAssistantView: View {
                         // replaces this whole list with the conversation and
                         // removing the pressed button inside its own action
                         // left macOS accessibility holding a destroyed element.
-                        guard !suggestionInFlight && !isProcessing else { return }
-                        suggestionInFlight = true
+                        guard !isProcessing else { return }
                         Task { @MainActor in
                             prompt = question
                             askAI()
-                            // Nothing started (e.g. the daily allowance opened
-                            // the paywall): give the suggestions back.
-                            if !isProcessing && currentTask == nil { suggestionInFlight = false }
                         }
                     } label: {
                         HStack(spacing: Spacing.xSmall) {
@@ -837,7 +824,7 @@ struct AIAssistantView: View {
                     .hoverEffect(scale: 1.01)
                     .accessibilityLabel("Ask: \(question)")
                     .accessibilityHint("Send this question to the AI assistant")
-                    .disabled(suggestionInFlight || isProcessing)
+                    .disabled(isProcessing)
                 }
             }
             #if os(iOS)
@@ -850,15 +837,33 @@ struct AIAssistantView: View {
         }
     }
 
+    /// "Ann Lee" from `"Ann Lee" <ann@x.org>`; the address when there is no
+    /// display name; "" when the header has neither.
+    static func senderDisplayName(_ from: String) -> String {
+        let trimmed = from.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let lt = trimmed.firstIndex(of: "<") {
+            let name = trimmed[..<lt].trimmingCharacters(in: CharacterSet(charactersIn: "\" ").union(.whitespaces))
+            if !name.isEmpty { return name }
+            let address = trimmed[trimmed.index(after: lt)...].prefix { $0 != ">" }
+            return String(address).trimmingCharacters(in: .whitespaces)
+        }
+        return trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+    }
+
     private var sampleQuestions: [String] {
         var questions: [String] = []
 
         if !emails.isEmpty {
-            let topSender = Dictionary(grouping: emails, by: { $0.headers["From"] ?? "" })
+            // The top sender among RECEIVED mail (in a Sent mailbox the top
+            // "From" is the user), named by display name without quotes, or
+            // by address. No usable sender, no suggestion: an empty name made
+            // "Tell me about emails from " a question that did nothing.
+            let received = emails.filter { $0.messageType != "sent" }
+            let topSender = Dictionary(grouping: received, by: { Self.senderDisplayName($0.headers["From"] ?? "") })
+                .filter { !$0.key.isEmpty }
                 .max(by: { $0.value.count < $1.value.count })
             if let sender = topSender, sender.value.count >= 2 {
-                let name = sender.key.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? sender.key
-                questions.append("Tell me about emails from \(name)")
+                questions.append("Tell me about emails from \(sender.key)")
             }
 
             let topics = EmailNLPEngine.extractTopics(from: Array(emails.prefix(200)), limit: 1)
@@ -1108,11 +1113,19 @@ struct AIAssistantView: View {
                     Spacer().frame(height: 6)
                 } else {
                     VStack(alignment: .leading, spacing: 2) {
-                        if let attributed = try? AttributedString(markdown: line, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
-                            Text(attributed)
-                        } else {
-                            Text(line)
+                        Group {
+                            if let attributed = try? AttributedString(markdown: line, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
+                                Text(attributed)
+                            } else {
+                                Text(line)
+                            }
                         }
+                        // Selectable per line, never on the container: on macOS
+                        // selectable text is a native text view, and a container
+                        // label resolved across those views and the citation
+                        // buttons crashed AppKit accessibility (EXC_BAD_ACCESS in
+                        // _accessibilityFindRoleFromProtocol, 2026-10-05).
+                        .textSelection(.enabled)
 
                         if let email = lineEmailMap[index] {
                             inlineEmailLink(email: email)
@@ -1151,13 +1164,14 @@ struct AIAssistantView: View {
             }
         }
         .font(Typography.body)
-        .textSelection(.enabled)
         .padding(.horizontal, Spacing.small)
         .padding(.vertical, Spacing.xSmall)
         .background(AppColors.backgroundSecondary)
         .cornerRadius(CornerRadius.large)
         .opacity(isStreaming && text == "Thinking..." ? 0.5 : 1.0)
-        .accessibilityLabel(isStreaming ? String(localized: "AI is thinking") : String(localized: "AI response"))
+        // A container whose children (lines, citations) are read one by one;
+        // no label override, which forced the cross-element label resolution.
+        .accessibilityElement(children: .contain)
     }
 
     private func inlineEmailLink(email: MBOXParser.RawEmail) -> some View {
@@ -1821,7 +1835,14 @@ struct AIAssistantView: View {
 
         // Attachment stats
         let attachKeywords = ["how many attachment", "attachment count", "emails with attachment", "which emails have attachment", "list attachment", "show attachment"]
-        if attachKeywords.contains(where: { lower.contains($0) }) {
+        // Any question about emails that carry files ("emails with photos or
+        // documents attached", "find PDFs attached"): answered from the real
+        // attachment data. The old exact-phrase list sent "…documents
+        // attached" to the language model, which said there were none.
+        let mentionsAttached = lower.contains("attached") || lower.contains("attachment")
+        let asksForEmails = ["email", "mail", "show", "find", "list", "which", "how many"].contains(where: { lower.contains($0) })
+        let asksForExtremes = ["most attach", "largest", "biggest"].contains(where: { lower.contains($0) })
+        if attachKeywords.contains(where: { lower.contains($0) }) || (mentionsAttached && asksForEmails && !asksForExtremes) {
             return { emails in smartAttachments(query: query, emails: emails) }
         }
 
@@ -1876,16 +1897,49 @@ struct AIAssistantView: View {
     }
 
     nonisolated private static func smartTopSenders(query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
-        var senderCounts: [String: Int] = [:]
-        for email in emails {
-            let from = email.headers["From"] ?? "Unknown"
-            senderCounts[from, default: 0] += 1
+        // Count by ADDRESS (one person, many display spellings) and leave out
+        // the archive owner: "who emails me" is about other people. The owner
+        // is whoever sent the archive's "sent" messages. Before, a Gmail Sent
+        // archive answered with the owner five times under different names.
+        func address(_ from: String) -> String {
+            if let lt = from.firstIndex(of: "<") {
+                return from[from.index(after: lt)...].prefix { $0 != ">" }.lowercased().trimmingCharacters(in: .whitespaces)
+            }
+            return from.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "\" ").union(.whitespaces))
         }
-        let sorted = senderCounts.sorted { $0.value > $1.value }
-        var answer = "**Top Senders** (out of \(Set(senderCounts.keys).count) unique):\n\n"
+        let isOwn: (MBOXParser.RawEmail) -> Bool = { email in
+            if email.messageType == "sent" { return true }
+            let labels = (email.headers["X-Gmail-Labels"] ?? email.headers["X-gmail-labels"] ?? "").lowercased()
+            return labels.split(separator: ",").contains { $0.trimmingCharacters(in: .whitespaces) == "sent" }
+        }
+        var ownAddresses = Set(emails.filter(isOwn).map { address($0.headers["From"] ?? "") })
+        if let configured = UserDefaults.standard.string(forKey: "defaultSenderEmail"), !configured.isEmpty {
+            ownAddresses.insert(configured.lowercased())
+        }
+        ownAddresses.remove("")
+        var counts: [String: Int] = [:]
+        var names: [String: String] = [:]
+        var considered = 0
+        for email in emails {
+            let from = email.headers["From"] ?? ""
+            let key = address(from)
+            guard !key.isEmpty, !ownAddresses.contains(key) else { continue }
+            considered += 1
+            counts[key, default: 0] += 1
+            if names[key] == nil {
+                let name = AIAssistantView.senderDisplayName(from)
+                names[key] = name.lowercased() == key ? key : "\(name) (\(key))"
+            }
+        }
+        let sorted = counts.sorted { $0.value > $1.value }
+        guard !sorted.isEmpty else {
+            return (query: query, answer: "Every message in this scope was sent by you, so there is no one else to rank.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        var answer = "**Who emails you the most** (\(sorted.count) senders, your own sent mail excluded):\n\n"
         for (i, entry) in sorted.prefix(15).enumerated() {
-            let pct = emails.isEmpty ? 0 : Int(Double(entry.value) / Double(emails.count) * 100)
-            answer += "\(i + 1). **\(entry.key)** — \(entry.value) email\(entry.value == 1 ? "" : "s") (\(pct)%)\n"
+            let share = Double(entry.value) / Double(max(considered, 1)) * 100
+            let pct = share < 1 ? "<1%" : "\(Int(share.rounded()))%"
+            answer += "\(i + 1). **\(names[entry.key] ?? entry.key)** — \(entry.value) email\(entry.value == 1 ? "" : "s") (\(pct))\n"
         }
         if sorted.count > 15 { answer += "\n...and \(sorted.count - 15) more senders." }
         return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: [])
@@ -4866,7 +4920,12 @@ struct AIAssistantView: View {
         for result in chunkResults.prefix(3) {
             let from = displayName(result.email.headers["From"])
             let subject = result.email.headers["Subject"] ?? "(No Subject)"
-            let snippet = String(result.chunk.prefix(250)).trimmingCharacters(in: .whitespacesAndNewlines)
+            // Strip markup first: a Gmail chat transcript's body is XML, and
+            // the excerpt showed raw <con:conversation …> tags.
+            let readable = result.chunk
+                .replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+                .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            let snippet = String(readable.trimmingCharacters(in: .whitespacesAndNewlines).prefix(250))
             if snippet.isEmpty { continue }
             evidence += "\n> **\(from)** — \"\(subject)\"\n> \"\(snippet)...\"\n"
             evidenceIDs.append(result.email.id)

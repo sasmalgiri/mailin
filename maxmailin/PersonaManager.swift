@@ -347,7 +347,7 @@ class PersonaManager: ObservableObject {
                 exportOrder: [.pdf, .word, .plainText, .csv, .redacted, .batesPDF, .forensicReport],
                 sampleAIQueries: [
                     "Summarize my emails from the last month",
-                    "Find emails from a specific person",
+                    "Who emails me the most?",
                     "What are the most common topics in my inbox?",
                     "Show me emails with photos or documents attached",
                     "Who emails me the most?",
