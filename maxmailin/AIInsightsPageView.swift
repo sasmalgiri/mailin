@@ -168,7 +168,7 @@ struct AIInsightsPageView: View {
     private var content: some View {
         switch tab {
         case .ask:
-            AIAssistantView(archiveScope: .all, searchContext: scopeContext)
+            AIAssistantView(archiveScope: .all, searchContext: scopeContext, showsDoneButton: false)
                 .id(scopeContext)   // a new scope is a new conversation context
         // Summaries and Reports are paid (Personal or Professional) on the
         // Archive page's hub; the same rule applies here. Ask keeps its own

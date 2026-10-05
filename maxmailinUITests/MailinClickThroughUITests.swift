@@ -14,6 +14,9 @@ import XCTest
 final class MailinClickThroughUITests: XCTestCase {
 
     private var app: XCUIApplication!
+    /// macOS: menus that exist with nothing open; a press "opened a menu"
+    /// only if the count rises above this.
+    private var baselineMenus = 0
 
     override func setUp() {
         continueAfterFailure = true
@@ -411,6 +414,11 @@ final class MailinClickThroughUITests: XCTestCase {
         var rows: [CrawlRow] = []
 
         // ── 1. Import through the real UI ──
+        #if os(macOS)
+        recoverIfNeeded()
+        baselineMenus = app.menus.count
+        print("UITEST-BASELINE-MENUS \(baselineMenus)")
+        #endif
         // The app reopens on the page it was last on; import from Archive.
         _ = openPage("Archive")
         let started = Date()
@@ -429,7 +437,11 @@ final class MailinClickThroughUITests: XCTestCase {
                 continue
             }
             snapshotScreen("page-\(page)")
+            #if os(macOS)
+            rows += macCrawl(page: page)
+            #else
             rows += crawlButtons(onPage: page)
+            #endif
         }
 
         #if os(macOS)
@@ -543,6 +555,16 @@ final class MailinClickThroughUITests: XCTestCase {
         recoverIfNeeded()
         dismissEverything()
         let tab = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
+        // A sheet (e.g. a first-run tutorial) can cover the page strip.
+        for _ in 0..<3 where tab.exists && !tab.isHittable {
+            #if os(macOS)
+            let gotIt = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Got It'")).firstMatch
+            if gotIt.exists, gotIt.isHittable { gotIt.click() } else { app.typeKey(.escape, modifierFlags: []) }
+            #else
+            dismissOnce()
+            #endif
+            Thread.sleep(forTimeInterval: 0.8)
+        }
         guard tab.waitForExistence(timeout: 5), tab.isHittable else {
             let labels = (try? app.snapshot()).map { snap -> [String] in
                 var out: [String] = []
@@ -653,8 +675,8 @@ final class MailinClickThroughUITests: XCTestCase {
             }
             var outcome: String
             #if os(macOS)
-            if app.menus.firstMatch.exists {
-                outcome = "opened a menu (\(app.menus.firstMatch.menuItems.count) items)"
+            if app.menus.count > baselineMenus {
+                outcome = "opened a menu"
             } else if app.popovers.firstMatch.exists {
                 outcome = "opened a popover"
             } else if app.sheets.count > sheetsBefore {
@@ -722,7 +744,7 @@ final class MailinClickThroughUITests: XCTestCase {
         for _ in 0..<4 {
             var acted = false
             #if os(macOS)
-            if app.menus.firstMatch.exists || app.popovers.firstMatch.exists || app.dialogs.firstMatch.exists {
+            if app.menus.count > baselineMenus || app.popovers.firstMatch.exists || app.dialogs.firstMatch.exists {
                 app.typeKey(.escape, modifierFlags: []); acted = true
             }
             if app.sheets.firstMatch.exists {
@@ -798,7 +820,13 @@ final class MailinClickThroughUITests: XCTestCase {
             app.launch(); _ = app.wait(for: .runningForeground, timeout: 30)
         }
         #if os(macOS)
-        if app.windows.count == 0 { app.typeKey("n", modifierFlags: .command); Thread.sleep(forTimeInterval: 1) }
+        app.activate()
+        if app.windows.count == 0 {
+            // Restored with every window closed: open the main window from the menu.
+            app.typeKey("n", modifierFlags: [.command, .shift])   // File ▸ New Window
+            _ = app.windows.firstMatch.waitForExistence(timeout: 10)
+        }
+        print("UITEST-WINDOWS \(app.windows.count): \(app.windows.allElementsBoundByIndex.map(\.title))")
         #endif
         app.activate()
     }
@@ -851,7 +879,7 @@ final class MailinClickThroughUITests: XCTestCase {
                 return rows
             }
             var outcome = "acted in place"
-            if app.menus.firstMatch.exists { outcome = "opened a menu (\(app.menus.firstMatch.menuItems.count) items)"; app.typeKey(.escape, modifierFlags: []) }
+            if app.menus.count > baselineMenus { outcome = "opened a menu"; app.typeKey(.escape, modifierFlags: []) }
             else if app.popovers.firstMatch.exists { outcome = "opened a popover"; app.typeKey(.escape, modifierFlags: []) }
             else if window.sheets.count > sheetsBefore || app.sheets.count > sheetsBefore {
                 outcome = "opened a sheet"
@@ -1305,6 +1333,142 @@ final class MailinClickThroughUITests: XCTestCase {
         print("REPRO after dismiss: state=\(app.state.rawValue)")
         XCTAssertEqual(app.state, .runningForeground, "the app is still running after dismissing the tutorial")
         snapshotScreen("repro-after-dismiss")
+    }
+    #endif
+
+    #if os(macOS)
+    // MARK: - Fast Mac crawl (one snapshot per step; large archives make each
+    // accessibility query cost seconds, so nothing is queried per element)
+
+    private struct MacState {
+        var windows: [String] = []
+        var windowFrames: [String: CGRect] = [:]
+        var menus = 0, popovers = 0, sheets = 0, dialogs = 0
+        /// Enabled buttons in the window being crawled: key -> (name, frame).
+        var buttons: [(key: String, name: String, frame: CGRect)] = []
+    }
+
+    private func macState(buttonsIn windowTitle: String) -> MacState? {
+        guard let snap = try? app.snapshot() else { return nil }
+        var st = MacState()
+        var seen = Set<String>()
+        func walk(_ e: XCUIElementSnapshot, collect: Bool) {
+            switch e.elementType {
+            case .menu: st.menus += 1
+            case .popover: st.popovers += 1
+            case .sheet: st.sheets += 1
+            case .dialog: st.dialogs += 1
+            default: break
+            }
+            if collect, [.button, .menuButton, .popUpButton].contains(e.elementType), e.isEnabled {
+                let label = e.label.trimmingCharacters(in: .whitespacesAndNewlines)
+                let key = e.identifier + "|" + label
+                let windowControl = [XCUIIdentifierCloseWindow, XCUIIdentifierMinimizeWindow, XCUIIdentifierZoomWindow, XCUIIdentifierFullScreenWindow].contains(e.identifier)
+                let isRow = label.count > 70 || label.contains(" from ")
+                if !(label.isEmpty && e.identifier.isEmpty), !windowControl, !isRow, !seen.contains(key) {
+                    seen.insert(key)
+                    st.buttons.append((key, label.isEmpty ? e.identifier : label, e.frame))
+                }
+            }
+            e.children.forEach { walk($0, collect: collect) }
+        }
+        for child in snap.children {
+            if child.elementType == .window {
+                st.windows.append(child.title)
+                st.windowFrames[child.title] = child.frame
+                walk(child, collect: child.title == windowTitle)
+            } else {
+                walk(child, collect: false)
+            }
+        }
+        return st
+    }
+
+    private func click(at frame: CGRect, inWindow title: String, windowFrame: CGRect) {
+        let origin = app.windows[title].firstMatch.coordinate(withNormalizedOffset: .zero)
+        origin.withOffset(CGVector(dx: frame.midX - windowFrame.minX, dy: frame.midY - windowFrame.minY)).click()
+    }
+
+    private static let macSkip = try! NSRegularExpression(
+        pattern: #"(?i)(\b(delete|remove|erase|clear|reset|forget|purge|wipe|empty|quit|sign out|log ?out|buy|purchase|subscribe|restore purchases|manage subscription|turn off|disable|send|move archive|relocate|lift hold|release|revoke|close)\b|new import|start new import|add files|open email archive|import)"#)
+
+    /// Closes what a press opened, judged against the state before it.
+    private func macDismiss(before: MacState, after: MacState, keep: Set<String>) {
+        if after.menus > before.menus || after.popovers > before.popovers || after.dialogs > before.dialogs || after.sheets > before.sheets {
+            app.typeKey(.escape, modifierFlags: [])
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        for title in after.windows where !keep.contains(title) && !before.windows.contains(title) {
+            app.windows[title].firstMatch.typeKey("w", modifierFlags: .command)
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+    }
+
+    private func macOutcome(before: MacState, after: MacState) -> String {
+        let newWindows = after.windows.filter { !before.windows.contains($0) }
+        if !newWindows.isEmpty { return "opened window “\(newWindows.joined(separator: ", "))”" }
+        if after.sheets > before.sheets { return "opened a sheet" }
+        if after.dialogs > before.dialogs { return "opened a dialog" }
+        if after.popovers > before.popovers { return "opened a popover" }
+        if after.menus > before.menus { return "opened a menu" }
+        let b = Set(before.buttons.map(\.key)), a = Set(after.buttons.map(\.key))
+        if a == b { return "no visible change (acts in place)" }
+        return "screen changed (+\(a.subtracting(b).count) / -\(b.subtracting(a).count) controls)"
+    }
+
+    /// Presses every enabled button of `windowTitle` once; for presses that
+    /// open a tool window, crawls that window one level deep.
+    private func macCrawl(page: String, windowTitle: String = "mailin", parent: String? = nil, depth: Int = 0) -> [CrawlRow] {
+        var rows: [CrawlRow] = []
+        guard let first = macState(buttonsIn: windowTitle) else {
+            return [CrawlRow(page: page, button: parent ?? "(page)", outcome: "could not read the window")]
+        }
+        let keep = Set(first.windows)
+        var pressed = Set<String>()
+        let targets = first.buttons.filter { !Self.pageNames.contains(where: $0.name.hasPrefix) }
+        for target in targets.prefix(depth == 0 ? 150 : 60) {
+            let path = parent.map { "\($0) ▸ \(target.name)" } ?? target.name
+            if pressed.contains(target.key) { continue }
+            pressed.insert(target.key)
+            if Self.macSkip.firstMatch(in: target.name, range: NSRange(target.name.startIndex..., in: target.name)) != nil {
+                rows.append(CrawlRow(page: page, button: path, outcome: "skipped (destructive, purchase, import or window control)")); continue
+            }
+            guard app.state == .runningForeground, let before = macState(buttonsIn: windowTitle) else {
+                rows.append(CrawlRow(page: page, button: path, outcome: "app not running before the press")); break
+            }
+            guard before.windows.contains(windowTitle), let winFrame = before.windowFrames[windowTitle] else {
+                rows.append(CrawlRow(page: page, button: path, outcome: "window closed by an earlier press")); break
+            }
+            guard let now = before.buttons.first(where: { $0.key == target.key }) else {
+                rows.append(CrawlRow(page: page, button: path, outcome: "gone after an earlier press")); continue
+            }
+            guard !now.frame.isEmpty, winFrame.insetBy(dx: 2, dy: 2).contains(CGPoint(x: now.frame.midX, y: now.frame.midY)) else {
+                rows.append(CrawlRow(page: page, button: path, outcome: "not visible (scroll needed)")); continue
+            }
+            print("CRAWL-STEP \(Date()) \(page) ▸ \(path)")
+            click(at: now.frame, inWindow: windowTitle, windowFrame: winFrame)
+            Thread.sleep(forTimeInterval: 1.2)
+            if app.state != .runningForeground {
+                rows.append(CrawlRow(page: page, button: path, outcome: "CRASH — app quit after the click"))
+                app.launch(); _ = app.wait(for: .runningForeground, timeout: 30)
+                recoverIfNeeded(); _ = openPage(page)
+                if depth > 0 { break } else { continue }
+            }
+            guard let after = macState(buttonsIn: windowTitle) else {
+                rows.append(CrawlRow(page: page, button: path, outcome: "could not read the app after the click")); continue
+            }
+            let outcome = macOutcome(before: before, after: after)
+            rows.append(CrawlRow(page: page, button: path, outcome: outcome))
+            let opened = after.windows.filter { !before.windows.contains($0) }
+            if depth == 0, let tool = opened.first {
+                rows += macCrawl(page: page, windowTitle: tool, parent: path, depth: 1)
+            }
+            if let latest = macState(buttonsIn: windowTitle) {
+                macDismiss(before: before, after: latest, keep: keep)
+            }
+            if depth == 0 { returnToPage(page) }
+        }
+        return rows
     }
     #endif
 }

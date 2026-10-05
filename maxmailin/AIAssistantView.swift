@@ -44,6 +44,11 @@ struct AIAssistantView: View {
     var searchContext: String = ""
     var onSelectEmail: ((UUID) -> Void)?
     var onFilterByIDs: (([UUID]) -> Void)?
+    /// Done closes the sheet or window that presents the assistant. Embedded
+    /// in a page (AI Insights ▸ Ask) there is nothing to close: `dismiss()`
+    /// there closed the main window on macOS (found 2026-10-05), so the page
+    /// hides it.
+    var showsDoneButton: Bool = true
 
     @ObservedObject private var forensicManager = ForensicManager.shared
     @ObservedObject private var personaManager = PersonaManager.shared
@@ -462,8 +467,10 @@ struct AIAssistantView: View {
                     .buttonStyle(.borderless)
                     .help("AI query metrics — timing, citations and outcomes per engine")
                     TutorialHelpButton(showTutorial: $showTutorial)
-                    Button("Done") { dismiss() }
-                        .fontWeight(.semibold)
+                    if showsDoneButton {
+                        Button("Done") { dismiss() }
+                            .fontWeight(.semibold)
+                    }
                 }
 
                 HStack(spacing: 8) {
@@ -632,10 +639,12 @@ struct AIAssistantView: View {
 
                 TutorialHelpButton(showTutorial: $showTutorial)
 
-                Button("Done") { dismiss() }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .keyboardShortcut(.cancelAction)
+                if showsDoneButton {
+                    Button("Done") { dismiss() }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .keyboardShortcut(.cancelAction)
+                }
             }
             .padding(.horizontal, Spacing.medium)
             .padding(.vertical, Spacing.small)

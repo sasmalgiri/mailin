@@ -73,8 +73,10 @@ struct mailinApp: App {
 
     // MARK: - Scene Configuration
     var body: some Scene {
-        // Main window with proper sizing and controls
-        WindowGroup {
+        // Main window with proper sizing and controls. The id lets File ▸
+        // New Window reopen it after the user closes it (the standard New
+        // command is replaced by New Import below).
+        WindowGroup(id: "main") {
             ZStack {
                 // A1/A2: the four-page frame. For a Page-1-only install this
                 // renders ContentView with no added chrome; a switcher appears
@@ -389,6 +391,13 @@ struct mailinApp: App {
         }
         
         CommandGroup(replacing: .newItem) {
+            #if os(macOS)
+            Button("New Window") {
+                openWindow(id: "main")
+            }
+            .keyboardShortcut("n", modifiers: [.command, .shift])
+            #endif
+
             Button("New Import") {
                 appState.triggerNewImport = true
             }
