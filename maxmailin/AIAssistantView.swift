@@ -730,7 +730,13 @@ struct AIAssistantView: View {
     private var chatArea: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: Spacing.medium) {
+                // A plain VStack, not LazyVStack: on macOS the lazy container
+                // churned its accessibility children (empty state swapped for
+                // the conversation, then a re-render per streamed token) and
+                // AppKit read a destroyed element (EXC_BAD_ACCESS in
+                // _accessibilityFindRoleFromProtocol), found by the Mac crawl
+                // 2026-10-05. A conversation is short; laziness buys nothing.
+                VStack(spacing: Spacing.medium) {
                     if conversationHistory.isEmpty && streamingQuery.isEmpty {
                         emptyStateView
                     } else {
@@ -740,6 +746,10 @@ struct AIAssistantView: View {
                         }
                         if !streamingQuery.isEmpty {
                             chatBubble(query: streamingQuery, answer: streamingAnswer.isEmpty ? "Thinking..." : streamingAnswer, isStreaming: true)
+                                // One stable element while tokens arrive; the
+                                // finished answer is read in full as a history bubble.
+                                .accessibilityElement(children: .ignore)
+                                .accessibilityLabel(Text("Answering: \(streamingQuery)"))
                                 .id("streaming")
                         }
                     }
@@ -784,8 +794,16 @@ struct AIAssistantView: View {
             VStack(spacing: Spacing.xSmall) {
                 ForEach(sampleQuestions, id: \.self) { question in
                     Button {
-                        prompt = question
-                        askAI()
+                        // Defer: askAI() replaces this whole list with the
+                        // conversation. Removing the pressed button inside its
+                        // own action left macOS accessibility holding a
+                        // destroyed element (EXC_BAD_ACCESS in
+                        // _accessibilityFindRoleFromProtocol, found by the Mac
+                        // crawl 2026-10-05). Let the press finish first.
+                        Task { @MainActor in
+                            prompt = question
+                            askAI()
+                        }
                     } label: {
                         HStack(spacing: Spacing.xSmall) {
                             Image(systemName: "sparkle")

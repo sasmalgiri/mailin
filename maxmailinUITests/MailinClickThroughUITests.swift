@@ -565,6 +565,18 @@ final class MailinClickThroughUITests: XCTestCase {
             #endif
             Thread.sleep(forTimeInterval: 0.8)
         }
+        #if os(macOS)
+        // Mac: the strip can report not-hittable while the window settles;
+        // click the tab's own position instead of giving up.
+        if tab.exists, !tab.isHittable, !tab.frame.isEmpty {
+            app.activate()
+            tab.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+            let turnOn = app.buttons["Turn on \(name)"].firstMatch
+            if turnOn.waitForExistence(timeout: 3) { turnOn.click(); Thread.sleep(forTimeInterval: 1.5) }
+            Thread.sleep(forTimeInterval: 1.0)
+            return true
+        }
+        #endif
         guard tab.waitForExistence(timeout: 5), tab.isHittable else {
             let labels = (try? app.snapshot()).map { snap -> [String] in
                 var out: [String] = []
@@ -816,7 +828,7 @@ final class MailinClickThroughUITests: XCTestCase {
     }
 
     private func recoverIfNeeded() {
-        if app.state != .runningForeground {
+        if app.state == .notRunning || app.state == .unknown {
             app.launch(); _ = app.wait(for: .runningForeground, timeout: 30)
         }
         #if os(macOS)
@@ -873,7 +885,7 @@ final class MailinClickThroughUITests: XCTestCase {
             let sheetsBefore = window.sheets.count
             el.click()
             Thread.sleep(forTimeInterval: 1.0)
-            if app.state != .runningForeground {
+            if app.state == .notRunning || app.state == .unknown {
                 rows.append(CrawlRow(page: page, button: path, outcome: "CRASH — app quit after the click"))
                 app.launch(); _ = app.wait(for: .runningForeground, timeout: 30)
                 return rows
@@ -1433,7 +1445,8 @@ final class MailinClickThroughUITests: XCTestCase {
             if Self.macSkip.firstMatch(in: target.name, range: NSRange(target.name.startIndex..., in: target.name)) != nil {
                 rows.append(CrawlRow(page: page, button: path, outcome: "skipped (destructive, purchase, import or window control)")); continue
             }
-            guard app.state == .runningForeground, let before = macState(buttonsIn: windowTitle) else {
+            if app.state == .runningBackground { app.activate(); Thread.sleep(forTimeInterval: 0.5) }
+            guard app.state == .runningForeground || app.state == .runningBackground, let before = macState(buttonsIn: windowTitle) else {
                 rows.append(CrawlRow(page: page, button: path, outcome: "app not running before the press")); break
             }
             guard before.windows.contains(windowTitle), let winFrame = before.windowFrames[windowTitle] else {
@@ -1448,7 +1461,7 @@ final class MailinClickThroughUITests: XCTestCase {
             print("CRAWL-STEP \(Date()) \(page) ▸ \(path)")
             click(at: now.frame, inWindow: windowTitle, windowFrame: winFrame)
             Thread.sleep(forTimeInterval: 1.2)
-            if app.state != .runningForeground {
+            if app.state == .notRunning || app.state == .unknown {
                 rows.append(CrawlRow(page: page, button: path, outcome: "CRASH — app quit after the click"))
                 app.launch(); _ = app.wait(for: .runningForeground, timeout: 30)
                 recoverIfNeeded(); _ = openPage(page)
@@ -1469,6 +1482,26 @@ final class MailinClickThroughUITests: XCTestCase {
             if depth == 0 { returnToPage(page) }
         }
         return rows
+    }
+    #endif
+
+    #if os(macOS)
+    /// Mac crawl 2026-10-05: clicking an AI Insights suggestion ("Ask: …")
+    /// crashed the app inside AppKit accessibility. Click one, then read the
+    /// accessibility tree the way VoiceOver would.
+    func testRepro_macAISuggestionClick() {
+        recoverIfNeeded()
+        _ = openPage("AI Insights")
+        let suggestion = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Ask: '")).firstMatch
+        guard suggestion.waitForExistence(timeout: 20) else { XCTFail("no suggestion shown"); return }
+        if suggestion.isHittable { suggestion.click() } else { suggestion.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click() }
+        for i in 0..<6 {
+            Thread.sleep(forTimeInterval: 1)
+            _ = try? app.snapshot()          // what an accessibility client does
+            print("REPRO-MAC tick \(i) state=\(app.state.rawValue)")
+            if app.state == .notRunning { break }
+        }
+        XCTAssertNotEqual(app.state, .notRunning, "the app survives clicking a suggestion")
     }
     #endif
 }
