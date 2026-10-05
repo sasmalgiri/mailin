@@ -568,8 +568,8 @@ final class MailinClickThroughUITests: XCTestCase {
         #if os(macOS)
         // Mac: the strip can report not-hittable while the window settles;
         // click the tab's own position instead of giving up.
-        if tab.exists, !tab.isHittable, !tab.frame.isEmpty {
-            app.activate()
+        app.activate()
+        if tab.exists, !tab.isHittable, !tab.frame.isEmpty, app.state == .runningForeground {
             tab.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
             let turnOn = app.buttons["Turn on \(name)"].firstMatch
             if turnOn.waitForExistence(timeout: 3) { turnOn.click(); Thread.sleep(forTimeInterval: 1.5) }
@@ -1458,6 +1458,13 @@ final class MailinClickThroughUITests: XCTestCase {
             guard !now.frame.isEmpty, winFrame.insetBy(dx: 2, dy: 2).contains(CGPoint(x: now.frame.midX, y: now.frame.midY)) else {
                 rows.append(CrawlRow(page: page, button: path, outcome: "not visible (scroll needed)")); continue
             }
+            // Coordinate clicks land on whatever is in front: only click when
+            // maxmailin itself is frontmost (otherwise they hit Xcode).
+            if app.state != .runningForeground { app.activate(); Thread.sleep(forTimeInterval: 1) }
+            guard app.state == .runningForeground else {
+                rows.append(CrawlRow(page: page, button: path, outcome: "not pressed: another app is in front"))
+                continue
+            }
             print("CRAWL-STEP \(Date()) \(page) ▸ \(path)")
             click(at: now.frame, inWindow: windowTitle, windowFrame: winFrame)
             Thread.sleep(forTimeInterval: 1.2)
@@ -1502,6 +1509,28 @@ final class MailinClickThroughUITests: XCTestCase {
             if app.state == .notRunning { break }
         }
         XCTAssertNotEqual(app.state, .notRunning, "the app survives clicking a suggestion")
+    }
+    #endif
+
+    #if os(macOS)
+    /// Mac crawl 2026-10-05: clicking the Archive tab left AI Insights on
+    /// screen. Click it and check the Archive content actually appears.
+    func testRepro_macPageSwitch() {
+        recoverIfNeeded()
+        app.activate()
+        Thread.sleep(forTimeInterval: 2)
+        for name in ["Archive", "AI Insights", "Archive"] {
+            let tab = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
+            guard tab.waitForExistence(timeout: 10) else { XCTFail("no \(name) tab"); return }
+            print("REPRO-PAGE \(name) tab label=\(tab.label) hittable=\(tab.isHittable) frame=\(tab.frame) state=\(app.state.rawValue)")
+            if tab.isHittable { tab.click() } else { tab.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click() }
+            Thread.sleep(forTimeInterval: 2)
+            let archiveShown = app.descendants(matching: .any)["archive.sidebar"].firstMatch.exists
+                || app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'All Emails'")).firstMatch.exists
+            let aiShown = app.descendants(matching: .any)["aiInsights.page"].firstMatch.exists
+            print("REPRO-PAGE after \(name): archiveShown=\(archiveShown) aiShown=\(aiShown) selected=\(tab.isSelected)")
+            snapshotScreen("page-switch-\(name)")
+        }
     }
     #endif
 }

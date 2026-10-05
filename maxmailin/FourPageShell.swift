@@ -108,8 +108,17 @@ struct FourPageShell: View {
                     .padding(.trailing, Spacing.xSmall)
                 #endif
             }
+            // The strip must always be on screen: it is the only way between
+            // pages. On a short Mac window a tall page (AI Insights ▸ Ask)
+            // pushed it above the window's top edge and the user could not
+            // get back to Archive (found 2026-10-05). The strip keeps its
+            // height and wins layout; the page takes what is left, clipped.
+            .fixedSize(horizontal: false, vertical: true)
+            .layoutPriority(1)
             Divider()
             page
+                .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
+                .clipped()
         }
         .onAppear {
             router.reconcile(with: modules)
