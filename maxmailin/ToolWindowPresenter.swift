@@ -45,18 +45,7 @@ final class ToolWindowPresenter {
         // manager are attached here (never a second StoreManager), and the
         // window hosts its own purchase presenter so a locked action inside
         // it shows the purchase screen in this window, not behind it.
-        var root = AnyView(content())
-        if let modules = ModuleRegistry.live {
-            root = AnyView(root.environment(modules))
-        }
-        if let store = StoreManager.live {
-            // Order matters: the environment flows DOWN, so the store must be
-            // attached OUTSIDE the purchase presenter, which reads it. The
-            // reverse order crashed every tool window ("No ObservableObject
-            // of type StoreManager found"), e.g. Compare, found 2026-10-04.
-            root = AnyView(root.purchasePresenter(target: .window(title)).environmentObject(store))
-        }
-        window.contentView = NSHostingView(rootView: root)
+        window.contentView = NSHostingView(rootView: Self.windowRoot(content(), title: title))
         window.center()
 
         observers[title] = NotificationCenter.default.addObserver(
@@ -73,6 +62,24 @@ final class ToolWindowPresenter {
         windows[title] = window
         window.makeKeyAndOrderFront(nil)
         NSApp.activate()
+    }
+
+    /// The ONE way to build a secondary window's SwiftUI root. A new
+    /// NSHostingView does not inherit the main window's environment, so the
+    /// page registry and the single store manager are attached here, with
+    /// the window's own purchase presenter. Order matters: the environment
+    /// flows DOWN, so both objects go OUTSIDE the presenter (which reads the
+    /// store) — the reverse crashed every tool window on 2026-10-04 with
+    /// "No ObservableObject of type StoreManager found".
+    static func windowRoot<Content: View>(_ content: Content, title: String) -> AnyView {
+        var root = AnyView(content)
+        if let store = StoreManager.live {
+            root = AnyView(root.purchasePresenter(target: .window(title)).environmentObject(store))
+        }
+        if let modules = ModuleRegistry.live {
+            root = AnyView(root.environment(modules))
+        }
+        return root
     }
 
     /// In-content Close buttons close the hosting window.

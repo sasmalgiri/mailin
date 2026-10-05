@@ -398,11 +398,15 @@ final class MailinClickThroughUITests: XCTestCase {
     /// every other outcome is reported for review.
     func testRealMailbox_importThenPressEveryButton() throws {
         let env = ProcessInfo.processInfo.environment["MAILIN_UITEST_MBOX"] ?? ""
-        #if os(macOS)
-        guard !env.isEmpty else {
-            throw XCTSkip("Set TEST_RUNNER_MAILIN_UITEST_MBOX to a mailbox file to run the crawl.")
-        }
-        #endif
+        // macOS without a mailbox path: crawl the archive already there
+        // (the owner's Debug archive) and import nothing.
+        let skipImport: Bool = {
+            #if os(macOS)
+            return env.isEmpty
+            #else
+            return false
+            #endif
+        }()
         _ = app.buttons.firstMatch.waitForExistence(timeout: 120)
         var rows: [CrawlRow] = []
 
@@ -411,9 +415,11 @@ final class MailinClickThroughUITests: XCTestCase {
         _ = openPage("Archive")
         let started = Date()
         let fileName = env.isEmpty ? "Sent" : ((env as NSString).lastPathComponent as NSString).deletingPathExtension
-        let importOutcome = importMailbox(path: env, fileName: fileName)
-        rows.append(CrawlRow(page: "Archive", button: "Import \(fileName).mbox",
-                             outcome: "\(importOutcome) (\(Int(Date().timeIntervalSince(started))) s)"))
+        if !skipImport {
+            let importOutcome = importMailbox(path: env, fileName: fileName)
+            rows.append(CrawlRow(page: "Archive", button: "Import \(fileName).mbox",
+                                 outcome: "\(importOutcome) (\(Int(Date().timeIntervalSince(started))) s)"))
+        }
         snapshotScreen("after-import")
 
         // ── 2. Every button on every page ──
@@ -654,7 +660,13 @@ final class MailinClickThroughUITests: XCTestCase {
             } else if app.sheets.count > sheetsBefore {
                 outcome = "opened a sheet"
             } else if app.windows.count > windowsBefore {
-                outcome = "opened window “\(app.windows.firstMatch.title)”"
+                let title = app.windows.firstMatch.title
+                outcome = "opened window “\(title)”"
+                rows.append(CrawlRow(page: page, button: name, outcome: outcome))
+                rows += crawlToolWindow(title: title, page: page, parent: name)
+                dismissEverything()
+                returnToPage(page)
+                continue
             } else if app.dialogs.firstMatch.exists {
                 outcome = "opened a dialog"
             } else {
@@ -792,6 +804,82 @@ final class MailinClickThroughUITests: XCTestCase {
     }
 
     #if os(macOS)
+    /// Presses every enabled button inside a tool window once (one level),
+    /// closing anything a press opens, then closes the window.
+    private func crawlToolWindow(title: String, page: String, parent: String) -> [CrawlRow] {
+        var rows: [CrawlRow] = []
+        let window = app.windows[title].firstMatch
+        guard window.waitForExistence(timeout: 5), let snap = try? window.snapshot() else {
+            return [CrawlRow(page: page, button: "\(parent) ▸ (window)", outcome: "window could not be read")]
+        }
+        var seen = Set<String>()
+        var targets: [(id: String, label: String)] = []
+        func walk(_ s: XCUIElementSnapshot) {
+            if s.elementType == .button || s.elementType == .menuButton || s.elementType == .popUpButton {
+                let label = s.label.trimmingCharacters(in: .whitespacesAndNewlines)
+                let key = s.identifier + "|" + label
+                let isRow = label.count > 70 || label.contains(" from ")
+                let windowControl = [XCUIIdentifierCloseWindow, XCUIIdentifierMinimizeWindow, XCUIIdentifierZoomWindow, XCUIIdentifierFullScreenWindow].contains(s.identifier)
+                if s.isEnabled, !(label.isEmpty && s.identifier.isEmpty), !isRow, !windowControl, !seen.contains(key) {
+                    seen.insert(key); targets.append((s.identifier, label))
+                }
+            }
+            s.children.forEach(walk)
+        }
+        walk(snap)
+        for target in targets.prefix(60) {
+            let name = target.label.isEmpty ? target.id : target.label
+            let path = "\(parent) ▸ \(name)"
+            if Self.skipPattern.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)) != nil {
+                rows.append(CrawlRow(page: page, button: path, outcome: "skipped (destructive, purchase or window control)")); continue
+            }
+            guard window.exists else { rows.append(CrawlRow(page: page, button: path, outcome: "window closed by an earlier press")); break }
+            let el = target.id.isEmpty
+                ? window.descendants(matching: .any).matching(NSPredicate(format: "label == %@", target.label)).firstMatch
+                : window.descendants(matching: .any).matching(identifier: target.id).firstMatch
+            guard el.exists else { rows.append(CrawlRow(page: page, button: path, outcome: "gone after an earlier press")); continue }
+            guard !el.frame.isEmpty, window.frame.intersects(el.frame), el.isHittable else {
+                rows.append(CrawlRow(page: page, button: path, outcome: "not hittable (scroll needed)")); continue
+            }
+            let windowsBefore = app.windows.count
+            let sheetsBefore = window.sheets.count
+            el.click()
+            Thread.sleep(forTimeInterval: 1.0)
+            if app.state != .runningForeground {
+                rows.append(CrawlRow(page: page, button: path, outcome: "CRASH — app quit after the click"))
+                app.launch(); _ = app.wait(for: .runningForeground, timeout: 30)
+                return rows
+            }
+            var outcome = "acted in place"
+            if app.menus.firstMatch.exists { outcome = "opened a menu (\(app.menus.firstMatch.menuItems.count) items)"; app.typeKey(.escape, modifierFlags: []) }
+            else if app.popovers.firstMatch.exists { outcome = "opened a popover"; app.typeKey(.escape, modifierFlags: []) }
+            else if window.sheets.count > sheetsBefore || app.sheets.count > sheetsBefore {
+                outcome = "opened a sheet"
+                let sheet = app.sheets.firstMatch
+                var closed = false
+                for t in ["Done", "Cancel", "Not now", "OK", "Close"] where !closed {
+                    let b = sheet.buttons[t].firstMatch
+                    if b.exists, b.isHittable { b.click(); closed = true }
+                }
+                if !closed { app.typeKey(.escape, modifierFlags: []) }
+            }
+            else if app.windows.count > windowsBefore {
+                let newTitle = app.windows.firstMatch.title
+                outcome = "opened window “\(newTitle)”"
+                if newTitle != title { app.windows.firstMatch.typeKey("w", modifierFlags: .command) }
+            }
+            else if app.dialogs.firstMatch.exists { outcome = "opened a dialog"; app.typeKey(.escape, modifierFlags: []) }
+            Thread.sleep(forTimeInterval: 0.4)
+            rows.append(CrawlRow(page: page, button: path, outcome: outcome))
+        }
+        if window.exists {
+            let close = window.buttons[XCUIIdentifierCloseWindow].firstMatch
+            if close.exists { close.click() } else { window.typeKey("w", modifierFlags: .command) }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        return rows
+    }
+
     /// Opens each top-level menu-bar menu and records its command count.
     private func crawlMenuBar() -> [CrawlRow] {
         var rows: [CrawlRow] = []
@@ -1201,6 +1289,8 @@ final class MailinClickThroughUITests: XCTestCase {
     func testRepro_aiAssistantTutorialDismiss() {
         _ = app.buttons.firstMatch.waitForExistence(timeout: 120)
         _ = openPage("Archive")
+        _ = app.buttons["AI Assistant"].firstMatch.waitForExistence(timeout: 90)
+        Thread.sleep(forTimeInterval: 2)
         let ai = resolveVisible((id: "", label: "AI Assistant"))
         XCTAssertTrue(ai.exists && reveal(ai), "AI Assistant button reachable")
         ai.tap(); Thread.sleep(forTimeInterval: 2)

@@ -104,13 +104,13 @@ struct AIWindowButton: View {
         newWindow.isReleasedWhenClosed = false
         newWindow.minSize = NSSize(width: 480, height: 400)
 
-        newWindow.contentView = NSHostingView(rootView:
-            AIAssistantView(
-                archiveScope: Self.aiScope(for: model),
-                searchContext: model.searchText
-            )
-            .environmentObject(storeManager)
-        )
+        // Same root as every tool window: store, page registry and this
+        // window's purchase presenter (a locked action asks here, not behind).
+        let root = ToolWindowPresenter.windowRoot(
+            AIAssistantView(archiveScope: Self.aiScope(for: model), searchContext: model.searchText)
+                .environmentObject(storeManager),
+            title: "AI Assistant")
+        newWindow.contentView = NSHostingView(rootView: root)
 
         if let main = NSApp.mainWindow {
             let mainFrame = main.frame

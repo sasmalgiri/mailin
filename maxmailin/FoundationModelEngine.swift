@@ -822,24 +822,54 @@ struct FoundationModelEngine {
         case unknown
     }
 
+    /// Asking the system whether the model is available is real work
+    /// (FoundationModels + GenerativeModels lookups, locale setup) and views
+    /// read it from `body`. On iPad, AI Assistant's header asked on every
+    /// render and the app stopped answering touches (found 2026-10-04). The
+    /// answer is cached and re-asked at most every 30 s; status changes
+    /// (Apple Intelligence switched on, model download finished) are seen
+    /// within that window.
+    private static let availabilityCache = AvailabilityCache()
+
     static var availability: ModelAvailability {
-        let model = SystemLanguageModel.default
-        switch model.availability {
-        case .available:
-            return .available
-        case .unavailable(.deviceNotEligible):
-            return .notEligible
-        case .unavailable(.appleIntelligenceNotEnabled):
-            return .notEnabled
-        case .unavailable(.modelNotReady):
-            return .notReady
-        default:
-            return .unknown
+        availabilityCache.value {
+            switch SystemLanguageModel.default.availability {
+            case .available: return .available
+            case .unavailable(.deviceNotEligible): return .notEligible
+            case .unavailable(.appleIntelligenceNotEnabled): return .notEnabled
+            case .unavailable(.modelNotReady): return .notReady
+            default: return .unknown
+            }
         }
     }
 
-    static var isAvailable: Bool {
-        SystemLanguageModel.default.isAvailable
+    static var isAvailable: Bool { availability == .available }
+
+    /// Thread-safe, time-limited cache for the availability answer.
+    final class AvailabilityCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cached: ModelAvailability?
+        private var checkedAt = Date.distantPast
+        static let lifetime: TimeInterval = 30
+
+        func value(_ compute: () -> ModelAvailability) -> ModelAvailability {
+            lock.lock()
+            if let cached, Date().timeIntervalSince(checkedAt) < Self.lifetime {
+                lock.unlock()
+                return cached
+            }
+            lock.unlock()
+            let fresh = compute()
+            lock.lock()
+            cached = fresh
+            checkedAt = Date()
+            lock.unlock()
+            return fresh
+        }
+
+        func invalidate() {
+            lock.lock(); cached = nil; lock.unlock()
+        }
     }
 
     // v4.3.1: Current persona for AI behavior

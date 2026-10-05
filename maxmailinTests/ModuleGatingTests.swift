@@ -1311,6 +1311,31 @@ struct ToolWindowEnvironmentTests {
         #expect(window.contentView != nil)
         ToolWindowPresenter.shared.close(title: title)
     }
+
+    /// A view that reads both shared objects the way EmailDetailView and the
+    /// studios do; any missing one traps when it renders.
+    private struct EnvironmentProbe: View {
+        @EnvironmentObject var store: StoreManager
+        @Environment(ModuleRegistry.self) private var modules
+        var body: some View { Text("\(store.effectiveTier.rawValue) \(modules.enabledModules.count)") }
+    }
+
+    @Test("Every secondary window root provides the store AND the page registry")
+    func windowRootProvidesStoreAndRegistry() throws {
+        let store = StoreManager(testTier: .professional)
+        let previousStore = StoreManager.live
+        StoreManager.live = store
+        defer { StoreManager.live = previousStore }
+        let (registry, _) = makeRegistry()
+        let previousModules = ModuleRegistry.live
+        ModuleRegistry.live = registry
+        defer { ModuleRegistry.live = previousModules }
+
+        let host = NSHostingView(rootView: ToolWindowPresenter.windowRoot(EnvironmentProbe(), title: "probe"))
+        host.frame = NSRect(x: 0, y: 0, width: 300, height: 120)
+        host.layoutSubtreeIfNeeded()
+        #expect(host.fittingSize.width > 0)
+    }
 }
 #endif
 

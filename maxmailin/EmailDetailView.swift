@@ -2368,11 +2368,10 @@ extension View {
         window.title = title
         window.isReleasedWhenClosed = true
         window.minSize = NSSize(width: 500, height: 400)
-        if let storeManager {
-            window.contentView = NSHostingView(rootView: self.environmentObject(storeManager))
-        } else {
-            window.contentView = NSHostingView(rootView: self)
-        }
+        // The detail view reads the page registry and the store; a bare
+        // NSHostingView provides neither (it crashed without the registry).
+        let content: AnyView = storeManager.map { AnyView(self.environmentObject($0)) } ?? AnyView(self)
+        window.contentView = NSHostingView(rootView: ToolWindowPresenter.windowRoot(content, title: title))
         window.makeKeyAndOrderFront(nil)
         NSApp.activate()
     }
