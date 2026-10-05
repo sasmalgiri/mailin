@@ -376,6 +376,20 @@ struct EmailNLPEngine {
             "want", "see", "look", "need", "take", "come", "think",
             "good", "right", "going", "back", "much", "still", "made",
             "even", "thing", "many", "said", "give", "tell", "try",
+            // Time words, company boilerplate and confidentiality footers:
+            // they appear in nearly every business email and topped the list
+            // ("year", "intl") on a real archive (2026-10-06).
+            "year", "years", "month", "months", "week", "weeks", "day", "days",
+            "time", "today", "date", "yesterday", "tomorrow", "morning",
+            "intl", "inc", "ltd", "pvt", "llp", "llc", "corp", "dept", "co",
+            "team", "info", "details", "detail", "number", "regard", "kind",
+            "confidential", "confidentiality", "intended", "recipient", "recipients",
+            "disclaimer", "privileged", "information", "notice", "unauthorized",
+            "prohibited", "rights", "reserved", "copyright", "unsubscribe",
+            // HTML entities left in plain-text parts, and mail-provider names.
+            "nbsp", "amp", "quot", "apos", "lt", "gt", "zwnj", "rsquo", "lsquo", "rdquo", "ldquo", "mdash", "ndash",
+            "gmail", "google", "googlemail", "yahoo", "outlook", "hotmail", "icloud",
+            "sir", "sirs", "madam", "mr", "mrs", "ms", "dr",
         ]
 
         for email in emails {

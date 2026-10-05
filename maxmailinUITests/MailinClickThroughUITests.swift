@@ -1570,6 +1570,14 @@ final class MailinClickThroughUITests: XCTestCase {
     /// Asks real questions on the archive and records every answer verbatim.
     func testAIAnswers_recordForReview() {
         recoverIfNeeded()
+        // A tall window, so every suggestion is on screen without scrolling.
+        let windowMenu = app.menuBars.menuBarItems["Window"]
+        if windowMenu.exists {
+            windowMenu.click()
+            let zoom = app.menuItems["Zoom"]
+            if zoom.waitForExistence(timeout: 2), zoom.isEnabled { zoom.click() } else { app.typeKey(.escape, modifierFlags: []) }
+            Thread.sleep(forTimeInterval: 1)
+        }
         _ = openPage("AI Insights")
         let askTab = app.buttons["Ask"].firstMatch
         if askTab.waitForExistence(timeout: 5), askTab.isHittable { askTab.click() }

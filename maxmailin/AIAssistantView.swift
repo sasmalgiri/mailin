@@ -1816,6 +1816,27 @@ struct AIAssistantView: View {
         }
 
         // Top senders
+        // "Tell me about / show / find / summarize emails from <name>": the
+        // messages actually from that sender. The model path answered about
+        // a different sender (2026-10-06, "…from Mail Delivery Subsystem").
+        if let range = lower.range(of: #"(tell me about|show me|show|find|list|summari[sz]e)( all| the| my)? e?mails? from "#, options: .regularExpression) {
+            let name = String(query[range.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: " ?.!\"'"))
+            // "…emails from the last month / 2014 / yesterday" is a time range,
+            // not a sender: leave those to the date-aware path.
+            let timePhrase = name.lowercased().range(of: #"^(the |this |last |past |previous |next )?(last |past )?(\d+ )?(day|days|week|weeks|month|months|year|years|yesterday|today|tonight|morning|january|february|march|april|may|june|july|august|september|october|november|december|\d{4})\b"#, options: .regularExpression) != nil
+            if !name.isEmpty && !timePhrase {
+                return { emails in smartEmailsFrom(name: name, query: query, emails: emails) }
+            }
+        }
+
+        // Topic questions: answered from the topic counter itself. Through the
+        // model the answer depended on which few emails were retrieved (one
+        // run listed "test_full.csv" as a top topic).
+        let topicKeywords = ["most common topic", "main topic", "top topic", "what topics", "which topics", "common themes", "main themes"]
+        if topicKeywords.contains(where: { lower.contains($0) }) {
+            return { emails in smartTopics(query: query, emails: emails) }
+        }
+
         let senderKeywords = ["who emails me", "who sends me", "top sender", "most email", "most frequent sender", "who contacts me", "who messages me"]
         if senderKeywords.contains(where: { lower.contains($0) }) {
             return { emails in smartTopSenders(query: query, emails: emails) }
@@ -1894,6 +1915,58 @@ struct AIAssistantView: View {
             - **Unique domains:** \(uniqueDomains)
             """
         return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: [])
+    }
+
+    nonisolated private static func smartTopics(query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        // The owner's own name is in every signature: it is not a topic.
+        let ownNameWords: Set<String> = Set(emails
+            .filter { $0.messageType == "sent" || ($0.headers["X-Gmail-Labels"] ?? "").lowercased().contains("sent") }
+            .prefix(200)
+            .flatMap { AIAssistantView.senderDisplayName($0.headers["From"] ?? "").lowercased()
+                .components(separatedBy: CharacterSet.alphanumerics.inverted) }
+            .filter { $0.count >= 3 })
+        let topics = EmailNLPEngine.extractTopics(from: emails, limit: 24)
+            .filter { !ownNameWords.contains($0.word.lowercased()) }
+            .sorted { $0.count > $1.count }
+            .prefix(12)
+            .map { $0 }
+        guard !topics.isEmpty else {
+            return (query: query, answer: "Not enough message text in this scope to find topics.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        var answer = "**Most common topics** across \(emails.count) emails (words that recur in message bodies):\n\n"
+        for (i, t) in topics.enumerated() {
+            answer += "\(i + 1). **\(t.word.capitalized)** — \(t.count) mention\(t.count == 1 ? "" : "s")\n"
+        }
+        // Open the emails behind the top topic.
+        let top = topics[0].word
+        let ids = emails.filter { ($0.headers["Subject"] ?? "").lowercased().contains(top) || $0.plainBody.lowercased().contains(top) }.prefix(5).map(\.id)
+        answer += "\nAsk \"What's discussed about \(top)?\" for the details behind any topic."
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: Array(ids))
+    }
+
+    nonisolated private static func smartEmailsFrom(name: String, query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        let needle = name.lowercased()
+        let matches = emails.filter { ($0.headers["From"] ?? "").lowercased().contains(needle) }
+        guard !matches.isEmpty else {
+            return (query: query, answer: "No emails from **\(name)** in this scope. Check the spelling, or widen the scope to the whole archive.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        let dated = matches.compactMap { e in MBOXParser.parseDate(e.headers["Date"]).map { (e, $0) } }.sorted { $0.1 > $1.1 }
+        let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
+        var answer = "**\(matches.count) email\(matches.count == 1 ? "" : "s") from \(name)**"
+        if let newest = dated.first?.1, let oldest = dated.last?.1 {
+            answer += newest == oldest ? " (\(fmt.string(from: newest)))" : " (\(fmt.string(from: oldest)) – \(fmt.string(from: newest)))"
+        }
+        let withAttachments = matches.filter { !$0.attachments.isEmpty }.count
+        if withAttachments > 0 { answer += ", \(withAttachments) with attachments" }
+        answer += ".\n\n**Most recent:**\n"
+        let recent = (dated.isEmpty ? matches.map { ($0, Date.distantPast) } : dated).prefix(8)
+        for (email, date) in recent {
+            let subject = email.headers["Subject"] ?? "(No Subject)"
+            let when = date == .distantPast ? "" : " — \(fmt.string(from: date))"
+            answer += "- \(subject)\(when)\n"
+        }
+        if matches.count > 8 { answer += "\n…and \(matches.count - 8) more." }
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: recent.map { $0.0.id })
     }
 
     nonisolated private static func smartTopSenders(query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
@@ -5954,8 +6027,17 @@ struct AIAssistantView: View {
         conversationHistory = turns.map { (query: $0.query, answer: $0.answer, timestamp: $0.timestamp ?? Date(), relatedEmailIDs: $0.relatedEmailIDs ?? []) }
     }
 
+    /// Clear means a fresh conversation for the model too: the engine keeps
+    /// its own turn memory, and without this a cleared conversation still
+    /// steered the next answer (found 2026-10-06: "Summarize last month"
+    /// answered about the previous question's sender).
     nonisolated static func clearSavedConversation() {
         try? FileManager.default.removeItem(at: conversationURL)
+        #if canImport(FoundationModels)
+        if #available(macOS 26, iOS 26, *) {
+            FoundationModelEngine.clearConversationMemory()
+        }
+        #endif
     }
 
     // MARK: - Export
