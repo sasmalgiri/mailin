@@ -1110,6 +1110,14 @@ struct AIAssistantView: View {
     @State private var showMetricsSheet: Bool = false
     @ObservedObject private var provenanceStore = AIProvenanceStore.shared
 
+    /// The question in an answer line of the form `Ask: “…”` (optionally a
+    /// list item, optionally followed by a note in brackets).
+    static func followUpQuestion(in line: String) -> String? {
+        guard let match = line.firstMatch(of: /^\s*(?:[-•]\s*)?Ask:\s*[“"](.+?)[”"]/) else { return nil }
+        let question = String(match.1).trimmingCharacters(in: .whitespaces)
+        return question.isEmpty ? nil : question
+    }
+
     private func renderedMarkdown(_ text: String, isStreaming: Bool, relatedEmailIDs: [UUID] = []) -> some View {
         let relatedEmails = relatedEmailIDs.compactMap { cachedEmail(id: $0) }
         let lines = text.components(separatedBy: "\n")
@@ -1121,6 +1129,22 @@ struct AIAssistantView: View {
             ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
                 if line.trimmingCharacters(in: .whitespaces).isEmpty {
                     Spacer().frame(height: 6)
+                } else if !isStreaming, let question = Self.followUpQuestion(in: line) {
+                    // An answer's suggested follow-up ("Ask: “…”") is one click,
+                    // not something to retype.
+                    Button {
+                        guard !isProcessing else { return }
+                        prompt = question
+                        askAI()
+                    } label: {
+                        Label(question, systemImage: "arrow.turn.down.right")
+                            .font(Typography.callout)
+                            .foregroundColor(.accentColor)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isProcessing)
+                    .help("Ask this question")
+                    .accessibilityLabel("Ask follow-up: \(question)")
                 } else {
                     VStack(alignment: .leading, spacing: 2) {
                         Group {
@@ -1825,6 +1849,12 @@ struct AIAssistantView: View {
             return { emails in smartStatistics(query: query, emails: emails) }
         }
 
+        // "Tell the story of <subject>": one named conversation, narrated —
+        // the follow-up Thread Story offers for the next busiest threads.
+        if let subject = threadStorySubject(in: query) {
+            return { emails in await smartThreadStory(subject: subject, query: query, emails: emails) }
+        }
+
         // Top senders
         // "Tell me about / show / find / summarize emails from <name>": the
         // messages actually from that sender. The model path answered about
@@ -1956,6 +1986,44 @@ struct AIAssistantView: View {
         return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: Array(ids))
     }
 
+    /// The subject in "tell / narrate / show (me) the story of <subject>".
+    nonisolated static func threadStorySubject(in query: String) -> String? {
+        guard let range = query.range(of: #"^\s*(tell|narrate|show)( me)? the story of\s+"#, options: [.regularExpression, .caseInsensitive]) else { return nil }
+        let subject = String(query[range.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: " “”\"'?.!"))
+        return subject.isEmpty ? nil : subject
+    }
+
+    nonisolated private static func smartThreadStory(subject: String, query: String, emails: [MBOXParser.RawEmail]) async -> SmartQueryResult {
+        guard let members = EmailNLPEngine.conversation(matching: subject, in: emails) else {
+            return (query: query, answer: "No conversation in this scope has a subject matching “\(subject)”.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        let thread = members.sorted {
+            (MBOXParser.parseDate($0.headers["Date"]) ?? .distantPast) < (MBOXParser.parseDate($1.headers["Date"]) ?? .distantPast)
+        }
+        let ids = Array(thread.suffix(5).map(\.id))
+        #if canImport(FoundationModels)
+        if #available(macOS 26, iOS 26, *), FoundationModelEngine.isAvailable {
+            let header = FoundationModelEngine.episodeHeader(thread, isBusiest: false)
+            let story = (try? await FoundationModelEngine.synthesizeThread(thread) { _ in }) ?? ""
+            return (query: query, answer: header + story, timestamp: Date(), relatedEmailIDs: ids)
+        }
+        #endif
+        // No on-device model: the outline from the messages themselves.
+        let fmt = DateFormatter()
+        fmt.dateStyle = .medium
+        fmt.timeStyle = .none
+        var answer = "**Thread: “\(EmailNLPEngine.baseSubject(thread.first?.headers["Subject"] ?? subject))”** — \(thread.count) messages.\n\n"
+        for email in thread.prefix(12) {
+            let when = MBOXParser.parseDate(email.headers["Date"]).map { fmt.string(from: $0) } ?? "undated"
+            let line = email.plainBody.components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .first { !$0.isEmpty && !$0.hasPrefix(">") } ?? ""
+            answer += "- \(when) — \(senderDisplayName(email.headers["From"] ?? "?")): \(line.prefix(140))\n"
+        }
+        if thread.count > 12 { answer += "- …and \(thread.count - 12) more messages\n" }
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: ids)
+    }
+
     nonisolated private static func smartEmailsFrom(name: String, query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
         let needle = name.lowercased()
         let matches = emails.filter { ($0.headers["From"] ?? "").lowercased().contains(needle) }
@@ -2039,20 +2107,39 @@ struct AIAssistantView: View {
             answer = "**Security scan complete — no phishing detected.**\n\n"
             answer += "Scanned \(emails.count) emails. No high or medium risk emails found."
         } else {
-            answer = "**Security Scan Results:**\n\n"
+            answer = "**Security scan of \(emails.count) emails:**\n\n"
             answer += "- 🔴 **High risk:** \(high.count) email\(high.count == 1 ? "" : "s")\n"
             answer += "- 🟡 **Medium risk:** \(medium.count) email\(medium.count == 1 ? "" : "s")\n\n"
-            if !high.isEmpty {
-                answer += "**High-risk emails:**\n"
-                for (i, flag) in high.prefix(10).enumerated() {
-                    let subject = flag.email.headers["Subject"] ?? "(No Subject)"
-                    let from = flag.email.headers["From"] ?? "Unknown"
-                    let reasons = flag.reasons.prefix(2).joined(separator: ", ")
-                    answer += "\(i + 1). **\(subject)** from \(from) — \(reasons)\n"
+            // Every reason is shown: the answer is the evidence, and the user
+            // judges it. Two reasons hid what pushed a message to "high".
+            // One line per conversation, sender and finding (use-once): four
+            // replies quoting the same link were four identical lines.
+            func list(_ flags: [EmailNLPEngine.PhishingFlag], limit: Int) -> String {
+                var groups: [(flag: EmailNLPEngine.PhishingFlag, count: Int)] = []
+                var index: [String: Int] = [:]
+                for flag in flags {
+                    let key = EmailNLPEngine.conversationKey(flag.email) + "|" + (flag.email.headers["From"] ?? "") + "|" + flag.reasons.joined(separator: ";")
+                    if let i = index[key] { groups[i].count += 1 } else { index[key] = groups.count; groups.append((flag, 1)) }
                 }
+                var text = ""
+                for (i, group) in groups.prefix(limit).enumerated() {
+                    let subject = group.flag.email.headers["Subject"] ?? "(No Subject)"
+                    let from = group.flag.email.headers["From"] ?? "Unknown"
+                    let copies = group.count > 1 ? " (\(group.count) emails in this thread)" : ""
+                    text += "\(i + 1). **\(subject)** from \(from)\(copies) — \(group.flag.reasons.joined(separator: "; "))\n"
+                }
+                if groups.count > limit { text += "…and \(groups.count - limit) more.\n" }
+                return text
             }
+            if !high.isEmpty {
+                answer += "**High-risk emails:**\n" + list(high, limit: 10) + "\n"
+            }
+            if !medium.isEmpty {
+                answer += "**Medium-risk emails:**\n" + list(medium, limit: 8) + "\n"
+            }
+            answer += "These are warning signs found by rules (wording, links, sender and authentication headers), not a verdict. Don't open links or attachments in a flagged email until you have checked the sender another way."
         }
-        let relatedIDs = Array(high.prefix(5).map(\.email.id))
+        let relatedIDs = Array((high + medium).prefix(5).map(\.email.id))
         return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: relatedIDs)
     }
 
@@ -2264,8 +2351,17 @@ struct AIAssistantView: View {
             return
         }
 
+        // A named thread's story is narrated by the model, so it counts as an
+        // AI question for the free allowance, like Thread Story itself.
+        let isModelStory = Self.threadStorySubject(in: query) != nil
+        if isModelStory && !storeManager.isPremium && freeQueryCount >= Self.freeQueryLimit {
+            showUpgradePaywall = true
+            return
+        }
+
         if let smartResult = Self.handleSmartQuery(query: query) {
             prompt = ""
+            if isModelStory && !storeManager.isPremium { freeQueryCount += 1 }
             isProcessing = true
             let smartMetrics = beginMetrics("smartQuery", query: query)
             let smartStart = Date()

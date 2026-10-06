@@ -1644,6 +1644,47 @@ final class MailinClickThroughUITests: XCTestCase {
             report += "\n## Q\(n+1): \(q)  (\(Int(Date().timeIntervalSince(started))) s)\n\(answer)\n"
             snapshotScreen("ai-answer-\(n+1)")
             if app.state == .notRunning { report += "\n(app quit)\n"; break }
+
+            // An answer's follow-up is a button: press the first "Tell the
+            // story of …" one after Thread Story and record what it gives.
+            let followUp = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Ask follow-up: Tell the story of'")).firstMatch
+            if q.hasPrefix("[Thread Story]") {
+                guard followUp.exists else { report += "\n## Q\(n+1)b: (no follow-up button)\n"; continue }
+                let fq = String(followUp.label.dropFirst("Ask follow-up: ".count))
+                if !followUp.isHittable {
+                    app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6)).scroll(byDeltaX: 0, deltaY: -600)
+                    Thread.sleep(forTimeInterval: 1)
+                }
+                guard followUp.isHittable else { report += "\n## Q\(n+1)b: \(fq)\n(could not reach the follow-up)\n"; continue }
+                app.activate(); Thread.sleep(forTimeInterval: 1)
+                followUp.click()
+                let fStarted = Date()
+                // The question appears as its own bubble once asked; a click
+                // that only focused the window is repeated once.
+                let asked = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Your question: " + String(fq.prefix(30)))).firstMatch
+                if !asked.waitForExistence(timeout: 5), followUp.exists, followUp.isHittable { followUp.click() }
+                Thread.sleep(forTimeInterval: 3)
+                while Date().timeIntervalSince(fStarted) < 150 {
+                    let busy = app.staticTexts["Thinking..."].exists || app.buttons["Processing query"].exists
+                        || app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'Answering'")).firstMatch.exists
+                    if !busy { break }
+                    Thread.sleep(forTimeInterval: 2)
+                }
+                Thread.sleep(forTimeInterval: 20)   // the model narrates
+                var ftexts: [String] = []
+                if let snap = try? app.windows.firstMatch.snapshot() {
+                    func walk(_ e: XCUIElementSnapshot) {
+                        if e.elementType == .staticText || e.elementType == .textView {
+                            let t = (e.value as? String) ?? e.label
+                            if !t.isEmpty { ftexts.append(t) }
+                        }
+                        e.children.forEach(walk)
+                    }
+                    walk(snap)
+                }
+                let ffrom = ftexts.lastIndex(where: { $0.hasPrefix("Your question: " + fq.prefix(30)) }).map { $0 + 1 } ?? max(0, ftexts.count - 30)
+                report += "\n## Q\(n+1)b (follow-up button): \(fq)  (\(Int(Date().timeIntervalSince(fStarted))) s)\n" + ftexts[ffrom...].prefix(30).joined(separator: "\n") + "\n"
+            }
         }
         print("AI-ANSWERS>>>\(report)\n<<<AI-ANSWERS")
         let att = XCTAttachment(string: report); att.name = "ai-answers.md"; att.lifetime = .keepAlways; add(att)

@@ -1453,3 +1453,100 @@ struct ConversationCountingTests {
         #expect(header.contains("Ann, Bob"))
     }
 }
+
+// MARK: - Security scan and thread choice (2026-10-06 "fix all")
+
+struct SecurityScanAndThreadChoiceTests {
+    private func email(_ subject: String, from: String, to: String = "me@example.com", body: String,
+                       type: String = "received", messageID: String? = nil) -> MBOXParser.RawEmail {
+        MBOXParser.RawEmail(
+            headers: ["From": from, "To": to, "Subject": subject,
+                      "Date": "Tue, 14 Mar 2017 09:41:00 +0000", "Message-ID": messageID ?? "<\(UUID().uuidString)@example.com>"],
+            rawSource: "", messageType: type, attachments: [],
+            timestamp: "Tue, 14 Mar 2017 09:41:00 +0000", domains: ["example.com"],
+            plainBody: body, htmlBody: "")
+    }
+
+    @Test("\"t.co\" inside a domain is not a shortened link; a t.co link is")
+    func shortenerIsAHost() {
+        let plain = email("Fees", from: "Ann <ann@lawfirm.example>", body: "See patent.com and contact.com for details. Please act now.")
+        let reasons = EmailNLPEngine.detectPhishing(in: [plain]).flatMap(\.reasons)
+        #expect(!reasons.contains { $0.hasPrefix("Shortened URL") })
+        let short = email("Fees", from: "x@spam.example", body: "Act now, verify your account: https://t.co/abc click here to verify")
+        #expect(EmailNLPEngine.detectPhishing(in: [short]).flatMap(\.reasons).contains("Shortened URL detected: t.co"))
+    }
+
+    @Test("A quoted display name with the sender's own address is not a mismatch")
+    func quotedDisplayName() {
+        let e = email("Interview", from: "\"hr@corp.example\" <hr@corp.example>", body: "Urgent: interview on Monday. Click here to verify")
+        #expect(!EmailNLPEngine.detectPhishing(in: [e]).flatMap(\.reasons).contains("Display name domain mismatch"))
+    }
+
+    @Test("The same message twice is flagged once")
+    func duplicateFlaggedOnce() {
+        let body = "Urgent: verify your account. Click here to verify. Enter your password."
+        let a = email("Account", from: "x@spam.example", body: body, messageID: "<dup@spam.example>")
+        let b = email("Account", from: "x@spam.example", body: body, messageID: "<dup@spam.example>")
+        #expect(EmailNLPEngine.detectPhishing(in: [a, b]).count == 1)
+    }
+
+    @Test("Wording alone does not make a correspondent's mail high-risk")
+    func correspondentNotHighOnWording() {
+        let body = "Urgent: confirm your details and send money by wire transfer immediately."
+        let sent = email("Fees", from: "me@example.com", to: "Ann <ann@lawfirm.example>", body: "Attached.", type: "sent")
+        let reply = email("Re: Fees", from: "Ann <ann@lawfirm.example>", body: body)
+        let stranger = email("Fees", from: "x@spam.example", body: body)
+        let flags = EmailNLPEngine.detectPhishing(in: [sent, reply, stranger])
+        let annFlag = flags.first { ($0.email.headers["From"] ?? "").contains("ann@") }
+        #expect(annFlag == nil || annFlag?.riskLevel != .high)
+        #expect(flags.contains { ($0.email.headers["From"] ?? "").contains("spam") })
+    }
+
+    @Test("Conversations rank by people taking part; a subject finds its thread")
+    func conversationChoice() {
+        let alerts = (0..<6).map { _ in email("Alert", from: "alerts@example.com", body: "x") }
+        let small = [email("Lunch", from: "a@x.example", body: "x"), email("Re: Lunch", from: "b@x.example", body: "x")]
+        let big = [email("Hearing notice", from: "a@x.example", body: "x"), email("Re: Hearing notice", from: "b@x.example", body: "x"),
+                   email("RE: Hearing notice", from: "c@x.example", body: "x")]
+        let ranked = EmailNLPEngine.conversationsByActivity(in: alerts + small + big)
+        #expect(ranked.count == 2)
+        #expect(ranked.first?.count == 3)
+        #expect(EmailNLPEngine.conversation(matching: "“hearing notice”", in: alerts + small + big)?.count == 3)
+        #expect(EmailNLPEngine.conversation(matching: "hearing", in: alerts + small + big)?.count == 3)
+        #expect(EmailNLPEngine.conversation(matching: "budget", in: alerts + small + big) == nil)
+        #expect(EmailNLPEngine.baseSubject("RE: Fwd:  Hearing   notice") == "Hearing notice")
+    }
+
+    @Test("Story requests and follow-up lines are recognised")
+    func storyAndFollowUpParsing() {
+        #expect(AIAssistantView.threadStorySubject(in: "Tell the story of “Hearing notice”") == "Hearing notice")
+        #expect(AIAssistantView.threadStorySubject(in: "tell me the story of lunch?") == "lunch")
+        #expect(AIAssistantView.threadStorySubject(in: "Tell me about emails from Ann") == nil)
+        #expect(AIAssistantView.followUpQuestion(in: "- Ask: “Tell the story of Lunch” (2 messages)") == "Tell the story of Lunch")
+        #expect(AIAssistantView.followUpQuestion(in: "Ask: “Tell me about emails from Shabana Khan”") == "Tell me about emails from Shabana Khan")
+        #expect(AIAssistantView.followUpQuestion(in: "We will ask: later") == nil)
+    }
+}
+
+struct LinkMismatchTests {
+    @Test("A link written as its own address is not a mismatch; a disguised one is")
+    func linkHosts() {
+        #expect(EmailNLPEngine.mismatchedLink(in: #"<a href="https://www.example.org/a">https://example.org/a</a>"#) == nil)
+        #expect(EmailNLPEngine.mismatchedLink(in: #"<a href="https://mail.example.org/x">www.example.org</a>"#) == nil)
+        #expect(EmailNLPEngine.mismatchedLink(in: #"<a href="https://www.google.com/url?q=https://example.org/p&amp;sa=D">https://example.org/p</a>"#) == nil)
+        let bad = EmailNLPEngine.mismatchedLink(in: #"<a href="http://login-verify.example.net/x">https://www.paypal.com</a>"#)
+        #expect(bad?.shown == "paypal.com")
+        #expect(bad?.actual == "login-verify.example.net")
+    }
+}
+
+struct BrandAndWrappedLinkTests {
+    @Test("Gmail is Google's own domain; long link text split by <wbr> keeps its host")
+    func brandAndWbr() {
+        let drive = MBOXParser.RawEmail(
+            headers: ["From": "\"Ann (via Google Drive)\" <ann@gmail.com>", "Subject": "Shared", "Date": "Tue, 14 Mar 2017 09:41:00 +0000", "Message-ID": "<d@x>"],
+            rawSource: "", messageType: "received", attachments: [], timestamp: "", domains: [], plainBody: "Urgent: open the shared file. Click here to verify", htmlBody: "")
+        #expect(!EmailNLPEngine.detectPhishing(in: [drive]).flatMap(\.reasons).contains { $0.hasPrefix("Brand impersonation") })
+        #expect(EmailNLPEngine.mismatchedLink(in: #"<a href="http://www.apminfrastructure.com">www.a<wbr>pminfrastructure.com</a>"#) == nil)
+    }
+}

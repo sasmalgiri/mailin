@@ -1021,7 +1021,18 @@ struct FoundationModelEngine {
         let story = try await synthesizeThread(thread) { partial in
             onUpdate(header + partial)
         }
-        let full = header + story
+        // The next busiest conversations, as questions the assistant answers,
+        // so another thread is one click away from this page.
+        let others = EmailNLPEngine.conversationsByActivity(in: workingSet).dropFirst().prefix(3)
+        var footer = ""
+        if !others.isEmpty {
+            footer = "\n\n" + String(localized: "Other conversations you can ask about:") + "\n"
+            for members in others {
+                let subject = EmailNLPEngine.baseSubject(members.first?.headers["Subject"] ?? "")
+                footer += "- Ask: “Tell the story of \(subject)” (\(members.count) messages)\n"
+            }
+        }
+        let full = header + story + footer
         await onUpdate(full)
         return full
     }
@@ -1030,22 +1041,12 @@ struct FoundationModelEngine {
     /// messages, then the most recent) among those with at least two senders.
     /// One sender's repeated alerts are not a conversation.
     static func busiestConversation(in emails: [MBOXParser.RawEmail]) -> [MBOXParser.RawEmail]? {
-        let groups = Dictionary(grouping: emails, by: EmailNLPEngine.conversationKey)
-            .filter { !$0.key.hasPrefix("id:") }
-        let ranked = groups.values.compactMap { members -> (members: [MBOXParser.RawEmail], senders: Int, newest: Date)? in
-            let senders = Set(members.map { ($0.headers["From"] ?? "").lowercased() }).count
-            guard senders >= 2 else { return nil }
-            let newest = members.compactMap { MBOXParser.parseDate($0.headers["Date"]) }.max() ?? .distantPast
-            return (members, senders, newest)
-        }
-        return ranked.max {
-            ($0.senders, $0.members.count, $0.newest) < ($1.senders, $1.members.count, $1.newest)
-        }?.members
+        EmailNLPEngine.conversationsByActivity(in: emails).first
     }
 
     /// The episode facts, computed rather than generated (kalsmritikosh H-5):
     /// which thread, who took part, its span, and who had the last word.
-    static func episodeHeader(_ thread: [MBOXParser.RawEmail]) -> String {
+    static func episodeHeader(_ thread: [MBOXParser.RawEmail], isBusiest: Bool = true) -> String {
         let sorted = thread.sorted {
             (MBOXParser.parseDate($0.headers["Date"]) ?? .distantPast) < (MBOXParser.parseDate($1.headers["Date"]) ?? .distantPast)
         }
@@ -1059,7 +1060,9 @@ struct FoundationModelEngine {
             if !people.contains(name) { people.append(name) }
         }
         let dates = sorted.compactMap { MBOXParser.parseDate($0.headers["Date"]) }
-        var header = String(localized: "**Thread: “\(subject)”** — the busiest conversation in this scope.") + "\n"
+        var header = (isBusiest
+            ? String(localized: "**Thread: “\(subject)”** — the busiest conversation in this scope.")
+            : String(localized: "**Thread: “\(subject)”**")) + "\n"
         header += String(localized: "\(sorted.count) messages between \(people.joined(separator: ", "))")
         if let first = dates.first, let last = dates.last {
             header += first == last ? ", \(fmt.string(from: first))" : ", \(fmt.string(from: first)) – \(fmt.string(from: last))"
@@ -1069,7 +1072,10 @@ struct FoundationModelEngine {
             let when = MBOXParser.parseDate(lastEmail.headers["Date"]).map { fmt.string(from: $0) } ?? "?"
             header += " " + String(localized: "Last message: \(displayName(from: lastEmail.headers["From"] ?? "?")), \(when).")
         }
-        header += "\n" + String(localized: "For another thread, open one of its emails and choose Thread Story.") + "\n\n"
+        if isBusiest {
+            header += "\n" + String(localized: "For another thread, open one of its emails and choose Thread Story.")
+        }
+        header += "\n\n"
         return header
     }
     static func securityBrief(onUpdate: @MainActor @Sendable @escaping (String) -> Void) async throws -> String {
@@ -1951,15 +1957,21 @@ struct FoundationModelEngine {
         }
 
         let deadlineWords = ["deadline", "due date", "due on", "last date", "expiry", "expires", "expiring"]
+        // Counted per conversation, people only: 81 copies of one automated
+        // expiry alert had made "122 emails mention a deadline" (2026-10-06).
         let withDeadlines = emails.filter { email in
+            let from = address(email.headers["From"] ?? "")
+            guard !automatedMarkers.contains(where: { from.contains($0) }) else { return false }
             let text = (email.headers["Subject"] ?? "") + " " + String(email.plainBody.prefix(3000))
             let lower = text.lowercased()
             return deadlineWords.contains { lower.contains($0) }
         }
-        if !withDeadlines.isEmpty {
+        let deadlineGroups = Dictionary(grouping: withDeadlines, by: EmailNLPEngine.conversationKey)
+        if !deadlineGroups.isEmpty {
             let newest = withDeadlines.compactMap { MBOXParser.parseDate($0.headers["Date"]) }.max()
+            let n = deadlineGroups.count
             out += "**Deadlines mentioned**\n"
-            out += "- **\(withDeadlines.count)** emails mention a deadline, due date or expiry"
+            out += "- **\(n)** conversation\(n == 1 ? "" : "s") (\(withDeadlines.count) emails) mention a deadline, due date or expiry"
             if let newest {
                 out += "; the newest is from \(fmt.string(from: newest))"
                 if newest < Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date() {
