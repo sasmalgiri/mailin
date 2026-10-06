@@ -1720,6 +1720,29 @@ struct FoundationModelEngine {
         let priorityResults = EmailNLPEngine.scoreAllPriorities(emails, replyCountPerSender: replyCountPerSender)
         let topEmails = Array(priorityResults.prefix(10))
 
+        // Nothing from the last 30 days means nothing to act on now. The model
+        // kept putting year-old deadlines under "Act Now" despite the rules, so
+        // in that case the list is built here, with no urgency tiers.
+        let recentCutoff = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+        let dates = emails.compactMap { MBOXParser.parseDate($0.headers["Date"]) }
+        if let newest = dates.max(), newest < recentCutoff {
+            let fmt = DateFormatter()
+            fmt.dateStyle = .medium
+            fmt.timeStyle = .none
+            var out = String(localized: "**Nothing needs action now.** No email here is from the last 30 days (the newest is from \(fmt.string(from: newest))), so any deadline in them has passed.")
+            out += "\n\n" + String(localized: "**Most important older emails — check each was handled:**") + "\n\n"
+            for result in topEmails {
+                let email = result.email
+                let date = MBOXParser.parseDate(email.headers["Date"]).map { fmt.string(from: $0) } ?? String(localized: "undated")
+                out += "- **\(email.headers["Subject"] ?? String(localized: "(No Subject)"))** — \(displayName(from: email.headers["From"] ?? "?")) · \(date)\n"
+                if !result.reasons.isEmpty {
+                    out += "  " + String(localized: "Why it ranked high: \(result.reasons.prefix(2).joined(separator: "; "))") + "\n"
+                }
+            }
+            await onUpdate(out)
+            return out
+        }
+
         var context = archiveDateFacts(emails)
         context += "PRIORITY TRIAGE — Top \(topEmails.count) high-priority emails from \(emails.count) total:\n\n"
         let now = Date()
@@ -1784,7 +1807,6 @@ struct FoundationModelEngine {
             return msg
         }
         let classification = EmailNLPEngine.classifyAll(emails)
-        let sentiment = EmailNLPEngine.averageSentiment(of: emails)
         let own = ownerAddresses(in: emails)
         let isOwn: (String) -> Bool = { addr in
             let lower = addr.lowercased()
@@ -1815,21 +1837,20 @@ struct FoundationModelEngine {
         }
         context += "Categories: \(catStrings.joined(separator: ", "))\n"
 
-        // Sentiment summary — a rough lexicon score; formal business and legal
-        // mail often scores "negative" without being so.
-        context += "Approximate sentiment (rough word-list score, unreliable on formal mail): \(sentiment.label) (avg \(String(format: "%.2f", sentiment.average))). "
-        context += "Positive: \(sentiment.positive), Neutral: \(sentiment.neutral), Negative: \(sentiment.negative)\n"
+        // No sentiment: the word-list score marks formal business and legal mail
+        // "negative", and the model built insights on it even when told not to
+        // (found 2026-10-06).
 
         // Top entities
         if !entities.isEmpty {
             context += "Top entities: \(entities.map { "\($0.name) (\($0.type), \($0.count)x)" }.joined(separator: ", "))\n"
         }
 
-        // Contact sentiment insights
+        // Busiest contacts
         if !contacts.isEmpty {
             context += "Contact insights:\n"
             for contact in contacts {
-                context += "  - \(contact.address): \(contact.emailCount) emails, sentiment: \(contact.sentimentLabel)\n"
+                context += "  - \(contact.address): \(contact.emailCount) emails\n"
             }
         }
 
@@ -1838,8 +1859,18 @@ struct FoundationModelEngine {
             context += "Key topics: \(topics.map { "\($0.word) (\($0.count)x)" }.joined(separator: ", "))\n"
         }
 
-        // Recent activity
-        context += "\nRecent activity (last 7 days before today): \(recentEmails.count) emails, \(unansweredReceived.count) received\n"
+        // The newest date is stated outright (the model mis-computed it from a
+        // day count), and the last-7-days line only appears when the archive
+        // reaches that far: on an old archive "0 this week" read as a lapse.
+        let longDate = DateFormatter()
+        longDate.dateStyle = .long
+        longDate.timeStyle = .none
+        if let newest = emails.compactMap({ MBOXParser.parseDate($0.headers["Date"]) }).max() {
+            context += "\nThis is an archive of past mail. Its newest email is dated \(longDate.string(from: newest)).\n"
+            if newest > oneWeekAgo {
+                context += "Recent activity (last 7 days): \(recentEmails.count) emails, \(unansweredReceived.count) received\n"
+            }
+        }
         context += "Whether an email was answered is NOT known from this data.\n"
 
         let instructions = """
@@ -1849,18 +1880,18 @@ struct FoundationModelEngine {
 
             Rules:
             - Each insight should be specific and data-backed (cite numbers from NLP analysis)
-            - Examples: unanswered emails, sentiment shifts with contacts, category imbalances, \
-              neglected threads, unusual patterns
+            - Examples: busiest contacts, category imbalances, recurring topics, \
+              deadlines mentioned, unusual patterns
             - Use **bold** for names, numbers, and key findings
             - Be conversational — like a smart assistant noticing patterns
             - Start each insight with a short descriptive heading
             - Prioritize actionable findings over obvious observations
             - Never treat the user's own address as a contact, and never say emails went \
               unanswered: reply data is not available
-            - Sentiment is a rough word-list score: never call a contact or a set of emails \
-              "all negative" or "100% negative", and do not build an insight on sentiment alone
-            - If the archive's newest email is old, say so; do not describe the quiet since \
-              then as a gap in the user's correspondence
+            - Do not mention sentiment or tone
+            - This is an archive of past mail: never describe the time since its newest \
+              email as a gap, lag or lapse, and never work out dates yourself — quote the \
+              dates given in the data
             """
 
         let session = LanguageModelSession(instructions: instructions)

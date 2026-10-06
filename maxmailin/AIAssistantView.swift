@@ -55,6 +55,9 @@ struct AIAssistantView: View {
 
     @State private var prompt = ""
     @State private var isProcessing = false
+    /// A period question already found to have mail in it, so the re-ask
+    /// skips the empty-period check.
+    @State private var periodCheckedQuery: String?
     @State private var conversationHistory: [(query: String, answer: String, timestamp: Date, relatedEmailIDs: [UUID])] = []
     @State private var selectedEngine: AIEngine = .auto
     @State private var emailScope: EmailScope = .filtered
@@ -2211,6 +2214,47 @@ struct AIAssistantView: View {
             break
         }
 
+        // A question about a period ("…from the last month") that has no mail
+        // in it is answered here. The model, given no emails from the period,
+        // summarised older mail as if it were from it (found 2026-10-06).
+        // Emptiness is only claimed when the working set is the whole scope;
+        // otherwise, or when the period has mail, the question goes on as usual.
+        if periodCheckedQuery == query {
+            periodCheckedQuery = nil
+        } else if let range = EmailNLPEngine.parseDateRange(from: query.lowercased()) {
+            isProcessing = true
+            currentTask = Task {
+                let ws = await currentWorkingSet()
+                let dates = ws.compactMap { MBOXParser.parseDate($0.headers["Date"]) }
+                let hasMailInRange = dates.contains { $0 >= range.start && $0 <= range.end }
+                let isWholeScope = ws.count >= emailCount(for: emailScope)
+                isProcessing = false
+                guard !hasMailInRange, isWholeScope, !ws.isEmpty else {
+                    periodCheckedQuery = query
+                    prompt = query
+                    askAI()
+                    return
+                }
+                prompt = ""
+                let fmt = DateFormatter()
+                fmt.dateStyle = .long
+                fmt.timeStyle = .none
+                var answer = String(localized: "**No emails from \(range.label).** None of the \(ws.count) emails in this scope is dated in that period.")
+                if let newest = dates.max() {
+                    answer += " " + String(localized: "The newest one is from **\(fmt.string(from: newest))**.")
+                }
+                let newestIDs = ws
+                    .compactMap { e in MBOXParser.parseDate(e.headers["Date"]).map { (e.id, $0) } }
+                    .sorted { $0.1 > $1.1 }
+                    .prefix(5)
+                    .map(\.0)
+                withAnimation(AnimationTiming.normal) {
+                    conversationHistory.append((query: query, answer: answer, timestamp: Date(), relatedEmailIDs: Array(newestIDs)))
+                }
+            }
+            return
+        }
+
         if let smartResult = Self.handleSmartQuery(query: query) {
             prompt = ""
             isProcessing = true
@@ -2764,6 +2808,9 @@ struct AIAssistantView: View {
             "important", "urgent", "missed", "action", "summarize", "thread", "conversation", "summary",
             "overview", "analyze", "cleanup", "storage", "disk", "space", "biggest", "relationship",
             "communication", "mention", "positive", "negative",
+            // Thread Story's own prompt ("Narrate this conversation thread")
+            // scoped the answer to emails containing "story" and "narrate".
+            "story", "narrate", "narrative", "tell", "explain", "describe",
             "smallest", "shortest", "longest", "largest", "fewest", "heaviest", "long",
             "replied", "active", "busiest", "messages",
             "many", "much", "count", "total", "sent", "send", "received",
