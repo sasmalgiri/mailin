@@ -1568,6 +1568,7 @@ struct TypedQuestionRoutingTests {
     func whoIs() {
         #expect(AIAssistantView.whoIsName(in: "Who is Shabana Khan?") == "Shabana Khan")
         #expect(AIAssistantView.whoIsName(in: "Who is emailing me the most?") == nil)
+        #expect(AIAssistantView.whoIsName(in: "Who is Sendhil Kumar?") == "Sendhil Kumar")
     }
 
     @available(macOS 26, iOS 26, *)
@@ -1649,5 +1650,86 @@ struct PendingFactsTests {
         #expect(facts.first?.contains("till 03rd year has been successfully paid") == true)
         #expect(newest?.contains("Grant") == true)
         #expect(FoundationModelEngine.recurringObligation(in: emails)?.contains("INR 800 per year") == true)
+    }
+}
+
+/// A 5,000-email archive with recent mail: the app-built answers stay
+/// correct and fast past the 2,000-email working set (owner, 2026-10-07).
+struct LargeRecentArchiveTests {
+    private static func archive() -> [MBOXParser.RawEmail] {
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.dateFormat = "EEE, dd MMM yyyy HH:mm:ss Z"
+        let now = Date()
+        return (0..<5_000).map { i in
+            let date = fmt.string(from: now.addingTimeInterval(-Double(i) * 3_600 * 6))   // one every 6 hours, ~3.4 years
+            let sent = i % 4 == 0
+            let from = sent ? "Me Person <me@example.com>" : "Sender \(i % 40) <s\(i % 40)@corp.example>"
+            var body = "Weekly update number \(i) about the warehouse project and the supplier invoice."
+            if i == 4_321 { body += " Your password: hunter22 for the portal." }
+            if i % 500 == 0 { body += " We confirm the safe receipt of a payment of INR 1,000 via UPI 9\(i) in our account." }
+            return MBOXParser.RawEmail(
+                headers: ["From": from, "To": sent ? "s1@corp.example" : "me@example.com",
+                          "Subject": i % 500 == 0 ? "Payment \(i) for Corp" : "Warehouse update \(i % 50)",
+                          "Date": date, "Message-ID": "<m\(i)@example.com>"],
+                rawSource: "", messageType: sent ? "sent" : "received", attachments: [],
+                timestamp: date, domains: ["corp.example"], plainBody: body, htmlBody: "")
+        }
+    }
+
+    private func ask(_ q: String, _ emails: [MBOXParser.RawEmail]) async -> (String, Double) {
+        guard let handler = AIAssistantView.handleSmartQuery(query: q) else { return ("<no handler>", 0) }
+        let start = Date()
+        let answer = await handler(emails).answer
+        return (answer, Date().timeIntervalSince(start))
+    }
+
+    @Test("Counts, payments, passwords, people and search over 5,000 emails")
+    func answersAtScale() async {
+        let emails = Self.archive()
+        OwnerIdentity.update(from: emails)
+        defer { OwnerIdentity.update(from: []) }
+        let year = Calendar.current.component(.year, from: Date())
+
+        let (sent, t1) = await ask("How many emails did I send in \(year)?", emails)
+        let expectedSent = emails.filter { $0.messageType == "sent" && (MBOXParser.parseDate($0.headers["Date"]).map { Calendar.current.component(.year, from: $0) == year } ?? false) }.count
+        #expect(sent.contains("You sent \(expectedSent) email"))
+
+        let (paid, t2) = await ask("How much did I pay Corp in total?", emails)
+        #expect(paid.contains("₹10,000 across 10 payments"))
+
+        let (secret, t3) = await ask("Do any emails contain a password?", emails)
+        #expect(secret.contains("1 email shows a password") && !secret.contains("hunter22"))
+
+        let (who, t4) = await ask("Who is Sender 7?", emails)
+        #expect(who.contains("emails from them"))
+
+        let (found, t5) = await ask("Find the email about the supplier invoice", emails)
+        #expect(found.contains("conversations match") || found.contains("Found it"))
+
+        // Each app-built answer over 5,000 emails stays interactive.
+        for t in [t1, t2, t3, t4, t5] { #expect(t < 3.0, "took \(t) s") }
+    }
+}
+
+struct OwnerNameNotATopicTests {
+    @Test("With the owner known, their own name is never a topic")
+    func ownerNameExcluded() async {
+        let emails = (0..<12).map { i in
+            MBOXParser.RawEmail(
+                headers: ["From": i % 2 == 0 ? "Shirshendu Sasmal <me@example.com>" : "Ann Lee <ann@x.example>",
+                          "Subject": "Topic \(i % 6)", "Date": "Tue, 14 Mar 2017 09:41:00 +0000", "Message-ID": "<t\(i)@x>"],
+                rawSource: "", messageType: i % 2 == 0 ? "sent" : "received", attachments: [], timestamp: "", domains: [],
+                // "contract" in 3 of the 6 conversations: a topic, not boilerplate.
+                plainBody: (i % 6 < 3 ? "The warehouse contract needs review. " : "Lunch on Friday. ") + "Regards, Shirshendu Sasmal.", htmlBody: "")
+        }
+        OwnerIdentity.update(from: emails)
+        defer { OwnerIdentity.update(from: []) }
+        guard let handler = AIAssistantView.handleSmartQuery(query: "What are the most common topics in my inbox?") else {
+            Issue.record("no topic handler"); return
+        }
+        let answer = await handler(emails).answer.lowercased()
+        #expect(!answer.contains("sasmal") && !answer.contains("shirshendu"))
+        #expect(answer.contains("contract") || answer.contains("warehouse"))
     }
 }

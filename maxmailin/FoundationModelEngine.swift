@@ -2166,7 +2166,8 @@ struct FoundationModelEngine {
                     || ($0.headers["X-Gmail-Labels"] ?? "").lowercased().contains("sent")
             }
             .prefix(200)
-            .flatMap { displayName(from: $0.headers["From"] ?? "").lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted) }
+            // Raw name, not displayName (which says "You" for the owner).
+            .flatMap { AIGroundingGate.senderName($0.headers["From"] ?? "").lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted) }
             .filter { $0.count >= 3 })
         let topics = EmailNLPEngine.extractTopicsByConversation(from: emails, limit: 12)
             .filter { !ownNameWords.contains($0.word) }

@@ -1601,7 +1601,10 @@ final class MailinClickThroughUITests: XCTestCase {
                 if anySuggestion.waitForExistence(timeout: 5) { break }
             }
             let suggestions = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Ask: '")).allElementsBoundByIndex
-            guard let next = suggestions.first(where: { !asked.contains($0.label) }) else { break }
+            guard let bound = suggestions.first(where: { !asked.contains($0.label) }) else { break }
+            // Re-found by label, not by list position: the list re-renders
+            // and an index-bound element went stale before the click.
+            let next = app.buttons.matching(NSPredicate(format: "label == %@", bound.label)).firstMatch
             let q = String(next.label.dropFirst("Ask: ".count))
             asked.insert(next.label)
             var tries = 0

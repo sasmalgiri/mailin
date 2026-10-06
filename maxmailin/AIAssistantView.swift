@@ -870,7 +870,7 @@ struct AIAssistantView: View {
             // "From" is the user), named by display name without quotes, or
             // by address. No usable sender, no suggestion: an empty name made
             // "Tell me about emails from " a question that did nothing.
-            let received = emails.filter { $0.messageType != "sent" }
+            let received = emails.filter { $0.messageType != "sent" && !OwnerIdentity.isOwner($0.headers["From"] ?? "") }
             let topSender = Dictionary(grouping: received, by: { Self.senderDisplayName($0.headers["From"] ?? "") })
                 .filter { !$0.key.isEmpty }
                 .max(by: { $0.value.count < $1.value.count })
@@ -1836,7 +1836,7 @@ struct AIAssistantView: View {
     typealias SmartQueryResult = (query: String, answer: String, timestamp: Date, relatedEmailIDs: [UUID])
     typealias SmartHandler = @Sendable ([MBOXParser.RawEmail]) async -> SmartQueryResult
 
-    nonisolated private static func handleSmartQuery(query: String) -> SmartHandler? {
+    nonisolated static func handleSmartQuery(query: String) -> SmartHandler? {
         let lower = query.lowercased()
 
         // Duplicate detection
@@ -1998,7 +1998,7 @@ struct AIAssistantView: View {
             } else {
                 answer = "**\(inYear.count) email\(inYear.count == 1 ? "" : "s") in \(year)**: \(sent) sent, \(received) received"
             }
-            answer += " (of \(emails.count) in this scope)."
+            answer += " (out of \(emails.count) emails counted)."
             if inYear.isEmpty, let newest = emails.compactMap({ MBOXParser.parseDate($0.headers["Date"]) }).max(),
                let oldest = emails.compactMap({ MBOXParser.parseDate($0.headers["Date"]) }).min() {
                 let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
@@ -2029,7 +2029,9 @@ struct AIAssistantView: View {
         let ownNameWords: Set<String> = Set(emails
             .filter { $0.messageType == "sent" || ($0.headers["X-Gmail-Labels"] ?? "").lowercased().contains("sent") }
             .prefix(200)
-            .flatMap { AIAssistantView.senderDisplayName($0.headers["From"] ?? "").lowercased()
+            // The raw name: senderDisplayName now says "You" for the owner,
+            // which let "Sasmal" back into the topics (2026-10-07).
+            .flatMap { AIGroundingGate.senderName($0.headers["From"] ?? "").lowercased()
                 .components(separatedBy: CharacterSet.alphanumerics.inverted) }
             .filter { $0.count >= 3 })
         // Counted once per conversation: one alert repeated 81 times is one
@@ -2284,8 +2286,13 @@ struct AIAssistantView: View {
         let name = String(query[range.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: " ?.!\"'“”"))
         // "who is emailing me most" is a ranking question, not a person.
         let lowered = name.lowercased()
+        // Whole words: a prefix check also refused real names ("Sendhil",
+        // "Sender 7") along with "who is sending me…".
+        let firstWord = lowered.split(separator: " ").first.map(String.init) ?? ""
+        let rankingWords: Set<String> = ["email", "emails", "emailing", "mail", "mails", "mailing", "sending", "sends", "writing",
+                                         "writes", "contacting", "contacts", "messaging", "the", "my", "most", "top"]
         guard !name.isEmpty, name.split(separator: " ").count <= 5,
-              !["email", "mail", "send", "writ", "contact", "most", "the "].contains(where: { lowered.hasPrefix($0) || lowered.contains(" most") }) else { return nil }
+              !rankingWords.contains(firstWord), !lowered.contains(" most") else { return nil }
         return name
     }
 
@@ -2756,7 +2763,14 @@ struct AIAssistantView: View {
             currentTask = Task {
                 defer { isProcessing = false }
                 let emailsCopy = await currentWorkingSet()
-                let result = await smartResult(emailsCopy)
+                var result = await smartResult(emailsCopy)
+                // These answers count over the working set — the newest
+                // `workingSetCap` emails. On a larger scope, say so: "(of 2000
+                // in this scope)" would otherwise misstate a 100,000-email one.
+                let scopeTotal = emailCount(for: emailScope)
+                if scopeTotal > emailsCopy.count && !emailsCopy.isEmpty {
+                    result.answer += "\n\n_Counted over the newest \(emailsCopy.count.formatted()) of the \(scopeTotal.formatted()) emails in this scope. Narrow the scope (Filtered or Selected) to count older mail._"
+                }
                 await MainActor.run {
                     withAnimation(AnimationTiming.normal) {
                         conversationHistory.append(result)
