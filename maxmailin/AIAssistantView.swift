@@ -144,6 +144,7 @@ struct AIAssistantView: View {
         } catch { }
         workingSet = Array(acc.prefix(Self.workingSetCap))
         hydratedScope = scope
+        OwnerIdentity.update(from: workingSet)
     }
 
     /// The bounded working set for the CURRENT scope, hydrating first if needed.
@@ -850,6 +851,7 @@ struct AIAssistantView: View {
     /// "Ann Lee" from `"Ann Lee" <ann@x.org>`; the address when there is no
     /// display name; "" when the header has neither.
     static func senderDisplayName(_ from: String) -> String {
+        if OwnerIdentity.isOwner(from) { return String(localized: "You") }
         let trimmed = from.trimmingCharacters(in: .whitespacesAndNewlines)
         if let lt = trimmed.firstIndex(of: "<") {
             let name = trimmed[..<lt].trimmingCharacters(in: CharacterSet(charactersIn: "\" ").union(.whitespaces))
@@ -1864,6 +1866,13 @@ struct AIAssistantView: View {
             return { emails in smartSlot(label: slot.label, eventVerb: slot.verb, query: query, emails: emails) }
         }
 
+        // "Find the email about <topic>": a search, answered with the
+        // matching emails. The model held the right thread and still said it
+        // "couldn't locate" one (2026-10-06).
+        if let topic = findRequestTopic(in: query) {
+            return { emails in smartFind(topic: topic, query: query, emails: emails) }
+        }
+
         // "How much did I pay <someone> (in total)?": payments the emails
         // state as made or received, each once, summed by the app. The model
         // could not add them up and mixed requests with payments.
@@ -2135,6 +2144,69 @@ struct AIAssistantView: View {
         return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: Array(ids))
     }
 
+    /// The topic in "find / show (me) the email(s) about <topic>".
+    nonisolated static func findRequestTopic(in query: String) -> String? {
+        guard let range = query.range(of: #"^\s*(find|show|open|get|search for)( me)?( the| an| any| all| my)? (e-?mails?|messages?|mails?|conversations?|threads?) (about|on|regarding|related to|mentioning|that mention|where)\s+"#,
+                                      options: [.regularExpression, .caseInsensitive]) else { return nil }
+        let topic = String(query[range.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: " ?.!\"'“”"))
+        return topic.isEmpty ? nil : topic
+    }
+
+    nonisolated private static func smartFind(topic: String, query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        let words = EmailNLPEngine.extractSearchTerms(from: topic)
+            .map { $0.lowercased() }
+            .map { $0.count > 4 && $0.hasSuffix("s") ? String($0.dropLast()) : $0 }
+            .filter { $0.count >= 3 }
+        guard !words.isEmpty else {
+            return (query: query, answer: "What should the email be about? Try “find the email about the hospital claim”.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        // Score: each word in the subject counts 2, in the text 1. An email
+        // must contain at least half the words.
+        let needed = max(1, (words.count + 1) / 2)
+        let scored = emails.compactMap { email -> (email: MBOXParser.RawEmail, score: Int, hits: Int)? in
+            let subject = (email.headers["Subject"] ?? "").lowercased()
+            let body = email.plainBody.prefix(6000).lowercased()
+            var score = 0, hits = 0
+            for word in words {
+                let inSubject = subject.contains(word), inBody = body.contains(word)
+                if inSubject || inBody { hits += 1 }
+                score += (inSubject ? 2 : 0) + (inBody ? 1 : 0)
+            }
+            return hits >= needed ? (email, score, hits) : nil
+        }
+        guard !scored.isEmpty else {
+            return (query: query, answer: "**No email in this scope mentions “\(topic)”.** Checked the subjects and text of \(emails.count) emails for \(words.map { "“\($0)”" }.joined(separator: ", ")).", timestamp: Date(), relatedEmailIDs: [])
+        }
+        // One line per conversation, best match first.
+        var bestByThread: [String: (email: MBOXParser.RawEmail, score: Int, count: Int)] = [:]
+        for hit in scored {
+            let key = EmailNLPEngine.conversationKey(hit.email)
+            if let current = bestByThread[key] {
+                bestByThread[key] = hit.score > current.score ? (hit.email, hit.score, current.count + 1) : (current.email, current.score, current.count + 1)
+            } else {
+                bestByThread[key] = (hit.email, hit.score, 1)
+            }
+        }
+        let ranked = bestByThread.values.sorted { $0.score > $1.score }
+        let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
+        var answer = ranked.count == 1
+            ? "**Found it** — one conversation matches “\(topic)”:\n\n"
+            : "**\(ranked.count) conversations match “\(topic)”**, best first:\n\n"
+        for hit in ranked.prefix(5) {
+            let subject = EmailNLPEngine.baseSubject(hit.email.headers["Subject"] ?? "")
+            let when = MBOXParser.parseDate(hit.email.headers["Date"]).map { fmt.string(from: $0) } ?? "undated"
+            let line = hit.email.plainBody.components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .first { $0.count > 20 && !$0.hasPrefix(">") && !$0.lowercased().hasPrefix("on ") } ?? ""
+            answer += "- **\(subject.isEmpty ? "(No Subject)" : subject)** — \(senderDisplayName(hit.email.headers["From"] ?? "?")) · \(when)"
+            if hit.count > 1 { answer += " (\(hit.count) emails)" }
+            if !line.isEmpty { answer += "\n  “\(line.prefix(140))”" }
+            answer += "\n"
+        }
+        if ranked.count > 5 { answer += "…and \(ranked.count - 5) more.\n" }
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: ranked.prefix(5).map(\.email.id))
+    }
+
     /// For "how much did I pay (to) X (in total)?" — X, or "" for everyone.
     nonisolated static func paymentQuestion(in query: String) -> String? {
         let lower = query.lowercased()
@@ -2321,7 +2393,7 @@ struct AIAssistantView: View {
         if #available(macOS 26, iOS 26, *), FoundationModelEngine.isAvailable {
             let header = FoundationModelEngine.episodeHeader(thread, isBusiest: false)
             let story = (try? await FoundationModelEngine.synthesizeThread(thread) { _ in }) ?? ""
-            return (query: query, answer: header + story, timestamp: Date(), relatedEmailIDs: ids)
+            return (query: query, answer: header + OwnerIdentity.rewritingOwnerNames(in: story), timestamp: Date(), relatedEmailIDs: ids)
         }
         #endif
         // No on-device model: the outline from the messages themselves.

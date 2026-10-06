@@ -165,13 +165,18 @@ enum AIGroundingGate {
             // Audit F15: what this check IS — every citation below resolves to
             // a message that was actually retrieved — and what it is NOT: the
             // statements themselves are not fact-checked against that message.
-            gated += "\n\n---\n**Cited evidence** (each citation resolves to a retrieved message; the statements are not fact-checked against it):\n"
+            // Owner, 2026-10-06: the long disclaimer read as doubt about
+            // correct answers. What it means, in fewer words — these are the
+            // messages the answer points to; the app's footer already says
+            // to verify important details.
+            gated += "\n\n---\n**Sources** — the emails this answer cites:\n"
             for line in citationLines(verified).prefix(8) {
                 gated += "- \(line)\n"
             }
         } else if !evidence.isEmpty {
-            gated += "\n\n---\n*No statement above cites a specific retrieved message — "
-            gated += "treat specifics as unverified inference.*\n**Retrieved evidence (not cited):**\n"
+            // No sentence names a message: say which emails were read,
+            // without branding a correct answer "unverified inference".
+            gated += "\n\n---\n**Emails read for this answer** (none is cited by name — open them to check):\n"
             for line in citationLines(evidence).prefix(3) {
                 gated += "- \(line)\n"
             }
@@ -264,15 +269,43 @@ enum AIGroundingGate {
         let fmt = DateFormatter()
         fmt.dateStyle = .medium
         fmt.timeStyle = .none
-        var seen = Set<String>()
-        var lines: [String] = []
+        // One line per conversation (owner, 2026-10-06: one subject listed
+        // seven times): its subject once, who wrote, the dates, the count.
+        var order: [String] = []
+        var groups: [String: [EvidenceReference]] = [:]
         for ref in refs {
-            let subject = ref.subject.isEmpty ? String(localized: "(No Subject)") : ref.subject
-            var line = "\(subject) — \(ref.sender)"
-            if ref.date != .distantPast { line += " · \(fmt.string(from: ref.date))" }
-            if seen.insert(line).inserted { lines.append(line) }
+            let key = EmailNLPEngine.conversationKey(subject: ref.subject)
+            let groupKey = key.isEmpty ? ref.evidenceID : key
+            if groups[groupKey] == nil { order.append(groupKey) }
+            if !(groups[groupKey] ?? []).contains(where: { $0.id == ref.id }) { groups[groupKey, default: []].append(ref) }
         }
-        return lines
+        return order.compactMap { key -> String? in
+            guard let members = groups[key], let first = members.first else { return nil }
+            let base = EmailNLPEngine.baseSubject(first.subject)
+            let subject = base.isEmpty ? String(localized: "(No Subject)") : base
+            var senders: [String] = []
+            for ref in members {
+                let name = OwnerIdentity.isOwner(ref.sender) ? String(localized: "You") : Self.senderName(ref.sender)
+                if !senders.contains(name) { senders.append(name) }
+            }
+            var line = "\(subject) — \(senders.prefix(3).joined(separator: ", "))"
+            let dates = members.map(\.date).filter { $0 != .distantPast }
+            if let lo = dates.min(), let hi = dates.max() {
+                line += " · " + (lo == hi ? fmt.string(from: lo) : "\(fmt.string(from: lo)) – \(fmt.string(from: hi))")
+            }
+            if members.count > 1 { line += " (\(members.count) emails)" }
+            return line
+        }
+    }
+
+    /// "Ann Lee <ann@x.com>" → "Ann Lee"; a bare address stays.
+    static func senderName(_ header: String) -> String {
+        if let lt = header.firstIndex(of: "<") {
+            let name = header[..<lt].trimmingCharacters(in: CharacterSet(charactersIn: "\"' ").union(.whitespaces))
+            if !name.isEmpty { return name }
+            return String(header[header.index(after: lt)...].prefix { $0 != ">" })
+        }
+        return header.trimmingCharacters(in: CharacterSet(charactersIn: "\"' ").union(.whitespaces))
     }
 
     static func normalizedSubject(_ subject: String) -> String {
@@ -298,5 +331,76 @@ enum AIGroundingGate {
                 hasAttachments: !email.attachments.isEmpty
             )
         }
+    }
+}
+
+// MARK: - The archive owner, as "You"
+
+/// Who "you" are in this archive: the addresses the owner's sent mail comes
+/// from, plus the configured sender address. Owner, 2026-10-06: answers
+/// showed the owner's own mail as "Everything Media" (their business display
+/// name), which read as a third party. Filled whenever the assistant loads
+/// its working set.
+enum OwnerIdentity {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var addresses: Set<String> = []
+    nonisolated(unsafe) private static var names: Set<String> = []
+
+    /// The address in a From/To header: "Ann <a@x>" → "a@x".
+    static func address(in header: String) -> String {
+        if let lt = header.firstIndex(of: "<") {
+            return header[header.index(after: lt)...].prefix { $0 != ">" }.lowercased().trimmingCharacters(in: .whitespaces)
+        }
+        return header.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "\" ").union(.whitespaces))
+    }
+
+    static func update(from emails: [MBOXParser.RawEmail]) {
+        let own = emails.filter { email in
+            if email.messageType == "sent" { return true }
+            let labels = (email.headers["X-Gmail-Labels"] ?? email.headers["X-gmail-labels"] ?? "").lowercased()
+            return labels.split(separator: ",").contains { $0.trimmingCharacters(in: .whitespaces) == "sent" }
+        }
+        var found = Set(own.map { address(in: $0.headers["From"] ?? "") })
+        if let configured = UserDefaults.standard.string(forKey: "defaultSenderEmail"), !configured.isEmpty {
+            found.insert(configured.lowercased())
+        }
+        found.remove("")
+        // Display names the owner's address has used ("Everything Media",
+        // "Shirshendu Sasmal") — at least two words, so a lone first name in
+        // prose is never rewritten.
+        var displayNames = Set<String>()
+        for email in emails {
+            let from = email.headers["From"] ?? ""
+            guard found.contains(address(in: from)), let lt = from.firstIndex(of: "<") else { continue }
+            let name = from[..<lt].trimmingCharacters(in: CharacterSet(charactersIn: "\"' ").union(.whitespaces))
+            if name.split(separator: " ").count >= 2, !name.contains("@") { displayNames.insert(name) }
+        }
+        lock.lock(); addresses = found; names = displayNames; lock.unlock()
+    }
+
+    static func isOwner(_ header: String) -> Bool {
+        let addr = address(in: header)
+        lock.lock(); defer { lock.unlock() }
+        return !addr.isEmpty && addresses.contains(addr)
+    }
+
+    /// "You" for the owner, else the header as given.
+    static func display(_ header: String) -> String {
+        isOwner(header) ? String(localized: "You") : header
+    }
+
+    /// Model prose names the owner by display name ("Everything Media
+    /// promised…"); rewritten to "you", capitalised at a sentence start.
+    static func rewritingOwnerNames(in text: String) -> String {
+        lock.lock(); let known = names; lock.unlock()
+        var result = text
+        for name in known.sorted(by: { $0.count > $1.count }) {
+            let escaped = NSRegularExpression.escapedPattern(for: name)
+            // Sentence start (or line start, or after "- ", "**") → "You".
+            result = result.replacingOccurrences(of: #"(?m)(^|[.!?]\s+|^\s*[-•]\s+|\*\*)"# + escaped + #"\b"#,
+                                                 with: "$1You", options: [.regularExpression, .caseInsensitive])
+            result = result.replacingOccurrences(of: #"\b"# + escaped + #"\b"#, with: "you", options: [.regularExpression, .caseInsensitive])
+        }
+        return result
     }
 }

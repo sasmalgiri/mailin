@@ -908,7 +908,23 @@ struct FoundationModelEngine {
                 let orQuery = terms.joined(separator: " OR ")
                 let relaxed = ((try? await ArchiveRetrievalService.shared.retrieve(orQuery, limit: contextLimit * 2)) ?? []).map(\.email)
                 var seen = Set(contextEmails.map(\.id))
-                var ranked = relaxed.filter { seen.insert($0.id).inserted }
+                // Emails containing more of the question's own words first
+                // (synonyms count less), then the search engine's order: a
+                // single common word ("scan") outranked the thread that has
+                // "Bengali", "manga" and "translation".
+                let ownWords = Set(EmailNLPEngine.extractSearchTerms(from: query).map { $0.lowercased() })
+                func coverage(_ email: MBOXParser.RawEmail) -> Int {
+                    let text = ((email.headers["Subject"] ?? "") + " " + email.plainBody.prefix(4000)).lowercased()
+                    return terms.reduce(0) { total, term in
+                        // Singular form, so "interviews" counts "Interview Call".
+                        let stem = term.count > 4 && term.hasSuffix("s") ? String(term.dropLast()) : term
+                        return total + (text.contains(stem) ? (ownWords.contains(term) ? 2 : 1) : 0)
+                    }
+                }
+                let unseen = relaxed.filter { seen.insert($0.id).inserted }
+                var ranked = unseen.enumerated()
+                    .sorted { (coverage($0.element), -$0.offset) > (coverage($1.element), -$1.offset) }
+                    .map(\.element)
                 // A year in the question ("in 2018") puts that year's mail first.
                 if let yearMatch = query.firstMatch(of: /\b(19|20)\d{2}\b/) {
                     let year = Int(query[yearMatch.range]) ?? 0
@@ -937,6 +953,28 @@ struct FoundationModelEngine {
                 }
             }
         }
+        // "What do I still need to do for my patent?" — what is pending is
+        // decided by the matter's NEWEST emails (kalsmritikosh: situation
+        // resolves conflicts). Keyword ranking returned the 2023 thread, and
+        // the answer listed steps the 2024 grant had settled (2026-10-06).
+        if isPendingQuestion(query) {
+            // Every reference the best matches share — a matter often runs
+            // across threads with different numbers in their subjects (a
+            // phone number on the 2023 thread, the application number on the
+            // 2024 ones); reading only one missed the grant.
+            var matter: [MBOXParser.RawEmail] = []
+            var seenIDs = Set<UUID>()
+            for key in matterKeys(in: contextEmails).prefix(3) {
+                for email in ((try? await ArchiveRetrievalService.shared.retrieve(key, limit: 200)) ?? []).map(\.email)
+                where seenIDs.insert(email.id).inserted {
+                    matter.append(email)
+                }
+            }
+            let newestFirst = matter.sorted {
+                (MBOXParser.parseDate($0.headers["Date"]) ?? .distantPast) > (MBOXParser.parseDate($1.headers["Date"]) ?? .distantPast)
+            }
+            if !newestFirst.isEmpty { contextEmails = Array(newestFirst.prefix(15)) }
+        }
         if contextEmails.isEmpty {
             // Nothing matched at all → a bounded most-recent window, so the
             // model can say plainly that nothing relevant was found.
@@ -964,6 +1002,127 @@ struct FoundationModelEngine {
         Never expand a code, abbreviation or ID (station codes, reference numbers)         unless the email itself spells it out; quote it as written.         If the emails answer the question, say so directly; never open with         "I couldn't find" when you then show a matching email.         For what is still pending or still to do, use the newest emails of that         matter: a later email showing something done (granted, paid, filed,         confirmed) settles earlier requests, so list only what is not shown as         done, each with its date.         Never add up or compute amounts yourself.
         """
 
+    /// Statements of completion in these emails ("has been granted",
+    /// "confirm the safe receipt of a payment", "successfully filed"), newest
+    /// first, with the newest email's date — appended to a pending question.
+    static func completedFacts(in emails: [MBOXParser.RawEmail]) -> String {
+        let (facts, newestLine) = completedFactList(in: emails)
+        guard let newestLine else { return "" }
+        var out = "\n\nFacts from the emails (already done — the app shows these to the user itself; do not repeat them, and anything they settle is not pending):\n"
+        out += facts.isEmpty ? "- none stated\n" : facts.joined(separator: "\n") + "\n"
+        out += newestLine
+        out += " Answer with one short part only, headed **Still open**: what is open after the newest email, each with its date, or “nothing shown as open”. Anything a fact above covers is settled. Quote years and dates exactly as written (\"3rd year\" is a year of the patent, not a date). Do not calculate."
+        return out
+    }
+
+    /// The completion sentences (newest first, dated) and a line naming the
+    /// newest email; shown to the user verbatim by the app.
+    static func completedFactList(in emails: [MBOXParser.RawEmail]) -> (facts: [String], newestLine: String?) {
+        let done = #"(?i)\b(has been granted|was granted|granted on|confirm(?:ed)? the (?:safe )?receipt|payment (?:has been|was) (?:made|received)|(?:has been |been )?successfully (?:paid|filed)|has been paid|has been filed|has been approved|was approved|completed|has been recorded)\b"#
+        let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
+        let newestFirst = emails.sorted {
+            (MBOXParser.parseDate($0.headers["Date"]) ?? .distantPast) > (MBOXParser.parseDate($1.headers["Date"]) ?? .distantPast)
+        }
+        var facts: [String] = []
+        var seen = Set<String>()
+        for email in newestFirst {
+            let lines = email.plainBody.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix(">") }
+            let text = lines.joined(separator: " ").replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            for sentence in text.components(separatedBy: ". ") where sentence.range(of: done, options: .regularExpression) != nil {
+                // Plain-text emphasis ("*has been successfully paid*") would
+                // garble the quoted markdown.
+                let clean = sentence.replacingOccurrences(of: "*", with: "").trimmingCharacters(in: .whitespaces)
+                let short = clean.count > 170 ? String(clean.prefix(170)) + "…" : clean
+                guard seen.insert(short.lowercased()).inserted else { continue }
+                let when = MBOXParser.parseDate(email.headers["Date"]).map { fmt.string(from: $0) } ?? "undated"
+                facts.append("- \(when): \(short)")
+                break
+            }
+            if facts.count >= 6 { break }
+        }
+        guard let newest = newestFirst.first else { return ([], nil) }
+        let newestDate = MBOXParser.parseDate(newest.headers["Date"]).map { fmt.string(from: $0) } ?? "undated"
+        return (facts, "The newest email in this matter is dated \(newestDate): “\(EmailNLPEngine.baseSubject(newest.headers["Subject"] ?? ""))”.")
+    }
+
+    /// The newest sentence in a matter that states a recurring cost or duty
+    /// ("INR 800 per year", "annuity payments every year"), quoted with its
+    /// sender and date. The model listed an already-paid annuity as upcoming.
+    static func recurringObligation(in emails: [MBOXParser.RawEmail]) -> String? {
+        let recurring = #"(?i)\b(per year|every year|each year|annually|per annum|yearly)\b"#
+        let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
+        let newestFirst = emails.sorted {
+            (MBOXParser.parseDate($0.headers["Date"]) ?? .distantPast) > (MBOXParser.parseDate($1.headers["Date"]) ?? .distantPast)
+        }
+        for email in newestFirst {
+            let lines = email.plainBody.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix(">") }
+            let text = lines.joined(separator: " ").replacingOccurrences(of: "*", with: "")
+                .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            if let sentence = text.components(separatedBy: ". ").first(where: { $0.range(of: recurring, options: .regularExpression) != nil }) {
+                let clean = sentence.trimmingCharacters(in: .whitespaces)
+                let short = clean.count > 200 ? String(clean.prefix(200)) + "…" : clean
+                let when = MBOXParser.parseDate(email.headers["Date"]).map { fmt.string(from: $0) } ?? "undated"
+                return "“\(short)” — \(displayName(from: email.headers["From"] ?? "?")), \(when)"
+            }
+        }
+        return nil
+    }
+
+    /// "Still to do", "pending", "next steps" and the like.
+    static func isPendingQuestion(_ query: String) -> Bool {
+        let lower = query.lowercased()
+        return ["still need", "still have to", "still to do", "pending", "next step", "to do", "todo",
+                "outstanding", "remaining", "left to do", "what's left", "what is left", "need to do", "should i do"]
+            .contains { lower.contains($0) }
+    }
+
+    /// The reference a matter's emails share in their subjects — a long
+    /// number (application, case, policy) or a reference code ("TIN23/2367")
+    /// — the one most of the best matches carry.
+    static func matterKey(in emails: [MBOXParser.RawEmail]) -> String? {
+        matterKeys(in: emails).first
+    }
+
+    /// All shared references, the most frequent (then longest) first. A
+    /// reference counts when it is in two or more subjects, or when it is in
+    /// one subject and the body of another email (a thread that names the
+    /// matter's number only in its text).
+    static func matterKeys(in emails: [MBOXParser.RawEmail]) -> [String] {
+        var counts: [String: Int] = [:]
+        let top = Array(emails.prefix(12))
+        for email in top {
+            let subject = email.headers["Subject"] ?? ""
+            var seen = Set<String>()
+            for match in subject.matches(of: /\b(?:\d{6,}|[A-Z]{2,}\d{2,}\/\d{2,})\b/) {
+                let token = String(subject[match.range])
+                if seen.insert(token).inserted { counts[token, default: 0] += 1 }
+            }
+        }
+        for (token, count) in counts where count == 1 {
+            if top.contains(where: { !($0.headers["Subject"] ?? "").contains(token) && $0.plainBody.contains(token) }) {
+                counts[token] = 2
+            }
+        }
+        // Long reference numbers (9+ digits: application, policy, case) that
+        // two of the top emails carry in their TEXT — the 2023 thread names
+        // the application number only in its body.
+        var inBodies: [String: Int] = [:]
+        for email in top {
+            let body = String(email.plainBody.prefix(6000))
+            var seen = Set<String>()
+            for match in body.matches(of: /\b\d{9,}\b/) {
+                let token = String(body[match.range])
+                if seen.insert(token).inserted { inBodies[token, default: 0] += 1 }
+            }
+        }
+        for (token, count) in inBodies where count >= 2 {
+            counts[token] = max(counts[token] ?? 0, count)
+        }
+        return counts.filter { $0.value >= 2 }
+            .sorted { ($0.value, $0.key.count) > ($1.value, $1.key.count) }
+            .map(\.key)
+    }
+
     /// Removes the multi-expert pipeline's internal labels from an answer:
     /// "(from timelineExpert)", "(via sentimentExpert)", "(via Find emails
     /// involving …)" reached users verbatim (2026-10-06).
@@ -984,7 +1143,7 @@ struct FoundationModelEngine {
             "hospital": ["patient", "claim", "tpa", "medical"], "claim": ["claim", "tpa"],
             "packers": ["packers", "movers"], "movers": ["packers", "movers"],
             "salary": ["payslip", "salary"], "bill": ["invoice", "bill"], "invoice": ["invoice", "bill"],
-            "password": ["password", "passcode"], "manga": ["manga", "scans"],
+            "password": ["password", "passcode"],
         ]
         let extra: Set<String> = ["book", "booked", "need", "still", "invited", "happened", "total", "pay", "paid", "number"]
         var terms: [String] = []
@@ -992,7 +1151,8 @@ struct FoundationModelEngine {
             let lower = word.lowercased().trimmingCharacters(in: .punctuationCharacters)
             guard lower.count >= 3 || lower.allSatisfy(\.isNumber), !extra.contains(lower) else { continue }
             terms.append(lower)
-            terms += synonyms[lower] ?? []
+            let singular = lower.count > 4 && lower.hasSuffix("s") ? String(lower.dropLast()) : lower
+            terms += synonyms[lower] ?? synonyms[singular] ?? []
         }
         var seen = Set<String>()
         return terms.filter { seen.insert($0).inserted }
@@ -1061,7 +1221,9 @@ struct FoundationModelEngine {
         var acc: [MBOXParser.RawEmail] = []
         let stream = await ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
         do { for try await b in stream { acc.append(contentsOf: b); if acc.count >= cap { break } } } catch { }
-        return Array(acc.prefix(cap))
+        let bounded = Array(acc.prefix(cap))
+        OwnerIdentity.update(from: bounded)
+        return bounded
     }
 
     // Corpus-free overloads — retrieve a bounded working set from the store
@@ -1103,7 +1265,7 @@ struct FoundationModelEngine {
                 footer += "- Ask: “Tell the story of \(subject)” (\(members.count) messages)\n"
             }
         }
-        let full = header + story + footer
+        let full = header + OwnerIdentity.rewritingOwnerNames(in: story) + footer
         await onUpdate(full)
         return full
     }
@@ -2210,6 +2372,7 @@ struct FoundationModelEngine {
 
     /// "Jane Doe <jane@x.com>" → "Jane Doe"; bare addresses stay as-is.
     static func displayName(from header: String) -> String {
+        if OwnerIdentity.isOwner(header) { return String(localized: "You") }
         if let angle = header.firstIndex(of: "<") {
             let name = header[..<angle].trimmingCharacters(in: CharacterSet(charactersIn: " \"'"))
             if !name.isEmpty { return name }
@@ -5136,8 +5299,25 @@ struct FoundationModelEngine {
             return try await respondSmart(to: query, emails: emails, onUpdate: onUpdate, onConfirmAction: onConfirmAction)
         }
         let evidence = AIGroundingGate.references(for: emails)
-        let raw = try await respondSmart(to: query, emails: emails, onUpdate: onUpdate, onConfirmAction: onConfirmAction)
-        let gated = AIGroundingGate.ground(answer: withoutPipelineLabels(raw), evidence: evidence).answer
+        // Pending questions start from the matter's current state: what the
+        // emails say is DONE, with dates, given as facts. The model listed
+        // 2024 hearing steps the later grant had settled (2026-10-06).
+        let pending = isPendingQuestion(query)
+        let asked = pending ? query + completedFacts(in: emails) : query
+        var raw = try await respondSmart(to: asked, emails: emails, onUpdate: onUpdate, onConfirmAction: onConfirmAction)
+        if pending {
+            // "Done" is quoted by the app, not paraphrased: the model read
+            // "till 03rd year" as "till 03 March 2025".
+            let (facts, newestLine) = completedFactList(in: emails)
+            var head = "**Done** (quoted from your emails):\n"
+            head += facts.isEmpty ? "- Nothing is stated as done in these emails.\n" : facts.joined(separator: "\n") + "\n"
+            if let newestLine { head += "_\(newestLine)_\n" }
+            raw = head + "\n" + raw
+            if let recurring = recurringObligation(in: emails) {
+                raw += "\n\n**Coming up** (quoted): \(recurring)"
+            }
+        }
+        let gated = AIGroundingGate.ground(answer: OwnerIdentity.rewritingOwnerNames(in: withoutPipelineLabels(raw)), evidence: evidence).answer
         await onUpdate(gated)
         return gated
     }

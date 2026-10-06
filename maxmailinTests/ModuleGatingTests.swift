@@ -1431,9 +1431,11 @@ struct ConversationCountingTests {
                                     date: date, excerpt: "", hasAttachments: false)
         let later = EvidenceReference(id: UUID(), messageID: nil, subject: "Grant notice", sender: "Lalan Prasad",
                                       date: date.addingTimeInterval(86_400 * 3), excerpt: "", hasAttachments: false)
+        // One line per conversation: subject once, sender, date range, count.
         let lines = AIGroundingGate.citationLines([ref, ref, later])
-        #expect(lines.count == 2)
-        #expect(lines.allSatisfy { $0.hasPrefix("Grant notice — Lalan Prasad · ") })
+        #expect(lines.count == 1)
+        #expect(lines.first?.hasPrefix("Grant notice — Lalan Prasad · ") == true)
+        #expect(lines.first?.hasSuffix("(2 emails)") == true)
     }
 
     @available(macOS 26, iOS 26, *)
@@ -1585,5 +1587,67 @@ struct PaymentQuestionTests {
         #expect(AIAssistantView.paymentQuestion(in: "How much did I pay Khurana & Khurana in total?") == "khurana & khurana")
         #expect(AIAssistantView.paymentQuestion(in: "How much have I spent?") == "")
         #expect(AIAssistantView.paymentQuestion(in: "Who emails me the most?") == nil)
+    }
+}
+
+struct OwnerAndMatterTests {
+    private func email(_ subject: String, from: String, type: String = "received") -> MBOXParser.RawEmail {
+        MBOXParser.RawEmail(
+            headers: ["From": from, "Subject": subject, "Date": "Tue, 14 Mar 2017 09:41:00 +0000", "Message-ID": "<\(UUID().uuidString)@x>"],
+            rawSource: "", messageType: type, attachments: [], timestamp: "", domains: [], plainBody: "x", htmlBody: "")
+    }
+
+    @Test("The owner's own mail reads as You, in names and in prose")
+    func ownerAsYou() {
+        OwnerIdentity.update(from: [email("Fees", from: "Everything Media <owner@example.com>", type: "sent"),
+                                    email("Re: Fees", from: "Ann Lee <ann@example.com>")])
+        defer { OwnerIdentity.update(from: []) }
+        #expect(OwnerIdentity.isOwner("Everything Media <owner@example.com>"))
+        #expect(!OwnerIdentity.isOwner("Ann Lee <ann@example.com>"))
+        #expect(AIAssistantView.senderDisplayName("Everything Media <owner@example.com>") == "You")
+        let text = OwnerIdentity.rewritingOwnerNames(in: "Everything Media promised to pay. Later, Ann thanked Everything Media.")
+        #expect(text == "You promised to pay. Later, Ann thanked you.")
+    }
+
+    @available(macOS 26, iOS 26, *)
+    @Test("Pending questions are recognised; a matter's shared reference is found")
+    func matter() {
+        #expect(FoundationModelEngine.isPendingQuestion("What do I still need to do for my patent?"))
+        #expect(!FoundationModelEngine.isPendingQuestion("Who is Shabana Khan?"))
+        let emails = [email("Re: Patent requirement : Mr. Sasmal", from: "a@x"),
+                      email("[Our Ref: TIN23/2367] Hearing Notice of Patent Application-202331019665", from: "b@x"),
+                      email("[Our Ref: TIN23/2367] Grant of Patent Application-202331019665", from: "c@x")]
+        #expect(FoundationModelEngine.matterKey(in: emails) == "202331019665")
+    }
+}
+
+struct FindRequestTests {
+    @Test("Find requests name the topic")
+    func topic() {
+        #expect(AIAssistantView.findRequestTopic(in: "Find the email about the Bengali manga translation") == "the Bengali manga translation")
+        #expect(AIAssistantView.findRequestTopic(in: "show me emails mentioning Hyderabad?") == "Hyderabad")
+        #expect(AIAssistantView.findRequestTopic(in: "Find emails from Ann") == nil)
+    }
+}
+
+struct PendingFactsTests {
+    private func email(_ date: String, _ body: String) -> MBOXParser.RawEmail {
+        MBOXParser.RawEmail(headers: ["From": "Docket <d@firm.example>", "Subject": "Grant", "Date": date, "Message-ID": "<\(UUID().uuidString)@x>"],
+                            rawSource: "", messageType: "received", attachments: [], timestamp: date, domains: [],
+                            plainBody: body, htmlBody: "")
+    }
+
+    @available(macOS 26, iOS 26, *)
+    @Test("Done facts are quoted newest first; recurring costs are quoted")
+    func doneAndRecurring() {
+        let emails = [
+            email("Thu, 05 Dec 2024 10:00:00 +0530", "The application has been granted by the Patent Office on 29th November 2024. Fees: INR 800 per year from the 3rd year."),
+            email("Fri, 07 Feb 2025 10:00:00 +0530", "Annuity payment till 03rd *year* has been successfully paid to the Patent Office."),
+        ]
+        let (facts, newest) = FoundationModelEngine.completedFactList(in: emails)
+        #expect(facts.count == 2)
+        #expect(facts.first?.contains("till 03rd year has been successfully paid") == true)
+        #expect(newest?.contains("Grant") == true)
+        #expect(FoundationModelEngine.recurringObligation(in: emails)?.contains("INR 800 per year") == true)
     }
 }

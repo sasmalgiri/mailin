@@ -1335,7 +1335,7 @@ final class V2VerificationTests: XCTestCase {
         XCTAssertFalse(out.answer.contains("[E7]"), "unknown citation removed")
         XCTAssertEqual(out.verifiedEvidence.map(\.evidenceID), [ref.evidenceID], "only retrieved evidence is shown as cited")
         XCTAssertGreaterThan(out.report.droppedUnknownEvidence, 0, "verifier dropped the unretrieved citation")
-        XCTAssertTrue(out.answer.contains("**Cited evidence** (each citation resolves to a retrieved message"), "verifier gates the cited-evidence section")
+        XCTAssertTrue(out.answer.contains("**Sources** — the emails this answer cites"), "verifier gates the cited-evidence section")
 
         // Zero evidence retrieved → factual path abstains honestly.
         let abstained = AIGroundingGate.ground(answer: "Everything is fine, trust me.", evidence: [])
@@ -1360,7 +1360,7 @@ final class V2VerificationTests: XCTestCase {
             evidence: [hostile, honest]
         )
         // Grounding ran despite the injection text sitting in evidence[0].
-        XCTAssertTrue(out.answer.contains("**Cited evidence** (each citation resolves to a retrieved message"), "gate not suppressed by evidence content")
+        XCTAssertTrue(out.answer.contains("**Sources** — the emails this answer cites"), "gate not suppressed by evidence content")
         XCTAssertEqual(out.verifiedEvidence.map(\.evidenceID), [honest.evidenceID], "only the actually-cited ref is verified")
         // The gate can never mark evidence outside the retrieved set as verified.
         let retrievedIDs = Set([hostile, honest].map(\.evidenceID))
