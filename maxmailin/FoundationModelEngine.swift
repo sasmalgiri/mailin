@@ -1453,6 +1453,9 @@ struct FoundationModelEngine {
             ▲=high ●=medium ▽=low relevance. Cite emails by **Subject** and **sender**. \
             \(kgCitationDirective)\
             Answer the user's exact question first, then add insights. Use bullet points. \
+            Relative dates ("last month", "this week", "recently") are measured from TODAY's \
+            date in the data, not from the newest email. If the asked period has no emails, \
+            say so plainly, give the date of the newest email, and offer that period instead. \
             \(personaConfig.synthesisGuidance)
             """
 
@@ -1461,7 +1464,7 @@ struct FoundationModelEngine {
             ? LanguageModelSession(instructions: instructions)
             : LanguageModelSession(tools: tools, instructions: instructions)
 
-        let prompt = "\(synthesisContext)\n\nAnswer this question: \(query)"
+        let prompt = "\(archiveDateFacts(targetEmails))\(synthesisContext)\n\nAnswer this question: \(query)"
 
         let stream = session.streamResponse(to: prompt)
         var finalContent = ""
@@ -1661,6 +1664,41 @@ struct FoundationModelEngine {
         return output.isEmpty ? nil : output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    // MARK: - Shared facts for proactive prompts
+
+    /// The archive owner's own addresses: the senders of mail marked sent
+    /// (or carrying Gmail's "Sent" label), plus the configured sender address.
+    /// Proactive prompts must not treat the owner as one of their contacts.
+    static func ownerAddresses(in emails: [MBOXParser.RawEmail]) -> Set<String> {
+        func address(_ from: String) -> String {
+            if let lt = from.firstIndex(of: "<") {
+                return from[from.index(after: lt)...].prefix { $0 != ">" }.lowercased().trimmingCharacters(in: .whitespaces)
+            }
+            return from.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "\" ").union(.whitespaces))
+        }
+        var own = Set(emails.filter { email in
+            if email.messageType == "sent" { return true }
+            let labels = (email.headers["X-Gmail-Labels"] ?? email.headers["X-gmail-labels"] ?? "").lowercased()
+            return labels.split(separator: ",").contains { $0.trimmingCharacters(in: .whitespaces) == "sent" }
+        }.map { address($0.headers["From"] ?? "") })
+        if let configured = UserDefaults.standard.string(forKey: "defaultSenderEmail"), !configured.isEmpty {
+            own.insert(configured.lowercased())
+        }
+        own.remove("")
+        return own
+    }
+
+    /// "Today is 6 Oct 2026. The archive runs 23 Jul 2007 – 11 Mar 2025; the
+    /// newest email is 574 days old." Without it the model treated an old
+    /// archive's silence as a current gap and old deadlines as urgent.
+    static func archiveDateFacts(_ emails: [MBOXParser.RawEmail], now: Date = Date()) -> String {
+        let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
+        let dates = emails.compactMap { MBOXParser.parseDate($0.headers["Date"]) }
+        guard let newest = dates.max(), let oldest = dates.min() else { return "Today is \(fmt.string(from: now)).\n" }
+        let age = Calendar.current.dateComponents([.day], from: newest, to: now).day ?? 0
+        return "Today is \(fmt.string(from: now)). The emails provided here run \(fmt.string(from: oldest)) – \(fmt.string(from: newest)); the newest of them is \(age) days old.\n"
+    }
+
     // MARK: - Smart Triage / Priority Inbox
 
     static func triageEmails(_ emails: [MBOXParser.RawEmail], onUpdate: @MainActor @Sendable @escaping (String) -> Void) async throws -> String {
@@ -1682,16 +1720,19 @@ struct FoundationModelEngine {
         let priorityResults = EmailNLPEngine.scoreAllPriorities(emails, replyCountPerSender: replyCountPerSender)
         let topEmails = Array(priorityResults.prefix(10))
 
-        var context = "PRIORITY TRIAGE — Top \(topEmails.count) high-priority emails from \(emails.count) total:\n\n"
+        var context = archiveDateFacts(emails)
+        context += "PRIORITY TRIAGE — Top \(topEmails.count) high-priority emails from \(emails.count) total:\n\n"
+        let now = Date()
         for (_, result) in topEmails.enumerated() {
             let email = result.email
             let subj = email.headers["Subject"] ?? "(No Subject)"
+            let ageDays = MBOXParser.parseDate(email.headers["Date"]).flatMap { Calendar.current.dateComponents([.day], from: $0, to: now).day }
             context += """
                 --- \(subj) (score: \(result.score), level: \(result.level.rawValue)) ---
                 From: \(email.headers["From"] ?? "Unknown")
                 To: \(email.headers["To"] ?? "Unknown")
                 Subject: \(subj)
-                Date: \(email.headers["Date"] ?? "")
+                Date: \(email.headers["Date"] ?? "") (\(ageDays.map { "\($0) days ago" } ?? "age unknown"))
                 Priority reasons: \(result.reasons.joined(separator: ", "))
                 Body: \(bodySnippet(for: email, maxLength: 400))
 
@@ -1708,7 +1749,11 @@ struct FoundationModelEngine {
               "Email 1" or "Message 2"
             - For each email, explain WHY it's important in one sentence
             - Suggest a specific action (reply, delegate, schedule, archive)
-            - Group by urgency: "Act Now", "Today", "This Week"
+            - Group by urgency: "Act Now", "Today", "This Week", "Older"
+            - Judge urgency against TODAY's date given in the data. An email more than \
+              30 days old, or a deadline that has already passed, is never "Act Now", \
+              "Today" or "This Week": put it under "Older" with the action "check it was \
+              handled", and say the deadline has passed
             - Use **bold** for names, deadlines, and key terms
             - Be concise and actionable — like a personal assistant briefing
             """
@@ -1740,8 +1785,14 @@ struct FoundationModelEngine {
         }
         let classification = EmailNLPEngine.classifyAll(emails)
         let sentiment = EmailNLPEngine.averageSentiment(of: emails)
-        let entities = EmailNLPEngine.extractEntities(from: emails, limit: 10)
-        let contacts = EmailNLPEngine.contactInsights(from: emails, limit: 8)
+        let own = ownerAddresses(in: emails)
+        let isOwn: (String) -> Bool = { addr in
+            let lower = addr.lowercased()
+            return own.contains { lower.contains($0) }
+        }
+        let entities = EmailNLPEngine.extractEntities(from: emails, limit: 14).filter { !isOwn($0.name) }.prefix(10)
+        // The owner is not one of their own contacts.
+        let contacts = EmailNLPEngine.contactInsights(from: emails, limit: 14).filter { !isOwn($0.address) }.prefix(8)
         let topics = EmailNLPEngine.extractTopics(from: emails, limit: 8)
 
         // Recent activity patterns
@@ -1754,7 +1805,8 @@ struct FoundationModelEngine {
         }
         let unansweredReceived = recentEmails.filter { $0.messageType == "received" }
 
-        var context = "INSIGHTS DATA for \(emails.count) emails:\n\n"
+        var context = archiveDateFacts(emails)
+        context += "INSIGHTS DATA for \(emails.count) emails (the user's own sent mail is excluded from contacts):\n\n"
 
         // Category distribution
         let catStrings = EmailNLPEngine.EmailCategory.allCases.compactMap { cat -> String? in
@@ -1763,8 +1815,9 @@ struct FoundationModelEngine {
         }
         context += "Categories: \(catStrings.joined(separator: ", "))\n"
 
-        // Sentiment summary
-        context += "Sentiment: \(sentiment.label) (avg \(String(format: "%.2f", sentiment.average))). "
+        // Sentiment summary — a rough lexicon score; formal business and legal
+        // mail often scores "negative" without being so.
+        context += "Approximate sentiment (rough word-list score, unreliable on formal mail): \(sentiment.label) (avg \(String(format: "%.2f", sentiment.average))). "
         context += "Positive: \(sentiment.positive), Neutral: \(sentiment.neutral), Negative: \(sentiment.negative)\n"
 
         // Top entities
@@ -1786,7 +1839,8 @@ struct FoundationModelEngine {
         }
 
         // Recent activity
-        context += "\nRecent activity (last 7 days): \(recentEmails.count) emails, \(unansweredReceived.count) received\n"
+        context += "\nRecent activity (last 7 days before today): \(recentEmails.count) emails, \(unansweredReceived.count) received\n"
+        context += "Whether an email was answered is NOT known from this data.\n"
 
         let instructions = """
             You are a proactive email intelligence analyst in mailin, a privacy-first Mac app. \
@@ -1801,6 +1855,12 @@ struct FoundationModelEngine {
             - Be conversational — like a smart assistant noticing patterns
             - Start each insight with a short descriptive heading
             - Prioritize actionable findings over obvious observations
+            - Never treat the user's own address as a contact, and never say emails went \
+              unanswered: reply data is not available
+            - Sentiment is a rough word-list score: never call a contact or a set of emails \
+              "all negative" or "100% negative", and do not build an insight on sentiment alone
+            - If the archive's newest email is old, say so; do not describe the quiet since \
+              then as a gap in the user's correspondence
             """
 
         let session = LanguageModelSession(instructions: instructions)
