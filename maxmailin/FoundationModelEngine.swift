@@ -895,6 +895,34 @@ struct FoundationModelEngine {
     /// plus the true archive total — never materializes the corpus.
     private static func retrieveContext(query: String, contextLimit: Int = 15) async -> (emails: [MBOXParser.RawEmail], total: Int) {
         var contextEmails = ((try? await ArchiveRetrievalService.shared.retrieve(query, limit: contextLimit)) ?? []).map(\.email)
+        // The full-text search needs EVERY word of the question: "Did I book a
+        // train ticket in 2018?" matched nothing, and the answer was built
+        // from the newest 20 emails instead (7 of 12 typed questions answered
+        // "not found" for mail that exists, 2026-10-06). Thin results are
+        // retried on the question's content words, any of them, with a few
+        // everyday synonyms; bm25 ranks the rarest matches first.
+        if contextEmails.count < 3 {
+            let terms = relaxedSearchTerms(for: query)
+            if !terms.isEmpty {
+                // Bare words: the retrieval layer escapes each one and keeps OR.
+                let orQuery = terms.joined(separator: " OR ")
+                let relaxed = ((try? await ArchiveRetrievalService.shared.retrieve(orQuery, limit: contextLimit * 2)) ?? []).map(\.email)
+                var seen = Set(contextEmails.map(\.id))
+                var ranked = relaxed.filter { seen.insert($0.id).inserted }
+                // A year in the question ("in 2018") puts that year's mail first.
+                if let yearMatch = query.firstMatch(of: /\b(19|20)\d{2}\b/) {
+                    let year = Int(query[yearMatch.range]) ?? 0
+                    let cal = Calendar.current
+                    let inYear = ranked.filter { MBOXParser.parseDate($0.headers["Date"]).map { cal.component(.year, from: $0) == year } ?? false }
+                    let others = ranked.filter { e in !inYear.contains { $0.id == e.id } }
+                    ranked = inYear + others
+                }
+                // At most 20 of the best matches: more pushed ordinary questions
+                // over the multi-expert threshold (50) — slower, and its
+                // pipeline labels leaked into answers.
+                contextEmails += ranked.prefix(min(contextLimit, 20))
+            }
+        }
         let total = (try? await ArchiveDataService.shared.count()) ?? contextEmails.count
         // I4: the opt-in semantic index adds messages that say the same thing
         // in other words. A no-op while the switch is off or nothing is
@@ -909,8 +937,9 @@ struct FoundationModelEngine {
                 }
             }
         }
-        if contextEmails.count < 3 {
-            // Thin retrieval → fall back to a bounded most-recent window.
+        if contextEmails.isEmpty {
+            // Nothing matched at all → a bounded most-recent window, so the
+            // model can say plainly that nothing relevant was found.
             var seen = Set(contextEmails.map(\.id))
             let stream = await ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 20)
             if let recent = try? await { () async throws -> [MBOXParser.RawEmail] in
@@ -925,6 +954,48 @@ struct FoundationModelEngine {
             }
         }
         return (contextEmails, total)
+    }
+
+    /// Rules every answer path shares, each from a wrong answer on the
+    /// owner's archive (2026-10-06): codes expanded into invented places
+    /// ("HWH (Hyderabad)"), "couldn't find any" followed by the email found,
+    /// and 2023 requests listed as still to do after the 2024 grant.
+    static let answerDiscipline = """
+        Never expand a code, abbreviation or ID (station codes, reference numbers)         unless the email itself spells it out; quote it as written.         If the emails answer the question, say so directly; never open with         "I couldn't find" when you then show a matching email.         For what is still pending or still to do, use the newest emails of that         matter: a later email showing something done (granted, paid, filed,         confirmed) settles earlier requests, so list only what is not shown as         done, each with its date.         Never add up or compute amounts yourself.
+        """
+
+    /// Removes the multi-expert pipeline's internal labels from an answer:
+    /// "(from timelineExpert)", "(via sentimentExpert)", "(via Find emails
+    /// involving …)" reached users verbatim (2026-10-06).
+    static func withoutPipelineLabels(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: #"\s*\((?:from|via|by)\s+[A-Za-z]*[Ee]xpert[^)]*\)"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s*\(via (?:Find|Search|Get|List|Analy[sz]e)[^)]*\)"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\b(?:from|via) [a-z]+Expert\b"#, with: "", options: .regularExpression)
+    }
+
+    /// The question's content words plus everyday synonyms, for the relaxed
+    /// (any-word) search. Question words, pronouns and filler are dropped.
+    static func relaxedSearchTerms(for query: String) -> [String] {
+        let synonyms: [String: [String]] = [
+            "train": ["irctc", "railway", "pnr"], "railway": ["irctc", "train"], "ticket": ["booking", "pnr"],
+            "flight": ["airline", "boarding", "pnr"],
+            "job": ["interview", "vacancy", "opening"], "interview": ["interview", "vacancy", "recruitment"],
+            "hospital": ["patient", "claim", "tpa", "medical"], "claim": ["claim", "tpa"],
+            "packers": ["packers", "movers"], "movers": ["packers", "movers"],
+            "salary": ["payslip", "salary"], "bill": ["invoice", "bill"], "invoice": ["invoice", "bill"],
+            "password": ["password", "passcode"], "manga": ["manga", "scans"],
+        ]
+        let extra: Set<String> = ["book", "booked", "need", "still", "invited", "happened", "total", "pay", "paid", "number"]
+        var terms: [String] = []
+        for word in EmailNLPEngine.extractSearchTerms(from: query) {
+            let lower = word.lowercased().trimmingCharacters(in: .punctuationCharacters)
+            guard lower.count >= 3 || lower.allSatisfy(\.isNumber), !extra.contains(lower) else { continue }
+            terms.append(lower)
+            terms += synonyms[lower] ?? []
+        }
+        var seen = Set<String>()
+        return terms.filter { seen.insert($0).inserted }
     }
 
     private static func prepareSessionBounded(query: String) async -> (session: LanguageModelSession, prompt: String, evidence: [EvidenceReference]) {
@@ -1120,6 +1191,7 @@ struct FoundationModelEngine {
         let personaConfig = await PersonaManager.aiConfig(for: personaForCurrentSession)
         let instructions = """
             \(personaConfig.systemInstruction) \
+            \(answerDiscipline) \
             You work in mailin, a privacy-first Mac app. \
             The NLP engine has already retrieved the most relevant emails and computed \
             verified statistics. Your job is to synthesize these into a natural, \
@@ -1219,6 +1291,7 @@ struct FoundationModelEngine {
         let personaConfig = await PersonaManager.aiConfig(for: personaForCurrentSession)
         let instructions = """
             \(personaConfig.systemInstruction) \
+            \(answerDiscipline) \
             You work in mailin, a privacy-first Mac app. \
             An agentic retrieval pipeline has already: searched with BM25 + semantic vectors, \
             expanded conversation threads for full context, extracted the most relevant \
@@ -1518,6 +1591,7 @@ struct FoundationModelEngine {
             : ""
         let instructions = """
             \(personaConfig.systemInstruction) \
+            \(answerDiscipline) \
             Synthesize \(allFindings.count) findings (\(highCount) high-relevance) \
             from \(experts.count) experts into one answer. NLP baseline numbers are ground truth. \
             ▲=high ●=medium ▽=low relevance. Cite emails by **Subject** and **sender**. \
@@ -5063,7 +5137,7 @@ struct FoundationModelEngine {
         }
         let evidence = AIGroundingGate.references(for: emails)
         let raw = try await respondSmart(to: query, emails: emails, onUpdate: onUpdate, onConfirmAction: onConfirmAction)
-        let gated = AIGroundingGate.ground(answer: raw, evidence: evidence).answer
+        let gated = AIGroundingGate.ground(answer: withoutPipelineLabels(raw), evidence: evidence).answer
         await onUpdate(gated)
         return gated
     }
@@ -6680,7 +6754,7 @@ struct FoundationModelEngine {
     }
 
     private static func focusedInstructions(for intent: QueryIntent) -> String {
-        let base = "Email analyst in mailin (on-device, private). Cite emails by **Subject** and **sender**. Use tools proactively. "
+        let base = "Email analyst in mailin (on-device, private). Cite emails by **Subject** and **sender**. Use tools proactively. " + answerDiscipline + " "
         switch intent {
         case .search:
             return base + "Search task. Use spotlightSearch + searchEmails. Show matching emails with evidence."

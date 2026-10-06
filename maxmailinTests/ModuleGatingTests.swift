@@ -1550,3 +1550,40 @@ struct BrandAndWrappedLinkTests {
         #expect(EmailNLPEngine.mismatchedLink(in: #"<a href="http://www.apminfrastructure.com">www.a<wbr>pminfrastructure.com</a>"#) == nil)
     }
 }
+
+struct TypedQuestionRoutingTests {
+    @Test("Slot questions name the label; 'when' adds the event")
+    func slots() {
+        let a = AIAssistantView.slotRequest(in: "What is my granted patent number and when was it granted?")
+        #expect(a?.label == "patent")
+        #expect(a?.verb == "granted")
+        #expect(AIAssistantView.slotRequest(in: "What is the application number of my patent?")?.label == "application")
+        #expect(AIAssistantView.slotRequest(in: "What is the total number of emails?") == nil)
+        #expect(AIAssistantView.slotRequest(in: "Summarize my emails") == nil)
+    }
+
+    @Test("Who-is names a person, not a ranking question")
+    func whoIs() {
+        #expect(AIAssistantView.whoIsName(in: "Who is Shabana Khan?") == "Shabana Khan")
+        #expect(AIAssistantView.whoIsName(in: "Who is emailing me the most?") == nil)
+    }
+
+    @available(macOS 26, iOS 26, *)
+    @Test("Relaxed search keeps content words and adds synonyms; pipeline labels are removed")
+    func relaxedTermsAndLabels() {
+        let terms = FoundationModelEngine.relaxedSearchTerms(for: "Did I book a train ticket in 2018? From where to where?")
+        #expect(terms.contains("train") && terms.contains("irctc") && terms.contains("2018"))
+        #expect(!terms.contains("did") && !terms.contains("where") && !terms.contains("book"))
+        let cleaned = FoundationModelEngine.withoutPipelineLabels("Deadline passed (from timelineExpert). Request sent (via sentimentExpert) and (via Find emails involving Ann).")
+        #expect(!cleaned.contains("Expert") && !cleaned.contains("via Find"))
+    }
+}
+
+struct PaymentQuestionTests {
+    @Test("Payment questions name the payee")
+    func payee() {
+        #expect(AIAssistantView.paymentQuestion(in: "How much did I pay Khurana & Khurana in total?") == "khurana & khurana")
+        #expect(AIAssistantView.paymentQuestion(in: "How much have I spent?") == "")
+        #expect(AIAssistantView.paymentQuestion(in: "Who emails me the most?") == nil)
+    }
+}

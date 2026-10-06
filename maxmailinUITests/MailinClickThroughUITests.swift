@@ -10,6 +10,9 @@
 //
 
 import XCTest
+#if os(macOS)
+import AppKit
+#endif
 
 final class MailinClickThroughUITests: XCTestCase {
 
@@ -1688,6 +1691,82 @@ final class MailinClickThroughUITests: XCTestCase {
         }
         print("AI-ANSWERS>>>\(report)\n<<<AI-ANSWERS")
         let att = XCTAttachment(string: report); att.name = "ai-answers.md"; att.lifetime = .keepAlways; add(att)
+    }
+
+    /// Questions a user would type, each with a checkable answer in the
+    /// owner's archive. Records every answer verbatim for review.
+    func testAIAnswers_typedQuestions() {
+        recoverIfNeeded()
+        let windowMenu = app.menuBars.menuBarItems["Window"]
+        if windowMenu.exists {
+            windowMenu.click()
+            let zoom = app.menuItems["Zoom"]
+            if zoom.waitForExistence(timeout: 2), zoom.isEnabled { zoom.click() } else { app.typeKey(.escape, modifierFlags: []) }
+            Thread.sleep(forTimeInterval: 1)
+        }
+        _ = openPage("AI Insights")
+        let askTab = app.buttons["Ask"].firstMatch
+        if askTab.waitForExistence(timeout: 5), askTab.isHittable { askTab.click() }
+
+        let questions = ProcessInfo.processInfo.environment["AI_TYPED_QUESTIONS"]?
+            .components(separatedBy: "|").filter { !$0.isEmpty } ?? [
+            "What is my granted patent number and when was it granted?",
+            "What is the application number of my patent?",
+            "How much did I pay Khurana & Khurana in total?",
+            "Who is Shabana Khan?",
+            "What was the settlement amount with the packers?",
+            "Did I book a train ticket in 2018? From where to where?",
+            "Which job interviews was I invited to?",
+            "Find the email about the Bengali manga translation",
+            "What do I still need to do for my patent?",
+            "Do any emails contain a password?",
+            "How many emails did I send in 2015?",
+            "What happened with the hospital claim for Giridhar Sasmal?",
+        ]
+        let field = app.textFields.matching(NSPredicate(format: "label == 'Question input' OR placeholderValue BEGINSWITH 'Ask a follow-up'")).firstMatch
+        var report = ""
+        for (n, q) in questions.enumerated() {
+            let clear = app.buttons.matching(NSPredicate(format: "label == 'Clear conversation'")).firstMatch
+            if clear.exists, clear.isEnabled, clear.isHittable { clear.click(); Thread.sleep(forTimeInterval: 1) }
+            guard field.waitForExistence(timeout: 5), field.isHittable else { report += "\n## T\(n+1): \(q)\n(no question field)\n"; continue }
+            app.activate(); Thread.sleep(forTimeInterval: 0.5)
+            field.click()
+            // Pasted, not typed: synthesized typing of a long question timed
+            // out on macOS.
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(q, forType: .string)
+            field.typeKey("a", modifierFlags: .command)
+            field.typeKey("v", modifierFlags: .command)
+            Thread.sleep(forTimeInterval: 0.5)
+            field.typeKey(.return, modifierFlags: [])
+            let started = Date()
+            Thread.sleep(forTimeInterval: 3)
+            while Date().timeIntervalSince(started) < 150 {
+                let busy = app.staticTexts["Thinking..."].exists || app.buttons["Processing query"].exists
+                    || app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'Answering'")).firstMatch.exists
+                if !busy { break }
+                Thread.sleep(forTimeInterval: 2)
+            }
+            Thread.sleep(forTimeInterval: 15)
+            var texts: [String] = []
+            if let snap = try? app.windows.firstMatch.snapshot() {
+                func walk(_ e: XCUIElementSnapshot) {
+                    if e.elementType == .staticText {
+                        let t = (e.value as? String) ?? e.label
+                        if !t.isEmpty { texts.append(t) }
+                    }
+                    e.children.forEach(walk)
+                }
+                walk(snap)
+            }
+            let from = texts.lastIndex(where: { $0.contains(q.prefix(30)) }).map { $0 + 1 } ?? max(0, texts.count - 40)
+            var lines: [String] = []
+            for t in texts[from...] where lines.last != t { lines.append(t) }
+            report += "\n## T\(n+1): \(q)  (\(Int(Date().timeIntervalSince(started))) s)\n" + lines.prefix(40).joined(separator: "\n") + "\n"
+            if app.state == .notRunning { report += "\n(app quit)\n"; break }
+        }
+        print("AI-TYPED>>>\(report)\n<<<AI-TYPED")
+        let att = XCTAttachment(string: report); att.name = "ai-typed.md"; att.lifetime = .keepAlways; add(att)
     }
     #endif
 }

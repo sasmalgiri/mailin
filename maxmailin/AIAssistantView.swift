@@ -1849,6 +1849,34 @@ struct AIAssistantView: View {
             return { emails in smartStatistics(query: query, emails: emails) }
         }
 
+        // "Do any emails contain a password?": a scan of the message text.
+        // Through the model the answer was "no emails contain a password"
+        // while a plain-text game password sat in the archive (2026-10-06).
+        if lower.contains("password") || lower.contains("passcode") {
+            return { emails in smartSecrets(query: query, emails: emails) }
+        }
+
+        // "What is my <label> number?" (kalsmritikosh D-11/D-12/D-15): the
+        // value written next to that label, one sentence, its source — or a
+        // conflict, or an honest "not found". The model mixed up the
+        // application number, the patent number and an examination date.
+        if let slot = slotRequest(in: query) {
+            return { emails in smartSlot(label: slot.label, eventVerb: slot.verb, query: query, emails: emails) }
+        }
+
+        // "How much did I pay <someone> (in total)?": payments the emails
+        // state as made or received, each once, summed by the app. The model
+        // could not add them up and mixed requests with payments.
+        if let payee = paymentQuestion(in: query) {
+            return { emails in smartPayments(payee: payee, query: query, emails: emails) }
+        }
+
+        // "Who is <name>?": the person as the archive shows them — counts,
+        // organisation, dates, subjects — not a model guess from 3 emails.
+        if let name = whoIsName(in: query) {
+            return { emails in smartWhoIs(name: name, query: query, emails: emails) }
+        }
+
         // "Tell the story of <subject>": one named conversation, narrated —
         // the follow-up Thread Story offers for the next busiest threads.
         if let subject = threadStorySubject(in: query) {
@@ -1940,6 +1968,36 @@ struct AIAssistantView: View {
     }
 
     nonisolated private static func smartStatistics(query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        // "How many emails did I send in 2015?" — the year and the direction
+        // were ignored and the archive totals came back instead.
+        let lower = query.lowercased()
+        if let yearMatch = query.firstMatch(of: /\b(19|20)\d{2}\b/), let year = Int(query[yearMatch.range]) {
+            let cal = Calendar.current
+            let inYear = emails.filter { MBOXParser.parseDate($0.headers["Date"]).map { cal.component(.year, from: $0) == year } ?? false }
+            let isSent: (MBOXParser.RawEmail) -> Bool = {
+                $0.messageType == "sent" || ($0.headers["X-Gmail-Labels"] ?? "").lowercased().contains("sent")
+            }
+            let sent = inYear.filter(isSent).count
+            let received = inYear.count - sent
+            let asksSent = lower.contains(" send") || lower.contains(" sent") || lower.contains("did i write")
+            let asksReceived = lower.contains("receive") || lower.contains("get ") || lower.contains("got ")
+            var answer: String
+            if asksSent && !asksReceived {
+                answer = "**You sent \(sent) email\(sent == 1 ? "" : "s") in \(year)**"
+            } else if asksReceived && !asksSent {
+                answer = "**You received \(received) email\(received == 1 ? "" : "s") in \(year)**"
+            } else {
+                answer = "**\(inYear.count) email\(inYear.count == 1 ? "" : "s") in \(year)**: \(sent) sent, \(received) received"
+            }
+            answer += " (of \(emails.count) in this scope)."
+            if inYear.isEmpty, let newest = emails.compactMap({ MBOXParser.parseDate($0.headers["Date"]) }).max(),
+               let oldest = emails.compactMap({ MBOXParser.parseDate($0.headers["Date"]) }).min() {
+                let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
+                answer += " This scope runs \(fmt.string(from: oldest)) – \(fmt.string(from: newest))."
+            }
+            let ids = inYear.filter { asksSent && !asksReceived ? isSent($0) : true }.prefix(5).map(\.id)
+            return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: Array(ids))
+        }
         let sent = emails.filter { $0.messageType == "sent" }.count
         let received = emails.filter { $0.messageType == "received" }.count
         let withAttachments = emails.filter { !$0.attachments.isEmpty }.count
@@ -1984,6 +2042,264 @@ struct AIAssistantView: View {
         let ids = emails.filter { ($0.headers["Subject"] ?? "").lowercased().contains(top) || $0.plainBody.lowercased().contains(top) }.prefix(5).map(\.id)
         answer += "\nAsk \"What's discussed about \(top)?\" for the details behind any topic."
         return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: Array(ids))
+    }
+
+    /// The label in "what is (my|the) <label> number" and, when the question
+    /// also asks when something happened ("…and when was it granted?"), the
+    /// event verb.
+    nonisolated static func slotRequest(in query: String) -> (label: String, verb: String?)? {
+        let lower = query.lowercased()
+        guard let match = lower.firstMatch(of: /\b(?:what|which)(?:\s+is|\s+was|'s)?\s+(?:the\s+|my\s+|our\s+)?([a-z][a-z ]{1,40}?)\s+(?:number|no\.?)\b/) else { return nil }
+        let qualifiers: Set<String> = ["granted", "official", "registered", "final", "correct", "full", "new", "old", "my", "the"]
+        guard let label = String(match.1).split(separator: " ").map(String.init).last(where: { !qualifiers.contains($0) }),
+              label.count >= 3, !["email", "emails", "message", "messages", "total", "phone"].contains(label) else { return nil }
+        let verbs = ["granted", "filed", "issued", "published", "registered", "approved", "allotted", "paid", "sent"]
+        let verb = lower.contains("when") ? verbs.first { lower.contains($0) } : nil
+        return (label, verb)
+    }
+
+    nonisolated private static func smartSlot(label: String, eventVerb: String?, query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        let escaped = NSRegularExpression.escapedPattern(for: label)
+        let pattern = "(?i)\\b\(escaped)\\s*(?:no\\.?|number|num\\.?|#)\\s*[:.\\-]?\\s*([A-Z0-9][A-Z0-9/\\-]{3,})"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return (query: query, answer: "Could not read that question.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        var byValue: [String: [MBOXParser.RawEmail]] = [:]
+        for email in emails {
+            let text = (email.headers["Subject"] ?? "") + "\n" + email.plainBody
+            var found = Set<String>()
+            for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+                guard let r = Range(match.range(at: 1), in: text) else { continue }
+                // "202331019665Applicant" is a value run into the next word
+                // (kalsmritikosh D-12): a letter run after the digits is cut.
+                let value = String(text[r]).trimmingCharacters(in: CharacterSet(charactersIn: ".-/"))
+                    .replacingOccurrences(of: #"(?<=\d)[A-Za-z]{4,}$"#, with: "", options: .regularExpression)
+                // A value needs a digit: "Patent No. Hybrid" is not a number.
+                guard value.rangeOfCharacter(from: .decimalDigits) != nil else { continue }
+                found.insert(value.uppercased())
+            }
+            for value in found { byValue[value, default: []].append(email) }
+        }
+        let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
+        let human = label.prefix(1).uppercased() + label.dropFirst()
+        guard !byValue.isEmpty else {
+            return (query: query, answer: "**No \(label) number appears in this scope.** None of the \(emails.count) emails writes a \(label) number (\"\(human) No.\" or \"\(human) Number\" followed by a value).", timestamp: Date(), relatedEmailIDs: [])
+        }
+        func earliest(_ list: [MBOXParser.RawEmail]) -> MBOXParser.RawEmail? {
+            list.min { (MBOXParser.parseDate($0.headers["Date"]) ?? .distantFuture) < (MBOXParser.parseDate($1.headers["Date"]) ?? .distantFuture) }
+        }
+        let ranked = byValue.sorted { ($0.value.count, $1.key) > ($1.value.count, $0.key) }
+        var answer: String
+        let top = ranked[0]
+        // One value, or one that clearly dominates (3× the next): lead with
+        // it, and list the others as "also seen" rather than a conflict.
+        let dominant = ranked.count == 1 || top.value.count >= 3 * ranked[1].value.count
+        if dominant {
+            let first = earliest(top.value)
+            let when = first.flatMap { MBOXParser.parseDate($0.headers["Date"]) }.map { fmt.string(from: $0) } ?? "an undated email"
+            answer = "**\(human) No. \(top.key)** — written in \(top.value.count) email\(top.value.count == 1 ? "" : "s"), first on \(when) (“\(first?.headers["Subject"] ?? "")”)."
+            for (value, list) in ranked.dropFirst().prefix(3) {
+                answer += "\nAlso seen: \(value) in “\(earliest(list)?.headers["Subject"] ?? "")” (\(list.count) email\(list.count == 1 ? "" : "s"))."
+            }
+        } else {
+            answer = "**Different \(label) numbers appear** — check which one you mean:\n"
+            for (value, list) in ranked.prefix(4) {
+                let first = earliest(list)
+                let when = first.flatMap { MBOXParser.parseDate($0.headers["Date"]) }.map { fmt.string(from: $0) } ?? "undated"
+                answer += "- **\(value)** — \(list.count) email\(list.count == 1 ? "" : "s"), first \(when) (“\(first?.headers["Subject"] ?? "")”)\n"
+            }
+        }
+        if let verb = eventVerb {
+            // The sentence that states the event and a date, from the emails
+            // carrying the value — quoted, never inferred.
+            let stem = String(verb.prefix(5))
+            let datePattern = #"(?i)\b(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*,?\s+\d{4}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\b"#
+            var statement: (sentence: String, date: String, email: MBOXParser.RawEmail)?
+            for email in top.value.sorted(by: { (MBOXParser.parseDate($0.headers["Date"]) ?? .distantFuture) < (MBOXParser.parseDate($1.headers["Date"]) ?? .distantFuture) }) {
+                let lines = email.plainBody.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix(">") }
+                let sentences = lines.joined(separator: " ").components(separatedBy: ". ")
+                if let hit = sentences.first(where: { $0.lowercased().contains(stem) && $0.range(of: datePattern, options: .regularExpression) != nil }),
+                   let dateRange = hit.range(of: datePattern, options: .regularExpression) {
+                    statement = (hit.trimmingCharacters(in: .whitespaces), String(hit[dateRange]), email)
+                    break
+                }
+            }
+            if let statement {
+                let sentence = statement.sentence.count > 220 ? String(statement.sentence.prefix(220)) + "…" : statement.sentence
+                answer += "\n\n**\(verb.capitalized) on \(statement.date)** — “\(sentence)” (\(senderDisplayName(statement.email.headers["From"] ?? "?")))"
+            } else {
+                answer += "\n\nNone of the emails carrying it states when it was \(verb)."
+            }
+        }
+        let ids = top.value.prefix(5).map(\.id)
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: Array(ids))
+    }
+
+    /// For "how much did I pay (to) X (in total)?" — X, or "" for everyone.
+    nonisolated static func paymentQuestion(in query: String) -> String? {
+        let lower = query.lowercased()
+        guard let match = lower.firstMatch(of: /how much (?:money )?(?:did|have) (?:i|we) (?:pay|paid|spend|spent|send|sent|transfer|transferred)(?: to)?\s*(.*)$/) else { return nil }
+        var payee = String(match.1)
+        for tail in ["in total", "altogether", "overall", "so far", "?", "."] {
+            payee = payee.replacingOccurrences(of: tail, with: "")
+        }
+        payee = payee.replacingOccurrences(of: #"\b(for|on|in) .*$"#, with: "", options: .regularExpression)
+        return payee.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    nonisolated private static func smartPayments(payee: String, query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        // The payee's distinctive word ("khurana" from "khurana & khurana").
+        let payeeWord = payee.split(whereSeparator: { !$0.isLetter }).map { $0.lowercased() }.first { $0.count >= 3 } ?? ""
+        let scoped = payeeWord.isEmpty ? emails : emails.filter {
+            (($0.headers["From"] ?? "") + " " + ($0.headers["To"] ?? "") + " " + ($0.headers["Cc"] ?? "") + " " + ($0.headers["Subject"] ?? "")).lowercased().contains(payeeWord)
+        }
+        // Only statements that a payment HAPPENED; "please pay", "due" and
+        // invoices are requests, not payments.
+        let confirmed = #"(?i)(receipt of (?:a |the )?payment of|received (?:a |the )?(?:payment|amount) of|payment of|paid|transferred|remitted|credited)\s*(?:an amount of\s*)?(INR|Rs\.?|₹)\s?([\d,]+(?:\.\d{1,2})?)"#
+        let request = #"(?i)(request|please|kindly|due|make (?:the )?payment|to be paid|pay now|invoice|quotation|fee structure|per year|estimate)"#
+        guard let regex = try? NSRegularExpression(pattern: confirmed) else {
+            return (query: query, answer: "Could not read that question.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        struct Payment { let amount: Double; let shown: String; let sentence: String; let email: MBOXParser.RawEmail; let date: Date? }
+        var payments: [Payment] = []
+        for email in scoped {
+            let lines = email.plainBody.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix(">") }
+            // Whitespace collapsed: a line break inside "payment\r\nof" left a
+            // double space and the confirmation never matched.
+            let text = lines.joined(separator: " ").replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            for sentence in text.components(separatedBy: ". ") {
+                guard sentence.range(of: request, options: .regularExpression) == nil else { continue }
+                let ns = sentence as NSString
+                for match in regex.matches(in: sentence, range: NSRange(location: 0, length: ns.length)) {
+                    let digits = ns.substring(with: match.range(at: 3)).replacingOccurrences(of: ",", with: "")
+                    guard let amount = Double(digits), amount > 0 else { continue }
+                    payments.append(Payment(amount: amount, shown: ns.substring(with: match.range(at: 3)), sentence: sentence.trimmingCharacters(in: .whitespaces),
+                                            email: email, date: MBOXParser.parseDate(email.headers["Date"])))
+                }
+            }
+        }
+        // Each payment once (kalsmritikosh H-1): the same amount in the same
+        // conversation within 14 days is one payment confirmed twice.
+        var unique: [Payment] = []
+        for p in payments.sorted(by: { ($0.date ?? .distantPast) < ($1.date ?? .distantPast) }) {
+            let key = EmailNLPEngine.conversationKey(p.email)
+            let duplicate = unique.contains { u in
+                u.amount == p.amount && EmailNLPEngine.conversationKey(u.email) == key
+                    && abs((u.date ?? .distantPast).timeIntervalSince(p.date ?? .distantPast)) < 14 * 86_400
+            }
+            if !duplicate { unique.append(p) }
+        }
+        let who = payee.isEmpty ? "" : " to \(payee)"
+        guard !unique.isEmpty else {
+            return (query: query, answer: "**No payment\(who) is stated in these emails.** I looked for amounts written as paid, received, transferred or credited in \(scoped.count) email\(scoped.count == 1 ? "" : "s"); requests and fee quotes were left out.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
+        let total = unique.reduce(0) { $0 + $1.amount }
+        let number = NumberFormatter(); number.numberStyle = .decimal; number.locale = Locale(identifier: "en_IN"); number.maximumFractionDigits = 2
+        var answer = "**₹\(number.string(from: NSNumber(value: total)) ?? String(total)) across \(unique.count) payment\(unique.count == 1 ? "" : "s")\(who)** — the sum of the amounts below, added by the app. Payments not written in your emails are not included.\n\n"
+        for p in unique.prefix(12) {
+            let when = p.date.map { fmt.string(from: $0) } ?? "undated"
+            let sentence = p.sentence.count > 160 ? String(p.sentence.prefix(160)) + "…" : p.sentence
+            answer += "- **₹\(p.shown)** — \(when) — “\(sentence)” (\(senderDisplayName(p.email.headers["From"] ?? "?")))\n"
+        }
+        if unique.count > 12 { answer += "…and \(unique.count - 12) more.\n" }
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: Array(unique.prefix(5).map(\.email.id)))
+    }
+
+    /// The name in "who is <name>" / "tell me about <name>" (not "…emails from").
+    nonisolated static func whoIsName(in query: String) -> String? {
+        guard let range = query.range(of: #"^\s*(who is|who's|who was)\s+"#, options: [.regularExpression, .caseInsensitive]) else { return nil }
+        let name = String(query[range.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: " ?.!\"'“”"))
+        // "who is emailing me most" is a ranking question, not a person.
+        let lowered = name.lowercased()
+        guard !name.isEmpty, name.split(separator: " ").count <= 5,
+              !["email", "mail", "send", "writ", "contact", "most", "the "].contains(where: { lowered.hasPrefix($0) || lowered.contains(" most") }) else { return nil }
+        return name
+    }
+
+    nonisolated private static func smartWhoIs(name: String, query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        let needle = name.lowercased()
+        let from = emails.filter { ($0.headers["From"] ?? "").lowercased().contains(needle) }
+        let to = emails.filter { (($0.headers["To"] ?? "") + " " + ($0.headers["Cc"] ?? "")).lowercased().contains(needle) }
+        let mentioned = emails.filter { $0.plainBody.lowercased().contains(needle) }
+        guard !from.isEmpty || !to.isEmpty || !mentioned.isEmpty else {
+            return (query: query, answer: "**\(name)** does not appear in this scope — not as a sender, a recipient or in any message text.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        func address(_ header: String) -> String? {
+            for part in header.components(separatedBy: ",") where part.lowercased().contains(needle) {
+                if let lt = part.firstIndex(of: "<") {
+                    return String(part[part.index(after: lt)...].prefix { $0 != ">" }).lowercased()
+                }
+                if part.contains("@") { return part.trimmingCharacters(in: .whitespaces).lowercased() }
+            }
+            return nil
+        }
+        let addresses = Set(from.compactMap { address($0.headers["From"] ?? "") } + to.compactMap { address(($0.headers["To"] ?? "") + "," + ($0.headers["Cc"] ?? "")) })
+        let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
+        let all = Array(Set((from + to).map(\.id)))
+        let involved = emails.filter { all.contains($0.id) }
+        let dates = involved.compactMap { MBOXParser.parseDate($0.headers["Date"]) }
+        var answer = "**\(name)**"
+        if !addresses.isEmpty { answer += " — \(addresses.sorted().joined(separator: ", "))" }
+        answer += "\n\n"
+        answer += "- **\(from.count)** email\(from.count == 1 ? "" : "s") from them, **\(to.count)** to them"
+        if let first = dates.min(), let last = dates.max() {
+            answer += ", \(fmt.string(from: first)) – \(fmt.string(from: last))"
+        }
+        answer += "\n"
+        let domains = Set(addresses.compactMap { $0.split(separator: "@").last.map(String.init) })
+            .filter { !["gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "icloud.com", "rediffmail.com"].contains($0) }
+        if !domains.isEmpty { answer += "- Writes from **\(domains.sorted().joined(separator: ", "))**\n" }
+        let conversations = Dictionary(grouping: involved, by: EmailNLPEngine.conversationKey)
+            .sorted { $0.value.count > $1.value.count }
+            .prefix(4)
+        if !conversations.isEmpty {
+            answer += "- Conversations:\n"
+            for (_, members) in conversations {
+                let subject = EmailNLPEngine.baseSubject(members.first?.headers["Subject"] ?? "")
+                answer += "  - \(subject.isEmpty ? "(No Subject)" : subject) — \(members.count) email\(members.count == 1 ? "" : "s")\n"
+            }
+        }
+        if from.isEmpty && to.isEmpty {
+            answer += "- Named in the text of \(mentioned.count) email\(mentioned.count == 1 ? "" : "s"), never as sender or recipient.\n"
+        }
+        answer += "\nAsk: “Tell me about emails from \(name)”"
+        let ids = involved.sorted {
+            (MBOXParser.parseDate($0.headers["Date"]) ?? .distantPast) > (MBOXParser.parseDate($1.headers["Date"]) ?? .distantPast)
+        }.prefix(5).map(\.id)
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: Array(ids))
+    }
+
+    /// Emails whose text shows a password, passcode or PIN with a value.
+    nonisolated private static func smartSecrets(query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        let pattern = #"(?i)\b(password|passcode|passwd|pwd|pin)\b\s*(is|:|=|-)\s*(\S{3,})"#
+        var hits: [(email: MBOXParser.RawEmail, label: String, masked: String)] = []
+        var seen = Set<String>()
+        for email in emails {
+            let text = email.plainBody.isEmpty ? email.htmlBody : email.plainBody
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+                  let labelRange = Range(match.range(at: 1), in: text),
+                  let valueRange = Range(match.range(at: 3), in: text) else { continue }
+            let key = (email.headers["Message-ID"] ?? "") + (email.headers["Subject"] ?? "")
+            guard seen.insert(key).inserted else { continue }
+            let value = String(text[valueRange])
+            // Never repeat the secret itself: first character, then dots.
+            let masked = String(value.prefix(1)) + String(repeating: "•", count: max(3, value.count - 1))
+            hits.append((email, String(text[labelRange]).lowercased(), masked))
+        }
+        guard !hits.isEmpty else {
+            return (query: query, answer: "**No password found in message text.** Checked \(emails.count) emails for a password, passcode or PIN written out with its value. Attachments were not checked.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
+        var answer = "**\(hits.count) email\(hits.count == 1 ? "" : "s") show\(hits.count == 1 ? "s" : "") a password or PIN in plain text:**\n\n"
+        for hit in hits.prefix(10) {
+            let date = MBOXParser.parseDate(hit.email.headers["Date"]).map { fmt.string(from: $0) } ?? "undated"
+            answer += "- **\(hit.email.headers["Subject"] ?? "(No Subject)")** — \(senderDisplayName(hit.email.headers["From"] ?? "?")) · \(date) — \(hit.label): \(hit.masked)\n"
+        }
+        if hits.count > 10 { answer += "…and \(hits.count - 10) more.\n" }
+        answer += "\nIf any of these is still in use, change it. The values are masked here; open the email to see it."
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: Array(hits.prefix(5).map(\.email.id)))
     }
 
     /// The subject in "tell / narrate / show (me) the story of <subject>".
