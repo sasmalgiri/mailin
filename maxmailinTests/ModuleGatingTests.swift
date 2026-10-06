@@ -1733,3 +1733,30 @@ struct OwnerNameNotATopicTests {
         #expect(answer.contains("contract") || answer.contains("warehouse"))
     }
 }
+
+struct RecentInboxTriageTests {
+    @available(macOS 26, iOS 26, *)
+    @Test("With mail from this week, Smart Triage uses the model's urgency groups, not the old-archive list")
+    func recentTriage() async throws {
+        guard FoundationModelEngine.isAvailable else { return }   // needs Apple Intelligence on this Mac
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.dateFormat = "EEE, dd MMM yyyy HH:mm:ss Z"
+        let now = Date()
+        let emails = (0..<12).map { i in
+            let date = fmt.string(from: now.addingTimeInterval(-Double(i) * 3_600 * 20))
+            let body = i == 0
+                ? "Please sign and return the lease renewal by Friday; the deadline is this week."
+                : "Weekly team update \(i): notes from the meeting."
+            return MBOXParser.RawEmail(
+                headers: ["From": "Landlord \(i) <l\(i)@x.example>", "To": "me@example.com",
+                          "Subject": i == 0 ? "Action required: lease renewal deadline" : "Team update \(i)",
+                          "Date": date, "Message-ID": "<r\(i)@x>"],
+                rawSource: "", messageType: "received", attachments: [], timestamp: date, domains: [],
+                plainBody: body, htmlBody: "")
+        }
+        let answer = try await FoundationModelEngine.triageEmails(emails) { _ in }
+        #expect(!answer.contains("Nothing needs action now"))
+        #expect(answer.localizedCaseInsensitiveContains("lease"))
+    }
+}
