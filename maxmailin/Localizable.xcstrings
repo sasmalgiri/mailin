@@ -9667,6 +9667,76 @@
         }
       }
     },
+    "%lld messages between %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld Nachrichten zwischen %2$@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$lld messages between %2$@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld mensajes entre %2$@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld messages entre %2$@"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%2$@ के बीच %1$lld संदेश"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld messaggi tra %2$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%2$@の間の%1$lld件のメッセージ"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%2$@ 사이의 메시지 %1$lld개"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld mensagens entre %2$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%2$@ 之间的 %1$lld 条消息"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%2$@ 之間的 %1$lld 則訊息"
+          }
+        }
+      }
+    },
     "%lld more email%@ with Personal or Professional": {
       "localizations": {
         "de": {
@@ -14170,6 +14240,332 @@
           "stringUnit": {
             "state": "translated",
             "value": "（找不到內文內容）"
+          }
+        }
+      }
+    },
+    "(No Subject)": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(Kein Betreff)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(Sin asunto)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(Sans objet)"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(कोई विषय नहीं)"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(Nessun oggetto)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(件名なし)"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(제목 없음)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(Sem assunto)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(无主题)"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(無主旨)"
+          }
+        }
+      }
+    },
+    "**Most important older emails — check each was handled:**": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**Wichtigste ältere E-Mails – prüfen Sie, ob jede erledigt wurde:**"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**Correos antiguos más importantes: compruebe que cada uno se atendió:**"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**E-mails anciens les plus importants – vérifiez que chacun a été traité :**"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**सबसे महत्वपूर्ण पुराने ईमेल — जाँचें कि हर एक पर काम हो गया था:**"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**Email meno recenti più importanti: verifica che ognuna sia stata gestita:**"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**重要な古いメール — それぞれ対応済みか確認してください:**"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**중요한 이전 이메일 — 각각 처리되었는지 확인하세요:**"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**E-mails antigos mais importantes — verifique se cada um foi tratado:**"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**最重要的较早邮件——请逐一确认已处理:**"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**最重要的較早郵件——請逐一確認已處理:**"
+          }
+        }
+      }
+    },
+    "**No emails from %@.** None of the %lld emails in this scope is dated in that period.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**Keine E-Mails aus %1$@.** Keine der %2$lld E-Mails in diesem Bereich stammt aus diesem Zeitraum."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "new",
+            "value": "**No emails from %1$@.** None of the %2$lld emails in this scope is dated in that period."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**No hay correos de %1$@.** Ninguno de los %2$lld correos de este ámbito tiene fecha en ese periodo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**Aucun e-mail de %1$@.** Aucun des %2$lld e-mails de cette portée n’est daté de cette période."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**%1$@ का कोई ईमेल नहीं।** इस दायरे के %2$lld ईमेल में से कोई भी उस अवधि का नहीं है।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**Nessuna email di %1$@.** Nessuna delle %2$lld email in questo ambito è datata in quel periodo."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**%1$@のメールはありません。** この範囲の%2$lld件のメールに、その期間の日付のものはありません。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**%1$@의 이메일이 없습니다.** 이 범위의 이메일 %2$lld개 중 그 기간에 해당하는 것이 없습니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**Nenhum e-mail de %1$@.** Nenhum dos %2$lld e-mails deste escopo é desse período."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**没有%1$@的邮件。** 此范围内的 %2$lld 封邮件中,没有一封的日期在该时段内。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**沒有%1$@的郵件。** 此範圍內的 %2$lld 封郵件中,沒有一封的日期在該期間內。"
+          }
+        }
+      }
+    },
+    "**Nothing needs action now.** No email here is from the last 30 days (the newest is from %@), so any deadline in them has passed.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**Derzeit ist nichts zu tun.** Keine E-Mail hier stammt aus den letzten 30 Tagen (die neueste ist vom %@), daher sind alle Fristen darin abgelaufen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**No hay nada que atender ahora.** Ningún correo de aquí es de los últimos 30 días (el más reciente es del %@), así que cualquier plazo que contengan ya ha pasado."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**Rien à traiter pour l’instant.** Aucun e-mail ici ne date des 30 derniers jours (le plus récent date du %@) : toute échéance qu’ils contiennent est passée."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**अभी कुछ करने की ज़रूरत नहीं।** यहाँ कोई भी ईमेल पिछले 30 दिनों का नहीं है (सबसे नया %@ का है), इसलिए उनमें दी गई हर समय-सीमा बीत चुकी है।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**Non c’è nulla da fare ora.** Nessuna email qui risale agli ultimi 30 giorni (la più recente è del %@), quindi tutte le scadenze indicate sono passate."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**今すぐ対応が必要なものはありません。** ここには過去30日以内のメールがなく(最新は%@)、含まれる期限はすべて過ぎています。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**지금 처리할 일이 없습니다.** 여기에는 최근 30일 이내의 이메일이 없으므로(가장 최근은 %@) 그 안의 기한은 모두 지났습니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**Nada exige ação agora.** Nenhum e-mail aqui é dos últimos 30 dias (o mais recente é de %@), então qualquer prazo neles já passou."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**目前无需处理任何事项。** 这里没有最近 30 天内的邮件(最新一封是 %@),其中的期限均已过去。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**目前無需處理任何事項。** 這裡沒有最近 30 天內的郵件(最新一封是 %@),其中的期限均已過去。"
+          }
+        }
+      }
+    },
+    "**Thread: “%@”** — the busiest conversation in this scope.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**Thread: „%@“** – die aktivste Unterhaltung in diesem Bereich."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**Hilo: «%@»**: la conversación con más actividad de este ámbito."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**Fil : « %@ »** – la conversation la plus active de cette portée."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**थ्रेड: “%@”** — इस दायरे की सबसे सक्रिय बातचीत।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**Conversazione: «%@»**: la più attiva in questo ambito."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**スレッド:「%@」** — この範囲で最もやり取りの多い会話です。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**스레드: “%@”** — 이 범위에서 가장 활발한 대화입니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**Conversa: “%@”** — a mais movimentada deste escopo."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**会话:“%@”**——此范围内最活跃的对话。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "**對話串:「%@」**——此範圍內最活躍的對話。"
           }
         }
       }
@@ -19770,6 +20166,7 @@
       }
     },
     "AI is thinking": {
+      "extractionState": "stale",
       "localizations": {
         "de": {
           "stringUnit": {
@@ -20090,6 +20487,7 @@
       }
     },
     "AI response": {
+      "extractionState": "stale",
       "localizations": {
         "de": {
           "stringUnit": {
@@ -121388,6 +121786,70 @@
         }
       }
     },
+    "For another thread, open one of its emails and choose Thread Story.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Für einen anderen Thread öffnen Sie eine seiner E-Mails und wählen Sie „Thread Story“."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Para otro hilo, abra uno de sus correos y elija Thread Story."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pour un autre fil, ouvrez l’un de ses e-mails et choisissez Thread Story."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "किसी दूसरे थ्रेड के लिए, उसका कोई ईमेल खोलें और Thread Story चुनें।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Per un’altra conversazione, apri una delle sue email e scegli Thread Story."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "別のスレッドについては、そのメールを開いてThread Storyを選んでください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다른 스레드는 해당 이메일 중 하나를 열고 Thread Story를 선택하세요."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Para outra conversa, abra um dos e-mails dela e escolha Thread Story."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "如需查看其他会话,请打开其中一封邮件并选择 Thread Story。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "如需查看其他對話串,請打開其中一封郵件並選擇 Thread Story。"
+          }
+        }
+      }
+    },
     "Force re-migrate legacy archive": {
       "localizations": {
         "de": {
@@ -149010,6 +149472,7 @@
       }
     },
     "Knowledge graph not available. Import emails first to build the graph.": {
+      "extractionState": "stale",
       "localizations": {
         "de": {
           "stringUnit": {
@@ -150484,6 +150947,76 @@
           "stringUnit": {
             "state": "translated",
             "value": "上次收件 %@"
+          }
+        }
+      }
+    },
+    "Last message: %@, %@.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Letzte Nachricht: %1$@, %2$@."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Last message: %1$@, %2$@."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Último mensaje: %1$@, %2$@."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dernier message : %1$@, %2$@."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "आख़िरी संदेश: %1$@, %2$@।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ultimo messaggio: %1$@, %2$@."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最後のメッセージ: %1$@、%2$@。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "마지막 메시지: %1$@, %2$@."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Última mensagem: %1$@, %2$@."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最后一条消息:%1$@,%2$@。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最後一則訊息:%1$@,%2$@。"
           }
         }
       }
@@ -170439,6 +170972,70 @@
           "stringUnit": {
             "state": "translated",
             "value": "沒有可摘要的內容。"
+          }
+        }
+      }
+    },
+    "No conversation in this scope has replies from more than one person. To tell the story of a single email's thread, open the email and choose Thread Story.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keine Unterhaltung in diesem Bereich hat Antworten von mehr als einer Person. Um die Geschichte des Threads einer einzelnen E-Mail zu erzählen, öffnen Sie die E-Mail und wählen Sie „Thread Story“."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ninguna conversación de este ámbito tiene respuestas de más de una persona. Para contar la historia del hilo de un correo, ábralo y elija Thread Story."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucune conversation de cette portée ne contient de réponses de plus d’une personne. Pour raconter le fil d’un e-mail, ouvrez-le et choisissez Thread Story."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "इस दायरे की किसी भी बातचीत में एक से ज़्यादा व्यक्ति के जवाब नहीं हैं। किसी एक ईमेल के थ्रेड की कहानी के लिए, वह ईमेल खोलें और Thread Story चुनें।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nessuna conversazione in questo ambito ha risposte da più di una persona. Per raccontare la conversazione di una singola email, aprila e scegli Thread Story."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この範囲には、複数の人が返信している会話がありません。1通のメールのスレッドをたどるには、そのメールを開いてThread Storyを選んでください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 범위에는 두 명 이상이 답장한 대화가 없습니다. 이메일 하나의 스레드를 보려면 그 이메일을 열고 Thread Story를 선택하세요."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nenhuma conversa deste escopo tem respostas de mais de uma pessoa. Para contar a história da conversa de um e-mail, abra-o e escolha Thread Story."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此范围内没有多人回复的对话。要查看单封邮件所在会话的经过,请打开该邮件并选择 Thread Story。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此範圍內沒有多人回覆的對話。若要查看單封郵件所在對話串的經過,請打開該郵件並選擇 Thread Story。"
           }
         }
       }
@@ -265902,6 +266499,70 @@
         }
       }
     },
+    "The newest one is from **%@**.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die neueste ist vom **%@**."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El más reciente es del **%@**."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le plus récent date du **%@**."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "सबसे नया **%@** का है।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La più recente è del **%@**."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最新は**%@**です。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "가장 최근 이메일은 **%@**입니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O mais recente é de **%@**."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最新一封是 **%@**。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最新一封是 **%@**。"
+          }
+        }
+      }
+    },
     "The note is hidden. Coverage is still recorded per message and still available on each message.": {
       "localizations": {
         "de": {
@@ -289585,6 +290246,70 @@
         }
       }
     },
+    "Why it ranked high: %@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warum sie weit oben steht: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Por qué tiene prioridad: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pourquoi il est prioritaire : %@"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ऊपर रखने का कारण: %@"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Perché è in cima: %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上位の理由: %@"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "상위에 있는 이유: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Por que está no topo: %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "排在前面的原因:%@"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "排在前面的原因:%@"
+          }
+        }
+      }
+    },
     "Why?": {
       "localizations": {
         "de": {
@@ -298595,6 +299320,70 @@
           "stringUnit": {
             "state": "translated",
             "value": "以快速開啟郵件封存"
+          }
+        }
+      }
+    },
+    "undated": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ohne Datum"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "sin fecha"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "sans date"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "बिना तारीख़"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "senza data"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "日付なし"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "날짜 없음"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "sem data"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无日期"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無日期"
           }
         }
       }

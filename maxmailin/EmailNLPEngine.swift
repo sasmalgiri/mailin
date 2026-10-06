@@ -347,50 +347,59 @@ struct EmailNLPEngine {
 
     // MARK: - Topic Extraction (keyword frequency)
 
+    static let topicStopWords: Set<String> = [
+        "the", "a", "an", "is", "was", "are", "were", "be", "been",
+        "have", "has", "had", "do", "does", "did", "will", "would",
+        "could", "should", "may", "might", "shall", "can", "to", "of",
+        "in", "for", "on", "with", "at", "by", "from", "as", "into",
+        "through", "during", "before", "after", "above", "below",
+        "between", "out", "off", "over", "under", "again", "further",
+        "then", "once", "here", "there", "when", "where", "why", "how",
+        "all", "both", "each", "few", "more", "most", "other", "some",
+        "such", "no", "nor", "not", "only", "own", "same", "so", "than",
+        "too", "very", "just", "don", "now", "it", "its", "this", "that",
+        "these", "those", "i", "me", "my", "we", "our", "you", "your",
+        "he", "him", "his", "she", "her", "they", "them", "their",
+        "what", "which", "who", "whom", "if", "but", "or", "and",
+        "because", "until", "while", "about", "up", "re", "sent",
+        "email", "mailto", "http", "https", "www", "com",
+        "thanks", "thank", "regards", "dear", "hello", "hi", "hey",
+        "best", "sincerely", "cheers", "reply", "forward", "forwarded",
+        "wrote", "said", "original", "message", "mail", "subject",
+        "attachment", "attached", "file", "click", "link", "view",
+        "copy", "please", "let", "know", "get", "got", "like",
+        "one", "two", "also", "new", "well", "way", "use", "make",
+        "want", "see", "look", "need", "take", "come", "think",
+        "good", "right", "going", "back", "much", "still", "made",
+        "even", "thing", "many", "said", "give", "tell", "try",
+        // Time words, company boilerplate and confidentiality footers:
+        // they appear in nearly every business email and topped the list
+        // ("year", "intl") on a real archive (2026-10-06).
+        "year", "years", "month", "months", "week", "weeks", "day", "days",
+        "time", "today", "date", "yesterday", "tomorrow", "morning",
+        "intl", "inc", "ltd", "pvt", "llp", "llc", "corp", "dept", "co",
+        "team", "info", "details", "detail", "number", "regard", "kind",
+        "confidential", "confidentiality", "intended", "recipient", "recipients",
+        "disclaimer", "privileged", "information", "notice", "unauthorized",
+        "prohibited", "rights", "reserved", "copyright", "unsubscribe",
+        // HTML entities left in plain-text parts, and mail-provider names.
+        "nbsp", "amp", "quot", "apos", "lt", "gt", "zwnj", "rsquo", "lsquo", "rdquo", "ldquo", "mdash", "ndash",
+        "gmail", "google", "googlemail", "yahoo", "outlook", "hotmail", "icloud",
+        "sir", "sirs", "madam", "mr", "mrs", "ms", "dr",
+        // Conversational filler and day/month abbreviations: with each
+        // conversation counted once they topped the list ("pls", "mam",
+        // "needful", "fri") on a real archive (2026-10-06).
+        "pls", "plz", "pl", "kindly", "needful", "mam", "maam", "ji", "sirji",
+        "ok", "okay", "okk", "yes", "thanx", "thx", "asap", "fyi", "pfa", "pfb",
+        "mon", "tue", "tues", "wed", "thu", "thur", "thurs", "fri", "sat", "sun",
+        "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+    ]
+
     static func extractTopics(from emails: [MBOXParser.RawEmail], limit: Int = 10) -> [(word: String, count: Int)] {
         let tagger = NLTagger(tagSchemes: [.lexicalClass])
         var wordCounts: [String: Int] = [:]
         var docFrequency: [String: Int] = [:]
-        let stopWords: Set<String> = [
-            "the", "a", "an", "is", "was", "are", "were", "be", "been",
-            "have", "has", "had", "do", "does", "did", "will", "would",
-            "could", "should", "may", "might", "shall", "can", "to", "of",
-            "in", "for", "on", "with", "at", "by", "from", "as", "into",
-            "through", "during", "before", "after", "above", "below",
-            "between", "out", "off", "over", "under", "again", "further",
-            "then", "once", "here", "there", "when", "where", "why", "how",
-            "all", "both", "each", "few", "more", "most", "other", "some",
-            "such", "no", "nor", "not", "only", "own", "same", "so", "than",
-            "too", "very", "just", "don", "now", "it", "its", "this", "that",
-            "these", "those", "i", "me", "my", "we", "our", "you", "your",
-            "he", "him", "his", "she", "her", "they", "them", "their",
-            "what", "which", "who", "whom", "if", "but", "or", "and",
-            "because", "until", "while", "about", "up", "re", "sent",
-            "email", "mailto", "http", "https", "www", "com",
-            "thanks", "thank", "regards", "dear", "hello", "hi", "hey",
-            "best", "sincerely", "cheers", "reply", "forward", "forwarded",
-            "wrote", "said", "original", "message", "mail", "subject",
-            "attachment", "attached", "file", "click", "link", "view",
-            "copy", "please", "let", "know", "get", "got", "like",
-            "one", "two", "also", "new", "well", "way", "use", "make",
-            "want", "see", "look", "need", "take", "come", "think",
-            "good", "right", "going", "back", "much", "still", "made",
-            "even", "thing", "many", "said", "give", "tell", "try",
-            // Time words, company boilerplate and confidentiality footers:
-            // they appear in nearly every business email and topped the list
-            // ("year", "intl") on a real archive (2026-10-06).
-            "year", "years", "month", "months", "week", "weeks", "day", "days",
-            "time", "today", "date", "yesterday", "tomorrow", "morning",
-            "intl", "inc", "ltd", "pvt", "llp", "llc", "corp", "dept", "co",
-            "team", "info", "details", "detail", "number", "regard", "kind",
-            "confidential", "confidentiality", "intended", "recipient", "recipients",
-            "disclaimer", "privileged", "information", "notice", "unauthorized",
-            "prohibited", "rights", "reserved", "copyright", "unsubscribe",
-            // HTML entities left in plain-text parts, and mail-provider names.
-            "nbsp", "amp", "quot", "apos", "lt", "gt", "zwnj", "rsquo", "lsquo", "rdquo", "ldquo", "mdash", "ndash",
-            "gmail", "google", "googlemail", "yahoo", "outlook", "hotmail", "icloud",
-            "sir", "sirs", "madam", "mr", "mrs", "ms", "dr",
-        ]
+        let stopWords = topicStopWords
 
         for email in emails {
             guard let body = bodyText(for: email), !body.isEmpty else { continue }
@@ -423,6 +432,141 @@ struct EmailNLPEngine {
             .sorted { $0.tfidf > $1.tfidf }
             .prefix(limit)
             .map { (word: $0.word, count: $0.count) }
+    }
+
+    // MARK: - Conversation-level counting (kalsmritikosh H-1, use-once)
+
+    /// The conversation an email belongs to, for counting: the subject without
+    /// reply/forward prefixes, case and spacing. Replies in one thread, and the
+    /// 81 copies of one automated alert, are one conversation. An email with
+    /// no subject is its own conversation.
+    static func conversationKey(_ email: MBOXParser.RawEmail) -> String {
+        var subject = (email.headers["Subject"] ?? "").lowercased()
+        let prefix = #"^\s*((re|fwd?|aw|sv|wg)(\[\d+\])?\s*:\s*|\[(fwd|ext|external)\]\s*)"#
+        while let range = subject.range(of: prefix, options: .regularExpression) {
+            subject.removeSubrange(range)
+        }
+        subject = subject.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return subject.isEmpty ? "id:\(email.id.uuidString)" : subject
+    }
+
+    /// Topics counted once per conversation, not once per mention. A word that
+    /// fills one repeated alert ("Hoi", "Choi", "Photocardon" in 81 copies of
+    /// one notice) ranked above the archive's real subjects when mentions
+    /// were counted (found 2026-10-06). A topic must recur in at least two
+    /// conversations.
+    static func extractTopicsByConversation(from emails: [MBOXParser.RawEmail], limit: Int = 10) -> [(word: String, conversations: Int, emails: Int)] {
+        let tagger = NLTagger(tagSchemes: [.lexicalClass])
+        let stopWords = topicStopWords
+        var conversationsByWord: [String: Set<String>] = [:]
+        var emailsByWord: [String: Int] = [:]
+        var allConversations = Set<String>()
+
+        for email in emails {
+            guard let body = bodyText(for: email), !body.isEmpty else { continue }
+            let key = conversationKey(email)
+            allConversations.insert(key)
+            let cleanBody = body.components(separatedBy: .newlines)
+                .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix(">") }
+                .joined(separator: " ")
+            let text = String(cleanBody.prefix(2000))
+            tagger.string = text
+            var wordsInDoc = Set<String>()
+            tagger.enumerateTags(in: text.startIndex..<text.endIndex, unit: .word, scheme: .lexicalClass, options: [.omitPunctuation, .omitWhitespace]) { tag, tokenRange in
+                guard let tag = tag, tag == .noun || tag == .adjective else { return true }
+                let word = String(text[tokenRange]).lowercased()
+                // Hosts and link fragments ("t.co") are not topics.
+                if word.count >= 3 && !stopWords.contains(word) && word.range(of: #"^\d+$"#, options: .regularExpression) == nil
+                    && !word.contains(".") && !word.contains("/") {
+                    wordsInDoc.insert(word)
+                }
+                return true
+            }
+            for word in wordsInDoc {
+                conversationsByWord[word, default: []].insert(key)
+                emailsByWord[word, default: 0] += 1
+            }
+        }
+
+        // A word in most conversations is boilerplate, not a topic.
+        let ceiling = max(Int(Double(allConversations.count) * 0.5), 3)
+        return conversationsByWord
+            .map { (word: $0.key, conversations: $0.value.count, emails: emailsByWord[$0.key, default: 0]) }
+            .filter { $0.conversations >= 2 && $0.conversations <= ceiling }
+            .sorted { ($0.conversations, $0.emails, $1.word) > ($1.conversations, $1.emails, $0.word) }
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    /// Names that are not people or organisations the user deals with: mail
+    /// infrastructure, providers and calendar words (kalsmritikosh D-13).
+    static let entityStoplist: Set<String> = [
+        "gmail", "google", "googlemail", "outlook", "hotmail", "yahoo", "icloud", "microsoft",
+        "smtp", "imap", "pop3", "mx", "mailer-daemon", "mailer daemon", "noreply", "no-reply",
+        "mail delivery subsystem", "postmaster", "whatsapp", "facebook", "linkedin", "twitter",
+        "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+        "january", "february", "march", "april", "june", "july", "august",
+        "september", "october", "november", "december",
+        "re", "fw", "fwd", "http", "https", "www", "com", "org", "net", "cc", "bcc", "sent", "subject",
+    ]
+
+    /// True when a tagged name is presentable as a person, organisation or
+    /// place: not a mail brand or calendar word, not a host or address, no
+    /// digits, and at most four words (a longer run is a sentence fragment
+    /// the tagger joined, such as "Expiry of Driving Licence Photocardon").
+    static func isPresentableEntity(_ name: String) -> Bool {
+        let lower = name.lowercased()
+        guard name.count >= 2, !entityStoplist.contains(lower) else { return false }
+        if lower.contains("@") || lower.contains("://") { return false }
+        if !lower.contains(" ") && lower.contains(".") { return false }
+        if lower.rangeOfCharacter(from: .decimalDigits) != nil { return false }
+        if name.split(separator: " ").count > 4 { return false }
+        // Brand stems inside a longer name ("Gmail Team", "Google Payments").
+        let brandStems = ["gmail", "google", "outlook", "hotmail", "yahoo", "icloud", "microsoft", "mailer", "noreply", "postmaster", "smtp", "imap"]
+        if brandStems.contains(where: { lower.contains($0) }) { return false }
+        return name.first?.isUppercase ?? false
+    }
+
+    /// Entities counted once per conversation, through the presentation gate.
+    /// `count` is the number of conversations naming the entity; it must be
+    /// at least two.
+    static func extractEntitiesByConversation(from emails: [MBOXParser.RawEmail], limit: Int = 10) -> [EntityResult] {
+        let tagger = NLTagger(tagSchemes: [.nameType])
+        var conversations: [String: (type: String, name: String, keys: Set<String>)] = [:]
+
+        for email in emails {
+            guard let body = bodyText(for: email), !body.isEmpty else { continue }
+            let key = conversationKey(email)
+            let cleanBody = body.components(separatedBy: .newlines)
+                .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix(">") }
+                .joined(separator: " ")
+            let text = String(cleanBody.prefix(3000))
+            tagger.string = text
+            tagger.setLanguage(.english, range: text.startIndex..<text.endIndex)
+            tagger.enumerateTags(in: text.startIndex..<text.endIndex, unit: .word, scheme: .nameType, options: [.omitPunctuation, .omitWhitespace, .joinNames]) { tag, tokenRange in
+                guard let tag = tag else { return true }
+                let typeName: String
+                switch tag {
+                case .personalName: typeName = "Person"
+                case .organizationName: typeName = "Organization"
+                case .placeName: typeName = "Place"
+                default: return true
+                }
+                let entity = String(text[tokenRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard isPresentableEntity(entity) else { return true }
+                let normalized = entity.lowercased() + "|" + typeName
+                conversations[normalized, default: (type: typeName, name: entity, keys: [])].keys.insert(key)
+                return true
+            }
+        }
+
+        return conversations.values
+            .filter { $0.keys.count >= 2 }
+            .map { EntityResult(name: $0.name, type: $0.type, count: $0.keys.count) }
+            .sorted { ($0.count, $1.name) > ($1.count, $0.name) }
+            .prefix(limit)
+            .map { $0 }
     }
 
     // MARK: - Busiest Contacts (by volume + sentiment)

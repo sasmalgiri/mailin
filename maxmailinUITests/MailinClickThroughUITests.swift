@@ -1585,8 +1585,18 @@ final class MailinClickThroughUITests: XCTestCase {
         var asked = Set<String>()
         for n in 0..<10 {
             // Back to the suggestion list: clear any previous conversation.
-            let clear = app.buttons.matching(NSPredicate(format: "label == 'Bin' OR label CONTAINS[c] 'Clear conversation'")).firstMatch
-            if clear.exists, clear.isEnabled, clear.isHittable { clear.click(); Thread.sleep(forTimeInterval: 1) }
+            // The page's identifier ("aiInsights.page") is inherited by the
+            // buttons inside it on macOS, so the trash button is found by its
+            // exact label. A click that did not register left the answer on
+            // screen and ended the run early: retry until the list is back.
+            let clear = app.buttons.matching(NSPredicate(format: "label == 'Clear conversation'")).firstMatch
+            let anySuggestion = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Ask: '")).firstMatch
+            for _ in 0..<3 {
+                guard clear.exists, clear.isEnabled else { break }
+                app.activate()
+                if clear.isHittable { clear.click() }
+                if anySuggestion.waitForExistence(timeout: 5) { break }
+            }
             let suggestions = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Ask: '")).allElementsBoundByIndex
             guard let next = suggestions.first(where: { !asked.contains($0.label) }) else { break }
             let q = String(next.label.dropFirst("Ask: ".count))

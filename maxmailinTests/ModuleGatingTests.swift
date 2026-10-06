@@ -1374,3 +1374,82 @@ struct AISuggestionSenderTests {
     }
 }
 
+
+// MARK: - AI answers count each conversation once (kalsmritikosh H-1 / D-13)
+
+struct ConversationCountingTests {
+    private func email(_ subject: String, from: String = "a@example.com", body: String) -> MBOXParser.RawEmail {
+        MBOXParser.RawEmail(
+            headers: ["From": from, "To": "me@example.com", "Subject": subject,
+                      "Date": "Tue, 14 Mar 2017 09:41:00 +0000", "Message-ID": "<\(UUID().uuidString)@example.com>"],
+            rawSource: "", messageType: "received", attachments: [],
+            timestamp: "Tue, 14 Mar 2017 09:41:00 +0000", domains: ["example.com"],
+            plainBody: body, htmlBody: "")
+    }
+
+    @Test("Reply and forward prefixes, case and spacing do not split a conversation")
+    func conversationKey() {
+        let a = EmailNLPEngine.conversationKey(email("Patent  filing", body: "x"))
+        #expect(EmailNLPEngine.conversationKey(email("RE: Fwd: patent filing", body: "x")) == a)
+        #expect(EmailNLPEngine.conversationKey(email("Re[2]: PATENT FILING", body: "x")) == a)
+        #expect(EmailNLPEngine.conversationKey(email("Patent filing 2", body: "x")) != a)
+        // No subject: each email is its own conversation.
+        #expect(EmailNLPEngine.conversationKey(email("", body: "x")) != EmailNLPEngine.conversationKey(email("", body: "x")))
+    }
+
+    @Test("A repeated alert's words count once, below words used across conversations")
+    func repeatedTemplateCountsOnce() {
+        var emails = (0..<40).map { _ in email("Alert generated", from: "alerts@example.com", body: "Expiry of licence photocard for the vehicle owner") }
+        emails += ["Grant notice", "Hearing notice", "Annuity reminder"].map {
+            email($0, body: "The patent application was reviewed by the attorney")
+        }
+        emails += ["Lunch", "Weekend", "Books", "Travel", "Music"].map { email($0, body: "Plans with family") }
+        let topics = EmailNLPEngine.extractTopicsByConversation(from: emails, limit: 10)
+        let patent = topics.first { $0.word == "patent" }
+        #expect(patent?.conversations == 3)
+        // "photocard" lives in one conversation, however many copies: not a topic.
+        #expect(!topics.contains { $0.word == "photocard" || $0.word == "licence" })
+    }
+
+    @Test("Entity gate drops mail brands, hosts, digits and joined sentence fragments")
+    func entityGate() {
+        #expect(EmailNLPEngine.isPresentableEntity("Shabana Khan"))
+        #expect(EmailNLPEngine.isPresentableEntity("Khurana & Khurana"))
+        #expect(!EmailNLPEngine.isPresentableEntity("Gmail"))
+        #expect(!EmailNLPEngine.isPresentableEntity("Google Payments"))
+        #expect(!EmailNLPEngine.isPresentableEntity("smtp.example.net"))
+        #expect(!EmailNLPEngine.isPresentableEntity("Expiry of Driving Licence Photocardon"))
+        #expect(!EmailNLPEngine.isPresentableEntity("Order 4471"))
+        #expect(!EmailNLPEngine.isPresentableEntity("Monday"))
+    }
+
+    @Test("Each cited source is listed once, with its date")
+    func citationLinesUseOnce() {
+        let id = UUID()
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let ref = EvidenceReference(id: id, messageID: nil, subject: "Grant notice", sender: "Lalan Prasad",
+                                    date: date, excerpt: "", hasAttachments: false)
+        let later = EvidenceReference(id: UUID(), messageID: nil, subject: "Grant notice", sender: "Lalan Prasad",
+                                      date: date.addingTimeInterval(86_400 * 3), excerpt: "", hasAttachments: false)
+        let lines = AIGroundingGate.citationLines([ref, ref, later])
+        #expect(lines.count == 2)
+        #expect(lines.allSatisfy { $0.hasPrefix("Grant notice — Lalan Prasad · ") })
+    }
+
+    @available(macOS 26, iOS 26, *)
+    @Test("Thread Story picks one conversation with replies, and narrates each message once")
+    func threadStoryCharter() {
+        let alerts = (0..<9).map { _ in email("Alert generated", from: "alerts@example.com", body: "x") }
+        let thread = [
+            email("Hearing notice", from: "Ann <ann@example.com>", body: "The hearing is on Monday."),
+            email("Re: Hearing notice", from: "Bob <bob@example.com>", body: "Noted, I will attend.\nOn 3 Mar 2024, Ann wrote:\n> The hearing is on Monday."),
+        ]
+        let picked = FoundationModelEngine.busiestConversation(in: alerts + thread)
+        #expect(picked?.count == 2)
+        #expect(FoundationModelEngine.busiestConversation(in: alerts) == nil)
+        #expect(FoundationModelEngine.withoutQuotedReply("Noted, I will attend. On 3 Mar 2024, Ann wrote: The hearing is on Monday.") == "Noted, I will attend.")
+        let header = FoundationModelEngine.episodeHeader(thread)
+        #expect(header.contains("Hearing notice"))
+        #expect(header.contains("Ann, Bob"))
+    }
+}

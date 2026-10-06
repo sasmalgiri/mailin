@@ -441,6 +441,8 @@ struct AIAssistantView: View {
                     }
                     .buttonStyle(.borderless)
                     .disabled(conversationHistory.isEmpty)
+                    .help("Export conversation")
+                    .accessibilityLabel("Export conversation")
                     Button {
                         conversationHistory.removeAll()
                         Self.clearSavedConversation()
@@ -449,6 +451,9 @@ struct AIAssistantView: View {
                     }
                     .buttonStyle(.borderless)
                     .disabled(conversationHistory.isEmpty)
+                    .help("Clear conversation")
+                    .accessibilityLabel("Clear conversation")
+                    .accessibilityIdentifier("ai.clearConversation")
                     // Reading surface for AIMetrics: what queries actually
                     // cost and produced, per engine, with honest "not
                     // measured" where an engine cannot see a figure.
@@ -639,6 +644,8 @@ struct AIAssistantView: View {
                 .buttonStyle(.borderless)
                 .disabled(conversationHistory.isEmpty)
                 .help("Clear conversation")
+                .accessibilityLabel("Clear conversation")
+                .accessibilityIdentifier("ai.clearConversation")
 
                 TutorialHelpButton(showTutorial: $showTutorial)
 
@@ -1928,17 +1935,19 @@ struct AIAssistantView: View {
             .flatMap { AIAssistantView.senderDisplayName($0.headers["From"] ?? "").lowercased()
                 .components(separatedBy: CharacterSet.alphanumerics.inverted) }
             .filter { $0.count >= 3 })
-        let topics = EmailNLPEngine.extractTopics(from: emails, limit: 24)
+        // Counted once per conversation: one alert repeated 81 times is one
+        // conversation, not 81 mentions of its words.
+        let topics = EmailNLPEngine.extractTopicsByConversation(from: emails, limit: 24)
             .filter { !ownNameWords.contains($0.word.lowercased()) }
-            .sorted { $0.count > $1.count }
             .prefix(12)
             .map { $0 }
         guard !topics.isEmpty else {
             return (query: query, answer: "Not enough message text in this scope to find topics.", timestamp: Date(), relatedEmailIDs: [])
         }
-        var answer = "**Most common topics** across \(emails.count) emails (words that recur in message bodies):\n\n"
+        let conversationCount = Set(emails.map(EmailNLPEngine.conversationKey)).count
+        var answer = "**Most common topics** across \(emails.count) emails in \(conversationCount) conversations (words that recur in message bodies; a conversation counts once):\n\n"
         for (i, t) in topics.enumerated() {
-            answer += "\(i + 1). **\(t.word.capitalized)** — \(t.count) mention\(t.count == 1 ? "" : "s")\n"
+            answer += "\(i + 1). **\(t.word.capitalized)** — \(t.conversations) conversations, \(t.emails) emails\n"
         }
         // Open the emails behind the top topic.
         let top = topics[0].word
@@ -2684,7 +2693,12 @@ struct AIAssistantView: View {
                                 self.streamingAnswer = partial
                             }
                         case .insights:
-                            return try await FoundationModelEngine.generateInsights { partial in
+                            // Built from counts, so it uses the assistant's
+                            // working set (as the other data answers do), not
+                            // the model's 200-email context cap.
+                            let ws = await self.currentWorkingSet()
+                            let total = await self.emailCount(for: self.emailScope)
+                            return try await FoundationModelEngine.generateInsights(ws, scopeTotal: total) { partial in
                                 self.streamingAnswer = partial
                             }
                         case .securityBrief:

@@ -166,14 +166,14 @@ enum AIGroundingGate {
             // a message that was actually retrieved — and what it is NOT: the
             // statements themselves are not fact-checked against that message.
             gated += "\n\n---\n**Cited evidence** (each citation resolves to a retrieved message; the statements are not fact-checked against it):\n"
-            for ref in verified.prefix(8) {
-                gated += "- \(ref.subject.isEmpty ? "(No Subject)" : ref.subject) — \(ref.sender)\n"
+            for line in citationLines(verified).prefix(8) {
+                gated += "- \(line)\n"
             }
         } else if !evidence.isEmpty {
             gated += "\n\n---\n*No statement above cites a specific retrieved message — "
             gated += "treat specifics as unverified inference.*\n**Retrieved evidence (not cited):**\n"
-            for ref in evidence.prefix(3) {
-                gated += "- \(ref.subject.isEmpty ? "(No Subject)" : ref.subject) — \(ref.sender)\n"
+            for line in citationLines(evidence).prefix(3) {
+                gated += "- \(line)\n"
             }
         }
         if report.droppedUnknownEvidence > 0 {
@@ -255,6 +255,24 @@ enum AIGroundingGate {
             }
         }
         return result
+    }
+
+    /// One line per source, each source once (kalsmritikosh H-1, use-once):
+    /// the same message retrieved twice listed twice, and replies in one
+    /// thread read as copies because the line had no date (2026-10-06).
+    static func citationLines(_ refs: [EvidenceReference]) -> [String] {
+        let fmt = DateFormatter()
+        fmt.dateStyle = .medium
+        fmt.timeStyle = .none
+        var seen = Set<String>()
+        var lines: [String] = []
+        for ref in refs {
+            let subject = ref.subject.isEmpty ? String(localized: "(No Subject)") : ref.subject
+            var line = "\(subject) — \(ref.sender)"
+            if ref.date != .distantPast { line += " · \(fmt.string(from: ref.date))" }
+            if seen.insert(line).inserted { lines.append(line) }
+        }
+        return lines
     }
 
     static func normalizedSubject(_ subject: String) -> String {

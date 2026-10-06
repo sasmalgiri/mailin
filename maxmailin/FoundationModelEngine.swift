@@ -1005,8 +1005,72 @@ struct FoundationModelEngine {
     static func generateInsights(onUpdate: @MainActor @Sendable @escaping (String) -> Void) async throws -> String {
         try await generateInsights(await boundedWorkingSet(), onUpdate: onUpdate)
     }
+    /// Thread Story from the AI page, where no thread is open. The whole
+    /// working set used to go to the narrator as if it were one thread; the
+    /// model timed out and a generic thread list answered instead (found
+    /// 2026-10-06). Now one conversation is chosen first and named — the
+    /// story's declared scope (kalsmritikosh H-3) — and only it is narrated.
     static func synthesizeThread(onUpdate: @MainActor @Sendable @escaping (String) -> Void) async throws -> String {
-        try await synthesizeThread(await boundedWorkingSet(), onUpdate: onUpdate)
+        let workingSet = await boundedWorkingSet()
+        guard let thread = busiestConversation(in: workingSet) else {
+            let msg = String(localized: "No conversation in this scope has replies from more than one person. To tell the story of a single email's thread, open the email and choose Thread Story.")
+            await onUpdate(msg)
+            return msg
+        }
+        let header = episodeHeader(thread)
+        let story = try await synthesizeThread(thread) { partial in
+            onUpdate(header + partial)
+        }
+        let full = header + story
+        await onUpdate(full)
+        return full
+    }
+
+    /// The conversation with the most people taking part (then the most
+    /// messages, then the most recent) among those with at least two senders.
+    /// One sender's repeated alerts are not a conversation.
+    static func busiestConversation(in emails: [MBOXParser.RawEmail]) -> [MBOXParser.RawEmail]? {
+        let groups = Dictionary(grouping: emails, by: EmailNLPEngine.conversationKey)
+            .filter { !$0.key.hasPrefix("id:") }
+        let ranked = groups.values.compactMap { members -> (members: [MBOXParser.RawEmail], senders: Int, newest: Date)? in
+            let senders = Set(members.map { ($0.headers["From"] ?? "").lowercased() }).count
+            guard senders >= 2 else { return nil }
+            let newest = members.compactMap { MBOXParser.parseDate($0.headers["Date"]) }.max() ?? .distantPast
+            return (members, senders, newest)
+        }
+        return ranked.max {
+            ($0.senders, $0.members.count, $0.newest) < ($1.senders, $1.members.count, $1.newest)
+        }?.members
+    }
+
+    /// The episode facts, computed rather than generated (kalsmritikosh H-5):
+    /// which thread, who took part, its span, and who had the last word.
+    static func episodeHeader(_ thread: [MBOXParser.RawEmail]) -> String {
+        let sorted = thread.sorted {
+            (MBOXParser.parseDate($0.headers["Date"]) ?? .distantPast) < (MBOXParser.parseDate($1.headers["Date"]) ?? .distantPast)
+        }
+        let fmt = DateFormatter()
+        fmt.dateStyle = .medium
+        fmt.timeStyle = .none
+        let subject = sorted.first?.headers["Subject"] ?? String(localized: "(No Subject)")
+        var people: [String] = []
+        for email in sorted {
+            let name = displayName(from: email.headers["From"] ?? "?")
+            if !people.contains(name) { people.append(name) }
+        }
+        let dates = sorted.compactMap { MBOXParser.parseDate($0.headers["Date"]) }
+        var header = String(localized: "**Thread: “\(subject)”** — the busiest conversation in this scope.") + "\n"
+        header += String(localized: "\(sorted.count) messages between \(people.joined(separator: ", "))")
+        if let first = dates.first, let last = dates.last {
+            header += first == last ? ", \(fmt.string(from: first))" : ", \(fmt.string(from: first)) – \(fmt.string(from: last))"
+        }
+        header += "."
+        if let lastEmail = sorted.last {
+            let when = MBOXParser.parseDate(lastEmail.headers["Date"]).map { fmt.string(from: $0) } ?? "?"
+            header += " " + String(localized: "Last message: \(displayName(from: lastEmail.headers["From"] ?? "?")), \(when).")
+        }
+        header += "\n" + String(localized: "For another thread, open one of its emails and choose Thread Story.") + "\n\n"
+        return header
     }
     static func securityBrief(onUpdate: @MainActor @Sendable @escaping (String) -> Void) async throws -> String {
         try await securityBrief(await boundedWorkingSet(), onUpdate: onUpdate)
@@ -1795,115 +1859,133 @@ struct FoundationModelEngine {
 
     // MARK: - Proactive Insights Dashboard
 
-    static func generateInsights(_ emails: [MBOXParser.RawEmail], onUpdate: @MainActor @Sendable @escaping (String) -> Void) async throws -> String {
+    /// `scopeTotal`: how many emails the scope holds, when `emails` is a
+    /// capped part of it — the answer then says what it covers.
+    static func generateInsights(_ emails: [MBOXParser.RawEmail], scopeTotal: Int? = nil, onUpdate: @MainActor @Sendable @escaping (String) -> Void) async throws -> String {
         guard !emails.isEmpty else {
             let msg = "No emails to analyze. Import emails first."
             await onUpdate(msg)
             return msg
         }
-        guard isAvailable else {
-            let msg = "Apple AI is not available on this device."
-            await onUpdate(msg)
-            return msg
-        }
-        let classification = EmailNLPEngine.classifyAll(emails)
+        // Built from the data, not generated (kalsmritikosh: "do not generate
+        // data — extract ledger value"; derived numbers are never model math).
+        // Every model-written version misstated a count, invented a role or
+        // motive, or proposed a follow-up the app cannot run (2026-10-06).
+        // Each insight is a count over these emails plus a question the
+        // assistant answers from the data.
         let own = ownerAddresses(in: emails)
-        let isOwn: (String) -> Bool = { addr in
-            let lower = addr.lowercased()
-            return own.contains { lower.contains($0) }
-        }
-        let entities = EmailNLPEngine.extractEntities(from: emails, limit: 14).filter { !isOwn($0.name) }.prefix(10)
-        // The owner is not one of their own contacts.
-        let contacts = EmailNLPEngine.contactInsights(from: emails, limit: 14).filter { !isOwn($0.address) }.prefix(8)
-        let topics = EmailNLPEngine.extractTopics(from: emails, limit: 8)
-
-        // Recent activity patterns
-        let now = Date()
-        let oneWeekAgo = Calendar.current.date(byAdding: .day, value: -7, to: now) ?? now
-        let recentEmails = emails.filter { email in
-            guard let dateStr = email.headers["Date"],
-                  let date = MBOXParser.parseDate(dateStr) else { return false }
-            return date > oneWeekAgo
-        }
-        let unansweredReceived = recentEmails.filter { $0.messageType == "received" }
-
-        var context = archiveDateFacts(emails)
-        context += "INSIGHTS DATA for \(emails.count) emails (the user's own sent mail is excluded from contacts):\n\n"
-
-        // Category distribution
-        let catStrings = EmailNLPEngine.EmailCategory.allCases.compactMap { cat -> String? in
-            guard let count = classification[cat], count > 0 else { return nil }
-            return "\(cat.rawValue): \(count)"
-        }
-        context += "Categories: \(catStrings.joined(separator: ", "))\n"
-
-        // No sentiment: the word-list score marks formal business and legal mail
-        // "negative", and the model built insights on it even when told not to
-        // (found 2026-10-06).
-
-        // Top entities
-        if !entities.isEmpty {
-            context += "Top entities: \(entities.map { "\($0.name) (\($0.type), \($0.count)x)" }.joined(separator: ", "))\n"
-        }
-
-        // Busiest contacts
-        if !contacts.isEmpty {
-            context += "Contact insights:\n"
-            for contact in contacts {
-                context += "  - \(contact.address): \(contact.emailCount) emails\n"
+        func address(_ from: String) -> String {
+            if let lt = from.firstIndex(of: "<") {
+                return from[from.index(after: lt)...].prefix { $0 != ">" }.lowercased().trimmingCharacters(in: .whitespaces)
             }
+            return from.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let fmt = DateFormatter()
+        fmt.dateStyle = .medium
+        fmt.timeStyle = .none
+        func span(_ group: [MBOXParser.RawEmail]) -> String {
+            let dates = group.compactMap { MBOXParser.parseDate($0.headers["Date"]) }
+            guard let first = dates.min(), let last = dates.max() else { return "" }
+            return first == last ? fmt.string(from: first) : "\(fmt.string(from: first)) – \(fmt.string(from: last))"
+        }
+        let automatedMarkers = ["mailer-daemon", "postmaster", "noreply", "no-reply", "donotreply", "do-not-reply", "notification", "alerts@", "alert@"]
+        let bySender = Dictionary(grouping: emails) { address($0.headers["From"] ?? "") }
+            .filter { !$0.key.isEmpty && !own.contains($0.key) }
+        let people = bySender
+            .filter { key, _ in !automatedMarkers.contains { key.contains($0) } }
+            .sorted { ($0.value.count, $1.key) > ($1.value.count, $0.key) }
+            .prefix(3)
+        let conversationCount = Set(emails.map(EmailNLPEngine.conversationKey)).count
+
+        var out = "**\(emails.count) emails in \(conversationCount) conversations**, \(span(emails))"
+        if let scopeTotal, scopeTotal > emails.count {
+            out += " — the newest \(emails.count) of the \(scopeTotal) in this scope"
+        }
+        out += ". Counted from the archive — every number below is a count over these emails.\n\n"
+
+        if !people.isEmpty {
+            out += "**Who you hear from most**\n"
+            for (_, group) in people {
+                let name = displayName(from: group.first?.headers["From"] ?? "?")
+                let threads = Set(group.map(EmailNLPEngine.conversationKey)).count
+                out += "- **\(name)** — \(group.count) emails in \(threads) conversation\(threads == 1 ? "" : "s"), \(span(group))\n"
+            }
+            if let top = people.first.map({ displayName(from: $0.value.first?.headers["From"] ?? "") }) {
+                out += "Ask: “Tell me about emails from \(top)”\n"
+            }
+            out += "\n"
         }
 
-        // Topics
+        // The owner's own name is in every signature: it is not a topic.
+        let ownNameWords = Set(emails
+            .filter {
+                own.contains(address($0.headers["From"] ?? ""))
+                    || $0.messageType == "sent"
+                    || ($0.headers["X-Gmail-Labels"] ?? "").lowercased().contains("sent")
+            }
+            .prefix(200)
+            .flatMap { displayName(from: $0.headers["From"] ?? "").lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted) }
+            .filter { $0.count >= 3 })
+        let topics = EmailNLPEngine.extractTopicsByConversation(from: emails, limit: 12)
+            .filter { !ownNameWords.contains($0.word) }
+            .prefix(4)
         if !topics.isEmpty {
-            context += "Key topics: \(topics.map { "\($0.word) (\($0.count)x)" }.joined(separator: ", "))\n"
-        }
-
-        // The newest date is stated outright (the model mis-computed it from a
-        // day count), and the last-7-days line only appears when the archive
-        // reaches that far: on an old archive "0 this week" read as a lapse.
-        let longDate = DateFormatter()
-        longDate.dateStyle = .long
-        longDate.timeStyle = .none
-        if let newest = emails.compactMap({ MBOXParser.parseDate($0.headers["Date"]) }).max() {
-            context += "\nThis is an archive of past mail. Its newest email is dated \(longDate.string(from: newest)).\n"
-            if newest > oneWeekAgo {
-                context += "Recent activity (last 7 days): \(recentEmails.count) emails, \(unansweredReceived.count) received\n"
+            out += "**What comes up most** (a conversation counts once)\n"
+            for t in topics {
+                out += "- **\(t.word.capitalized)** — \(t.conversations) conversations, \(t.emails) emails\n"
             }
+            out += "Ask: “What's discussed about \(topics[topics.startIndex].word)?”\n\n"
         }
-        context += "Whether an email was answered is NOT known from this data.\n"
 
-        let instructions = """
-            You are a proactive email intelligence analyst in mailin, a privacy-first Mac app. \
-            The NLP engine has computed verified statistics about the user's email archive. \
-            Generate 3-5 actionable insights the user might not have noticed.
-
-            Rules:
-            - Each insight should be specific and data-backed (cite numbers from NLP analysis)
-            - Examples: busiest contacts, category imbalances, recurring topics, \
-              deadlines mentioned, unusual patterns
-            - Use **bold** for names, numbers, and key findings
-            - Be conversational — like a smart assistant noticing patterns
-            - Start each insight with a short descriptive heading
-            - Prioritize actionable findings over obvious observations
-            - Never treat the user's own address as a contact, and never say emails went \
-              unanswered: reply data is not available
-            - Do not mention sentiment or tone
-            - This is an archive of past mail: never describe the time since its newest \
-              email as a gap, lag or lapse, and never work out dates yourself — quote the \
-              dates given in the data
-            """
-
-        let session = LanguageModelSession(instructions: instructions)
-        let prompt = "Generate proactive insights from this email analysis:\n\n\(context)"
-
-        let stream = session.streamResponse(to: prompt)
-        var finalContent = ""
-        for try await snapshot in stream {
-            finalContent = snapshot.content
-            await onUpdate(finalContent)
+        let bounces = emails.filter {
+            let from = address($0.headers["From"] ?? "")
+            return from.contains("mailer-daemon") || from.contains("postmaster")
         }
-        return finalContent
+        if !bounces.isEmpty {
+            let name = displayName(from: bounces.first?.headers["From"] ?? "Mail Delivery Subsystem")
+            out += "**Mail that did not arrive**\n"
+            out += bounces.count == 1
+                ? "- **1** delivery-failure notice, \(span(bounces)): a message of yours that did not reach someone.\n"
+                : "- **\(bounces.count)** delivery-failure notices, \(span(bounces)). Each is a message of yours that did not reach someone.\n"
+            out += "Ask: “Tell me about emails from \(name)”\n\n"
+        }
+
+        let deadlineWords = ["deadline", "due date", "due on", "last date", "expiry", "expires", "expiring"]
+        let withDeadlines = emails.filter { email in
+            let text = (email.headers["Subject"] ?? "") + " " + String(email.plainBody.prefix(3000))
+            let lower = text.lowercased()
+            return deadlineWords.contains { lower.contains($0) }
+        }
+        if !withDeadlines.isEmpty {
+            let newest = withDeadlines.compactMap { MBOXParser.parseDate($0.headers["Date"]) }.max()
+            out += "**Deadlines mentioned**\n"
+            out += "- **\(withDeadlines.count)** emails mention a deadline, due date or expiry"
+            if let newest {
+                out += "; the newest is from \(fmt.string(from: newest))"
+                if newest < Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date() {
+                    out += ", so all have passed — worth checking each was handled"
+                }
+            }
+            out += ".\nUse Smart Triage to list the most important ones.\n\n"
+        }
+
+        let withFiles = emails.filter { !$0.attachments.isEmpty }
+        if !withFiles.isEmpty {
+            let types = Dictionary(grouping: withFiles.flatMap(\.attachments)) {
+                ($0.filename as NSString).pathExtension.lowercased()
+            }
+            .filter { !$0.key.isEmpty }
+            .sorted { ($0.value.count, $1.key) > ($1.value.count, $0.key) }
+            .prefix(3)
+            .map { ".\($0.key) (\($0.value.count))" }
+            out += "**Files**\n"
+            out += "- **\(withFiles.count)** emails carry attachments"
+            if !types.isEmpty { out += "; most common: \(types.joined(separator: ", "))" }
+            out += ".\nAsk: “Show me emails with photos or documents attached”\n"
+        }
+
+        await onUpdate(out)
+        return out
     }
 
     // MARK: - Thread Narrative Synthesis
@@ -1936,7 +2018,11 @@ struct FoundationModelEngine {
             let subj = email.headers["Subject"] ?? "(No Subject)"
             let sender = displayName(from: email.headers["From"] ?? "someone")
             let when = MBOXParser.parseDate(email.headers["Date"]).map { dateFmt.string(from: $0) } ?? "an unknown date"
-            let snippet = bodySnippet(for: email, maxLength: 500)
+            // Each message is told once (kalsmritikosh H-1): a reply's quote
+            // of the earlier messages ("On 18 Sep, X wrote: …") is cut, or the
+            // story retells the same words under every reply.
+            let snippet = withoutQuotedReply(bodySnippet(for: email, maxLength: 1500))
+                .prefix(500)
                 .replacingOccurrences(of: "\n", with: " ")
             context += "On \(when), \(sender) wrote about “\(subj)”: \(snippet)\n\n"
         }
@@ -1988,6 +2074,21 @@ struct FoundationModelEngine {
             return fallback
         }
         return narrative
+    }
+
+    /// The text before a reply's quoted history: everything from the first
+    /// "On <date>, <name> wrote:" or "-----Original Message-----" is dropped.
+    /// Forwarded content is kept — in a "Fwd:" it is the substance.
+    static func withoutQuotedReply(_ text: String) -> String {
+        let markers = [#"On [^\n]{5,160}? wrote:"#, #"-{2,}\s*Original Message\s*-{2,}"#, #"\nFrom: [^\n]+\nSent: "#]
+        var cut = text.endIndex
+        for marker in markers {
+            if let range = text.range(of: marker, options: [.regularExpression, .caseInsensitive]), range.lowerBound < cut {
+                cut = range.lowerBound
+            }
+        }
+        let kept = text[..<cut].trimmingCharacters(in: .whitespacesAndNewlines)
+        return kept.isEmpty ? text : kept
     }
 
     /// True when generated text regurgitates input structure instead of
