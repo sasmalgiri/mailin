@@ -1848,3 +1848,15 @@ struct FillerTests {
         #expect(FoundationModelEngine.withoutFiller("Let me know.") == "Let me know.")
     }
 }
+
+struct UnwitnessedDateTests {
+    @available(macOS 26, iOS 26, *)
+    @Test("A date no email in the thread carries is removed from the story")
+    func dates() {
+        let email = MBOXParser.RawEmail(headers: ["From": "A <a@x>", "Subject": "S", "Date": "Mon, 18 Sep 2017 20:00:00 -0700", "Message-ID": "<d@x>"],
+                                        rawSource: "", messageType: "received", attachments: [], timestamp: "", domains: [], plainBody: "x", htmlBody: "")
+        let story = "On 12 Mar, Hatigarm asked a question. On 19 Sep, the time was confirmed."
+        let fixed = FoundationModelEngine.withoutUnwitnessedDates(story, thread: [email])
+        #expect(fixed == "Hatigarm asked a question. On 19 Sep, the time was confirmed.")
+    }
+}

@@ -2360,6 +2360,8 @@ struct FoundationModelEngine {
             await onUpdate(fallback)
             return fallback
         }
+        narrative = withoutUnwitnessedDates(narrative, thread: sorted)
+        await onUpdate(narrative)
         return narrative
     }
 
@@ -2368,6 +2370,46 @@ struct FoundationModelEngine {
     /// Forwarded content is kept — in a "Fwd:" it is the substance.
     static func withoutQuotedReply(_ text: String) -> String {
         EmailNLPEngine.withoutQuotedReply(text)
+    }
+
+    /// Removes "On 12 Mar, " anchors whose day and month match none of the
+    /// thread's emails — a narrative opened "On 12 Mar" for a thread sent on
+    /// 18–19 Sep (2026-10-07). The sentence stays; only the false date goes.
+    static func withoutUnwitnessedDates(_ text: String, thread: [MBOXParser.RawEmail]) -> String {
+        let cal = Calendar(identifier: .gregorian)
+        let months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+        var witnessed = Set<String>()
+        for email in thread {
+            guard let date = MBOXParser.parseDate(email.headers["Date"]) else { continue }
+            let c = cal.dateComponents(in: TimeZone(secondsFromGMT: 0) ?? .current, from: date)
+            // A day either side: time zones move a date across midnight.
+            for delta in -1...1 {
+                if let shifted = cal.date(byAdding: .day, value: delta, to: date) {
+                    let d = cal.dateComponents([.day, .month], from: shifted)
+                    if let day = d.day, let month = d.month { witnessed.insert("\(day)-\(month)") }
+                }
+            }
+            _ = c
+        }
+        guard !witnessed.isEmpty else { return text }
+        let pattern = #"(?i)\b[Oo]n (\d{1,2})(?:st|nd|rd|th)? (jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?,?\s*"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
+        var result = text
+        let ns = text as NSString
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)).reversed() {
+            let day = Int(ns.substring(with: match.range(at: 1))) ?? 0
+            let month = (months.firstIndex(of: ns.substring(with: match.range(at: 2)).lowercased()) ?? -1) + 1
+            guard !witnessed.contains("\(day)-\(month)"), let range = Range(match.range, in: result) else { continue }
+            // Capitalise what follows when the removed anchor began a sentence.
+            let rest = result[range.upperBound...]
+            let startsSentence = range.lowerBound == result.startIndex || result[..<range.lowerBound].hasSuffix(". ") || result[..<range.lowerBound].hasSuffix("\n")
+            result.replaceSubrange(range, with: "")
+            if startsSentence, let first = rest.first {
+                let idx = range.lowerBound
+                if idx < result.endIndex { result.replaceSubrange(idx...idx, with: String(first).uppercased()) }
+            }
+        }
+        return result
     }
 
     /// True when generated text regurgitates input structure instead of

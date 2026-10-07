@@ -2847,8 +2847,17 @@ struct AIAssistantView: View {
             isProcessing = true
             let smartMetrics = beginMetrics("smartQuery", query: query)
             let smartStart = Date()
+            // The question and "Thinking..." show at once, as for model
+            // answers: a thread story takes ~20 s, and the screen showed
+            // nothing until it finished (2026-10-07).
+            streamingQuery = query
+            streamingAnswer = "Thinking..."
             currentTask = Task {
-                defer { isProcessing = false }
+                defer {
+                    isProcessing = false
+                    streamingQuery = ""
+                    streamingAnswer = ""
+                }
                 let emailsCopy = await currentWorkingSet()
                 var result = await smartResult(emailsCopy)
                 // These answers count over the working set — the newest
