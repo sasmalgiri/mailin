@@ -73,3 +73,5 @@ The Mac crawl could not reach the button ("not visible"): the settings had no sc
 | On-screen confirmation | "Exported 526 redacted emails with 6328 redactions." |
 
 Known: the default SSN rule also redacts other 9-digit numbers (booking IDs, link parameters) — over-redaction, not a leak; the rule can be switched off.
+
+Full unit suite on the final code (after the redaction changes): 510 XCTest (12 skipped, 0 failures) + 225 Swift Testing — green.
