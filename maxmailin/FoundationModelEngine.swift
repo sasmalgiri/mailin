@@ -964,7 +964,8 @@ struct FoundationModelEngine {
         // decided by the matter's NEWEST emails (kalsmritikosh: situation
         // resolves conflicts). Keyword ranking returned the 2023 thread, and
         // the answer listed steps the 2024 grant had settled (2026-10-06).
-        if isPendingQuestion(query) {
+        let history = isHistoryQuestion(query)
+        if isPendingQuestion(query) || history {
             // Every reference the best matches share — a matter often runs
             // across threads with different numbers in their subjects (a
             // phone number on the 2023 thread, the application number on the
@@ -980,7 +981,8 @@ struct FoundationModelEngine {
             let newestFirst = matter.sorted {
                 (MBOXParser.parseDate($0.headers["Date"]) ?? .distantPast) > (MBOXParser.parseDate($1.headers["Date"]) ?? .distantPast)
             }
-            if !newestFirst.isEmpty { contextEmails = Array(newestFirst.prefix(15)) }
+            // A history needs the whole matter, a pending question its newest part.
+            if !newestFirst.isEmpty { contextEmails = Array(newestFirst.prefix(history ? 80 : 15)) }
         }
         if contextEmails.isEmpty {
             // Nothing matched at all → a bounded most-recent window, so the
@@ -1110,6 +1112,60 @@ struct FoundationModelEngine {
             }
         }
         return nil
+    }
+
+    /// "The journey of my patent from start to finish", "history of…".
+    static func isHistoryQuestion(_ query: String) -> Bool {
+        query.lowercased().range(of: #"\b(journey|history of|timeline|start to finish|beginning to end|from the (?:start|beginning))\b"#, options: .regularExpression) != nil
+    }
+
+    /// A matter's history built by the app: each conversation with its
+    /// dates, oldest first, then the completion sentences quoted. The model
+    /// told a patent's two-year history as one hearing (2026-10-07).
+    static func matterTimeline(query: String, emails allEmails: [MBOXParser.RawEmail]) -> String {
+        let fmt = DateFormatter(); fmt.dateFormat = "d MMM yyyy"
+        var groups: [String: [MBOXParser.RawEmail]] = [:]
+        for email in allEmails { groups[EmailNLPEngine.conversationKey(email), default: []].append(email) }
+        // Only conversations about the question's subject: a matter key can be
+        // a phone number every signature carries, which pulled a CV and a
+        // food complaint into a patent's history (2026-10-07).
+        let generic: Set<String> = ["journey", "history", "timeline", "start", "finish", "beginning", "summarize", "summary", "tell", "story"]
+        let terms = EmailNLPEngine.extractSearchTerms(from: query).map { $0.lowercased() }
+            .filter { $0.count >= 3 && !generic.contains($0) && !OwnerIdentity.nameWords.contains($0) }
+        if !terms.isEmpty {
+            let relevant = groups.filter { _, conv in
+                conv.contains { email in
+                    let text = ((email.headers["Subject"] ?? "") + " " + String(email.plainBody.prefix(1500))).lowercased()
+                    return terms.contains { text.range(of: "\\b\(NSRegularExpression.escapedPattern(for: $0))", options: .regularExpression) != nil }
+                }
+            }
+            if !relevant.isEmpty { groups = relevant }
+        }
+        let emails = groups.values.flatMap { $0 }
+        let dated = groups.values.map { conv -> (first: Date, last: Date, emails: [MBOXParser.RawEmail]) in
+            let dates = conv.compactMap { MBOXParser.parseDate($0.headers["Date"]) }
+            return (dates.min() ?? .distantPast, dates.max() ?? .distantPast, conv)
+        }.sorted { $0.first < $1.first }
+        var out = "**Timeline** — \(emails.count) emails in \(dated.count) conversation\(dated.count == 1 ? "" : "s"), oldest first:\n\n"
+        for conv in dated.suffix(12) {
+            let span = Calendar.current.isDate(conv.first, inSameDayAs: conv.last)
+                ? fmt.string(from: conv.first) : "\(fmt.string(from: conv.first)) – \(fmt.string(from: conv.last))"
+            let subject = EmailNLPEngine.baseSubject(conv.emails.first?.headers["Subject"] ?? "")
+            let people = Set(conv.emails.map { displayName(from: $0.headers["From"] ?? "?") }).sorted().prefix(3).joined(separator: ", ")
+            out += "- **\(span)** — “\(subject.isEmpty ? "(No Subject)" : subject)” (\(conv.emails.count) email\(conv.emails.count == 1 ? "" : "s"); \(people))\n"
+        }
+        if dated.count > 12 { out += "_The \(dated.count - 12) earlier conversations are left out._\n" }
+        let facts = completedFactList(in: emails).facts
+        if !facts.isEmpty {
+            out += "\n**Milestones** (quoted from your emails):\n" + facts.reversed().joined(separator: "\n") + "\n"
+        }
+        return out
+    }
+
+    /// "No emails found", "the search did not return…": a not-found claim
+    /// anywhere in the answer.
+    static func claimsNothingFound(_ text: String) -> Bool {
+        text.range(of: #"(?i)\b(did not|didn['’]t|does not|doesn['’]t|could not|couldn['’]t) (?:return|find|yield|locate|contain|mention|specify)|\bno (?:emails?|results?|information|mention|record)s? (?:were |was )?(?:found|about|regarding|matching|related)|\bthere (?:is|are|were) no (?:emails?|information|mention)"#, options: .regularExpression) != nil
     }
 
     /// "Still to do", "pending", "next steps" and the like.
@@ -5383,6 +5439,11 @@ struct FoundationModelEngine {
             return try await respondSmart(to: query, emails: emails, onUpdate: onUpdate, onConfirmAction: onConfirmAction)
         }
         let evidence = AIGroundingGate.references(for: emails)
+        if isHistoryQuestion(query) && !isPendingQuestion(query) && emails.count >= 2 {
+            let timeline = AIGroundingGate.ground(answer: matterTimeline(query: query, emails: emails), evidence: evidence).answer
+            await onUpdate(timeline)
+            return timeline
+        }
         // Pending questions start from the matter's current state: what the
         // emails say is DONE, with dates, given as facts. The model listed
         // 2024 hearing steps the later grant had settled (2026-10-06).
@@ -5409,6 +5470,19 @@ struct FoundationModelEngine {
             return fallback
         }
         var cleaned = withoutFiller(withoutFalseNotFoundOpener(OwnerIdentity.rewritingOwnerNames(in: withoutPipelineLabels(raw)), evidence: evidence))
+        // "The search did not return any information about your Udemy
+        // purchase" with the Udemy receipt among the emails read: the quoted
+        // answer replaces it (2026-10-07).
+        if !pending, claimsNothingFound(cleaned) {
+            let words = EmailNLPEngine.extractSearchTerms(from: query).map { $0.lowercased() }
+                .filter { $0.count >= 4 && !OwnerIdentity.nameWords.contains($0) }
+            let subjects = emails.prefix(15).map { ($0.headers["Subject"] ?? "").lowercased() }
+            if words.contains(where: { word in subjects.contains { $0.range(of: "\\b\(word)", options: .regularExpression) != nil } }) {
+                let fallback = EvidenceFallback.build(query: query, emails: emails, reason: "Apple Intelligence said nothing matched, but these emails do")
+                await onUpdate(fallback)
+                return fallback
+            }
+        }
         // Amounts and long numbers the emails don't contain are the model's
         // own arithmetic or guesses: those sentences are removed.
         let sources = emails.map { ($0.headers["Subject"] ?? "") + " " + $0.plainBody + " " + ($0.headers["Date"] ?? "") }

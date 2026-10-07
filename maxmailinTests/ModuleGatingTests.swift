@@ -1591,6 +1591,78 @@ struct PaymentQuestionTests {
     }
 }
 
+struct BroaderQuestionTests {
+    private func email(_ subject: String, from: String, date: String, body: String, type: String = "received") -> MBOXParser.RawEmail {
+        MBOXParser.RawEmail(
+            headers: ["From": from, "Subject": subject, "Date": date, "Message-ID": "<\(UUID().uuidString)@x>"],
+            rawSource: "", messageType: type, attachments: [], timestamp: date, domains: [], plainBody: body, htmlBody: "")
+    }
+
+    @Test("Misspelled routing words are corrected; names and inflections are not")
+    func typos() {
+        #expect(AIAssistantView.normalizeTypos("wat is my patnt numbr") == "what is my patent number")
+        #expect(AIAssistantView.slotRequest(in: AIAssistantView.normalizeTypos("wat is my patnt numbr"))?.label == "patent")
+        #expect(AIAssistantView.normalizeTypos("Who emailed me about patents?") == "Who emailed me about patents?")
+        #expect(AIAssistantView.normalizeTypos("Who is Shabana Khan?") == "Who is Shabana Khan?")
+    }
+
+    @Test("Years, payees after a preposition, and which-year questions")
+    func routing() {
+        #expect(AIAssistantView.years(in: "Compare 2012 and 2023, then 2012 again") == [2012, 2023])
+        #expect(AIAssistantView.paymentQuestion(in: "What did I buy on Udemy and how much did I pay?") == "udemy")
+        #expect(AIAssistantView.paymentQuestion(in: "How much did I pay on Udemy?") == "udemy")
+        #expect(AIAssistantView.handleSmartQuery(query: "Which year did I get the most emails?") != nil)
+        #expect(AIAssistantView.handleSmartQuery(query: "How much loan was approved for me?") != nil)
+    }
+
+    @Test("Busiest year, sender counts, several years, oldest email described")
+    func counts() async {
+        let emails = [
+            email("Hello", from: "Hatigarm <h@x>", date: "Tue, 14 Mar 2023 09:41:00 +0000", body: "a"),
+            email("Again", from: "Hatigarm <h@x>", date: "Wed, 15 Mar 2023 09:41:00 +0000", body: "b"),
+            email("Old one", from: "Mail Delivery Subsystem <d@x>", date: "Mon, 23 Jul 2007 09:41:00 +0000", body: "c"),
+            email("Mine", from: "Me <me@x>", date: "Fri, 1 Jun 2012 09:41:00 +0000", body: "d", type: "sent"),
+        ]
+        let busiest = await AIAssistantView.handleSmartQuery(query: "Which year did I get the most emails?")!(emails).answer
+        #expect(busiest.hasPrefix("**2023** — 2 emails"))
+        let fromHatigarm = await AIAssistantView.handleSmartQuery(query: "How many emails did Hatigarm send me?")!(emails).answer
+        #expect(fromHatigarm.hasPrefix("**2 emails from Hatigarm**"))
+        let compared = await AIAssistantView.handleSmartQuery(query: "Compare how many emails I sent in 2012 and 2023")!(emails).answer
+        #expect(compared.contains("**2012**: 1 emails — 1 sent") && compared.contains("**2023**: 2 emails — 0 sent"))
+        let amazon = await AIAssistantView.handleSmartQuery(query: "Did I get any emails from Amazon?")!(emails).answer
+        #expect(amazon.hasPrefix("**0 emails from Amazon**"))
+        let oldest = await AIAssistantView.handleSmartQuery(query: "When is my oldest email from?")!(emails).answer
+        #expect(oldest.contains("“Old one” from Mail Delivery Subsystem"))
+    }
+
+    @Test("A how-much question quotes the stated amount")
+    func amounts() async {
+        let emails = [email("Loan", from: "Bank <b@x>", date: "Tue, 4 Aug 2015 09:41:00 +0000",
+                            body: "Dear customer,\nLoan amount approved Rs. 100000 under FLEXI LOAN.\nRegards"),
+                      email("Other", from: "Shop <s@x>", date: "Tue, 4 Aug 2015 09:41:00 +0000", body: "Your bill is Rs. 250.")]
+        let answer = await AIAssistantView.handleSmartQuery(query: "How much loan was approved for me?")!(emails).answer
+        #expect(answer.contains("Rs. 100000") && !answer.contains("Rs. 250"))
+        #expect(answer.components(separatedBy: "\n- ").count == 2)  // one passage per email
+    }
+
+    @available(macOS 26, iOS 26, *)
+    @Test("History questions get the app's timeline; not-found claims are recognised")
+    func historyAndNotFound() {
+        #expect(FoundationModelEngine.isHistoryQuestion("Tell me the journey of my patent from start to finish"))
+        #expect(!FoundationModelEngine.isHistoryQuestion("What is my patent number?"))
+        let emails = [email("FER for 202331019665", from: "Firm <f@x>", date: "Tue, 12 Sep 2023 09:41:00 +0000", body: "First report on the patent."),
+                      email("Worst food delivered", from: "Me <m@x>", date: "Thu, 22 Aug 2019 09:41:00 +0000", body: "Salted noodles."),
+                      email("Grant of 202331019665", from: "Firm <f@x>", date: "Fri, 29 Nov 2024 09:41:00 +0000", body: "Your patent has been granted. Congratulations.")]
+        let timeline = FoundationModelEngine.matterTimeline(query: "journey of my patent", emails: emails)
+        let fer = timeline.range(of: "FER for")!, grant = timeline.range(of: "Grant of")!
+        #expect(fer.lowerBound < grant.lowerBound)
+        #expect(!timeline.contains("Worst food"))
+        #expect(timeline.contains("**Milestones**") && timeline.contains("has been granted"))
+        #expect(FoundationModelEngine.claimsNothingFound("The search did not return any information about your purchase."))
+        #expect(!FoundationModelEngine.claimsNothingFound("You bought a course for ₹499."))
+    }
+}
+
 struct OwnerAndMatterTests {
     private func email(_ subject: String, from: String, type: String = "received") -> MBOXParser.RawEmail {
         MBOXParser.RawEmail(

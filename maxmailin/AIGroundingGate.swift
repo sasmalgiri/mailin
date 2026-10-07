@@ -201,7 +201,11 @@ enum AIGroundingGate {
             let s = normalizedSubject(ref.subject)
             return s.count >= 6 ? (s, ref.evidenceID) : nil
         }
+        // The owner's own name is in every sent email: naming it cites none
+        // of them. ("Sender: you sasmalgiri@…" cited three 2012 emails as
+        // the sources of a 2019 complaint, 2026-10-07.)
         let senders: [(key: String, id: String)] = evidence.compactMap { ref in
+            guard !OwnerIdentity.isOwner(ref.sender) else { return nil }
             let name = ref.sender.components(separatedBy: "<").first?
                 .trimmingCharacters(in: CharacterSet(charactersIn: " \"")).lowercased() ?? ""
             return name.count >= 4 ? (name, ref.evidenceID) : nil
@@ -232,7 +236,10 @@ enum AIGroundingGate {
             for (subject, id) in subjects where lower.contains(subject) && !ids.contains(id) {
                 ids.append(id)
             }
-            for (sender, id) in senders where lower.contains(sender) && !ids.contains(id) {
+            // A sentence that names an email by subject cites that email,
+            // not everything else its sender wrote.
+            let citedBySubject = !ids.isEmpty
+            for (sender, id) in senders where !citedBySubject && lower.contains(sender) && !ids.contains(id) {
                 ids.append(id)
             }
 

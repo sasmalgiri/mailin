@@ -75,3 +75,24 @@ The Mac crawl could not reach the button ("not visible"): the settings had no sc
 Known: the default SSN rule also redacts other 9-digit numbers (booking IDs, link parameters) — over-redaction, not a leak; the rule can be switched off.
 
 Full unit suite on the final code (after the redaction changes): 510 XCTest (12 skipped, 0 failures) + 225 Swift Testing — green.
+
+## 21 more typed questions (2026-10-07, night)
+
+The owner turned AI on in Settings ("Apple Intelligence is ready") and asked for more varied questions. 21 new questions with known answers (counts, years, bills, loans, purchases, attachments, people, a matter's history, a misspelled question):
+
+| Run | Correct |
+|---|---|
+| First | 8 / 21 |
+| After the fixes | 21 / 21 (T1–T13 in one run; T14–T21 rerun after a test-harness stall left the question field unreachable — the app had not crashed) |
+
+What was fixed:
+- **App-built answers:** which year or month had the most emails; how many emails a person sent; did I get any emails from X; several years compared; top senders for a year; attachments by file type, year and sender (with filenames); oldest and newest email named; payee read from "buy on Udemy"; receipt totals ("Your Price") counted; "how much … approved" quotes the sentence with the amount (one per conversation); a matter's history as a dated timeline of its own conversations, with milestones quoted.
+- **Typos:** misspelled routing words are corrected ("wat is my patnt numbr" → patent number 555489).
+- **Model answers:** a "nothing found" claim when the emails read do match is replaced by the quoted answer. Sources no longer cite every email the owner sent because the owner's name appears in the answer.
+
+Still imperfect:
+- One Abbott email is stored as raw MIME, so the model quoted MIME boundaries from it.
+- The Udemy answer shows the receipt's link text, not the course name.
+- The oldest email is reported as the owner's own message, which has the same timestamp as the bounce notice.
+
+Gate suites: 102 Swift Testing + 68 XCTest, green.

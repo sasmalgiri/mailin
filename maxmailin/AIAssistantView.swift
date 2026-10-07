@@ -1842,8 +1842,27 @@ struct AIAssistantView: View {
     typealias SmartQueryResult = (query: String, answer: String, timestamp: Date, relatedEmailIDs: [UUID])
     typealias SmartHandler = @Sendable ([MBOXParser.RawEmail]) async -> SmartQueryResult
 
-    nonisolated static func handleSmartQuery(query: String) -> SmartHandler? {
+    nonisolated static func handleSmartQuery(query rawQuery: String) -> SmartHandler? {
+        // Common words are corrected before routing: "wat is my patnt numbr"
+        // reached the model and got the application number (2026-10-07).
+        let query = normalizeTypos(rawQuery)
         let lower = query.lowercased()
+
+        // "Which year / month did I get the most emails?" — a histogram, not
+        // the top senders the "most email" keywords used to send it to.
+        if lower.range(of: #"\b(which|what) (year|month)\b.*\b(most|least|fewest|busiest|highest)\b|\bbusiest (year|month)\b"#, options: .regularExpression) != nil {
+            return { emails in smartBusiestPeriod(query: query, emails: emails) }
+        }
+
+        // "Did I get any emails from Amazon?" — a sender lookup, exact.
+        if lower.range(of: #"\b(did|have) (i|we) (ever )?(get|got|receive|received)( any)? (e-?mails?|messages?) (from|by) "#, options: .regularExpression) != nil {
+            return { emails in smartStatistics(query: query, emails: emails) }
+        }
+
+        // "What files did Shabana Khan send me?" / "documents from X".
+        if lower.range(of: #"\b(files?|documents?|attachments?|pdfs?)\b.*\b(send|sent|from)\b"#, options: .regularExpression) != nil {
+            return { emails in smartAttachments(query: query, emails: emails) }
+        }
 
         // Duplicate detection
         let dupKeywords = ["duplicate", "duplicates", "duplicated", "dedup", "same email", "same emails", "repeated email", "identical email", "copies of"]
@@ -1884,6 +1903,14 @@ struct AIAssistantView: View {
         // could not add them up and mixed requests with payments.
         if let payee = paymentQuestion(in: query) {
             return { emails in smartPayments(payee: payee, query: query, emails: emails) }
+        }
+
+        // "How much loan was approved?", "How much is the renewal fee?": the
+        // sentences that state an amount with the question's words, quoted.
+        // The model answered "the emails do not specify an exact loan
+        // amount" with "Loan amount approved Rs. 100000" in them.
+        if lower.hasPrefix("how much") {
+            return { emails in smartAmounts(query: query, emails: emails) }
         }
 
         // "Who is <name>?": the person as the archive shows them — counts,
@@ -1994,6 +2021,40 @@ struct AIAssistantView: View {
         // "How many emails did I send in 2015?" — the year and the direction
         // were ignored and the archive totals came back instead.
         let lower = query.lowercased()
+        let years = Self.years(in: query)
+        let fmtYear = DateFormatter(); fmtYear.dateStyle = .medium; fmtYear.timeStyle = .none
+        let isSentMail: (MBOXParser.RawEmail) -> Bool = {
+            $0.messageType == "sent" || ($0.headers["X-Gmail-Labels"] ?? "").lowercased().contains("sent")
+        }
+        // "How many emails did Hatigarm send me?" / "…from Hatigarm": that
+        // sender's count, not the archive totals.
+        if let m = lower.firstMatch(of: /how many (?:e-?mails?|messages?) (?:did|has|have) (.+?) (?:send|sent|write|written)|(?:how many|(?:did|have) (?:i|we) (?:ever )?(?:get|got|receive|received)(?: any)?) (?:e-?mails?|messages?) (?:from|by) (.+?)(?:\?| in |$)/) {
+            let name = String(m.1 ?? m.2 ?? "").trimmingCharacters(in: CharacterSet(charactersIn: " ?.!\"'"))
+            if !name.isEmpty, !["i", "me", "you", "we"].contains(name) {
+                var from = emails.filter { ($0.headers["From"] ?? "").lowercased().contains(name) }
+                if !years.isEmpty {
+                    from = from.filter { e in MBOXParser.parseDate(e.headers["Date"]).map { years.contains(Calendar.current.component(.year, from: $0)) } ?? false }
+                }
+                let dates = from.compactMap { MBOXParser.parseDate($0.headers["Date"]) }
+                let shown = query.range(of: name, options: .caseInsensitive).map { String(query[$0]) } ?? name
+                var answer = "**\(from.count) email\(from.count == 1 ? "" : "s") from \(shown)**"
+                if !years.isEmpty { answer += " in \(years.map(String.init).joined(separator: " and "))" }
+                if let lo = dates.min(), let hi = dates.max() { answer += ", \(fmtYear.string(from: lo)) – \(fmtYear.string(from: hi))" }
+                answer += from.isEmpty ? ". Check the spelling, or ask “Who emails me the most?”." : "."
+                return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: Array(from.prefix(5).map(\.id)))
+            }
+        }
+        // Two or more years: compared side by side.
+        if years.count >= 2 {
+            let cal = Calendar.current
+            var answer = "**Emails by year** (out of \(emails.count) emails counted):\n\n"
+            for year in years {
+                let inYear = emails.filter { MBOXParser.parseDate($0.headers["Date"]).map { cal.component(.year, from: $0) == year } ?? false }
+                let sent = inYear.filter(isSentMail).count
+                answer += "- **\(year)**: \(inYear.count) emails — \(sent) sent, \(inYear.count - sent) received\n"
+            }
+            return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: [])
+        }
         if let yearMatch = query.firstMatch(of: /\b(19|20)\d{2}\b/), let year = Int(query[yearMatch.range]) {
             let cal = Calendar.current
             let inYear = emails.filter { MBOXParser.parseDate($0.headers["Date"]).map { cal.component(.year, from: $0) == year } ?? false }
@@ -2231,8 +2292,17 @@ struct AIAssistantView: View {
         for tail in ["in total", "altogether", "overall", "so far", "?", "."] {
             payee = payee.replacingOccurrences(of: tail, with: "")
         }
+        // "…pay on Udemy", "…pay to X", "…spend at X": the name after the
+        // preposition is the payee.
+        if let m = payee.firstMatch(of: /^(?:on|at|to|for|with)\s+(.+)$/) { payee = String(m.1) }
         payee = payee.replacingOccurrences(of: #"\b(for|on|in) .*$"#, with: "", options: .regularExpression)
-        return payee.trimmingCharacters(in: .whitespacesAndNewlines)
+        payee = payee.trimmingCharacters(in: .whitespacesAndNewlines)
+        // "What did I buy on Udemy and how much did I pay?": the payee was
+        // named earlier in the question.
+        if payee.isEmpty, let m = lower.firstMatch(of: /(?:buy|bought|order|ordered|purchase|purchased|subscribe|subscribed)\s+(?:[a-z]+\s+){0,3}?(?:on|from|at|to)\s+([a-z0-9&.\- ]{2,30}?)(?:\s+and\b|\?|$)/) {
+            payee = String(m.1).trimmingCharacters(in: .whitespaces)
+        }
+        return payee
     }
 
     nonisolated private static func smartPayments(payee: String, query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
@@ -2243,7 +2313,9 @@ struct AIAssistantView: View {
         }
         // Only statements that a payment HAPPENED; "please pay", "due" and
         // invoices are requests, not payments.
-        let confirmed = #"(?i)(receipt of (?:a |the )?payment of|received (?:a |the )?(?:payment|amount) of|payment of|paid|transferred|remitted|credited)\s*(?:an amount of\s*)?(INR|Rs\.?|₹)\s?([\d,]+(?:\.\d{1,2})?)"#
+        // Payment statements, and receipt totals ("Your Price: ₹499.00",
+        // "Order total ₹…") for purchases.
+        let confirmed = #"(?i)(receipt of (?:a |the )?payment of|received (?:a |the )?(?:payment|amount) of|payment of|paid|transferred|remitted|credited|your price|order total|grand total|total paid|amount paid)\s*:?\s*(?:an amount of\s*)?(INR|Rs\.?|₹)\s?([\d,]+(?:\.\d{1,2})?)"#
         let request = #"(?i)(request|please|kindly|due|make (?:the )?payment|to be paid|pay now|invoice|quotation|fee structure|per year|estimate)"#
         guard let regex = try? NSRegularExpression(pattern: confirmed) else {
             return (query: query, answer: "Could not read that question.", timestamp: Date(), relatedEmailIDs: [])
@@ -2466,6 +2538,127 @@ struct AIAssistantView: View {
         return await smartThreadStory(subject: EmailNLPEngine.baseSubject(thread.first?.headers["Subject"] ?? ""), query: query, emails: thread)
     }
 
+    /// Years named in a question ("2012 and 2023"), in order, without repeats.
+    nonisolated static func years(in query: String) -> [Int] {
+        var out: [Int] = []
+        for m in query.matches(of: /\b(19|20)\d{2}\b/) {
+            if let y = Int(query[m.range]), !out.contains(y) { out.append(y) }
+        }
+        return out
+    }
+
+    /// Corrects misspellings of the words questions are routed on — edit
+    /// distance 1 for short words, 2 for longer ones; names and other words
+    /// are left alone.
+    nonisolated static func normalizeTypos(_ query: String) -> String {
+        let vocabulary = ["patent", "number", "application", "invoice", "payment", "payments", "interview", "attachment",
+                          "attachments", "emails", "email", "password", "settlement", "booking", "ticket", "hospital",
+                          "claim", "granted", "receipt", "policy", "account", "summarize", "summary", "documents",
+                          "files", "contract", "deadline", "renewal", "insurance", "salary", "address", "meeting"]
+        func distance(_ a: [Character], _ b: [Character]) -> Int {
+            var prev = Array(0...b.count)
+            for (i, ca) in a.enumerated() {
+                var cur = [i + 1] + Array(repeating: 0, count: b.count)
+                for (j, cb) in b.enumerated() {
+                    cur[j + 1] = min(prev[j + 1] + 1, cur[j] + 1, prev[j] + (ca == cb ? 0 : 1))
+                }
+                prev = cur
+            }
+            return prev[b.count]
+        }
+        // Texting spellings of question words, too short for edit distance.
+        let shortForms = ["wat": "what", "wht": "what", "whn": "when", "wen": "when", "whr": "where",
+                          "hw": "how", "hwo": "how", "u": "you", "ur": "your", "abt": "about", "pls": "please", "plz": "please"]
+        var changed = false
+        let corrected = query.split(separator: " ", omittingEmptySubsequences: false).map { token -> String in
+            let word = String(token)
+            let core = word.trimmingCharacters(in: .punctuationCharacters)
+            let lowerCore = core.lowercased()
+            if let full = shortForms[lowerCore], !core.isEmpty {
+                changed = true
+                return word.replacingOccurrences(of: core, with: full)
+            }
+            // Inflections of a known word ("emailed", "patents") are spelled right.
+            guard core.count >= 4, core.allSatisfy(\.isLetter), !vocabulary.contains(where: { lowerCore.hasPrefix($0) }) else { return word }
+            let limit = core.count >= 7 ? 2 : 1
+            let letters = Array(lowerCore)
+            guard let best = vocabulary.min(by: { distance(letters, Array($0)) < distance(letters, Array($1)) }),
+                  distance(letters, Array(best)) <= limit, abs(best.count - core.count) <= limit else { return word }
+            changed = true
+            return word.replacingOccurrences(of: core, with: best)
+        }.joined(separator: " ")
+        return changed ? corrected : query
+    }
+
+    nonisolated private static func smartBusiestPeriod(query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        let byMonth = query.lowercased().contains("month")
+        let cal = Calendar.current
+        let fmt = DateFormatter(); fmt.dateFormat = byMonth ? "MMM yyyy" : "yyyy"
+        var counts: [String: (count: Int, date: Date)] = [:]
+        for email in emails {
+            guard let date = MBOXParser.parseDate(email.headers["Date"]) else { continue }
+            let key = byMonth ? fmt.string(from: date) : String(cal.component(.year, from: date))
+            counts[key, default: (0, date)].count += 1
+        }
+        let ranked = counts.sorted { $0.value.count > $1.value.count }
+        guard let top = ranked.first else {
+            return (query: query, answer: "No dated emails in this scope.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        var answer = "**\(top.key)** — \(top.value.count) emails, the most of any \(byMonth ? "month" : "year") (out of \(emails.count) counted).\n\n**Next:**\n"
+        for entry in ranked.dropFirst().prefix(4) { answer += "- \(entry.key): \(entry.value.count)\n" }
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: [])
+    }
+
+    /// Sentences that state an amount together with the question's words.
+    nonisolated private static func smartAmounts(query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        let stop: Set<String> = ["how", "much", "was", "is", "are", "the", "my", "for", "me", "did", "do", "does", "approved", "what", "amount", "money", "pay", "paid", "cost"]
+        let words = query.lowercased().split(whereSeparator: { !$0.isLetter }).map(String.init)
+            .filter { $0.count >= 3 && !stop.contains($0) }
+            .map { $0.count > 4 && $0.hasSuffix("s") ? String($0.dropLast()) : $0 }
+        let amount = #"(?i)(?:INR|Rs\.?|₹)\s?[\d,]+(?:\.\d{1,2})?(?:/-)?"#
+        let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
+        var hits: [(sentence: String, email: MBOXParser.RawEmail, score: Int)] = []
+        var seen = Set<String>()
+        for email in emails {
+            let text = (email.plainBody.isEmpty ? email.htmlBody.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression) : email.plainBody)
+                .components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "> \t*")) }
+                .joined(separator: " ")
+                .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            // Short windows around each amount, not whole paragraphs.
+            for match in text.matches(of: try! Regex(amount)) {
+                let start = text.index(match.range.lowerBound, offsetBy: -120, limitedBy: text.startIndex) ?? text.startIndex
+                let end = text.index(match.range.upperBound, offsetBy: 40, limitedBy: text.endIndex) ?? text.endIndex
+                let window = String(text[start..<end])
+                let lowerWindow = window.lowercased()
+                let score = words.filter { lowerWindow.range(of: "\\b\($0)", options: .regularExpression) != nil }.count
+                guard score > 0 else { continue }
+                // One passage per conversation: its best-matching window. A
+                // forwarded letter's copies quoted it three times (2026-10-07).
+                var passage = window.trimmingCharacters(in: .whitespaces)
+                if start != text.startIndex, let space = passage.firstIndex(of: " ") { passage = String(passage[passage.index(after: space)...]) }
+                let conversation = EmailNLPEngine.conversationKey(email)
+                if let i = hits.firstIndex(where: { EmailNLPEngine.conversationKey($0.email) == conversation }) {
+                    if score > hits[i].score { hits[i] = (passage, email, score) }
+                    continue
+                }
+                let key = String(text[match.range]) + "|" + EmailNLPEngine.baseSubject(email.headers["Subject"] ?? "")
+                guard seen.insert(key).inserted else { continue }
+                hits.append((passage, email, score))
+            }
+        }
+        guard !hits.isEmpty else {
+            return (query: query, answer: "**No amount found** with \(words.map { "“\($0)”" }.joined(separator: ", ")) in this scope's emails.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        let ranked = hits.sorted { ($0.score, MBOXParser.parseDate($0.email.headers["Date"]) ?? .distantPast) > ($1.score, MBOXParser.parseDate($1.email.headers["Date"]) ?? .distantPast) }.prefix(3)
+        var answer = "**Amounts stated in your emails** (quoted):\n\n"
+        for hit in ranked {
+            let when = MBOXParser.parseDate(hit.email.headers["Date"]).map { fmt.string(from: $0) } ?? "undated"
+            answer += "- “…\(hit.sentence)…” — \(senderDisplayName(hit.email.headers["From"] ?? "?")), \(when) (“\(EmailNLPEngine.baseSubject(hit.email.headers["Subject"] ?? ""))”)\n"
+        }
+        return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: ranked.map(\.email.id))
+    }
+
     /// The subject in "tell / narrate / show (me) the story of <subject>".
     nonisolated static func threadStorySubject(in query: String) -> String? {
         guard let range = query.range(of: #"^\s*(tell|narrate|show)( me)? the story of\s+"#, options: [.regularExpression, .caseInsensitive]) else { return nil }
@@ -2531,7 +2724,12 @@ struct AIAssistantView: View {
         return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: recent.map { $0.0.id })
     }
 
-    nonisolated private static func smartTopSenders(query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+    nonisolated private static func smartTopSenders(query: String, emails allEmails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        // "Who sent me the most emails in 2024?" — that year only.
+        let years = Self.years(in: query)
+        let emails = years.isEmpty ? allEmails : allEmails.filter { e in
+            MBOXParser.parseDate(e.headers["Date"]).map { years.contains(Calendar.current.component(.year, from: $0)) } ?? false
+        }
         // Count by ADDRESS (one person, many display spellings) and leave out
         // the archive owner: "who emails me" is about other people. The owner
         // is whoever sent the archive's "sent" messages. Before, a Gmail Sent
@@ -2570,7 +2768,7 @@ struct AIAssistantView: View {
         guard !sorted.isEmpty else {
             return (query: query, answer: "Every message in this scope was sent by you, so there is no one else to rank.", timestamp: Date(), relatedEmailIDs: [])
         }
-        var answer = "**Who emails you the most** (\(sorted.count) senders, your own sent mail excluded):\n\n"
+        var answer = "**Who emails you the most**\(years.isEmpty ? "" : " in " + years.map(String.init).joined(separator: " and ")) (\(sorted.count) senders, your own sent mail excluded):\n\n"
         for (i, entry) in sorted.prefix(15).enumerated() {
             let share = Double(entry.value) / Double(max(considered, 1)) * 100
             let pct = share < 1 ? "<1%" : "\(Int(share.rounded()))%"
@@ -2653,6 +2851,59 @@ struct AIAssistantView: View {
     }
 
     nonisolated private static func smartAttachments(query: String, emails: [MBOXParser.RawEmail]) -> SmartQueryResult {
+        // Filters named in the question: a file type, a year, a person. With
+        // any of them the answer lists the matching emails and their files;
+        // without, the summary. "PDF attachments from 2024" and "files
+        // Shabana Khan sent" got the archive summary (2026-10-07).
+        let lower = query.lowercased()
+        let typeWords: [(words: [String], exts: Set<String>, label: String)] = [
+            (["pdf", "pdfs"], ["pdf"], "PDF"),
+            (["photo", "photos", "image", "images", "picture", "pictures", "jpg", "jpeg", "png"], ["jpg", "jpeg", "png", "gif", "heic"], "image"),
+            (["word", "doc", "docx"], ["doc", "docx"], "Word"),
+            (["excel", "spreadsheet", "spreadsheets", "xlsx", "xls", "csv"], ["xls", "xlsx", "csv"], "spreadsheet"),
+            (["zip", "zips"], ["zip"], "zip"),
+            (["video", "videos", "mp4"], ["mp4", "mov", "3gp"], "video"),
+        ]
+        let words = Set(lower.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init))
+        let wanted = typeWords.filter { !words.isDisjoint(with: $0.words) }
+        let exts = wanted.reduce(into: Set<String>()) { $0.formUnion($1.exts) }
+        let years = Self.years(in: query)
+        var person: String?
+        if let m = lower.firstMatch(of: /(?:did|has|have) (.+?) (?:send|sent|share|shared|attach|attached)|\bfrom ([a-z][a-z .&'-]{1,40}?)(?:\s+in\s+\d{4}|\?|$)/) {
+            let name = String(m.1 ?? m.2 ?? "").trimmingCharacters(in: .whitespaces)
+            if !name.isEmpty, !["i", "me", "you", "we"].contains(name), Int(name) == nil { person = name }
+        }
+        if !exts.isEmpty || !years.isEmpty || person != nil {
+            let cal = Calendar.current
+            let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
+            var matches: [(email: MBOXParser.RawEmail, files: [String])] = []
+            for email in emails where !email.attachments.isEmpty {
+                if let person, !(email.headers["From"] ?? "").lowercased().contains(person) { continue }
+                if !years.isEmpty, !(MBOXParser.parseDate(email.headers["Date"]).map { years.contains(cal.component(.year, from: $0)) } ?? false) { continue }
+                let files = email.attachments.map(\.filename).filter { name in
+                    exts.isEmpty || exts.contains((name as NSString).pathExtension.lowercased())
+                }
+                if !files.isEmpty { matches.append((email, files)) }
+            }
+            matches.sort { (MBOXParser.parseDate($0.email.headers["Date"]) ?? .distantPast) > (MBOXParser.parseDate($1.email.headers["Date"]) ?? .distantPast) }
+            var filters: [String] = []
+            if !wanted.isEmpty { filters.append(wanted.map(\.label).joined(separator: "/") + " files") }
+            if let person { filters.append("from " + (query.range(of: person, options: .caseInsensitive).map { String(query[$0]) } ?? person)) }
+            if !years.isEmpty { filters.append("in " + years.map(String.init).joined(separator: " and ")) }
+            let description = filters.joined(separator: " ")
+            guard !matches.isEmpty else {
+                return (query: query, answer: "**No attachments \(description)** in this scope.", timestamp: Date(), relatedEmailIDs: [])
+            }
+            let fileCount = matches.reduce(0) { $0 + $1.files.count }
+            var answer = "**\(fileCount) file\(fileCount == 1 ? "" : "s") in \(matches.count) email\(matches.count == 1 ? "" : "s")** — \(description):\n\n"
+            for match in matches.prefix(15) {
+                let when = MBOXParser.parseDate(match.email.headers["Date"]).map { fmt.string(from: $0) } ?? "undated"
+                let subject = EmailNLPEngine.baseSubject(match.email.headers["Subject"] ?? "")
+                answer += "- \(when) — **\(subject.isEmpty ? "(No Subject)" : subject)** (\(senderDisplayName(match.email.headers["From"] ?? "?"))): \(match.files.joined(separator: ", "))\n"
+            }
+            if matches.count > 15 { answer += "…and \(matches.count - 15) more emails.\n" }
+            return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: Array(matches.prefix(5).map(\.email.id)))
+        }
         let withAttach = emails.filter { !$0.attachments.isEmpty }
         var typeCounts: [String: Int] = [:]
         for email in withAttach {
@@ -2683,8 +2934,15 @@ struct AIAssistantView: View {
         if let first = dates.first, let last = dates.last {
             let days = Calendar.current.dateComponents([.day], from: first, to: last).day ?? 0
             answer = "**Email Timeline:**\n\n"
-            answer += "- **Oldest:** \(fmt.string(from: first))\n"
-            answer += "- **Newest:** \(fmt.string(from: last))\n"
+            // What they were, not only when: "When is my oldest email from
+            // and what was it?" got the date alone.
+            func describe(_ date: Date) -> String {
+                guard let email = emails.first(where: { MBOXParser.parseDate($0.headers["Date"]) == date }) else { return "" }
+                let subject = EmailNLPEngine.baseSubject(email.headers["Subject"] ?? "")
+                return " — “\(subject.isEmpty ? "(No Subject)" : subject)” from \(senderDisplayName(email.headers["From"] ?? "?"))"
+            }
+            answer += "- **Oldest:** \(fmt.string(from: first))\(describe(first))\n"
+            answer += "- **Newest:** \(fmt.string(from: last))\(describe(last))\n"
             answer += "- **Span:** \(days) days\n"
             answer += "- **Total:** \(emails.count) emails\n"
             if days > 0 {
