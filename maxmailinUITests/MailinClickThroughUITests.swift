@@ -836,10 +836,21 @@ final class MailinClickThroughUITests: XCTestCase {
         }
         #if os(macOS)
         app.activate()
-        if app.windows.count == 0 {
+        // A restored window can take a few seconds to appear; deciding "no
+        // window" too early opened a second one, and two same-titled windows
+        // left the Archive crawl with nothing to press (2026-10-07).
+        if !app.windows.firstMatch.waitForExistence(timeout: 8) {
             // Restored with every window closed: open the main window from the menu.
             app.typeKey("n", modifierFlags: [.command, .shift])   // File ▸ New Window
             _ = app.windows.firstMatch.waitForExistence(timeout: 10)
+        }
+        // One main window: close extras restored from an earlier session.
+        var guardCount = 0
+        while app.windows.count > 1 && guardCount < 4 {
+            app.windows.element(boundBy: 1).click()
+            app.typeKey("w", modifierFlags: .command)
+            Thread.sleep(forTimeInterval: 1)
+            guardCount += 1
         }
         print("UITEST-WINDOWS \(app.windows.count): \(app.windows.allElementsBoundByIndex.map(\.title))")
         #endif
