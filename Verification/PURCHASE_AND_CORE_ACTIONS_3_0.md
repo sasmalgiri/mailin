@@ -49,3 +49,21 @@ macOS: app suite 510 XCTest (12 skipped, 0 failures) + 184 Swift Testing passed;
 ## Still owner-side
 
 App Store sandbox purchase and restore on TestFlight (both platforms), the signed Release archive, Mac hands-on testing (UI automation needs one Touch ID approval at the Mac).
+
+## The owner's TestFlight purchase checklist, simulated (2026-10-08)
+
+UI tests `testPurchase1_buyMonthlyUnlocksFeatures`, `testPurchase2_reinstallThenRestore` and `testPurchase3_buyLifetime` (iPad Pro 13-inch simulator) tap through the real purchase screen. StoreKit runs locally from `maxmailin/Products.storekit` via `SKTestSession`. The app runs with the Debug switch `-mailinRealStore`: no Debug unlock and no simulated tier, so the tier comes only from verified StoreKit transactions, as in the App Store build. Runner: `Scripts/purchase-checklist-sim.sh`.
+
+| Step | What happened |
+|---|---|
+| Fresh install | Plan badge "Free plan. Upgrade"; Redaction (a Personal tool) asks for a purchase |
+| Buy monthly | Pressed "Buy Personal — $4.99 / month"; the purchase screen closed itself; badge "Current plan: Personal"; Redaction opens; Bates Numbering (Professional) still asks for a purchase |
+| Reinstall | All the app's data wiped (1.9 MB → 4 KB); the store account still holds `personal_monthly`; the app came back as Personal on its own |
+| Restore Purchases | "Restored: your Personal access is active on this device."; Redaction opens |
+| Buy lifetime | Pressed "Buy Professional — $249.99 once"; the purchase screen closed; badge "Current plan: Professional · Lifetime"; Bates Numbering opens |
+
+All three pass. An earlier run also bought Personal lifetime ($99.99, through a mis-tap in the test) and the app correctly showed "Personal · Lifetime".
+
+Why "reinstall" is a data wipe rather than an uninstall: uninstalling under Xcode's local StoreKit also erases the app's test purchases (the store reported no transactions afterwards), unlike the real App Store, where purchases stay with the Apple Account. In that state Restore correctly reported "No eligible purchases were found".
+
+Not covered: App Store Connect's product setup and a sandbox Apple Account. Those are checked with TestFlight build 3.0 (302), uploaded 2026-10-08.

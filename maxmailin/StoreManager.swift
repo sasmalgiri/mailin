@@ -379,6 +379,15 @@ class StoreManager: ObservableObject {
     /// purchase entry point can be seen and screenshotted without StoreKit.
     /// Release builds do not compile this.
     func applyDebugLaunchOverride(arguments: [String] = CommandLine.arguments) {
+        // `-mailinRealStore`: no Debug unlock and no simulated tier — the tier
+        // comes only from StoreKit's verified transactions, as in the App
+        // Store build. The purchase UI tests drive StoreKit with SKTestSession.
+        if arguments.contains("-mailinRealStore") {
+            debugUnlocksAllTiers = false
+            simulatedTier = nil
+            Task { await checkEntitlements() }
+            return
+        }
         guard let index = arguments.firstIndex(of: "-mailinSimulateTier"), index + 1 < arguments.count else { return }
         let tier: PurchaseTier?
         switch arguments[index + 1].lowercased() {

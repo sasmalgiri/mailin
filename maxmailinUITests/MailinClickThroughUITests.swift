@@ -13,6 +13,9 @@ import XCTest
 #if os(macOS)
 import AppKit
 #endif
+#if os(iOS)
+import StoreKitTest
+#endif
 
 final class MailinClickThroughUITests: XCTestCase {
 
@@ -1143,6 +1146,203 @@ final class MailinClickThroughUITests: XCTestCase {
         attachment.name = "core-actions.md"; attachment.lifetime = .keepAlways
         add(attachment)
         XCTAssertFalse(rows.contains { $0.contains("CRASH") || $0.contains("FAIL") }, report)
+    }
+    #endif
+
+    #if os(iOS)
+    // MARK: - Purchases through the real purchase screen (iPad, local StoreKit)
+
+    // The owner's TestFlight checklist, run as a user would: buy a monthly
+    // plan and see features unlock; delete and reinstall, then Restore
+    // Purchases; buy a lifetime plan. StoreKit runs locally from
+    // maxmailin/Products.storekit through SKTestSession; the app runs with
+    // -mailinRealStore, so its tier comes only from verified transactions.
+    // The three tests run in order; ~/mailin-loc-work/purchase-fg.sh deletes
+    // the app between the first and the second.
+
+    private static var storeConfigURL: URL {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("maxmailin/Products.storekit")
+    }
+
+    private func storeSession(clear: Bool) throws -> SKTestSession {
+        let session = try SKTestSession(contentsOf: Self.storeConfigURL)
+        if clear { session.resetToDefaultState(); session.clearTransactions() }
+        session.disableDialogs = true
+        session.askToBuyEnabled = false
+        return session
+    }
+
+    private func planBadge() -> String {
+        let badge = app.buttons["plan.badge"].firstMatch
+        return badge.waitForExistence(timeout: 15) ? badge.label : "no plan badge"
+    }
+
+    /// Waits until the plan badge reads `expected` (the store updates async).
+    private func waitForBadge(_ expected: String, timeout: TimeInterval = 20) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if planBadge() == expected { return true }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        return false
+    }
+
+    private func button(beginningWith text: String) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", text)).firstMatch
+    }
+
+    private func textContaining(_ text: String) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
+    }
+
+    private func waitUntilPurchaseScreenCloses(timeout: TimeInterval = 20) -> Bool {
+        let restore = button(beginningWith: "Restore Purchases")
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if !restore.exists { return true }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        return false
+    }
+
+    /// Opens the purchase screen from the plan badge.
+    private func openPurchaseScreen() -> Bool {
+        let badge = app.buttons["plan.badge"].firstMatch
+        guard badge.waitForExistence(timeout: 15) else { return false }
+        badge.tap()
+        return button(beginningWith: "Restore Purchases").waitForExistence(timeout: 10)
+    }
+
+    /// Picks a plan and period on the purchase screen and presses Buy.
+    /// Returns the Buy button's label (it names product and price).
+    private func buy(tier: String, period: String) -> String {
+        // A card's label can start with its badge ("Most Popular, Professional…").
+        let card = app.buttons.matching(NSPredicate(format: "label CONTAINS %@ AND NOT (label BEGINSWITH 'Buy ') AND NOT (label BEGINSWITH 'Current plan')", tier)).firstMatch
+        if card.waitForExistence(timeout: 10) { card.tap() }
+        let periodButton = button(beginningWith: period)
+        if periodButton.waitForExistence(timeout: 5) { periodButton.tap() }
+        let buyButton = button(beginningWith: "Buy ")
+        guard buyButton.waitForExistence(timeout: 10) else { return "FAIL no Buy button" }
+        var swipes = 0
+        while !buyButton.isHittable && swipes < 6 { app.swipeUp(); swipes += 1 }
+        let label = buyButton.label
+        buyButton.tap()
+        return label
+    }
+
+    /// Opens a Professional-page tool and reports whether it opened or asked
+    /// for a purchase.
+    private func toolOutcome(_ raw: String) -> String {
+        _ = openPage("Professional Workflows")
+        let tile = app.buttons["professional.tool.\(raw)"].firstMatch
+        guard revealInStrip(tile) else { return "FAIL not reachable" }
+        tile.tap()
+        let paywall = app.descendants(matching: .any)["paywall"].firstMatch
+        let done = app.buttons["Done"].firstMatch
+        let deadline = Date().addingTimeInterval(10)
+        var outcome = "FAIL neither opened nor asked"
+        while Date() < deadline {
+            if paywall.exists { outcome = "asks for a purchase"; break }
+            if done.exists { outcome = "opens"; break }
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        snapshotScreen("purchase-tool-\(raw)")
+        let close = app.buttons["paywall.close"].firstMatch
+        if close.exists { close.tap(); Thread.sleep(forTimeInterval: 0.8) } else { dismissEverything() }
+        return outcome
+    }
+
+    private func report(_ name: String, _ rows: [String]) {
+        let text = rows.map { "- " + $0 }.joined(separator: "\n")
+        print("PURCHASE-\(name)>>>\n\(text)\n<<<PURCHASE-\(name)")
+        let attachment = XCTAttachment(string: text)
+        attachment.name = "purchase-\(name).md"; attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    func testPurchase1_buyMonthlyUnlocksFeatures() throws {
+        let session = try storeSession(clear: true)
+        _ = session
+        relaunch(["-mailinRealStore"])
+        var rows: [String] = []
+        let freeBadge = waitForBadge("Free plan. Upgrade")
+        rows.append("Fresh install: badge “\(planBadge())”")
+        XCTAssertTrue(freeBadge, "a fresh install must be Free")
+        let redactionFree = toolOutcome("redaction")
+        rows.append("Free ▸ Redaction (Personal tool): \(redactionFree)")
+        XCTAssertEqual(redactionFree, "asks for a purchase")
+
+        XCTAssertTrue(openPurchaseScreen(), "purchase screen opens from the plan badge")
+        let bought = buy(tier: "Personal", period: "Monthly")
+        rows.append("Pressed: “\(bought)”")
+        // On success the purchase screen closes itself (PaywallView.submitPurchase).
+        let unlocked = waitUntilPurchaseScreenCloses()
+        rows.append("Purchase screen: " + (unlocked ? "closed itself after the purchase succeeded" : "FAIL still open after 20 s"))
+        snapshotScreen("purchase-monthly-done")
+        if !unlocked { dismissEverything() }
+        let personal = waitForBadge("Current plan: Personal")
+        rows.append("Badge after purchase: “\(planBadge())”")
+        let redactionPaid = toolOutcome("redaction")
+        let batesPaid = toolOutcome("batesNumbering")
+        rows.append("Personal ▸ Redaction: \(redactionPaid)")
+        rows.append("Personal ▸ Bates Numbering (Professional tool): \(batesPaid)")
+        report("MONTHLY", rows)
+        XCTAssertTrue(unlocked && personal)
+        XCTAssertTrue(bought.contains("Personal") && bought.contains("month"), bought)
+        XCTAssertEqual(redactionPaid, "opens")
+        XCTAssertEqual(batesPaid, "asks for a purchase")
+    }
+
+    func testPurchase2_reinstallThenRestore() throws {
+        // The runner wiped all of the app's data before this test — what a
+        // reinstall erases. (Uninstalling under Xcode's local StoreKit also
+        // erases the app's test purchases, unlike the real App Store, where
+        // they stay with the Apple Account; so a real uninstall cannot stand
+        // in for a reinstall here.)
+        let session = try storeSession(clear: false)
+        let owned = session.allTransactions().map(\.productIdentifier)
+        relaunch(["-mailinRealStore"])
+        var rows: [String] = ["Transactions on the store account: \(owned)"]
+        rows.append("Fresh install, before Restore: badge “\(planBadge())”")
+        XCTAssertTrue(openPurchaseScreen(), "purchase screen opens from the plan badge")
+        let restore = button(beginningWith: "Restore Purchases")
+        restore.tap()
+        let restored = textContaining("Restored: your Personal access").waitForExistence(timeout: 20)
+            || waitForBadge("Current plan: Personal", timeout: 5)
+        snapshotScreen("purchase-restored")
+        rows.append("Restore Purchases: " + (restored ? "“Restored: your Personal access is active on this device.”" : "FAIL"))
+        dismissEverything()
+        let personal = waitForBadge("Current plan: Personal")
+        rows.append("Badge after Restore: “\(planBadge())”")
+        let redaction = toolOutcome("redaction")
+        rows.append("Restored ▸ Redaction: \(redaction)")
+        report("RESTORE", rows)
+        XCTAssertTrue(owned.contains("personal_monthly"), "the monthly purchase is on the store account")
+        XCTAssertTrue(restored && personal)
+        XCTAssertEqual(redaction, "opens")
+    }
+
+    func testPurchase3_buyLifetime() throws {
+        let session = try storeSession(clear: false)
+        _ = session
+        relaunch(["-mailinRealStore"])
+        var rows: [String] = ["Starting badge: “\(planBadge())”"]
+        XCTAssertTrue(openPurchaseScreen(), "purchase screen opens from the plan badge")
+        let bought = buy(tier: "Professional", period: "Lifetime")
+        rows.append("Pressed: “\(bought)”")
+        let unlocked = waitUntilPurchaseScreenCloses()
+        rows.append("Purchase screen: " + (unlocked ? "closed itself after the purchase succeeded" : "FAIL still open after 20 s"))
+        snapshotScreen("purchase-lifetime-done")
+        if !unlocked { dismissEverything() }
+        let lifetime = waitForBadge("Current plan: Professional · Lifetime", timeout: 30)
+        rows.append("Badge after purchase: “\(planBadge())”")
+        let bates = toolOutcome("batesNumbering")
+        rows.append("Professional ▸ Bates Numbering: \(bates)")
+        report("LIFETIME", rows)
+        XCTAssertTrue(bought.contains("Professional") && bought.contains("once"), bought)
+        XCTAssertTrue(unlocked && lifetime)
+        XCTAssertEqual(bates, "opens")
     }
     #endif
 
