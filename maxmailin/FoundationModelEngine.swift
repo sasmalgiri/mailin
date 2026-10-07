@@ -835,7 +835,13 @@ struct FoundationModelEngine {
     private static let availabilityCache = AvailabilityCache()
 
     static var availability: ModelAvailability {
-        availabilityCache.value {
+        #if DEBUG
+        // Test hook: behave exactly as if Apple Intelligence were switched off
+        // in System Settings, so the no-model paths can be checked live
+        // without changing the Mac's settings. Debug builds only.
+        if ProcessInfo.processInfo.arguments.contains("-simulateAppleIntelligenceOff") { return .notEnabled }
+        #endif
+        return availabilityCache.value {
             switch SystemLanguageModel.default.availability {
             case .available: return .available
             case .unavailable(.deviceNotEligible): return .notEligible

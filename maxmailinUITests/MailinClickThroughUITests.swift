@@ -25,6 +25,11 @@ final class MailinClickThroughUITests: XCTestCase {
         continueAfterFailure = true
         app = XCUIApplication()
         app.launchArguments = ["--uitest"]
+        // Extra launch arguments from the runner (TEST_RUNNER_UITEST_EXTRA_ARGS),
+        // e.g. -simulateAppleIntelligenceOff.
+        if let extra = ProcessInfo.processInfo.environment["UITEST_EXTRA_ARGS"], !extra.isEmpty {
+            app.launchArguments += extra.split(separator: " ").map(String.init)
+        }
         app.launch()
         // A relaunch in the same test run can be slow (state teardown from
         // the previous test) — wait on process state first, then the window.
@@ -1875,6 +1880,72 @@ final class MailinClickThroughUITests: XCTestCase {
         }
         print("AI-TYPED>>>\(report)\n<<<AI-TYPED")
         let att = XCTAttachment(string: report); att.name = "ai-typed.md"; att.lifetime = .keepAlways; add(att)
+    }
+    #endif
+
+    #if os(iOS)
+    /// The typed-question check on iPad (owner, 2026-10-07: "check on iPad").
+    /// Set MAILIN_UITEST_IMPORT=1 to import Sent.mbox from On My iPad first.
+    func testAIAnswers_typedQuestions_iOS() {
+        recoverIfNeeded()
+        var report = ""
+        if ProcessInfo.processInfo.environment["MAILIN_UITEST_IMPORT"] == "1" {
+            _ = openPage("Archive")
+            report += "import: \(importMailbox(path: "", fileName: "Sent"))\n"
+        }
+        _ = openPage("Archive")
+        let all = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'All Emails'")).firstMatch
+        report += "archive: \(all.waitForExistence(timeout: 5) ? all.label : "All Emails row not visible")\n"
+        _ = openPage("AI Insights")
+        let askTab = app.buttons["Ask"].firstMatch
+        if askTab.waitForExistence(timeout: 5), askTab.isHittable { askTab.tap() }
+        let questions = ProcessInfo.processInfo.environment["AI_TYPED_QUESTIONS"]?
+            .components(separatedBy: "|").filter { !$0.isEmpty } ?? [
+            "What is my granted patent number and when was it granted?",
+            "How much did I pay Khurana & Khurana in total?",
+            "Who is Shabana Khan?",
+            "What was the settlement amount with the packers?",
+            "Did I book a train ticket in 2018? From where to where?",
+            "Find the email about the Bengali manga translation",
+            "What do I still need to do for my patent?",
+            "Do any emails contain a password?",
+            "How many emails did I send in 2015?",
+            "Summarize what Hatigarm and I discussed about translating manga into Bengali",
+        ]
+        let field = app.textFields.matching(NSPredicate(format: "label == 'Question input' OR placeholderValue BEGINSWITH 'Ask a follow-up'")).firstMatch
+        for (n, q) in questions.enumerated() {
+            let clear = app.buttons.matching(NSPredicate(format: "label == 'Clear conversation'")).firstMatch
+            if clear.exists, clear.isEnabled, clear.isHittable { clear.tap(); Thread.sleep(forTimeInterval: 1) }
+            guard field.waitForExistence(timeout: 5), field.isHittable else { report += "\n## P\(n+1): \(q)\n(no question field)\n"; continue }
+            field.tap()
+            field.typeText(q + "\n")
+            let started = Date()
+            Thread.sleep(forTimeInterval: 3)
+            while Date().timeIntervalSince(started) < 150 {
+                let busy = app.staticTexts["Thinking..."].exists || app.buttons["Processing query"].exists
+                    || app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'Answering'")).firstMatch.exists
+                if !busy { break }
+                Thread.sleep(forTimeInterval: 2)
+            }
+            Thread.sleep(forTimeInterval: 5)
+            var texts: [String] = []
+            if let snap = try? app.windows.firstMatch.snapshot() {
+                func walk(_ e: XCUIElementSnapshot) {
+                    if e.elementType == .staticText {
+                        let t = (e.value as? String) ?? e.label
+                        if !t.isEmpty { texts.append(t) }
+                    }
+                    e.children.forEach(walk)
+                }
+                walk(snap)
+            }
+            let from = texts.lastIndex(where: { $0.hasPrefix("Your question: " + q.prefix(30)) || $0.contains(q.prefix(30)) }).map { $0 + 1 } ?? max(0, texts.count - 30)
+            var out: [String] = []
+            for t in texts[from...] where out.last != t { out.append(t) }
+            report += "\n## P\(n+1): \(q)  (\(Int(Date().timeIntervalSince(started))) s)\n" + out.prefix(25).joined(separator: "\n") + "\n"
+            if app.state == .notRunning { report += "\n(app quit)\n"; break }
+        }
+        print("AI-IPAD>>>\(report)\n<<<AI-IPAD")
     }
     #endif
 }

@@ -378,6 +378,12 @@ enum OwnerIdentity {
         lock.lock(); addresses = found; names = displayNames; lock.unlock()
     }
 
+    /// Lower-cased words of the owner's display names ("shirshendu", "sasmal").
+    static var nameWords: Set<String> {
+        lock.lock(); let known = names; lock.unlock()
+        return Set(known.flatMap { $0.lowercased().split(whereSeparator: { !$0.isLetter }).map(String.init) }.filter { $0.count >= 3 })
+    }
+
     static func isOwner(_ header: String) -> Bool {
         let addr = address(in: header)
         lock.lock(); defer { lock.unlock() }
@@ -436,32 +442,72 @@ enum EvidenceFallback {
     /// question's words (each email's own words, quoted history cut), then
     /// the emails in date order, then a plain statement of the limitation.
     static func build(query: String, emails: [MBOXParser.RawEmail], reason: String) -> String {
-        let terms = EmailNLPEngine.extractSearchTerms(from: query).map { $0.lowercased() }.filter { $0.count >= 3 }
+        let terms = Array(Set(EmailNLPEngine.extractSearchTerms(from: query)
+            .map { $0.lowercased().trimmingCharacters(in: .punctuationCharacters) }
+            .map { $0.count > 4 && $0.hasSuffix("s") ? String($0.dropLast()) : $0 }
+            .filter { $0.count >= 3 && !["book", "need", "still", "invited", "happened", "total", "where"].contains($0) }
+            // The owner's own name is in nearly every email: not a search word.
+            .filter { !OwnerIdentity.nameWords.contains($0) }))
+        // Whole words only: "train" must not match "retraining".
+        func matches(_ text: String) -> Int {
+            let lower = text.lowercased()
+            return terms.filter { lower.range(of: "\\b\(NSRegularExpression.escapedPattern(for: $0))", options: .regularExpression) != nil }.count
+        }
+        // At least half the question's words: one shared word ("hospital" in
+        // an address) pulled in unrelated mail.
+        let needed = max(1, (terms.count + 1) / 2)
         let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
         var answer = "**Answered from your emails** — \(reason), so here is what the emails themselves say.\n\n"
-        let passages = terms.isEmpty ? [] : ArchiveEvidenceService.chunkExcerpts(terms: terms, in: Array(emails.prefix(60)), maxChunksPerEmail: 1, limit: 5)
-        if !passages.isEmpty {
+
+        // Key passages: each email's own words, markup and header/signature
+        // fragments removed, ranked by how many of the question's words they
+        // contain.
+        func clean(_ text: String) -> String {
+            text.replacingOccurrences(of: #"-{3,}\s*Forwarded message\s*-{3,}"#, with: " ", options: [.regularExpression, .caseInsensitive])
+                // A forward's header fields are not its content; the text after them is.
+                .replacingOccurrences(of: #"\b(?:From|Date|Subject|To|Cc|Sent):\s*[^:]{0,140}?(?=\s(?:From|Date|Subject|To|Cc|Sent):|\s{2,}|$)"#, with: " ", options: .regularExpression)
+                .replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+                .replacingOccurrences(of: "&[a-z]+;", with: " ", options: .regularExpression)
+                .replacingOccurrences(of: "*", with: "")
+                .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespaces)
+        }
+        func isNoise(_ text: String) -> Bool {
+            let lower = text.lowercased()
+            return lower.contains("message-id:") || lower.contains("mso-") || lower.hasPrefix("regards") || lower.hasPrefix("thanks & regards")
+                || lower.hasPrefix("best regards") || lower.contains("received: ")
+        }
+        var passages: [(text: String, email: MBOXParser.RawEmail, score: Int)] = []
+        if !terms.isEmpty {
+            for hit in ArchiveEvidenceService.chunkExcerpts(terms: terms, in: Array(emails.prefix(60)), maxChunksPerEmail: 2, limit: 20) {
+                let text = clean(hit.chunk)
+                guard text.count >= 30, !isNoise(text) else { continue }
+                let score = matches(text)
+                guard score >= needed else { continue }
+                passages.append((text, hit.email, score))
+            }
+        }
+        var seenEmails = Set<UUID>()
+        let topPassages = passages.sorted { $0.score > $1.score }.filter { seenEmails.insert($0.email.id).inserted }.prefix(4)
+        if !topPassages.isEmpty {
             answer += "**Key passages**\n"
-            for hit in passages {
-                let text = hit.chunk.replacingOccurrences(of: "\n", with: " ")
-                    .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-                    .trimmingCharacters(in: .whitespaces)
-                let when = MBOXParser.parseDate(hit.email.headers["Date"]).map { fmt.string(from: $0) } ?? "undated"
-                answer += "- “\(text.prefix(240))\(text.count > 240 ? "…" : "")” — \(OwnerIdentity.display(senderName(hit.email.headers["From"] ?? "?"))), \(when)\n"
+            for p in topPassages {
+                let when = MBOXParser.parseDate(p.email.headers["Date"]).map { fmt.string(from: $0) } ?? "undated"
+                answer += "- “\(p.text.prefix(240))\(p.text.count > 240 ? "…" : "")” — \(OwnerIdentity.display(senderName(p.email.headers["From"] ?? "?"))), \(when)\n"
             }
             answer += "\n"
         }
-        // The emails that matched, oldest first — the order things happened.
+
+        // The emails that match enough of the question, oldest first.
         let relevant = emails.filter { email in
             guard !terms.isEmpty else { return true }
-            let text = ((email.headers["Subject"] ?? "") + " " + email.plainBody.prefix(4000)).lowercased()
-            return terms.contains { text.contains($0) }
+            return matches((email.headers["Subject"] ?? "") + " " + EmailNLPEngine.withoutQuotedReply(String(email.plainBody.prefix(4000)))) >= needed
         }
         let dated = relevant.sorted {
             (MBOXParser.parseDate($0.headers["Date"]) ?? .distantPast) < (MBOXParser.parseDate($1.headers["Date"]) ?? .distantPast)
         }
-        if dated.isEmpty && passages.isEmpty {
-            answer += "No email in this scope contains \(terms.isEmpty ? "the words asked about" : terms.map { "“\($0)”" }.joined(separator: ", ")).\n"
+        if dated.isEmpty && topPassages.isEmpty {
+            answer += "No email in this scope contains \(terms.isEmpty ? "the words asked about" : terms.sorted().map { "“\($0)”" }.joined(separator: ", ")).\n"
         } else if !dated.isEmpty {
             answer += "**The emails, in order**\n"
             for email in dated.prefix(8) {
@@ -471,7 +517,7 @@ enum EvidenceFallback {
             }
             if dated.count > 8 { answer += "- …and \(dated.count - 8) more\n" }
         }
-        answer += "\n_These lines are quoted from your emails, not written by AI. Ask a narrower question (one person, one topic) for a written answer._"
+        answer += "\n_These lines are quoted from your emails, not written by AI._"
         return answer
     }
 

@@ -2897,6 +2897,35 @@ struct AIAssistantView: View {
             ? resolveAutoEngine(query: currentQuery, emailCount: emailCount(for: emailScope))
             : rawEngine
 
+        // Apple Intelligence off or unavailable, engine on Auto: answer from
+        // the emails themselves, through the same relaxed retrieval the model
+        // path uses. The older NLP summary answered "Did I book a train
+        // ticket in 2018?" with "I found 15 emails involving <owner>" and the
+        // hospital claim with the patent thread (2026-10-07 check with Apple
+        // Intelligence off).
+        #if canImport(FoundationModels)
+        if rawEngine == .auto, !foundationModelAvailable, #available(macOS 26, iOS 26, *) {
+            let metrics = beginMetrics("evidenceFallback", query: currentQuery)
+            let started = Date()
+            streamingQuery = currentQuery
+            streamingAnswer = "Thinking..."
+            currentTask = Task {
+                defer {
+                    isProcessing = false
+                    streamingQuery = ""
+                    streamingAnswer = ""
+                }
+                let answer = await FoundationModelEngine.fallbackAnswer(for: currentQuery, reason: "Apple Intelligence isn’t available on this device right now")
+                guard !Task.isCancelled else { return }
+                withAnimation(AnimationTiming.normal) {
+                    conversationHistory.append((query: currentQuery, answer: answer, timestamp: Date(), relatedEmailIDs: []))
+                }
+                finishMetrics(metrics, startedAt: started, answer: answer, citedEmailIDs: [], fallbackUsed: true)
+            }
+            return
+        }
+        #endif
+
         switch engine {
         // ━━━ Engine 1: Apple AI MoE ━━━
         // Full multi-session expert pipeline with fan-in, self-correction
