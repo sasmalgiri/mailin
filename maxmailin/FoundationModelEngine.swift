@@ -7242,8 +7242,8 @@ enum ModelScheduler {
 enum ModelCallLog {
     static let logger = Logger(subsystem: "com.ecosanskriti.mailin", category: "model")
 
-    static func started(_ site: String, promptChars: Int) {
-        logger.notice("MODEL-CALL start site=\(site, privacy: .public) promptChars=\(promptChars)")
+    static func started(_ site: String, inputChars: Int) {
+        logger.notice("MODEL-CALL start site=\(site, privacy: .public) inputChars=\(inputChars)")
     }
     static func finished(_ site: String, since start: Date, outputChars: Int) {
         let ms = Int(Date().timeIntervalSince(start) * 1000)
@@ -7251,7 +7251,9 @@ enum ModelCallLog {
     }
     static func failed(_ site: String, since start: Date, error: Swift.Error) {
         let ms = Int(Date().timeIntervalSince(start) * 1000)
-        logger.error("MODEL-CALL fail site=\(site, privacy: .public) ms=\(ms) error=\(String(describing: error), privacy: .public)")
+        // The error's type is public; its message stays private (a message
+        // could in principle quote model input).
+        logger.error("MODEL-CALL fail site=\(site, privacy: .public) ms=\(ms) errorType=\(String(describing: type(of: error)), privacy: .public) detail=\(String(describing: error))")
     }
 }
 
@@ -7265,7 +7267,7 @@ extension LanguageModelSession {
             throw ModelScheduler.BudgetExceeded()
         }
         let start = Date()
-        ModelCallLog.started(site, promptChars: prompt.count)
+        ModelCallLog.started(site, inputChars: prompt.count)
         do {
             let response = try await respond(to: prompt)
             ModelCallLog.finished(site, since: start, outputChars: response.content.count)
@@ -7285,7 +7287,7 @@ extension LanguageModelSession {
             throw ModelScheduler.BudgetExceeded()
         }
         let start = Date()
-        ModelCallLog.started(site, promptChars: prompt.count)
+        ModelCallLog.started(site, inputChars: prompt.count)
         do {
             let response = try await respond(to: prompt, generating: type)
             ModelCallLog.finished(site, since: start, outputChars: String(describing: response.content).count)
@@ -7302,7 +7304,7 @@ extension LanguageModelSession {
         -> AsyncThrowingStream<LanguageModelSession.ResponseStream<String>.Snapshot, Swift.Error> {
         let site = "\(file):\(line)"
         let start = Date()
-        ModelCallLog.started(site, promptChars: prompt.count)
+        ModelCallLog.started(site, inputChars: prompt.count)
         // Streams are only used to answer the user, never by background jobs.
         let upstream = streamResponse(to: prompt)
         return AsyncThrowingStream { continuation in
