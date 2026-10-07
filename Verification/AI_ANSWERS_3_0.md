@@ -45,7 +45,7 @@ Apple's documentation lists basic math and logical reasoning under "capabilities
 
 | Check | Result |
 |---|---|
-| Full unit suite | 510 XCTest (12 skipped) + 223 Swift Testing — green (one privacy-guard failure from the new model log fixed first) |
+| Full unit suite | 510 XCTest (12 skipped) + 223 Swift Testing: one failure, the privacy guard flagging the new model log. Fixed (log field renamed, error text private) and that guard plus the offline-gate guard re-run green; the whole suite was not re-run after this log-only change |
 | Gate suite | 95 tests green |
 | Mac button crawl | 343 buttons pressed (Archive 83, Professional Workflows 240, AI Insights 10, menus 9), 0 crashes |
 | Release builds | macOS and iOS (generic device) green |
