@@ -1785,3 +1785,36 @@ struct DiscussionAndOpenerTests {
         #expect(FoundationModelEngine.withoutFalseNotFoundOpener(honest, evidence: [ref]) == honest)
     }
 }
+
+struct FallbackAndFiguresTests {
+    @Test("Refusals and empty answers are unusable; real answers are not")
+    func unusable() {
+        #expect(EvidenceFallback.isUnusable("I cannot provide information about requests for content."))
+        #expect(EvidenceFallback.isUnusable("Not enough evidence in this archive to answer that confidently.\n(Response timed out — partial result shown)"))
+        #expect(EvidenceFallback.isUnusable("   "))
+        #expect(!EvidenceFallback.isUnusable("The settlement amount was Rs.1500/-."))
+    }
+
+    @Test("The fallback quotes the emails and names its reason")
+    func fallback() {
+        let email = MBOXParser.RawEmail(
+            headers: ["From": "APML <k@packers.example>", "Subject": "FULL AND FINAL SETTLEMENT FOR AMOUNT RS.1500/-", "Date": "Sat, 25 Apr 2015 10:00:00 +0530", "Message-ID": "<p@x>"],
+            rawSource: "", messageType: "received", attachments: [], timestamp: "", domains: [],
+            plainBody: "Dear Sir, the full and final settlement amount of Rs.1500 has been approved for your shifting claim.", htmlBody: "")
+        let answer = EvidenceFallback.build(query: "What was the settlement amount with the packers?", emails: [email], reason: "Apple Intelligence took too long")
+        #expect(answer.contains("Apple Intelligence took too long"))
+        #expect(answer.localizedCaseInsensitiveContains("settlement"))
+        #expect(answer.localizedCaseInsensitiveContains("rs.1500"))
+        #expect(answer.contains("not written by AI"))
+    }
+
+    @Test("Sentences with figures the emails don't contain are removed")
+    func figures() {
+        let sources = ["we confirm the safe receipt of a payment of INR 10,000", "a payment of INR 20,000", "a payment of INR 3,800"]
+        let answer = "You paid INR 10,000 in October. The total paid is INR 47,600.\n- INR 3,800 in February"
+        let (text, removed) = AIGroundingGate.removingUnsupportedFigures(answer, sources: sources)
+        #expect(removed == 1)
+        #expect(text.contains("INR 10,000") && text.contains("INR 3,800") && !text.contains("47,600"))
+        #expect(text.contains("1 statement removed"))
+    }
+}

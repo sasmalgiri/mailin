@@ -3310,21 +3310,26 @@ struct AIAssistantView: View {
                     }
                     guard let result = try await group.next() else {
                         group.cancelAll()
-                        return await enhancedNLPFallback(query)
+                        return await FoundationModelEngine.fallbackAnswer(for: query, reason: "Apple Intelligence returned no answer")
                     }
                     group.cancelAll()
+                    // A refusal ("I cannot provide…") or an empty reply is
+                    // replaced by the answer from the emails themselves.
+                    if EvidenceFallback.isUnusable(result) {
+                        return await FoundationModelEngine.fallbackAnswer(for: query, reason: "Apple Intelligence declined or could not answer this one")
+                    }
                     return result
                 }
             } catch is CancellationError {
                 return streamingAnswer.isEmpty ? "" : streamingAnswer
             } catch is TimeoutError {
                 let partial = streamingAnswer
-                if !partial.isEmpty {
+                if !EvidenceFallback.isUnusable(partial) {
                     return partial + "\n\n(Response timed out — partial result shown)"
                 }
-                return await enhancedNLPFallback(query)
+                return await FoundationModelEngine.fallbackAnswer(for: query, reason: "Apple Intelligence took too long")
             } catch {
-                return await enhancedNLPFallback(query)
+                return await FoundationModelEngine.fallbackAnswer(for: query, reason: "Apple Intelligence could not answer (\(error.localizedDescription))")
             }
         }
         #endif
@@ -3348,21 +3353,26 @@ struct AIAssistantView: View {
                     }
                     guard let result = try await group.next() else {
                         group.cancelAll()
-                        return await enhancedNLPFallback(query)
+                        return await FoundationModelEngine.fallbackAnswer(for: query, reason: "Apple Intelligence returned no answer")
                     }
                     group.cancelAll()
+                    // A refusal ("I cannot provide…") or an empty reply is
+                    // replaced by the answer from the emails themselves.
+                    if EvidenceFallback.isUnusable(result) {
+                        return await FoundationModelEngine.fallbackAnswer(for: query, reason: "Apple Intelligence declined or could not answer this one")
+                    }
                     return result
                 }
             } catch is CancellationError {
                 return streamingAnswer.isEmpty ? "" : streamingAnswer
             } catch is TimeoutError {
                 let partial = streamingAnswer
-                if !partial.isEmpty {
+                if !EvidenceFallback.isUnusable(partial) {
                     return partial + "\n\n(Response timed out — partial result shown)"
                 }
-                return await enhancedNLPFallback(query)
+                return await FoundationModelEngine.fallbackAnswer(for: query, reason: "Apple Intelligence took too long")
             } catch {
-                return await enhancedNLPFallback(query)
+                return await FoundationModelEngine.fallbackAnswer(for: query, reason: "Apple Intelligence could not answer (\(error.localizedDescription))")
             }
         }
         #endif

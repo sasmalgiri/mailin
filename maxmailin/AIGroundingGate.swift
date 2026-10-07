@@ -404,3 +404,125 @@ enum OwnerIdentity {
         return result
     }
 }
+
+// MARK: - Answer of last resort (kalsmritikosh §13 DeterministicEvidenceFallback)
+
+/// When Apple Intelligence refuses, times out, returns nothing, or is not
+/// available, the user still gets an answer built from the emails that were
+/// retrieved — no model, nothing invented. Owner, 2026-10-07: a direct test
+/// showed the on-device model refusing ordinary questions about personal
+/// email ("I cannot provide information…") 5 times out of 5, and a timed-out
+/// question showed only "Not enough evidence… (Response timed out)".
+enum EvidenceFallback {
+    /// True when model output is not an answer: empty, a refusal, or only the
+    /// grounding gate's abstention text.
+    static func isUnusable(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return true }
+        let lower = trimmed.lowercased()
+        let refusalOpeners = ["i cannot", "i can't", "i can not", "i'm sorry", "i am sorry", "i am unable", "i'm unable",
+                              "i'm not able", "i am not able", "as an ai", "i apologize", "sorry, i"]
+        let firstLine = lower.components(separatedBy: .newlines).first ?? lower
+        if refusalOpeners.contains(where: { firstLine.hasPrefix($0) }) && trimmed.count < 400 { return true }
+        let body = lower.components(separatedBy: "\n---").first ?? lower
+        let stripped = body
+            .replacingOccurrences(of: "(response timed out — partial result shown)", with: "")
+            .replacingOccurrences(of: "(expert pipeline timed out — showing partial result)", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return stripped.isEmpty || stripped.hasPrefix("not enough evidence in this archive")
+    }
+
+    /// The answer from the emails themselves: key passages that contain the
+    /// question's words (each email's own words, quoted history cut), then
+    /// the emails in date order, then a plain statement of the limitation.
+    static func build(query: String, emails: [MBOXParser.RawEmail], reason: String) -> String {
+        let terms = EmailNLPEngine.extractSearchTerms(from: query).map { $0.lowercased() }.filter { $0.count >= 3 }
+        let fmt = DateFormatter(); fmt.dateStyle = .medium; fmt.timeStyle = .none
+        var answer = "**Answered from your emails** — \(reason), so here is what the emails themselves say.\n\n"
+        let passages = terms.isEmpty ? [] : ArchiveEvidenceService.chunkExcerpts(terms: terms, in: Array(emails.prefix(60)), maxChunksPerEmail: 1, limit: 5)
+        if !passages.isEmpty {
+            answer += "**Key passages**\n"
+            for hit in passages {
+                let text = hit.chunk.replacingOccurrences(of: "\n", with: " ")
+                    .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespaces)
+                let when = MBOXParser.parseDate(hit.email.headers["Date"]).map { fmt.string(from: $0) } ?? "undated"
+                answer += "- “\(text.prefix(240))\(text.count > 240 ? "…" : "")” — \(OwnerIdentity.display(senderName(hit.email.headers["From"] ?? "?"))), \(when)\n"
+            }
+            answer += "\n"
+        }
+        // The emails that matched, oldest first — the order things happened.
+        let relevant = emails.filter { email in
+            guard !terms.isEmpty else { return true }
+            let text = ((email.headers["Subject"] ?? "") + " " + email.plainBody.prefix(4000)).lowercased()
+            return terms.contains { text.contains($0) }
+        }
+        let dated = relevant.sorted {
+            (MBOXParser.parseDate($0.headers["Date"]) ?? .distantPast) < (MBOXParser.parseDate($1.headers["Date"]) ?? .distantPast)
+        }
+        if dated.isEmpty && passages.isEmpty {
+            answer += "No email in this scope contains \(terms.isEmpty ? "the words asked about" : terms.map { "“\($0)”" }.joined(separator: ", ")).\n"
+        } else if !dated.isEmpty {
+            answer += "**The emails, in order**\n"
+            for email in dated.prefix(8) {
+                let when = MBOXParser.parseDate(email.headers["Date"]).map { fmt.string(from: $0) } ?? "undated"
+                let subject = EmailNLPEngine.baseSubject(email.headers["Subject"] ?? "")
+                answer += "- \(when) — \(OwnerIdentity.display(senderName(email.headers["From"] ?? "?"))): \(subject.isEmpty ? "(No Subject)" : subject)\n"
+            }
+            if dated.count > 8 { answer += "- …and \(dated.count - 8) more\n" }
+        }
+        answer += "\n_These lines are quoted from your emails, not written by AI. Ask a narrower question (one person, one topic) for a written answer._"
+        return answer
+    }
+
+    private static func senderName(_ header: String) -> String {
+        if OwnerIdentity.isOwner(header) { return header }
+        return AIGroundingGate.senderName(header)
+    }
+}
+
+// MARK: - Figures must come from the emails
+
+extension AIGroundingGate {
+    /// Removes sentences (or list items) whose amounts or long numbers do not
+    /// appear in the emails the model read. Owner, 2026-10-07: asked to add
+    /// three payments, the on-device model answered 47,600 / 37,600 / 37,400
+    /// (correct: 33,800) — Apple lists math under "capabilities to avoid".
+    /// A figure counts as supported when its digits occur in a source, in the
+    /// question, or in `allowed` (counts the app itself stated).
+    static func removingUnsupportedFigures(_ text: String, sources: [String], allowed: Set<String> = []) -> (text: String, removed: Int) {
+        let figure = #"(?:₹|INR\s?|Rs\.?\s?)\s?\d[\d,]*(?:\.\d+)?|\b\d{1,3}(?:,\d{2,3})+(?:\.\d+)?\b|\b\d{4,}(?:\.\d+)?\b"#
+        func digits(_ s: String) -> String { s.filter(\.isNumber) }
+        var known = allowed
+        for source in sources {
+            for match in source.matches(of: try! Regex(#"\d[\d,]*(?:\.\d+)?"#)) {
+                let d = digits(String(source[match.range]))
+                if d.count >= 3 { known.insert(d) }
+            }
+        }
+        var removed = 0
+        var kept: [String] = []
+        // Line by line; within prose lines, sentence by sentence.
+        for line in text.components(separatedBy: "\n") {
+            let isListItem = line.trimmingCharacters(in: .whitespaces).hasPrefix("-") || line.trimmingCharacters(in: .whitespaces).first?.isNumber == true && line.contains(". ")
+            let pieces = isListItem ? [line] : line.components(separatedBy: ". ")
+            var keptPieces: [String] = []
+            for piece in pieces {
+                // Years (1900–2100) are dates, not arithmetic: not checked.
+                let figures = piece.matches(of: try! Regex(figure)).map { digits(String(piece[$0.range])) }
+                    .filter { $0.count >= 3 && !($0.count == 4 && (1900...2100).contains(Int($0) ?? 0)) }
+                if figures.contains(where: { !known.contains($0) }) {
+                    removed += 1
+                } else {
+                    keptPieces.append(piece)
+                }
+            }
+            if !keptPieces.isEmpty || pieces.isEmpty { kept.append(keptPieces.joined(separator: ". ")) }
+        }
+        var result = kept.joined(separator: "\n")
+        if removed > 0 {
+            result += "\n\n_\(removed) statement\(removed == 1 ? "" : "s") removed: \(removed == 1 ? "it gave a figure" : "they gave figures") not found in your emails._"
+        }
+        return (result, removed)
+    }
+}

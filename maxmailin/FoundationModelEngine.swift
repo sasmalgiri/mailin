@@ -1010,6 +1010,13 @@ struct FoundationModelEngine {
         return rest.prefix(1).uppercased() + rest.dropFirst()
     }
 
+    /// The answer of last resort for `query`, from freshly retrieved emails —
+    /// used when the model timed out, failed, or returned nothing usable.
+    static func fallbackAnswer(for query: String, reason: String) async -> String {
+        let (emails, _) = await retrieveContext(query: query, contextLimit: 15)
+        return EvidenceFallback.build(query: query, emails: emails, reason: reason)
+    }
+
     /// Rules every answer path shares, each from a wrong answer on the
     /// owner's archive (2026-10-06): codes expanded into invented places
     /// ("HWH (Hyderabad)"), "couldn't find any" followed by the email found,
@@ -5331,7 +5338,20 @@ struct FoundationModelEngine {
                 raw += "\n\n**Coming up** (quoted): \(recurring)"
             }
         }
-        let cleaned = withoutFalseNotFoundOpener(OwnerIdentity.rewritingOwnerNames(in: withoutPipelineLabels(raw)), evidence: evidence)
+        // A refusal or an empty answer is not shown: the user gets the
+        // answer of last resort from these same emails instead.
+        if EvidenceFallback.isUnusable(raw) {
+            let fallback = EvidenceFallback.build(query: query, emails: emails, reason: "Apple Intelligence declined or could not answer this one")
+            await onUpdate(fallback)
+            return fallback
+        }
+        var cleaned = withoutFalseNotFoundOpener(OwnerIdentity.rewritingOwnerNames(in: withoutPipelineLabels(raw)), evidence: evidence)
+        // Amounts and long numbers the emails don't contain are the model's
+        // own arithmetic or guesses: those sentences are removed.
+        let sources = emails.map { ($0.headers["Subject"] ?? "") + " " + $0.plainBody + " " + ($0.headers["Date"] ?? "") }
+        var allowed: Set<String> = [String(emails.count)]
+        for match in query.matches(of: /\d{3,}/) { allowed.insert(String(query[match.range])) }
+        cleaned = AIGroundingGate.removingUnsupportedFigures(cleaned, sources: sources, allowed: allowed).text
         let gated = AIGroundingGate.ground(answer: cleaned, evidence: evidence).answer
         await onUpdate(gated)
         return gated
