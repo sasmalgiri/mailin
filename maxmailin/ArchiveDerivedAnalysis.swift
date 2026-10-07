@@ -43,6 +43,15 @@ enum DerivedAIAnalysis {
     /// records at a lower version become stale and are recomputed.
     static let analysisVersion = 1
 
+    /// Background analysis uses the on-device NLP engine, not Apple
+    /// Intelligence (kalsmritikosh call-value test: a call must create or
+    /// improve evidence the user relies on). Owner's archive, 2026-10-07:
+    /// model tagging was ~25 calls of 7–11 s for 526 emails — thousands on a
+    /// large archive — for sentiment and category filters the NLP engine
+    /// already computes, and it competed with the user's questions. The
+    /// Smart Auto-Tagger window still uses the model when the user asks.
+    static let usesModelInBackground = false
+
     /// Compute the per-email derived filter attributes for ONE bounded batch,
     /// merging into `existing` records so fields owned by other producers
     /// (topic, thread id, predictive score) are preserved.
@@ -63,7 +72,7 @@ enum DerivedAIAnalysis {
         var phishIDs = Set<UUID>()
 
         #if canImport(FoundationModels)
-        if #available(macOS 26, iOS 26, *), FoundationModelEngine.isAvailable {
+        if usesModelInBackground, #available(macOS 26, iOS 26, *), FoundationModelEngine.isAvailable {
             await DerivedModelPassLock.shared.acquire()
             // Background work: yields to the user's questions, one call at a time.
             let tagResults = await ModelScheduler.background {
@@ -98,7 +107,7 @@ enum DerivedAIAnalysis {
         let needClass = emails.filter { classMap[$0.id] == nil }
         let ranModelPhishing = !phishIDs.isEmpty || { () -> Bool in
             #if canImport(FoundationModels)
-            if #available(macOS 26, iOS 26, *) { return FoundationModelEngine.isAvailable }
+            if usesModelInBackground, #available(macOS 26, iOS 26, *) { return FoundationModelEngine.isAvailable }
             #endif
             return false
         }()

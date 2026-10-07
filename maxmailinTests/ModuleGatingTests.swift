@@ -1818,3 +1818,33 @@ struct FallbackAndFiguresTests {
         #expect(text.contains("1 statement removed"))
     }
 }
+
+struct BudgetAndDisplayTests {
+    @available(macOS 26, iOS 26, *)
+    @Test("The call budget allows exactly its limit")
+    func budget() {
+        let b = ModelScheduler.CallBudget(limit: 2)
+        #expect(b.take() && b.take() && !b.take())
+    }
+
+    @Test("Routing tags are hidden from the user")
+    func display() {
+        #expect(AIAssistantView.displayQuestion("[Smart Triage] Prioritize my emails and suggest actions") == "Prioritize my emails and suggest actions")
+        #expect(AIAssistantView.displayQuestion("Who emails me the most?") == "Who emails me the most?")
+    }
+
+    @Test("Background analysis does not call the model")
+    func background() {
+        #expect(DerivedAIAnalysis.usesModelInBackground == false)
+    }
+}
+
+struct FillerTests {
+    @available(macOS 26, iOS 26, *)
+    @Test("Trailing filler is removed, the answer is kept")
+    func filler() {
+        let text = "The settlement amount was Rs.1500. Let me know if you'd like further assistance!"
+        #expect(FoundationModelEngine.withoutFiller(text) == "The settlement amount was Rs.1500.")
+        #expect(FoundationModelEngine.withoutFiller("Let me know.") == "Let me know.")
+    }
+}

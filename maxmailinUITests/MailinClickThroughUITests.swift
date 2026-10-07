@@ -1654,7 +1654,7 @@ final class MailinClickThroughUITests: XCTestCase {
             // An answer's follow-up is a button: press the first "Tell the
             // story of …" one after Thread Story and record what it gives.
             let followUp = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Ask follow-up: Tell the story of'")).firstMatch
-            if q.hasPrefix("[Thread Story]") {
+            if q.hasPrefix("[Thread Story]") || q.hasPrefix("Narrate this conversation thread") {
                 guard followUp.exists else { report += "\n## Q\(n+1)b: (no follow-up button)\n"; continue }
                 let fq = String(followUp.label.dropFirst("Ask follow-up: ".count))
                 if !followUp.isHittable {

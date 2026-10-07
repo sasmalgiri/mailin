@@ -995,6 +995,21 @@ struct FoundationModelEngine {
         return (contextEmails, total)
     }
 
+    /// Trailing chat filler ("Let me know if you'd like further assistance.")
+    /// carries no information; it is removed from the end of an answer.
+    static func withoutFiller(_ text: String) -> String {
+        let filler = #"(?is)\s*(?:let me know[^.!?\n]*|feel free to[^.!?\n]*|if you (?:need|have|would like|want)[^.!?\n]*|i hope (?:this|that) helps[^.!?\n]*|hope (?:this|that) helps[^.!?\n]*)[.!?]?\s*$"#
+        var result = text
+        // Up to two trailing filler sentences.
+        for _ in 0..<2 {
+            guard let range = result.range(of: filler, options: .regularExpression) else { break }
+            let candidate = String(result[..<range.lowerBound])
+            guard candidate.trimmingCharacters(in: .whitespacesAndNewlines).count >= 20 else { break }
+            result = candidate
+        }
+        return result
+    }
+
     /// "I couldn't find any emails about X. However, here is the email about
     /// X…": the opener is dropped when the answer goes on to name a retrieved
     /// email. A prompt rule alone did not stop it (2026-10-07).
@@ -5345,7 +5360,7 @@ struct FoundationModelEngine {
             await onUpdate(fallback)
             return fallback
         }
-        var cleaned = withoutFalseNotFoundOpener(OwnerIdentity.rewritingOwnerNames(in: withoutPipelineLabels(raw)), evidence: evidence)
+        var cleaned = withoutFiller(withoutFalseNotFoundOpener(OwnerIdentity.rewritingOwnerNames(in: withoutPipelineLabels(raw)), evidence: evidence))
         // Amounts and long numbers the emails don't contain are the model's
         // own arithmetic or guesses: those sentences are removed.
         let sources = emails.map { ($0.headers["Subject"] ?? "") + " " + $0.plainBody + " " + ($0.headers["Date"] ?? "") }
@@ -7143,6 +7158,19 @@ enum ModelScheduler {
     @TaskLocal static var isBackground = false
     private static let interactive = OSAllocatedUnfairLock(initialState: 0)
 
+    /// Per-question budget for the model's helper calls (classify, expert
+    /// passes, checks) — kalsmritikosh LLMCallBudget. The final written
+    /// answer (a stream) is never counted, so it is never starved; a helper
+    /// call over budget is refused, and callers already skip a failed expert.
+    final class CallBudget: @unchecked Sendable {
+        private let lock = NSLock()
+        private var remaining: Int
+        init(limit: Int) { remaining = limit }
+        func take() -> Bool { lock.lock(); defer { lock.unlock() }; guard remaining > 0 else { return false }; remaining -= 1; return true }
+    }
+    struct BudgetExceeded: Swift.Error {}
+    @TaskLocal static var budget: CallBudget?
+
     static func beginInteractive() { interactive.withLock { $0 += 1 } }
     static func endInteractive() { interactive.withLock { $0 = max(0, $0 - 1) } }
     static var interactiveInFlight: Bool { interactive.withLock { $0 > 0 } }
@@ -7190,6 +7218,10 @@ extension LanguageModelSession {
     func loggedRespond(to prompt: String, file: StaticString = #fileID, line: Int = #line) async throws -> Response<String> {
         let site = "\(file):\(line)"
         await ModelScheduler.waitForTurn()
+        if let budget = ModelScheduler.budget, !budget.take() {
+            ModelCallLog.logger.notice("MODEL-CALL skipped site=\(site, privacy: .public) reason=budget")
+            throw ModelScheduler.BudgetExceeded()
+        }
         let start = Date()
         ModelCallLog.started(site, promptChars: prompt.count)
         do {
@@ -7206,6 +7238,10 @@ extension LanguageModelSession {
                                            file: StaticString = #fileID, line: Int = #line) async throws -> Response<Content> {
         let site = "\(file):\(line)"
         await ModelScheduler.waitForTurn()
+        if let budget = ModelScheduler.budget, !budget.take() {
+            ModelCallLog.logger.notice("MODEL-CALL skipped site=\(site, privacy: .public) reason=budget")
+            throw ModelScheduler.BudgetExceeded()
+        }
         let start = Date()
         ModelCallLog.started(site, promptChars: prompt.count)
         do {

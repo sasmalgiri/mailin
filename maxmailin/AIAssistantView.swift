@@ -819,7 +819,7 @@ struct AIAssistantView: View {
                             Image(systemName: "sparkle")
                                 .font(Typography.caption1)
                                 .foregroundStyle(.blue)
-                            Text(question)
+                            Text(Self.displayQuestion(question))
                                 .font(Typography.callout)
                                 .foregroundColor(.primary)
                             Spacer()
@@ -833,7 +833,7 @@ struct AIAssistantView: View {
                     }
                     .buttonStyle(.plain)
                     .hoverEffect(scale: 1.01)
-                    .accessibilityLabel("Ask: \(question)")
+                    .accessibilityLabel("Ask: \(Self.displayQuestion(question))")
                     .accessibilityHint("Send this question to the AI assistant")
                     .disabled(isProcessing)
                 }
@@ -923,7 +923,7 @@ struct AIAssistantView: View {
             HStack {
                 Spacer(minLength: Spacing.xxLarge)
                 VStack(alignment: .trailing, spacing: 2) {
-                    Text(query)
+                    Text(Self.displayQuestion(query))
                         .font(Typography.body)
                         .padding(.horizontal, Spacing.small)
                         .padding(.vertical, Spacing.xSmall)
@@ -938,7 +938,7 @@ struct AIAssistantView: View {
                             .foregroundColor(AppColors.secondary.opacity(0.6))
                     }
                 }
-                .accessibilityLabel("Your question: \(query)")
+                .accessibilityLabel("Your question: \(Self.displayQuestion(query))")
             }
 
             HStack {
@@ -1111,6 +1111,12 @@ struct AIAssistantView: View {
     @State private var showProvenanceSheet: Bool = false
     @State private var showMetricsSheet: Bool = false
     @ObservedObject private var provenanceStore = AIProvenanceStore.shared
+
+    /// A question as the user sees it: the routing tag the app uses
+    /// internally ("[Smart Triage] …") is not shown.
+    nonisolated static func displayQuestion(_ question: String) -> String {
+        question.replacingOccurrences(of: #"^\s*\[[^\]]{2,30}\]\s*"#, with: "", options: .regularExpression)
+    }
 
     /// The question in an answer line of the form `Ask: “…”` (optionally a
     /// list item, optionally followed by a note in brackets).
@@ -3265,8 +3271,12 @@ struct AIAssistantView: View {
             // A question in flight: background model work waits for it.
             ModelScheduler.beginInteractive()
             defer { ModelScheduler.endInteractive() }
+            // At most five helper calls per question; the written answer
+            // itself is never counted (kalsmritikosh call budget).
+            let budget = ModelScheduler.CallBudget(limit: 5)
             do {
-                return try await withThrowingTaskGroup(of: String.self) { group in
+                return try await ModelScheduler.$budget.withValue(budget) {
+                try await withThrowingTaskGroup(of: String.self) { group in
                     group.addTask {
                         switch specialAction {
                         case .triage:
@@ -3319,6 +3329,7 @@ struct AIAssistantView: View {
                         return await FoundationModelEngine.fallbackAnswer(for: query, reason: "Apple Intelligence declined or could not answer this one")
                     }
                     return result
+                }
                 }
             } catch is CancellationError {
                 return streamingAnswer.isEmpty ? "" : streamingAnswer
