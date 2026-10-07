@@ -50,3 +50,26 @@ Apple's documentation lists basic math and logical reasoning under "capabilities
 | Mac button crawl | 343 buttons pressed (Archive 83, Professional Workflows 240, AI Insights 10, menus 9), 0 crashes |
 | Release builds | macOS and iOS (generic device) green |
 | `Scripts/verify-no-network.sh` on the Release app | PASS — 8 checks, 0 failures: "This signed build cannot open a network connection." |
+
+## Later the same day (2026-10-07, evening)
+
+| Check | Result |
+|---|---|
+| AI with Apple Intelligence off (Debug launch switch `-simulateAppleIntelligenceOff`) | Model log: 0 calls. App-built answers unchanged and correct; general questions now answered from the emails (train booking, hospital claim request, interviews, still-to-do, packers) instead of the old NLP summary. |
+| iPad simulator after importing Sent.mbox (534 emails) | 10/10 typed questions correct, including the discussion story |
+
+## Redact & Export — verified by its output file
+
+The Mac crawl could not reach the button ("not visible"): the settings had no scroll view and pushed it below the window. Fixed (settings scroll, actions pinned). Then the button was pressed in the app on the owner's archive and both files were checked (`~/mailin-loc-work/check-redaction.py`):
+
+| Check on RedactedExport.txt / RedactionLog.csv | Result |
+|---|---|
+| Emails exported | 526 of 526 (the export now streams the whole scope; it used to write only the tool's newest 2,000) |
+| Every entry has a Date line; attachments listed (redacted names, marked not included) | Yes; 152 entries list attachments |
+| Email addresses / phone numbers left in the output | 0 / 0 |
+| HTML markup left | 0 tags (HTML-only and HTML-in-plain bodies are converted to text) |
+| Long identifiers kept (application no., patent no.) | Yes (phone pattern no longer matches inside longer numbers) |
+| Log | 3,707 rows, header once |
+| On-screen confirmation | "Exported 526 redacted emails with 6328 redactions." |
+
+Known: the default SSN rule also redacts other 9-digit numbers (booking IDs, link parameters) — over-redaction, not a leak; the rule can be switched off.

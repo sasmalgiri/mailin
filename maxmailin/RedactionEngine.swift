@@ -207,9 +207,18 @@ struct RedactionEngine {
         let (redactedFrom, fromCount) = redact(text: email.headers["From"] ?? "", rules: rules)
         let (redactedTo, toCount) = redact(text: email.headers["To"] ?? "", rules: rules)
 
-        let (redactedPlain, plainCount) = redact(text: email.plainBody, rules: rules)
-        let (redactedHtml, htmlCount) = redact(text: email.htmlBody, rules: rules)
-        let redactedBody = redactedPlain.isEmpty ? redactedHtml : redactedPlain
+        // Some senders put HTML in the "plain" part (newsletters): that is
+        // converted too, so the export is readable text throughout.
+        let plainIsMarkup = email.plainBody.range(of: #"(?i)<(html|body|div|table|style|a\s+href|p\b|span|font)"#, options: .regularExpression) != nil
+        let plainSource = plainIsMarkup ? plainText(fromHTML: email.plainBody) : email.plainBody
+        let (redactedPlain, plainCount) = redact(text: plainSource, rules: rules)
+        // An HTML-only email is exported as its text, not as markup: the
+        // export showed raw <img>, <style> and Outlook list codes (2026-10-07).
+        // The HTML is still redacted as markup too, so anything hidden in an
+        // attribute is counted.
+        let (_, htmlCount) = redact(text: email.htmlBody, rules: rules)
+        let (redactedHtmlText, _) = redact(text: plainText(fromHTML: email.htmlBody), rules: rules)
+        let redactedBody = redactedPlain.isEmpty ? redactedHtmlText : redactedPlain
         let bodyCount = plainCount + htmlCount
 
         let ccText = email.headers["Cc"] ?? ""
@@ -233,6 +242,24 @@ struct RedactionEngine {
             date: email.headers["Date"] ?? "",
             attachmentNames: attachmentNames
         )
+    }
+
+    /// Readable text from an HTML body: style and script blocks dropped,
+    /// line-breaking tags turned into new lines, other tags removed, common
+    /// entities decoded, blank runs collapsed.
+    static func plainText(fromHTML html: String) -> String {
+        guard !html.isEmpty else { return "" }
+        var text = html
+            .replacingOccurrences(of: #"(?is)<(style|script|head)[^>]*>.*?</\1>"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"(?i)<br\s*/?>|</p>|</div>|</tr>|</li>|</h[1-6]>"#, with: "\n", options: .regularExpression)
+            .replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+        for (entity, char) in [("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""), ("&#39;", "'"), ("&rsquo;", "’"), ("&lsquo;", "‘"), ("&ldquo;", "“"), ("&rdquo;", "”")] {
+            text = text.replacingOccurrences(of: entity, with: char)
+        }
+        text = text.replacingOccurrences(of: #"&#?[a-zA-Z0-9]+;"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"[ \t]+"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\n\s*\n\s*\n+"#, with: "\n\n", options: .regularExpression)
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Redact a batch of emails.

@@ -1860,3 +1860,47 @@ struct UnwitnessedDateTests {
         #expect(fixed == "Hatigarm asked a question. On 19 Sep, the time was confirmed.")
     }
 }
+
+struct RedactedExportTests {
+    private func email(_ i: Int, body: String, html: String = "", from: String = "Ann Lee <ann@corp.example>") -> MBOXParser.RawEmail {
+        MBOXParser.RawEmail(
+            headers: ["From": from, "To": "me@example.com", "Subject": "Case \(i)", "Date": "Tue, 14 Mar 2017 09:41:00 +0000", "Message-ID": "<r\(i)@x>"],
+            rawSource: "", messageType: "received", attachments: [], timestamp: "", domains: [],
+            plainBody: body, htmlBody: html)
+    }
+
+    @Test("HTML-only bodies export as text; IDs are not phones")
+    func bodyAndIDs() {
+        let html = "<html><head><style>p{color:red}</style></head><body><p>Call 9123861172</p><div>App No. 202331019665</div><img src=\"x.png\"></body></html>"
+        let r = RedactionEngine.redactEmail(email(1, body: "", html: html), rules: RedactionEngine.defaultRules)
+        #expect(!r.body.contains("<") && !r.body.contains("color:red"))
+        #expect(r.body.contains("[REDACTED-PHONE]"))
+        #expect(r.body.contains("202331019665"))
+        #expect(r.date == "Tue, 14 Mar 2017 09:41:00 +0000")
+    }
+
+    @Test("Every email is written, with dates and totals; a surviving name blocks the export")
+    func writeAndBlock() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("redact-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let emails = (0..<450).map { email($0, body: "Reach me at ann@corp.example or 9123861172.") }
+        let text = dir.appendingPathComponent("e.txt"), log = dir.appendingPathComponent("l.csv")
+        let ok = await RedactionEngine.writeExport(textURL: text, logURL: log, query: nil, emails: emails,
+                                                   rules: RedactionEngine.defaultRules, person: nil)
+        #expect(ok.emails == 450 && ok.leaks.isEmpty && ok.failure == nil)
+        let out = try String(contentsOf: text, encoding: .utf8)
+        #expect(out.components(separatedBy: "\nDate: ").count - 1 == 450)
+        #expect(out.hasSuffix("Total Emails: 450\nTotal Redactions: \(ok.redactions)\n"))
+        #expect(!out.contains("ann@corp.example") && !out.contains("9123861172"))
+        let csv = try String(contentsOf: log, encoding: .utf8)
+        #expect(csv.components(separatedBy: "EmailID,Field").count - 1 == 1)
+
+        // Person target "Ann Lee" is in the From display name, which no
+        // default rule removes: the export is blocked and both files deleted.
+        let blocked = await RedactionEngine.writeExport(textURL: text, logURL: log, query: nil, emails: emails,
+                                                        rules: RedactionEngine.defaultRules, person: ("Ann Lee", nil))
+        #expect(!blocked.leaks.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: text.path) && !FileManager.default.fileExists(atPath: log.path))
+    }
+}

@@ -1733,12 +1733,19 @@ final class MailinClickThroughUITests: XCTestCase {
         func answerSavePanel(name: String) -> Bool {
             let panel = app.sheets.firstMatch.waitForExistence(timeout: 10) ? app.sheets.firstMatch : app.dialogs.firstMatch
             guard panel.waitForExistence(timeout: 10) else { return false }
+            // Pasted, not typed: synthesized typing timed out in the panel.
+            func paste(_ text: String) {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+                app.typeKey("a", modifierFlags: .command)
+                app.typeKey("v", modifierFlags: .command)
+                Thread.sleep(forTimeInterval: 0.5)
+            }
             // File name first, then the folder via Go to Folder.
-            app.typeKey("a", modifierFlags: .command)
-            app.typeText(name)
+            paste(name)
             panel.typeKey("g", modifierFlags: [.command, .shift])
             Thread.sleep(forTimeInterval: 1.0)
-            app.typeText(outDir)
+            paste(outDir)
             app.typeKey(.return, modifierFlags: [])
             Thread.sleep(forTimeInterval: 1.5)
             let save = panel.buttons["Save"].firstMatch
@@ -1751,9 +1758,24 @@ final class MailinClickThroughUITests: XCTestCase {
         XCTAssertTrue(answerSavePanel(name: "RedactedExport.txt"), "first save panel")
         XCTAssertTrue(answerSavePanel(name: "RedactionLog.csv"), "second save panel")
 
-        let done = window.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Exported ' OR label BEGINSWITH 'Export blocked' OR label BEGINSWITH 'Export failed'")).firstMatch
-        let finished = done.waitForExistence(timeout: 300)
-        let message = finished ? done.label : "(no result message)"
+        // Anywhere in the app: after the save panels the window reference
+        // can go stale, and the message was missed while it showed.
+        // The message is a Label: its text is the element's value on macOS.
+        let done = app.descendants(matching: .any).matching(NSPredicate(format:
+            "label BEGINSWITH 'Exported ' OR value BEGINSWITH 'Exported ' OR label BEGINSWITH 'Export blocked' OR value BEGINSWITH 'Export blocked' OR value BEGINSWITH 'Export failed'")).firstMatch
+        let finished = done.waitForExistence(timeout: 120)
+        var message = finished ? ((done.value as? String).flatMap { $0.isEmpty ? nil : $0 } ?? done.label) : "(no result message)"
+        if !finished, let snap = try? app.snapshot() {
+            // What the window shows instead, for the report.
+            var seen: [String] = []
+            func walk(_ e: XCUIElementSnapshot) {
+                let t = ((e.value as? String) ?? "") + " " + e.label
+                if t.lowercased().contains("export") { seen.append("\(e.elementType.rawValue): \(t.trimmingCharacters(in: .whitespaces))") }
+                e.children.forEach(walk)
+            }
+            walk(snap)
+            message += " | on screen: " + seen.prefix(12).joined(separator: " | ")
+        }
         print("REDACT-RESULT>>>\(message)<<<REDACT-RESULT")
         XCTAssertTrue(message.hasPrefix("Exported "), "export finished: \(message)")
     }
