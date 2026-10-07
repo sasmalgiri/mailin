@@ -1611,6 +1611,19 @@ struct BroaderQuestionTests {
         #expect(AIAssistantView.years(in: "Compare 2012 and 2023, then 2012 again") == [2012, 2023])
         #expect(AIAssistantView.paymentQuestion(in: "What did I buy on Udemy and how much did I pay?") == "udemy")
         #expect(AIAssistantView.paymentQuestion(in: "How much did I pay on Udemy?") == "udemy")
+    }
+
+    @Test("A receipt names what was bought; tied oldest emails are both named")
+    func receiptAndTies() async {
+        let receipt = email("Order complete! Start learning now.", from: "Udemy <hello@alerts.udemy.com>", date: "Mon, 18 Mar 2024 13:49:21 +0000",
+                            body: "Ready to jump in? Start learning ( https://ablink.alerts.udemy.com/ls/click?upn=\(String(repeating: "x9", count: 120)) )\nCourse name\nMake Money Online: Secrets to Making Money On Fiverr Fast      List Price:\n₹799.00 Your Price:\n₹499.00\nTotal:\n₹499.00")
+        let paid = await AIAssistantView.handleSmartQuery(query: "What did I buy on Udemy and how much did I pay?")!([receipt]).answer
+        #expect(paid.contains("Secrets to Making Money On Fiverr Fast") && paid.contains("₹499") && !paid.contains("https://"))
+        let bounce = email("Delivery Status Notification (Failure)", from: "Mail Delivery Subsystem <d@x>", date: "Mon, 23 Jul 2007 09:00:06 -0700", body: "a")
+        let mine = email("", from: "Me <me@x>", date: "Mon, 23 Jul 2007 21:30:06 +0530", body: "b", type: "sent")
+        let later = email("Later", from: "A <a@x>", date: "Tue, 24 Jul 2007 10:00:00 +0530", body: "c")
+        let oldest = await AIAssistantView.handleSmartQuery(query: "When is my oldest email from?")!([later, mine, bounce]).answer
+        #expect(oldest.contains("Delivery Status Notification (Failure)") && oldest.contains("(No Subject)"))
         #expect(AIAssistantView.handleSmartQuery(query: "Which year did I get the most emails?") != nil)
         #expect(AIAssistantView.handleSmartQuery(query: "How much loan was approved for me?") != nil)
     }

@@ -70,8 +70,20 @@ public class MIMEParser {
                ((filename != nil) && !disposition.contains("inline"))
     }
 
+    // Header names are case-insensitive (RFC 5322 §1.2.2). Outlook 12 wrote
+    // "content-type:", the lookups below missed it, and a three-level
+    // multipart message was stored as raw MIME text (2026-10-07). The MIME
+    // structure fields are stored under one spelling; other names keep
+    // theirs, since callers already look up variants like "Message-Id".
+    private static let canonicalMIMEHeaders: [String: String] = [
+        "content-type": "Content-Type",
+        "content-transfer-encoding": "Content-Transfer-Encoding",
+        "content-disposition": "Content-Disposition",
+        "content-id": "Content-ID",
+    ]
+
     // --- Legacy fallback helpers ---
-    private static func parseHeaders(from raw: String) -> [String: String] {
+    static func parseHeaders(from raw: String) -> [String: String] {
         var headers = [String: String]()
         var currentKey: String?
         var currentValue = ""
@@ -84,7 +96,8 @@ public class MIMEParser {
                 if let key = currentKey {
                     headers[key] = currentValue.trimmingCharacters(in: .whitespaces)
                 }
-                currentKey = String(line[..<range.lowerBound]).trimmingCharacters(in: .whitespaces)
+                let name = String(line[..<range.lowerBound]).trimmingCharacters(in: .whitespaces)
+                currentKey = canonicalMIMEHeaders[name.lowercased()] ?? name
                 currentValue = String(line[range.upperBound...]).trimmingCharacters(in: .whitespaces)
             } else {
                 currentValue += " " + line.trimmingCharacters(in: .whitespaces)

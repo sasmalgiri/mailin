@@ -2321,6 +2321,19 @@ struct AIAssistantView: View {
             return (query: query, answer: "Could not read that question.", timestamp: Date(), relatedEmailIDs: [])
         }
         struct Payment { let amount: Double; let shown: String; let sentence: String; let email: MBOXParser.RawEmail; let date: Date? }
+        // What is shown for a payment: the text leading up to the amount,
+        // links removed. A receipt's sentence began with a tracking link and
+        // was cut before the course name (2026-10-07).
+        func leadIn(_ sentence: String, upTo end: Int) -> String {
+            let ns = sentence as NSString
+            let head = ns.substring(to: min(end, ns.length))
+                .replacingOccurrences(of: #"\(?\s*https?://\S+\s*\)?"#, with: " ", options: .regularExpression)
+                .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespaces)
+            guard head.count > 160 else { return head }
+            let tail = String(head.suffix(160))
+            return "…" + (tail.firstIndex(of: " ").map { String(tail[tail.index(after: $0)...]) } ?? tail)
+        }
         var payments: [Payment] = []
         for email in scoped {
             let lines = email.plainBody.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix(">") }
@@ -2333,7 +2346,7 @@ struct AIAssistantView: View {
                 for match in regex.matches(in: sentence, range: NSRange(location: 0, length: ns.length)) {
                     let digits = ns.substring(with: match.range(at: 3)).replacingOccurrences(of: ",", with: "")
                     guard let amount = Double(digits), amount > 0 else { continue }
-                    payments.append(Payment(amount: amount, shown: ns.substring(with: match.range(at: 3)), sentence: sentence.trimmingCharacters(in: .whitespaces),
+                    payments.append(Payment(amount: amount, shown: ns.substring(with: match.range(at: 3)), sentence: leadIn(sentence, upTo: NSMaxRange(match.range)),
                                             email: email, date: MBOXParser.parseDate(email.headers["Date"])))
                 }
             }
@@ -2359,8 +2372,7 @@ struct AIAssistantView: View {
         var answer = "**₹\(number.string(from: NSNumber(value: total)) ?? String(total)) across \(unique.count) payment\(unique.count == 1 ? "" : "s")\(who)** — the sum of the amounts below, added by the app. Payments not written in your emails are not included.\n\n"
         for p in unique.prefix(12) {
             let when = p.date.map { fmt.string(from: $0) } ?? "undated"
-            let sentence = p.sentence.count > 160 ? String(p.sentence.prefix(160)) + "…" : p.sentence
-            answer += "- **₹\(p.shown)** — \(when) — “\(sentence)” (\(senderDisplayName(p.email.headers["From"] ?? "?")))\n"
+            answer += "- **₹\(p.shown)** — \(when) — “\(p.sentence)” (\(senderDisplayName(p.email.headers["From"] ?? "?")))\n"
         }
         if unique.count > 12 { answer += "…and \(unique.count - 12) more.\n" }
         return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: Array(unique.prefix(5).map(\.email.id)))
@@ -2936,10 +2948,17 @@ struct AIAssistantView: View {
             answer = "**Email Timeline:**\n\n"
             // What they were, not only when: "When is my oldest email from
             // and what was it?" got the date alone.
+            // Every email at that instant: a bounce notice carries the same
+            // time as the message it bounced (written in another time zone).
             func describe(_ date: Date) -> String {
-                guard let email = emails.first(where: { MBOXParser.parseDate($0.headers["Date"]) == date }) else { return "" }
-                let subject = EmailNLPEngine.baseSubject(email.headers["Subject"] ?? "")
-                return " — “\(subject.isEmpty ? "(No Subject)" : subject)” from \(senderDisplayName(email.headers["From"] ?? "?"))"
+                let atDate = emails.filter { MBOXParser.parseDate($0.headers["Date"]) == date }
+                    .sorted { OwnerIdentity.isOwner($0.headers["From"] ?? "") == false && OwnerIdentity.isOwner($1.headers["From"] ?? "") }
+                let named = atDate.prefix(2).map { email -> String in
+                    let subject = EmailNLPEngine.baseSubject(email.headers["Subject"] ?? "")
+                    return "“\(subject.isEmpty ? "(No Subject)" : subject)” from \(senderDisplayName(email.headers["From"] ?? "?"))"
+                }
+                guard !named.isEmpty else { return "" }
+                return " — " + named.joined(separator: " and ") + (atDate.count > 2 ? " (\(atDate.count) emails at that time)" : "")
             }
             answer += "- **Oldest:** \(fmt.string(from: first))\(describe(first))\n"
             answer += "- **Newest:** \(fmt.string(from: last))\(describe(last))\n"

@@ -90,9 +90,9 @@ What was fixed:
 - **Typos:** misspelled routing words are corrected ("wat is my patnt numbr" → patent number 555489).
 - **Model answers:** a "nothing found" claim when the emails read do match is replaced by the quoted answer. Sources no longer cite every email the owner sent because the owner's name appears in the answer.
 
-Still imperfect:
-- One Abbott email is stored as raw MIME, so the model quoted MIME boundaries from it.
-- The Udemy answer shows the receipt's link text, not the course name.
-- The oldest email is reported as the owner's own message, which has the same timestamp as the bounce notice.
+Follow-up fixes the same night:
+- **Raw MIME in an email's text.** The cause was a parser bug: an Outlook 12 email wrote `content-type:` in lowercase, and the parser matched header names case-sensitively. MIME structure headers are now matched case-insensitively (RFC 5322); ArchiveCore test `HeaderCaseTests` fails on the old parser and passes on the new one. Already-imported emails keep their old text until the archive is imported again.
+- **Udemy:** the answer now shows the course name ("Make Money Online: Secrets to Making Money On Fiverr Fast … Your Price: ₹499.00"), with links removed. Verified live.
+- **Oldest email:** the bounce notice and the owner's message share the same instant, and both are now named. Verified live.
 
-Gate suites: 102 Swift Testing + 68 XCTest, green.
+Gate suites: 103 Swift Testing + 68 XCTest, green; ArchiveCore HeaderCaseTests green.
