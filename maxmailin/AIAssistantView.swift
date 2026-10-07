@@ -1886,6 +1886,14 @@ struct AIAssistantView: View {
             return { emails in smartWhoIs(name: name, query: query, emails: emails) }
         }
 
+        // "Summarize what Ann and I discussed (about X)" / "my conversation
+        // with Ann (about X)": the conversation with that person, told as a
+        // story. Through the general path the model opened with "I couldn't
+        // find any emails…" and listed the thread instead (2026-10-07).
+        if let request = discussionRequest(in: query) {
+            return { emails in await smartDiscussion(person: request.person, topic: request.topic, query: query, emails: emails) }
+        }
+
         // "Tell the story of <subject>": one named conversation, narrated —
         // the follow-up Thread Story offers for the next busiest threads.
         if let subject = threadStorySubject(in: query) {
@@ -2381,6 +2389,77 @@ struct AIAssistantView: View {
         return (query: query, answer: answer, timestamp: Date(), relatedEmailIDs: Array(hits.prefix(5).map(\.email.id)))
     }
 
+    /// The person (and optional topic) in "what Ann and I discussed (about
+    /// X)", "my conversation/discussion/emails with Ann (about X)".
+    nonisolated static func discussionRequest(in query: String) -> (person: String, topic: String?)? {
+        let lower = query.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: " ?.!"))
+        let patterns = [
+            #"what (?:did )?(.+?) and i (?:discussed|discuss|talked about|talk about|agreed|agree on|decided)(?: about| on| regarding)?(.*)$"#,
+            #"(?:my |our )?(?:conversations?|discussions?|correspondence|exchanges?) with (.+?)(?: about| on| regarding)\s+(.+)$"#,
+            #"(?:summari[sz]e|tell me about|recap) (?:my |our )?(?:conversations?|discussions?|correspondence|exchanges?) with (.+?)$"#,
+        ]
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: lower, range: NSRange(lower.startIndex..., in: lower)),
+                  let personRange = Range(match.range(at: 1), in: lower) else { continue }
+            var person = String(lower[personRange])
+            for lead in ["summarize ", "summarise ", "tell me ", "recap "] where person.hasPrefix(lead) { person.removeFirst(lead.count) }
+            person = person.trimmingCharacters(in: .whitespaces)
+            var topic: String?
+            if match.numberOfRanges > 2, let topicRange = Range(match.range(at: 2), in: lower) {
+                let t = String(lower[topicRange]).trimmingCharacters(in: .whitespaces)
+                topic = t.isEmpty ? nil : t
+            }
+            guard !person.isEmpty, person.split(separator: " ").count <= 4 else { continue }
+            return (person, topic)
+        }
+        return nil
+    }
+
+    nonisolated private static func smartDiscussion(person: String, topic: String?, query: String, emails: [MBOXParser.RawEmail]) async -> SmartQueryResult {
+        let needle = person.lowercased()
+        let involved = emails.filter {
+            (($0.headers["From"] ?? "") + " " + ($0.headers["To"] ?? "") + " " + ($0.headers["Cc"] ?? "")).lowercased().contains(needle)
+        }
+        guard !involved.isEmpty else {
+            return (query: query, answer: "**No emails with \(person)** in this scope — not as sender or recipient.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        // The conversations with them; with a topic, the one whose messages
+        // contain the most of the topic's words.
+        let groups = Dictionary(grouping: emails.filter { email in
+            let key = EmailNLPEngine.conversationKey(email)
+            return involved.contains { EmailNLPEngine.conversationKey($0) == key }
+        }, by: EmailNLPEngine.conversationKey)
+        let words = (topic.map { EmailNLPEngine.extractSearchTerms(from: $0) } ?? [])
+            .map { $0.lowercased() }
+            .map { $0.count > 4 && $0.hasSuffix("s") ? String($0.dropLast()) : $0 }
+            .filter { $0.count >= 3 }
+        func coverage(_ members: [MBOXParser.RawEmail]) -> Int {
+            let text = members.map { (($0.headers["Subject"] ?? "") + " " + $0.plainBody.prefix(3000)).lowercased() }.joined(separator: " ")
+            return words.filter { text.contains($0) }.count
+        }
+        guard let best = groups.values.max(by: { (coverage($0), $0.count) < (coverage($1), $1.count) }) else {
+            return (query: query, answer: "**No conversation with \(person)** in this scope.", timestamp: Date(), relatedEmailIDs: [])
+        }
+        if !words.isEmpty && coverage(best) == 0 {
+            return (query: query, answer: "**No conversation with \(person) mentions “\(topic ?? "")”.** You have \(involved.count) email\(involved.count == 1 ? "" : "s") with them; ask “Who is \(person)?” to see their conversations.", timestamp: Date(), relatedEmailIDs: Array(involved.prefix(5).map(\.id)))
+        }
+        let thread = best.sorted {
+            (MBOXParser.parseDate($0.headers["Date"]) ?? .distantPast) < (MBOXParser.parseDate($1.headers["Date"]) ?? .distantPast)
+        }
+        let ids = Array(thread.suffix(5).map(\.id))
+        #if canImport(FoundationModels)
+        if #available(macOS 26, iOS 26, *), FoundationModelEngine.isAvailable {
+            let header = FoundationModelEngine.episodeHeader(thread, isBusiest: false)
+            ModelScheduler.beginInteractive()
+            defer { ModelScheduler.endInteractive() }
+            let story = (try? await FoundationModelEngine.synthesizeThread(thread) { _ in }) ?? ""
+            return (query: query, answer: header + OwnerIdentity.rewritingOwnerNames(in: story), timestamp: Date(), relatedEmailIDs: ids)
+        }
+        #endif
+        return await smartThreadStory(subject: EmailNLPEngine.baseSubject(thread.first?.headers["Subject"] ?? ""), query: query, emails: thread)
+    }
+
     /// The subject in "tell / narrate / show (me) the story of <subject>".
     nonisolated static func threadStorySubject(in query: String) -> String? {
         guard let range = query.range(of: #"^\s*(tell|narrate|show)( me)? the story of\s+"#, options: [.regularExpression, .caseInsensitive]) else { return nil }
@@ -2399,6 +2478,8 @@ struct AIAssistantView: View {
         #if canImport(FoundationModels)
         if #available(macOS 26, iOS 26, *), FoundationModelEngine.isAvailable {
             let header = FoundationModelEngine.episodeHeader(thread, isBusiest: false)
+            ModelScheduler.beginInteractive()
+            defer { ModelScheduler.endInteractive() }
             let story = (try? await FoundationModelEngine.synthesizeThread(thread) { _ in }) ?? ""
             return (query: query, answer: header + OwnerIdentity.rewritingOwnerNames(in: story), timestamp: Date(), relatedEmailIDs: ids)
         }
@@ -3181,6 +3262,9 @@ struct AIAssistantView: View {
         #if canImport(FoundationModels)
         if #available(macOS 26, iOS 26, *) {
             let specialAction = Self.detectSpecialAction(query)
+            // A question in flight: background model work waits for it.
+            ModelScheduler.beginInteractive()
+            defer { ModelScheduler.endInteractive() }
             do {
                 return try await withThrowingTaskGroup(of: String.self) { group in
                     group.addTask {

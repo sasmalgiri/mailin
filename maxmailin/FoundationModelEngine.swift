@@ -10,6 +10,7 @@ struct EmailTagResult {
 
 #if canImport(FoundationModels)
 import FoundationModels
+import os
 
 // MARK: - @Generable Structured Output Types
 
@@ -994,6 +995,21 @@ struct FoundationModelEngine {
         return (contextEmails, total)
     }
 
+    /// "I couldn't find any emails about X. However, here is the email about
+    /// X…": the opener is dropped when the answer goes on to name a retrieved
+    /// email. A prompt rule alone did not stop it (2026-10-07).
+    static func withoutFalseNotFoundOpener(_ text: String, evidence: [EvidenceReference]) -> String {
+        let opener = #"^\s*(?:I (?:couldn['’]t|could not|didn['’]t|did not|was unable to) (?:find|locate|identify)|There (?:are|were) no emails|No emails (?:were|are) found)[^.\n]*[.\n]\s*(?:However,\s*)?"#
+        guard let range = text.range(of: opener, options: [.regularExpression, .caseInsensitive]) else { return text }
+        let rest = String(text[range.upperBound...])
+        let namesEvidence = evidence.contains { ref in
+            let subject = EmailNLPEngine.baseSubject(ref.subject)
+            return subject.count >= 8 && rest.localizedCaseInsensitiveContains(String(subject.prefix(30)))
+        }
+        guard namesEvidence, !rest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return text }
+        return rest.prefix(1).uppercased() + rest.dropFirst()
+    }
+
     /// Rules every answer path shares, each from a wrong answer on the
     /// owner's archive (2026-10-06): codes expanded into invented places
     /// ("HWH (Hyderabad)"), "couldn't find any" followed by the email found,
@@ -1190,7 +1206,7 @@ struct FoundationModelEngine {
     static func respond(to query: String) async throws -> String {
         guard isAvailable else { return "Apple AI is not available on this device." }
         let prepared = await prepareSessionBounded(query: query)
-        let response = try await prepared.session.respond(to: prepared.prompt)
+        let response = try await prepared.session.loggedRespond(to: prepared.prompt)
         return AIGroundingGate.ground(answer: response.content, evidence: prepared.evidence).answer
     }
 
@@ -1203,7 +1219,7 @@ struct FoundationModelEngine {
             return msg
         }
         let prepared = await prepareSessionBounded(query: query)
-        let stream = prepared.session.streamResponse(to: prepared.prompt)
+        let stream = prepared.session.loggedStreamResponse(to: prepared.prompt)
         var finalContent = ""
         for try await snapshot in stream {
             finalContent = snapshot.content
@@ -1379,7 +1395,7 @@ struct FoundationModelEngine {
         )
         let prompt = "User question: \(query)\n\n\(context)"
 
-        let stream = session.streamResponse(to: prompt)
+        let stream = session.loggedStreamResponse(to: prompt)
         var finalContent = ""
         for try await snapshot in stream {
             finalContent = snapshot.content
@@ -1481,7 +1497,7 @@ struct FoundationModelEngine {
         )
         let prompt = "User question: \(query)\n\n\(context)"
 
-        let stream = session.streamResponse(to: prompt)
+        let stream = session.loggedStreamResponse(to: prompt)
         var finalContent = ""
         for try await snapshot in stream {
             finalContent = snapshot.content
@@ -1772,7 +1788,7 @@ struct FoundationModelEngine {
 
         let prompt = "\(archiveDateFacts(targetEmails))\(synthesisContext)\n\nAnswer this question: \(query)"
 
-        let stream = session.streamResponse(to: prompt)
+        let stream = session.loggedStreamResponse(to: prompt)
         var finalContent = ""
         for try await snapshot in stream {
             finalContent = snapshot.content
@@ -1888,7 +1904,7 @@ struct FoundationModelEngine {
             """
 
         let session = LanguageModelSession(instructions: instructions)
-        let response = try await session.respond(to: "Summarize this email archive:\n\n\(emailContext)")
+        let response = try await session.loggedRespond(to: "Summarize this email archive:\n\n\(emailContext)")
         return response.content
     }
 
@@ -2090,7 +2106,7 @@ struct FoundationModelEngine {
         let session = LanguageModelSession(instructions: instructions)
         let prompt = "Triage these priority emails and recommend actions:\n\n\(context)"
 
-        let stream = session.streamResponse(to: prompt)
+        let stream = session.loggedStreamResponse(to: prompt)
         var finalContent = ""
         for try await snapshot in stream {
             finalContent = snapshot.content
@@ -2295,7 +2311,7 @@ struct FoundationModelEngine {
         let prompt = "Tell the story of this conversation:\n\n\(context)"
 
         func generate(_ prompt: String) async throws -> String {
-            let stream = session.streamResponse(to: prompt)
+            let stream = session.loggedStreamResponse(to: prompt)
             var finalContent = ""
             for try await snapshot in stream {
                 finalContent = snapshot.content
@@ -2329,15 +2345,7 @@ struct FoundationModelEngine {
     /// "On <date>, <name> wrote:" or "-----Original Message-----" is dropped.
     /// Forwarded content is kept — in a "Fwd:" it is the substance.
     static func withoutQuotedReply(_ text: String) -> String {
-        let markers = [#"On [^\n]{5,160}? wrote:"#, #"-{2,}\s*Original Message\s*-{2,}"#, #"\nFrom: [^\n]+\nSent: "#]
-        var cut = text.endIndex
-        for marker in markers {
-            if let range = text.range(of: marker, options: [.regularExpression, .caseInsensitive]), range.lowerBound < cut {
-                cut = range.lowerBound
-            }
-        }
-        let kept = text[..<cut].trimmingCharacters(in: .whitespacesAndNewlines)
-        return kept.isEmpty ? text : kept
+        EmailNLPEngine.withoutQuotedReply(text)
     }
 
     /// True when generated text regurgitates input structure instead of
@@ -2447,7 +2455,7 @@ struct FoundationModelEngine {
         let session = LanguageModelSession(instructions: instructions)
         let prompt = "Summarize this email safety review for the user:\n\n\(context)"
 
-        let stream = session.streamResponse(to: prompt)
+        let stream = session.loggedStreamResponse(to: prompt)
         var finalContent = ""
         for try await snapshot in stream {
             finalContent = snapshot.content
@@ -2504,7 +2512,7 @@ struct FoundationModelEngine {
             Write a \(tone.rawValue.lowercased()) reply:
             """
 
-        let stream = session.streamResponse(to: prompt)
+        let stream = session.loggedStreamResponse(to: prompt)
         var finalContent = ""
         for try await snapshot in stream {
             finalContent = snapshot.content
@@ -2525,7 +2533,7 @@ struct FoundationModelEngine {
             """
 
         let session = LanguageModelSession(instructions: instructions)
-        let response = try await session.respond(to: "Analyze the sentiment of these emails:\n\n\(emailContext)")
+        let response = try await session.loggedRespond(to: "Analyze the sentiment of these emails:\n\n\(emailContext)")
         return response.content
     }
 
@@ -2625,7 +2633,10 @@ struct FoundationModelEngine {
         guard maxLength > 0 else { return "(empty)" }
         let text: String
         if !email.plainBody.isEmpty {
-            text = email.plainBody.components(separatedBy: .newlines)
+            // Each email speaks for its sender only: the quoted earlier
+            // messages ("On 18 Sep, Ann wrote: …") are cut, or the model
+            // attributes them to whoever replied (2026-10-07).
+            text = EmailNLPEngine.withoutQuotedReply(email.plainBody).components(separatedBy: .newlines)
                 .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix(">") }
                 .joined(separator: " ")
         } else if !email.htmlBody.isEmpty {
@@ -2644,7 +2655,7 @@ struct FoundationModelEngine {
         guard maxLength > 0 else { return "(empty)" }
         let rawText: String
         if !email.plainBody.isEmpty {
-            rawText = email.plainBody.components(separatedBy: .newlines)
+            rawText = EmailNLPEngine.withoutQuotedReply(email.plainBody).components(separatedBy: .newlines)
                 .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix(">") }
                 .joined(separator: " ")
         } else if !email.htmlBody.isEmpty {
@@ -2749,7 +2760,7 @@ struct FoundationModelEngine {
             """
 
         let session = LanguageModelSession(instructions: instructions)
-        let response = try await session.respond(
+        let response = try await session.loggedRespond(
             to: "Triage these emails:\n\n\(context)",
             generating: EmailTriageResult.self
         )
@@ -2789,7 +2800,7 @@ struct FoundationModelEngine {
             """
 
         let session = LanguageModelSession(instructions: instructions)
-        let response = try await session.respond(
+        let response = try await session.loggedRespond(
             to: "Generate insights:\n\n\(context)",
             generating: EmailInsightsResult.self
         )
@@ -2825,7 +2836,7 @@ struct FoundationModelEngine {
         let instructions = "You are an email safety advisor. Produce structured findings about message trustworthiness."
 
         let session = LanguageModelSession(instructions: instructions)
-        let response = try await session.respond(
+        let response = try await session.loggedRespond(
             to: "Security brief:\n\n\(context)",
             generating: EmailSecurityBrief.self
         )
@@ -2947,7 +2958,9 @@ struct FoundationModelEngine {
         return AIWorkloadProfile(
             weight: weight,
             batchSize: batchSize,
-            parallelism: parallelism,
+            // Background work: one call at a time, so a question never queues
+            // behind ten of them.
+            parallelism: ModelScheduler.isBackground ? 1 : parallelism,
             maxAICalls: maxAICalls
         )
     }
@@ -3019,7 +3032,7 @@ struct FoundationModelEngine {
 
         do {
             let session = LanguageModelSession(instructions: phishingInstructions)
-            let response = try await session.respond(to: prompt, generating: AIPhishingBatchResult.self)
+            let response = try await session.loggedRespond(to: prompt, generating: AIPhishingBatchResult.self)
             var ids = Set<UUID>()
             for result in response.content.results {
                 guard result.index >= 0, result.index < batch.count else { continue }
@@ -3042,7 +3055,7 @@ struct FoundationModelEngine {
                             let singlePrompt = "Categorize this message:\nSender: \(sanitizeForSafetyFilter(email.headers["From"] ?? "Unknown"))\nTitle: \(sanitizeForSafetyFilter(email.headers["Subject"] ?? "(No Subject)"))\n"
                             do {
                                 let s = LanguageModelSession(instructions: phishingInstructions)
-                                let r = try await s.respond(to: singlePrompt, generating: AIEmailSafetyResult.self)
+                                let r = try await s.loggedRespond(to: singlePrompt, generating: AIEmailSafetyResult.self)
                                 return r.content.verdict == .phishing ? email.id : nil
                             } catch {
                                 return nil
@@ -3178,7 +3191,7 @@ struct FoundationModelEngine {
 
         do {
             let session = LanguageModelSession(instructions: tagInstructions)
-            let response = try await session.respond(to: prompt, generating: AIEmailTagBatchResult.self)
+            let response = try await session.loggedRespond(to: prompt, generating: AIEmailTagBatchResult.self)
             var results: [UUID: EmailTagResult] = [:]
             for tag in response.content.results {
                 guard tag.index >= 0, tag.index < batch.count else { continue }
@@ -3231,7 +3244,7 @@ struct FoundationModelEngine {
 
         do {
             let session = LanguageModelSession(instructions: instructions)
-            let response = try await session.respond(to: prompt, generating: AIEntityBatchResult.self)
+            let response = try await session.loggedRespond(to: prompt, generating: AIEntityBatchResult.self)
 
             // Build index-aligned result array so caller can map by position
             var enriched: [EnrichedEntity?] = Array(repeating: nil, count: capped.count)
@@ -3272,7 +3285,7 @@ struct FoundationModelEngine {
 
         do {
             let session = LanguageModelSession(instructions: instructions)
-            let response = try await session.respond(
+            let response = try await session.loggedRespond(
                 to: "What language is this text written in?\n\n\(snippet)",
                 generating: AILanguageResult.self
             )
@@ -3584,7 +3597,7 @@ struct FoundationModelEngine {
                 prompt += "\nPrevious question was: \(lastTurn.query)"
             }
             let session = LanguageModelSession(instructions: instructions)
-            let response = try await session.respond(to: prompt, generating: AIIntentResult.self)
+            let response = try await session.loggedRespond(to: prompt, generating: AIIntentResult.self)
             let result = response.content
 
             let mapped: QueryIntent
@@ -3618,7 +3631,7 @@ struct FoundationModelEngine {
                 emailQuery: anything about emails, searching, analyzing, filtering, summarizing, or any substantive question.
                 """
             let session = LanguageModelSession(instructions: instructions)
-            let response = try await session.respond(to: query, generating: AIConversationalClassification.self)
+            let response = try await session.loggedRespond(to: query, generating: AIConversationalClassification.self)
             return response.content.messageType
         } catch {
             return nil
@@ -3634,7 +3647,7 @@ struct FoundationModelEngine {
                 If asking about emails, set isConversational=false, response empty.
                 """
             let session = LanguageModelSession(instructions: instructions)
-            let response = try await session.respond(to: query, generating: AIConversationalResponse.self)
+            let response = try await session.loggedRespond(to: query, generating: AIConversationalResponse.self)
             let result = response.content
             if result.isConversational && !result.response.isEmpty {
                 return result.response
@@ -3975,7 +3988,7 @@ struct FoundationModelEngine {
                 "Rate relevance: high = directly answers the question, medium = useful context, low = tangential."
             )
             let truncatedContext = String(context.prefix(3000))
-            let response = try await session.respond(
+            let response = try await session.loggedRespond(
                 to: "Question: \(query)\n\nData:\n\(truncatedContext)",
                 generating: AISessionFindings.self
             )
@@ -4864,7 +4877,7 @@ struct FoundationModelEngine {
                 "topic (themes/subjects), timeline (dates/patterns), security (threats/phishing), or none."
             )
             let prompt = "Question: \(query)\n\nAnswer:\n\(String(answer.prefix(1500)))"
-            let response = try await session.respond(to: prompt, generating: AIAnswerValidation.self)
+            let response = try await session.loggedRespond(to: prompt, generating: AIAnswerValidation.self)
             let validation = response.content
 
             if validation.confidence >= 4 || !validation.needsRetry {
@@ -5091,7 +5104,7 @@ struct FoundationModelEngine {
                 "If multi-step, decompose into 2-4 focused sub-queries that each retrieve different data."
             )
             let prompt = "Archive profile:\n\(profile)\n\nQuestion: \(query)"
-            let response = try await session.respond(to: prompt, generating: AIQueryPlan.self)
+            let response = try await session.loggedRespond(to: prompt, generating: AIQueryPlan.self)
             return response.content
         } catch {
             return nil
@@ -5143,7 +5156,7 @@ struct FoundationModelEngine {
                 "Refer to emails by **Subject** and **sender**."
             )
             let prompt = "Question: \(subQuery)\n\n\(context)"
-            let response = try await session.respond(to: prompt)
+            let response = try await session.loggedRespond(to: prompt)
             return response.content
         } catch {
             return "Sub-query: \(subQuery)\nFound \(results.count) emails. \(context.prefix(500))"
@@ -5318,7 +5331,8 @@ struct FoundationModelEngine {
                 raw += "\n\n**Coming up** (quoted): \(recurring)"
             }
         }
-        let gated = AIGroundingGate.ground(answer: OwnerIdentity.rewritingOwnerNames(in: withoutPipelineLabels(raw)), evidence: evidence).answer
+        let cleaned = withoutFalseNotFoundOpener(OwnerIdentity.rewritingOwnerNames(in: withoutPipelineLabels(raw)), evidence: evidence)
+        let gated = AIGroundingGate.ground(answer: cleaned, evidence: evidence).answer
         await onUpdate(gated)
         return gated
     }
@@ -6022,7 +6036,7 @@ struct FoundationModelEngine {
                 "Each finding must be one specific, evidence-backed sentence. " +
                 "Rate relevance: high = directly answers the question, medium = useful context, low = tangential."
             )
-            let response = try await session.respond(
+            let response = try await session.loggedRespond(
                 to: "Question: \(query)\n\nData:\n\(enrichedData)",
                 generating: AISessionFindings.self
             )
@@ -6411,7 +6425,7 @@ struct FoundationModelEngine {
             )
             let subBudget = contextBudget(for: intent)
             let truncatedContext = String(context.prefix(subBudget.emailBodyChars + subBudget.headerChars + subBudget.findingsChars + subBudget.ragChars))
-            let response = try await session.respond(
+            let response = try await session.loggedRespond(
                 to: "Question: \(subQuery)\n\n\(truncatedContext)",
                 generating: AISessionFindings.self
             )
@@ -6465,7 +6479,7 @@ struct FoundationModelEngine {
                 "Remove redundant or tangential findings. " +
                 "Output: merged findings with cross-session patterns noted."
             )
-            let response = try await session.respond(
+            let response = try await session.loggedRespond(
                 to: "Question: \(query)\n\nFindings to merge:\n\(input)",
                 generating: AIMergedFindings.self
             )
@@ -6537,7 +6551,7 @@ struct FoundationModelEngine {
 
         let prompt = "\(reduceContext)\n\nAnswer this question: \(query)"
 
-        let stream = session.streamResponse(to: prompt)
+        let stream = session.loggedStreamResponse(to: prompt)
         var finalContent = ""
         for try await snapshot in stream {
             finalContent = snapshot.content
@@ -6611,7 +6625,7 @@ struct FoundationModelEngine {
 
         let prompt = "User question: \(query)\n\n\(context)"
 
-        let stream = session.streamResponse(to: prompt)
+        let stream = session.loggedStreamResponse(to: prompt)
         var finalContent = ""
         for try await snapshot in stream {
             finalContent = snapshot.content
@@ -7072,7 +7086,7 @@ struct FoundationModelEngine {
                 )
                 let focusClause = query.map { "Focus on: \($0). " } ?? ""
                 let prompt = "\(focusClause)Compare these archives:\n\n\(String(context.prefix(3000)))"
-                let stream = session.streamResponse(to: prompt)
+                let stream = session.loggedStreamResponse(to: prompt)
                 for try await snapshot in stream {
                     synthesis = snapshot.content
                     await onUpdate(synthesis)
@@ -7092,6 +7106,124 @@ struct FoundationModelEngine {
             kgComparison: kgComp,
             synthesis: synthesis
         )
+    }
+}
+
+
+// MARK: - Model scheduling: questions before background work
+
+/// The user's questions go first (kalsmritikosh minimum-LLM §14: separate
+/// user-query calls from background calls). Found 2026-10-07 from the model
+/// log: switching AI on restarted the background tagging job, ~40 calls ran
+/// with up to ten in parallel, and the user's first question waited 60 s and
+/// timed out. Background calls are marked with `isBackground`, run one at a
+/// time, and wait while any question is being answered.
+@available(macOS 26, iOS 26, *)
+enum ModelScheduler {
+    @TaskLocal static var isBackground = false
+    private static let interactive = OSAllocatedUnfairLock(initialState: 0)
+
+    static func beginInteractive() { interactive.withLock { $0 += 1 } }
+    static func endInteractive() { interactive.withLock { $0 = max(0, $0 - 1) } }
+    static var interactiveInFlight: Bool { interactive.withLock { $0 > 0 } }
+
+    /// A background call starts only when no question is in flight.
+    static func waitForTurn() async {
+        guard isBackground else { return }
+        while interactiveInFlight && !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(300))
+        }
+    }
+
+    /// Runs `work` as background model work.
+    static func background<T: Sendable>(_ work: () async -> T) async -> T {
+        await $isBackground.withValue(true) { await work() }
+    }
+}
+
+// MARK: - Model call log
+
+/// One line per on-device model request — call site, outcome, time, sizes;
+/// never prompt or answer text. Owner, 2026-10-07: "make sure Apple AI is
+/// properly accessed by the app" — this is how a run proves which answers
+/// came from the model. Read with:
+/// `log show --predicate 'subsystem == "com.ecosanskriti.mailin" AND category == "model"'`
+@available(macOS 26, iOS 26, *)
+enum ModelCallLog {
+    static let logger = Logger(subsystem: "com.ecosanskriti.mailin", category: "model")
+
+    static func started(_ site: String, promptChars: Int) {
+        logger.notice("MODEL-CALL start site=\(site, privacy: .public) promptChars=\(promptChars)")
+    }
+    static func finished(_ site: String, since start: Date, outputChars: Int) {
+        let ms = Int(Date().timeIntervalSince(start) * 1000)
+        logger.notice("MODEL-CALL ok site=\(site, privacy: .public) ms=\(ms) outputChars=\(outputChars)")
+    }
+    static func failed(_ site: String, since start: Date, error: Swift.Error) {
+        let ms = Int(Date().timeIntervalSince(start) * 1000)
+        logger.error("MODEL-CALL fail site=\(site, privacy: .public) ms=\(ms) error=\(String(describing: error), privacy: .public)")
+    }
+}
+
+@available(macOS 26, iOS 26, *)
+extension LanguageModelSession {
+    func loggedRespond(to prompt: String, file: StaticString = #fileID, line: Int = #line) async throws -> Response<String> {
+        let site = "\(file):\(line)"
+        await ModelScheduler.waitForTurn()
+        let start = Date()
+        ModelCallLog.started(site, promptChars: prompt.count)
+        do {
+            let response = try await respond(to: prompt)
+            ModelCallLog.finished(site, since: start, outputChars: response.content.count)
+            return response
+        } catch {
+            ModelCallLog.failed(site, since: start, error: error)
+            throw error
+        }
+    }
+
+    func loggedRespond<Content: Generable>(to prompt: String, generating type: Content.Type,
+                                           file: StaticString = #fileID, line: Int = #line) async throws -> Response<Content> {
+        let site = "\(file):\(line)"
+        await ModelScheduler.waitForTurn()
+        let start = Date()
+        ModelCallLog.started(site, promptChars: prompt.count)
+        do {
+            let response = try await respond(to: prompt, generating: type)
+            ModelCallLog.finished(site, since: start, outputChars: String(describing: response.content).count)
+            return response
+        } catch {
+            ModelCallLog.failed(site, since: start, error: error)
+            throw error
+        }
+    }
+
+    /// The same snapshots as `streamResponse(to:)`, logged when the stream
+    /// ends (finished, failed or cancelled).
+    func loggedStreamResponse(to prompt: String, file: StaticString = #fileID, line: Int = #line)
+        -> AsyncThrowingStream<LanguageModelSession.ResponseStream<String>.Snapshot, Swift.Error> {
+        let site = "\(file):\(line)"
+        let start = Date()
+        ModelCallLog.started(site, promptChars: prompt.count)
+        // Streams are only used to answer the user, never by background jobs.
+        let upstream = streamResponse(to: prompt)
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                var chars = 0
+                do {
+                    for try await snapshot in upstream {
+                        chars = snapshot.content.count
+                        continuation.yield(snapshot)
+                    }
+                    ModelCallLog.finished(site, since: start, outputChars: chars)
+                    continuation.finish()
+                } catch {
+                    ModelCallLog.failed(site, since: start, error: error)
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 }
 

@@ -1696,6 +1696,100 @@ final class MailinClickThroughUITests: XCTestCase {
         let att = XCTAttachment(string: report); att.name = "ai-answers.md"; att.lifetime = .keepAlways; add(att)
     }
 
+    /// Owner, 2026-10-07: start from Settings — turn AI on there, confirm
+    /// Apple Intelligence is reachable, then ask. The model log
+    /// (subsystem com.ecosanskriti.mailin, category model) is read by the
+    /// runner script afterwards to prove the answer came from the model.
+    func testAI_fromSettings_turnOnThenAsk() {
+        recoverIfNeeded()
+        var report = ""
+        app.activate()
+        app.typeKey(",", modifierFlags: .command)
+        let settings = app.windows.matching(NSPredicate(format: "title IN {'General', 'AI', 'Display', 'Advanced', 'Modules', 'Settings'} OR identifier CONTAINS[c] 'settings'")).firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 5), "Settings window opens")
+        let aiTab = app.toolbars.buttons["AI"].firstMatch
+        XCTAssertTrue(aiTab.waitForExistence(timeout: 5), "AI tab exists")
+        aiTab.click()
+        Thread.sleep(forTimeInterval: 1)
+
+        let toggle = app.descendants(matching: .any).matching(identifier: "settings.ai.enable").firstMatch
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5), "AI switch exists")
+        func isOn() -> Bool { "\(toggle.value ?? "")" == "1" }
+        report += "AI switch at start: \(isOn() ? "on" : "off")\n"
+        let aiPageTab = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'AI Insights'")).firstMatch
+
+        // Off: the AI Insights page must go off with it.
+        if isOn() { toggle.click(); Thread.sleep(forTimeInterval: 1) }
+        report += "after turning off: switch \(isOn() ? "on" : "off"); page tab \"\(aiPageTab.exists ? aiPageTab.label : "missing")\"\n"
+        XCTAssertFalse(isOn())
+        // On again: the page comes back.
+        toggle.click(); Thread.sleep(forTimeInterval: 1)
+        report += "after turning on: switch \(isOn() ? "on" : "off"); page tab \"\(aiPageTab.exists ? aiPageTab.label : "missing")\"\n"
+        XCTAssertTrue(isOn())
+
+        // Owner, 2026-10-07: switching the AI page on from its page tab must
+        // turn AI on in Settings too. Off here, on from the page, check here.
+        toggle.click(); Thread.sleep(forTimeInterval: 1)
+        XCTAssertFalse(isOn(), "AI off in Settings before the page test")
+        app.typeKey("w", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 1)
+        if aiPageTab.waitForExistence(timeout: 5) { aiPageTab.click() }
+        let turnOn = app.buttons["Turn on AI Insights"].firstMatch
+        if turnOn.waitForExistence(timeout: 5) { turnOn.click() }
+        Thread.sleep(forTimeInterval: 1)
+        report += "after turning the page on from its tab: page tab \"\(aiPageTab.exists ? aiPageTab.label : "missing")\"\n"
+        app.typeKey(",", modifierFlags: .command)
+        if aiTab.waitForExistence(timeout: 5) { aiTab.click() }
+        Thread.sleep(forTimeInterval: 1)
+        report += "Settings ▸ AI switch after page activation: \(isOn() ? "on" : "off")\n"
+        XCTAssertTrue(isOn(), "turning the AI page on turned AI on in Settings")
+
+        let status = app.descendants(matching: .any).matching(identifier: "settings.ai.appleIntelligenceStatus").firstMatch
+        let statusText = status.waitForExistence(timeout: 5) ? status.label : "(no status row)"
+        report += "Apple Intelligence status: \(statusText)\n"
+        XCTAssertTrue(statusText.contains("ready"), "Apple Intelligence reported ready: \(statusText)")
+        app.typeKey("w", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 1)
+
+        // Ask something only the model can write: a narrative over a thread.
+        _ = openPage("AI Insights")
+        let askTab = app.buttons["Ask"].firstMatch
+        if askTab.waitForExistence(timeout: 5), askTab.isHittable { askTab.click() }
+        let field = app.textFields.matching(NSPredicate(format: "label == 'Question input' OR placeholderValue BEGINSWITH 'Ask a follow-up'")).firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "question field")
+        let question = ProcessInfo.processInfo.environment["AI_SETTINGS_QUESTION"]
+            ?? "Summarize what Hatigarm and I discussed about translating manga into Bengali"
+        field.click()
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(question, forType: .string)
+        field.typeKey("a", modifierFlags: .command)
+        field.typeKey("v", modifierFlags: .command)
+        field.typeKey(.return, modifierFlags: [])
+        let started = Date()
+        Thread.sleep(forTimeInterval: 3)
+        while Date().timeIntervalSince(started) < 150 {
+            let busy = app.staticTexts["Thinking..."].exists || app.buttons["Processing query"].exists
+                || app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'Answering'")).firstMatch.exists
+            if !busy { break }
+            Thread.sleep(forTimeInterval: 2)
+        }
+        Thread.sleep(forTimeInterval: 5)
+        var texts: [String] = []
+        if let snap = try? app.windows.firstMatch.snapshot() {
+            func walk(_ e: XCUIElementSnapshot) {
+                if e.elementType == .staticText {
+                    let t = (e.value as? String) ?? e.label
+                    if !t.isEmpty { texts.append(t) }
+                }
+                e.children.forEach(walk)
+            }
+            walk(snap)
+        }
+        let from = texts.lastIndex(where: { $0.contains(question.prefix(30)) }).map { $0 + 1 } ?? max(0, texts.count - 30)
+        report += "\n## \(question)  (\(Int(Date().timeIntervalSince(started))) s)\n" + texts[from...].prefix(30).joined(separator: "\n") + "\n"
+        print("AI-SETTINGS>>>\(report)\n<<<AI-SETTINGS")
+    }
+
     /// Questions a user would type, each with a checkable answer in the
     /// owner's archive. Records every answer verbatim for review.
     func testAIAnswers_typedQuestions() {

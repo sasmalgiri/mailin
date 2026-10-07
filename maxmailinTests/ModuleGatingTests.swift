@@ -1760,3 +1760,28 @@ struct RecentInboxTriageTests {
         #expect(answer.localizedCaseInsensitiveContains("lease"))
     }
 }
+
+struct DiscussionAndOpenerTests {
+    @Test("Discussion questions name the person and the topic")
+    func discussion() {
+        let a = AIAssistantView.discussionRequest(in: "Summarize what Hatigarm and I discussed about translating manga into Bengali")
+        #expect(a?.person == "hatigarm")
+        #expect(a?.topic == "translating manga into bengali")
+        let b = AIAssistantView.discussionRequest(in: "Summarize my conversation with Shabana Khan")
+        #expect(b?.person == "shabana khan" && b?.topic == nil)
+        #expect(AIAssistantView.discussionRequest(in: "Who emails me the most?") == nil)
+    }
+
+    @available(macOS 26, iOS 26, *)
+    @Test("A not-found opener is dropped only when the answer names a retrieved email")
+    func opener() {
+        let ref = EvidenceReference(id: UUID(), messageID: nil, subject: "Re: Hatigarm Scans Bengali translation of Chinese manga",
+                                    sender: "Hatigarm", date: Date(), excerpt: "", hasAttachments: false)
+        let found = FoundationModelEngine.withoutFalseNotFoundOpener(
+            "I couldn't find any emails specifically about manga. However, the thread Hatigarm Scans Bengali translation of Chinese manga covers it.",
+            evidence: [ref])
+        #expect(found.hasPrefix("The thread Hatigarm Scans"))
+        let honest = "I couldn't find any emails about the budget."
+        #expect(FoundationModelEngine.withoutFalseNotFoundOpener(honest, evidence: [ref]) == honest)
+    }
+}

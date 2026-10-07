@@ -320,7 +320,7 @@ enum AIGroundingGate {
     /// produced full emails.
     static func references(for emails: [MBOXParser.RawEmail], excerptChars: Int = 600) -> [EvidenceReference] {
         emails.map { email in
-            let body = email.plainBody.isEmpty ? email.htmlBody : email.plainBody
+            let body = email.plainBody.isEmpty ? email.htmlBody : EmailNLPEngine.withoutQuotedReply(email.plainBody)
             return EvidenceReference(
                 id: email.id,
                 messageID: email.headers["Message-ID"],

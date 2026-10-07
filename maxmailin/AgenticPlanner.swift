@@ -123,7 +123,7 @@ struct AgenticPlanner {
                 Set needsAgenticPlan=false for simple analytical questions.
                 """
 
-            let response = try await session.respond(to: prompt, generating: AgenticPlan.self)
+            let response = try await session.loggedRespond(to: prompt, generating: AgenticPlan.self)
             let plan = response.content
 
             guard plan.needsAgenticPlan, plan.steps.count >= 2 else { return nil }
@@ -554,7 +554,7 @@ struct AgenticPlanner {
                 "Cite specific emails by subject and sender. Use bullet points."
             )
             let truncatedContext = String(context.prefix(3000))
-            let response = try await session.respond(to: "Summarize these findings:\n\n\(truncatedContext)")
+            let response = try await session.loggedRespond(to: "Summarize these findings:\n\n\(truncatedContext)")
             return StepResult(
                 stepIndex: stepIndex, stepType: .summarize, description: step.description,
                 emailCount: emails.count, emailIDs: [],
@@ -603,7 +603,7 @@ struct AgenticPlanner {
                 "Use the analysis results to inform the response. Focus: \(step.parameters)"
             )
             let truncatedContext = String(context.prefix(3000))
-            let response = try await session.respond(to: "Draft a response based on:\n\n\(truncatedContext)")
+            let response = try await session.loggedRespond(to: "Draft a response based on:\n\n\(truncatedContext)")
             return StepResult(
                 stepIndex: stepIndex, stepType: .draftResponse, description: step.description,
                 emailCount: emails.count, emailIDs: [],
@@ -826,7 +826,7 @@ struct AgenticPlanner {
         let truncatedContext = String(context.prefix(3200))
         let prompt = "Original question: \(query)\n\nWorkflow results:\n\(truncatedContext)\n\nSynthesize a final answer."
 
-        let stream = session.streamResponse(to: prompt)
+        let stream = session.loggedStreamResponse(to: prompt)
         var finalContent = ""
         for try await snapshot in stream {
             finalContent = snapshot.content

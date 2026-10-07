@@ -565,12 +565,27 @@ final class ModuleRegistry {
         if case .unavailable(let reason) = activation(module) {
             throw Failure.unavailable(module, reason: reason)
         }
-        guard !state.isEnabled(module) else { return }
+        guard !state.isEnabled(module) else { syncLegacyAIFlag(); return }
         state.set(module, enabled: true)
         store.save(state)
         applyWiring(forPage: module)
         lastEffectiveModules = Set(AppModule.allCases.filter { isEnabled($0) })
+        syncLegacyAIFlag()
         moduleLog.info("enabled \(module.rawValue, privacy: .public)")
+    }
+
+    /// Settings ▸ AI's "Enable AI features" and the AI Insights page are one
+    /// switch (owner, 2026-10-07: "when the user activates the AI page, AI
+    /// should automatically be on in Settings"). The 2.x flag still gates AI
+    /// tags, a menu item and the background analysis job, so it follows the
+    /// page. Only the app's own registry writes it; test registries never
+    /// touch real settings.
+    func syncLegacyAIFlag() {
+        guard trapsOnMisuse, state.didMapLegacyDefaults else { return }
+        let on = isEnabled(.aiInsights)
+        if UserDefaults.standard.object(forKey: "enableAIFeatures") as? Bool != on {
+            UserDefaults.standard.set(on, forKey: "enableAIFeatures")
+        }
     }
 
     /// Switches a page off: stops its jobs, drops its host so its types are no
@@ -584,6 +599,7 @@ final class ModuleRegistry {
         store.save(state)
         applyWiring(forPage: module)
         lastEffectiveModules = Set(AppModule.allCases.filter { isEnabled($0) })
+        syncLegacyAIFlag()
         moduleLog.info("""
             disabled \(module.rawValue, privacy: .public) \
             (retention: \(retention.rawValue, privacy: .public))
@@ -668,10 +684,11 @@ final class ModuleRegistry {
     func mapLegacyStateIfNeeded(isExistingInstall: Bool,
                                 legacyAIEnabled: Bool,
                                 legacyPersonaCompleted: Bool) {
-        guard !state.didMapLegacyDefaults else { return }
+        guard !state.didMapLegacyDefaults else { syncLegacyAIFlag(); return }
         defer {
             state.didMapLegacyDefaults = true
             store.save(state)
+            syncLegacyAIFlag()
         }
         guard isExistingInstall else {
             moduleLog.info("fresh install — all optional pages off")

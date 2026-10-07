@@ -43,6 +43,7 @@ struct SettingsView: View {
     @AppStorage("autoDetectSender") private var autoDetectSender = true
     @AppStorage("showInlineImages") private var showInlineImages = true
     @AppStorage("enableAIFeatures") private var enableAIFeatures = true
+    @Environment(ModuleRegistry.self) private var modules
     @AppStorage("emailListDensity") private var emailListDensity = "comfortable"
     // Simple (true) = clean ArchiveListView; Advanced (false) = full-filter
     // toolkit list. Both are bounded + repository-backed (Part S).
@@ -916,13 +917,30 @@ struct SettingsView: View {
     private var aiSettings: some View {
         Form {
             Section {
-                Toggle("Enable AI features", isOn: $enableAIFeatures)
-                    .help("Show AI assistant and analysis features")
+                // One switch for AI (owner, 2026-10-07): this toggle used to
+                // drive only the 2.x "enableAIFeatures" flag (tags, one menu
+                // item) while the AI Insights page kept working; turning AI
+                // "off" here did not stop the assistant. It now turns the AI
+                // Insights page on or off, and keeps the old flag in step.
+                Toggle("Enable AI features", isOn: Binding(
+                    get: { modules.isEnabled(.aiInsights) },
+                    set: { on in
+                        if on { try? modules.enable(.aiInsights) } else { modules.disable(.aiInsights) }
+                        enableAIFeatures = modules.isEnabled(.aiInsights)
+                    }
+                ))
+                    .help("Turns on the AI Insights page and AI analysis")
+                    .accessibilityIdentifier("settings.ai.enable")
+                #if canImport(FoundationModels)
+                if #available(macOS 26, iOS 26, *) {
+                    AppleIntelligenceStatusRow()
+                }
+                #endif
             } header: {
                 Text("On-Device AI")
                     .font(.headline)
             } footer: {
-                Text("Uses Apple Intelligence (FoundationModels) when available. All processing stays on your device.")
+                Text("Uses Apple Intelligence (FoundationModels) when available. All processing stays on your device. The same switch is the AI Insights page in Settings ▸ Modules.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -1559,3 +1577,92 @@ struct SettingsView: View {
     SettingsView()
         .environmentObject(StoreManager())
 }
+
+#if canImport(FoundationModels)
+/// Whether this device's Apple Intelligence can answer right now, in plain
+/// words, with the way to fix it when it cannot.
+@available(macOS 26, iOS 26, *)
+private struct AppleIntelligenceStatusRow: View {
+    @State private var status = FoundationModelEngine.availability
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Spacing.small) {
+            Image(systemName: icon)
+                .foregroundColor(color)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(Typography.callout)
+                Text(detail)
+                    .font(Typography.caption1)
+                    .foregroundColor(AppColors.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            // One readable element for VoiceOver (and the UI test): combining
+            // the whole row left its label empty on macOS.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(verbatim: "\(title). \(detail)"))   // both parts already localized
+            .accessibilityIdentifier("settings.ai.appleIntelligenceStatus")
+            Spacer()
+            if status == .notEnabled {
+                Button("Open System Settings") {
+                    #if os(macOS)
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.Siri-Settings.extension") {
+                        PlatformURLOpener.open(url)
+                    }
+                    #else
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        PlatformURLOpener.open(url)
+                    }
+                    #endif
+                }
+                .controlSize(.small)
+            }
+        }
+        .task {
+            // Re-read while the window is open: turning Apple Intelligence on
+            // in System Settings, or the model finishing its download, shows
+            // up here without reopening Settings.
+            while !Task.isCancelled {
+                status = FoundationModelEngine.availability
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
+    }
+
+    private var title: String {
+        switch status {
+        case .available: return String(localized: "Apple Intelligence is ready")
+        case .notEnabled: return String(localized: "Apple Intelligence is turned off")
+        case .notReady: return String(localized: "Apple Intelligence is downloading")
+        case .notEligible: return String(localized: "Apple Intelligence isn't available on this device")
+        case .unknown: return String(localized: "Apple Intelligence status unknown")
+        }
+    }
+
+    private var detail: String {
+        switch status {
+        case .available: return String(localized: "Answers that need writing or summarizing use the on-device model.")
+        case .notEnabled: return String(localized: "Turn it on in System Settings ▸ Apple Intelligence & Siri. Until then, answers use on-device analysis only.")
+        case .notReady: return String(localized: "The on-device model is still being set up. Answers use on-device analysis until it is ready.")
+        case .notEligible: return String(localized: "Answers use on-device analysis only — counts, search and lists still work.")
+        case .unknown: return String(localized: "Answers use on-device analysis until the model reports it is ready.")
+        }
+    }
+
+    private var icon: String {
+        switch status {
+        case .available: return "checkmark.circle.fill"
+        case .notReady: return "arrow.down.circle"
+        default: return "exclamationmark.circle"
+        }
+    }
+
+    private var color: Color {
+        switch status {
+        case .available: return .green
+        case .notReady: return .blue
+        default: return .orange
+        }
+    }
+}
+#endif

@@ -17,6 +17,25 @@
 
 import Foundation
 
+/// One model-backed analysis pass at a time. The email list's window pass and
+/// the archive-wide job each tagged the same emails in parallel, so two to
+/// four background model calls were in flight when the user asked a question
+/// (model log, 2026-10-07).
+actor DerivedModelPassLock {
+    static let shared = DerivedModelPassLock()
+    private var busy = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        if !busy { busy = true; return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func release() {
+        if waiters.isEmpty { busy = false } else { waiters.removeFirst().resume() }
+    }
+}
+
 enum DerivedAIAnalysis {
 
     /// Feature/model version for the Part I producers. Bump when the
@@ -45,7 +64,11 @@ enum DerivedAIAnalysis {
 
         #if canImport(FoundationModels)
         if #available(macOS 26, iOS 26, *), FoundationModelEngine.isAvailable {
-            let tagResults = await FoundationModelEngine.tagEmails(emails) { _, _ in }
+            await DerivedModelPassLock.shared.acquire()
+            // Background work: yields to the user's questions, one call at a time.
+            let tagResults = await ModelScheduler.background {
+                await FoundationModelEngine.tagEmails(emails) { _, _ in }
+            }
             for (id, result) in tagResults {
                 switch result.sentiment {
                 case "positive": sentMap[id] = 0.8
@@ -61,7 +84,10 @@ enum DerivedAIAnalysis {
                 default: break
                 }
             }
-            phishIDs = await FoundationModelEngine.classifyPhishing(emails) { _, _ in }
+            phishIDs = await ModelScheduler.background {
+                await FoundationModelEngine.classifyPhishing(emails) { _, _ in }
+            }
+            await DerivedModelPassLock.shared.release()
         }
         #endif
 

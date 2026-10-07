@@ -79,7 +79,12 @@ final class ArchiveEvidenceService {
 
             var scored: [(chunk: String, chunkType: ChunkType, score: Double)] = []
             for tc in typedChunks {
-                let lower = tc.bodyChunk.lowercased()
+                // Quoted earlier messages and signatures are not this
+                // sender's words; the model attributed them to the replier.
+                guard tc.chunkType != .quotedReply, tc.chunkType != .signature else { continue }
+                let own = EmailNLPEngine.withoutQuotedReply(tc.bodyChunk)
+                guard own.count >= 20 else { continue }
+                let lower = own.lowercased()
                 var score = 0.0
                 var hitCount = 0
                 for term in lowerTerms {
@@ -98,10 +103,10 @@ final class ArchiveEvidenceService {
                 if hitCount > 1 { score *= 1.0 + Double(hitCount - 1) * 0.5 }
                 if lower.contains("?") { score *= 1.15 }
                 if lower.range(of: #"\d"#, options: .regularExpression) != nil { score *= 1.1 }
-                let wordCount = tc.bodyChunk.split(separator: " ").count
+                let wordCount = own.split(separator: " ").count
                 if wordCount >= 15 && wordCount <= 200 { score *= 1.1 }
                 if let preferred = preferredTypes, preferred.contains(tc.chunkType) { score *= 2.0 }
-                if score > 0 { scored.append((tc.bodyChunk, tc.chunkType, score)) }
+                if score > 0 { scored.append((own, tc.chunkType, score)) }
             }
 
             for (chunk, type, score) in scored.sorted(by: { $0.score > $1.score }).prefix(maxChunksPerEmail) {

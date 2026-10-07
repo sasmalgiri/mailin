@@ -434,6 +434,25 @@ struct EmailNLPEngine {
             .map { (word: $0.word, count: $0.count) }
     }
 
+    // MARK: - Quoted history
+
+    /// The text before a reply's quoted history: everything from the first
+    /// "On <date>, <name> wrote:", "-----Original Message-----" or Outlook
+    /// "From: … Sent:" header is dropped. Forwarded content is kept — in a
+    /// "Fwd:" it is the substance. Each email then speaks for its sender
+    /// only (kalsmritikosh: every statement keeps its witness).
+    static func withoutQuotedReply(_ text: String) -> String {
+        let markers = [#"On [^\n]{5,160}? wrote:"#, #"-{2,}\s*Original Message\s*-{2,}"#, #"\nFrom: [^\n]+\n(?:Sent|Date): "#]
+        var cut = text.endIndex
+        for marker in markers {
+            if let range = text.range(of: marker, options: [.regularExpression, .caseInsensitive]), range.lowerBound < cut {
+                cut = range.lowerBound
+            }
+        }
+        let kept = text[..<cut].trimmingCharacters(in: .whitespacesAndNewlines)
+        return kept.isEmpty ? text : kept
+    }
+
     // MARK: - Conversation-level counting (kalsmritikosh H-1, use-once)
 
     /// The conversation an email belongs to, for counting: the subject without
