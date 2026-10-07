@@ -563,7 +563,7 @@ struct V7ForensicSheetsModifier: ViewModifier {
                 appState.showRedaction = false
                 ToolWindowPresenter.shared.open(title: String(localized: "Redaction")) { AnyView(Group {
                 ArchiveWorkingSetView(query: query) { emails in
-                    RedactionConfigView(emails: emails)
+                    RedactionConfigView(emails: emails, exportQuery: query)
                 }
                     .resizableSheet()
                     #if os(macOS)
@@ -574,7 +574,7 @@ struct V7ForensicSheetsModifier: ViewModifier {
         #else
         v = AnyView(v.sheet(isPresented: $appState.showRedaction) {
                 ArchiveWorkingSetView(query: query) { emails in
-                    RedactionConfigView(emails: emails)
+                    RedactionConfigView(emails: emails, exportQuery: query)
                 }
                     .resizableSheet()
                     #if os(macOS)

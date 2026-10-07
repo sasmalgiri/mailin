@@ -264,7 +264,7 @@ struct ProfessionalDestinationView: View {
         case .batesNumbering:
             ArchiveWorkingSetView(query: .all) { BatesConfigView(emails: $0) }.navigationTitle("Bates Numbering")
         case .redaction:
-            ArchiveWorkingSetView(query: .all) { RedactionConfigView(emails: $0) }.navigationTitle("Redaction")
+            ArchiveWorkingSetView(query: .all) { RedactionConfigView(emails: $0, exportQuery: .all) }.navigationTitle("Redaction")
         case .reviewBatches:
             ArchiveWorkingSetView(query: .all) { ReviewBatchPanelView(emails: $0, manager: ReviewBatchManager.shared) }.navigationTitle("Review Batches")
         case .investigationReport:

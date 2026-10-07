@@ -1712,6 +1712,52 @@ final class MailinClickThroughUITests: XCTestCase {
         let att = XCTAttachment(string: report); att.name = "ai-answers.md"; att.lifetime = .keepAlways; add(att)
     }
 
+    /// Owner, 2026-10-07: "Redact & Export was still missed by the Mac crawl.
+    /// Verify its actual output, not just that its window opens." Presses the
+    /// button on the real archive and saves both files to REDACT_OUT_DIR; the
+    /// runner script then checks the files themselves.
+    func testRedactAndExport_writesFiles() {
+        recoverIfNeeded()
+        let outDir = ProcessInfo.processInfo.environment["REDACT_OUT_DIR"] ?? "/tmp/mailin-redact"
+        _ = openPage("Professional Workflows")
+        let tool = app.buttons.matching(NSPredicate(format: "label == 'Redaction' OR label BEGINSWITH 'Redaction,'")).firstMatch
+        XCTAssertTrue(tool.waitForExistence(timeout: 10), "Redaction tool on the Professional page")
+        tool.click()
+        let window = app.windows["Redaction"]
+        XCTAssertTrue(window.waitForExistence(timeout: 10), "Redaction window opens")
+        let export = window.buttons["Redact & Export"].firstMatch
+        XCTAssertTrue(export.waitForExistence(timeout: 30), "Redact & Export exists (working set loaded)")
+        XCTAssertTrue(export.isHittable, "Redact & Export is on screen without scrolling")
+        export.click()
+
+        func answerSavePanel(name: String) -> Bool {
+            let panel = app.sheets.firstMatch.waitForExistence(timeout: 10) ? app.sheets.firstMatch : app.dialogs.firstMatch
+            guard panel.waitForExistence(timeout: 10) else { return false }
+            // File name first, then the folder via Go to Folder.
+            app.typeKey("a", modifierFlags: .command)
+            app.typeText(name)
+            panel.typeKey("g", modifierFlags: [.command, .shift])
+            Thread.sleep(forTimeInterval: 1.0)
+            app.typeText(outDir)
+            app.typeKey(.return, modifierFlags: [])
+            Thread.sleep(forTimeInterval: 1.5)
+            let save = panel.buttons["Save"].firstMatch
+            if save.exists, save.isEnabled { save.click() } else { app.typeKey(.return, modifierFlags: []) }
+            Thread.sleep(forTimeInterval: 1.0)
+            let replace = app.buttons["Replace"].firstMatch
+            if replace.waitForExistence(timeout: 2) { replace.click() }
+            return true
+        }
+        XCTAssertTrue(answerSavePanel(name: "RedactedExport.txt"), "first save panel")
+        XCTAssertTrue(answerSavePanel(name: "RedactionLog.csv"), "second save panel")
+
+        let done = window.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Exported ' OR label BEGINSWITH 'Export blocked' OR label BEGINSWITH 'Export failed'")).firstMatch
+        let finished = done.waitForExistence(timeout: 300)
+        let message = finished ? done.label : "(no result message)"
+        print("REDACT-RESULT>>>\(message)<<<REDACT-RESULT")
+        XCTAssertTrue(message.hasPrefix("Exported "), "export finished: \(message)")
+    }
+
     /// Owner, 2026-10-07: start from Settings — turn AI on there, confirm
     /// Apple Intelligence is reachable, then ask. The model log
     /// (subsystem com.ecosanskriti.mailin, category model) is read by the

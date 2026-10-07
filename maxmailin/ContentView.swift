@@ -1046,7 +1046,7 @@ struct ContentView: View {
             hubWorkingSet { BatesConfigView(emails: $0) }
                 .navigationTitle("Bates Numbering")
         case .redaction:
-            hubWorkingSet { RedactionConfigView(emails: $0) }
+            hubWorkingSet { RedactionConfigView(emails: $0, exportQuery: modelVM.currentArchiveQuery) }
                 .navigationTitle("Redaction")
         case .automationRules:
             hubWorkingSet { AutomationRulesView(emails: $0) }

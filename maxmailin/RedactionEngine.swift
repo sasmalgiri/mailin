@@ -120,6 +120,12 @@ struct RedactionEngine {
         let to: String
         let body: String
         let redactionCount: Int
+        /// Redacted Cc line, the message date (not redacted — the patterns
+        /// are PII, and a production without dates is unusable), and the
+        /// attachment file names, redacted (names can carry PII).
+        var cc: String = ""
+        var date: String = ""
+        var attachmentNames: [String] = []
     }
 
     // MARK: - Default Rules
@@ -140,7 +146,9 @@ struct RedactionEngine {
         // US/Canada phone: (xxx) xxx-xxxx, xxx-xxx-xxxx, +1 xxx xxx xxxx
         RedactionRule(
             type: .phoneNumber,
-            pattern: #"(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b"#,
+            // Not inside a longer run of digits: application numbers, UPI
+            // references and claim IDs were being redacted as phones.
+            pattern: #"(?<!\d)(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}(?!\d)"#,
             replacement: "[REDACTED-PHONE]"
         ),
         // International phone: +xx xx xxxx xxxx (UK, EU, India, etc.)
@@ -205,8 +213,14 @@ struct RedactionEngine {
         let bodyCount = plainCount + htmlCount
 
         let ccText = email.headers["Cc"] ?? ""
-        let (_, ccCount) = redact(text: ccText, rules: rules)
-        let totalRedactions = subjectCount + fromCount + toCount + bodyCount + ccCount
+        let (redactedCc, ccCount) = redact(text: ccText, rules: rules)
+        var attachmentCount = 0
+        let attachmentNames = email.attachments.map { attachment -> String in
+            let (name, count) = redact(text: attachment.filename, rules: rules)
+            attachmentCount += count
+            return name
+        }
+        let totalRedactions = subjectCount + fromCount + toCount + bodyCount + ccCount + attachmentCount
 
         return RedactedEmail(
             id: email.id,
@@ -214,7 +228,10 @@ struct RedactionEngine {
             from: redactedFrom,
             to: redactedTo,
             body: redactedBody,
-            redactionCount: totalRedactions
+            redactionCount: totalRedactions,
+            cc: redactedCc,
+            date: email.headers["Date"] ?? "",
+            attachmentNames: attachmentNames
         )
     }
 
@@ -249,8 +266,101 @@ struct RedactionEngine {
                 targets.append(String(local))
             }
         }
-        let combined = [redacted.subject, redacted.from, redacted.to, redacted.body].joined(separator: "\n")
+        let combined = ([redacted.subject, redacted.from, redacted.to, redacted.cc, redacted.body] + redacted.attachmentNames).joined(separator: "\n")
         return Array(Set(validateRedaction(text: combined, targets: targets))).sorted()
+    }
+
+    // MARK: - Streaming export (every email in scope, no cap)
+
+    /// One email as it appears in the export file.
+    static func exportEntry(_ item: RedactedEmail) -> String {
+        var out = "From: \(item.from)\n"
+        out += "To: \(item.to)\n"
+        if !item.cc.isEmpty { out += "Cc: \(item.cc)\n" }
+        out += "Date: \(item.date)\n"
+        out += "Subject: \(item.subject)\n"
+        if !item.attachmentNames.isEmpty {
+            out += "Attachments (\(item.attachmentNames.count), not included in this export): \(item.attachmentNames.joined(separator: "; "))\n"
+        }
+        out += String(repeating: "-", count: 40) + "\n"
+        out += item.body + "\n"
+        out += String(repeating: "=", count: 60) + "\n\n"
+        return out
+    }
+
+    struct ExportResult {
+        var emails = 0
+        var redactions = 0
+        var leaks: [String] = []
+        var failure: String?
+    }
+
+    /// Writes the redacted export and its log, streaming every email of
+    /// `query` in batches — or `emails` when there is no query. The tool's
+    /// window holds only the newest 2,000 emails; the export used to write
+    /// just those, so on a larger archive most mail was silently left out
+    /// (2026-10-07). A person check that finds a surviving name or address
+    /// stops the export and deletes both files.
+    static func writeExport(textURL: URL, logURL: URL, query: EmailQuery?, emails: [MBOXParser.RawEmail],
+                            rules: [RedactionRule], person: (name: String, email: String?)?) async -> ExportResult {
+        var result = ExportResult()
+        let fm = FileManager.default
+        guard fm.createFile(atPath: textURL.path, contents: nil), fm.createFile(atPath: logURL.path, contents: nil),
+              let text = try? FileHandle(forWritingTo: textURL), let log = try? FileHandle(forWritingTo: logURL) else {
+            result.failure = "could not create the export files"
+            return result
+        }
+        func abandon() {
+            try? text.close(); try? log.close()
+            try? fm.removeItem(at: textURL); try? fm.removeItem(at: logURL)
+        }
+        func write(_ handle: FileHandle, _ string: String) { handle.write(Data(string.utf8)) }
+
+        write(text, "REDACTED EMAIL EXPORT\nAttachments are listed by (redacted) file name and are not included.\nTotals are at the end of this file.\n" + String(repeating: "=", count: 60) + "\n\n")
+        var wroteLogHeader = false
+
+        func process(_ batch: [MBOXParser.RawEmail]) -> Bool {
+            let redacted = redactBatch(emails: batch, rules: rules)
+            if let person {
+                var leaks = Set<String>()
+                for item in redacted { leaks.formUnion(validatePersonRedaction(item, name: person.name, email: person.email)) }
+                if !leaks.isEmpty { result.leaks = leaks.sorted(); return false }
+            }
+            for item in redacted {
+                write(text, exportEntry(item))
+                result.redactions += item.redactionCount
+            }
+            result.emails += redacted.count
+            var csv = String(decoding: generateRedactionLog(emails: batch, rules: rules), as: UTF8.self)
+            if wroteLogHeader, let firstNewline = csv.firstIndex(of: "\n") {
+                csv = String(csv[csv.index(after: firstNewline)...])
+            }
+            wroteLogHeader = true
+            write(log, csv)
+            return true
+        }
+
+        if let query {
+            do {
+                let stream = await ArchiveDataService.shared.streamFullEmails(query: query, batchSize: 200)
+                for try await batch in stream {
+                    if Task.isCancelled { abandon(); result.failure = "cancelled"; return result }
+                    guard process(batch) else { abandon(); return result }
+                }
+            } catch {
+                abandon(); result.failure = "reading the archive failed"; return result
+            }
+        } else {
+            var start = 0
+            while start < emails.count {
+                let batch = Array(emails[start..<min(start + 200, emails.count)])
+                guard process(batch) else { abandon(); return result }
+                start += 200
+            }
+        }
+        write(text, "Total Emails: \(result.emails)\nTotal Redactions: \(result.redactions)\n")
+        try? text.close(); try? log.close()
+        return result
     }
 
     // MARK: - Redaction Log Export
@@ -316,6 +426,9 @@ struct RedactionEngine {
 
 struct RedactionConfigView: View {
     let emails: [MBOXParser.RawEmail]
+    /// The scope the window was opened for. Export streams every email of it;
+    /// `emails` (the newest 2,000) is only for the preview.
+    var exportQuery: EmailQuery? = nil
 
     @State private var rules: [RedactionEngine.RedactionRule] = RedactionEngine.defaultRules
     @State private var previewEmail: MBOXParser.RawEmail?
@@ -360,6 +473,12 @@ struct RedactionConfigView: View {
     }
 
     var body: some View {
+        // The settings scroll; Preview and Redact & Export stay pinned below.
+        // Without a scroll view the rules list pushed the action buttons past
+        // the window's bottom edge, out of reach (found by the Mac crawl,
+        // 2026-10-07: "Redact & Export — not visible").
+        VStack(alignment: .leading, spacing: Spacing.small) {
+        ScrollView {
         VStack(alignment: .leading, spacing: Spacing.medium) {
             // Header
             Label("PII Redaction", systemImage: "eye.slash.fill")
@@ -521,7 +640,11 @@ struct RedactionConfigView: View {
                 .cornerRadius(CornerRadius.small)
             }
 
-            // Actions
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        }
+            Divider()
+            // Actions — always visible
             HStack(spacing: Spacing.small) {
                 Button {
                     if let sample = emails.first {
@@ -569,87 +692,53 @@ struct RedactionConfigView: View {
 
     private func exportRedacted() {
         let appliedRules = effectiveRules
-        let redacted = RedactionEngine.redactBatch(emails: emails, rules: appliedRules)
-        let totalRedactions = redacted.reduce(0) { $0 + $1.redactionCount }
-
-        // LAW-14: independent post-redaction check. `validatePersonRedaction`
-        // re-scans the OUTPUT for the literal target terms — it is not the rule
-        // engine, so a regex that failed to match cannot also pass the check.
-        // A leak blocks the export: a redacted export that still names the
-        // person is worse than no export, because it will be relied on.
-        //
-        // This can only check LITERAL targets, so it runs when a person is
-        // named. The default categories are patterns, not terms, and no
-        // second-opinion check is claimed for them.
-        if hasPersonTarget {
-            var leaks = Set<String>()
-            for item in redacted {
-                leaks.formUnion(
-                    RedactionEngine.validatePersonRedaction(
-                        item, name: personName, email: trimmedPersonEmail))
-            }
-            if !leaks.isEmpty {
-                leakedTerms = leaks.sorted()
+        let person: (name: String, email: String?)? = hasPersonTarget ? (personName, trimmedPersonEmail) : nil
+        #if os(macOS)
+        guard let textURL = PlatformFileSaver.savePanel(suggestedName: "RedactedExport.txt"),
+              let logURL = PlatformFileSaver.savePanel(suggestedName: "RedactionLog.csv") else {
+            exportMessage = "Export cancelled."
+            showExportMessage = true
+            return
+        }
+        #else
+        let textURL = FileManager.default.temporaryDirectory.appendingPathComponent("RedactedExport.txt")
+        let logURL = FileManager.default.temporaryDirectory.appendingPathComponent("RedactionLog.csv")
+        #endif
+        leakedTerms = []
+        exportMessage = "Exporting…"
+        showExportMessage = true
+        let query = exportQuery
+        let windowEmails = emails
+        Task { @MainActor in
+            let result = await RedactionEngine.writeExport(
+                textURL: textURL, logURL: logURL, query: query, emails: windowEmails,
+                rules: appliedRules, person: person)
+            // LAW-14: a name or address that survived redaction blocks the
+            // export (both files are deleted); a redacted export that still
+            // names the person is worse than none.
+            if !result.leaks.isEmpty {
+                leakedTerms = result.leaks
                 exportMessage = """
                     Export blocked: “\(leakedTerms.joined(separator: "”, “"))” \
                     \(leakedTerms.count == 1 ? "is" : "are") still present after redaction. \
                     Add a rule covering \(leakedTerms.count == 1 ? "it" : "them") and export again.
                     """
-                showExportMessage = true
                 redactionLog.error("redacted export blocked: \(leakedTerms.count) term(s) survived redaction")
                 return
             }
-            leakedTerms = []
-        }
-
-        // Build a combined text export
-        var output = "REDACTED EMAIL EXPORT\n"
-        output += "Total Emails: \(redacted.count)\n"
-        output += "Total Redactions: \(totalRedactions)\n"
-        output += String(repeating: "=", count: 60) + "\n\n"
-
-        for item in redacted {
-            output += "From: \(item.from)\n"
-            output += "To: \(item.to)\n"
-            output += "Subject: \(item.subject)\n"
-            output += String(repeating: "-", count: 40) + "\n"
-            output += item.body + "\n"
-            output += String(repeating: "=", count: 60) + "\n\n"
-        }
-
-        let data = output.data(using: .utf8) ?? Data()
-
-        // Also generate the redaction log
-        let logData = RedactionEngine.generateRedactionLog(emails: emails, rules: appliedRules)
-
-        #if os(macOS)
-        if PlatformFileSaver.saveData(data, suggestedName: "RedactedExport.txt") {
-            // Save redaction log alongside
-            _ = PlatformFileSaver.saveData(logData, suggestedName: "RedactionLog.csv")
-            exportMessage = "Exported \(redacted.count) redacted emails with \(totalRedactions) redactions."
+            if let failure = result.failure {
+                exportMessage = "Export failed: \(failure)."
+                return
+            }
+            exportMessage = "Exported \(result.emails) redacted emails with \(result.redactions) redactions."
             ForensicManager.shared.logAction(
                 "Redacted Export",
-                detail: "\(redacted.count) emails exported with \(totalRedactions) redactions applied"
+                detail: "\(result.emails) emails exported with \(result.redactions) redactions applied"
             )
-        } else {
-            exportMessage = "Export cancelled."
-        }
-        #else
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("RedactedExport.txt")
-        do {
-            try data.write(to: url, options: .atomic)
-            let logURL = FileManager.default.temporaryDirectory.appendingPathComponent("RedactionLog.csv")
-            try logData.write(to: logURL, options: .atomic)
-            shareItems = [url, logURL]
+            #if !os(macOS)
+            shareItems = [textURL, logURL]
             showShareSheet = true
-            ForensicManager.shared.logAction(
-                "Redacted Export",
-                detail: "\(redacted.count) emails exported with \(totalRedactions) redactions applied"
-            )
-        } catch {
-            exportMessage = "Failed to export redacted emails."
+            #endif
         }
-        #endif
-        showExportMessage = true
     }
 }
