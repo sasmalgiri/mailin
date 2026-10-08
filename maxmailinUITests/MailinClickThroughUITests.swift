@@ -13,9 +13,7 @@ import XCTest
 #if os(macOS)
 import AppKit
 #endif
-#if os(iOS)
 import StoreKitTest
-#endif
 
 final class MailinClickThroughUITests: XCTestCase {
 
@@ -1149,8 +1147,7 @@ final class MailinClickThroughUITests: XCTestCase {
     }
     #endif
 
-    #if os(iOS)
-    // MARK: - Purchases through the real purchase screen (iPad, local StoreKit)
+    // MARK: - Purchases through the real purchase screen (iPad and Mac, local StoreKit)
 
     // The owner's TestFlight checklist, run as a user would: buy a monthly
     // plan and see features unlock; delete and reinstall, then Restore
@@ -1160,12 +1157,32 @@ final class MailinClickThroughUITests: XCTestCase {
     // The three tests run in order; ~/mailin-loc-work/purchase-fg.sh deletes
     // the app between the first and the second.
 
+    #if os(macOS)
+    private func relaunch(_ extra: [String]) {
+        app.terminate()
+        app.launchArguments = ["--uitest"] + extra
+        app.launch()
+        _ = app.wait(for: .runningForeground, timeout: 30)
+        app.activate()
+        _ = app.windows.firstMatch.waitForExistence(timeout: 30)
+        _ = app.buttons.firstMatch.waitForExistence(timeout: 60)
+    }
+    #endif
+
     private static var storeConfigURL: URL {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("maxmailin/Products.storekit")
     }
 
     private func storeSession(clear: Bool) throws -> SKTestSession {
+        #if os(macOS)
+        // On the Mac, SKTestSession in a UI test does not take over the app's
+        // StoreKit: Buy goes to the App Store sandbox, which asks a person to
+        // sign in (seen 2026-10-08). Run only when someone is at the Mac.
+        guard ProcessInfo.processInfo.environment["MAC_SANDBOX_PURCHASE"] == "1" else {
+            throw XCTSkip("Mac purchases need a person to sign in to the App Store sandbox; set TEST_RUNNER_MAC_SANDBOX_PURCHASE=1")
+        }
+        #endif
         let session = try SKTestSession(contentsOf: Self.storeConfigURL)
         if clear { session.resetToDefaultState(); session.clearTransactions() }
         session.disableDialogs = true
@@ -1188,20 +1205,52 @@ final class MailinClickThroughUITests: XCTestCase {
         return false
     }
 
+    /// A control by the start of its label, whatever its type: on the Mac,
+    /// "Restore Purchases" is a link-style button.
     private func button(beginningWith text: String) -> XCUIElement {
-        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", text)).firstMatch
+        let asButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", text)).firstMatch
+        if asButton.exists { return asButton }
+        let any = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@ AND elementType != %d", text, XCUIElement.ElementType.staticText.rawValue)).firstMatch
+        return any.exists ? any : asButton
+    }
+
+    /// What the purchase screen exposes, printed when a control is missing.
+    private func dumpControls(_ tag: String) {
+        guard let snap = try? app.snapshot() else { return }
+        var out: [String] = []
+        func walk(_ s: XCUIElementSnapshot) {
+            if [.button, .link, .staticText, .radioButton, .sheet].contains(s.elementType), !(s.label.isEmpty && s.identifier.isEmpty) {
+                out.append("\(s.elementType.rawValue):\(s.identifier):\(s.label.prefix(60))")
+            }
+            s.children.forEach(walk)
+        }
+        walk(snap)
+        print("PURCHASE-DUMP \(tag) >>> \(out.prefix(120))")
     }
 
     private func textContaining(_ text: String) -> XCUIElement {
         app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
     }
 
-    private func waitUntilPurchaseScreenCloses(timeout: TimeInterval = 20) -> Bool {
-        let restore = button(beginningWith: "Restore Purchases")
+    /// On the Mac the purchase goes to the App Store sandbox, which asks the
+    /// person at the Mac to sign in or confirm: wait for them.
+    #if os(macOS)
+    private static let purchaseWait: TimeInterval = 240
+    #else
+    private static let purchaseWait: TimeInterval = 20
+    #endif
+
+    private func waitUntilPurchaseScreenCloses(timeout: TimeInterval = MailinClickThroughUITests.purchaseWait) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if !restore.exists { return true }
+            if !button(beginningWith: "Restore Purchases").exists { return true }
             Thread.sleep(forTimeInterval: 0.5)
+        }
+        dumpControls("still-open")
+        // Anything the purchase screen says (an error, a pending note).
+        for id in ["paywall.error", "paywall.status", "paywall.pending"] {
+            let e = app.descendants(matching: .any)[id].firstMatch
+            if e.exists { print("PURCHASE-MESSAGE \(id): \(e.label) \(String(describing: e.value))") }
         }
         return false
     }
@@ -1210,8 +1259,19 @@ final class MailinClickThroughUITests: XCTestCase {
     private func openPurchaseScreen() -> Bool {
         let badge = app.buttons["plan.badge"].firstMatch
         guard badge.waitForExistence(timeout: 15) else { return false }
+        #if os(macOS)
+        print("PURCHASE-BADGE frame \(badge.frame) hittable \(badge.isHittable) enabled \(badge.isEnabled)")
+        badge.click()
+        #else
         badge.tap()
-        return button(beginningWith: "Restore Purchases").waitForExistence(timeout: 10)
+        #endif
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline {
+            if button(beginningWith: "Restore Purchases").exists { return true }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        dumpControls("no-restore")
+        return false
     }
 
     /// Picks a plan and period on the purchase screen and presses Buy.
@@ -1219,21 +1279,49 @@ final class MailinClickThroughUITests: XCTestCase {
     private func buy(tier: String, period: String) -> String {
         // A card's label can start with its badge ("Most Popular, Professional…").
         let card = app.buttons.matching(NSPredicate(format: "label CONTAINS %@ AND NOT (label BEGINSWITH 'Buy ') AND NOT (label BEGINSWITH 'Current plan')", tier)).firstMatch
-        if card.waitForExistence(timeout: 10) { card.tap() }
+        if card.waitForExistence(timeout: 10) { press(card) }
         let periodButton = button(beginningWith: period)
-        if periodButton.waitForExistence(timeout: 5) { periodButton.tap() }
+        if periodButton.waitForExistence(timeout: 5) { press(periodButton) }
         let buyButton = button(beginningWith: "Buy ")
-        guard buyButton.waitForExistence(timeout: 10) else { return "FAIL no Buy button" }
+        guard buyButton.waitForExistence(timeout: 10) else { dumpControls("no-buy"); return "FAIL no Buy button" }
+        #if os(iOS)
         var swipes = 0
         while !buyButton.isHittable && swipes < 6 { app.swipeUp(); swipes += 1 }
+        #endif
         let label = buyButton.label
-        buyButton.tap()
+        press(buyButton)
         return label
     }
 
     /// Opens a Professional-page tool and reports whether it opened or asked
     /// for a purchase.
     private func toolOutcome(_ raw: String) -> String {
+        #if os(macOS)
+        // On the Mac an unlocked tool opens in its own window; a locked one
+        // shows the purchase sheet in the main window.
+        _ = openPage("Professional Workflows")
+        let tile = app.buttons["professional.tool.\(raw)"].firstMatch
+        guard tile.waitForExistence(timeout: 10) else { return "FAIL not reachable" }
+        let windowsBefore = app.windows.count
+        tile.click()
+        let paywall = app.descendants(matching: .any)["paywall"].firstMatch
+        let deadline = Date().addingTimeInterval(10)
+        var outcome = "FAIL neither opened nor asked"
+        while Date() < deadline {
+            if paywall.exists { outcome = "asks for a purchase"; break }
+            if app.windows.count > windowsBefore { outcome = "opens"; break }
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        snapshotScreen("purchase-tool-\(raw)")
+        if outcome == "opens" {
+            app.typeKey("w", modifierFlags: .command)   // close the tool window
+            Thread.sleep(forTimeInterval: 0.8)
+        } else {
+            let close = app.buttons["paywall.close"].firstMatch
+            if close.exists { close.click(); Thread.sleep(forTimeInterval: 0.8) } else { dismissEverything() }
+        }
+        return outcome
+        #else
         _ = openPage("Professional Workflows")
         let tile = app.buttons["professional.tool.\(raw)"].firstMatch
         guard revealInStrip(tile) else { return "FAIL not reachable" }
@@ -1251,6 +1339,7 @@ final class MailinClickThroughUITests: XCTestCase {
         let close = app.buttons["paywall.close"].firstMatch
         if close.exists { close.tap(); Thread.sleep(forTimeInterval: 0.8) } else { dismissEverything() }
         return outcome
+        #endif
     }
 
     private func report(_ name: String, _ rows: [String]) {
@@ -1278,7 +1367,7 @@ final class MailinClickThroughUITests: XCTestCase {
         rows.append("Pressed: “\(bought)”")
         // On success the purchase screen closes itself (PaywallView.submitPurchase).
         let unlocked = waitUntilPurchaseScreenCloses()
-        rows.append("Purchase screen: " + (unlocked ? "closed itself after the purchase succeeded" : "FAIL still open after 20 s"))
+        rows.append("Purchase screen: " + (unlocked ? "closed itself after the purchase succeeded" : "FAIL still open after \(Int(Self.purchaseWait)) s"))
         snapshotScreen("purchase-monthly-done")
         if !unlocked { dismissEverything() }
         let personal = waitForBadge("Current plan: Personal")
@@ -1295,8 +1384,11 @@ final class MailinClickThroughUITests: XCTestCase {
     }
 
     func testPurchase2_reinstallThenRestore() throws {
-        // The runner wiped all of the app's data before this test — what a
-        // reinstall erases. (Uninstalling under Xcode's local StoreKit also
+        // iPad: the runner wiped all of the app's data before this test —
+        // what a reinstall erases. Mac: the app keeps no purchase state of
+        // its own (StoreManager asks StoreKit on every launch), so a fresh
+        // launch sees what a reinstall sees; the Mac container holds the
+        // owner's real archive and is not wiped. (Uninstalling under Xcode's local StoreKit also
         // erases the app's test purchases, unlike the real App Store, where
         // they stay with the Apple Account; so a real uninstall cannot stand
         // in for a reinstall here.)
@@ -1307,8 +1399,8 @@ final class MailinClickThroughUITests: XCTestCase {
         rows.append("Fresh install, before Restore: badge “\(planBadge())”")
         XCTAssertTrue(openPurchaseScreen(), "purchase screen opens from the plan badge")
         let restore = button(beginningWith: "Restore Purchases")
-        restore.tap()
-        let restored = textContaining("Restored: your Personal access").waitForExistence(timeout: 20)
+        press(restore)
+        let restored = textContaining("Restored: your Personal access").waitForExistence(timeout: Self.purchaseWait)
             || waitForBadge("Current plan: Personal", timeout: 5)
         snapshotScreen("purchase-restored")
         rows.append("Restore Purchases: " + (restored ? "“Restored: your Personal access is active on this device.”" : "FAIL"))
@@ -1332,7 +1424,7 @@ final class MailinClickThroughUITests: XCTestCase {
         let bought = buy(tier: "Professional", period: "Lifetime")
         rows.append("Pressed: “\(bought)”")
         let unlocked = waitUntilPurchaseScreenCloses()
-        rows.append("Purchase screen: " + (unlocked ? "closed itself after the purchase succeeded" : "FAIL still open after 20 s"))
+        rows.append("Purchase screen: " + (unlocked ? "closed itself after the purchase succeeded" : "FAIL still open after \(Int(Self.purchaseWait)) s"))
         snapshotScreen("purchase-lifetime-done")
         if !unlocked { dismissEverything() }
         let lifetime = waitForBadge("Current plan: Professional · Lifetime", timeout: 30)
@@ -1344,7 +1436,6 @@ final class MailinClickThroughUITests: XCTestCase {
         XCTAssertTrue(unlocked && lifetime)
         XCTAssertEqual(bates, "opens")
     }
-    #endif
 
     #if os(iOS)
     // MARK: - Deep crawl: every button, two levels (iPad)
