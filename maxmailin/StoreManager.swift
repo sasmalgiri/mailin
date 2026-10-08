@@ -1,5 +1,6 @@
 @testable import ArchiveCore
 import Foundation
+import os
 #if !ENTERPRISE_EDITION
 import StoreKit
 #endif
@@ -180,6 +181,8 @@ enum ImportAllowance {
 class StoreManager: ObservableObject {
 
     // MARK: - Product IDs
+
+    private static let log = Logger(subsystem: "com.ecosanskriti.mailin", category: "purchases")
 
     static let personalLifetimeID = "mailin_personal"
     static let professionalLifetimeID = "Professional_Lifetime"
@@ -571,6 +574,10 @@ class StoreManager: ObservableObject {
         isLifetimePurchase = hasLifetime
         subscriptionExpirationDate = hasLifetime ? nil : latestExpiration
         scheduleExpiryRecheck(at: latestExpiration)
+        // Diagnostics (no personal data): what StoreKit's verified
+        // transactions grant right now. Lets a renewal in the sandbox be seen
+        // as the expiry moving forward — the screen only shows the date.
+        Self.log.notice("entitlements tier=\(highestTier.rawValue, privacy: .public) lifetime=\(hasLifetime, privacy: .public) expires=\(latestExpiration.map { ISO8601DateFormatter().string(from: $0) } ?? "none", privacy: .public)")
     }
 
     /// Expiry is not a transaction update, so nothing would otherwise tell a

@@ -67,3 +67,22 @@ All three pass. An earlier run also bought Personal lifetime ($99.99, through a 
 Why "reinstall" is a data wipe rather than an uninstall: uninstalling under Xcode's local StoreKit also erases the app's test purchases (the store reported no transactions afterwards), unlike the real App Store, where purchases stay with the Apple Account. In that state Restore correctly reported "No eligible purchases were found".
 
 Not covered: App Store Connect's product setup and a sandbox Apple Account. Those are checked with TestFlight build 3.0 (302), uploaded 2026-10-08.
+
+## Apple sandbox, real servers (2026-10-08, afternoon)
+
+Xcode build launched with `-mailinRealStore` (tier from StoreKit only), sandbox tester `sasmalgiri1@gmail.com`, owner confirming Apple's sheets. StoreKit's own log (`storekitagent`, "Initialized with server Sandbox") confirms the environment for each reading.
+
+| Time | Apple's sandbox | mailin |
+|---|---|---|
+| 15:45 | Personal monthly bought | Personal; Redaction opens, Bates locked |
+| 15:56 | Upgraded to Professional monthly | Professional; "Subscription · renews or ends 8 Oct 2026" |
+| 16:39 | still active after ~8 five-minute renewals | Professional |
+| 17:01 | subscription ended (12-renewal limit) | Free · Upgrade, all paid tools locked |
+| 17:28 | Personal monthly bought again | Personal |
+| 18:53 | ended | Free |
+
+Restore Purchases while active once reported "Restore failed: Request Canceled" (Apple's sign-in prompt dismissed) — reported, not hidden; Restore verified on TestFlight (Professional Lifetime, owner's account). Family Sharing is on for all six products and cannot be turned off (Apple rule); single-user products would need new product IDs.
+
+Harness lesson: creating an `SKTestSession` inside a Mac UI test left storekitagent pointing the app at Xcode's local test store ("XcodeTest") for every later launch; readings between 16:05 and 16:31 were from that store and are discarded. Cleared by Product ▸ Run from Xcode with StoreKit Configuration = None. The Mac sandbox tests no longer create a session. `StoreManager.checkEntitlements` now logs tier/lifetime/expiry (subsystem com.ecosanskriti.mailin, category purchases) so a renewal can be read from the log.
+
+Not shown on screen: the renewal time ticking forward — the app shows a date only, and every sandbox renewal falls on the same day. Covered by the 9/9 StoreKit test suite and by the ~60-minute survival of each subscription above.

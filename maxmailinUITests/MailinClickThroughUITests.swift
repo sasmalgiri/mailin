@@ -1187,14 +1187,17 @@ final class MailinClickThroughUITests: XCTestCase {
             .appendingPathComponent("maxmailin/Products.storekit")
     }
 
-    private func storeSession(clear: Bool) throws -> SKTestSession {
+    private func storeSession(clear: Bool) throws -> SKTestSession? {
         #if os(macOS)
-        // On the Mac, SKTestSession in a UI test does not take over the app's
-        // StoreKit: Buy goes to the App Store sandbox, which asks a person to
-        // sign in (seen 2026-10-08). Run only when someone is at the Mac.
+        // Mac sandbox mode: the app buys from Apple's sandbox with a person
+        // signing in. NO SKTestSession here — creating one can bind the
+        // app's StoreKit to Xcode's local test store (storekitagent:
+        // "Initialized with server XcodeTest … No client in [Sandbox]"),
+        // which made the app read an empty store and show Free (2026-10-08).
         guard ProcessInfo.processInfo.environment["MAC_SANDBOX_PURCHASE"] == "1" else {
             throw XCTSkip("Mac purchases need a person to sign in to the App Store sandbox; set TEST_RUNNER_MAC_SANDBOX_PURCHASE=1")
         }
+        return nil
         #endif
         let session = try SKTestSession(contentsOf: Self.storeConfigURL)
         if clear { session.resetToDefaultState(); session.clearTransactions() }
@@ -1248,7 +1251,7 @@ final class MailinClickThroughUITests: XCTestCase {
     /// On the Mac the purchase goes to the App Store sandbox, which asks the
     /// person at the Mac to sign in or confirm: wait for them.
     #if os(macOS)
-    private static let purchaseWait: TimeInterval = 240
+    private static let purchaseWait: TimeInterval = 600
     #else
     private static let purchaseWait: TimeInterval = 20
     #endif
@@ -1403,6 +1406,87 @@ final class MailinClickThroughUITests: XCTestCase {
         report("STATE", rows)
     }
 
+    /// Sandbox bootstrap (Mac): the Mac's StoreKit session may belong to an
+    /// Apple Account that already owns a purchase, so the purchase screen
+    /// offers nothing to buy. Launch with the tier DISPLAYED as Free, press
+    /// Buy Personal monthly, and let the person at the Mac sign the sandbox
+    /// tester in on Apple's sheet; then relaunch on real entitlements.
+    func testPurchase0_sandboxBootstrap() throws {
+        _ = try storeSession(clear: false)
+        relaunch(["-mailinSimulateTier", "free"])
+        var rows: [String] = ["Launched with the tier displayed as Free: badge “\(planBadge())”"]
+        XCTAssertTrue(openPurchaseScreen(), "purchase screen opens from the plan badge")
+        let bought = buy(tier: "Personal", period: "Monthly")
+        rows.append("Pressed: “\(bought)”")
+        // Sign-in + confirmation by the person at the Mac: up to 8 minutes.
+        let closed = waitUntilPurchaseScreenCloses(timeout: 480)
+        rows.append("Purchase screen: " + (closed ? "closed (purchase went through)" : "still open after 8 min"))
+        snapshotScreen("sandbox-bootstrap")
+        // Real entitlements from the account that just bought.
+        relaunch(["-mailinRealStore"])
+        rows.append("Relaunched on real StoreKit entitlements: badge “\(planBadge())”")
+        rows.append("Redaction (Personal tool): \(toolOutcome("redaction"))")
+        rows.append("Bates Numbering (Professional tool): \(toolOutcome("batesNumbering"))")
+        report("BOOTSTRAP", rows)
+        XCTAssertTrue(closed)
+    }
+
+    /// Subscription lifecycle watch (Mac, Apple sandbox): with a monthly
+    /// plan just bought, keep the app open and log the plan badge and the
+    /// Settings "Renews or ends" date every minute. Sandbox months last
+    /// ~5 minutes and stop after 6 renewals, so within ~45 minutes the date
+    /// must move forward at least once and the plan must drop to Free on
+    /// its own — no relaunch, no click on Restore.
+    func testPurchaseWatch_renewalThenExpiry() throws {
+        _ = try storeSession(clear: false)
+        relaunch(["-mailinRealStore"])
+        var rows: [String] = []
+        var dates: [String] = []
+        var sawFree = false
+        let start = Date()
+        let fmt = DateFormatter(); fmt.dateFormat = "HH:mm:ss"
+        func settingsRenewal() -> String {
+            #if os(macOS)
+            app.typeKey(",", modifierFlags: .command)
+            let general = app.buttons["General"].firstMatch
+            if general.waitForExistence(timeout: 6) { general.click() }
+            #endif
+            let row = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'Renews or ends'")).firstMatch
+            let tier = app.descendants(matching: .any)["settings.plan.tier"].firstMatch
+            let text = (row.waitForExistence(timeout: 6) ? "\(row.label) \(String(describing: row.value ?? ""))" : "no renewal row")
+                + " | plan: " + (tier.exists ? "\(tier.label) \(String(describing: tier.value ?? ""))" : "?")
+            #if os(macOS)
+            app.typeKey("w", modifierFlags: .command)
+            #else
+            dismissEverything()
+            #endif
+            Thread.sleep(forTimeInterval: 0.8)
+            return text
+        }
+        // WATCH_MINUTES / WATCH_STOP_AT_DATES (test-runner env) shorten the run:
+        // stop after N minutes, or once N distinct renewal dates were seen.
+        let env = ProcessInfo.processInfo.environment
+        let minutes = Double(env["WATCH_MINUTES"] ?? "") ?? 45
+        let stopAtDates = Int(env["WATCH_STOP_AT_DATES"] ?? "") ?? Int.max
+        rows.append("\(fmt.string(from: Date())) start: badge “\(planBadge())” — \(settingsRenewal())")
+        if let d = rows.last?.components(separatedBy: " — ").last?.components(separatedBy: " | ").first { dates.append(d) }
+        while Date().timeIntervalSince(start) < minutes * 60 {
+            Thread.sleep(forTimeInterval: 60)
+            let badge = planBadge()
+            let renewal = settingsRenewal()
+            rows.append("\(fmt.string(from: Date())) badge “\(badge)” — \(renewal)")
+            print("PURCHASE-WATCH-TICK \(rows.last!)")
+            if let d = renewal.components(separatedBy: " | ").first, !dates.contains(d) { dates.append(d) }
+            if badge == "Free plan. Upgrade" { sawFree = true; break }
+            if dates.count >= stopAtDates { break }
+        }
+        rows.append("Distinct renewal readings: \(dates.count)")
+        rows.append("Dropped to Free on its own: \(sawFree)")
+        report("WATCH", rows)
+        XCTAssertGreaterThanOrEqual(dates.count, 2, "the renewal date never moved")
+        if stopAtDates == Int.max { XCTAssertTrue(sawFree, "the plan did not return to Free after the subscription ended") }
+    }
+
     func testPurchase1_buyMonthlyUnlocksFeatures() throws {
         let session = try storeSession(clear: true)
         _ = session
@@ -1446,7 +1530,7 @@ final class MailinClickThroughUITests: XCTestCase {
         // they stay with the Apple Account; so a real uninstall cannot stand
         // in for a reinstall here.)
         let session = try storeSession(clear: false)
-        let owned = session.allTransactions().map(\.productIdentifier)
+        let owned = session?.allTransactions().map(\.productIdentifier) ?? ["(Apple sandbox: not readable from the test)"]
         relaunch(["-mailinRealStore"])
         var rows: [String] = ["Transactions on the store account: \(owned)"]
         rows.append("Fresh install, before Restore: badge “\(planBadge())”")
@@ -1463,7 +1547,7 @@ final class MailinClickThroughUITests: XCTestCase {
         let redaction = toolOutcome("redaction")
         rows.append("Restored ▸ Redaction: \(redaction)")
         report("RESTORE", rows)
-        XCTAssertTrue(owned.contains("personal_monthly"), "the monthly purchase is on the store account")
+        if session != nil { XCTAssertTrue(owned.contains("personal_monthly"), "the monthly purchase is on the store account") }
         XCTAssertTrue(restored && personal)
         XCTAssertEqual(redaction, "opens")
     }
