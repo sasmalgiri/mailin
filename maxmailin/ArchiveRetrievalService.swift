@@ -38,8 +38,15 @@ final class ArchiveRetrievalService {
     func retrieve(_ query: String, limit: Int = 15) async throws -> [EmailNLPEngine.SearchResult] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, limit > 0 else { return [] }
-        let ids = try await fts.search(trimmed, limit: limit)
+        var ids = try await fts.search(trimmed, limit: limit)
         guard !ids.isEmpty else { return [] }
+        // Purchase-tier scope: FTS ranks the whole index; keep only hits the
+        // tier may read (ArchiveDataService applies the newest-N rule).
+        if await data.accessLimit != nil {
+            let allowed = try await data.matchingIDs(among: ids, query: .all)
+            ids = ids.filter { allowed.contains($0) }
+            guard !ids.isEmpty else { return [] }
+        }
         let emails = try await data.fullEmails(ids: ids)
         let byID = Dictionary(emails.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         var results: [EmailNLPEngine.SearchResult] = []

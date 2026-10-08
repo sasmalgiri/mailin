@@ -22,9 +22,21 @@ final class MailinClickThroughUITests: XCTestCase {
     /// only if the count rises above this.
     private var baselineMenus = 0
 
+    /// The app under test: the scheme's Debug build, or — on the Mac, when
+    /// UITEST_APP_PATH names an installed .app — that build (used to run the
+    /// purchase checklist against the TestFlight copy, 2026-10-08).
+    private func makeApp() -> XCUIApplication {
+        #if os(macOS)
+        if let path = ProcessInfo.processInfo.environment["UITEST_APP_PATH"], !path.isEmpty {
+            return XCUIApplication(url: URL(fileURLWithPath: path))
+        }
+        #endif
+        return XCUIApplication()
+    }
+
     override func setUp() {
         continueAfterFailure = true
-        app = XCUIApplication()
+        app = makeApp()
         app.launchArguments = ["--uitest"]
         // Extra launch arguments from the runner (TEST_RUNNER_UITEST_EXTRA_ARGS),
         // e.g. -simulateAppleIntelligenceOff.
@@ -1160,6 +1172,7 @@ final class MailinClickThroughUITests: XCTestCase {
     #if os(macOS)
     private func relaunch(_ extra: [String]) {
         app.terminate()
+        app = makeApp()
         app.launchArguments = ["--uitest"] + extra
         app.launch()
         _ = app.wait(for: .runningForeground, timeout: 30)
@@ -1348,6 +1361,46 @@ final class MailinClickThroughUITests: XCTestCase {
         let attachment = XCTAttachment(string: text)
         attachment.name = "purchase-\(name).md"; attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    /// Reads the purchase state of the app as it is — no buying — so a
+    /// purchase made by hand (TestFlight) can be checked: plan badge,
+    /// Settings ▸ Plan & Purchases (tier, ownership, renewal date), and
+    /// which tools open.
+    func testPurchaseState_report() throws {
+        relaunch([])
+        var rows: [String] = []
+        rows.append("Badge: “\(planBadge())”")
+        #if os(macOS)
+        app.typeKey(",", modifierFlags: .command)
+        let general = app.buttons["General"].firstMatch
+        if general.waitForExistence(timeout: 8) { general.click() }
+        #endif
+        let tier = app.descendants(matching: .any)["settings.plan.tier"].firstMatch
+        if tier.waitForExistence(timeout: 10) {
+            rows.append("Settings ▸ Current plan: “\(tier.label)” value “\(String(describing: tier.value ?? ""))”")
+        } else {
+            rows.append("Settings ▸ Current plan: not found")
+        }
+        for label in ["Ownership", "Renews or ends"] {
+            let row = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", label)).firstMatch
+            if row.exists { rows.append("Settings ▸ \(label): “\(row.label)” value “\(String(describing: row.value ?? ""))”") }
+        }
+        snapshotScreen("purchase-state-settings")
+        #if os(macOS)
+        app.typeKey("w", modifierFlags: .command)
+        Thread.sleep(forTimeInterval: 0.8)
+        #else
+        dismissEverything()
+        #endif
+        rows.append("Redaction (Personal tool): \(toolOutcome("redaction"))")
+        rows.append("Bates Numbering (Professional tool): \(toolOutcome("batesNumbering"))")
+        // The Archive list's count line: Free reads "First 500 of N emails ·
+        // Unlock Full Archive"; paid tiers show no such line.
+        _ = openPage("Archive")
+        let countLine = app.descendants(matching: .any)["archive.list.count"].firstMatch
+        rows.append("Archive list count line: " + (countLine.waitForExistence(timeout: 5) ? "“\(countLine.label)”" : "none (whole archive)"))
+        report("STATE", rows)
     }
 
     func testPurchase1_buyMonthlyUnlocksFeatures() throws {

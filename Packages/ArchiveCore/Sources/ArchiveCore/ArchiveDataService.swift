@@ -27,19 +27,41 @@ final class ArchiveDataService {
 
     private let repository: any EmailRepository
 
+    /// Purchase-tier scope: when set, every query through this service sees
+    /// only the newest `accessLimit` emails of the archive — list, counts,
+    /// search, AI retrieval, analytics, exports, attachments. The app sets it
+    /// from the store manager (Free = 500, paid = nil). Bounded once here,
+    /// not per screen.
+    var accessLimit: Int? = nil
+
     nonisolated init(repository: any EmailRepository) {
         self.repository = repository
+    }
+
+    /// `query` with the tier's scope applied (the tighter of the two limits).
+    func scoped(_ query: EmailQuery) -> EmailQuery {
+        guard let accessLimit else { return query }
+        var q = query
+        q.newestLimit = min(q.newestLimit ?? Int.max, accessLimit)
+        return q
     }
 
     // MARK: - Bounded reads
 
     /// One keyset page of lightweight summaries (no bodies).
     func page(query: EmailQuery = .all, cursor: EmailPageCursor? = nil, limit: Int = 100) async throws -> EmailPage {
-        try await repository.page(query: query, cursor: cursor, limit: limit)
+        try await repository.page(query: scoped(query), cursor: cursor, limit: limit)
     }
 
     /// Exact result count for a query (O(1)-memory aggregate; never materializes).
     func count(query: EmailQuery = .all) async throws -> Int {
+        try await repository.count(query: scoped(query))
+    }
+
+    /// The count WITHOUT the tier's scope — what the archive holds in total,
+    /// for the Free banners that say "first 500 of 526" and "26 more with
+    /// Personal". Never used to fetch rows.
+    func unscopedCount(query: EmailQuery = .all) async throws -> Int {
         try await repository.count(query: query)
     }
 
@@ -75,8 +97,9 @@ final class ArchiveDataService {
     /// §15: which of `ids` genuinely match `query` — structured filters
     /// verified in SQL, text via a bounded per-ID FTS check. Used to verify
     /// Select-All exclusions; bounded by `ids`, never by the result set.
-    func matchingIDs(among ids: [EmailID], query: EmailQuery) async throws -> Set<EmailID> {
+    func matchingIDs(among ids: [EmailID], query unscoped: EmailQuery) async throws -> Set<EmailID> {
         guard !ids.isEmpty else { return [] }
+        let query = scoped(unscoped)
         guard let repo = repository as? EmailStoreRepository,
               let sqlite = repo.store as? SQLiteEmailStore else {
             return try await exists(ids: ids)   // best effort without SQL access
@@ -96,7 +119,8 @@ final class ArchiveDataService {
     /// every match exactly once in stable order; a changed query throws
     /// `.staleSearchCursor`. Falls back to a single bounded page (no
     /// continuation) when the repository lacks the ranked capability.
-    func searchRanked(query: EmailQuery, cursor: RankedSearchCursor? = nil, limit: Int = 100) async throws -> RankedSearchPage {
+    func searchRanked(query unscoped: EmailQuery, cursor: RankedSearchCursor? = nil, limit: Int = 100) async throws -> RankedSearchPage {
+        let query = scoped(unscoped)
         if let ranked = repository as? RankedSearchRepository {
             return try await ranked.searchRanked(query: query, cursor: cursor, limit: limit)
         }
@@ -203,9 +227,10 @@ final class ArchiveDataService {
     /// Select All / exports / bulk ops to one page (H1). Non-text queries use
     /// the keyset page loop.
     private func forEachSummaryPage(
-        query: EmailQuery, batchSize: Int,
+        query unscoped: EmailQuery, batchSize: Int,
         _ body: ([EmailSummary]) async throws -> Void
     ) async throws {
+        let query = scoped(unscoped)
         if let text = query.text, !text.isEmpty {
             var cursor: RankedSearchCursor? = nil
             while true {

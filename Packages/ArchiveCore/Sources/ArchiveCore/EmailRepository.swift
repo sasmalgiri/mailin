@@ -112,6 +112,11 @@ struct EmailQuery: Sendable, Equatable, Codable {
     /// A2: the Trash mailbox — ONLY trashed rows. Implies `includeTrashed`.
     var trashedOnly = false
     var sort: EmailSortOrder = .dateDesc
+    /// Purchase-tier scope: only the newest N emails of the archive (by date,
+    /// then id) take part in this query — rows, counts, text search and
+    /// streams alike. Set by `ArchiveDataService.accessLimit` for the Free
+    /// tier; nil means the whole archive.
+    var newestLimit: Int? = nil
 
     static let all = EmailQuery()
 
@@ -123,7 +128,7 @@ struct EmailQuery: Sendable, Equatable, Codable {
             || !senders.isEmpty || !recipients.isEmpty || !subjects.isEmpty
             || !domains.isEmpty || !tags.isEmpty
             || minPriority != nil || phishingOnly || sentimentBelow != nil || !classifications.isEmpty
-            || minSenderMessages != nil
+            || minSenderMessages != nil || newestLimit != nil
     }
 
     var isEmpty: Bool {
@@ -423,7 +428,8 @@ extension EmailStoreRepository: RankedSearchRepository {
             query.domain ?? "-", query.userTag ?? "-", query.sourceFileName ?? "-",
             query.evidenceTag ?? "-", query.hasAttachments.map(String.init) ?? "-",
             query.messageType ?? "-", String(query.pinnedOnly),
-            String(query.includeTrashed), query.sort.rawValue
+            String(query.includeTrashed), query.sort.rawValue,
+            query.newestLimit.map(String.init) ?? "-"
         ]
         let listFilters: [String] = [
             query.senders.joined(separator: ","), query.recipients.joined(separator: ","),

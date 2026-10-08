@@ -251,7 +251,9 @@ class StoreManager: ObservableObject {
     #if !ENTERPRISE_EDITION
     @Published private(set) var products: [Product] = []
     #endif
-    @Published private(set) var currentTier: PurchaseTier = .free
+    @Published private(set) var currentTier: PurchaseTier = .free {
+        didSet { publishAccessScope() }
+    }
     @Published private(set) var purchaseInProgress = false
     @Published private(set) var purchasePending = false
     @Published private(set) var productLoadError: String?
@@ -318,8 +320,19 @@ class StoreManager: ObservableObject {
     /// gate denies set this to false on their own instance (see
     /// `init(testTier:)`); Release builds do not compile this property, so
     /// the override cannot reach the App Store.
-    var debugUnlocksAllTiers = true
+    var debugUnlocksAllTiers = true {
+        didSet { publishAccessScope() }
+    }
     #endif
+
+    /// The archive scope the tier allows, handed to the data service so every
+    /// read — list, counts, search, AI, analytics, exports, attachments — is
+    /// bounded once: Free sees the newest `freeEmailLimit` emails, paid tiers
+    /// the whole archive. Called whenever the effective tier can change.
+    func publishAccessScope() {
+        guard Self.live === self || Self.live == nil else { return }   // test fixtures never reach the live data
+        ArchiveDataService.shared.accessLimit = isPremium ? nil : Self.freeEmailLimit
+    }
 
     /// The single tier every purchase gate consults. Enterprise: everything is
     /// included in the purchase price. Debug (unless a test opts out): all
@@ -361,6 +374,7 @@ class StoreManager: ObservableObject {
         Task { await checkEntitlements() }
         #endif
         if Self.live == nil { Self.live = self }
+        publishAccessScope()
     }
 
     #if DEBUG

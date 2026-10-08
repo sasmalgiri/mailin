@@ -3187,6 +3187,17 @@ actor SQLiteEmailStore: EmailArchiveStore {
             sql.append("e.date < ?")
             binds.append(.int(Int64(before.timeIntervalSince1970.rounded())))
         }
+        // Purchase-tier scope: the newest N emails of the archive, whatever
+        // else the query asks. One predicate here reaches every path —
+        // pages, counts, FTS verification, streams — so the Free tier is
+        // bounded once, not per screen (owner, 2026-10-08).
+        if let newest = q.newestLimit {
+            sql.append("""
+                e.id IN (SELECT n.id FROM emails n WHERE \(notTrashedPredicate.replacingOccurrences(of: "e.id", with: "n.id"))
+                         ORDER BY n.date DESC, n.id DESC LIMIT ?)
+                """)
+            binds.append(.int(Int64(max(0, newest))))
+        }
         if let sender = q.sender, !sender.isEmpty {
             sql.append("instr(lower(e.from_addr), lower(?)) > 0")
             binds.append(.text(sender))

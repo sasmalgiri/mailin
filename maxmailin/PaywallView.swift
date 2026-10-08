@@ -321,7 +321,7 @@ struct PaywallView: View {
             featureRow("AI Assistant", free: String(localized: "5/day"), personal: true, pro: true)
             featureRow("AI Smart Filters", free: String(localized: "5/day"), personal: true, pro: true)
             featureRow("Analytics & charts", free: true, personal: true, pro: true)
-            featureRow("Export (EML/CSV)", free: "10", personal: true, pro: true)
+            featureRow("Export (EML/CSV)", free: "500", personal: true, pro: true)
             featureRow("Download attachments", free: "10", personal: true, pro: true)
 
             Divider().padding(.vertical, Spacing.xxxSmall)

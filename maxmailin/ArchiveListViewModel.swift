@@ -134,7 +134,10 @@ final class ArchiveListViewModel: ObservableObject {
         error = nil
         isLoading = true
         do {
-            let count = try await archive.count(query: query)
+            // The archive's true total for this query: the Free banner says
+            // "First 500 of 526" from it, while the pages themselves come
+            // through the tier's scope.
+            let count = try await archive.unscopedCount(query: query)
             let fetched = try await fetchPage(startingAt: nil)
             guard revision == queryRevision else { return }
             let (batch, next) = clampToAccessLimit(fetched.batch, next: fetched.next, pageIndex: 0)

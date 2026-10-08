@@ -439,7 +439,7 @@ class ContentViewModel: ObservableObject {
         totalParsedCount = committed
         isParsed = true
         Task { @MainActor [weak self] in
-            if let total = try? await ArchiveDataService.shared.count(), total > 0 {
+            if let total = try? await ArchiveDataService.shared.unscopedCount(), total > 0 {
                 self?.totalParsedCount = total
             }
         }
@@ -710,7 +710,7 @@ class ContentViewModel: ObservableObject {
             _ = try? await ArchiveCorpusRevision.shared.bump()
             duplicatesRemoved += removed.count
             removedDuplicates.append(contentsOf: removed.map { DuplicateFinding(from: $0, reason: "removed") })
-            totalParsedCount = (try? await ArchiveDataService.shared.count()) ?? max(0, totalParsedCount - ids.count)
+            totalParsedCount = (try? await ArchiveDataService.shared.unscopedCount()) ?? max(0, totalParsedCount - ids.count)
             return true
         } catch {
             Self.importLogger.error("Delete failed: \(error.localizedDescription, privacy: .public)")

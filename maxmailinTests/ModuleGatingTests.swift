@@ -1229,6 +1229,28 @@ struct StoreKitPurchaseFlowTests {
                 "tier after the period ended: \(store.effectiveTier); expiry \(String(describing: store.subscriptionExpirationDate)); now \(Date())")
     }
 
+    @Test("A subscription that renews keeps access and moves its renewal date forward")
+    func renewalKeepsAccess() async throws {
+        let session = try freshSession()
+        defer { session.clearTransactions(); session.timeRate = .realTime }
+        // One monthly period = 30 real seconds; auto-renew stays on.
+        session.timeRate = .monthlyRenewalEveryThirtySeconds
+        let store = await liveStore()
+        _ = await store.purchase(try product(StoreManager.personalMonthlyID, in: store))
+        #expect(store.isPremium)
+        let firstExpiry = try #require(store.subscriptionExpirationDate)
+        // Past the first period: the renewal must have arrived through the
+        // transaction listener (no checkEntitlements call from here on).
+        let renewed = await eventually(60) {
+            (store.subscriptionExpirationDate ?? .distantPast) > firstExpiry
+        }
+        #expect(renewed, "renewal date did not move: first \(firstExpiry), now \(String(describing: store.subscriptionExpirationDate))")
+        #expect(store.isPremium, "access must not lapse across a renewal")
+        #expect(!store.isLifetimePurchase)
+        #expect(session.allTransactions().filter { $0.productIdentifier == StoreManager.personalMonthlyID }.count >= 2,
+                "StoreKit recorded the renewal as a second transaction")
+    }
+
     @Test("An expired subscription grants nothing once the app is next active")
     func expiredSubscriptionOnActivation() async throws {
         let session = try freshSession()
