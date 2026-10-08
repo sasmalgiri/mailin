@@ -135,7 +135,7 @@ mailin is an email archive analyzer that opens .mbox, .eml, .emlx, .msg, .pst, .
 TESTING:
 - Help > Open sample loads the bundled demo_emails.mbox; it shows every surface. Or drag any supported file onto the window.
 - The archive page is always on. AI Insights and Professional Workflows are optional pages, off on a fresh install; the page switcher (top of the window) explains what each needs and turns it on.
-- Free tier: import up to 100 MB of archives and browse the first 500 results of any list or search. Personal and Professional features need a subscription or one-time purchase (StoreKit 2; cancel via Apple's Subscriptions UI).
+- Free tier: import up to 100 MB of archives and work with the newest 500 emails of the archive (list, search, analytics, exports and the AI assistant alike; the list states the archive's total). Personal and Professional features need a subscription or one-time purchase (StoreKit 2; cancel via Apple's Subscriptions UI).
 
 NETWORK:
 - No account, no login, no developer server. The archive never leaves the device.
@@ -165,4 +165,9 @@ No demo account is needed.
   runs until you do.
 - Offset import engine is now the default: single messages over 100 MB are archived instead of
   reported as damaged.
+- Interface in 11 languages: English, German, Spanish, French, Hindi, Italian, Japanese, Korean,
+  Brazilian Portuguese, Simplified and Traditional Chinese.
+- AI answers list the emails they came from; counts, dates and amounts are read from the archive,
+  not generated. With Apple Intelligence off, the assistant answers from the emails themselves.
+- Free tier: the newest 500 emails of the archive in every view, with the archive's total shown.
 ```

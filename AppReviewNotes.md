@@ -118,7 +118,7 @@ A: To open user-selected email archives (.mbox, .eml, .emlx, .msg, .pst, .ost). 
 A: A visible banner above every AI feature reads "AI and software can make mistakes. Verify important results before relying on them." The Terms of Use clause 7 explicitly disclaims accuracy and assigns verification responsibility to the user.
 
 **Q: What is the subscription model?**
-A: Standard StoreKit 2 auto-renewable subscriptions (monthly / yearly) plus a one-time Lifetime purchase. Free tier is fully usable for evaluation (up to 100 MB of imported input and the first 500 results of any list or search; 5 AI queries a day). Subscriptions auto-renew per Apple's standard terms; cancellation is via Settings → Subscriptions.
+A: Standard StoreKit 2 auto-renewable subscriptions (monthly / yearly) plus a one-time Lifetime purchase. Free tier is fully usable for evaluation (up to 100 MB of imported input and the newest 500 emails of the archive in every view; 5 AI queries a day). Subscriptions auto-renew per Apple's standard terms; cancellation is via Settings → Subscriptions.
 
 **Q: GDPR Compliance Report — does this confer GDPR compliance on the user's data?**
 A: No. It's a discovery tool that helps users locate personal data (PII) in their email archives. The user remains the data controller; mailin is a tool, not a compliance certifier. This is clearly stated in the Glossary entry for "GDPR" and in the report's own disclaimer.
