@@ -2689,17 +2689,26 @@ actor SQLiteEmailStore: EmailArchiveStore {
             bind: "%\(needle)%", limit: limit)
     }
 
-    private func documentQuery(where clause: String, bind: String?, limit: Int) throws -> [IssuedDocument] {
+    /// Every document of one type, newest first — deliberately uncapped, so
+    /// a cross-document report never silently drops older documents.
+    func documents(ofType type: String) throws -> [IssuedDocument] {
+        try documentQuery(where: "doc_type = ?", bind: type, limit: nil)
+    }
+
+    private func documentQuery(where clause: String, bind: String?, limit: Int?) throws -> [IssuedDocument] {
         let db = try ensureDB()
+        let limitClause = limit.map { " LIMIT \($0)" } ?? ""
         let stmt = try prepare(db, """
             SELECT doc_number, doc_type, created_at, summary, refs, created_by, reverses, reversed_by
             FROM documents WHERE \(clause)
-            ORDER BY created_at DESC, doc_number DESC LIMIT \(limit);
+            ORDER BY created_at DESC, doc_number DESC\(limitClause);
         """)
         defer { sqlite3_finalize(stmt) }
         if let bind {
-            bindText(stmt, 1, bind)
-            bindText(stmt, 2, bind)
+            // Bind the value to every placeholder the clause declares.
+            for i in 0..<sqlite3_bind_parameter_count(stmt) {
+                bindText(stmt, i + 1, bind)
+            }
         }
         var out: [IssuedDocument] = []
         while try stepRow(stmt, db) {

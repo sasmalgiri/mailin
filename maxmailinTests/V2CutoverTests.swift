@@ -1973,6 +1973,91 @@ final class V2CutoverTests: XCTestCase {
         XCTAssertTrue(csv.contains("\"VRD-2026-0002\""))
     }
 
+    /// Workflow documents carry their own "Document" field: it must not make
+    /// a second "Document" header. Dates are ISO (no 12/08/26 ambiguity), a
+    /// label repeated in another section keeps both values, and seal
+    /// signatures are not report columns.
+    func testCrossDocumentReport_columnsAreUniqueAndLossless() {
+        let day = Date(timeIntervalSince1970: 1_754_800_000)   // 2025-08-10 UTC
+        let a = DocumentTable.parse(contentType: "application/json",
+            body: CapturedDocument(title: "A", sections: [
+                .init(name: "Intake", fields: [
+                    .init(key: "Document", value: "WF-2026-0001"),     // repeats the number → dropped
+                    .init(key: "Status", value: "Released")]),
+                .init(name: "Review", fields: [
+                    .init(key: "Status", value: "Confirmed")]),         // same label, other value → kept
+                .init(name: DocumentRegistry.receiptSectionName, fields: [
+                    .init(key: "SHA-256", value: "abc")]),
+            ]).jsonString())
+        let b = DocumentTable.parse(contentType: "application/json",
+            body: CapturedDocument(title: "B", sections: [.init(name: "Intake", fields: [
+                .init(key: "Document", value: "IMP-2026-0004")])]).jsonString())   // differs → own column
+
+        let r = CrossDocumentReport.build([
+            (number: "WF-2026-0001", date: day, table: a),
+            (number: "WF-2026-0002", date: day, table: b),
+        ])
+        XCTAssertEqual(r.columns, ["Document", "Date", "Status", "Review › Status", "Document (field)"])
+        XCTAssertEqual(Set(r.columns).count, r.columns.count, "duplicate column headers")
+        XCTAssertEqual(r.rows[0][2], "Released")
+        XCTAssertEqual(r.rows[0][3], "Confirmed")
+        XCTAssertEqual(r.rows[1][4], "IMP-2026-0004")
+        XCTAssertNotNil(r.rows[0][1].wholeMatch(of: /\d{4}-\d{2}-\d{2}/), r.rows[0][1])
+        XCTAssertEqual(r.period, day...day)
+    }
+
+    /// The saved report: summary counts for categorical columns, one section
+    /// per source document, and a PDF text that carries every value.
+    func testCrossDocumentReport_savedDocumentAndPDF() {
+        func doc(_ status: String, _ owner: String) -> DocumentTable {
+            DocumentTable.parse(contentType: "application/json",
+                body: CapturedDocument(title: "", sections: [.init(name: "S", fields: [
+                    .init(key: "Status", value: status),
+                    .init(key: "Owner", value: owner)])]).jsonString())
+        }
+        let d = Date(timeIntervalSince1970: 1_754_800_000)
+        let r = CrossDocumentReport.build([
+            (number: "WF-1", date: d, table: doc("Released", "a")),
+            (number: "WF-2", date: d, table: doc("Released", "b")),
+            (number: "WF-3", date: d, table: doc("Confirmed", "c")),
+        ])
+        // Status repeats → summarised; Owner is all-unique free text → not.
+        let b = CrossDocumentReport.breakdowns(r)
+        XCTAssertEqual(b.map(\.column), ["Status"])
+        XCTAssertEqual(b.first?.counts, [.init(value: "Released", count: 2), .init(value: "Confirmed", count: 1)])
+
+        let saved = CrossDocumentReport.capturedDocument(r, typeName: "Workflows", builtBy: "Tester", builtAt: d)
+        XCTAssertEqual(saved.sections.map(\.name), [CrossDocumentReport.reportSectionName, "Summary", "WF-1", "WF-2", "WF-3"])
+        XCTAssertTrue(CrossDocumentReport.isCrossDocumentReport(
+            DocumentTable.parse(contentType: "application/json", body: saved.jsonString())))
+        XCTAssertEqual(saved.sections[1].fields.first, .init(key: "Status: Released", value: "2"))
+
+        let pdf = CrossDocumentReport.pdfLines(r, number: "RPT-2026-0001", typeName: "Workflows",
+                                               builtBy: "Tester", builtAt: d, sealSHA256: "ff")
+        for value in ["Report:     RPT-2026-0001", "Seal:       SHA-256 ff", "  Owner: c", "    Released: 2"] {
+            XCTAssertTrue(pdf.contains(value), "PDF text missing \(value)")
+        }
+    }
+
+    /// The report source query is uncapped and type-exact: older documents
+    /// are never cut off by other types' volume.
+    func testDocumentsOfType_uncappedAndTypeExact() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("docs-of-type-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = SQLiteEmailStore(directory: dir)
+        for i in 0..<5 { _ = try await store.issueDocument(type: "WF", summary: "wf \(i)") }
+        for i in 0..<300 { _ = try await store.issueDocument(type: "IMP", summary: "imp \(i)") }
+        let wf = try await store.documents(ofType: "WF")
+        XCTAssertEqual(wf.count, 5)
+        XCTAssertTrue(wf.allSatisfy { $0.type == "WF" })
+        let imp = try await store.documents(ofType: "IMP")
+        XCTAssertEqual(imp.count, 300, "more than the 200 recentDocuments default — no cap")
+        // The two-placeholder lookup still binds both placeholders.
+        let hits = try await store.lookupDocuments(matching: "wf 3")
+        XCTAssertEqual(hits.map(\.summary), ["wf 3"])
+    }
+
     /// No production source references the retired flag name.
     func testNoRollbackFlagRemains() throws {
         let fm = FileManager.default

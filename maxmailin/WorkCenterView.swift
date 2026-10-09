@@ -48,6 +48,12 @@ struct WorkCenterView: View {
     @State private var reportType = "RPT"
     @State private var reportResult: CrossDocumentReport.Result? = nil
     @State private var buildingReport = false
+    /// The RPT number the current table was saved as (nil = preview only).
+    @State private var postedReport: String? = nil
+    @State private var postedReportBuiltAt = Date()
+    @State private var postedReportSeal: String? = nil
+    @State private var reportNotice: String? = nil
+    @State private var reportError: String? = nil
     @State private var newNote = ""
     @AppStorage("selectedPersona") private var personaRaw = "general"
     @State private var isLoading = true
@@ -775,7 +781,9 @@ struct WorkCenterView: View {
                 Button { Task { await buildReport() } } label: {
                     Label(buildingReport ? String(localized: "Building…") : String(localized: "Build report"), systemImage: "wand.and.stars")
                 }
-                .controlSize(.small).disabled(buildingReport)
+                .controlSize(.small)
+                .disabled(buildingReport || reportResult?.isEmpty != false || postedReport != nil)
+                .help("Save this table as a numbered, sealed Report (RPT) — it appears in Documents and can be exported as PDF.")
                 Spacer()
                 if let r = reportResult, !r.isEmpty {
                     Text("\(r.rows.count) rows").font(Typography.caption2).foregroundColor(AppColors.secondary)
@@ -790,9 +798,33 @@ struct WorkCenterView: View {
                 }
             }
             .padding(.horizontal, Spacing.small).padding(.top, Spacing.small)
-            Text("Pull every \(reportTypeName(reportType)) document into one spreadsheet — one row per document, a column for every field. Export to Excel/Numbers.")
+            Text("Every \(reportTypeName(reportType)) document in one table — one row per document, a column for every field. Build report saves it as a numbered, sealed Report with a summary, exportable as PDF or CSV.")
                 .font(Typography.caption2).foregroundColor(AppColors.secondary)
                 .padding(.horizontal, Spacing.small)
+            if let number = postedReport, let r = reportResult {
+                HStack(spacing: Spacing.small) {
+                    Image(systemName: "checkmark.seal.fill").foregroundColor(.green)
+                    Text("Saved as \(number) — sealed, in Documents")
+                        .font(Typography.caption1).fontWeight(.semibold)
+                    Button("Show in Documents") { Task { await showInDocuments(number) } }
+                        .controlSize(.small)
+                    #if os(macOS)
+                    Button { exportReportPDF(r, number: number) } label: {
+                        Label("Export PDF…", systemImage: "doc.richtext")
+                    }.controlSize(.small)
+                    #endif
+                }
+                .padding(.horizontal, Spacing.small)
+            }
+            if let reportNotice {
+                Text(reportNotice).font(Typography.caption2).foregroundColor(AppColors.secondary)
+                    .padding(.horizontal, Spacing.small)
+            }
+            if let reportError {
+                Label(reportError, systemImage: "exclamationmark.triangle.fill")
+                    .font(Typography.caption1).foregroundColor(.orange)
+                    .padding(.horizontal, Spacing.small)
+            }
             Divider()
             if let r = reportResult {
                 if r.isEmpty {
@@ -823,42 +855,147 @@ struct WorkCenterView: View {
                 }
             } else {
                 VStack(spacing: Spacing.small) {
-                    Image(systemName: "tablecells").font(.largeTitle).foregroundColor(AppColors.secondary)
-                    Text("Choose a document type and Build report to combine every matching document into one table.")
+                    ProgressView()
+                    Text("Collecting \(reportTypeName(reportType)) documents…")
                         .font(Typography.caption1).foregroundColor(AppColors.secondary)
-                        .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity).padding()
             }
         }
+        // The table is a live preview: rebuilt on open and whenever the type
+        // changes, so it never shows one type's rows under another's name.
+        .task(id: reportType) { await refreshReportPreview() }
     }
 
+    /// Reads every document of the chosen type (no cap) into the table.
+    /// Nothing is saved — that is what Build report does.
+    @MainActor
+    private func refreshReportPreview() async {
+        reportResult = nil
+        postedReport = nil
+        postedReportSeal = nil
+        reportNotice = nil
+        reportError = nil
+        let store = SQLiteEmailStore.shared
+        let matching: [SQLiteEmailStore.IssuedDocument]
+        do {
+            matching = try await store.documents(ofType: reportType)
+        } catch {
+            reportError = String(localized: "Couldn't read the documents: \(error.localizedDescription)")
+            reportResult = CrossDocumentReport.Result(columns: [], rows: [])
+            return
+        }
+        var rows: [(number: String, date: Date, table: DocumentTable)] = []
+        var unreadable = 0
+        var skippedReports = 0
+        for d in matching {
+            if Task.isCancelled { return }
+            let p: (contentType: String, body: String)?
+            do { p = try await store.documentPayload(d.number) } catch { p = nil; unreadable += 1 }
+            let table = DocumentTable.parse(contentType: p?.contentType ?? "text/markdown",
+                                            body: p?.body ?? d.summary)
+            // Earlier cross-document reports would explode into a column per
+            // field of every document they cover.
+            if CrossDocumentReport.isCrossDocumentReport(table) { skippedReports += 1; continue }
+            rows.append((d.number, d.createdAt, table))
+        }
+        var notes: [String] = []
+        if skippedReports > 0 {
+            notes.append(String(localized: "\(skippedReports) earlier cross-document reports are not included as rows."))
+        }
+        if unreadable > 0 {
+            notes.append(String(localized: "\(unreadable) documents' saved data couldn't be read — their rows show the summary only."))
+        }
+        reportNotice = notes.isEmpty ? nil : notes.joined(separator: " ")
+        reportResult = CrossDocumentReport.build(rows)
+    }
+
+    /// Build report: re-reads the documents (so the report is current), then
+    /// posts the table as a sealed RPT document — header, summary counts and
+    /// one section per source document — echoed to the audit trail.
     @MainActor
     private func buildReport() async {
         buildingReport = true
-        reportResult = nil
-        let all = (try? await SQLiteEmailStore.shared.recentDocuments(limit: 1000)) ?? []
-        let matching = all.filter { $0.type == reportType }
-        var rows: [(number: String, date: Date, table: DocumentTable)] = []
-        for d in matching {
-            let p = try? await SQLiteEmailStore.shared.documentPayload(d.number)
-            let table = DocumentTable.parse(contentType: p?.contentType ?? "text/markdown",
-                                            body: p?.body ?? d.summary)
-            rows.append((d.number, d.createdAt, table))
+        defer { buildingReport = false }
+        await refreshReportPreview()
+        guard let r = reportResult, !r.isEmpty else { return }
+        let typeName = reportTypeName(reportType)
+        let who = ForensicManager.shared.examinerName
+        let builtAt = Date()
+        let doc = CrossDocumentReport.capturedDocument(r, typeName: typeName, builtBy: who, builtAt: builtAt)
+        guard let number = await DocumentRegistry.captureStructured(
+            .report, summary: CrossDocumentReport.summaryLine(r, typeName: typeName),
+            document: doc, refs: r.rows.compactMap(\.first).joined(separator: ", ")) else {
+            reportError = String(localized: "The report couldn't be saved — no document number was issued. Try again.")
+            return
         }
-        reportResult = CrossDocumentReport.build(rows)
-        buildingReport = false
+        postedReport = number
+        postedReportBuiltAt = builtAt
+        // Read back what was stored: proves the payload landed and gives the
+        // seal digest to print on the PDF.
+        if let p = try? await SQLiteEmailStore.shared.documentPayload(number),
+           let saved = CapturedDocument.from(json: p.body) {
+            postedReportSeal = saved.sections
+                .first { $0.name == DocumentRegistry.receiptSectionName }?
+                .fields.first { $0.key == "SHA-256" }?.value
+        } else {
+            reportError = String(localized: "\(number) was issued but its contents couldn't be read back. Open it in Documents to check.")
+        }
+        await reloadDocuments()
+    }
+
+    @MainActor
+    private func showInDocuments(_ number: String) async {
+        docDateFilterOn = false
+        docSearch = number
+        selectedTab = 4
+        await reloadDocuments()
+        if expandedDoc != number { await toggleDocDetail(number) }
     }
 
     #if os(macOS)
     @MainActor
     private func exportReportCSV(_ r: CrossDocumentReport.Result) {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "\(reportType)_report.csv"
+        panel.nameFieldStringValue = "\(postedReport ?? "\(reportType)_report").csv"
         panel.allowedContentTypes = [.commaSeparatedText]
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        try? CrossDocumentReport.csv(r).write(to: url, atomically: true, encoding: .utf8)
+        let csv = CrossDocumentReport.csv(r)
+        do {
+            try csv.write(to: url, atomically: true, encoding: .utf8)
+            // Round-trip check: a CSV counts as exported only if it reads back identical.
+            guard try String(contentsOf: url, encoding: .utf8) == csv else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            reportError = nil
+            reportNotice = String(localized: "CSV saved — \(r.rows.count) rows, \(r.columns.count) columns.")
+        } catch {
+            reportError = String(localized: "The CSV couldn't be saved: \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    private func exportReportPDF(_ r: CrossDocumentReport.Result, number: String) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(number).pdf"
+        panel.allowedContentTypes = [.pdf]
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let who = ForensicManager.shared.examinerName
+        let lines = CrossDocumentReport.pdfLines(
+            r, number: number, typeName: reportTypeName(reportType), builtBy: who,
+            builtAt: postedReportBuiltAt, sealSHA256: postedReportSeal)
+        do {
+            let out = try BatesPDFRenderer.renderVerified(
+                lines: lines, metadata: .init(batesNumber: number, examiner: who), to: url)
+            ForensicManager.shared.logAction("Report PDF exported: \(number)",
+                                             detail: "\(out.pages) pages · SHA-256 \(out.sha256Hex)")
+            reportError = nil
+            reportNotice = String(localized: "PDF saved — \(out.pages) pages.")
+        } catch {
+            reportError = String(localized: "The PDF couldn't be saved: \(error.localizedDescription)")
+        }
     }
     #endif
 
