@@ -53,6 +53,9 @@ struct WorkCenterView: View {
     @State private var isLoading = true
     @State private var topSuggestion: NextBestAction.Suggestion? = nil
     @State private var selectedTab = 0
+    /// When set, the selected tab is a place Back / Forward remembers for
+    /// this page (the Professional page passes `.professional`).
+    var historyPage: AppModule? = nil
     @AppStorage(DigestScheduler.enabledKey) private var digestEnabled = false
 
     var body: some View {
@@ -100,6 +103,9 @@ struct WorkCenterView: View {
                 reportsTab
                     .tabItem { Label("Reports", systemImage: "tablecells") }
                     .tag(5)
+            }
+            .navigationSection(historyPage, current: String(selectedTab)) { section in
+                if let section, let tab = Int(section) { selectedTab = tab }
             }
             .padding(.top, Spacing.xxSmall)
         }

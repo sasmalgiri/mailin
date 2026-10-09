@@ -63,7 +63,7 @@ struct ProfessionalPageView: View {
         VStack(spacing: 0) {
             toolStrip
             Divider()
-            WorkCenterView(onOpenDestination: { open($0) }, onClose: {})
+            WorkCenterView(onOpenDestination: { open($0) }, onClose: {}, historyPage: .professional)
         }
         .sheet(item: $presented) { destination in
             NavigationStack {

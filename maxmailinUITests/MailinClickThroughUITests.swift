@@ -1370,6 +1370,62 @@ final class MailinClickThroughUITests: XCTestCase {
     /// purchase made by hand (TestFlight) can be checked: plan badge,
     /// Settings ▸ Plan & Purchases (tier, ownership, renewal date), and
     /// which tools open.
+    #if os(macOS)
+    /// The page strip's ‹ › buttons (2026-10-09): disabled with nothing to go
+    /// back to; Back returns to the previous page AND the section it was on
+    /// (AI Insights ▸ Reports); Forward re-enables after Back; ⌘[ works.
+    func testNavigation_backForwardStrip() throws {
+        // Start on Archive: the page is restored from the last run otherwise.
+        relaunch(["-selectedTopLevelPage", "archive"])
+        dismissEverything()
+        let back = app.buttons["nav.back"].firstMatch
+        let forward = app.buttons["nav.forward"].firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 10), "Back button on the strip")
+        XCTAssertTrue(forward.exists, "Forward button on the strip")
+        XCTAssertFalse(back.isEnabled, "nothing to go back to at launch")
+        XCTAssertFalse(forward.isEnabled, "nothing to go forward to at launch")
+
+        XCTAssertTrue(openPage("AI Insights"))
+        let aiPage = app.otherElements["aiInsights.page"].firstMatch
+        XCTAssertTrue(aiPage.waitForExistence(timeout: 20) || app.descendants(matching: .any)["aiInsights.page"].waitForExistence(timeout: 5))
+        let reports = app.radioButtons["Reports"].firstMatch
+        if reports.waitForExistence(timeout: 5) { press(reports) } else { press(app.buttons["Reports"].firstMatch) }
+        Thread.sleep(forTimeInterval: 1.0)
+        XCTAssertTrue(back.isEnabled, "Back enabled after moving to a section")
+
+        XCTAssertTrue(openPage("Professional"))
+        Thread.sleep(forTimeInterval: 1.5)
+        XCTAssertTrue(back.isEnabled)
+        XCTAssertFalse(forward.isEnabled)
+
+        press(back)
+        Thread.sleep(forTimeInterval: 1.5)
+        let aiBack = app.descendants(matching: .any)["aiInsights.page"].firstMatch.waitForExistence(timeout: 10)
+        XCTAssertTrue(aiBack, "Back returns to AI Insights")
+        // A Mac segmented picker's segment reports isSelected == false even
+        // when chosen; its value is 1 when selected.
+        func segmentSelected(_ label: String) -> Bool {
+            (app.radioButtons[label].firstMatch.value as? NSNumber)?.intValue == 1
+        }
+        XCTAssertTrue(segmentSelected("Reports"), "Back restores the Reports tab, not the default Ask tab")
+        XCTAssertTrue(forward.isEnabled, "Forward enabled after Back")
+
+        press(back)   // AI Insights ▸ Ask
+        Thread.sleep(forTimeInterval: 1.0)
+        XCTAssertTrue(segmentSelected("Ask"), "second Back restores Ask")
+
+        app.typeKey("[", modifierFlags: .command)   // Archive
+        Thread.sleep(forTimeInterval: 1.5)
+        XCTAssertFalse(app.descendants(matching: .any)["aiInsights.page"].firstMatch.exists, "⌘[ leaves AI Insights for Archive")
+        XCTAssertFalse(back.isEnabled, "at the start of the history again")
+
+        press(forward)
+        Thread.sleep(forTimeInterval: 1.5)
+        XCTAssertTrue(app.descendants(matching: .any)["aiInsights.page"].firstMatch.waitForExistence(timeout: 10), "Forward returns to AI Insights")
+        print("UITEST-NAV back/forward strip: OK")
+    }
+    #endif
+
     func testPurchaseState_report() throws {
         relaunch([])
         var rows: [String] = []

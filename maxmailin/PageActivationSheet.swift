@@ -181,7 +181,12 @@ struct PageActivationSheet: View {
             buttons
         }
         .padding(Spacing.large)
+        #if os(macOS)
+        // A Mac sheet sizes itself from this. On iOS the sheet is the
+        // screen's width; a 520 pt minimum pushed the content past both
+        // edges of an iPhone (found 2026-10-09: "Not now" read "ow").
         .frame(minWidth: 520, idealWidth: 620, minHeight: 420, idealHeight: 560)
+        #endif
     }
 
     private var header: some View {

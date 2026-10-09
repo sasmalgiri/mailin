@@ -70,6 +70,10 @@ struct AIInsightsPageView: View {
             content
         }
         .task { sources = (try? await ArchiveDataService.shared.sources()) ?? [] }
+        // Back / Forward remembers the tab (Ask, Summaries, Reports).
+        .navigationSection(.aiInsights, current: tab.rawValue) { section in
+            if let section, let target = Tab(rawValue: section) { tab = target }
+        }
         .accessibilityIdentifier("aiInsights.page")
     }
 

@@ -75,9 +75,14 @@ struct FourPageShell: View {
     @Environment(ModuleRegistry.self) private var modules
     @EnvironmentObject private var storeManager: StoreManager
     @State private var router = PageRouter()
+    /// Back / Forward across pages and their sections (NavigationHistory.swift).
+    @State private var history = NavigationHistory()
     /// The page whose activation sheet is showing. Set by tapping an inactive
     /// tab: nothing is enabled until the user reads the matrix and agrees.
     @State private var pendingActivation: AppModule?
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
 
     var body: some View {
         VStack(spacing: 0) {
@@ -87,6 +92,7 @@ struct FourPageShell: View {
             // out of the edition (Live Mail in the no-network build) has no
             // tab at all — nothing behind it exists to turn on.
             HStack(spacing: 0) {
+                if showsBackForward { backForwardButtons }
                 PageSwitcher(
                     pages: modules.shippedModules,
                     selection: router.selection,
@@ -120,6 +126,7 @@ struct FourPageShell: View {
                 .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
                 .clipped()
         }
+        .environment(\.navigationHistory, history)
         .onAppear {
             router.reconcile(with: modules)
             #if DEBUG
@@ -152,6 +159,53 @@ struct FourPageShell: View {
         }
     }
 
+    /// Back / Forward through the places visited: pages and the sections
+    /// inside them. ⌘[ and ⌘] as in a browser.
+    private var backForwardButtons: some View {
+        HStack(spacing: 2) {
+            Button { navigate(to: history.goBack()) } label: {
+                Image(systemName: "chevron.left").font(.system(size: 13, weight: .semibold))
+            }
+            .disabled(!history.canGoBack)
+            .help("Back")
+            .accessibilityLabel(Text("Back"))
+            .accessibilityIdentifier("nav.back")
+            .keyboardShortcut("[", modifiers: .command)
+            Button { navigate(to: history.goForward()) } label: {
+                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold))
+            }
+            .disabled(!history.canGoForward)
+            .help("Forward")
+            .accessibilityLabel(Text("Forward"))
+            .accessibilityIdentifier("nav.forward")
+            .keyboardShortcut("]", modifiers: .command)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .padding(.leading, Spacing.xSmall)
+    }
+
+    /// The ‹ › buttons sit on the strip on the Mac and at regular width
+    /// (iPad). On an iPhone the strip is too narrow: with them, only the
+    /// first page tab fit and the rest were cut off (found 2026-10-09).
+    private var showsBackForward: Bool {
+        #if os(iOS)
+        return horizontalSizeClass == .regular
+        #else
+        return true
+        #endif
+    }
+
+    /// Shows a place from the history: switch page if needed (the page then
+    /// applies its section from `history.pending`). A page that has been
+    /// switched off since cannot be shown; the request is dropped.
+    private func navigate(to location: NavigationLocation?) {
+        guard let location else { return }
+        if location.page != router.selection, !router.select(location.page, in: modules) {
+            history.pending = nil
+        }
+    }
+
     @ViewBuilder
     private var page: some View {
         switch router.selection {
@@ -172,6 +226,9 @@ struct FourPageShell: View {
                     account can be added.
                     """
             )
+            // A place in the history too (no sections), so Back/Forward
+            // arriving here consumes its pending request.
+            .navigationSection(.liveMail, current: nil) { _ in }
         }
     }
 }

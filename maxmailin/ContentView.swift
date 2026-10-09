@@ -49,6 +49,8 @@ struct ContentView: View {
     @State private var sidebarSelection: HubDestination?
     @State private var navigationHistory: [HubDestination] = []
     @State private var isNavigatingBack = false
+    /// The window's Back / Forward history (the page strip's ‹ ›).
+    @Environment(\.navigationHistory) private var pageHistory
 
     // Sidebar section expansion state. For the Personal persona we default
     // the advanced groups to collapsed; power personas keep them expanded.
@@ -98,6 +100,11 @@ struct ContentView: View {
     var body: some View {
         @Bindable var appState = appState
         bodyContent
+            // Back / Forward: the Archive page's place is Home or the hub
+            // destination on screen (the list is .emailInbox).
+            .navigationSection(.archive, current: sidebarSelection?.rawValue ?? "home") { section in
+                sidebarSelection = section.flatMap { $0 == "home" ? nil : HubDestination(rawValue: $0) }
+            }
             // ONE sheet for the Feature Guide, at the root: attaching the
             // same isPresented binding to several nodes makes the sheets
             // suppress each other (observed on iOS).
@@ -129,11 +136,19 @@ struct ContentView: View {
             // A2: an open archive lands in the three-pane shell, not on a
             // picker. The hub stays one click away (Tools).
             .onChange(of: modelVM.showParsedList) { _, shown in
-                if shown && sidebarSelection == nil { sidebarSelection = .emailInbox }
+                if shown && sidebarSelection == nil { landOnInbox() }
             }
             .onAppear {
-                if modelVM.showParsedList && sidebarSelection == nil { sidebarSelection = .emailInbox }
+                if modelVM.showParsedList && sidebarSelection == nil { landOnInbox() }
             }
+    }
+
+    /// The automatic landing on the inbox replaces the Home entry in the
+    /// Back / Forward history: the user did not go to Home, so Back must not
+    /// stop there.
+    private func landOnInbox() {
+        pageHistory?.replaceCurrent(page: .archive, section: HubDestination.emailInbox.rawValue)
+        sidebarSelection = .emailInbox
     }
 
     /// One handler for every drop target: a dragged message (from Mail) is

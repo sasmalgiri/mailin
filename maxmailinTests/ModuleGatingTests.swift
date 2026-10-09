@@ -1613,6 +1613,73 @@ struct PaymentQuestionTests {
     }
 }
 
+@MainActor
+struct NavigationHistoryTests {
+    @Test("Back and Forward walk the places visited; the same place is one entry")
+    func backAndForward() {
+        let h = NavigationHistory()
+        #expect(!h.canGoBack && !h.canGoForward)
+        h.record(page: .archive, section: "home")
+        h.record(page: .archive, section: "home")          // same place twice: one entry
+        h.record(page: .archive, section: "emailInbox")
+        h.record(page: .aiInsights, section: nil)           // page first…
+        h.record(page: .aiInsights, section: "Ask")         // …then its section: refined, not stacked
+        #expect(h.entries.count == 3)
+        #expect(h.goBack() == NavigationLocation(page: .archive, section: "emailInbox"))
+        #expect(h.canGoForward)
+        h.pending = nil
+        #expect(h.goBack() == NavigationLocation(page: .archive, section: "home"))
+        h.pending = nil
+        #expect(!h.canGoBack)
+        #expect(h.goForward() == NavigationLocation(page: .archive, section: "emailInbox"))
+        h.pending = nil
+    }
+
+    @Test("A new place after going back drops the forward entries, as in a browser")
+    func newPlaceTruncatesForward() {
+        let h = NavigationHistory()
+        h.record(page: .archive, section: "home")
+        h.record(page: .aiInsights, section: "Ask")
+        h.record(page: .professional, section: "0")
+        _ = h.goBack(); h.pending = nil
+        _ = h.goBack(); h.pending = nil
+        h.record(page: .professional, section: "3")
+        #expect(h.entries.map(\.section) == ["home", "3"])
+        #expect(!h.canGoForward)
+    }
+
+    @Test("While a page is being steered by Back, nothing is recorded")
+    func pendingSuppressesRecording() {
+        let h = NavigationHistory()
+        h.record(page: .archive, section: "home")
+        h.record(page: .aiInsights, section: "Reports")
+        _ = h.goBack()                                        // pending = archive/home
+        h.record(page: .archive, section: "emailInbox")      // the page's default state on appear: ignored
+        #expect(h.entries.count == 2 && h.index == 0)
+        h.pending = nil
+        #expect(h.goForward() == NavigationLocation(page: .aiInsights, section: "Reports"))
+    }
+
+    @Test("A page placing itself (Archive landing on the inbox) replaces the entry; no Back step")
+    func automaticLandingReplaces() {
+        let h = NavigationHistory()
+        h.record(page: .archive, section: "home")
+        h.replaceCurrent(page: .archive, section: "emailInbox")
+        #expect(h.entries == [NavigationLocation(page: .archive, section: "emailInbox")])
+        #expect(!h.canGoBack)
+        h.record(page: .aiInsights, section: "Ask")
+        h.record(page: .archive, section: "home")
+        h.replaceCurrent(page: .archive, section: "emailInbox")
+        #expect(h.entries.count == 3 && h.index == 2)
+        // Replacing into a copy of the entry before it collapses the two.
+        let g = NavigationHistory()
+        g.record(page: .archive, section: "emailInbox")
+        g.record(page: .archive, section: "home")
+        g.replaceCurrent(page: .archive, section: "emailInbox")
+        #expect(g.entries.count == 1 && g.index == 0)
+    }
+}
+
 struct BroaderQuestionTests {
     private func email(_ subject: String, from: String, date: String, body: String, type: String = "received") -> MBOXParser.RawEmail {
         MBOXParser.RawEmail(
