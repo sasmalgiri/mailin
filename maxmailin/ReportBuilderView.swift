@@ -765,7 +765,7 @@ struct ReportBuilderView: View {
     }
 
     /// The sentence the PDF and the view carry about coverage.
-    static func coverageNote(matching: Int, processed: Int) -> String {
+    nonisolated static func coverageNote(matching: Int, processed: Int) -> String {
         if processed >= matching {
             return "All \(matching.formatted()) matching messages were analyzed."
         }

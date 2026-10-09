@@ -75,8 +75,8 @@ final class ArchivePageCapabilityTests: XCTestCase {
     // MARK: - 1. Read an attachment out of the archive
 
     func testArchive_canReadAttachmentBytesFromStoredEmail() async throws {
-        let (store, _, root, _) = try await importFixture()
-        // `root` is removed in tearDown — see the note on `roots`.
+        let (store, _, _, _) = try await importFixture()
+        // The root is removed in tearDown — see the note on `roots`.
 
         // Find a STORED email that has attachments, reading it back the way the
         // detail view does.
@@ -123,8 +123,8 @@ final class ArchivePageCapabilityTests: XCTestCase {
     // MARK: - 2. Search the archive
 
     func testArchive_searchFindsStoredMessages() async throws {
-        let (store, fts, root, _) = try await importFixture()
-        // `root` is removed in tearDown — see the note on `roots`.
+        let (store, fts, _, _) = try await importFixture()
+        // The root is removed in tearDown — see the note on `roots`.
 
         let total = try await store.totalCount()
         XCTAssertGreaterThan(total, 0)

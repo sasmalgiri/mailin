@@ -42,7 +42,7 @@ final class ArchiveRetrievalService {
         guard !ids.isEmpty else { return [] }
         // Purchase-tier scope: FTS ranks the whole index; keep only hits the
         // tier may read (ArchiveDataService applies the newest-N rule).
-        if await data.accessLimit != nil {
+        if data.accessLimit != nil {
             let allowed = try await data.matchingIDs(among: ids, query: .all)
             ids = ids.filter { allowed.contains($0) }
             guard !ids.isEmpty else { return [] }

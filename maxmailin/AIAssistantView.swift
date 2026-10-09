@@ -850,7 +850,7 @@ struct AIAssistantView: View {
 
     /// "Ann Lee" from `"Ann Lee" <ann@x.org>`; the address when there is no
     /// display name; "" when the header has neither.
-    static func senderDisplayName(_ from: String) -> String {
+    nonisolated static func senderDisplayName(_ from: String) -> String {
         if OwnerIdentity.isOwner(from) { return String(localized: "You") }
         let trimmed = from.trimmingCharacters(in: .whitespacesAndNewlines)
         if let lt = trimmed.firstIndex(of: "<") {

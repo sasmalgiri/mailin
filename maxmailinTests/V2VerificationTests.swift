@@ -2101,7 +2101,8 @@ final class V2VerificationTests: XCTestCase {
 
         // Background job computes derived state for all, in bounded batches.
         let runner = ArchiveBackgroundJobRunner(store: store)
-        var batchSizesSeen: [Int] = []
+        // Batches are delivered sequentially by the runner.
+        nonisolated(unsafe) var batchSizesSeen: [Int] = []
         let finalState = await runner.run(batchSize: 10) { emails, rev in
             batchSizesSeen.append(emails.count)
             return emails.map { DerivedRecord(emailID: $0.id, corpusRevision: rev, sentiment: "neutral", topic: "t\(abs($0.id.hashValue) % 3)") }

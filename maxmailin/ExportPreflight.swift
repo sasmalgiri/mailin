@@ -338,7 +338,10 @@ final class ExportJobRunner {
         return resume
     }
 
-    func start(_ request: ExportRequest, service: ArchiveExportService = .shared) {
+    func start(_ request: ExportRequest, service explicitService: ArchiveExportService? = nil) {
+        // Resolved here, on the main actor, rather than as a default argument
+        // (a main-actor `shared` in a default argument is a Swift 6 error).
+        let service = explicitService ?? ArchiveExportService.shared
         let center = ExportRunCenter.shared
         center.run(title: request.title) { [weak self] in
             guard let self else { return }

@@ -124,7 +124,9 @@ final class ArchiveRelocatorTests: XCTestCase {
 
         let recordStore = RelocationRecordStore(url: base.appendingPathComponent("relocation.json"))
         let locationStore = ArchiveLocationStore(url: base.appendingPathComponent("location.json"))
-        var lastProgress: (Int64, Int64) = (0, 0)
+        // Progress callbacks arrive one at a time, so the capture is safe; the
+        // annotation only silences the concurrent-capture check.
+        nonisolated(unsafe) var lastProgress: (Int64, Int64) = (0, 0)
         let receipt = try await ArchiveRelocator.perform(plan, store: store, fts: fts,
                                                          recordStore: recordStore, locationStore: locationStore,
                                                          progress: { lastProgress = ($0, $1) })

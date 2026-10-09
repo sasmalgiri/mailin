@@ -532,8 +532,8 @@ final class CaseBundleTests: XCTestCase {
 
     /// Merge is ADDITIVE and attributed: an unseen artifact arrives labelled
     /// with the sender, and nothing local is overwritten.
-    func testMergeAddsUnseenArtifactsLabelledWithTheSender() throws {
-        try withIsolatedStudioStores {
+    func testMergeAddsUnseenArtifactsLabelledWithTheSender() {
+        withIsolatedStudioStores {
             let incoming = ACHMatrixModel(title: "Their analysis")
             var bundle = CaseBundle(caseTitle: "Matter 42", exportedBy: "Ada",
                                     exportedAt: Date())
@@ -556,8 +556,8 @@ final class CaseBundleTests: XCTestCase {
     /// Same id, different content: BOTH readings stand. The copy gets a fresh
     /// id so it can persist alongside, which is the point of E4 — a conflict is
     /// surfaced, never silently resolved.
-    func testMergeKeepsBothSidesOfAConflict() throws {
-        try withIsolatedStudioStores {
+    func testMergeKeepsBothSidesOfAConflict() {
+        withIsolatedStudioStores {
             let shared = UUID()
             let mine = ACHMatrixModel(id: shared, title: "Shared analysis")
             var theirs = ACHMatrixModel(id: shared, title: "Shared analysis")
@@ -586,8 +586,8 @@ final class CaseBundleTests: XCTestCase {
     /// Re-merging the same bundle must not multiply it — a handoff often
     /// arrives twice, and before merged ids were derived from (origin, sender)
     /// each pass filed another "conflict": three imports left four copies.
-    func testMergingTheSameBundleTwiceIsIdempotent() throws {
-        try withIsolatedStudioStores {
+    func testMergingTheSameBundleTwiceIsIdempotent() {
+        withIsolatedStudioStores {
             var bundle = CaseBundle(caseTitle: "Matter 42", exportedBy: "Ada", exportedAt: Date())
             bundle.achMatrices = [ACHMatrixModel(title: "Their analysis")]
 
@@ -608,8 +608,8 @@ final class CaseBundleTests: XCTestCase {
 
     /// If the sender revises an artifact and sends it again, that IS a change
     /// and both readings must stand — idempotency must not swallow real edits.
-    func testARevisedArtifactFromTheSameSenderIsKeptAlongside() throws {
-        try withIsolatedStudioStores {
+    func testARevisedArtifactFromTheSameSenderIsKeptAlongside() {
+        withIsolatedStudioStores {
             let origin = UUID()
             var bundle = CaseBundle(caseTitle: "Matter 42", exportedBy: "Ada", exportedAt: Date())
             bundle.achMatrices = [ACHMatrixModel(id: origin, title: "Their analysis")]

@@ -54,12 +54,12 @@ struct SourceSizePolicyTests {
     // MARK: ANSI's real 2 GB ceiling
 
     @Test("An ANSI PST above 2 GB is refused as corrupt, with the reason")
-    func ansiAboveTwoGigabytesIsRefused() {
+    func ansiAboveTwoGigabytesIsRefused() throws {
         let verdict = SourceSizePolicy.pstVerdict(version: .ansi(14), fileSize: 3 * GiB)
-        let reason = try? #require(verdict.refusal)
-        #expect(reason?.contains("ANSI") == true)
-        #expect(reason?.contains("2 GB") == true)
-        #expect(reason?.contains("mislabelled") == true || reason?.contains("corrupt") == true)
+        let reason = try #require(verdict.refusal)
+        #expect(reason.contains("ANSI"))
+        #expect(reason.contains("2 GB"))
+        #expect(reason.contains("mislabelled") || reason.contains("corrupt"))
     }
 
     @Test("An ANSI PST within 2 GB is fine")
@@ -70,12 +70,12 @@ struct SourceSizePolicyTests {
     // MARK: The 50 GB refusal is gone
 
     @Test("A 60 GB Unicode PST warns and proceeds — it is no longer refused")
-    func largeUnicodePSTIsNotRefused() {
+    func largeUnicodePSTIsNotRefused() throws {
         let verdict = SourceSizePolicy.pstVerdict(version: .unicode(23), fileSize: 60_000_000_000)
         #expect(verdict.refusal == nil, "50 GB was Outlook's configurable default, not a format limit")
-        let note = try? #require(verdict.warning)
-        #expect(note?.contains("not been tested") == true)
-        #expect(note?.contains("will not be refused") == true)
+        let note = try #require(verdict.warning)
+        #expect(note.contains("not been tested"))
+        #expect(note.contains("will not be refused"))
     }
 
     @Test("A Unicode PST under the tested ceiling passes silently")
@@ -84,11 +84,11 @@ struct SourceSizePolicyTests {
     }
 
     @Test("A WIP-marked PST warns that content may be encrypted")
-    func wipProtectedWarns() {
+    func wipProtectedWarns() throws {
         let verdict = SourceSizePolicy.pstVerdict(version: .unicode(37), fileSize: GiB)
-        let note = try? #require(verdict.warning)
-        #expect(note?.contains("Windows Information Protection") == true)
-        #expect(note?.contains("reported rather than skipped") == true)
+        let note = try #require(verdict.warning)
+        #expect(note.contains("Windows Information Protection"))
+        #expect(note.contains("reported rather than skipped"))
     }
 
     @Test("An unreadable header does not produce a size complaint")
@@ -99,12 +99,12 @@ struct SourceSizePolicyTests {
     // MARK: NSF — 256 GB, not 64
 
     @Test("An NSF of 100 GiB is accepted, not refused as it was before")
-    func nsfAboveLegacyCeilingIsAccepted() {
+    func nsfAboveLegacyCeilingIsAccepted() throws {
         let verdict = SourceSizePolicy.nsfVerdict(fileSize: 100 * GiB)
         #expect(verdict.refusal == nil, "64 GB is the pre-ODS-53 limit, not the current one")
-        let note = try? #require(verdict.warning)
-        #expect(note?.contains("ODS 53") == true)
-        #expect(note?.contains("cannot yet read the ODS version") == true,
+        let note = try #require(verdict.warning)
+        #expect(note.contains("ODS 53"))
+        #expect(note.contains("cannot yet read the ODS version"),
                 "the warning must admit what we cannot determine")
     }
 
@@ -114,11 +114,11 @@ struct SourceSizePolicyTests {
     }
 
     @Test("An NSF beyond HCL's documented 256 GB maximum is refused")
-    func nsfBeyondDocumentedMaximumIsRefused() {
+    func nsfBeyondDocumentedMaximumIsRefused() throws {
         let verdict = SourceSizePolicy.nsfVerdict(fileSize: 300 * GiB)
-        let reason = try? #require(verdict.refusal)
-        #expect(reason?.contains("256 GB") == true)
-        #expect(reason?.contains("corrupt") == true)
+        let reason = try #require(verdict.refusal)
+        #expect(reason.contains("256 GB"))
+        #expect(reason.contains("corrupt"))
     }
 
     // MARK: Constants match the documented figures
