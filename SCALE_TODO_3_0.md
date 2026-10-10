@@ -120,25 +120,25 @@ loops, the current AI context building. Deleted only in a later release after a 
 ### M — Engine switches and crash isolation (do before anything else changes behaviour)
 | ID | Item | Done means | Status |
 |---|---|---|---|
-| M1 | **One capability per rebuilt engine/tool** (e.g. `v3ScopeEngine`, `v3FeatureIndex`, `v3LegalState`, `v3SafeHTML`, `v3EDiscovery`, `v3Bates`, … one per L/A/I/Q tool), raw values permanent, `maturity: .preview`, `requires` the foundations they use, `whenOff` = "the previous engine is used; nothing is lost"; grouped under "3.0 engines" in the matrix | matrix lists every engine; a test asserts each L/A/I/Q/S8 item has a switch and defaults off | [ ] |
-| M2 | **Crash breadcrumbs → automatic switch-off ("trip")**: before a new engine runs a job or render, write a durable "running X" marker; clear it on finish. On launch, a marker left behind means the app stopped inside X → X is switched off, the old engine is used, a banner explains it and offers "Copy diagnostics" (S5). Tripped switches stay off until a new app version or the user re-enables them | kill-inside-engine test: next launch has X off, banner shown, old path works | [ ] |
-| M3 | **Error fallback**: a new engine that *throws* (not crashes) falls back to the old path for that call, logs it, and says so in the receipt | fault-injection test per seam | [ ] |
-| M4 | **Shadow comparison** (debug and TestFlight builds only): run old and new on the same scope (where the old one is capped, on a ≤ 2,000 subset) and record any difference in the result | report per tool before promotion | [ ] |
-| M5 | **Promotion rule**: preview → stable (default on) only after golden + 100k + chaos tests pass, shadow comparison matches, and a TestFlight period with zero trips; recorded here with date. Demotion is automatic on a trip | promotion log in this file | [ ] |
-| M6 | **Data compatibility** for rule 16: dual-write / read adapters for every moved piece of state, with a test that flips the switch back and forth and loses nothing | flip-flop test per moved state | [ ] |
+| M1 | **One capability per rebuilt engine/tool** (e.g. `v3ScopeEngine`, `v3FeatureIndex`, `v3LegalState`, `v3SafeHTML`, `v3EDiscovery`, `v3Bates`, … one per L/A/I/Q tool), raw values permanent, `maturity: .preview`, `requires` the foundations they use, `whenOff` = "the previous engine is used; nothing is lost"; grouped under "3.0 engines" in the matrix | matrix lists every engine; a test asserts each L/A/I/Q/S8 item has a switch and defaults off |  (11ecfe4) [~] |
+| M2 | **Crash breadcrumbs → automatic switch-off ("trip")**: before a new engine runs a job or render, write a durable "running X" marker; clear it on finish. On launch, a marker left behind means the app stopped inside X → X is switched off, the old engine is used, a banner explains it and offers "Copy diagnostics" (S5). Tripped switches stay off until a new app version or the user re-enables them | kill-inside-engine test: next launch has X off, banner shown, old path works |  (11ecfe4) [~] |
+| M3 | **Error fallback**: a new engine that *throws* (not crashes) falls back to the old path for that call, logs it, and says so in the receipt | fault-injection test per seam |  (11ecfe4) [~] |
+| M4 | **Shadow comparison** (debug and TestFlight builds only): run old and new on the same scope (where the old one is capped, on a ≤ 2,000 subset) and record any difference in the result | report per tool before promotion | — test-and-fix pass — [ ] |
+| M5 | **Promotion rule**: preview → stable (default on) only after golden + 100k + chaos tests pass, shadow comparison matches, and a TestFlight period with zero trips; recorded here with date. Demotion is automatic on a trip | promotion log in this file | — test-and-fix pass — [ ] |
+| M6 | **Data compatibility** for rule 16: dual-write / read adapters for every moved piece of state, with a test that flips the switch back and forth and loses nothing | flip-flop test per moved state | — test-and-fix pass — [ ] |
 
 ### S — Safety and recovery (right after M)
 | ID | Item | Done means | Status |
 |---|---|---|---|
-| S1 | **Snapshots**: `VACUUM INTO`/`sqlite3_backup` before every migration + rolling schedule; free-space check; one rolling copy; external location option; restore screen | corrupt-file test restores; migration leaves a snapshot | [ ] |
-| S2 | **`PRAGMA checkpoint_fullfsync = ON`** on macOS for every archive connection (keep WAL + NORMAL); measure import speed before/after | pragma read back in test; import timing recorded | [ ] |
-| S3 | **iOS suspend/lock safety**: background-task assertions around writes; store + `-wal`/`-shm` + folder set to `completeUntilFirstUserAuthentication`; background work checks `isProtectedDataAvailable`; never repair in background | device test: lock + background during import → no kill (0xdead10cc), resumes | [ ] |
-| S4 | **Long jobs on iPhone/iPad via `BGContinuedProcessingTask`** (starts from a tap, continues in background, system Live Activity shows progress, user can cancel; report progress or the system ends it) — used by the scope engine | whole-archive job survives backgrounding on iPad | [ ] |
-| S5 | **MetricKit** crash/hang/disk-write diagnostics kept on device; Settings ▸ "Copy diagnostics"; symbolicate with archived dSYMs | forced test crash appears after relaunch | [ ] |
-| S6 | **Safe Mode**: two launch crashes → read-only archive, no background jobs, "Restore snapshot / Rebuild search index / Copy diagnostics" (user-initiated, foreground only) | crash-loop test lands in Safe Mode | [ ] |
-| S7 | **Archive Health page**: last integrity check, snapshot age, feature-index coverage, fingerprint status, free disk, recent diagnostics, "Run full check" | UI test | [ ] |
-| S8 | **Safe HTML email rendering** (found 2026-10-10): `EmailHTMLView` uses the synchronous in-process `NSAttributedString` HTML importer, which Apple discourages, and whose default loader **fetches remote resources** — on iPhone/iPad (no network sandbox) opening an email can load tracking pixels (breaks offline-first; tells a phishing sender the evidence was opened) and can block the main thread (watchdog). Replace with out-of-process rendering (`loadFromHTML…` or a `WKWebView` with JavaScript off, CSP `default-src 'none'`, a block-all `WKContentRuleList`, only `cid:`/`data:` images); remote images never load; render off the main thread | test email with a remote pixel → zero network requests on iOS; 5 MB HTML email does not block the main thread | [ ] |
-| S9 | **SQLite connection hygiene** (GRDB guidance): `busy_timeout` on every connection (none set today, several connections open), one writer per file, `BEGIN IMMEDIATE` writes, checkpoints only when idle | concurrency stress test: no SQLITE_BUSY | [ ] |
+| S1 | **Snapshots**: `VACUUM INTO`/`sqlite3_backup` before every migration + rolling schedule; free-space check; one rolling copy; external location option; restore screen | corrupt-file test restores; migration leaves a snapshot |  (11ecfe4) [~] |
+| S2 | **`PRAGMA checkpoint_fullfsync = ON`** on macOS for every archive connection (keep WAL + NORMAL); measure import speed before/after | pragma read back in test; import timing recorded |  (11ecfe4) [~] |
+| S3 | **iOS suspend/lock safety**: background-task assertions around writes; store + `-wal`/`-shm` + folder set to `completeUntilFirstUserAuthentication`; background work checks `isProtectedDataAvailable`; never repair in background | device test: lock + background during import → no kill (0xdead10cc), resumes |  (11ecfe4; see §8 #2 — the main store already had busy_timeout and file protection) [~] |
+| S4 | **Long jobs on iPhone/iPad via `BGContinuedProcessingTask`** (starts from a tap, continues in background, system Live Activity shows progress, user can cancel; report progress or the system ends it) — used by the scope engine | whole-archive job survives backgrounding on iPad |  (11ecfe4) [~] |
+| S5 | **MetricKit** crash/hang/disk-write diagnostics kept on device; Settings ▸ "Copy diagnostics"; symbolicate with archived dSYMs | forced test crash appears after relaunch |  (11ecfe4) [~] |
+| S6 | **Safe Mode**: two launch crashes → read-only archive, no background jobs, "Restore snapshot / Rebuild search index / Copy diagnostics" (user-initiated, foreground only) | crash-loop test lands in Safe Mode |  (11ecfe4; see §8 #3 — Safe Mode stops background work and 3.0 engines; it does not make the archive read-only) [~] |
+| S7 | **Archive Health page**: last integrity check, snapshot age, feature-index coverage, fingerprint status, free disk, recent diagnostics, "Run full check" | UI test |  (11ecfe4) [~] |
+| S8 | **Safe HTML email rendering** (found 2026-10-10): `EmailHTMLView` uses the synchronous in-process `NSAttributedString` HTML importer, which Apple discourages, and whose default loader **fetches remote resources** — on iPhone/iPad (no network sandbox) opening an email can load tracking pixels (breaks offline-first; tells a phishing sender the evidence was opened) and can block the main thread (watchdog). Replace with out-of-process rendering (`loadFromHTML…` or a `WKWebView` with JavaScript off, CSP `default-src 'none'`, a block-all `WKContentRuleList`, only `cid:`/`data:` images); remote images never load; render off the main thread | test email with a remote pixel → zero network requests on iOS; 5 MB HTML email does not block the main thread |  (11ecfe4) [~] |
+| S9 | **SQLite connection hygiene** (GRDB guidance): `busy_timeout` on every connection (none set today, several connections open), one writer per file, `BEGIN IMMEDIATE` writes, checkpoints only when idle | concurrency stress test: no SQLITE_BUSY |  (11ecfe4; see §8 #2 — the main store already had busy_timeout and file protection) [~] |
 
 ### F — Foundations
 | ID | Item | Done means | Status |
@@ -242,9 +242,9 @@ loops, the current AI context building. Deleted only in a later release after a 
 ### X — Experience
 | ID | Item | Status |
 |---|---|---|
-| X1 | **One tool, one host** (~70 entry points → ~35 tools) | [ ] |
-| X2 | Confirmation-with-count component (rule 4) used by every whole-archive action | [ ] |
-| X3 | Release note + in-app note: "results now cover your whole archive" | [ ] |
+| X1 | **One tool, one host** (~70 entry points → ~35 tools) | — inventory and proposal in X1_TOOL_HOSTS.md; **owner decision** which entry points go (not reversible by a switch) — [~] |
+| X2 | Confirmation-with-count component (rule 4) used by every whole-archive action | — `ScopeConfirmation` (ArchiveScope.swift) used by the whole-scope L actions — [~] |
+| X3 | Release note + in-app note: "results now cover your whole archive" | — What's New 3.0 entries (preview wording; App Store text is the owner's) — [~] |
 | X4 | **Accessibility to Apple's Nutrition Label standard**: VoiceOver, Voice Control, Larger Text, Sufficient Contrast, Dark Interface, Differentiate Without Color, Reduced Motion; automated accessibility audits in UI tests; declare the labels in App Store Connect | [ ] |
 
 ### P — Platform future-proofing
@@ -263,7 +263,7 @@ loops, the current AI context building. Deleted only in a later release after a 
 |---|---|---|
 | R1 | **Not in 3.0.** Old engines stay behind their switches through 3.0. Delete `ArchiveWorkingSetView` / `workingSet(query:cap:)`, the 8 per-tool loaders and the in-process HTML importer only in a later release, after one full release with each replacement stable and zero trips | [ ] |
 | R2 | F9 lints fail the build for **new** code (old files allow-listed until R1) | [ ] |
-| R3 | Update `SUPPORTED_FORMATS_AND_LIMITS.md`, `SIZE_LIMITS_DESIGN.md`, store copy, help: real limits only | [ ] |
+| R3 | Update `SUPPORTED_FORMATS_AND_LIMITS.md`, `SIZE_LIMITS_DESIGN.md`, store copy, help: real limits only | — SUPPORTED_FORMATS_AND_LIMITS.md "Tool scope" section added; SIZE_LIMITS_DESIGN.md, help and store copy in the test pass — [~] |
 
 ### V — Verification before shipping
 | ID | Item | Who | Status |

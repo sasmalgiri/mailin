@@ -245,3 +245,22 @@ Honest split, because "supported" and "tested" are different claims:
 | PST / MSG import | **Executed 2026-09-27** on the Apache Tika fixtures: `testPST.pst` (Unicode, `bCryptMethod` 1) and three `.msg` files import and reconcile through the production path (`RealBinaryFixtureTests`). The PST fixture yields one message; the fixture's true count has not been independently verified with another reader |
 | OST / NSF import | **Not executed on a real file** — no fixture exists; synthetic headers exercise classification and honest refusal only (`SyntheticBinaryFormatTests`) |
 | PST above 50 GB, NSF above 64 GB | **Never executed.** The warnings say so. |
+
+## Tool scope (3.0 engines, 2026-10-10)
+
+Each tool has two engines for the whole of 3.0: the previous engine and the 3.0 engine, chosen per tool in
+Settings ▸ Modules ▸ 3.0 engines (previews, off until switched on).
+
+| | Previous engine | 3.0 engine |
+|---|---|---|
+| Legal and forensic actions (hold, seal, verify, Bates, custodians, privilege, rules, batch tags, review batches, PII, IOC, keywords, duplicates, investigation report) | Newest 2,000 emails of the scope (5,000 for duplicates), stated on screen | **Every email in scope**, in batches, with progress, Cancel and resume; a receipt records the scope and a fingerprint of the exact emails |
+| Counts and statistics (dashboards, IT figures, composition, sentiment, PII / priority counts, cleanup, overview cards) | The loaded window | **Exact over the whole archive** |
+| Analyses that read message text through a model or a pattern finder (trends, communication patterns, languages, topics learned, AI enhancement) | The loaded window | An **evenly spaced sample** of up to 5,000 emails across the whole archive (500 for AI enhancement), always stated as "based on N of M"; topics are then **assigned to every email** |
+| Thread stories | First 200 messages | **Every message**, read in parts that fit the on-device model (4,096 tokens) |
+| Near-duplicates | Newest 10,000, pairwise | Whole archive: MinHash candidates, exact Jaccard verification; covers the emails the analysis index has reached (shown) |
+| PST export | One file; error at 50 GB | Parts below 45 GB and below the destination's maximum file size (FAT32: 4 GB) |
+
+Real limits that remain, by design:
+- Lists show a page at a time with "N of M" and Load more; nothing is dropped.
+- Per-type PII findings shown on screen: 200 per type; Export CSV writes every finding.
+- The analysis index (needed by near-duplicates, analysis queries) builds in the background and pauses on low battery, heat or Safe Mode; coverage is shown in Settings ▸ Health.
