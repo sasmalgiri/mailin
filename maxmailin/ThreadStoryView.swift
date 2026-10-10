@@ -30,6 +30,9 @@ struct ThreadStoryView: View {
     @State private var narrativeTask: Task<Void, Never>?
 
     static let maxThreadEmails = 200
+    // §3-A6: complete threads, told within the model's window (3.0 engine).
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+    private var v3: Bool { v3Modules?.isOn(.v3Threads) ?? false }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -197,6 +200,11 @@ struct ThreadStoryView: View {
 
     private func load() async {
         defer { isLoading = false }
+        if v3 {
+            members = (try? await ThreadStoryEngine.completeThread(of: email)) ?? [email]
+            truncated = false
+            return
+        }
         do {
             var ids: [UUID]
             if let key = try await ArchiveThreadService.shared.threadKey(for: email.id) {
@@ -237,9 +245,21 @@ struct ThreadStoryView: View {
         narrative = ""
         let thread = members
         narrativeTask = Task {
-            _ = try? await FoundationModelEngine.synthesizeThread(thread) { partial in
-                guard !Task.isCancelled else { return }
-                narrative = partial
+            if v3 {
+                do {
+                    _ = try await ThreadStoryEngine.tell(thread) { partial in
+                        guard !Task.isCancelled else { return }
+                        narrative = partial
+                    }
+                } catch is CancellationError {
+                } catch {
+                    narrative = String(localized: "The story could not be written: \(error.localizedDescription)")
+                }
+            } else {
+                _ = try? await FoundationModelEngine.synthesizeThread(thread) { partial in
+                    guard !Task.isCancelled else { return }
+                    narrative = partial
+                }
             }
             if !Task.isCancelled { isNarrating = false }
         }

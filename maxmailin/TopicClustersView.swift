@@ -12,6 +12,10 @@ struct TopicClustersView: View {
     @Binding var selectedClusterFilter: String?
     @Binding var clusterFilterIDs: Set<UUID>?
     @State private var showTutorial = false
+    // §3-A5: whole-archive topics when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+    @State private var v3Note: String?
+    private var v3: Bool { v3Modules?.isOn(.v3TopicClusters) ?? false }
 
     enum TopicSortOrder: String, CaseIterable {
         case emailsDesc = "Emails (Most)"
@@ -187,7 +191,7 @@ struct TopicClustersView: View {
             HStack(spacing: Spacing.xSmall) {
                 Image(systemName: "number")
                     .foregroundColor(AppColors.primary)
-                Text("\(clusters.count) topics · \(emails.count) emails")
+                Text(v3Note ?? "\(clusters.count) topics · \(emails.count) emails")
                     .font(Typography.caption1)
                     .fontWeight(.medium)
             }
@@ -398,6 +402,27 @@ struct TopicClustersView: View {
     // compact features (sentence vectors + term counts) are derived per email;
     // bodies are never retained beyond the working set already resident.
     private func computeClusters() {
+        if v3 {
+            isComputing = true
+            Task { @MainActor in
+                defer { isComputing = false }
+                do {
+                    let r = try await TopicClustersEngine.run()
+                    clusters = r.clusters
+                    silhouetteScore = r.silhouette
+                    v3Note = String(localized: "\(r.clusters.count) topics · \(r.assigned) emails assigned (topics learned from \(r.sampled) emails spread across the archive)")
+                        + (r.unassigned > 0 ? " · " + String(localized: "\(r.unassigned) without readable text") : "")
+                    let snapshot = r.clusters.map { cluster in
+                        TopicClusterCache.PersistedCluster(
+                            label: cluster.label, keywords: cluster.keywords, emailIDs: cluster.emailIDs,
+                            colorIndex: Self.clusterColors.firstIndex(of: cluster.color) ?? 0, coherence: cluster.coherence)
+                    }
+                    let revision = (try? await ArchiveCorpusRevision.shared.current()) ?? 0
+                    TopicClusterCache.save(clusters: snapshot, silhouette: r.silhouette, corpusRevision: revision)
+                } catch { v3Note = error.localizedDescription }
+            }
+            return
+        }
         isComputing = true
         let allEmails = emails
 
