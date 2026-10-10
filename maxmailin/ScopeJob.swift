@@ -241,16 +241,22 @@ struct ScopeJobProgressBar: View {
                 ForEach(center.running) { job in
                     HStack(spacing: 8) {
                         Text(job.title).font(.caption.weight(.semibold)).lineLimit(1)
+                            .accessibilityHidden(true)   // read as the progress bar's label
                         ProgressView(value: Double(job.done), total: Double(max(job.total, 1)))
                             .frame(maxWidth: 220)
+                            .accessibilityLabel(job.title)
+                            .accessibilityValue(String(localized: "\(job.done) of \(job.total) emails"))
                         Text("\(job.done.formatted()) of \(job.total.formatted())")
                             .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            .accessibilityHidden(true)   // read as the progress bar's value
                         if job.resumed {
                             Text("Resumed").font(.caption2).foregroundStyle(.secondary)
                         }
                         Spacer()
                         Button(String(localized: "Cancel")) { center.cancel(job.id) }
                             .controlSize(.small)
+                            .accessibilityLabel(String(localized: "Cancel \(job.title)"))
+                            .accessibilityInputLabels([String(localized: "Cancel"), String(localized: "Cancel \(job.title)")])
                     }
                 }
             }

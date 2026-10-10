@@ -245,7 +245,7 @@ loops, the current AI context building. Deleted only in a later release after a 
 | X1 | **One tool, one host** (~70 entry points → ~35 tools) | — inventory and proposal in X1_TOOL_HOSTS.md; **owner decision** which entry points go (not reversible by a switch) — [~] |
 | X2 | Confirmation-with-count component (rule 4) used by every whole-archive action | — `ScopeConfirmation` (ArchiveScope.swift) used by the whole-scope L actions — [~] |
 | X3 | Release note + in-app note: "results now cover your whole archive" | — What's New 3.0 entries (preview wording; App Store text is the owner's) — [~] |
-| X4 | **Accessibility to Apple's Nutrition Label standard**: VoiceOver, Voice Control, Larger Text, Sufficient Contrast, Dark Interface, Differentiate Without Color, Reduced Motion; automated accessibility audits in UI tests; declare the labels in App Store Connect | [ ] |
+| X4 | **Accessibility to Apple's Nutrition Label standard**: VoiceOver, Voice Control, Larger Text, Sufficient Contrast, Dark Interface, Differentiate Without Color, Reduced Motion; automated accessibility audits in UI tests; declare the labels in App Store Connect | Implemented: 3.0 views swept (decorative icons hidden, progress bars labelled with "X of Y emails", Cancel names its job + Voice Control input labels, list rows read as one element, status = shape + text); no fixed sizes or animations in 3.0 views. `maxmailinUITests/AccessibilityAuditUITests.swift` runs `performAccessibilityAudit(for: .all)` on the main window and Settings ▸ Modules (owner present). Declaration evidence per feature in `ACCESSIBILITY_3_0.md` (V10 decides what to declare) — [~] |
 
 ### P — Platform future-proofing
 | ID | Item | Status |

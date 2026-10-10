@@ -44,6 +44,7 @@ struct ArchiveAttachmentIndexView: View {
                     Button { open(row) } label: {
                         HStack {
                             Image(systemName: "doc").foregroundStyle(.secondary)
+                                .accessibilityHidden(true)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(row.filename.isEmpty ? String(localized: "(unnamed)") : row.filename).lineLimit(1)
                                 Text("\(row.emailSubject) — \(row.emailDate.formatted(date: .abbreviated, time: .omitted))")
@@ -158,6 +159,8 @@ struct ArchiveSubjectGroupsView: View {
                             Spacer()
                             Text("\(row.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                         }
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(String(localized: "\(row.subject.isEmpty ? String(localized: "(No Subject)") : row.subject), \(row.count) emails"))
                     }
                     .buttonStyle(.plain)
                 }

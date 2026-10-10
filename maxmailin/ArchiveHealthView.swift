@@ -84,11 +84,13 @@ struct ArchiveHealthView: View {
                 LabeledContent(String(localized: "Emails analysed"),
                                value: "\(coverage.analyzed.formatted()) of \(coverage.total.formatted())")
                 ProgressView(value: pct)
+                    .accessibilityLabel(String(localized: "Emails analysed"))
                 if modules.isOn(.v3FeatureIndex) {
                     let fp = featureCoverage.total > 0 ? Double(featureCoverage.indexed) / Double(featureCoverage.total) : 0
                     LabeledContent(String(localized: "Per-email analysis index (3.0)"),
                                    value: "\(featureCoverage.indexed.formatted()) of \(featureCoverage.total.formatted())")
                     ProgressView(value: fp)
+                        .accessibilityLabel(String(localized: "Per-email analysis index (3.0)"))
                 }
                 if modules.isOn(.v3Fingerprints) {
                     LabeledContent(String(localized: "Archive fingerprint")) {

@@ -28,6 +28,7 @@ struct EngineTripBanner: View {
             HStack(alignment: .top, spacing: Spacing.small) {
                 Image(systemName: "exclamationmark.shield.fill")
                     .foregroundColor(.orange)
+                    .accessibilityHidden(true)   // the heading says it
                 VStack(alignment: .leading, spacing: 2) {
                     Text("mailin stopped unexpectedly last time while a new engine was running")
                         .font(Typography.callout).fontWeight(.semibold)
@@ -121,6 +122,7 @@ struct SafeModeBanner: View {
             VStack(alignment: .leading, spacing: Spacing.xxSmall) {
                 HStack(alignment: .top, spacing: Spacing.small) {
                     Image(systemName: "lifepreserver.fill").foregroundColor(.orange)
+                        .accessibilityHidden(true)   // the heading says it
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Safe Mode").font(Typography.callout).fontWeight(.semibold)
                         Text("mailin stopped twice right after starting. Background work and the new 3.0 engines are paused for this launch; your archive is untouched. Choose what to do — nothing runs on its own.")
