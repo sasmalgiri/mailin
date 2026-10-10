@@ -31,6 +31,14 @@ enum CapabilityWiring {
     /// machinery disarmed.
     static func apply(_ capability: Capability, isOn: Bool) {
         switch capability {
+        case .v3SQLiteHygiene:
+            // §3-S2/S9: read when a connection opens.
+            SQLiteHygiene.isEnabled = isOn
+        case .v3Snapshots:
+            // §3-S1: pre-upgrade snapshots are taken when the store opens.
+            ArchiveSnapshotPolicy.isEnabled = isOn
+        case .v3SafeHTML:
+            SafeHTMLPolicy.isEnabled = isOn
         case .locatorReads:
             // S5. Off means the readers fall back to the stored raw MIME,
             // exactly as they did before the capability existed.
@@ -82,7 +90,38 @@ enum CapabilityWiring {
              .predictiveCoding, .custodianPanel, .reviewBatches, .auditTrail,
              .eDiscovery, .batesNumbering, .redaction, .gdprReport,
              .chainOfCustody, .investigationReport, .reportBuilder,
-             .reasoningStudios:
+             .reasoningStudios,
+             .v3ScopeEngine,
+             .v3FeatureIndex,
+             .v3Fingerprints,
+             .v3PagedLists,
+             .v3SemanticSearch,
+             .v3Duplicates,
+             .v3AnalysisQueries,
+             .v3AlertsAnomalies,
+             .v3PredictiveCoding,
+             .v3NearDuplicates,
+             .v3TopicClusters,
+             .v3Threads,
+             .v3AIAnswers,
+             .v3Graphs,
+             .v3KeywordMonitor,
+             .v3LegalState,
+             .v3EDiscovery,
+             .v3Bates,
+             .v3ChainOfCustody,
+             .v3Custodians,
+             .v3ReviewBatches,
+             .v3BatchOperations,
+             .v3AutomationRules,
+             .v3PrivilegeScan,
+             .v3PIIReport,
+             .v3IOC,
+             .v3InvestigationReport,
+             .v3LegalReview,
+             .v3EvidenceDesks,
+             .v3EvidenceReceipts,
+             .v3PreservationExport:
             // Gated at the point of use — the surface asks the registry. No
             // pushed flag to keep in step, which is the preferable shape;
             // these cases are listed explicitly rather than behind `default`
@@ -93,6 +132,17 @@ enum CapabilityWiring {
 
     /// Applies every capability. Called once at launch, after the registry has
     /// loaded state and mapped legacy defaults.
+    /// §3-S1/S2: the store-level 3.0 switches must be armed before the archive
+    /// store opens its first connection (a pre-upgrade snapshot is taken at
+    /// open). Called from the app's `init`, before any view exists, straight
+    /// from the persisted switch positions. Both are Archive-page engines, and
+    /// the Archive page is always on.
+    static func applyStoreLevelEarly() {
+        let state = ModuleStateStore(url: ModuleStateStore.productionURL).load()
+        SQLiteHygiene.isEnabled = state.isCapabilitySet(.v3SQLiteHygiene)
+        ArchiveSnapshotPolicy.isEnabled = state.isCapabilitySet(.v3Snapshots)
+    }
+
     @MainActor
     static func applyAll(_ registry: ModuleRegistry) {
         for capability in Capability.allCases {

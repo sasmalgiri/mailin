@@ -36,6 +36,7 @@ final class DigestScheduler {
     /// Launch hook: at most one digest per 7 days; a no-op when disabled,
     /// when no saved searches exist, or when nothing new matched.
     func checkAndDeliver() {
+        guard SafeMode.shared.allowsBackgroundWork else { return }   // §3-S6
         guard defaults.bool(forKey: Self.enabledKey) else { return }
         let last = defaults.object(forKey: Self.lastDigestKey) as? Date ?? .distantPast
         guard Date().timeIntervalSince(last) >= 7 * 24 * 3600 else { return }

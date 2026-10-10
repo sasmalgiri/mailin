@@ -175,9 +175,27 @@ struct CapabilityMatrixView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                ForEach(capabilities) { capability in
+                let current = capabilities.filter { !$0.isV3Engine }
+                let engines = capabilities.filter(\.isV3Engine)
+                ForEach(current) { capability in
                     row(capability)
-                    if capability != capabilities.last { Divider() }
+                    if capability != current.last { Divider() }
+                }
+                // §3-M: the 3.0 replacement engines, each next to the engine
+                // it replaces. Off until promoted; switching one off returns
+                // to the previous engine with nothing lost.
+                if !engines.isEmpty {
+                    Divider()
+                    Text("3.0 engines")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Each new engine runs instead of the previous one only while its switch is on. If mailin ever stops while one is running, it is switched off automatically and the previous engine takes over.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    ForEach(engines) { capability in
+                        row(capability)
+                        if capability != engines.last { Divider() }
+                    }
                 }
             }
             .padding(14)
@@ -212,6 +230,13 @@ struct CapabilityMatrixView: View {
                     // Why it is not running, when the switch says it should be.
                     if let block, modules.switchPosition(capability) {
                         Label(block.explanation, systemImage: "exclamationmark.circle")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
+
+                    if capability.isV3Engine, let trip = EngineGuard.lastTrip(capability) {
+                        Label(String(localized: "Switched off automatically after an unexpected stop on \(trip.date.formatted(date: .abbreviated, time: .shortened)) (\(trip.appVersion))."),
+                              systemImage: "exclamationmark.shield")
                             .font(.caption2)
                             .foregroundStyle(.orange)
                     }

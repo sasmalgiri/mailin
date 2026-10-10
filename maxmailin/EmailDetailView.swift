@@ -1488,7 +1488,7 @@ struct EmailDetailView: View {
     }
 
     private var htmlAttributedString: NSAttributedString? {
-        guard let data = safeHTML.data(using: .utf8) else { return nil }
+        guard let data = SafeHTMLRenderer.sanitizedIfEnabled(safeHTML).data(using: .utf8) else { return nil }
         return try? NSAttributedString(
             data: data,
             options: [
@@ -1744,7 +1744,7 @@ struct EmailDetailView: View {
             """
         }
 
-        guard let data = htmlContent.data(using: .utf8),
+        guard let data = SafeHTMLRenderer.sanitizedIfEnabled(htmlContent).data(using: .utf8),
               let attrString = try? NSAttributedString(
                   data: data,
                   options: [.documentType: NSAttributedString.DocumentType.html,
@@ -1905,7 +1905,7 @@ struct EmailDetailView: View {
             width: printInfo.paperSize.width - printInfo.leftMargin - printInfo.rightMargin,
             height: printInfo.paperSize.height - printInfo.topMargin - printInfo.bottomMargin))
 
-        if let data = htmlContent.data(using: .utf8),
+        if let data = SafeHTMLRenderer.sanitizedIfEnabled(htmlContent).data(using: .utf8),
            let attrString = try? NSAttributedString(
                data: data,
                options: [.documentType: NSAttributedString.DocumentType.html,

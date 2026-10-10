@@ -102,6 +102,54 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
     case reportBuilder
     case reasoningStudios
 
+    // MARK: 3.0 engines (SCALE_TODO_3_0.md §3-M)
+    //
+    // Each rebuilt engine is its own switch, next to the old code path it
+    // replaces. All start OFF (`.preview`); the old path runs whenever the
+    // switch is off, and a crash inside a new engine switches it off on the
+    // next launch (EngineGuard). Raw values are persistence keys — never rename.
+    // Descriptions live in EngineSpec.swift.
+
+    // Archive (Page 1)
+    case v3SafeHTML
+    case v3SQLiteHygiene
+    case v3Snapshots
+    case v3ScopeEngine
+    case v3FeatureIndex
+    case v3Fingerprints
+    case v3PagedLists
+    case v3SemanticSearch
+    case v3Duplicates
+
+    // AI Insights (Page 2)
+    case v3AnalysisQueries
+    case v3AlertsAnomalies
+    case v3PredictiveCoding
+    case v3NearDuplicates
+    case v3TopicClusters
+    case v3Threads
+    case v3AIAnswers
+    case v3Graphs
+    case v3KeywordMonitor
+
+    // Professional Workflows (Page 3)
+    case v3LegalState
+    case v3EDiscovery
+    case v3Bates
+    case v3ChainOfCustody
+    case v3Custodians
+    case v3ReviewBatches
+    case v3BatchOperations
+    case v3AutomationRules
+    case v3PrivilegeScan
+    case v3PIIReport
+    case v3IOC
+    case v3InvestigationReport
+    case v3LegalReview
+    case v3EvidenceDesks
+    case v3EvidenceReceipts
+    case v3PreservationExport
+
     var id: String { rawValue }
 
     // MARK: Ownership
@@ -109,6 +157,7 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
     /// The page that owns this capability. `isOn` is false whenever the owner
     /// is off, whatever the stored flag says.
     var owner: AppModule {
+        if let spec = EngineSpec.of(self) { return spec.owner }
         switch self {
         case .blobTier, .offsetParser, .locatorReads, .externalStorage,
              .guidedImport, .importQueue, .searchCoverageBadge:
@@ -121,6 +170,8 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
              .batesNumbering, .redaction, .gdprReport, .chainOfCustody,
              .investigationReport, .reportBuilder, .reasoningStudios:
             return .professional
+        default:
+            return .archive   // unreachable: every 3.0 engine has an EngineSpec
         }
     }
 
@@ -145,6 +196,7 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
     }
 
     var maturity: Maturity {
+        if let spec = EngineSpec.of(self) { return spec.maturity }
         switch self {
         // The engines added in this release cycle. None has been run against a
         // real archive yet, so none of them changes behaviour on install.
@@ -168,6 +220,8 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
              .redaction, .gdprReport, .chainOfCustody, .investigationReport,
              .reportBuilder, .reasoningStudios:
             return .stable
+        default:
+            return .preview
         }
     }
 
@@ -181,6 +235,7 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
     /// one off, and the matrix says which dependency is responsible rather
     /// than showing an unexplained dimmed row.
     var requires: [Capability] {
+        if let spec = EngineSpec.of(self) { return spec.requires }
         switch self {
         case .locatorReads:
             // Byte-range reads need the offset index that only the offset
@@ -199,6 +254,7 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
     // MARK: Copy
 
     var displayName: String {
+        if let spec = EngineSpec.of(self) { return spec.name }
         switch self {
         case .blobTier: return String(localized: "Large-message storage")
         case .offsetParser: return String(localized: "Offset parser (no message size limit)")
@@ -227,10 +283,12 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
         case .investigationReport: return String(localized: "Investigation report")
         case .reportBuilder: return String(localized: "Report builder")
         case .reasoningStudios: return String(localized: "Reasoning studios")
+        default: return rawValue
         }
     }
 
     var detail: String {
+        if let spec = EngineSpec.of(self) { return spec.detail }
         switch self {
         case .blobTier:
             return String(localized: "Stores raw MIME over 8 MB beside the database instead of inside a row, so a multi-gigabyte message can be archived at all.")
@@ -266,12 +324,16 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
         case .investigationReport: return String(localized: "The full case report as a PDF.")
         case .reportBuilder: return String(localized: "Assemble a report from archive sections.")
         case .reasoningStudios: return String(localized: "ACH matrix, reasoning studio, fact–evidence matrix, evidence desks, action register.")
+        default: return ""
         }
     }
 
     /// What happens to existing work when this is switched off. Nothing in
     /// this list deletes anything — that is the point.
     var whenOff: String {
+        if EngineSpec.of(self) != nil {
+            return String(localized: "The previous engine is used, exactly as before this release. Nothing is lost: both engines read and write the same data.")
+        }
         switch self {
         case .blobTier:
             return String(localized: "Messages already stored outside the database are still read normally. New messages over 8 MB will fail to import until this is back on.")
@@ -305,6 +367,7 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
     /// Set for a capability that is risky enough to warrant a sentence before
     /// the user flips it, beyond the maturity label.
     var warning: String? {
+        if let spec = EngineSpec.of(self) { return spec.warning }
         switch self {
         case .offsetParser:
             return "3.0's default import engine, verified on a 1.5 GB real mailbox with an exact export round trip. Switching it off returns to the streaming parser, which reports single messages over 100 MB as damaged."
@@ -328,6 +391,13 @@ extension Capability {
     static func all(for module: AppModule) -> [Capability] {
         allCases.filter { $0.owner == module }
     }
+
+    /// True for the 3.0 replacement engines (§3-M) — shown as their own group
+    /// in the matrix and guarded by EngineGuard.
+    var isV3Engine: Bool { EngineSpec.of(self) != nil }
+
+    /// Every 3.0 engine.
+    static var v3Engines: [Capability] { allCases.filter(\.isV3Engine) }
 
     /// Capabilities that would also switch off if this one did, because they
     /// declare it as a requirement. Shown in the confirmation so turning off

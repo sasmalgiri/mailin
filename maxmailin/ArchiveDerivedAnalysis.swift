@@ -182,6 +182,8 @@ final class DerivedAIAnalysisJob: ObservableObject {
     /// re-runs only if new/stale work exists (the runner's work list is empty
     /// otherwise, so it completes immediately).
     func kickIfNeeded() {
+        guard SafeMode.shared.allowsBackgroundWork else { return }   // §3-S6
+        guard BackgroundExecution.isProtectedDataAvailable else { return }   // §3-S3
         guard UserDefaults.standard.object(forKey: "enableAIFeatures") as? Bool ?? true else { return }
         guard jobTask == nil else { return }   // one in-flight job at a time
         jobTask = Task { @MainActor [weak self] in

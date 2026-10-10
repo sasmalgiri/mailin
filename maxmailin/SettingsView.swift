@@ -159,6 +159,12 @@ struct SettingsView: View {
                     Label("Modules", systemImage: "square.grid.2x2")
                 }
 
+            // §3-S7: is the archive healthy and recoverable?
+            ArchiveHealthView()
+                .tabItem {
+                    Label("Health", systemImage: "heart.text.square")
+                }
+
             profileSettings
                 .tabItem {
                     Label("Profile", systemImage: personaManager.selectedPersona.icon)

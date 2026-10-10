@@ -69,6 +69,12 @@ struct mailinApp: App {
         // store, storage authority and memory-pressure reader before any
         // property wrapper above touches a repository.
         ArchiveCoreBridge.install()
+        // §3-M2 / §3-S6: mark this launch's start before anything can run, so
+        // crash breadcrumbs and the Safe Mode counter see the right boundary.
+        _ = EngineGuard.launchDate
+        SafeMode.recordLaunchStart()
+        CapabilityWiring.applyStoreLevelEarly()
+        DiagnosticsCenter.start()
     }
 
     // MARK: - Scene Configuration
@@ -160,7 +166,9 @@ struct mailinApp: App {
                         // and within it to the capabilities that consume it —
                         // if the user has switched all of them off there is
                         // nothing for the background pass to produce.
-                        if modules.isEnabled(.aiInsights),
+                        // §3-S6: a Safe Mode launch runs no background work.
+                        if SafeMode.shared.allowsBackgroundWork,
+                           modules.isEnabled(.aiInsights),
                            [Capability.anomalyDetection, .smartAutoTagger,
                             .topicClusters, .threadSummarizer, .smartAlerts,
                             .keywordMonitor, .aiDigest].contains(where: { modules.isOn($0) }) {

@@ -133,6 +133,9 @@ final class BackgroundAnalysisManager: ObservableObject {
     // MARK: - Run Analysis
 
     func runAnalysis() async {
+        // §3-S3/S6: never in Safe Mode, never while the device has not been
+        // unlocked since boot (the archive is unreadable then).
+        guard SafeMode.shared.allowsBackgroundWork, BackgroundExecution.isProtectedDataAvailable else { return }
         let emails = await currentArchiveEmails()
         guard !emails.isEmpty else {
             logger.info("No emails loaded — skipping background analysis")

@@ -963,6 +963,7 @@ actor FTSSearchIndex {
         ArtifactProtection.applyBackgroundReadable(to: url)
         try exec(db, "PRAGMA journal_mode = WAL;")
         try exec(db, "PRAGMA synchronous = NORMAL;")
+        SQLiteHygiene.apply(to: db)   // §3-S9 / S2 (switch: v3SQLiteHygiene)
         // P3.3: bound each shard connection's page cache explicitly instead of
         // inheriting SQLite's default, so N open shards have a known cost.
         try exec(db, "PRAGMA cache_size = -\(shardCacheKB);")

@@ -545,9 +545,134 @@ actor SQLiteEmailStore: EmailArchiveStore {
         try applyMemoryBudget(Self.interactiveBudget, to: handle)
         try exec(handle, "PRAGMA temp_store = MEMORY;")
         try exec(handle, "PRAGMA busy_timeout = 5000;")
+        SQLiteHygiene.apply(to: handle)
+        // §3-S1: an existing archive about to be upgraded gets a snapshot first.
+        // A failed snapshot does not block opening (the archive must stay
+        // usable); it is logged and the Health page shows the missing snapshot.
+        if ArchiveSnapshotPolicy.isEnabled,
+           let v = try? scalarInt(handle, "PRAGMA user_version;"),
+           v >= 1, v < Self.currentSchemaVersion {
+            _ = try? writeSnapshot(handle, reason: "before-upgrade-v\(v)-to-v\(Self.currentSchemaVersion)")
+        }
         try migrateSchema(handle)
         self.db = handle
         return handle
+    }
+
+    // MARK: - Snapshots (§3-S1)
+
+    /// Where snapshots live: beside the store, never inside a cloud folder
+    /// (the store itself refuses cloud locations).
+    nonisolated var snapshotDirectory: URL { directory.appendingPathComponent("Snapshots", isDirectory: true) }
+
+    /// Writes a consistent copy of the live database with `VACUUM INTO` (safe
+    /// while other connections read and write; the copy is compact and
+    /// self-contained, with no -wal to lose).
+    @discardableResult
+    func snapshot(reason: String = "scheduled") throws -> ArchiveSnapshot {
+        let handle = try ensureDB()
+        let snap = try writeSnapshot(handle, reason: reason)
+        if reason == "scheduled" { pruneRollingSnapshots() }
+        return snap
+    }
+
+    private func writeSnapshot(_ handle: OpaquePointer, reason: String) throws -> ArchiveSnapshot {
+        let fm = FileManager.default
+        try fm.createDirectory(at: snapshotDirectory, withIntermediateDirectories: true)
+        ArtifactProtection.applyBackgroundReadable(to: snapshotDirectory)
+        let dbURL = directory.appendingPathComponent("emails.db")
+        let size = ((try? fm.attributesOfItem(atPath: dbURL.path)[.size]) as? NSNumber)?.int64Value ?? 0
+        let available = (try? snapshotDirectory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
+            .volumeAvailableCapacityForImportantUsage ?? Int64.max
+        let needed = size + ArchiveSnapshotPolicy.headroomBytes
+        guard available >= needed else {
+            throw ArchiveSnapshotError.notEnoughSpace(neededBytes: needed, availableBytes: available)
+        }
+        let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+        let safeReason = reason.replacingOccurrences(of: "[^A-Za-z0-9-]", with: "-", options: .regularExpression)
+        let url = snapshotDirectory.appendingPathComponent("emails-\(stamp)-\(safeReason).db")
+        let escaped = url.path.replacingOccurrences(of: "'", with: "''")
+        do {
+            try exec(handle, "VACUUM INTO '\(escaped)';")
+        } catch {
+            try? fm.removeItem(at: url)
+            throw ArchiveSnapshotError.snapshotFailed(error.localizedDescription)
+        }
+        ArtifactProtection.applyBackgroundReadable(to: url)
+        let bytes = ((try? fm.attributesOfItem(atPath: url.path)[.size]) as? NSNumber)?.int64Value ?? 0
+        return ArchiveSnapshot(url: url, date: Date(), reason: reason, bytes: bytes)
+    }
+
+    /// Snapshots on disk, newest first.
+    nonisolated func snapshots() -> [ArchiveSnapshot] {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: snapshotDirectory,
+                                                      includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey]) else { return [] }
+        return files.filter { $0.pathExtension == "db" && $0.lastPathComponent.hasPrefix("emails-") }
+            .map { url in
+                let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+                let name = url.deletingPathExtension().lastPathComponent
+                let reason = name.contains("before-upgrade") ? "before upgrade"
+                    : name.contains("before-restore") ? "before restore" : "scheduled"
+                return ArchiveSnapshot(url: url, date: values?.contentModificationDate ?? .distantPast,
+                                       reason: reason, bytes: Int64(values?.fileSize ?? 0))
+            }
+            .sorted { $0.date > $1.date }
+    }
+
+    /// Keeps only the newest `rollingKeep` scheduled snapshots. Upgrade and
+    /// restore snapshots are never pruned here.
+    private func pruneRollingSnapshots() {
+        let rolling = snapshots().filter { $0.reason == "scheduled" }
+        for old in rolling.dropFirst(ArchiveSnapshotPolicy.rollingKeep) {
+            try? FileManager.default.removeItem(at: old.url)
+        }
+    }
+
+    /// Restores a snapshot. Nothing is destroyed: the current database is
+    /// first saved as a "before-restore" snapshot, the snapshot is
+    /// integrity-checked BEFORE it replaces anything, and the store reopens on
+    /// the restored file.
+    func restore(from snapshot: URL) throws {
+        let fm = FileManager.default
+        // 1. Check the snapshot on its own connection.
+        var check: OpaquePointer?
+        guard sqlite3_open_v2(snapshot.path, &check, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let check else {
+            throw ArchiveSnapshotError.restoreFailed("the snapshot could not be opened")
+        }
+        let verdict: String
+        do {
+            let stmt = try prepare(check, "PRAGMA integrity_check;")
+            defer { sqlite3_finalize(stmt) }
+            verdict = sqlite3_step(stmt) == SQLITE_ROW ? columnText(stmt, 0) : "no result"
+        } catch {
+            sqlite3_close(check)
+            throw ArchiveSnapshotError.restoreFailed(error.localizedDescription)
+        }
+        sqlite3_close(check)
+        guard verdict == "ok" else { throw ArchiveSnapshotError.integrityCheckFailed(verdict) }
+
+        // 2. Keep the current database.
+        let current = try ensureDB()
+        _ = try? writeSnapshot(current, reason: "before-restore")
+
+        // 3. Swap files with the connection closed.
+        reopenConnection()
+        let dbURL = directory.appendingPathComponent("emails.db")
+        let staged = directory.appendingPathComponent("emails.restore-staging.db")
+        try? fm.removeItem(at: staged)
+        do {
+            try fm.copyItem(at: snapshot, to: staged)
+            for suffix in ["-wal", "-shm"] {
+                try? fm.removeItem(at: URL(fileURLWithPath: dbURL.path + suffix))
+            }
+            _ = try fm.replaceItemAt(dbURL, withItemAt: staged)
+        } catch {
+            try? fm.removeItem(at: staged)
+            throw ArchiveSnapshotError.restoreFailed(error.localizedDescription)
+        }
+        // 4. Reopen (runs migrations if the snapshot predates an upgrade).
+        _ = try ensureDB()
     }
 
     // MARK: - Memory budget (plan task P3.3)

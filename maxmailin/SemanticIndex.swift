@@ -43,6 +43,7 @@ actor EmbeddingStore {
         }
         db = h
         try exec("PRAGMA journal_mode = WAL;")
+        SQLiteHygiene.apply(to: h)   // §3-S9 / S2 (switch: v3SQLiteHygiene)
         try exec("""
             CREATE TABLE IF NOT EXISTS vectors(
                 email_id TEXT PRIMARY KEY,

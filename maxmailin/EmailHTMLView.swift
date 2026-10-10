@@ -8,9 +8,18 @@ struct EmailHTMLView: View {
 
     @State private var cachedAttributed: NSAttributedString?
     @State private var didParse = false
+    /// §3-S8: remote items the safe renderer removed (shown as a note).
+    @State private var blockedRemoteItems = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if blockedRemoteItems > 0 {
+                Label(String(localized: "\(blockedRemoteItems) remote images or styles were not loaded — opening this email contacted no one."),
+                      systemImage: "shield.lefthalf.filled")
+                    .font(Typography.caption2)
+                    .foregroundColor(AppColors.secondary)
+                    .padding([.horizontal, .top], Spacing.small)
+            }
             if let attributed = cachedAttributed {
                 AttributedTextView(attributedText: attributed)
                     .frame(minHeight: minHeight, maxHeight: .infinity)
@@ -48,6 +57,25 @@ struct EmailHTMLView: View {
         guard !resolved.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let data = resolved.data(using: .utf8) else {
             didParse = true
+            return
+        }
+        // §3-S8: the safe renderer, when its switch is on. The previous
+        // importer below is unchanged and runs when the switch is off.
+        if SafeHTMLPolicy.isEnabled {
+            let source = resolved
+            Task { @MainActor in
+                let token = EngineGuard.begin(.v3SafeHTML)
+                defer { EngineGuard.end(token) }
+                do {
+                    let (attributed, blocked) = try await SafeHTMLRenderer.render(source)
+                    cachedAttributed = attributed
+                    blockedRemoteItems = blocked
+                } catch {
+                    EngineGuard.recordFallback(.v3SafeHTML, error: error)
+                    cachedAttributed = SafeHTMLRenderer.plainTextFallback(source)
+                }
+                didParse = true
+            }
             return
         }
         Task { @MainActor in

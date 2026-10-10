@@ -70,6 +70,8 @@ final class AttachmentTextIndexJob {
 
     func kickIfNeeded(registry: JobRegistry? = nil) {
         guard task == nil else { return }
+        guard SafeMode.shared.allowsBackgroundWork else { return }   // §3-S6
+        guard BackgroundExecution.isProtectedDataAvailable else { return }   // §3-S3
         if let registry { self.registry = registry }
         runGeneration += 1
         let generation = runGeneration

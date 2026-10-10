@@ -122,12 +122,21 @@ struct FourPageShell: View {
             .fixedSize(horizontal: false, vertical: true)
             .layoutPriority(1)
             Divider()
+            // §3-M2: an engine the previous launch stopped inside has been
+            // switched off; say so once, with diagnostics to copy.
+            EngineTripBanner()
+            SafeModeBanner()
             page
                 .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
                 .clipped()
         }
         .environment(\.navigationHistory, history)
         .onAppear {
+            // Before any 3.0 engine can run: trip engines the last process
+            // stopped inside, and decide whether this launch is Safe Mode.
+            SafeMode.shared.evaluateAtLaunch(registry: modules)
+            EngineTripCenter.shared.checkAtLaunch(registry: modules)
+            ArchiveSnapshots.scheduleIfDue()
             router.reconcile(with: modules)
             #if DEBUG
             storeManager.applyDebugLaunchOverride()

@@ -448,6 +448,8 @@ final class ModuleRegistry {
         case pageOff(AppModule)
         case switchedOff
         case dependencyOff(Capability)
+        /// §3-S6: 3.0 engines are paused for a Safe Mode launch.
+        case safeMode
 
         var explanation: String {
             switch self {
@@ -457,6 +459,8 @@ final class ModuleRegistry {
                 return String(localized: "Switched off.")
             case .dependencyOff(let dependency):
                 return "Needs “\(dependency.displayName)”, which is switched off."
+            case .safeMode:
+                return String(localized: "Paused while mailin is in Safe Mode.")
             }
         }
     }
@@ -474,6 +478,7 @@ final class ModuleRegistry {
     func block(_ capability: Capability) -> CapabilityBlock? {
         guard isEnabled(capability.owner) else { return .pageOff(capability.owner) }
         guard state.isCapabilitySet(capability) else { return .switchedOff }
+        if capability.isV3Engine, SafeMode.shared.isActive { return .safeMode }
         for dependency in capability.requires where !isOn(dependency) {
             return .dependencyOff(dependency)
         }
