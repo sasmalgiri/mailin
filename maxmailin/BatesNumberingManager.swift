@@ -33,7 +33,11 @@ class BatesNumberingManager: ObservableObject {
     private static let assignmentsKey = "batesNumberAssignments"
     private static let configKey = "batesNumberConfig"
 
-    init() {
+    /// Where numbers and settings are kept (tests pass a disposable suite).
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         loadAssignments()
         loadConfig()
         _initialized = true
@@ -48,11 +52,30 @@ class BatesNumberingManager: ObservableObject {
 
     // MARK: - Assignment
 
-    /// Assigns sequential Bates numbers to emails sorted by date.
-    /// Returns the mapping of email ID to Bates number.
+    /// The next number that can be used: above every number already
+    /// assigned with the current prefix, never below the configured start.
+    func nextFreeNumber() -> Int {
+        let used = assignments.values.compactMap { number -> Int? in
+            guard number.hasPrefix(prefix) else { return nil }
+            return Int(number.dropFirst(prefix.count))
+        }.max() ?? 0
+        return max(startNumber, used + 1)
+    }
+
+    /// How many of `emails` have no number yet (the ones a run would number).
+    func unnumberedCount(in emails: [MBOXParser.RawEmail]) -> Int {
+        emails.reduce(0) { $0 + (assignments[$1.id] == nil ? 1 : 0) }
+    }
+
+    /// Assigns Bates numbers, in date order, to the emails that have none.
+    /// Rule 3: a number once assigned is never changed or reused — emails
+    /// that already have one keep it, and the sequence continues after the
+    /// highest number used. (Before 3.0 every call replaced all assignments
+    /// with a fresh sequence over the given emails.)
+    /// Returns the numbers assigned by this call.
     @discardableResult
     func assignNumbers(to emails: [MBOXParser.RawEmail]) -> [UUID: String] {
-        let sorted = emails.sorted { email1, email2 in
+        let sorted = emails.filter { assignments[$0.id] == nil }.sorted { email1, email2 in
             let date1 = MBOXParser.parseDate(email1.headers["Date"])
             let date2 = MBOXParser.parseDate(email2.headers["Date"])
             switch (date1, date2) {
@@ -61,22 +84,25 @@ class BatesNumberingManager: ObservableObject {
             case (_, nil): return false
             }
         }
+        let alreadyNumbered = emails.count - sorted.count
+        let first = nextFreeNumber()
 
         var newAssignments: [UUID: String] = [:]
         for (index, email) in sorted.enumerated() {
-            let batesNumber = formatNumber(startNumber + index)
-            newAssignments[email.id] = batesNumber
+            newAssignments[email.id] = formatNumber(first + index)
         }
 
-        assignments = newAssignments
+        for (id, number) in newAssignments { assignments[id] = number }
+        startNumber = max(startNumber, first + sorted.count)
         persistAssignments()
 
-        ForensicManager.shared.logAction(
+        let range = sorted.isEmpty ? "none" : "\(formatNumber(first)) through \(formatNumber(first + sorted.count - 1))"
+        ScopeJobEnvironment.logAction(
             "Bates Numbers Assigned",
-            detail: "Assigned \(newAssignments.count) Bates numbers (\(formatNumber(startNumber)) through \(formatNumber(startNumber + max(sorted.count - 1, 0))))"
+            detail: "Assigned \(newAssignments.count) new Bates numbers (\(range)); \(alreadyNumbered) already numbered, unchanged"
         )
 
-        batesLog.info("Assigned \(newAssignments.count) Bates numbers with prefix \(self.prefix)")
+        batesLog.info("Assigned \(newAssignments.count) Bates numbers with prefix \(self.prefix); \(alreadyNumbered) unchanged")
         return newAssignments
     }
 
@@ -93,7 +119,7 @@ class BatesNumberingManager: ObservableObject {
         startNumber = max(startNumber, nextStart)
         persistAssignments()
         guard log else { return }
-        ForensicManager.shared.logAction(
+        ScopeJobEnvironment.logAction(
             "Bates Numbers Assigned",
             detail: "Production assigned \(new.count) Bates numbers; sequence continues at \(formatNumber(startNumber))")
     }
@@ -105,7 +131,7 @@ class BatesNumberingManager: ObservableObject {
         assignments.removeAll()
         persistAssignments()
 
-        ForensicManager.shared.logAction(
+        ScopeJobEnvironment.logAction(
             "Bates Numbers Removed",
             detail: "Removed \(count) Bates number assignment(s)"
         )
@@ -151,7 +177,7 @@ class BatesNumberingManager: ObservableObject {
             csv += "\(attachmentCount)\n"
         }
 
-        ForensicManager.shared.logAction(
+        ScopeJobEnvironment.logAction(
             "Bates Index Exported",
             detail: "Exported CSV index with \(assignments.count) entries"
         )
@@ -166,18 +192,18 @@ class BatesNumberingManager: ObservableObject {
             result[pair.key.uuidString] = pair.value
         }
         if let data = try? JSONEncoder().encode(stringDict) {
-            UserDefaults.standard.set(data, forKey: Self.assignmentsKey)
+            defaults.set(data, forKey: Self.assignmentsKey)
         }
         let config: [String: Any] = [
             "prefix": prefix,
             "startNumber": startNumber,
             "zeroPadding": zeroPadding
         ]
-        UserDefaults.standard.set(config, forKey: Self.configKey)
+        defaults.set(config, forKey: Self.configKey)
     }
 
     private func loadAssignments() {
-        guard let data = UserDefaults.standard.data(forKey: Self.assignmentsKey),
+        guard let data = defaults.data(forKey: Self.assignmentsKey),
               let stringDict = try? JSONDecoder().decode([String: String].self, from: data) else { return }
         for (key, value) in stringDict {
             if let uuid = UUID(uuidString: key) {
@@ -187,7 +213,7 @@ class BatesNumberingManager: ObservableObject {
     }
 
     private func loadConfig() {
-        guard let config = UserDefaults.standard.dictionary(forKey: Self.configKey) else { return }
+        guard let config = defaults.dictionary(forKey: Self.configKey) else { return }
         if let p = config["prefix"] as? String { prefix = p }
         if let s = config["startNumber"] as? Int { startNumber = s }
         if let z = config["zeroPadding"] as? Int { zeroPadding = z }
@@ -208,8 +234,12 @@ struct BatesConfigView: View {
     @State private var v3Busy = false
     @State private var v3Status: String?
     private var v3: Bool { modules?.isOn(.v3Bates) ?? false }
-    private var previewCount: Int { v3 ? (v3Total ?? emails.count) : emails.count }
+    /// Emails a run would number: the whole scope (3.0) or the unnumbered
+    /// loaded emails — already-numbered ones are never renumbered.
+    private var previewCount: Int { v3 ? (v3Total ?? emails.count) : manager.unnumberedCount(in: emails) }
     @State private var assignmentComplete = false
+    /// Numbers assigned by the last run (not the running total).
+    @State private var lastAssigned = 0
     @State private var exportMessage: String?
     @State private var showExportMessage = false
     @State private var showTutorial = false
@@ -296,7 +326,7 @@ struct BatesConfigView: View {
                         Text("First:")
                             .font(Typography.caption1)
                             .foregroundColor(AppColors.secondary)
-                        Text(manager.formatNumber(manager.startNumber))
+                        Text(manager.formatNumber(manager.nextFreeNumber()))
                             .font(.system(.body, design: .monospaced))
                             .foregroundColor(AppColors.primary)
                     }
@@ -305,7 +335,7 @@ struct BatesConfigView: View {
                         Text("Last:")
                             .font(Typography.caption1)
                             .foregroundColor(AppColors.secondary)
-                        Text(manager.formatNumber(manager.startNumber + max(previewCount - 1, 0)))
+                        Text(manager.formatNumber(manager.nextFreeNumber() + max(previewCount - 1, 0)))
                             .font(.system(.body, design: .monospaced))
                             .foregroundColor(AppColors.primary)
                     }
@@ -331,10 +361,10 @@ struct BatesConfigView: View {
             HStack(spacing: Spacing.small) {
                 Button {
                     if v3 { confirmV3Assign(); return }
-                    manager.assignNumbers(to: emails)
+                    let n = manager.assignNumbers(to: emails).count
+                    lastAssigned = n
                     assignmentComplete = true
                     // Record a numbered document of this Bates run.
-                    let n = emails.count
                     Task { await DocumentRegistry.captureStructured(.report,
                         summary: "Bates numbering — \(n) emails",
                         document: CapturedDocument(title: "Bates Numbering", sections: [
@@ -343,7 +373,7 @@ struct BatesConfigView: View {
                     Label("Assign Bates Numbers", systemImage: "number.square.fill")
                 }
                 .buttonStyle(PrimaryButtonStyle())
-                .accessibilityHint("Assigns sequential Bates numbers to all \(emails.count) emails sorted by date")
+                .accessibilityHint("Assigns Bates numbers, in date order, to the \(previewCount) emails that do not have one yet")
 
                 Button {
                     if v3 {
@@ -380,12 +410,12 @@ struct BatesConfigView: View {
             // Status
             if assignmentComplete {
                 Label(
-                    "Assigned \(manager.assignments.count) Bates numbers successfully.",
+                    "Assigned \(lastAssigned) new Bates numbers.",
                     systemImage: "checkmark.circle.fill"
                 )
                 .font(Typography.callout)
                 .foregroundColor(AppColors.success)
-                .accessibilityLabel("Assignment complete. \(manager.assignments.count) Bates numbers assigned.")
+                .accessibilityLabel("Assignment complete. \(lastAssigned) new Bates numbers assigned.")
 
                 Label {
                     Text("Bates numbers provide unique sequential identifiers for each document in legal proceedings. These numbers are permanent — once assigned, they create a fixed reference for production and court citation.")
@@ -459,6 +489,7 @@ struct BatesConfigView: View {
                 defer { v3Busy = false }
                 do {
                     let r = try await BatesEngine.assign(scope: scope, manager: manager)
+                    lastAssigned = r.state.assigned
                     assignmentComplete = true
                     v3Status = String(localized: "Assigned \(r.state.assigned) new Bates numbers (\(r.state.first ?? "—")–\(r.state.last ?? "—")); \(r.state.skipped) already numbered, unchanged.")
                     await DocumentRegistry.captureStructured(.report,

@@ -435,4 +435,49 @@ final class V3FoundationTests: XCTestCase {
         try Data("tampered".utf8).write(to: bag.appendingPathComponent("data/originals/\(first)"))
         XCTAssertFalse(try PreservationExporter.verify(bag: bag))
     }
+
+    // MARK: - Old Bates path never renumbers (finding #4, rule 3)
+
+    /// The pre-3.0 path used to replace every assignment with a fresh
+    /// sequence over the emails given. Now: numbered emails keep their
+    /// numbers, the rest continue after the highest one, in date order.
+    func testOldBatesPath_neverRenumbersExistingAssignments() {
+        let suite = "mailin-bates-test-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: suite) }
+        let env = makeEnv()
+
+        ScopeJobEnvironment.$current.withValue(env.job) {
+            let manager = BatesNumberingManager(defaults: defaults)
+            manager.prefix = "B"
+            manager.zeroPadding = 3
+            let first = [makeEmail(10), makeEmail(11), makeEmail(12)]
+            XCTAssertEqual(manager.unnumberedCount(in: first), 3)
+            let assigned = manager.assignNumbers(to: first)
+            XCTAssertEqual(first.map { assigned[$0.id] }, ["B001", "B002", "B003"])
+
+            // A later run over a different working set: older and newer mail
+            // plus two already-numbered emails.
+            let older = makeEmail(1, tag: "older"), newer = makeEmail(20, tag: "newer")
+            let second = [first[2], older, newer, first[0]]
+            XCTAssertEqual(manager.unnumberedCount(in: second), 2)
+            XCTAssertEqual(manager.nextFreeNumber(), 4)
+            let more = manager.assignNumbers(to: second)
+            XCTAssertEqual(more.count, 2, "only the unnumbered emails are numbered")
+            XCTAssertEqual(more[older.id], "B004", "date order among the new ones")
+            XCTAssertEqual(more[newer.id], "B005")
+            for (email, number) in zip(first, ["B001", "B002", "B003"]) {
+                XCTAssertEqual(manager.assignments[email.id], number, "an assigned number never changes")
+            }
+            XCTAssertEqual(manager.assignments.count, 5, "the first run's numbers are all kept")
+
+            // Re-running over the same emails changes nothing.
+            XCTAssertTrue(manager.assignNumbers(to: second).isEmpty)
+
+            // Persisted to the injected store, not the app's settings.
+            let reloaded = BatesNumberingManager(defaults: defaults)
+            XCTAssertEqual(reloaded.assignments, manager.assignments)
+        }
+        XCTAssertTrue(env.job.auditLines().allSatisfy { $0.hasPrefix("Bates Numbers Assigned") })
+    }
 }
