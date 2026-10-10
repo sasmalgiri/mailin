@@ -1376,7 +1376,8 @@ struct EDiscoveryWorkflowView: View {
             isVerifyingCollection = true
             runV3(previous: { verifyCollection(previousEngine: true) }) {
                 defer { isVerifyingCollection = false }
-                let (state, receipt) = try await EDiscoveryEngine.verifyCollection(scope: scope)
+                let (state, receipt) = try await EDiscoveryEngine.verifyCollection(
+                    scope: scope, useFingerprints: modules?.isOn(.v3Fingerprints) ?? false)
                 collectionVerification = (passed: state.passed, failed: state.failed, unverified: state.newlySealed)
                 await ScopeJob.recordReceipt(receipt, extra: state.failedIDs.prefix(500).map {
                     .init(key: String(localized: "Failed"), value: $0.uuidString)

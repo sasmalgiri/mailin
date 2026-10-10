@@ -146,19 +146,46 @@ enum EDiscoveryEngine {
     struct VerifyState: Codable, Sendable {
         var passed = 0, failed = 0, newlySealed = 0
         var failedIDs: [UUID] = []
+        /// §3-F5: emails whose stored bytes no longer match their
+        /// fingerprint-tree leaf (counted in `failed` too).
+        var treeChanged: Int? = nil
     }
 
     /// Verifies every email in scope against its ORIGINAL stored seal; emails
     /// with no seal get their first baseline (same rule as before).
-    static func verifyCollection(scope: ArchiveScope, capability: Capability = .v3EDiscovery) async throws -> (VerifyState, ScopeJobReceipt) {
+    /// With `useFingerprints` (§3-F5, switch `v3Fingerprints`) the fingerprint
+    /// tree is the verification path: each email's stored bytes are re-hashed
+    /// against its leaf (leaves are built first for emails without one — their
+    /// baseline). The previous seals keep verifying too; an email passes only
+    /// when both agree.
+    static func verifyCollection(scope: ArchiveScope, capability: Capability = .v3EDiscovery,
+                                 useFingerprints: Bool = false) async throws -> (VerifyState, ScopeJobReceipt) {
         let forensic = ForensicManager.shared
+        let store = ScopeJobEnvironment.store
+        if useFingerprints {
+            while try await store.fingerprintBuildMissing(limit: 1_000) > 0 {}
+            try await store.fingerprintRefreshBuckets()
+        }
         let result = try await ScopeJob.run(
             key: "verify.\(capability.rawValue)", title: String(localized: "Verify & seal collection"),
-            capability: capability, query: scope.query, initialState: VerifyState()
+            capability: capability, query: scope.query,
+            initialState: VerifyState(treeChanged: useFingerprints ? 0 : nil)
         ) { state, batch in
             await forensic.prefetchForensicWindow(ids: batch.map(\.id))
+            var treeFailed = Set<UUID>()
+            if useFingerprints {
+                for mismatch in try await store.fingerprintVerify(ids: batch.map(\.id)) {
+                    switch mismatch {
+                    case .changed(let id), .unreadable(let id): treeFailed.insert(id)
+                    }
+                }
+                state.treeChanged = (state.treeChanged ?? 0) + treeFailed.count
+            }
             var unsealed: [MBOXParser.RawEmail] = []
             for email in batch {
+                if treeFailed.contains(email.id) {
+                    state.failed += 1; state.failedIDs.append(email.id); continue
+                }
                 if forensic.perEmailHashes[email.id] == nil { unsealed.append(email); continue }
                 if forensic.verifyEmailIntegrity(email).passed { state.passed += 1 }
                 else { state.failed += 1; state.failedIDs.append(email.id) }

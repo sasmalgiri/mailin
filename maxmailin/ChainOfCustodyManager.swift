@@ -597,7 +597,8 @@ struct ChainOfCustodyView: View {
             Task { @MainActor in
                 defer { isVerifying = false }
                 do {
-                    let (state, receipt) = try await EDiscoveryEngine.verifyCollection(scope: scope, capability: .v3ChainOfCustody)
+                    let (state, receipt) = try await EDiscoveryEngine.verifyCollection(
+                        scope: scope, capability: .v3ChainOfCustody, useFingerprints: modules?.isOn(.v3Fingerprints) ?? false)
                     integrityReport = IntegrityReport(
                         totalChecked: receipt.processed, passed: state.passed, failed: state.failed,
                         newlySealed: state.newlySealed, failedIDs: state.failedIDs, timestamp: receipt.finishedAt)

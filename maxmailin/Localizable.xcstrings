@@ -277901,6 +277901,9 @@
         }
       }
     },
+    "stored bytes changed" : {
+
+    },
     "Stores raw MIME over 8 MB beside the database instead of inside a row, so a multi-gigabyte message can be archived at all." : {
       "localizations" : {
         "de" : {
@@ -288212,6 +288215,9 @@
           }
         }
       }
+    },
+    "the archive fingerprint" : {
+
     },
     "the archive fingerprint could not be read" : {
       "comment" : "Error message when the archive fingerprint cannot be read.",

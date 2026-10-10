@@ -52,10 +52,15 @@ enum CustodianEngine {
     struct SealResult {
         var intact = 0, broken = 0, unsealed = 0
         var verdicts: [UUID: CustodianManager.SealVerification] = [:]
+        /// §3-F5: broken because the stored bytes no longer match the
+        /// fingerprint-tree leaf (included in `broken`).
+        var treeBroken = 0
     }
 
     /// Verifies the seal of every HELD email in the group.
-    static func verifySeals(group: String?) async throws -> SealResult {
+    /// With `useFingerprints` (§3-F5) the fingerprint tree is checked first;
+    /// the evidence seal keeps verifying too — intact only when both agree.
+    static func verifySeals(group: String?, useFingerprints: Bool = false) async throws -> SealResult {
         let manager = ScopeJobEnvironment.custodians
         let token = EngineGuard.begin(.v3Custodians)
         defer { EngineGuard.end(token) }
@@ -68,12 +73,30 @@ enum CustodianEngine {
             held = try await ids(for: group).filter { manager.isUnderLegalHold($0) }
         }
         var result = SealResult()
+        let store = ScopeJobEnvironment.store
+        if useFingerprints {
+            while try await store.fingerprintBuildMissing(limit: 1_000) > 0 {}
+            try await store.fingerprintRefreshBuckets()
+        }
         var start = 0
         while start < held.count {
             try Task.checkCancellation()
             let chunk = Array(held[start..<min(start + 500, held.count)])
+            var treeFailed = Set<UUID>()
+            if useFingerprints {
+                for mismatch in try await store.fingerprintVerify(ids: chunk) {
+                    switch mismatch { case .changed(let id), .unreadable(let id): treeFailed.insert(id) }
+                }
+            }
             for email in try await ScopeJobEnvironment.archive.fullEmails(ids: chunk) {
-                let verdict = manager.verifyEvidenceSeal(email)
+                var verdict = manager.verifyEvidenceSeal(email)
+                if treeFailed.contains(email.id) {
+                    if case .notHeld = verdict {} else {
+                        result.treeBroken += 1
+                        verdict = .tampered(expected: String(localized: "the archive fingerprint"),
+                                            actual: String(localized: "stored bytes changed"))
+                    }
+                }
                 switch verdict {
                 case .intact: result.intact += 1
                 case .tampered: result.broken += 1

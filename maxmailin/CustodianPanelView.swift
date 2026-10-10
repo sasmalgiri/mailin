@@ -462,7 +462,7 @@ struct CustodianPanelView: View {
     private func v3VerifySeals(visibleHeld: [MBOXParser.RawEmail]) {
         let group = selectedCustodian
         v3Run(previous: { verifySeals(visibleHeld) }) {
-            let r = try await CustodianEngine.verifySeals(group: group)
+            let r = try await CustodianEngine.verifySeals(group: group, useFingerprints: modules?.isOn(.v3Fingerprints) ?? false)
             sealVerdicts = r.verdicts
             sealSummaryIsBad = r.broken > 0 || r.unsealed > 0
             var parts = ["\(r.intact) intact"]

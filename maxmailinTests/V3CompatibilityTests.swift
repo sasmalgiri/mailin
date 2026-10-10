@@ -11,6 +11,7 @@
 //
 
 import XCTest
+import SQLite3
 @testable import maxmailin
 
 @MainActor
@@ -504,6 +505,36 @@ final class V3CompatibilityTests: XCTestCase {
             XCTAssertNil(ReviewWorkspaceStore.load(LegalReviewSnapshot.self, name: LegalReviewSnapshot.fileName))
             let recovered = await ReviewWorkspaceStore.loadFromDatabase(LegalReviewSnapshot.self, name: LegalReviewSnapshot.fileName)
             XCTAssertEqual(recovered, snapshot)
+        }
+    }
+
+    // MARK: - F5: the fingerprint tree is the verification path
+
+    /// A held email whose stored bytes change behind its back fails Verify,
+    /// even though its evidence seal (computed from the parsed fields the app
+    /// keeps) still matches — the tree checks the stored original.
+    func testVerifySeals_withTheTree_catchesAChangedOriginal() async throws {
+        let env = makeEnv(engineOn: false)
+        try await env.store.insertBatch((0..<3).map { makeEmail($0, from: "a@a.com", tag: "f5") }, batchSize: 10)
+        let all = try await env.archive.fullEmails(ids: try await ids(env))
+        try await ScopeJobEnvironment.$current.withValue(env.job) {
+            env.manager.placeLegalHoldBatched(all)
+            let before = try await CustodianEngine.verifySeals(group: nil, useFingerprints: true)
+            XCTAssertEqual(before.intact, 3)
+            XCTAssertEqual(before.broken, 0)
+
+            // Change one stored original through a second connection.
+            var db: OpaquePointer?
+            XCTAssertEqual(sqlite3_open(env.store.storeDirectory.appendingPathComponent("emails.db").path, &db), SQLITE_OK)
+            defer { sqlite3_close(db) }
+            XCTAssertEqual(sqlite3_exec(db, "UPDATE email_bodies SET raw = X'00' WHERE id = '\(all[1].id.uuidString)';", nil, nil, nil), SQLITE_OK)
+
+            let after = try await CustodianEngine.verifySeals(group: nil, useFingerprints: true)
+            XCTAssertEqual(after.treeBroken, 1, "the tree pinpoints the changed original")
+            XCTAssertEqual(after.broken, 1)
+            XCTAssertEqual(after.intact, 2)
+            let withoutTree = try await CustodianEngine.verifySeals(group: nil, useFingerprints: false)
+            XCTAssertEqual(withoutTree.broken, 0, "the old seal alone cannot see a change to the stored original")
         }
     }
 }
