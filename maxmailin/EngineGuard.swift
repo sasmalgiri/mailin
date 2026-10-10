@@ -43,6 +43,11 @@ enum EngineGuard {
     static let launchDate = Date()
 
     static var directory: URL {
+        // A bound scope-job environment (tests) keeps its breadcrumbs with it,
+        // so they can never trip an engine in the real app.
+        if let root = ScopeJobEnvironment.current?.root {
+            return root.appendingPathComponent("EngineGuard", isDirectory: true)
+        }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("EngineGuard", isDirectory: true)
     }

@@ -62,7 +62,7 @@ enum DuplicatesEngine {
         var start = 0
         while start < members.count {
             let chunk = Array(members[start..<min(start + 500, members.count)])
-            for email in try await ArchiveDataService.shared.fullEmails(ids: chunk) { byID[email.id] = email }
+            for email in try await ScopeJobEnvironment.archive.fullEmails(ids: chunk) { byID[email.id] = email }
             start += chunk.count
         }
         let groups = groupsOfIDs.map { $0.compactMap { byID[$0] } }.filter { $0.count > 1 }

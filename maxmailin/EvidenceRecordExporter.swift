@@ -57,7 +57,7 @@ enum EvidenceRecordExporter {
     }
 
     static func export(scope: ArchiveScope) async -> (ExportOutcome, Int) {
-        let store = SQLiteEmailStore.shared
+        let store = ScopeJobEnvironment.store
         do {
             while try await store.fingerprintBuildMissing(limit: 1_000) > 0 {}
             try await store.fingerprintRefreshBuckets()
@@ -70,7 +70,7 @@ enum EvidenceRecordExporter {
         // Emails in scope (ids only).
         var inScope = Set<UUID>()
         do {
-            for try await page in ArchiveDataService.shared.streamSummaries(query: scope.query, batchSize: 5_000) {
+            for try await page in ScopeJobEnvironment.archive.streamSummaries(query: scope.query, batchSize: 5_000) {
                 inScope.formUnion(page.map(\.id))
             }
         } catch {

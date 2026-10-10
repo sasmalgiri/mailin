@@ -86,10 +86,13 @@ class BatesNumberingManager: ObservableObject {
 
     /// F-4: a production run's numbers join the record and the sequence
     /// continues after them, so two productions never reuse a number.
-    func merge(assignments new: [UUID: String], nextStart: Int) {
+    /// `log: false` when the caller writes the audit entry itself (the 3.0
+    /// engine), so one action is one entry.
+    func merge(assignments new: [UUID: String], nextStart: Int, log: Bool = true) {
         for (id, number) in new { assignments[id] = number }
         startNumber = max(startNumber, nextStart)
         persistAssignments()
+        guard log else { return }
         ForensicManager.shared.logAction(
             "Bates Numbers Assigned",
             detail: "Production assigned \(new.count) Bates numbers; sequence continues at \(formatNumber(startNumber))")

@@ -3627,7 +3627,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
         for ex in q.exclusions ?? [] {
             switch ex.field {
             case .sender:
-                sql.append("NOT (instr(lower(e.from_addr), lower(?)) > 0)")
+                sql.append("NOT (instr(lower(coalesce(e.from_addr, '')), lower(?)) > 0)")
                 binds.append(.text(ex.value))
             case .recipient:
                 sql.append("""
@@ -3636,7 +3636,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
                     """)
                 binds.append(.text(ex.value))
             case .subject:
-                sql.append("NOT (instr(lower(e.subject), lower(?)) > 0)")
+                sql.append("NOT (instr(lower(coalesce(e.subject, '')), lower(?)) > 0)")
                 binds.append(.text(ex.value))
             case .domain:
                 sql.append("NOT EXISTS (SELECT 1 FROM email_domains dx WHERE dx.email_id = e.id AND dx.domain = ?)")
@@ -5323,6 +5323,17 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 let tsOK = sqlite3_step(ts) == SQLITE_DONE
                 sqlite3_finalize(ts)
                 guard tsOK else { throw SQLiteStoreError.step(lastError(db)) }
+                // §3-F5: a month that loses a leaf loses its stored root, so
+                // the next refresh recomputes it — otherwise the archive root
+                // would still vouch for the deleted email.
+                let fb = try prepare(db, """
+                    DELETE FROM fingerprint_buckets WHERE bucket IN
+                        (SELECT bucket FROM fingerprints WHERE email_id IN (\(placeholders)));
+                """)
+                for (i, id) in chunk.enumerated() { bindText(fb, Int32(i + 1), id.uuidString) }
+                let fbOK = sqlite3_step(fb) == SQLITE_DONE
+                sqlite3_finalize(fb)
+                guard fbOK else { throw SQLiteStoreError.step(lastError(db)) }
                 // (table, id column) — derived tables are keyed by email_id.
                 // `duplicates` is keyed by duplicate_id (clears orphan bookkeeping).
                 for (table, col) in [("emails", "id"), ("email_bodies", "id"), ("derived", "email_id"),
@@ -6000,6 +6011,12 @@ extension SQLiteEmailStore {
     /// (date, id), so the root is reproducible.
     func fingerprintRefreshBuckets() throws {
         let db = try ensureDB()
+        // Leaves whose email is gone (whatever removed it): their months'
+        // roots are stale too.
+        try exec(db, """
+            DELETE FROM fingerprint_buckets WHERE bucket IN (SELECT f.bucket FROM fingerprints f
+                WHERE NOT EXISTS (SELECT 1 FROM emails e WHERE e.id = f.email_id));
+        """)
         try exec(db, "DELETE FROM fingerprints WHERE NOT EXISTS (SELECT 1 FROM emails e WHERE e.id = fingerprints.email_id);")
         let stale = try prepare(db, """
             SELECT DISTINCT f.bucket FROM fingerprints f

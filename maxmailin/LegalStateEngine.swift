@@ -49,7 +49,7 @@ final class LegalStateMirror {
     /// engine was off.) The first activation takes a snapshot first.
     func activate() async {
         guard Self.isEnabled, !active else { return }
-        let store = SQLiteEmailStore.shared
+        let store = ScopeJobEnvironment.store
         let manager = CustodianManager.shared
         do {
             let first = !UserDefaults.standard.bool(forKey: Self.migratedKey)
@@ -105,7 +105,7 @@ final class LegalStateMirror {
     func syncNow() async {
         guard Self.isEnabled, active else { return }
         let manager = CustodianManager.shared
-        let store = SQLiteEmailStore.shared
+        let store = ScopeJobEnvironment.store
         let token = EngineGuard.begin(.v3LegalState)
         defer { EngineGuard.end(token) }
         do {
@@ -155,12 +155,12 @@ final class LegalStateMirror {
     /// Places a hold on every email in `query` in the database, then mirrors
     /// the result into the manager (and so the files). Returns how many new.
     func placeHolds(query requested: EmailQuery, matter: String = "") async throws -> Int {
-        let store = SQLiteEmailStore.shared
-        let query = ArchiveDataService.shared.scoped(requested)   // free-tier rule applies here too
+        let store = ScopeJobEnvironment.store
+        let query = ScopeJobEnvironment.archive.scoped(requested)   // free-tier rule applies here too
         let added: Int
         if let text = query.text, !text.isEmpty {
             var ids: [UUID] = []
-            for try await page in ArchiveDataService.shared.streamSummaries(query: query, batchSize: 2_000) {
+            for try await page in ScopeJobEnvironment.archive.streamSummaries(query: query, batchSize: 2_000) {
                 ids.append(contentsOf: page.map(\.id))
             }
             added = try await store.legalHoldsAdd(ids, matter: matter)
@@ -174,12 +174,12 @@ final class LegalStateMirror {
 
     /// Assigns a custodian to every email in `query`.
     func assignCustodian(_ name: String, query requested: EmailQuery) async throws -> Int {
-        let store = SQLiteEmailStore.shared
-        let query = ArchiveDataService.shared.scoped(requested)
+        let store = ScopeJobEnvironment.store
+        let query = ScopeJobEnvironment.archive.scoped(requested)
         let n: Int
         if let text = query.text, !text.isEmpty {
             var map: [UUID: String] = [:]
-            for try await page in ArchiveDataService.shared.streamSummaries(query: query, batchSize: 2_000) {
+            for try await page in ScopeJobEnvironment.archive.streamSummaries(query: query, batchSize: 2_000) {
                 for s in page { map[s.id] = name }
             }
             n = try await store.custodiansAssign(map)

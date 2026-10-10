@@ -117,8 +117,25 @@ struct ScopeJobCheckpoint<State: Codable & Sendable>: Codable, Sendable {
     var appVersion: String
 }
 
+/// Where scope jobs read from and keep their checkpoints. Production uses the
+/// shared archive; tests bind a disposable one with
+/// `ScopeJobEnvironment.$current.withValue(...)`, so no global state changes.
+struct ScopeJobEnvironment: Sendable {
+    var archive: ArchiveDataService
+    var store: SQLiteEmailStore
+    /// Holds this environment's checkpoints and crash breadcrumbs.
+    var root: URL
+    var checkpoints: URL { root.appendingPathComponent("ScopeJobs", isDirectory: true) }
+
+    @TaskLocal static var current: ScopeJobEnvironment?
+
+    static var archive: ArchiveDataService { current?.archive ?? .shared }
+    static var store: SQLiteEmailStore { current?.store ?? .shared }
+}
+
 enum ScopeJobCheckpointStore {
     static var directory: URL {
+        if let dir = ScopeJobEnvironment.current?.checkpoints { return dir }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("ScopeJobs", isDirectory: true)
     }
@@ -242,9 +259,9 @@ enum ScopeJob {
         let center = ScopeJobCenter.shared
         guard !center.running.contains(where: { $0.id == key }) else { throw ScopeJobError.alreadyRunning(title) }
 
-        let data = ArchiveDataService.shared
+        let data = ScopeJobEnvironment.archive
         let total = (try? await data.count(query: query)) ?? 0
-        let revision = (try? await SQLiteEmailStore.shared.corpusRevision()) ?? 0
+        let revision = (try? await ScopeJobEnvironment.store.corpusRevision()) ?? 0
 
         // Resume when an unfinished checkpoint for the same job and scope exists.
         var cp: ScopeJobCheckpoint<State>
@@ -278,6 +295,10 @@ enum ScopeJob {
             center.isCancelled(key) || assertion.isExpiring || ContinuedProcessing.isExpired(continued) || Task.isCancelled
         }
 
+        // Counts, fingerprint and the resume position are saved together in
+        // ONE checkpoint write after each batch: saving the counts before the
+        // cursor moved let a stop in between re-run the batch on resume and
+        // count it twice (wrong totals, wrong fingerprint on the receipt).
         func handle(_ emails: [MBOXParser.RawEmail], requested: Int) async throws {
             try await step(&cp.state, emails)
             for e in emails { cp.fingerprint.add(e.id) }
@@ -285,7 +306,6 @@ enum ScopeJob {
             cp.unreadable += max(0, requested - emails.count)
             center.progress(key, done: cp.processed, total: total)
             ContinuedProcessing.progress(continued, done: cp.processed, total: total)
-            if resumable { ScopeJobCheckpointStore.save(cp) }
         }
 
         if let text = query.text, !text.isEmpty {
@@ -302,6 +322,7 @@ enum ScopeJob {
                     if emails.isEmpty { continue }
                 }
                 try await handle(emails, requested: emails.count)
+                if resumable { ScopeJobCheckpointStore.save(cp) }
             }
         } else {
             var cursor: EmailPageCursor? = cp.cursorDate.flatMap { d in cp.cursorID.map { EmailPageCursor(beforeDate: d, beforeID: $0) } }
@@ -341,9 +362,9 @@ enum ScopeJob {
     ) async throws -> (state: State, receipt: ScopeJobReceipt) {
         let center = ScopeJobCenter.shared
         guard !center.running.contains(where: { $0.id == key }) else { throw ScopeJobError.alreadyRunning(title) }
-        let data = ArchiveDataService.shared
+        let data = ScopeJobEnvironment.archive
         let total = (try? await data.count(query: query)) ?? 0
-        let revision = (try? await SQLiteEmailStore.shared.corpusRevision()) ?? 0
+        let revision = (try? await ScopeJobEnvironment.store.corpusRevision()) ?? 0
         center.started(key, title: title, done: 0, total: total, resumed: false)
         defer { center.finished(key) }
         let breadcrumb = EngineGuard.begin(capability)
@@ -395,7 +416,7 @@ enum ScopeJob {
         }
         var fp = EmailSetFingerprint()
         do {
-            for try await page in ArchiveDataService.shared.streamSummaries(query: query, batchSize: 5_000) {
+            for try await page in ScopeJobEnvironment.archive.streamSummaries(query: query, batchSize: 5_000) {
                 for s in page { fp.add(s.id) }
             }
         } catch {

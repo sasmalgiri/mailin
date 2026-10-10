@@ -63,7 +63,7 @@ enum PIIEngine {
                 try emit("Type,Value,Risk,Context,Email Subject,Email ID\n")
                 let token = EngineGuard.begin(.v3PIIReport)
                 defer { EngineGuard.end(token) }
-                for try await batch in ArchiveDataService.shared.streamFullEmails(query: scope.query, batchSize: 200) {
+                for try await batch in ScopeJobEnvironment.archive.streamFullEmails(query: scope.query, batchSize: 200) {
                     try Task.checkCancellation()
                     let detected = await Task.detached(priority: .userInitiated) { EmailNLPEngine.detectPII(in: batch) }.value
                     var chunk = ""

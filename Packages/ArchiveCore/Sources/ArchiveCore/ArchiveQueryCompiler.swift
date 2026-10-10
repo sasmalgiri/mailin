@@ -41,14 +41,15 @@ enum ArchiveQueryCompiler {
         }
     }
 
-    static func compile(_ input: String, base: EmailQuery = .all) -> EmailQuery {
+    static func compile(_ input: String, base: EmailQuery = .all,
+                        exclusions exclusionsOn: Bool = exclusionsEnabled) -> EmailQuery {
         var query = base
         var freeText: [String] = []
         var negateNext = false
 
         for token0 in tokenize(input) {
             var token = token0
-            if exclusionsEnabled {
+            if exclusionsOn {
                 if token.uppercased() == "NOT" { negateNext = true; continue }
                 var negated = negateNext
                 negateNext = false
@@ -61,7 +62,13 @@ enum ArchiveQueryCompiler {
                         query.exclusions = (query.exclusions ?? []) + [ex]
                         continue
                     }
-                    freeText.append("NOT")   // FTS understands NOT for words
+                    // A negated operator with no exclusion form (-source:,
+                    // -before: …) must never fall through to the INCLUDE
+                    // parser below — that would keep exactly what was asked
+                    // to be left out. It stays literal text, like any
+                    // unrecognised operator.
+                    freeText.append(token0)
+                    continue
                 }
                 if negated, !token.contains(":") { freeText.append("NOT") }
             }

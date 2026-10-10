@@ -73,8 +73,8 @@ enum PreservationExporter {
 
         var originals = 0, missing = 0
         var bytes: Int64 = 0
-        let store = SQLiteEmailStore.shared
-        for try await page in ArchiveDataService.shared.streamSummaries(query: scope.query, batchSize: 500) {
+        let store = ScopeJobEnvironment.store
+        for try await page in ScopeJobEnvironment.archive.streamSummaries(query: scope.query, batchSize: 500) {
             try Task.checkCancellation()
             for summary in page {
                 let id = summary.id.uuidString

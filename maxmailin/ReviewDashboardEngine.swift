@@ -16,8 +16,8 @@ extension ForensicReviewManager {
     @MainActor
     func computeDashboardWholeArchive() async throws -> CodingDashboard {
         let forensic = ForensicManager.shared
-        let total = try await ArchiveDataService.shared.count()
-        let counts = try await SQLiteEmailStore.shared.forensicTagCounts()
+        let total = try await ScopeJobEnvironment.archive.count()
+        let counts = try await ScopeJobEnvironment.store.forensicTagCounts()
         var dist: [ForensicManager.EvidenceTag: Int] = [:]
         var coded = 0
         for (raw, n) in counts {

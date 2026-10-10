@@ -38,7 +38,7 @@ enum NearDuplicatesEngine {
     }
 
     static func run(threshold: Double) async throws -> Result {
-        let store = SQLiteEmailStore.shared
+        let store = ScopeJobEnvironment.store
         let token = EngineGuard.begin(.v3NearDuplicates)
         defer { EngineGuard.end(token) }
         let started = Date()
@@ -74,7 +74,7 @@ enum NearDuplicatesEngine {
             let neededList = Array(needed)
             while start < neededList.count {
                 let chunk = Array(neededList[start..<min(start + 200, neededList.count)])
-                let emails = try await ArchiveDataService.shared.fullEmails(ids: chunk)
+                let emails = try await ScopeJobEnvironment.archive.fullEmails(ids: chunk)
                 let computed = await Task.detached(priority: .userInitiated) {
                     emails.map { email -> (UUID, Set<UInt64>) in
                         let text = email.plainBody.isEmpty ? FTSSearchIndex.stripHTMLText(email.htmlBody) : email.plainBody

@@ -275,8 +275,8 @@ final class FeatureIndexJob {
     private func run() async {
         isRunning = true
         defer { isRunning = false }
-        let store = SQLiteEmailStore.shared
-        let data = ArchiveDataService.shared
+        let store = ScopeJobEnvironment.store
+        let data = ScopeJobEnvironment.archive
         while !Task.isCancelled {
             if BackgroundBudget.shouldPause {
                 try? await Task.sleep(for: .seconds(60))
@@ -341,7 +341,7 @@ final class FingerprintJob {
     private func build() async {
         isRunning = true
         defer { isRunning = false }
-        let store = SQLiteEmailStore.shared
+        let store = ScopeJobEnvironment.store
         let token = EngineGuard.begin(.v3Fingerprints)
         defer { EngineGuard.end(token) }
         do {
@@ -368,7 +368,7 @@ final class FingerprintJob {
     /// resumable scope job; returns the changed and unreadable emails, the
     /// archive root, and the receipt.
     func verify(query: EmailQuery = .all) async throws -> (state: VerifyState, root: String, receipt: ScopeJobReceipt) {
-        let store = SQLiteEmailStore.shared
+        let store = ScopeJobEnvironment.store
         // Leaves first, so a new email is a new baseline, not a failure.
         while try await store.fingerprintBuildMissing(limit: 1_000) > 0 {}
         try await store.fingerprintRefreshBuckets()

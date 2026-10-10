@@ -22,7 +22,7 @@ enum CustodianEngine {
         let manager = CustodianManager.shared
         if let group, group != unassignedKey { return manager.emailIDs(for: group) }
         var out: [UUID] = []
-        for try await page in ArchiveDataService.shared.streamSummaries(query: .all, batchSize: 5_000) {
+        for try await page in ScopeJobEnvironment.archive.streamSummaries(query: .all, batchSize: 5_000) {
             for s in page where group == nil || manager.custodian(for: s.id) == nil { out.append(s.id) }
         }
         return out
@@ -39,7 +39,7 @@ enum CustodianEngine {
         while start < ids.count {
             try Task.checkCancellation()
             let chunk = Array(ids[start..<min(start + 1_000, ids.count)])
-            let emails = try await ArchiveDataService.shared.fullEmails(ids: chunk)
+            let emails = try await ScopeJobEnvironment.archive.fullEmails(ids: chunk)
             manager.placeLegalHoldBatched(emails)
             start += chunk.count
         }
@@ -72,7 +72,7 @@ enum CustodianEngine {
         while start < held.count {
             try Task.checkCancellation()
             let chunk = Array(held[start..<min(start + 500, held.count)])
-            for email in try await ArchiveDataService.shared.fullEmails(ids: chunk) {
+            for email in try await ScopeJobEnvironment.archive.fullEmails(ids: chunk) {
                 let verdict = manager.verifyEvidenceSeal(email)
                 switch verdict {
                 case .intact: result.intact += 1
@@ -105,7 +105,7 @@ enum CustodianEngine {
     /// Emails in the archive with no custodian (exact).
     static func unassignedCount() async -> Int {
         if LegalStateMirror.isEnabled, LegalStateMirror.shared.isActive,
-           let n = try? await SQLiteEmailStore.shared.unassignedCustodianCount() { return n }
+           let n = try? await ScopeJobEnvironment.store.unassignedCustodianCount() { return n }
         return (try? await ids(for: unassignedKey).count) ?? 0
     }
 
@@ -118,12 +118,12 @@ enum CustodianEngine {
         var totals: [String: Totals] = [:]
         var unassigned = 0
         if LegalStateMirror.isEnabled, LegalStateMirror.shared.isActive {
-            for t in try await SQLiteEmailStore.shared.custodianTotals() {
+            for t in try await ScopeJobEnvironment.store.custodianTotals() {
                 totals[t.custodian] = Totals(emails: t.emails, held: t.held, first: t.firstDate, last: t.lastDate)
             }
-            unassigned = try await SQLiteEmailStore.shared.unassignedCustodianCount()
+            unassigned = try await ScopeJobEnvironment.store.unassignedCustodianCount()
         } else {
-            for try await page in ArchiveDataService.shared.streamSummaries(query: .all, batchSize: 5_000) {
+            for try await page in ScopeJobEnvironment.archive.streamSummaries(query: .all, batchSize: 5_000) {
                 for s in page {
                     guard let c = manager.custodian(for: s.id) else { unassigned += 1; continue }
                     var t = totals[c] ?? Totals()

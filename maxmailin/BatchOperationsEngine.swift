@@ -22,7 +22,7 @@ enum BatchOperationsEngine {
     struct Progress: Codable, Sendable { var done = 0 }
 
     static func apply(_ op: Operation, scope: ArchiveScope, loaded: [UUID]) async throws -> (count: Int, receipt: ScopeJobReceipt) {
-        let store = SQLiteEmailStore.shared
+        let store = ScopeJobEnvironment.store
         let title: String
         switch op {
         case .add(let tag): title = String(localized: "Tag “\(tag)”")

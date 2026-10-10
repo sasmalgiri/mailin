@@ -39,70 +39,87 @@ enum BatesEngine {
         return Int(number.dropFirst(prefix.count))
     }
 
-    /// Next free number for `prefix`: above every stored number, never below
-    /// the configured start.
-    static func nextNumber(manager: BatesNumberingManager, stored: [UUID: String]) -> Int {
-        let used = (stored.values.compactMap { numericPart($0, prefix: manager.prefix) }
-                    + manager.assignments.values.compactMap { numericPart($0, prefix: manager.prefix) }).max() ?? 0
-        return max(manager.startNumber, used + 1)
-    }
-
     static func assign(scope: ArchiveScope, manager: BatesNumberingManager)
         async throws -> (state: AssignState, receipt: ScopeJobReceipt) {
-        let store = SQLiteEmailStore.shared
-        var stored = try await store.reviewCoding(workspace: workspace, field: field)
+        let store = ScopeJobEnvironment.store
+        let stored = try await store.reviewCoding(workspace: workspace, field: field)
         // Numbers from the previous engine (kept in the manager) are part of
         // the record too: carry them into the database first, never change them.
         let legacy = manager.assignments.filter { stored[$0.key] == nil }
         if !legacy.isEmpty {
             try await store.reviewCodingSet(workspace: workspace, field: field, values: legacy.mapValues { Optional($0) })
-            stored.merge(legacy) { current, _ in current }
         }
-        var query = scope.query
-        query.sort = .dateAsc
-        let alreadyNumbered = stored
-        let result = try await ScopeJob.runIDs(
-            key: "bates.assign", title: String(localized: "Assign Bates numbers"),
-            capability: .v3Bates, query: query, batchSize: 2_000,
-            initialState: AssignState(next: nextNumber(manager: manager, stored: stored))
-        ) { state, page in
-            var batch: [UUID: String?] = [:]
-            for summary in page {
-                if alreadyNumbered[summary.id] != nil { state.skipped += 1; continue }
-                let number = manager.formatNumber(state.next)
-                batch[summary.id] = number
-                state.next += 1
-                state.assigned += 1
-                if state.first == nil { state.first = number }
-                state.last = number
-            }
-            try await store.reviewCodingSet(workspace: workspace, field: field, values: batch)
-        }
+        let result = try await number(query: scope.query, prefix: manager.prefix,
+                                      start: max(manager.startNumber, 1), format: manager.formatNumber)
         let all = try await store.reviewCoding(workspace: workspace, field: field)
         let new = all.filter { manager.assignments[$0.key] == nil }
-        manager.merge(assignments: new, nextStart: result.state.next)
+        // One action, one audit entry: this one (merge's own entry is off).
+        manager.merge(assignments: new, nextStart: result.state.next, log: false)
         ForensicManager.shared.logAction(
             "Bates Numbers Assigned",
             detail: "\(result.state.assigned) new numbers (\(result.state.first ?? "—") through \(result.state.last ?? "—")); \(result.state.skipped) already numbered, unchanged — \(result.receipt.coverageLine)")
         return (result.state, result.receipt)
     }
 
+    /// The numbering itself, against the archive database only: every email
+    /// in `query` without a number gets the next one, in date order (oldest
+    /// first); numbered emails are skipped and never changed. The sequence
+    /// continues after the highest number stored with `prefix`, never below
+    /// `start`.
+    static func number(query scopeQuery: EmailQuery, prefix: String, start: Int,
+                       format: (Int) -> String) async throws -> (state: AssignState, receipt: ScopeJobReceipt) {
+        let store = ScopeJobEnvironment.store
+        let alreadyNumbered = try await store.reviewCoding(workspace: workspace, field: field)
+        let used = alreadyNumbered.values.compactMap { numericPart($0, prefix: prefix) }.max() ?? 0
+        var query = scopeQuery
+        query.sort = .dateAsc
+        return try await ScopeJob.runIDs(
+            key: "bates.assign", title: String(localized: "Assign Bates numbers"),
+            capability: .v3Bates, query: query, batchSize: 2_000,
+            initialState: AssignState(next: max(start, used + 1))
+        ) { state, page in
+            var batch: [UUID: String?] = [:]
+            for summary in page {
+                if alreadyNumbered[summary.id] != nil { state.skipped += 1; continue }
+                let number = format(state.next)
+                batch[summary.id] = number
+                state.next += 1
+                state.assigned += 1
+                if state.first == nil { state.first = number }
+                state.last = number
+            }
+            if !batch.isEmpty {
+                try await store.reviewCodingSet(workspace: workspace, field: field, values: batch)
+            }
+        }
+    }
+
     /// CSV index of every numbered email in scope, in Bates order — the
     /// previous columns, streamed to the file and verified.
     static func exportIndex(scope: ArchiveScope, manager: BatesNumberingManager) async -> (ExportOutcome, Int) {
-        let store = SQLiteEmailStore.shared
+        let store = ScopeJobEnvironment.store
         guard let stored = try? await store.reviewCoding(workspace: workspace, field: field) else {
             return (.failed(String(localized: "the Bates numbers could not be read")), 0)
         }
         var rows: [(number: String, id: UUID)] = []
         do {
-            for try await page in ArchiveDataService.shared.streamSummaries(query: scope.query, batchSize: 5_000) {
+            for try await page in ScopeJobEnvironment.archive.streamSummaries(query: scope.query, batchSize: 5_000) {
                 for s in page { if let n = stored[s.id] { rows.append((n, s.id)) } }
             }
         } catch {
             return (.failed(error.localizedDescription), 0)
         }
-        rows.sort { $0.number < $1.number }
+        // By value, not text: "MAILIN1000000" follows "MAILIN999999" even
+        // once a number outgrows its zero padding.
+        let prefix = manager.prefix
+        rows.sort { a, b in
+            switch (numericPart(a.number, prefix: prefix), numericPart(b.number, prefix: prefix)) {
+            case let (x?, y?): return x != y ? x < y : a.number < b.number
+            case (_?, nil): return true
+            case (nil, _?): return false
+            case (nil, nil): return a.number < b.number
+            }
+        }
         guard !rows.isEmpty else { return (.failed(String(localized: "no emails in scope have Bates numbers")), 0) }
         let count = rows.count
         let (outcome, _) = await PlatformExport.saveStreamed(suggestedName: "BatesIndex_\(manager.prefix).csv") { url in
@@ -110,7 +127,7 @@ enum BatesEngine {
                 try emit("BatesNumber,From,To,Subject,Date,MessageID,AttachmentCount\n")
                 for start in stride(from: 0, to: rows.count, by: 200) {
                     let chunk = rows[start..<min(start + 200, rows.count)]
-                    let emails = try await ArchiveDataService.shared.fullEmails(ids: chunk.map(\.id))
+                    let emails = try await ScopeJobEnvironment.archive.fullEmails(ids: chunk.map(\.id))
                     let byID = Dictionary(uniqueKeysWithValues: emails.map { ($0.id, $0) })
                     var text = ""
                     for row in chunk {
@@ -144,11 +161,11 @@ enum BatesEngine {
 
     /// Numbered emails in scope (for the preview line).
     static func numberedCount(scope: ArchiveScope) async -> Int {
-        guard let stored = try? await SQLiteEmailStore.shared.reviewCoding(workspace: workspace, field: field),
+        guard let stored = try? await ScopeJobEnvironment.store.reviewCoding(workspace: workspace, field: field),
               !stored.isEmpty else { return 0 }
         var n = 0
         do {
-            for try await page in ArchiveDataService.shared.streamSummaries(query: scope.query, batchSize: 5_000) {
+            for try await page in ScopeJobEnvironment.archive.streamSummaries(query: scope.query, batchSize: 5_000) {
                 n += page.reduce(0) { $0 + (stored[$1.id] != nil ? 1 : 0) }
             }
         } catch {}

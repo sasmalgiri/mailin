@@ -61,7 +61,7 @@ enum EDiscoveryEngine {
     static func applyHold(scope: ArchiveScope) async throws -> (held: Int, sealed: Int, receipt: ScopeJobReceipt) {
         let custodian = CustodianManager.shared
         let forensic = ForensicManager.shared
-        let store = SQLiteEmailStore.shared
+        let store = ScopeJobEnvironment.store
         let viaDatabase = LegalStateMirror.isEnabled && LegalStateMirror.shared.isActive
         let result = try await ScopeJob.run(
             key: "ediscovery.hold", title: String(localized: "Apply legal hold"),
@@ -112,8 +112,8 @@ enum EDiscoveryEngine {
         if LegalStateMirror.isEnabled, LegalStateMirror.shared.isActive {
             var n = 0
             do {
-                for try await page in ArchiveDataService.shared.streamSummaries(query: scope.query, batchSize: 5_000) {
-                    n += try await SQLiteEmailStore.shared.legalHeldAmong(page.map(\.id)).count
+                for try await page in ScopeJobEnvironment.archive.streamSummaries(query: scope.query, batchSize: 5_000) {
+                    n += try await ScopeJobEnvironment.store.legalHeldAmong(page.map(\.id)).count
                 }
             } catch { return n }
             return n
@@ -122,7 +122,7 @@ enum EDiscoveryEngine {
         guard !holds.isEmpty else { return 0 }
         var n = 0
         do {
-            for try await page in ArchiveDataService.shared.streamSummaries(query: scope.query, batchSize: 5_000) {
+            for try await page in ScopeJobEnvironment.archive.streamSummaries(query: scope.query, batchSize: 5_000) {
                 n += page.reduce(0) { $0 + (holds.contains($1.id) ? 1 : 0) }
             }
         } catch { return n }
@@ -245,7 +245,7 @@ enum EDiscoveryEngine {
                 if header.hasSuffix("\n") { header.removeLast() }
                 try emit(header + "\(sep)\(quote)MIH\(quote)\n")
                 var index = 0
-                for try await batch in ArchiveDataService.shared.streamFullEmails(query: scope.query, batchSize: 200) {
+                for try await batch in ScopeJobEnvironment.archive.streamFullEmails(query: scope.query, batchSize: 200) {
                     var chunk = ""
                     for email in batch {
                         index += 1
@@ -273,7 +273,7 @@ enum EDiscoveryEngine {
         var query = scope.query
         query.evidenceTag = ForensicManager.EvidenceTag.privileged.rawValue
         query.sort = .dateAsc
-        let total = (try? await ArchiveDataService.shared.count(query: query)) ?? 0
+        let total = (try? await ScopeJobEnvironment.archive.count(query: query)) ?? 0
         guard total > 0 else { return (.failed(String(localized: "no emails in scope are tagged Privileged")), 0) }
         let forensic = ForensicManager.shared
         let (outcome, _) = await PlatformExport.saveStreamed(suggestedName: "privilege_log.csv") { url in
@@ -291,7 +291,7 @@ enum EDiscoveryEngine {
                 head += String(repeating: "-", count: 120) + "\n"
                 try emit(head)
                 var i = 0
-                for try await batch in ArchiveDataService.shared.streamFullEmails(query: query, batchSize: 200) {
+                for try await batch in ScopeJobEnvironment.archive.streamFullEmails(query: query, batchSize: 200) {
                     var chunk = ""
                     for email in batch {
                         i += 1

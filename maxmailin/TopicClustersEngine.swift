@@ -85,7 +85,7 @@ enum TopicClustersEngine {
             for (id, index) in assigned {
                 if let index { members[index].append(id); topics[id] = labels[index] } else { unassigned += 1 }
             }
-            try await SQLiteEmailStore.shared.derivedSetTopics(topics)
+            try await ScopeJobEnvironment.store.derivedSetTopics(topics)
             state.emails += batch.count
         }
         let whole = clusters.enumerated().map { i, c in
