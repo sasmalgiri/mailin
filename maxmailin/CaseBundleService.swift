@@ -357,11 +357,11 @@ enum CaseBundleService {
     private static func withID<T>(_ item: T, _ id: UUID) -> T {
         var copy = item
         switch copy {
-        case var m as ACHMatrixModel:      m.id = id; copy = m as! T
-        case var m as FactEvidenceModel:   m.id = id; copy = m as! T
-        case var m as ActionRegisterModel: m.id = id; copy = m as! T
-        case var m as EvidenceDeskModel:   m.id = id; copy = m as! T
-        case var m as ReasoningCaseModel:  m.id = id; copy = m as! T
+        case var m as ACHMatrixModel:      m.id = id; copy = (m as? T) ?? copy
+        case var m as FactEvidenceModel:   m.id = id; copy = (m as? T) ?? copy
+        case var m as ActionRegisterModel: m.id = id; copy = (m as? T) ?? copy
+        case var m as EvidenceDeskModel:   m.id = id; copy = (m as? T) ?? copy
+        case var m as ReasoningCaseModel:  m.id = id; copy = (m as? T) ?? copy
         default: break
         }
         return copy

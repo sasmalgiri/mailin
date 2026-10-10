@@ -250,13 +250,13 @@ loops, the current AI context building. Deleted only in a later release after a 
 ### P — Platform future-proofing
 | ID | Item | Status |
 |---|---|---|
-| P1 | Strict concurrency **complete**, then **Swift 6 language mode**, module by module (ArchiveCore first); consider default MainActor isolation for the app target; Thread Sanitizer run | [ ] |
-| P2 | **`SWIFT_STRICT_MEMORY_SAFETY`** for ArchiveCore parsers (28 unsafe-pointer sites today); move parser buffers to bounds-checked `Span` where possible | [ ] |
+| P1 | Strict concurrency **complete**, then **Swift 6 language mode**, module by module (ArchiveCore first); consider default MainActor isolation for the app target; Thread Sanitizer run |  — measured 2026-10-10: ArchiveCore has ~50 strict-concurrency diagnostics (34 mutable statics, 8 sending, 2 deinit, 2 async conformance); fix in the test pass, then `swiftLanguageModes: [.v6]` [~] |
+| P2 | **`SWIFT_STRICT_MEMORY_SAFETY`** for ArchiveCore parsers (28 unsafe-pointer sites today); move parser buffers to bounds-checked `Span` where possible |  — measured: 2,686 warnings package-wide, 2,147 are SQLite C calls in SQLiteEmailStore (expected unsafe API). Scope P2 to the parsers (~80 sites: ZIP 31, MIME 14, FileUtils 13, ExportFolderManifest 12, BodyExtractor 11, QP 9) with `unsafe`/Span, not a package-wide flag [~] |
 | P3 | Parser hardening: property-based tests + coverage-guided fuzzing of every format parser (damaged/hostile files → named error, never a crash), including the known attack classes from recent CVEs: deeply nested multiparts and nested `message/rfc822` (depth limit 20 exists — prove it), unbounded per-part headers, huge address lists, decompression bombs (ZIP reader is disk-aware — prove it) | [ ] |
-| P4 | Replace 5 `as!` in `CaseBundleService.swift:360-364`; F9 lint stops new ones | [ ] |
-| P5 | Yearly WWDC checklist: new SDK build, deprecations, prompt re-check (I5), Phase V re-run | [ ] |
-| P6 | **SDK 27 readiness**: `@State` becomes a macro (views with custom `init`s — 96 here, 4 assign `State(...)` directly — can stop compiling; use Apple's documented fix, not reordering assignments) and result builders unify under `@ContentBuilder` (ambiguous overlay/background overloads); build against the new SDK and fix per Apple's reference | [ ] |
-| P7 | Export-compliance check: `ITSAppUsesNonExemptEncryption = NO` is right only while the app signs/hashes but does not encrypt data itself — re-verify whenever case bundles or exports change | [ ] |
+| P4 | Replace 5 `as!` in `CaseBundleService.swift:360-364`; F9 lint stops new ones |  — done: 5 `as! T` replaced with conditional casts (behaviour unchanged) [~] |
+| P5 | Yearly WWDC checklist: new SDK build, deprecations, prompt re-check (I5), Phase V re-run |  — WWDC_CHECKLIST.md written [~] |
+| P6 | **SDK 27 readiness**: `@State` becomes a macro (views with custom `init`s — 96 here, 4 assign `State(...)` directly — can stop compiling; use Apple's documented fix, not reordering assignments) and result builders unify under `@ContentBuilder` (ambiguous overlay/background overloads); build against the new SDK and fix per Apple's reference |  — builds clean against macOS SDK 27.0; iOS SDK build to confirm in the test pass [~] |
+| P7 | Export-compliance check: `ITSAppUsesNonExemptEncryption = NO` is right only while the app signs/hashes but does not encrypt data itself — re-verify whenever case bundles or exports change |  — verified: no code encrypts data (hash/sign only) → NO is correct; recheck kept in WWDC_CHECKLIST.md [~] |
 
 ### R — Remove the old path
 | ID | Item | Status |
