@@ -927,7 +927,10 @@ struct EmailAnalyticsView: View {
                 insights = await FoundationModelEngine.enhanceWithAI(
                     scope: .digest,
                     emails: emailsForAI,
-                    context: "Analyze this email archive for key patterns, trends, and notable findings"
+                    context: "Analyze this email archive for key patterns, trends, and notable findings",
+                    // The whole archive's window may be replaced by an even
+                    // spread (§3-I4); a filtered view is the user's scope.
+                    given: scopeQuery == .all ? .window : .scope
                 )
             }
             #endif

@@ -301,7 +301,8 @@ struct AnomalyDetectionView: View {
                 let result = await FoundationModelEngine.enhanceWithAI(
                     scope: .security,
                     emails: emailsForAI,
-                    context: context
+                    context: context,
+                    given: .window
                 )
                 aiInsights = result ?? "AI analysis unavailable."
             } else {

@@ -444,4 +444,26 @@ final class V3CompatibilityTests: XCTestCase {
         let after = try await env.archive.count(query: .all)
         XCTAssertEqual(after, 2)
     }
+
+    // MARK: - I4: a user's scope is never swapped for an archive sample
+
+    func testAIContext_keepsTheUsersScope_replacesOnlyAWindow() async throws {
+        let env = makeEnv(engineOn: false)
+        try await env.store.insertBatch((0..<30).map { makeEmail($0, from: "a@a.com", tag: "ai") }, batchSize: 50)
+        let all = try await env.archive.fullEmails(ids: try await ids(env))
+        let one = [all[3]]
+        try await ScopeJobEnvironment.$current.withValue(env.job) {
+            let kept = await AIContextSelector.context(for: one, isWindow: false, scopeName: "other", enabled: true)
+            XCTAssertEqual(kept.emails.map(\.id), [all[3].id], "one email asked about stays one email")
+            XCTAssertNil(kept.basedOn)
+
+            let window = Array(all.prefix(5))
+            let replaced = await AIContextSelector.context(for: window, isWindow: true, scopeName: "other", enabled: true)
+            XCTAssertEqual(replaced.emails.count, 30, "a window is replaced by an even spread of the archive (all 30 here)")
+            XCTAssertTrue(replaced.basedOn?.contains("30") ?? false, replaced.basedOn ?? "nil")
+
+            let off = await AIContextSelector.context(for: window, isWindow: true, scopeName: "other", enabled: false)
+            XCTAssertEqual(off.emails.count, 5, "engine off: the window as given")
+        }
+    }
 }

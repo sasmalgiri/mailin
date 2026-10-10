@@ -180,7 +180,8 @@ struct PersonalEmailOrganizerView: View {
             let result = await FoundationModelEngine.enhanceWithAI(
                 scope: .all,
                 emails: workingSet,
-                context: "Suggest emails to archive, unsubscribe from, or clean up. Focus on newsletters, duplicates, and old automated emails."
+                context: "Suggest emails to archive, unsubscribe from, or clean up. Focus on newsletters, duplicates, and old automated emails.",
+                given: .window
             )
             aiCleanupSuggestions = result ?? "AI cleanup unavailable."
             isGeneratingCleanup = false

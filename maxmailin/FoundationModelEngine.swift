@@ -2010,22 +2010,29 @@ struct FoundationModelEngine {
         case all
     }
 
+    /// What the caller's `emails` are (§3-I4).
+    enum GivenEmails {
+        /// The emails the user is asking about (a case, a person, a
+        /// selection, one email) — always kept.
+        case scope
+        /// A capped working window standing in for the whole archive — with
+        /// the 3.0 engine on, replaced by emails chosen from the whole archive.
+        case window
+    }
+
     static func enhanceWithAI(
         scope: AnalysisScope,
         emails: [MBOXParser.RawEmail],
-        context: String = ""
+        context: String = "",
+        given: GivenEmails = .scope
     ) async -> String? {
-        // §3-I4: with the 3.0 engine on, read emails chosen from the whole
-        // archive (relevance or an even spread) instead of the given window.
-        var emails = emails
-        var basedOn: String?
-        if AIContextSelector.isEnabled {
-            let name: String = { if case .security = scope { return "security" } else { return "other" } }()
-            if let selection = await AIContextSelector.select(for: name) {
-                emails = selection.emails
-                basedOn = selection.note
-            }
-        }
+        // §3-I4: with the 3.0 engine on, a WINDOW is replaced by emails chosen
+        // from the whole archive (relevance or an even spread). A scope the
+        // user chose is never replaced — that would answer about other emails.
+        let name: String = { if case .security = scope { return "security" } else { return "other" } }()
+        let chosen = await AIContextSelector.context(for: emails, isWindow: given == .window, scopeName: name)
+        let emails = chosen.emails
+        let basedOn = chosen.basedOn
         guard isAvailable, !emails.isEmpty else { return nil }
 
         let roles: [ExpertRole]

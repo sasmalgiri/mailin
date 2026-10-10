@@ -748,7 +748,8 @@ struct RelationshipGraphView: View {
                 let result = await FoundationModelEngine.enhanceWithAI(
                     scope: .entity,
                     emails: emailsCopy,
-                    context: context
+                    context: context,
+                    given: .window
                 )
                 aiInsights = result ?? "AI analysis unavailable."
             } else {

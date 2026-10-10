@@ -279,7 +279,8 @@ struct ExecutiveDashboardView: View {
                 let result = await FoundationModelEngine.enhanceWithAI(
                     scope: .all,
                     emails: emailsForAI,
-                    context: context
+                    context: context,
+                    given: .window
                 )
                 aiInsights = result ?? "AI analysis unavailable."
             } else {

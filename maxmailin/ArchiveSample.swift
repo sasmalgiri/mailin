@@ -20,7 +20,7 @@ enum ArchiveSample {
     /// Every k-th email in date order, so the sample spans the whole range.
     static func evenlySpaced(query: EmailQuery = .all, size: Int = defaultSize) async throws
         -> (emails: [MBOXParser.RawEmail], total: Int) {
-        let data = ArchiveDataService.shared
+        let data = ScopeJobEnvironment.archive
         let total = try await data.count(query: query)
         guard total > 0, size > 0 else { return ([], total) }
         let stride = max(1, total / size)

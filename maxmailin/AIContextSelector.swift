@@ -30,8 +30,17 @@ enum AIContextSelector {
         var note: String { String(localized: "Based on \(emails.count) of \(total) emails (\(how)).") }
     }
 
+    /// The emails an AI answer reads, and the "based on" line (nil = the
+    /// caller's emails as given). A scope the user chose is always kept; a
+    /// window is replaced only while the 3.0 engine is on.
+    static func context(for emails: [MBOXParser.RawEmail], isWindow: Bool, scopeName: String,
+                        enabled: Bool = isEnabled) async -> (emails: [MBOXParser.RawEmail], basedOn: String?) {
+        guard enabled, isWindow, let selection = await select(for: scopeName) else { return (emails, nil) }
+        return (selection.emails, selection.note)
+    }
+
     static func select(for scopeName: String, count: Int = defaultCount) async -> Selection? {
-        let total = (try? await ArchiveDataService.shared.count()) ?? 0
+        let total = (try? await ScopeJobEnvironment.archive.count()) ?? 0
         guard total > 0 else { return nil }
         if scopeName == "security",
            let hits = try? await ArchiveRetrievalService.shared.retrieve(securityQuery, limit: count), !hits.isEmpty {

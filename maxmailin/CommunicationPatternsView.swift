@@ -632,6 +632,10 @@ struct CommunicationPatternsView: View {
             let emailsForAI: [MBOXParser.RawEmail]
             if let injected {
                 emailsForAI = injected
+            } else if AIContextSelector.isEnabled {
+                // §3-I4: the 3.0 selector chooses from the whole archive and
+                // the answer says how many — no newest-500 window is read.
+                emailsForAI = []
             } else {
                 var recent: [MBOXParser.RawEmail] = []
                 let stream = ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
@@ -648,7 +652,8 @@ struct CommunicationPatternsView: View {
                 let result = await FoundationModelEngine.enhanceWithAI(
                     scope: .entity,
                     emails: emailsForAI,
-                    context: context
+                    context: context,
+                    given: injected == nil ? .window : .scope
                 )
                 aiInsights = result ?? "AI analysis unavailable."
             } else {
