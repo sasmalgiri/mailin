@@ -162,6 +162,11 @@ struct IOCExtractorView: View {
     @State private var showTutorial = false
     @State private var exportStatus: String?
     @Environment(\.dismiss) private var dismiss
+    // §3-L16: whole-scope extraction when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
+    @Environment(\.archiveScope) private var scope
+    @State private var v3Scanned: Int?
+    private var v3: Bool { modules?.isOn(.v3IOC) ?? false }
 
     private var filteredEntries: [IOCEntry] {
         var result = entries
@@ -181,7 +186,7 @@ struct IOCExtractorView: View {
                 VStack(alignment: .leading) {
                     Text("IOC Extraction")
                         .font(.headline)
-                    Text("Indicators of Compromise from \(emails.count) emails")
+                    Text("Indicators of Compromise from \(v3Scanned ?? emails.count) emails")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -310,6 +315,19 @@ struct IOCExtractorView: View {
     }
 
     private func extract() async {
+        if v3 {
+            isExtracting = true
+            defer { isExtracting = false }
+            do {
+                let r = try await IOCEngine.extract(scope: scope)
+                entries = r.entries
+                v3Scanned = r.receipt.processed
+                exportStatus = r.receipt.coverageLine
+            } catch {
+                exportStatus = error.localizedDescription
+            }
+            return
+        }
         isExtracting = true
         let emailsCopy = emails
         let result = await Task.detached { IOCExtractor.extract(from: emailsCopy) }.value

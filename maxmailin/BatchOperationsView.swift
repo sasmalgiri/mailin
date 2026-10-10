@@ -58,6 +58,15 @@ struct BatchOperationsView: View {
     @State private var deletedIDs: Set<UUID> = []
     @State private var showTutorial = false
 
+    // §3-L11: tag / classify every email in scope when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
+    @Environment(\.archiveScope) private var scope
+    @State private var wholeScope = false
+    @State private var scopeTotal: Int?
+    @State private var scopeConfirm: ScopeConfirmationRequest?
+    private var v3: Bool { modules?.isOn(.v3BatchOperations) ?? false }
+    private var v3Whole: Bool { v3 && wholeScope }
+
     // MARK: - Computed Helpers
 
     private var selectedEmails: [MBOXParser.RawEmail] {
@@ -76,7 +85,15 @@ struct BatchOperationsView: View {
             header
             Divider()
 
-            if selectedIDs.isEmpty {
+            if v3 {
+                Toggle(isOn: $wholeScope) {
+                    Text("Apply tags and classification to every email in scope (\(scopeTotal ?? 0)), not only the selected ones")
+                        .font(Typography.callout)
+                }
+                .padding(.horizontal, Spacing.medium)
+                .padding(.top, Spacing.small)
+            }
+            if selectedIDs.isEmpty && !v3Whole {
                 emptyState
             } else {
                 ScrollView {
@@ -117,6 +134,32 @@ struct BatchOperationsView: View {
             performBulkDelete()
         }
         .featureTutorial(.batchOperations, key: "batch_operations_tutorial_seen", isPresented: $showTutorial)
+        .scopeConfirmation($scopeConfirm)
+        .task(id: v3) { if v3 { scopeTotal = await scope.resolvedTotal() } }
+    }
+
+    // MARK: - 3.0 whole scope
+
+    private func runWholeScope(_ ops: [BatchOperationsEngine.Operation], title: String, verb: String, done: @escaping (Int) -> String) {
+        Task { @MainActor in
+            scopeConfirm = await ScopeConfirm.request(scope, title: title, verb: verb) {
+                isProcessing = true
+                resultMessage = nil
+                defer { isProcessing = false }
+                do {
+                    var count = 0
+                    for op in ops {
+                        let r = try await BatchOperationsEngine.apply(op, scope: scope, loaded: emails.map(\.id))
+                        count = r.count
+                        await ScopeJob.recordReceipt(r.receipt, registry: modules)
+                    }
+                    withAnimation(AnimationTiming.fast) { resultMessage = done(count) }
+                    clearResultAfterDelay()
+                } catch {
+                    resultMessage = error.localizedDescription
+                }
+            }
+        }
     }
 
     // MARK: - Header
@@ -428,6 +471,13 @@ struct BatchOperationsView: View {
     private func performApplyTag() {
         let tag = newTagName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !tag.isEmpty else { return }
+        if v3Whole {
+            newTagName = ""
+            runWholeScope([.add(tag)], title: String(localized: "Apply Tag"), verb: String(localized: "Tag")) {
+                String(localized: "Tagged \($0) emails")
+            }
+            return
+        }
 
         isProcessing = true
         progressValue = 0
@@ -462,6 +512,14 @@ struct BatchOperationsView: View {
 
     private func performRemoveTag() {
         guard !removeTagSelection.isEmpty else { return }
+        if v3Whole {
+            let tag = removeTagSelection
+            removeTagSelection = ""
+            runWholeScope([.remove(tag)], title: String(localized: "Remove Tag"), verb: String(localized: "Remove")) {
+                String(localized: "Removed “\(tag)” from \($0) emails")
+            }
+            return
+        }
 
         isProcessing = true
         progressValue = 0
@@ -496,6 +554,13 @@ struct BatchOperationsView: View {
     }
 
     private func performBulkClassification() {
+        if v3Whole {
+            let tag = selectedCategory.rawValue
+            runWholeScope([.add(tag)], title: String(localized: "Classify"), verb: String(localized: "Classify")) {
+                String(localized: "Classified \($0) emails as \(tag)")
+            }
+            return
+        }
         isProcessing = true
         progressValue = 0
         resultMessage = nil
@@ -528,6 +593,14 @@ struct BatchOperationsView: View {
     }
 
     private func performClearClassification() {
+        if v3Whole {
+            // Removes the classification tags only — other tags stay.
+            runWholeScope(BulkCategory.allCases.map { .remove($0.rawValue) },
+                          title: String(localized: "Clear Classification"), verb: String(localized: "Clear")) {
+                String(localized: "Cleared classification from \($0) emails")
+            }
+            return
+        }
         isProcessing = true
         progressValue = 0
         resultMessage = nil

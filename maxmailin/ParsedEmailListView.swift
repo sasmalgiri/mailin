@@ -1754,11 +1754,12 @@ struct ParsedEmailListView: View {
             .help("Select a random 10% of the current list for quality-control re-review — standard e-discovery practice")
 
             Button {
-                forensicManager.runPrivilegeScan(on: emails)
                 // Surface the results immediately: the Privileged quick
                 // filter shows exactly the rows the scan flagged.
-                quickFilterPrivileged = true
-                model.applyFilters()
+                PrivilegeScanEngine.run(modules: modules, query: model.currentArchiveQuery, loaded: emails) {
+                    quickFilterPrivileged = true
+                    model.applyFilters()
+                }
             } label: {
                 HStack(spacing: 2) {
                     Image(systemName: "lock.shield")

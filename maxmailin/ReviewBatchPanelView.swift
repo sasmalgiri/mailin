@@ -9,6 +9,20 @@ struct ReviewBatchPanelView: View {
     @State private var batchSize = 50
     @State private var hasCreatedBatches = false
     @State private var showTutorial = false
+    // §3-L12: batches can hold any email in the archive (whole-scope
+    // creation here or in E-Discovery); the current batch's members that are
+    // not in the loaded list are fetched, one batch at a time.
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
+    @Environment(\.archiveScope) private var scope
+    @State private var hydrated: [UUID: MBOXParser.RawEmail] = [:]
+    @State private var scopeTotal: Int?
+    @State private var creating = false
+    private var v3: Bool { modules?.isOn(.v3ReviewBatches) ?? false }
+    private var createCount: Int { v3 ? (scopeTotal ?? emails.count) : emails.count }
+
+    private func email(_ id: UUID) -> MBOXParser.RawEmail? {
+        hydrated[id] ?? emails.first(where: { $0.id == id })
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -73,7 +87,7 @@ struct ReviewBatchPanelView: View {
             Text("Create Review Batches")
                 .font(Typography.title2)
 
-            Text("Split \(emails.count) emails into batches for systematic review.")
+            Text("Split \(createCount) emails into batches for systematic review.")
                 .font(Typography.body)
                 .foregroundColor(AppColors.secondary)
 
@@ -84,18 +98,42 @@ struct ReviewBatchPanelView: View {
                     .frame(width: 140)
             }
 
-            Button("Create \(max(1, emails.count / max(1, batchSize))) Batches") {
+            Button("Create \(max(1, (createCount + batchSize - 1) / max(1, batchSize))) Batches") {
+                if v3 {
+                    creating = true
+                    let size = batchSize
+                    Task { @MainActor in
+                        defer { creating = false }
+                        // Every email in scope, newest first (the list order).
+                        var ids: [UUID] = []
+                        let token = EngineGuard.begin(.v3ReviewBatches)
+                        defer { EngineGuard.end(token) }
+                        do {
+                            for try await page in ArchiveDataService.shared.streamSummaries(query: scope.query, batchSize: 5_000) {
+                                ids.append(contentsOf: page.map(\.id))
+                            }
+                        } catch { return }
+                        manager.createBatches(from: ids, batchSize: size)
+                        hasCreatedBatches = true
+                        ForensicManager.shared.logAction("Review Batches Created",
+                            detail: "\(manager.batches.count) batches of up to \(size) from \(ids.count) emails (whole scope: \(scope.description))")
+                    }
+                    return
+                }
                 manager.createBatches(from: emails.map(\.id), batchSize: batchSize)
                 hasCreatedBatches = true
             }
             .buttonStyle(PrimaryButtonStyle())
-            .accessibilityLabel("Create \(max(1, emails.count / max(1, batchSize))) review batches")
-            .accessibilityHint("Splits \(emails.count) emails into batches of \(batchSize)")
+            .disabled(creating)
+            .accessibilityLabel("Create \(max(1, (createCount + batchSize - 1) / max(1, batchSize))) review batches")
+            .accessibilityHint("Splits \(createCount) emails into batches of \(batchSize)")
+            if creating { ProgressView().controlSize(.small) }
 
             Spacer()
         }
         .frame(maxWidth: 400)
         .frame(maxWidth: .infinity)
+        .task(id: v3) { if v3 { scopeTotal = await scope.resolvedTotal() } }
     }
 
     private var batchReviewView: some View {
@@ -164,6 +202,22 @@ struct ReviewBatchPanelView: View {
     }
 
     private func batchContent(_ batch: ReviewBatchManager.ReviewBatch) -> some View {
+        batchContentBody(batch)
+            .task(id: batch.id) {
+                let known = Set(emails.map(\.id))
+                let missing = batch.emailIDs.filter { !known.contains($0) && hydrated[$0] == nil }
+                guard !missing.isEmpty else { return }
+                var loaded: [UUID: MBOXParser.RawEmail] = [:]
+                for start in stride(from: 0, to: missing.count, by: 200) {
+                    let chunk = Array(missing[start..<min(start + 200, missing.count)])
+                    for e in (try? await ArchiveDataService.shared.fullEmails(ids: chunk)) ?? [] { loaded[e.id] = e }
+                }
+                // Keep only the current batch's emails resident.
+                hydrated = loaded
+            }
+    }
+
+    private func batchContentBody(_ batch: ReviewBatchManager.ReviewBatch) -> some View {
         VStack(alignment: .leading, spacing: Spacing.xxSmall) {
             HStack {
                 Text(batch.name)
@@ -183,7 +237,7 @@ struct ReviewBatchPanelView: View {
 
             List {
                 ForEach(batch.emailIDs, id: \.self) { emailID in
-                    if let email = emails.first(where: { $0.id == emailID }) {
+                    if let email = email(emailID) {
                         HStack {
                             if batch.reviewedIDs.contains(emailID) {
                                 Image(systemName: "checkmark.circle.fill")

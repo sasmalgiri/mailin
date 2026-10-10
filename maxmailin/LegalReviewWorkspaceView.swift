@@ -2,6 +2,12 @@
 import SwiftUI
 
 struct LegalReviewWorkspaceView: View {
+    // §3-L9: whole-archive privilege scan when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+    @Environment(\.archiveScope) private var v3Scope
+    /// §3-L14: statistics over every coded email and the whole archive.
+    private var v3Stats: Bool { v3Modules?.isOn(.v3LegalReview) ?? false }
+    private var statsTotal: Int { v3Stats ? max(archiveTotal, workingSet.count) : workingSet.count }
     // v2: no injected corpus. Review list is a growable paged full-email window
     // from the store (reaches EVERY email for privilege review); the legal
     // analysis engines + stats + export run over a bounded working set.
@@ -689,7 +695,7 @@ struct LegalReviewWorkspaceView: View {
             Spacer()
 
             Button {
-                forensicManager.runPrivilegeScan(on: workingSet)
+                PrivilegeScanEngine.run(modules: v3Modules, query: v3Scope.query, loaded: workingSet)
                 runAISuggestions()
             } label: {
                 HStack(spacing: 2) {
@@ -1246,13 +1252,17 @@ struct LegalReviewWorkspaceView: View {
                 Button("Done") { showPDFExport = false }
             }
             VStack(alignment: .leading, spacing: 6) {
-                let reviewed = workingSet.filter { privilegeAssignments[$0.id] != nil && privilegeAssignments[$0.id] != .unreviewed }.count
-                let privileged = workingSet.filter {
-                    let p = privilegeAssignments[$0.id] ?? .unreviewed
-                    return p == .attorneyClient || p == .workProduct || p == .jointDefense || p == .partiallyPrivileged
-                }.count
+                let reviewed = v3Stats
+                    ? privilegeAssignments.values.filter { $0 != .unreviewed }.count
+                    : workingSet.filter { privilegeAssignments[$0.id] != nil && privilegeAssignments[$0.id] != .unreviewed }.count
+                let privileged = v3Stats
+                    ? privilegeAssignments.values.filter { $0 == .attorneyClient || $0 == .workProduct || $0 == .jointDefense || $0 == .partiallyPrivileged }.count
+                    : workingSet.filter {
+                        let p = privilegeAssignments[$0.id] ?? .unreviewed
+                        return p == .attorneyClient || p == .workProduct || p == .jointDefense || p == .partiallyPrivileged
+                    }.count
                 Text("Report Summary").font(.headline)
-                Text("Total emails: \(workingSet.count)")
+                Text("Total emails: \(statsTotal)")
                 Text("Reviewed: \(reviewed)")
                 Text("Privileged: \(privileged)")
                 Text("PII findings: \(piiFindings.count)")
@@ -1825,7 +1835,7 @@ struct LegalReviewWorkspaceView: View {
         let reviewed = privilegeAssignments.values.filter { $0 != .unreviewed }.count
         let responsive = responsivenessAssignments.values.filter { $0 == .responsive || $0 == .partiallyResponsive }.count
         let privileged = privilegeAssignments.values.filter { $0 == .attorneyClient || $0 == .workProduct || $0 == .jointDefense || $0 == .partiallyPrivileged }.count
-        let progress = workingSet.isEmpty ? 0.0 : Double(reviewed) / Double(workingSet.count)
+        let progress = statsTotal == 0 ? 0.0 : min(1.0, Double(reviewed) / Double(statsTotal))
         let progressPct = Int(progress * 100)
 
         return VStack(spacing: 0) {
@@ -1843,7 +1853,7 @@ struct LegalReviewWorkspaceView: View {
                     ProgressView(value: progress)
                         .frame(width: 80)
                         .tint(progress >= 1.0 ? .green : .indigo)
-                    Text("\(reviewed) of \(workingSet.count) reviewed (\(progressPct)%)")
+                    Text("\(reviewed) of \(statsTotal) reviewed (\(progressPct)%)")
                         .font(.system(size: 9, weight: .medium))
                         .foregroundColor(.secondary)
                 }

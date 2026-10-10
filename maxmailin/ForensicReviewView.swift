@@ -2,6 +2,9 @@
 import SwiftUI
 
 struct ForensicReviewView: View {
+    // §3-L9: whole-archive privilege scan when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+    @Environment(\.archiveScope) private var v3Scope
     // v2: no injected corpus. Review list is a growable paged full-email window
     // from the store (infinite scroll reaches EVERY email); forensic analysis /
     // QC / privilege scan / dashboard run over a bounded working set.
@@ -562,7 +565,7 @@ struct ForensicReviewView: View {
             }
             .buttonStyle(.plain)
 
-            Button { forensicManager.runPrivilegeScan(on: workingSet) } label: {
+            Button { PrivilegeScanEngine.run(modules: v3Modules, query: v3Scope.query, loaded: workingSet) } label: {
                 HStack(spacing: 2) {
                     Image(systemName: "lock.shield").font(.system(size: 9))
                     Text("Privilege Scan").font(.system(size: 9, weight: .medium))

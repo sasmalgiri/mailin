@@ -19,6 +19,16 @@ struct AutomationRulesView: View {
 
     let emails: [MBOXParser.RawEmail]
 
+    // §3-L10: whole-scope run when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
+    @Environment(\.archiveScope) private var scope
+    @State private var v3Total: Int?
+    @State private var v3Matched: [MBOXParser.RawEmail] = []
+    @State private var v3Running = false
+    @State private var v3Status: String?
+    private var v3: Bool { modules?.isOn(.v3AutomationRules) ?? false }
+    private var runCount: Int { v3 ? (v3Total ?? emails.count) : emails.count }
+
     var body: some View {
         VStack(spacing: 0) {
             headerView
@@ -44,10 +54,11 @@ struct AutomationRulesView: View {
                 .resizableSheet()
         }
         .sheet(isPresented: $showingResults) {
-            RunResultsSheet(results: runResults ?? [:], emails: emails)
+            RunResultsSheet(results: runResults ?? [:], emails: v3 ? v3Matched : emails)
                 .resizableSheet()
         }
         .featureTutorial(.automationRules, key: "automation_rules_tutorial_seen", isPresented: $showTutorial)
+        .task(id: v3) { if v3 { v3Total = await scope.resolvedTotal() } }
     }
 
     // MARK: - Header
@@ -61,6 +72,10 @@ struct AutomationRulesView: View {
                 Text("\(engine.rules.count) rule\(engine.rules.count == 1 ? "" : "s") configured")
                     .font(Typography.caption1)
                     .foregroundColor(AppColors.secondary)
+                if v3 { WholeScopeNote() }
+                if let v3Status {
+                    Text(v3Status).font(Typography.caption2).foregroundColor(AppColors.secondary)
+                }
             }
 
             Spacer()
@@ -72,14 +87,29 @@ struct AutomationRulesView: View {
                     Label("Run Rules Now", systemImage: "play.fill")
                 }
                 .buttonStyle(SecondaryButtonStyle())
-                .disabled(emails.isEmpty || engine.rules.isEmpty)
+                .disabled((v3 ? runCount == 0 : emails.isEmpty) || engine.rules.isEmpty || v3Running)
                 .accessibilityLabel("Run all enabled rules on current emails")
                 .adaptiveDestructiveConfirmation(
                     "Run Automation Rules",
                     isPresented: $showingRunConfirmation,
-                    message: "This will evaluate \(engine.rules.filter(\.isEnabled).count) enabled rule\(engine.rules.filter(\.isEnabled).count == 1 ? "" : "s") against \(emails.count) email\(emails.count == 1 ? "" : "s").",
+                    message: "This will evaluate \(engine.rules.filter(\.isEnabled).count) enabled rule\(engine.rules.filter(\.isEnabled).count == 1 ? "" : "s") against \(runCount) email\(runCount == 1 ? "" : "s").",
                     actionTitle: String(localized: "Run Rules")
                 ) {
+                    if v3 {
+                        v3Running = true
+                        Task { @MainActor in
+                            defer { v3Running = false }
+                            do {
+                                let r = try await AutomationRulesRunEngine.run(scope: scope, engine: engine)
+                                runResults = r.results
+                                v3Matched = r.matched
+                                v3Status = r.receipt.coverageLine
+                                await ScopeJob.recordReceipt(r.receipt, registry: modules)
+                                showingResults = true
+                            } catch { v3Status = error.localizedDescription }
+                        }
+                        return
+                    }
                     runResults = engine.applyRules(to: emails)
                     showingResults = true
                 }

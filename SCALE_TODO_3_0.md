@@ -156,25 +156,25 @@ loops, the current AI context building. Deleted only in a later release after a 
 ### L — Legal / forensic actions (whole archive, no exceptions; built as F1 recipes with E1 receipts)
 | ID | Tool ▸ button | Status |
 |---|---|---|
-| L1 | E-Discovery ▸ Run Search (SQL/FTS over scope) | [ ] |
-| L2 | E-Discovery ▸ Apply / Release Legal Hold (id query → F4 batch) | [ ] |
-| L3 | E-Discovery ▸ Verify & Seal Collection (F5) | [ ] |
-| L4 | E-Discovery ▸ Run NLP Analysis / Create Review Batches (F6 / all ids) | [ ] |
-| L5 | E-Discovery ▸ Load File / Production CSV / Privilege Log (streamed exporters with scope) | [ ] |
-| L6 | Bates ▸ Assign / Export Index (never renumber — rule 3) | [ ] |
-| L7 | Chain of Custody ▸ Verify / exports (F5, F4) | [ ] |
-| L8 | Custodians ▸ Place All on Hold / Assign to All Visible / Verify Seals / Report | [ ] |
-| L9 | Privilege scan (Forensic Review, Legal Review, list) → F6 flags | [ ] |
-| L10 | Automation Rules ▸ Run Rules Now (count first — rule 4) | [ ] |
-| L11 | Batch Operations ▸ Tag / Classify (store bulk by ids/scope) | [ ] |
-| L12 | Review Batches ▸ Create (all ids) | [ ] |
-| L13 | Investigation Report (scope or ids; F3 sections) | [ ] |
-| L14 | Legal Review workspace stats (F3) on F4 coding | [ ] |
-| L15 | PII Report (F6 flags; today `scanCap = 2_000`) | [ ] |
-| L16 | IOC Extractor (F6 rows) | [ ] |
-| L17 | Keyword Monitor (FTS whole archive) | [ ] |
-| L18 | Evidence Desks ▸ Seed (F3 top sources with totals) | [ ] |
-| L19 | Duplicates ▸ groups from SQL, paged (today 5,000 loader) | [ ] |
+| L1 | E-Discovery ▸ Run Search (SQL/FTS over scope) | [~] |
+| L2 | E-Discovery ▸ Apply / Release Legal Hold (id query → F4 batch) | [~] |
+| L3 | E-Discovery ▸ Verify & Seal Collection (F5) | [~] |
+| L4 | E-Discovery ▸ Run NLP Analysis / Create Review Batches (F6 / all ids) | [~] |
+| L5 | E-Discovery ▸ Load File / Production CSV / Privilege Log (streamed exporters with scope) | [~] |
+| L6 | Bates ▸ Assign / Export Index (never renumber — rule 3) | [~] |
+| L7 | Chain of Custody ▸ Verify / exports (F5, F4) | [~] |
+| L8 | Custodians ▸ Place All on Hold / Assign to All Visible / Verify Seals / Report | [~] |
+| L9 | Privilege scan (Forensic Review, Legal Review, list) → F6 flags | [~] |
+| L10 | Automation Rules ▸ Run Rules Now (count first — rule 4) | [~] |
+| L11 | Batch Operations ▸ Tag / Classify (store bulk by ids/scope) | [~] |
+| L12 | Review Batches ▸ Create (all ids) | [~] |
+| L13 | Investigation Report (scope or ids; F3 sections) | [~] |
+| L14 | Legal Review workspace stats (F3) on F4 coding | [~] |
+| L15 | PII Report (F6 flags; today `scanCap = 2_000`) | [~] |
+| L16 | IOC Extractor (F6 rows) | [~] |
+| L17 | Keyword Monitor (FTS whole archive) | [~] |
+| L18 | Evidence Desks ▸ Seed (F3 top sources with totals) | [~] |
+| L19 | Duplicates ▸ groups from SQL, paged (today 5,000 loader) | [~] |
 | — | GDPR data-subject report, Triage IOC blocklist, Redact & Export — already whole-archive (2026-10-09); keep, add to F7/F8 | [x] (uncommitted) |
 
 ### A — Analysis tools (become F6 queries)
@@ -377,3 +377,4 @@ Background audits: `BUTTON_AUDIT_3_0.md` (1,083 buttons, 2026-10-09).
 | 2 | Plan text S3/S9 | The main store already set `busy_timeout=5000` and background-readable file protection before 3.0; S3/S9 wording "none set today" is wrong. | [ ] |
 | 3 | Safe Mode wording | Safe Mode = no background work + no 3.0 engines; it does not make the archive read-only. Make help text say exactly that. | [ ] |
 | 4 | `BatesNumberingManager.assignNumbers` (old path) | Replaces every existing assignment with a fresh sequence over the loaded emails — breaks rule 3 (never renumber). The 3.0 engine skips numbered emails. Decide: guard the old path the same way (owner call — it changes old behaviour). Assignments also live in UserDefaults (whole dictionary rewritten); 3.0 keeps them in the database. | [ ] |
+| 5 | `BatchOperationsView.performRemoveTag` / `performClearClassification` (old path) | Both call `onTagApplied("")`, which clears ALL tags on the emails — "Remove Tag X" removes every tag. 3.0 path removes only the chosen tag. Fix the old path to call `removeTag(tag, from:)`. | [ ] |

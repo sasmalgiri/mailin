@@ -198,6 +198,12 @@ struct KeywordMonitorView: View {
     @State private var hasScanned = false
     @State private var selectedKeywordID: UUID?
     @State private var showTutorial = false
+    // §3-L17: whole-scope sweep when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
+    @Environment(\.archiveScope) private var scope
+    @State private var v3Scanned: Int?
+    @State private var v3Error: String?
+    private var v3: Bool { modules?.isOn(.v3KeywordMonitor) ?? false }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -239,9 +245,12 @@ struct KeywordMonitorView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Keyword Monitor")
                         .font(Typography.headline)
-                    Text("\(emails.count) emails, \(keywords.count) keywords")
+                    Text("\(v3Scanned ?? emails.count) emails, \(keywords.count) keywords")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
+                    if let v3Error {
+                        Text(v3Error).font(Typography.caption2).foregroundColor(AppColors.error)
+                    }
                 }
             }
             Spacer()
@@ -551,6 +560,30 @@ struct KeywordMonitorView: View {
     }
 
     private func scanArchive() {
+        if v3 {
+            isScanning = true
+            hasScanned = true
+            let keywordsCopy = keywords
+            Task { @MainActor in
+                defer { isScanning = false }
+                do {
+                    let r = try await KeywordMonitorEngine.scan(scope: scope, keywords: keywordsCopy)
+                    matches = r.matches
+                    v3Scanned = r.receipt.processed
+                    v3Error = nil
+                    await DocumentRegistry.captureStructured(.report,
+                        summary: "Keyword sweep — \(keywordsCopy.count) terms, \(r.matches.count) matches",
+                        document: CapturedDocument(title: String(localized: "Keyword Sweep"), sections: [
+                            .init(name: String(localized: "Keyword Sweep"), fields: [
+                                .init(key: "Keywords", value: "\(keywordsCopy.count)"),
+                                .init(key: "Matches", value: "\(r.matches.count)")]),
+                            .init(name: String(localized: "Job receipt"), fields: r.receipt.documentFields)]))
+                } catch {
+                    v3Error = error.localizedDescription
+                }
+            }
+            return
+        }
         isScanning = true
         hasScanned = true
         let emailsCopy = emails

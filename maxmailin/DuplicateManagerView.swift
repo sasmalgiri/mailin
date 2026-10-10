@@ -14,6 +14,10 @@ struct DuplicateManagerView: View {
     @State private var legalHoldWarning: String?
     @State private var showTutorial = false
     @State private var isRemoving = false
+    // §3-L19: whole-archive exact groups when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
+    @State private var v3Note: String?
+    private var v3: Bool { modules?.isOn(.v3Duplicates) ?? false }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -57,6 +61,12 @@ struct DuplicateManagerView: View {
             Toggle("Include near-duplicates", isOn: $showNearDuplicates)
                 .font(Typography.callout)
                 .onChange(of: showNearDuplicates) { _, _ in scanForDuplicates() }
+            if let v3Note {
+                Text(v3Note)
+                    .font(Typography.caption2)
+                    .foregroundColor(AppColors.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
 
             if showNearDuplicates {
                 #if os(iOS)
@@ -415,6 +425,39 @@ struct DuplicateManagerView: View {
     }
 
     private func scanForDuplicates() {
+        if v3 {
+            isScanning = true
+            let includeNear = showNearDuplicates
+            let threshold = similarityThreshold
+            Task { @MainActor in
+                defer { isScanning = false }
+                do {
+                    let r = try await DuplicatesEngine.exactGroups()
+                    duplicateGroups = r.groups
+                    var note = String(localized: "Exact duplicates: whole archive — \(r.receipt.coverageLine)")
+                    if includeNear {
+                        // Near-duplicates across the whole archive are the
+                        // Near-Duplicates tool's job (MinHash index); here they
+                        // are still found among the newest 5,000.
+                        var emails: [MBOXParser.RawEmail] = []
+                        for try await b in ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200) {
+                            emails.append(contentsOf: b); if emails.count >= 5000 { break }
+                        }
+                        let window = Array(emails.prefix(5000))
+                        nearDuplicateGroups = await Task.detached(priority: .utility) {
+                            Self.findNearDuplicates(in: window, threshold: threshold)
+                        }.value
+                        note += " " + String(localized: "Near-duplicates: newest \(window.count) emails — use Near-Duplicates for the whole archive.")
+                    } else {
+                        nearDuplicateGroups = []
+                    }
+                    v3Note = note
+                } catch {
+                    v3Note = error.localizedDescription
+                }
+            }
+            return
+        }
         isScanning = true
         let includeNear = showNearDuplicates
         let threshold = similarityThreshold

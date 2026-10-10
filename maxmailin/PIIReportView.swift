@@ -41,6 +41,20 @@ struct PIIReportView: View {
 
     static let scanCap = 2_000
 
+    // §3-L15: whole-scope report when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
+    @Environment(\.archiveScope) private var hostScope
+    @State private var v3Counts: [EmailNLPEngine.PIIType: Int]?
+    @State private var v3Status: String?
+    private var v3: Bool { modules?.isOn(.v3PIIReport) ?? false }
+    /// The scope to scan: the host's when this report was opened from a tool
+    /// (preset collection), otherwise this report's own filter.
+    private var v3Scope: ArchiveScope { presetEmails != nil ? hostScope : ArchiveScope(query: query) }
+
+    /// Whole-scope total for a type (v3), else the loaded findings' count.
+    private func total(_ type: EmailNLPEngine.PIIType, shown: Int) -> Int { v3Counts?[type] ?? shown }
+    private var totalFindings: Int { v3Counts.map { $0.values.reduce(0, +) } ?? findings.count }
+
     private var grouped: [(type: EmailNLPEngine.PIIType, items: [EmailNLPEngine.PIIFinding])] {
         Dictionary(grouping: findings, by: { $0.type })
             .filter { selectedType == nil || $0.key == selectedType }
@@ -51,7 +65,10 @@ struct PIIReportView: View {
     /// Chip order: biggest buckets first — one tap to Email IDs, Phone
     /// Numbers, IP Addresses without scrolling past small categories.
     private var typeCounts: [(type: EmailNLPEngine.PIIType, count: Int)] {
-        Dictionary(grouping: findings, by: { $0.type })
+        if let v3Counts {
+            return v3Counts.map { (type: $0.key, count: $0.value) }.sorted { $0.count > $1.count }
+        }
+        return Dictionary(grouping: findings, by: { $0.type })
             .map { (type: $0.key, count: $0.value.count) }
             .sorted { $0.count > $1.count }
     }
@@ -75,7 +92,7 @@ struct PIIReportView: View {
                         .font(Typography.title2)
                     Text(isScanning
                          ? "Scanning for personally identifiable information…"
-                         : "\(findings.count) finding(s) in \(scannedCount) email(s) — detected on-device, nothing leaves this Mac")
+                         : "\(totalFindings) finding(s) in \(scannedCount) email(s) — detected on-device, nothing leaves this Mac")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
                     if !isScanning && !findings.isEmpty {
@@ -122,7 +139,7 @@ struct PIIReportView: View {
             if !findings.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: Spacing.xxSmall) {
-                        piiChip(label: String(localized: "All"), count: findings.count, isOn: selectedType == nil) {
+                        piiChip(label: String(localized: "All"), count: totalFindings, isOn: selectedType == nil) {
                             selectedType = nil
                         }
                         ForEach(typeCounts, id: \.type) { entry in
@@ -175,6 +192,11 @@ struct PIIReportView: View {
                 Spacer()
             } else {
                 List {
+                    if let v3Status {
+                        Label(v3Status, systemImage: "square.stack.3d.up.fill")
+                            .font(Typography.caption1)
+                            .foregroundColor(AppColors.secondary)
+                    }
                     if truncated {
                         Label("Large filter — the first \(Self.scanCap) emails were scanned. Narrow the filter to cover the rest.",
                               systemImage: "info.circle")
@@ -197,8 +219,8 @@ struct PIIReportView: View {
                                 }
                                 .help("Found in “\(finding.emailSubject)” — risk \(String(format: "%.0f", finding.contextualRiskScore))/10")
                             }
-                            if group.items.count > 200 {
-                                Text("… and \(group.items.count - 200) more — use Export CSV for the complete list")
+                            if total(group.type, shown: group.items.count) > min(group.items.count, 200) {
+                                Text("… and \(total(group.type, shown: group.items.count) - min(group.items.count, 200)) more — use Export CSV for the complete list")
                                     .font(Typography.caption2)
                                     .foregroundColor(AppColors.secondary)
                             }
@@ -206,7 +228,7 @@ struct PIIReportView: View {
                             HStack {
                                 Text("\(group.type.rawValue)")
                                     .font(Typography.subheadline).fontWeight(.semibold)
-                                Text("\(group.items.count)")
+                                Text("\(total(group.type, shown: group.items.count))")
                                     .font(Typography.caption1)
                                     .foregroundColor(AppColors.secondary)
                                 Spacer()
@@ -231,6 +253,20 @@ struct PIIReportView: View {
     }
 
     private func scan() async {
+        if v3 {
+            do {
+                let r = try await PIIEngine.scan(scope: v3Scope)
+                findings = r.shown
+                v3Counts = r.counts
+                scannedCount = r.receipt.processed
+                truncated = false
+                v3Status = String(localized: "Whole scope: \(r.receipt.coverageLine) \(r.emailsWithPII) emails contain personal data.")
+            } catch {
+                v3Status = error.localizedDescription
+            }
+            isScanning = false
+            return
+        }
         let emails: [MBOXParser.RawEmail]
         if let preset = presetEmails {
             emails = Array(preset.prefix(Self.scanCap))
@@ -308,6 +344,17 @@ struct PIIReportView: View {
     }
 
     private func exportCSV() {
+        if v3 {
+            Task { @MainActor in
+                let (outcome, n) = await PIIEngine.exportCSV(scope: v3Scope)
+                if let url = outcome.url {
+                    _ = await DocumentRegistry.post(.report, summary: "PII report — \(n) finding\(n == 1 ? "" : "s")", refs: url.lastPathComponent)
+                } else if case .failed(let why) = outcome {
+                    exportError = why
+                }
+            }
+            return
+        }
         func esc(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
         var csv = "Type,Value,Risk,Context,Email Subject,Email ID\n"
         for finding in findings {

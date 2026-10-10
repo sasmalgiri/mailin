@@ -1070,6 +1070,16 @@ struct InvestigationReportConfigSheet: View {
     @State private var generatedPDFData: Data?
     @State private var showFileExporter = false
     @State private var savedSuccessfully = false
+    // §3-L13: whole-scope report when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+    @Environment(\.archiveScope) private var v3Scope
+    @State private var wholeScope = false
+    @State private var v3ScopeTotal: Int?
+    @State private var v3ReportCount: Int?
+    private var v3: Bool { v3Modules?.isOn(.v3InvestigationReport) ?? false }
+    private var v3Whole: Bool { v3 && wholeScope }
+    /// Emails the report covers (for the info line and the audit entry).
+    private var reportCount: Int { v3Whole ? (v3ReportCount ?? v3ScopeTotal ?? 0) : selectedEmailIDs.count }
 
     private var matchingEmails: [MBOXParser.RawEmail] {
         guard !emailSearchText.isEmpty else { return emails }
@@ -1206,9 +1216,16 @@ struct InvestigationReportConfigSheet: View {
                     HStack {
                         Image(systemName: "info.circle")
                             .foregroundColor(AppColors.info)
-                        Text("Report will analyze \(selectedEmailIDs.count) email\(selectedEmailIDs.count == 1 ? "" : "s") and generate a multi-page PDF.")
+                        Text("Report will analyze \(reportCount) email\(reportCount == 1 ? "" : "s") and generate a multi-page PDF.")
                             .font(Typography.caption1)
                             .foregroundColor(AppColors.secondary)
+                    }
+                    if v3 {
+                        Toggle(isOn: $wholeScope) {
+                            Text("Report on every email in scope (\(v3ScopeTotal ?? 0)), not only the selected ones")
+                                .font(Typography.caption1)
+                        }
+                        .task { v3ScopeTotal = await v3Scope.resolvedTotal() }
                     }
 
                     if let error = generationError {
@@ -1288,7 +1305,7 @@ struct InvestigationReportConfigSheet: View {
                             }
                             .buttonStyle(PrimaryButtonStyle())
                             .keyboardShortcut("r", modifiers: .command)
-                            .disabled(isGenerating || selectedEmailIDs.isEmpty)
+                            .disabled(isGenerating || (selectedEmailIDs.isEmpty && !v3Whole))
                         }
                     }
                 }
@@ -1303,12 +1320,12 @@ struct InvestigationReportConfigSheet: View {
         ) { result in
             switch result {
             case .success:
-                forensicManager.logAction("Investigation Report", detail: "Generated PDF report for \(selectedEmailIDs.count) emails")
+                forensicManager.logAction("Investigation Report", detail: "Generated PDF report for \(reportCount) emails")
                 // Keep the generated data so the user can Save Again to
                 // another location without regenerating.
                 savedSuccessfully = true
                 // Capture a numbered, referable document of this job.
-                let count = selectedEmailIDs.count
+                let count = reportCount
                 let title = reportTitle
                 let examiner = examinerName
                 Task { await DocumentRegistry.captureStructured(.report,
@@ -1390,6 +1407,22 @@ struct InvestigationReportConfigSheet: View {
     private func generateReport() {
         isGenerating = true
         generationError = nil
+        if v3Whole {
+            let title = reportTitle
+            let investigator = examinerName
+            Task { @MainActor in
+                defer { isGenerating = false }
+                do {
+                    let r = try await InvestigationReportEngine.build(scope: v3Scope, title: title, investigator: investigator)
+                    guard !r.pdf.isEmpty else { generationError = "Failed to generate PDF report."; return }
+                    v3ReportCount = r.receipt.processed
+                    generatedPDFData = r.pdf
+                } catch {
+                    generationError = error.localizedDescription
+                }
+            }
+            return
+        }
 
         let reportEmails = selectedEmails
         let title = reportTitle
