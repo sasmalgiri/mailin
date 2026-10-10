@@ -383,4 +383,47 @@ final class V3CompatibilityTests: XCTestCase {
         XCTAssertTrue(log.contains("S 1"), "subject column")
         XCTAssertTrue(log.contains("No.      Date"), "header padded to the same widths")
     }
+
+    // MARK: - E4: collection fields on import receipts
+
+    func testImportReceipt_collectionFieldsRoundTrip_andOldReceiptsStillDecode() throws {
+        var receipt = ImportReceipt(startedAt: Date(), completedAt: Date())
+        receipt.custodian = "Pat Examiner"
+        receipt.collectingTool = "mailin 3.0 (603)"
+        receipt.collectionSettings = ["Duplicates": "Message-ID", "Copies originals": "yes"]
+        let data = try JSONEncoder().encode(receipt)
+        let back = try JSONDecoder().decode(ImportReceipt.self, from: data)
+        XCTAssertEqual(back.custodian, "Pat Examiner")
+        XCTAssertEqual(back.collectingTool, "mailin 3.0 (603)")
+        XCTAssertEqual(back.collectionSettings?["Duplicates"], "Message-ID")
+
+        // A receipt written before 3.0 has none of these keys.
+        var json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        json.removeValue(forKey: "custodian"); json.removeValue(forKey: "collectingTool"); json.removeValue(forKey: "collectionSettings")
+        let old = try JSONDecoder().decode(ImportReceipt.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertNil(old.custodian)
+        XCTAssertNil(old.collectionSettings)
+    }
+
+    // MARK: - E6: a redacted export carries no unredacted part
+
+    func testRedactedExport_everyPartIsRedacted_noHTMLNoAttachmentBytes() {
+        let ssn = "078-05-1120"
+        let secretBytes = Data("attachment holds \(ssn)".utf8).base64EncodedString()
+        let email = MBOXParser.RawEmail(
+            headers: ["Subject": "Re: \(ssn)", "From": "a@a.com", "To": "b@b.com", "Cc": "c@c.com \(ssn)",
+                      "Date": "Mon, 01 Jan 2024 00:00:00 +0000", "Message-ID": "<e6@test>"],
+            rawSource: "raw \(ssn)", messageType: "email",
+            attachments: [AttachmentMetadata(filename: "scan-\(ssn).pdf", mimeType: "application/pdf", size: 20, base64: secretBytes)],
+            timestamp: "2024-01-01T00:00:00Z", domains: ["a.com"],
+            plainBody: "Plain part \(ssn).",
+            htmlBody: "<html><body><p title=\"\(ssn)\">HTML part \(ssn)</p><img src=\"cid:x\"></body></html>")
+        let redacted = RedactionEngine.redactEmail(email, rules: RedactionEngine.defaultRules)
+        let entry = RedactionEngine.exportEntry(redacted)
+        XCTAssertFalse(entry.contains(ssn), "no part carries the unredacted value:\n\(entry)")
+        XCTAssertFalse(entry.contains("<p") || entry.contains("<html") || entry.contains("title="), "no HTML part")
+        XCTAssertFalse(entry.contains(secretBytes), "no attachment bytes")
+        XCTAssertTrue(entry.contains("not included in this export"), "attachments are named, not carried")
+        XCTAssertGreaterThanOrEqual(redacted.redactionCount, 5, "subject, Cc, plain, HTML attribute, file name")
+    }
 }

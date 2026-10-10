@@ -63,6 +63,7 @@ struct ImportReceiptView: View {
                 verdictBanner
                 sourcesSection
                 accountingSection
+                collectionSection
                 coverageSection
                 if !receipt.fileFailures.isEmpty || !receipt.warnings.isEmpty {
                     problemsSection
@@ -186,6 +187,27 @@ struct ImportReceiptView: View {
             row("Source files skipped (already imported)", receipt.skipped)
             Divider()
             row("Duration", text: String(format: "%.1f s", receipt.durationSeconds))
+        }
+    }
+
+    // MARK: Collection (§3-E4, EDRM processing)
+
+    /// Who collected, with what tool and settings — recorded at import when
+    /// the evidence-receipts engine is on; absent on older receipts.
+    @ViewBuilder
+    private var collectionSection: some View {
+        if receipt.custodian != nil || receipt.collectingTool != nil || !(receipt.collectionSettings ?? [:]).isEmpty {
+            section(String(localized: "Collection")) {
+                if let custodian = receipt.custodian {
+                    row(String(localized: "Collected by"), text: custodian)
+                }
+                if let tool = receipt.collectingTool {
+                    row(String(localized: "Tool"), text: tool)
+                }
+                ForEach((receipt.collectionSettings ?? [:]).sorted(by: { $0.key < $1.key }), id: \.key) { setting in
+                    row(setting.key, text: setting.value)
+                }
+            }
         }
     }
 
