@@ -61,11 +61,22 @@ struct AttachmentGridView: View {
     // §3-A7: the whole archive's attachments when the 3.0 engine is on.
     @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
 
+    /// §3-M3: the whole-archive list failed; the previous view is shown.
+    @State private var wholeFailed: String?
+
     var body: some View {
-        if v3Modules?.isOn(.v3AnalysisQueries) ?? false {
-            ArchiveAttachmentIndexView()
+        if v3Modules?.isOn(.v3AnalysisQueries) ?? false, wholeFailed == nil {
+            ArchiveAttachmentIndexView(onFailure: { error in
+                wholeFailed = EngineGuard.fellBack(.v3AnalysisQueries, error: error)
+            })
         } else {
-            windowBody
+            VStack(spacing: 0) {
+                if let wholeFailed {
+                    Text(wholeFailed).font(Typography.caption1).foregroundColor(AppColors.secondary)
+                        .fixedSize(horizontal: false, vertical: true).padding(Spacing.xSmall)
+                }
+                windowBody
+            }
         }
     }
 

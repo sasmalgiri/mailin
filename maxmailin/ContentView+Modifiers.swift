@@ -1404,10 +1404,11 @@ struct InvestigationReportConfigSheet: View {
         .buttonStyle(.plain)
     }
 
-    private func generateReport() {
+    /// `previousEngine`: the pre-3.0 report (switch off, or §3-M3 fallback).
+    private func generateReport(previousEngine: Bool = false) {
         isGenerating = true
         generationError = nil
-        if v3Whole {
+        if v3Whole && !previousEngine {
             let title = reportTitle
             let investigator = examinerName
             Task { @MainActor in
@@ -1417,8 +1418,13 @@ struct InvestigationReportConfigSheet: View {
                     guard !r.pdf.isEmpty else { generationError = "Failed to generate PDF report."; return }
                     v3ReportCount = r.receipt.processed
                     generatedPDFData = r.pdf
+                } catch is CancellationError {
                 } catch {
-                    generationError = error.localizedDescription
+                    // §3-M3: the previous engine reports on the selected emails.
+                    v3ReportCount = nil
+                    let note = EngineGuard.fellBack(.v3InvestigationReport, error: error)
+                    generateReport(previousEngine: true)
+                    generationError = note
                 }
             }
             return

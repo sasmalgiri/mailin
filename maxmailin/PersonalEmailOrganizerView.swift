@@ -130,7 +130,11 @@ struct PersonalEmailOrganizerView: View {
                 let r = try await PersonalCleanupEngine.compute()
                 cleanup = r.stats
                 cleanupNote = String(localized: "Cleanup and storage figures cover all \(r.stats.emails) emails.")
-            } catch { cleanupNote = error.localizedDescription }
+            } catch is CancellationError {
+            } catch {
+                // §3-M3: the previous engine's figures (below) stay on screen.
+                cleanupNote = EngineGuard.fellBack(.v3AnalysisQueries, error: error)
+            }
         }
         .task { await loadBoundedWorkingSet() }
         .task { await loadV3Data() }

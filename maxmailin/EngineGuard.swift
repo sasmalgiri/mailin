@@ -33,6 +33,12 @@ struct EngineTrip: Codable, Equatable, Sendable, Identifiable {
     let capability: String
     let date: Date
     let appVersion: String
+    /// §3-M2: the app version that switched the engine back on (a new
+    /// version may carry the fix). Optional so older trip logs decode.
+    var restoredInVersion: String? = nil
+    /// The user changed this engine's switch after the trip: their choice
+    /// wins, a new version does not override it.
+    var userChoseSince: Bool? = nil
 }
 
 enum EngineGuard {
@@ -104,6 +110,19 @@ enum EngineGuard {
 
     // MARK: Fallback (M3)
 
+    /// A 3.0 engine threw at a tool's seam: records the fallback (log +
+    /// audit) and returns the line the tool shows. The caller then runs the
+    /// previous engine for this call. Cancellation is not a fallback.
+    @MainActor
+    static func fellBack(_ capability: Capability, error: Error) -> String {
+        recordFallback(capability, error: error)
+        engineGuardLog.error("\(capability.rawValue, privacy: .public) threw, falling back: \(error.localizedDescription, privacy: .public)")
+        ScopeJobEnvironment.logAction("Fell back to the previous engine",
+                                      detail: "\(capability.rawValue): \(error.localizedDescription)")
+        return String(localized: "The new engine stopped (\(error.localizedDescription)); the previous engine ran instead.")
+    }
+
+
     /// Uses the new engine when its switch is on, inside a breadcrumb; if the
     /// new engine throws, logs it, counts the fallback and runs the old path
     /// for this call. With the switch off, runs the old path directly.
@@ -168,6 +187,34 @@ enum EngineGuard {
         }
     }
 
+    /// The user changed `capability`'s switch: an open trip no longer decides it.
+    static func noteUserChoice(_ capability: Capability) {
+        var trips = loadTrips()
+        guard let i = trips.lastIndex(where: { $0.capability == capability.rawValue }),
+              trips[i].restoredInVersion == nil, trips[i].userChoseSince != true else { return }
+        trips[i].userChoseSince = true
+        saveTrips(trips)
+    }
+
+    /// Engines tripped in an EARLIER app version, still off, never restored
+    /// and not touched by the user since: a new version switches them back
+    /// on once (the trip may have been fixed). Marks them restored.
+    static func takeRestorableTrips(currentVersion: String) -> [Capability] {
+        var trips = loadTrips()
+        var latest: [String: Int] = [:]
+        for (i, t) in trips.enumerated() { latest[t.capability] = i }
+        var restore: [Capability] = []
+        for (_, i) in latest {
+            let t = trips[i]
+            guard t.appVersion != currentVersion, t.restoredInVersion == nil, t.userChoseSince != true,
+                  let capability = Capability(rawValue: t.capability) else { continue }
+            trips[i].restoredInVersion = currentVersion
+            restore.append(capability)
+        }
+        if !restore.isEmpty { saveTrips(trips) }
+        return restore.sorted { $0.rawValue < $1.rawValue }
+    }
+
     /// The most recent trip for a capability, for the matrix row.
     static func lastTrip(_ capability: Capability) -> EngineTrip? {
         loadTrips().last { $0.capability == capability.rawValue }
@@ -179,6 +226,11 @@ enum EngineGuard {
         let capability: String
         let date: Date
         let error: String
+    }
+
+    /// Fallbacks recorded for `capability` since `date` (for job receipts).
+    static func fallbackCount(_ capability: Capability, since date: Date) -> Int {
+        loadFallbacks().filter { $0.capability == capability.rawValue && $0.date >= date }.count
     }
 
     static func recordFallback(_ capability: Capability, error: Error) {
@@ -207,17 +259,28 @@ final class EngineTripCenter {
 
     /// Engines switched off at this launch because the app stopped inside them.
     private(set) var newlyTripped: [Capability] = []
+    /// Engines a new version switched back on at this launch.
+    private(set) var newlyRestored: [Capability] = []
 
     /// Call once at launch, before any 3.0 engine can run: trips every engine
     /// whose breadcrumb survived the previous process.
     func checkAtLaunch(registry: ModuleRegistry) {
+        // A new app version gets one fresh chance for engines an earlier
+        // version tripped (unless the user decided since), §3-M2.
+        let restored = EngineGuard.takeRestorableTrips(currentVersion: EngineGuard.appVersion)
+        for capability in restored {
+            registry.set(capability, enabled: true)
+            ScopeJobEnvironment.logAction("Engine switched back on in a new version",
+                detail: "\(capability.rawValue) — it had stopped unexpectedly in an earlier version; switched off again automatically if it stops")
+        }
+        newlyRestored = restored
         let leftovers = EngineGuard.collectLeftoverBreadcrumbs()
         guard !leftovers.isEmpty else { return }
         var trips = EngineGuard.loadTrips()
         for capability in leftovers {
             registry.set(capability, enabled: false)
             trips.append(EngineTrip(capability: capability.rawValue, date: Date(), appVersion: EngineGuard.appVersion))
-            ForensicManager.shared.logAction(
+            ScopeJobEnvironment.logAction(
                 "Engine switched off after an unexpected stop",
                 detail: "\(capability.rawValue) — the previous engine is used; no data was changed")
         }
@@ -226,6 +289,7 @@ final class EngineTripCenter {
     }
 
     func dismiss() { newlyTripped = [] }
+    func dismissRestored() { newlyRestored = [] }
 
     /// Plain-text summary for "Copy diagnostics".
     func diagnosticsText() -> String {

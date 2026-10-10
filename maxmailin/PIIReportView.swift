@@ -261,11 +261,16 @@ struct PIIReportView: View {
                 scannedCount = r.receipt.processed
                 truncated = false
                 v3Status = String(localized: "Whole scope: \(r.receipt.coverageLine) \(r.emailsWithPII) emails contain personal data.")
+                isScanning = false
+                return
+            } catch is CancellationError {
+                isScanning = false
+                return
             } catch {
-                v3Status = error.localizedDescription
+                // §3-M3: the previous engine runs for this call (below).
+                v3Status = EngineGuard.fellBack(.v3PIIReport, error: error)
+                v3Counts = nil
             }
-            isScanning = false
-            return
         }
         let emails: [MBOXParser.RawEmail]
         if let preset = presetEmails {

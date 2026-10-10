@@ -106,7 +106,14 @@ struct AutomationRulesView: View {
                                 v3Status = r.receipt.coverageLine
                                 await ScopeJob.recordReceipt(r.receipt, registry: modules)
                                 showingResults = true
-                            } catch { v3Status = error.localizedDescription }
+                            } catch is CancellationError {
+                                v3Status = String(localized: "Cancelled.")
+                            } catch {
+                                // §3-M3: fall back to the previous engine for this call.
+                                v3Status = EngineGuard.fellBack(.v3AutomationRules, error: error)
+                                runResults = engine.applyRules(to: emails)
+                                showingResults = true
+                            }
                         }
                         return
                     }

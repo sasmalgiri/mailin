@@ -47,14 +47,18 @@ struct ScopeJobReceipt: Codable, Sendable, Equatable {
     let fingerprint: String
     /// The scope as an `EmailQuery` (JSON) — what "Re-run and prove" re-runs.
     var queryJSON: String? = nil
+    /// §3-M3: calls inside this job that fell back to the previous engine.
+    var fallbacks: Int? = nil
 
     /// "X of Y" wording for status lines.
     var coverageLine: String {
-        cancelled
+        let base = cancelled
             ? String(localized: "Stopped after \(processed) of \(totalInScope) emails.")
             : unreadable > 0
                 ? String(localized: "\(processed) of \(totalInScope) emails processed; \(unreadable) could not be read.")
                 : String(localized: "All \(processed) emails in scope processed.")
+        guard let fallbacks, fallbacks > 0 else { return base }
+        return base + " " + String(localized: "\(fallbacks) call(s) fell back to the previous engine.")
     }
 
     /// Fields for a structured document (DocumentRegistry.captureStructured).
@@ -73,6 +77,7 @@ struct ScopeJobReceipt: Codable, Sendable, Equatable {
             .init(key: "Finished", value: f.string(from: finishedAt)),
             .init(key: "Email-set fingerprint", value: fingerprint),
         ] + (queryJSON.map { [.init(key: "Scope query (JSON)", value: $0)] } ?? [])
+          + ((fallbacks ?? 0) > 0 ? [.init(key: "Calls that fell back to the previous engine", value: String(fallbacks ?? 0))] : [])
     }
 }
 
@@ -387,7 +392,8 @@ enum ScopeJob {
             totalInScope: total, processed: cp.processed, unreadable: cp.unreadable,
             resumed: resumed, cancelled: wasCancelled,
             startedAt: cp.startedAt, finishedAt: Date(), fingerprint: cp.fingerprint.hex,
-            queryJSON: ScopeJob.json(query))
+            queryJSON: ScopeJob.json(query),
+            fallbacks: EngineGuard.fallbackCount(capability, since: cp.startedAt))
         return (cp.state, receipt)
     }
 
@@ -426,7 +432,8 @@ enum ScopeJob {
             jobKey: key, title: title, capability: capability.rawValue, scope: describe(query),
             archiveRevision: revision, totalInScope: total, processed: processed, unreadable: 0,
             resumed: false, cancelled: cancelled, startedAt: started, finishedAt: Date(),
-            fingerprint: fingerprint.hex, queryJSON: json(query))
+            fingerprint: fingerprint.hex, queryJSON: json(query),
+            fallbacks: EngineGuard.fallbackCount(capability, since: started))
         return (state, receipt)
     }
 

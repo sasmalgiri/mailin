@@ -128,15 +128,28 @@ private struct UncheckedPlugin: @unchecked Sendable {
 }
 
 extension PluginManager {
-    /// Whole-archive run of every enabled plugin (v2 runner).
-    func runAllPluginsWholeArchive() async -> [String: PluginRunnerV2.Outcome] {
+    /// Whole-archive run of every enabled plugin (v2 runner). A plugin whose
+    /// v2 run throws falls back to the previous runner on `fallbackEmails`
+    /// (§3-M3) — it used to be skipped without a word. Returns the v2
+    /// outcomes and how many plugins fell back.
+    func runAllPluginsWholeArchive(fallbackEmails: [MBOXParser.RawEmail]) async
+        -> (outcomes: [String: PluginRunnerV2.Outcome], fellBack: Int) {
         var outcomes: [String: PluginRunnerV2.Outcome] = [:]
+        var fellBack = 0
         for entry in loadedPlugins where entry.isEnabled {
-            guard let outcome = try? await PluginRunnerV2.run(entry.plugin) else { continue }
-            outcomes[entry.id] = outcome
-            recordWholeArchiveRun(pluginID: entry.id, findings: outcome.findings)
+            do {
+                let outcome = try await PluginRunnerV2.run(entry.plugin)
+                outcomes[entry.id] = outcome
+                recordWholeArchiveRun(pluginID: entry.id, findings: outcome.findings)
+            } catch is CancellationError {
+                break
+            } catch {
+                _ = EngineGuard.fellBack(.v3AnalysisQueries, error: error)
+                _ = await runPlugin(id: entry.id, emails: fallbackEmails)
+                fellBack += 1
+            }
         }
-        return outcomes
+        return (outcomes, fellBack)
     }
 
 }

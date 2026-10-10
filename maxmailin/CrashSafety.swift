@@ -53,6 +53,25 @@ struct EngineTripBanner: View {
             .background(Color.orange.opacity(0.12))
             .accessibilityElement(children: .contain)
         }
+        // §3-M2: a new version switched tripped engines back on once.
+        if !center.newlyRestored.isEmpty {
+            HStack(alignment: .top, spacing: Spacing.small) {
+                Image(systemName: "arrow.uturn.forward.circle")
+                    .accessibilityHidden(true)
+                Text("Switched back on in this version: \(center.newlyRestored.map(\.displayName).joined(separator: ", ")). They had stopped unexpectedly in an earlier version; if one stops again it is switched off automatically.")
+                    .font(Typography.caption1)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Button { center.dismissRestored() } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundColor(AppColors.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss")
+            }
+            .padding(Spacing.small)
+            .background(Color.secondary.opacity(0.08))
+            .accessibilityElement(children: .contain)
+        }
     }
 }
 

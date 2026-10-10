@@ -389,8 +389,9 @@ struct PredictiveInsightsView: View {
 
     // MARK: - Actions
 
-    private func runAnalysis() {
-        if v3 {
+    /// `previousEngine`: run the pre-3.0 path (switch off, or §3-M3 fallback).
+    private func runAnalysis(previousEngine: Bool = false) {
+        if v3 && !previousEngine {
             isAnalyzing = true
             Task { @MainActor in
                 defer { isAnalyzing = false }
@@ -400,7 +401,12 @@ struct PredictiveInsightsView: View {
                     v3Note = r.urgentTotal > r.summary.urgentEmails.count
                         ? String(localized: "\(r.scanned) emails analysed; \(r.urgentTotal) need attention — the strongest \(r.summary.urgentEmails.count) are listed. Thread outcomes use recent activity.")
                         : String(localized: "\(r.scanned) emails analysed. Thread outcomes use recent activity.")
-                } catch { v3Note = error.localizedDescription }
+                } catch is CancellationError {
+                    v3Note = nil
+                } catch {
+                    v3Note = EngineGuard.fellBack(.v3AnalysisQueries, error: error)
+                    runAnalysis(previousEngine: true)
+                }
             }
             return
         }

@@ -173,8 +173,9 @@ struct SmartAlertsView: View {
         }
     }
 
-    private func analyze() {
-        if v3 {
+    /// `previousEngine`: run the pre-3.0 path (switch off, or §3-M3 fallback).
+    private func analyze(previousEngine: Bool = false) {
+        if v3 && !previousEngine {
             isAnalyzing = true
             Task { @MainActor in
                 defer { isAnalyzing = false }
@@ -191,7 +192,12 @@ struct SmartAlertsView: View {
                     }
                     hydrated = map
                     v3Note = r.receipt.coverageLine
-                } catch { v3Note = error.localizedDescription }
+                } catch is CancellationError {
+                    v3Note = nil
+                } catch {
+                    v3Note = EngineGuard.fellBack(.v3AlertsAnomalies, error: error)
+                    analyze(previousEngine: true)
+                }
             }
             return
         }

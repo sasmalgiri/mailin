@@ -853,9 +853,10 @@ struct RelationshipGraphView: View {
 
     // MARK: - Actions
 
-    private func buildAndSimulate() {
+    /// `previousEngine`: the pre-3.0 graph (switch off, or §3-M3 fallback).
+    private func buildAndSimulate(previousEngine: Bool = false) {
         graphLayout.isReady = false
-        if v3Modules?.isOn(.v3Graphs) ?? false, !senderEmail.isEmpty {
+        if v3Modules?.isOn(.v3Graphs) ?? false, !senderEmail.isEmpty, !previousEngine {
             Task { @MainActor [senderEmail, graphSize] in
                 var acc = GraphLayout.Accumulator(senderEmail: senderEmail)
                 let token = EngineGuard.begin(.v3Graphs)
@@ -865,7 +866,15 @@ struct RelationshipGraphView: View {
                         let current = acc
                         acc = await Task.detached(priority: .userInitiated) { var a = current; a.add(batch); return a }.value
                     }
-                } catch {}
+                } catch is CancellationError {
+                    return
+                } catch {
+                    // §3-M3 (was `catch {}`, which drew a partial graph as if whole).
+                    _ = EngineGuard.fellBack(.v3Graphs, error: error)
+                    wholeEmailCount = nil
+                    buildAndSimulate(previousEngine: true)
+                    return
+                }
                 let finished = acc
                 let layout = await Task.detached(priority: .userInitiated) { () -> GraphLayout in
                     let layout = GraphLayout()

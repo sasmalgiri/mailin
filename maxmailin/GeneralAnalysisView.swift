@@ -30,6 +30,8 @@ struct GeneralAnalysisView: View {
     @State private var sentimentResults: [EmailNLPEngine.SentimentResult] = []
     @State private var anomalies: [AnomalyDetectionEngine.Anomaly] = []
     @State private var hasAnalyzed = false
+    /// §3-M3: set when the 3.0 engine failed and the previous one ran.
+    @State private var fallbackNote: String?
     @State private var isAnalyzing = false
 
     // v4: AI + Background + Digest
@@ -75,7 +77,13 @@ struct GeneralAnalysisView: View {
         }
         .overlay { if AnalysisCoordinator.isEnabled { AnalysisProgressOverlay(coordinator: coordinator) } }
         .featureTutorial(.general, key: "general_tutorial_seen", isPresented: $showTutorial)
-        .modifier(GeneralAnalysisNotice(v3: v3Analysis, shown: workingSet.count, total: archiveTotal))
+        .modifier(GeneralAnalysisNotice(v3: v3Analysis && fallbackNote == nil, shown: workingSet.count, total: archiveTotal))
+        .safeAreaInset(edge: .top) {
+            if let fallbackNote {
+                Text(fallbackNote).font(Typography.caption1).foregroundColor(AppColors.secondary)
+                    .fixedSize(horizontal: false, vertical: true).padding(.horizontal, Spacing.small)
+            }
+        }
         .task { archiveTotal = (try? await ArchiveDataService.shared.count()) ?? 0 }
         .task { await loadV3Data() }
         .task { await loadV4Data() }
@@ -103,8 +111,7 @@ struct GeneralAnalysisView: View {
         if loaded.nodeCount > 0 { graph = loaded; kgLoaded = true }
 
         guard !hasAnalyzed else { return }
-        if v3Analysis {
-            await loadWholeArchive(graph: kgLoaded ? graph : nil)
+        if v3Analysis, await loadWholeArchive(graph: kgLoaded ? graph : nil) {
             return
         }
         isAnalyzing = true
@@ -147,7 +154,9 @@ struct GeneralAnalysisView: View {
     }
 
     /// §3-A11 whole-archive path.
-    private func loadWholeArchive(graph: KnowledgeGraph?) async {
+    /// Returns false when the 3.0 engine failed and the caller should run the
+    /// previous engine (§3-M3; this used to end silently with no results).
+    private func loadWholeArchive(graph: KnowledgeGraph?) async -> Bool {
         isAnalyzing = true
         defer { isAnalyzing = false }
         do {
@@ -177,15 +186,26 @@ struct GeneralAnalysisView: View {
             v3Attachments = comp.attachmentCount
             v3Domains = comp.uniqueFromDomains
             archiveComposition = comp.finish(languageSample: sample.emails)
-            anomalies = (try? await AnomalyDetectionEngine.detectAnomalies(from: .shared)) ?? []
+            do {
+                anomalies = try await AnomalyDetectionEngine.detectAnomalies(from: .shared)
+            } catch {
+                // §3-M3: the previous detector on the sample, not a silent empty list.
+                if !(error is CancellationError) { fallbackNote = EngineGuard.fellBack(.v3AnalysisQueries, error: error) }
+                anomalies = AnomalyDetectionEngine.detectAnomalies(in: sample.emails)
+            }
             hasAnalyzed = true
             let emailsCopy = sample.emails
             trends = await Task.detached(priority: .userInitiated) { ArchiveInsightsFeatures.detectTrends(in: emailsCopy) }.value
             communicationPatterns = await Task.detached(priority: .userInitiated) {
                 ArchiveInsightsFeatures.analyzeCommunicationPatterns(emails: emailsCopy, graph: graph)
             }.value
+            return true
+        } catch is CancellationError {
+            return true
         } catch {
-            hasAnalyzed = true
+            fallbackNote = EngineGuard.fellBack(.v3AnalysisQueries, error: error)
+            workingSet = []
+            return false
         }
     }
 

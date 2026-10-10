@@ -501,10 +501,14 @@ struct BatesConfigView: View {
                                 .init(key: "Last", value: r.state.last ?? "—"),
                                 .init(key: "Already numbered (unchanged)", value: "\(r.state.skipped)")]),
                             .init(name: String(localized: "Job receipt"), fields: r.receipt.documentFields)]))
-                } catch {
+                } catch is CancellationError {
                     v3Status = nil
-                    exportMessage = error.localizedDescription
-                    showExportMessage = true
+                } catch {
+                    // §3-M3: the previous engine numbers the loaded emails
+                    // (it never renumbers either, finding #4).
+                    v3Status = EngineGuard.fellBack(.v3Bates, error: error)
+                    lastAssigned = manager.assignNumbers(to: emails).count
+                    assignmentComplete = true
                 }
             }
         }

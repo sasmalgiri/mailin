@@ -276,7 +276,11 @@ struct SmartAutoTaggerView: View {
                     let r = try await tagger.generateTagsWholeArchive()
                     wholeTags = r.tags
                     wholeNote = String(localized: "Tags saved for every email — \(r.receipt.coverageLine) The list below shows the newest emails, with Apple Intelligence suggestions.")
-                } catch { wholeNote = error.localizedDescription }
+                } catch is CancellationError {
+                } catch {
+                    // §3-M3: the previous engine's suggestions (above) stay on screen.
+                    wholeNote = EngineGuard.fellBack(.v3AnalysisQueries, error: error)
+                }
             }
         }
     }

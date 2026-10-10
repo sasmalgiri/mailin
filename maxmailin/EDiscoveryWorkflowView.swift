@@ -382,6 +382,8 @@ struct EDiscoveryWorkflowView: View {
     @State private var scopeConfirm: ScopeConfirmationRequest?
     @State private var v3HeldCount: Int?
     @State private var v3Running = false
+    /// §3-M3: prefixed to the next action message after a fallback.
+    @State private var fallbackPrefix: String?
     private var v3: Bool { modules?.isOn(.v3EDiscovery) ?? false }
 
     @State private var showResetConfirmation = false
@@ -438,7 +440,13 @@ struct EDiscoveryWorkflowView: View {
                         v3HeldCount = await EDiscoveryEngine.heldCount(scope: scope)
                         await ScopeJob.recordReceipt(r.receipt, registry: modules)
                         showActionMessage(String(localized: "Legal hold released — \(r.released) emails no longer protected"))
-                    } catch { showActionMessage(error.localizedDescription) }
+                    } catch is CancellationError {
+                    } catch {
+                        // §3-M3: the previous engine releases the loaded emails.
+                        let note = EngineGuard.fellBack(.v3EDiscovery, error: error)
+                        for email in emails { CustodianManager.shared.removeLegalHold(email.id) }
+                        showActionMessage(note + " " + String(localized: "Legal hold released — \(emails.count) emails no longer protected"))
+                    }
                 }
                 return
             }
@@ -907,15 +915,7 @@ struct EDiscoveryWorkflowView: View {
                 if holdCount < scopeCount {
                     Button {
                         if v3 { confirmApplyHold(); return }
-                        let collection = emails
-                        Task { @MainActor in
-                            CustodianManager.shared.placeLegalHold(on: collection)
-                            // Load stored seals first so existing originals are kept,
-                            // not replaced in memory by the current content.
-                            await ForensicManager.shared.prefetchForensicWindow(ids: collection.map(\.id))
-                            ForensicManager.shared.storeEmailHashes(collection)
-                            showActionMessage("Legal hold applied with evidence seals — \(collection.count) emails protected")
-                        }
+                        applyHoldPreviousEngine()
                     } label: {
                         Label("Apply Legal Hold", systemImage: "lock.shield")
                     }
@@ -1307,11 +1307,12 @@ struct EDiscoveryWorkflowView: View {
 
     // MARK: - Identification Search
 
-    private func runIdentificationSearch() {
+    /// `previousEngine`: the pre-3.0 path (switch off, or §3-M3 fallback).
+    private func runIdentificationSearch(previousEngine: Bool = false) {
         manager.startPhase(.identification)
-        if v3 {
+        if v3 && !previousEngine {
             let info = manager.caseInfo
-            runV3 {
+            runV3(previous: { runIdentificationSearch(previousEngine: true) }) {
                 let r = try await EDiscoveryEngine.identify(scope: scope, custodians: info.custodians,
                                                             start: info.dateRangeStart, end: info.dateRangeEnd)
                 identificationResults = (matching: r.matching, total: r.total, topDomains: r.topDomains)
@@ -1369,10 +1370,11 @@ struct EDiscoveryWorkflowView: View {
 
     // MARK: - Collection Verification
 
-    private func verifyCollection() {
-        if v3 {
+    /// `previousEngine`: the pre-3.0 path (switch off, or §3-M3 fallback).
+    private func verifyCollection(previousEngine: Bool = false) {
+        if v3 && !previousEngine {
             isVerifyingCollection = true
-            runV3 {
+            runV3(previous: { verifyCollection(previousEngine: true) }) {
                 defer { isVerifyingCollection = false }
                 let (state, receipt) = try await EDiscoveryEngine.verifyCollection(scope: scope)
                 collectionVerification = (passed: state.passed, failed: state.failed, unverified: state.newlySealed)
@@ -1412,10 +1414,11 @@ struct EDiscoveryWorkflowView: View {
     /// Classifies every email in the collection off the main thread, shows
     /// the counts, and records them as a numbered document — the audit entry
     /// is written only after the analysis has actually run.
-    private func runNLPAnalysis() {
-        if v3 {
+    /// `previousEngine`: the pre-3.0 path (switch off, or §3-M3 fallback).
+    private func runNLPAnalysis(previousEngine: Bool = false) {
+        if v3 && !previousEngine {
             isRunningNLP = true
-            runV3 {
+            runV3(previous: { runNLPAnalysis(previousEngine: true) }) {
                 defer { isRunningNLP = false }
                 let (sorted, receipt) = try await EDiscoveryEngine.classify(scope: scope)
                 nlpCategories = sorted
@@ -1459,15 +1462,16 @@ struct EDiscoveryWorkflowView: View {
     /// Creates real review batches (Review Batches panel) — privilege-flagged
     /// emails first, then grouped by category — instead of only a count list.
     /// Existing batches with review progress are never overwritten.
-    private func createReviewBatches() {
+    /// `previousEngine`: the pre-3.0 path (switch off, or §3-M3 fallback).
+    private func createReviewBatches(previousEngine: Bool = false) {
         let batchManager = ReviewBatchManager.shared
         let reviewedSoFar = batchManager.batches.reduce(0) { $0 + $1.reviewedIDs.count }
         if reviewedSoFar > 0 {
             showActionMessage("Review batches already exist with \(reviewedSoFar) emails reviewed — reset them in Review Batches before creating new ones")
             return
         }
-        if v3 {
-            runV3 {
+        if v3 && !previousEngine {
+            runV3(previous: { createReviewBatches(previousEngine: true) }) {
                 let r = try await EDiscoveryEngine.createReviewBatches(scope: scope)
                 privilegeScanCount = r.privileged
                 reviewBatches = r.categories
@@ -1504,13 +1508,39 @@ struct EDiscoveryWorkflowView: View {
 
     // MARK: - 3.0 whole-scope helpers
 
-    /// Runs a whole-scope action; errors are shown, never swallowed.
-    private func runV3(_ body: @escaping @MainActor () async throws -> Void) {
+    /// Runs a whole-scope action; errors are shown, never swallowed. With
+    /// `previous`, a 3.0 engine that throws falls back to the previous engine
+    /// for this call (§3-M3) and the result message says so.
+    private func runV3(previous: (@MainActor () -> Void)? = nil,
+                       _ body: @escaping @MainActor () async throws -> Void) {
         guard !v3Running else { return }
         v3Running = true
         Task { @MainActor in
             defer { v3Running = false }
-            do { try await body() } catch { showActionMessage(error.localizedDescription) }
+            do {
+                try await body()
+            } catch is CancellationError {
+            } catch {
+                if let previous {
+                    fallbackPrefix = EngineGuard.fellBack(.v3EDiscovery, error: error)
+                    previous()
+                } else {
+                    showActionMessage(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    /// The pre-3.0 hold: the loaded collection (switch off, or §3-M3 fallback).
+    private func applyHoldPreviousEngine() {
+        let collection = emails
+        Task { @MainActor in
+            CustodianManager.shared.placeLegalHold(on: collection)
+            // Load stored seals first so existing originals are kept,
+            // not replaced in memory by the current content.
+            await ForensicManager.shared.prefetchForensicWindow(ids: collection.map(\.id))
+            ForensicManager.shared.storeEmailHashes(collection)
+            showActionMessage("Legal hold applied with evidence seals — \(collection.count) emails protected")
         }
     }
 
@@ -1520,7 +1550,7 @@ struct EDiscoveryWorkflowView: View {
                 scope, title: String(localized: "Apply Legal Hold"), verb: String(localized: "Apply Hold"),
                 detail: String(localized: "Each email is sealed with its current content the first time it is held. Existing seals are never replaced.")
             ) {
-                runV3 {
+                runV3(previous: { applyHoldPreviousEngine() }) {
                     let r = try await EDiscoveryEngine.applyHold(scope: scope)
                     v3HeldCount = await EDiscoveryEngine.heldCount(scope: scope)
                     await ScopeJob.recordReceipt(r.receipt, registry: modules)
@@ -1845,8 +1875,11 @@ struct EDiscoveryWorkflowView: View {
     }
 
     private func showActionMessage(_ message: String) {
+        // §3-M3: the message that follows a fallback says so.
+        let text = fallbackPrefix.map { $0 + " " + message } ?? message
+        fallbackPrefix = nil
         withAnimation(AnimationTiming.fast) {
-            actionMessage = message
+            actionMessage = text
         }
         Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 3000000000)

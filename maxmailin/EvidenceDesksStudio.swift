@@ -428,7 +428,16 @@ struct EvidenceDeskEditorView: View {
                                 model.sources.append(contentsOf: r.entries.filter { !known.contains($0.source) })
                                 onSave(model)
                                 seedStatus = String(localized: "Top \(r.entries.count) of \(r.senders) senders — \(r.receipt.coverageLine)")
-                            } catch { seedStatus = error.localizedDescription }
+                            } catch is CancellationError {
+                                seedStatus = nil
+                            } catch {
+                                // §3-M3: the previous engine seeds from the working set.
+                                seedStatus = EngineGuard.fellBack(.v3EvidenceDesks, error: error)
+                                let seeded = SourceReliabilitySeeder.seed(from: workingSet)
+                                let known = Set(model.sources.map(\.source))
+                                model.sources.append(contentsOf: seeded.filter { !known.contains($0.source) })
+                                onSave(model)
+                            }
                         }
                         return
                     }

@@ -201,9 +201,17 @@ struct ThreadStoryView: View {
     private func load() async {
         defer { isLoading = false }
         if v3 {
-            members = (try? await ThreadStoryEngine.completeThread(of: email)) ?? [email]
-            truncated = false
-            return
+            do {
+                members = try await ThreadStoryEngine.completeThread(of: email)
+                truncated = false
+                return
+            } catch is CancellationError {
+                members = [email]
+                return
+            } catch {
+                // §3-M3 (was `try?`: one email shown as the whole thread).
+                _ = EngineGuard.fellBack(.v3Threads, error: error)
+            }
         }
         do {
             var ids: [UUID]
@@ -253,12 +261,29 @@ struct ThreadStoryView: View {
                     }
                 } catch is CancellationError {
                 } catch {
-                    narrative = String(localized: "The story could not be written: \(error.localizedDescription)")
+                    // §3-M3: the previous narrator tries; if it fails too, say why.
+                    let note = EngineGuard.fellBack(.v3Threads, error: error)
+                    do {
+                        _ = try await FoundationModelEngine.synthesizeThread(thread) { partial in
+                            guard !Task.isCancelled else { return }
+                            narrative = partial
+                        }
+                    } catch is CancellationError {
+                    } catch {
+                        narrative = note + " " + String(localized: "The story could not be written: \(error.localizedDescription)")
+                    }
                 }
             } else {
-                _ = try? await FoundationModelEngine.synthesizeThread(thread) { partial in
-                    guard !Task.isCancelled else { return }
-                    narrative = partial
+                // §8 #6: a long thread exceeds the model's window; this used to
+                // be `try?`, which left the story silently empty.
+                do {
+                    _ = try await FoundationModelEngine.synthesizeThread(thread) { partial in
+                        guard !Task.isCancelled else { return }
+                        narrative = partial
+                    }
+                } catch is CancellationError {
+                } catch {
+                    narrative = String(localized: "The story could not be written: \(error.localizedDescription)")
                 }
             }
             if !Task.isCancelled { isNarrating = false }

@@ -17,6 +17,8 @@ import AppKit
 #endif
 
 struct ArchiveAttachmentIndexView: View {
+    /// §3-M3: the list could not be read; the host falls back to its previous view.
+    var onFailure: (Error) -> Void = { _ in }
     @State private var rows: [SQLiteEmailStore.AttachmentRow] = []
     @State private var totals: (count: Int, bytes: Int64) = (0, 0)
     @State private var search = ""
@@ -69,7 +71,14 @@ struct ArchiveAttachmentIndexView: View {
         .task(id: search) {
             rows = []
             exhausted = false
-            totals = (try? await SQLiteEmailStore.shared.attachmentRowsTotals(nameContains: search)) ?? (0, 0)
+            do {
+                totals = try await SQLiteEmailStore.shared.attachmentRowsTotals(nameContains: search)
+            } catch is CancellationError {
+                return
+            } catch {
+                onFailure(error)
+                return
+            }
             await loadMore()
         }
         #if os(iOS)
@@ -85,8 +94,17 @@ struct ArchiveAttachmentIndexView: View {
         guard !loading, !exhausted else { return }
         loading = true
         defer { loading = false }
-        let page = (try? await SQLiteEmailStore.shared.attachmentRowsPage(after: rows.last?.rowID, nameContains: search,
-                                                                         limit: Self.pageSize)) ?? []
+        let page: [SQLiteEmailStore.AttachmentRow]
+        do {
+            page = try await SQLiteEmailStore.shared.attachmentRowsPage(after: rows.last?.rowID, nameContains: search,
+                                                                       limit: Self.pageSize)
+        } catch is CancellationError {
+            return
+        } catch {
+            exhausted = true
+            onFailure(error)
+            return
+        }
         rows += page
         if page.count < Self.pageSize { exhausted = true }
     }
@@ -127,6 +145,8 @@ struct ArchiveAttachmentIndexView: View {
 struct ArchiveSubjectGroupsView: View {
     /// Called with the ids of the emails carrying the tapped subject.
     var onSelect: (Set<UUID>) -> Void
+    /// §3-M3: the list could not be read; the host falls back to its previous view.
+    var onFailure: (Error) -> Void = { _ in }
 
     @State private var rows: [(subject: String, count: Int)] = []
     @State private var distinct = 0
@@ -178,9 +198,17 @@ struct ArchiveSubjectGroupsView: View {
         guard !loading, !exhausted else { return }
         loading = true
         defer { loading = false }
-        guard let page = try? await SQLiteEmailStore.shared.subjectGroups(query: ArchiveDataService.shared.scoped(.all),
-                                                                         limit: Self.pageSize, offset: rows.count) else {
-            exhausted = true; return
+        let page: (rows: [(subject: String, count: Int)], distinct: Int)
+        do {
+            let p = try await SQLiteEmailStore.shared.subjectGroups(query: ArchiveDataService.shared.scoped(.all),
+                                                                   limit: Self.pageSize, offset: rows.count)
+            page = (p.rows, p.distinct)
+        } catch is CancellationError {
+            return
+        } catch {
+            exhausted = true
+            onFailure(error)
+            return
         }
         distinct = page.distinct
         rows += page.rows

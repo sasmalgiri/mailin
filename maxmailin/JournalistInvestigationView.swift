@@ -140,7 +140,14 @@ struct JournalistInvestigationView: View {
         .workingSetLimitNotice(shown: workingSet.count, total: archiveTotal)
         .task {
             guard v3Modules?.isOn(.v3AnalysisQueries) ?? false else { return }
-            overview = try? await SQLiteEmailStore.shared.archiveOverview(query: ArchiveDataService.shared.scoped(.all))
+            do {
+                overview = try await SQLiteEmailStore.shared.archiveOverview(query: ArchiveDataService.shared.scoped(.all))
+            } catch is CancellationError {
+            } catch {
+                // §3-M3: the previous (working-set) figures stay, with their notice.
+                overview = nil
+                _ = EngineGuard.fellBack(.v3AnalysisQueries, error: error)
+            }
         }
         .task { await loadBoundedWorkingSet() }
         .task { await loadV3Data() }

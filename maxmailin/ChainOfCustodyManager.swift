@@ -590,8 +590,9 @@ struct ChainOfCustodyView: View {
         }
     }
 
-    private func verifyIntegrity() {
-        if v3 {
+    /// `previousEngine`: the pre-3.0 check (switch off, or §3-M3 fallback).
+    private func verifyIntegrity(previousEngine: Bool = false) {
+        if v3 && !previousEngine {
             isVerifying = true
             Task { @MainActor in
                 defer { isVerifying = false }
@@ -605,8 +606,10 @@ struct ChainOfCustodyView: View {
                         description: "Integrity verification: \(state.passed) passed, \(state.failed) failed, \(state.newlySealed) newly sealed — \(receipt.coverageLine)",
                         emailIDs: state.failedIDs)
                     await ScopeJob.recordReceipt(receipt, registry: modules)
+                } catch is CancellationError {
                 } catch {
-                    exportStatus = error.localizedDescription
+                    exportStatus = EngineGuard.fellBack(.v3ChainOfCustody, error: error)
+                    verifyIntegrity(previousEngine: true)
                 }
             }
             return

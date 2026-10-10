@@ -294,7 +294,7 @@ struct CustodianPanelView: View {
                 Spacer()
                 if let sel = selectedCustodian, sel != "__unassigned__" {
                     Button("Place All on Legal Hold") {
-                        if v3 { v3HoldAll(sel); return }
+                        if v3 { v3HoldAll(sel, visible: scopedEmails); return }
                         manager.placeLegalHold(on: scopedEmails)
                     }
                     .buttonStyle(CompactSecondaryButtonStyle())
@@ -302,7 +302,7 @@ struct CustodianPanelView: View {
                 }
                 let heldInScope = scopedEmails.filter { manager.isUnderLegalHold($0.id) }
                 if v3 {
-                    Button(String(localized: "Verify All Seals")) { v3VerifySeals() }
+                    Button(String(localized: "Verify All Seals")) { v3VerifySeals(visibleHeld: heldInScope) }
                         .buttonStyle(CompactSecondaryButtonStyle())
                         .disabled(v3Busy || manager.legalHolds.isEmpty)
                         .help("Recompute the hash of every held message in this group — the whole archive — and compare it to its seal")
@@ -395,7 +395,13 @@ struct CustodianPanelView: View {
                     let name = newCustodianName.trimmingCharacters(in: .whitespaces)
                     let group = selectedCustodian
                     newCustodianName = ""
-                    v3Run {
+                    let visibleIDs: [UUID] = {
+                        guard let sel = group else { return workingSet.map(\.id) }
+                        if sel == "__unassigned__" { return workingSet.filter { manager.custodian(for: $0.id) == nil }.map(\.id) }
+                        let ids = Set(manager.emailIDs(for: sel))
+                        return workingSet.filter { ids.contains($0.id) }.map(\.id)
+                    }()
+                    v3Run(previous: { manager.assignCustodian(name, to: visibleIDs) }) {
                         let n = try await CustodianEngine.assign(name, group: group)
                         v3Unassigned = await CustodianEngine.unassignedCount()
                         reportStatus = String(localized: "Assigned \(name) to \(n) emails.")
@@ -423,25 +429,39 @@ struct CustodianPanelView: View {
 
     // MARK: - 3.0 whole-archive actions
 
-    private func v3Run(_ body: @escaping @MainActor () async throws -> Void) {
+    /// Runs a whole-archive action. With `previous`, a 3.0 engine that throws
+    /// falls back to the previous engine for this call and says so (§3-M3).
+    private func v3Run(previous: (@MainActor () -> Void)? = nil,
+                       _ body: @escaping @MainActor () async throws -> Void) {
         guard !v3Busy else { return }
         v3Busy = true
         Task { @MainActor in
             defer { v3Busy = false }
-            do { try await body() } catch { reportStatus = error.localizedDescription }
+            do {
+                try await body()
+            } catch is CancellationError {
+            } catch {
+                if let previous {
+                    let note = EngineGuard.fellBack(.v3Custodians, error: error)
+                    previous()
+                    reportStatus = note
+                } else {
+                    reportStatus = error.localizedDescription
+                }
+            }
         }
     }
 
-    private func v3HoldAll(_ custodian: String) {
-        v3Run {
+    private func v3HoldAll(_ custodian: String, visible: [MBOXParser.RawEmail]) {
+        v3Run(previous: { manager.placeLegalHold(on: visible) }) {
             let r = try await CustodianEngine.holdAll(custodian: custodian)
             reportStatus = String(localized: "Legal hold placed on \(r.held) more emails of \(custodian) (\(r.total) assigned in the archive).")
         }
     }
 
-    private func v3VerifySeals() {
+    private func v3VerifySeals(visibleHeld: [MBOXParser.RawEmail]) {
         let group = selectedCustodian
-        v3Run {
+        v3Run(previous: { verifySeals(visibleHeld) }) {
             let r = try await CustodianEngine.verifySeals(group: group)
             sealVerdicts = r.verdicts
             sealSummaryIsBad = r.broken > 0 || r.unsealed > 0
@@ -454,9 +474,10 @@ struct CustodianPanelView: View {
         }
     }
 
-    private func exportCustodianReport() {
-        if v3 {
-            v3Run {
+    /// `previousEngine`: the pre-3.0 report (switch off, or §3-M3 fallback).
+    private func exportCustodianReport(previousEngine: Bool = false) {
+        if v3 && !previousEngine {
+            v3Run(previous: { exportCustodianReport(previousEngine: true) }) {
                 let report = try await CustodianEngine.report()
                 let outcome = PlatformExport.save(text: report, suggestedName: "custodian_report.txt")
                 if let url = outcome.url {

@@ -323,10 +323,14 @@ struct IOCExtractorView: View {
                 entries = r.entries
                 v3Scanned = r.receipt.processed
                 exportStatus = r.receipt.coverageLine
+                return
+            } catch is CancellationError {
+                return
             } catch {
-                exportStatus = error.localizedDescription
+                // §3-M3: the previous engine runs for this call (below).
+                exportStatus = EngineGuard.fellBack(.v3IOC, error: error)
+                v3Scanned = nil
             }
-            return
         }
         isExtracting = true
         let emailsCopy = emails

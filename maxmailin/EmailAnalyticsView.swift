@@ -951,11 +951,14 @@ struct EmailAnalyticsView: View {
                     ? String(localized: "Sentiment, PII and priority cover all \(r.note.total) emails; languages and topics use \(r.note.sampled) emails spread across them.")
                     : nil
                 withAnimation(AnimationTiming.normal) { analyticsData = r.data; isComputing = false }
-            } catch {
-                v3Note = error.localizedDescription
+                return
+            } catch is CancellationError {
                 isComputing = false
+                return
+            } catch {
+                // §3-M3: the previous engine runs for this call (below).
+                v3Note = EngineGuard.fellBack(.v3AnalysisQueries, error: error)
             }
-            return
         }
         // Bounded streaming over the injected scope from the activated store.
         let data = (try? await ArchiveFullAnalyticsService.shared.compute(scope: query)) ?? AnalyticsData()

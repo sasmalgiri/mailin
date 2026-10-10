@@ -470,12 +470,19 @@ struct KnowledgeGraphExplorerView: View {
                 for try await batch in ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 500) {
                     await Task.detached(priority: .userInitiated) { KnowledgeGraphBuilder.build(from: batch, into: newGraph) }.value
                 }
-            } catch {}
-            newGraph.save()
-            graph = newGraph
-            hasBuilt = true
-            isBuilding = false
-            return
+                newGraph.save()
+                graph = newGraph
+                hasBuilt = true
+                isBuilding = false
+                return
+            } catch is CancellationError {
+                isBuilding = false
+                return
+            } catch {
+                // §3-M3 (was `catch {}`, which saved a partial graph as whole):
+                // the previous engine builds from the loaded emails below.
+                _ = EngineGuard.fellBack(.v3Graphs, error: error)
+            }
         }
         let emailsCopy = emails
         await Task.detached(priority: .userInitiated) {

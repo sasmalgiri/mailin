@@ -414,8 +414,9 @@ struct NearDuplicateDetectionView: View {
         loadedGroupCount += keys.count
     }
 
-    private func analyze() {
-        if v3 {
+    /// `previousEngine`: run the pre-3.0 path (switch off, or §3-M3 fallback).
+    private func analyze(previousEngine: Bool = false) {
+        if v3 && !previousEngine {
             isAnalyzing = true
             removedGroupIDs.removeAll()
             let currentThreshold = threshold
@@ -432,8 +433,11 @@ struct NearDuplicateDetectionView: View {
                         summary: "Near-duplicates — \(r.groups) groups",
                         document: CapturedDocument(title: String(localized: "Near-Duplicate Detection"), sections: [
                             .init(name: String(localized: "Method and coverage"), fields: r.receiptFields)]))
+                } catch is CancellationError {
+                    v3Note = nil
                 } catch {
-                    v3Note = error.localizedDescription
+                    v3Note = EngineGuard.fellBack(.v3NearDuplicates, error: error)
+                    analyze(previousEngine: true)
                 }
             }
             return

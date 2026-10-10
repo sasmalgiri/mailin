@@ -293,4 +293,47 @@ final class V3CompatibilityTests: XCTestCase {
             XCTAssertTrue(r.matches, "\(tool): \(r.differences)")
         }
     }
+
+    // MARK: - M2: a tripped engine comes back once with a new version
+
+    func testTrippedEngine_restoredOnceInANewVersion_unlessTheUserChose() {
+        let env = makeEnv(engineOn: false)
+        ScopeJobEnvironment.$current.withValue(env.job) {
+            EngineGuard.saveTrips([
+                EngineTrip(capability: Capability.v3PIIReport.rawValue, date: Date(), appVersion: "3.0 (600)"),
+                EngineTrip(capability: Capability.v3IOC.rawValue, date: Date(), appVersion: "3.0 (600)"),
+                EngineTrip(capability: Capability.v3Bates.rawValue, date: Date(), appVersion: "3.0 (601)"),
+            ])
+            EngineGuard.noteUserChoice(.v3IOC)   // the user decided after the trip
+            let restored = EngineGuard.takeRestorableTrips(currentVersion: "3.0 (601)")
+            XCTAssertEqual(restored, [.v3PIIReport], "older-version trip comes back; the user's choice and a same-version trip stay")
+            XCTAssertTrue(EngineGuard.takeRestorableTrips(currentVersion: "3.0 (601)").isEmpty, "only once")
+            XCTAssertTrue(EngineGuard.takeRestorableTrips(currentVersion: "3.0 (602)").contains(.v3Bates),
+                          "the 601 trip gets its chance in 602")
+        }
+    }
+
+    // MARK: - M3: a fallback is recorded, audited and stated in the receipt
+
+    private struct Boom: LocalizedError { var errorDescription: String? { "boom" } }
+
+    func testFallback_isAuditedAndStatedInTheJobReceipt() async throws {
+        let env = makeEnv(engineOn: false)
+        try await env.store.insertBatch((0..<3).map { makeEmail($0, from: "a@a.com", tag: "fb") }, batchSize: 10)
+        try await ScopeJobEnvironment.$current.withValue(env.job) {
+            let (_, receipt) = try await ScopeJob.runIDs(
+                key: "test.fallback", title: "Fallback", capability: .v3PIIReport,
+                query: .all, batchSize: 10, initialState: 0
+            ) { n, page in
+                n += page.count
+                _ = EngineGuard.fellBack(.v3PIIReport, error: Boom())   // a seam inside the job fell back
+            }
+            XCTAssertEqual(receipt.fallbacks, 1)
+            XCTAssertTrue(receipt.coverageLine.contains("fell back"), receipt.coverageLine)
+            XCTAssertTrue(receipt.documentFields.contains { $0.key == "Calls that fell back to the previous engine" && $0.value == "1" })
+            XCTAssertTrue(env.job.auditLines().contains { $0.hasPrefix("Fell back to the previous engine") })
+        }
+        let message = await ScopeJobEnvironment.$current.withValue(env.job) { EngineGuard.fellBack(.v3IOC, error: Boom()) }
+        XCTAssertTrue(message.contains("boom") && message.contains("previous engine"), message)
+    }
 }

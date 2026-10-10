@@ -756,7 +756,14 @@ struct ThreadSummarizerView: View {
         if v3Modules?.isOn(.v3Threads) ?? false {
             let input = threadEmails
             Task { @MainActor in
-                let emails = (try? await ThreadStoryEngine.completeThreads(for: input)) ?? input
+                let emails: [MBOXParser.RawEmail]
+                do {
+                    emails = try await ThreadStoryEngine.completeThreads(for: input) ?? input
+                } catch {
+                    // §3-M3: the previous engine summarises the emails given.
+                    if !(error is CancellationError) { _ = EngineGuard.fellBack(.v3Threads, error: error) }
+                    emails = input
+                }
                 completeCount = emails.count
                 let result = await Task.detached(priority: .userInitiated) { ThreadSummarizer.summarizeThread(emails: emails) }.value
                 withAnimation(AnimationTiming.normal) {

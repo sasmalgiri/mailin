@@ -424,8 +424,9 @@ struct DuplicateManagerView: View {
         }
     }
 
-    private func scanForDuplicates() {
-        if v3 {
+    /// `previousEngine`: run the pre-3.0 path (switch off, or §3-M3 fallback).
+    private func scanForDuplicates(previousEngine: Bool = false) {
+        if v3 && !previousEngine {
             isScanning = true
             let includeNear = showNearDuplicates
             let threshold = similarityThreshold
@@ -452,8 +453,11 @@ struct DuplicateManagerView: View {
                         nearDuplicateGroups = []
                     }
                     v3Note = note
+                } catch is CancellationError {
+                    v3Note = nil
                 } catch {
-                    v3Note = error.localizedDescription
+                    v3Note = EngineGuard.fellBack(.v3Duplicates, error: error)
+                    scanForDuplicates(previousEngine: true)
                 }
             }
             return

@@ -578,8 +578,16 @@ struct KeywordMonitorView: View {
                                 .init(key: "Keywords", value: "\(keywordsCopy.count)"),
                                 .init(key: "Matches", value: "\(r.matches.count)")]),
                             .init(name: String(localized: "Job receipt"), fields: r.receipt.documentFields)]))
+                } catch is CancellationError {
+                    v3Error = nil
                 } catch {
-                    v3Error = error.localizedDescription
+                    // §3-M3: the previous engine runs for this call.
+                    v3Error = EngineGuard.fellBack(.v3KeywordMonitor, error: error)
+                    let emailsCopy = emails
+                    matches = await Task.detached(priority: .userInitiated) {
+                        KeywordMonitor.scan(emails: emailsCopy, keywords: keywordsCopy)
+                    }.value
+                    v3Scanned = nil
                 }
             }
             return

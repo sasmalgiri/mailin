@@ -160,7 +160,14 @@ struct ForensicReviewView: View {
         .task(id: forensicManager.evidenceTags.count) {
             // §3-A11: the coding dashboard over the whole archive (3.0).
             guard v3Modules?.isOn(.v3AnalysisQueries) ?? false else { wholeDashboard = nil; return }
-            wholeDashboard = try? await reviewManager.computeDashboardWholeArchive()
+            do {
+                wholeDashboard = try await reviewManager.computeDashboardWholeArchive()
+            } catch is CancellationError {
+            } catch {
+                // §3-M3: the previous (working-set) dashboard stays, with its notice.
+                wholeDashboard = nil
+                _ = EngineGuard.fellBack(.v3AnalysisQueries, error: error)
+            }
         }
         .task { await loadInitial() }
         .task { await loadForensicFeatures() }
@@ -198,6 +205,25 @@ struct ForensicReviewView: View {
         canLoadMore = page.nextCursor != nil
     }
 
+
+    /// §3-H4: every hit id of `query` (paged lists). nil = the 3.0 path
+    /// failed: the fallback is recorded and the previous ranked search runs
+    /// (§3-M3) — it used to show a silently partial list.
+    private func pagedSearchIDs(_ query: EmailQuery) async -> [UUID]? {
+        var ids: [UUID] = []
+        do {
+            for try await page in ArchiveDataService.shared.streamSummaries(query: query, batchSize: 1_000) {
+                ids.append(contentsOf: page.map(\.id))
+            }
+            return ids
+        } catch is CancellationError {
+            return ids
+        } catch {
+            _ = EngineGuard.fellBack(.v3PagedLists, error: error)
+            return nil
+        }
+    }
+
     private func runSearch() async {
         let q = filterSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else {
@@ -205,15 +231,9 @@ struct ForensicReviewView: View {
             if !v3SearchIDs.isEmpty { v3SearchIDs = []; canLoadMore = pageCursor != nil || pagedEmails.isEmpty }
             return
         }
-        if V3Paging.isOn {
-            var query = EmailQuery.all
-            query.text = q
-            var ids: [UUID] = []
-            do {
-                for try await page in ArchiveDataService.shared.streamSummaries(query: query, batchSize: 1_000) {
-                    ids.append(contentsOf: page.map(\.id))
-                }
-            } catch {}
+        var pagedQuery = EmailQuery.all
+        pagedQuery.text = q
+        if V3Paging.isOn, let ids = await pagedSearchIDs(pagedQuery) {
             v3SearchIDs = ids
             let first = Array(ids.prefix(100))
             searchHits = (try? await ArchiveDataService.shared.fullEmails(ids: first)) ?? []

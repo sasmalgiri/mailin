@@ -401,8 +401,9 @@ struct TopicClustersView: View {
     // `maxClusteringEmails` (10 000) inside kMeansPlusPlusClustering. Only
     // compact features (sentence vectors + term counts) are derived per email;
     // bodies are never retained beyond the working set already resident.
-    private func computeClusters() {
-        if v3 {
+    /// `previousEngine`: run the pre-3.0 path (switch off, or §3-M3 fallback).
+    private func computeClusters(previousEngine: Bool = false) {
+        if v3 && !previousEngine {
             isComputing = true
             Task { @MainActor in
                 defer { isComputing = false }
@@ -419,7 +420,12 @@ struct TopicClustersView: View {
                     }
                     let revision = (try? await ArchiveCorpusRevision.shared.current()) ?? 0
                     TopicClusterCache.save(clusters: snapshot, silhouette: r.silhouette, corpusRevision: revision)
-                } catch { v3Note = error.localizedDescription }
+                } catch is CancellationError {
+                    v3Note = nil
+                } catch {
+                    v3Note = EngineGuard.fellBack(.v3TopicClusters, error: error)
+                    computeClusters(previousEngine: true)
+                }
             }
             return
         }

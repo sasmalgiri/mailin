@@ -43,10 +43,12 @@ struct PluginManagerView: View {
                     isRunningAll = true
                     Task {
                         if v3Modules?.isOn(.v3AnalysisQueries) ?? false {
-                            let outcomes = await manager.runAllPluginsWholeArchive()
+                            let (outcomes, fellBack) = await manager.runAllPluginsWholeArchive(fallbackEmails: emails)
                             let timedOut = outcomes.values.reduce(0) { $0 + $1.timedOut }
                             let scanned = outcomes.values.map(\.emails).max() ?? 0
-                            v3Note = String(localized: "Ran over \(scanned) emails.") + (timedOut > 0 ? " " + String(localized: "\(timedOut) batch call(s) timed out and were skipped.") : "")
+                            v3Note = String(localized: "Ran over \(scanned) emails.")
+                                + (timedOut > 0 ? " " + String(localized: "\(timedOut) batch call(s) timed out and were skipped.") : "")
+                                + (fellBack > 0 ? " " + String(localized: "\(fellBack) plugin(s) stopped in the new runner and ran with the previous one on the loaded emails.") : "")
                         } else {
                             await manager.runAllPlugins(emails: emails)
                         }
@@ -165,9 +167,15 @@ struct PluginManagerView: View {
                 Button {
                     Task {
                         if v3Modules?.isOn(.v3AnalysisQueries) ?? false {
-                            if let outcome = try? await PluginRunnerV2.run(entry.plugin) {
+                            do {
+                                let outcome = try await PluginRunnerV2.run(entry.plugin)
                                 manager.recordWholeArchiveRun(pluginID: entry.id, findings: outcome.findings)
                                 v3Note = String(localized: "\(entry.name): \(outcome.findings.count) findings from \(outcome.emails) emails.")
+                            } catch is CancellationError {
+                            } catch {
+                                // §3-M3 (was `try?`, which showed nothing).
+                                v3Note = EngineGuard.fellBack(.v3AnalysisQueries, error: error)
+                                _ = await manager.runPlugin(id: entry.id, emails: emails)
                             }
                         } else {
                             _ = await manager.runPlugin(id: entry.id, emails: emails)

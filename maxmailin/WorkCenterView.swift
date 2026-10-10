@@ -815,6 +815,30 @@ struct WorkCenterView: View {
         await reloadDocuments()
     }
 
+    /// §3-H2: every open / released run, not only the latest 200. nil = the
+    /// paged read failed: the fallback is recorded and the previous list is
+    /// used (§3-M3) — a failure used to leave a silently partial list.
+    @MainActor
+    private func allRuns() async -> [SQLiteEmailStore.StoredInstance]? {
+        var all: [SQLiteEmailStore.StoredInstance] = []
+        let store = SQLiteEmailStore.shared
+        do {
+            for status in ["open", "released"] {
+                var offset = 0
+                while true {
+                    let page = try await store.instances(status: status, limit: 500, offset: offset)
+                    all += page
+                    if page.count < 500 { break }
+                    offset += page.count
+                }
+            }
+            return all
+        } catch {
+            if !(error is CancellationError) { _ = EngineGuard.fellBack(.v3PagedLists, error: error) }
+            return nil
+        }
+    }
+
     @MainActor
     private func reloadDocuments() async {
         let needle = docSearch.trimmingCharacters(in: .whitespaces)
@@ -1081,18 +1105,7 @@ struct WorkCenterView: View {
         await WorkflowService.seedBuiltins()
         personaTemplates = WorkflowCatalog.templates(for: personaRaw)
         if personaTemplates.isEmpty { personaTemplates = WorkflowCatalog.all }
-        if pagedLists {
-            // §3-H2: every open / released run, not only the latest 200.
-            var all: [SQLiteEmailStore.StoredInstance] = []
-            for status in ["open", "released"] {
-                var offset = 0
-                while true {
-                    let page = (try? await store.instances(status: status, limit: 500, offset: offset)) ?? []
-                    all += page
-                    if page.count < 500 { break }
-                    offset += page.count
-                }
-            }
+        if pagedLists, let all = await allRuns() {
             openRuns = all
         } else {
             openRuns = ((try? await store.instances(status: "open")) ?? [])

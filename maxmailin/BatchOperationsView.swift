@@ -140,7 +140,11 @@ struct BatchOperationsView: View {
 
     // MARK: - 3.0 whole scope
 
-    private func runWholeScope(_ ops: [BatchOperationsEngine.Operation], title: String, verb: String, done: @escaping (Int) -> String) {
+    /// `previous`: the pre-3.0 operation on the selected emails, run if the
+    /// 3.0 engine throws (§3-M3).
+    private func runWholeScope(_ ops: [BatchOperationsEngine.Operation], title: String, verb: String,
+                               previous: @escaping @MainActor () -> Void,
+                               done: @escaping (Int) -> String) {
         Task { @MainActor in
             scopeConfirm = await ScopeConfirm.request(scope, title: title, verb: verb) {
                 isProcessing = true
@@ -155,8 +159,12 @@ struct BatchOperationsView: View {
                     }
                     withAnimation(AnimationTiming.fast) { resultMessage = done(count) }
                     clearResultAfterDelay()
+                } catch is CancellationError {
+                    resultMessage = nil
                 } catch {
-                    resultMessage = error.localizedDescription
+                    let note = EngineGuard.fellBack(.v3BatchOperations, error: error)
+                    previous()
+                    resultMessage = note
                 }
             }
         }
@@ -473,7 +481,9 @@ struct BatchOperationsView: View {
         guard !tag.isEmpty else { return }
         if v3Whole {
             newTagName = ""
-            runWholeScope([.add(tag)], title: String(localized: "Apply Tag"), verb: String(localized: "Tag")) {
+            let selected = Array(selectedIDs)
+            runWholeScope([.add(tag)], title: String(localized: "Apply Tag"), verb: String(localized: "Tag"),
+                          previous: { onTagApplied(tag, selected) }) {
                 String(localized: "Tagged \($0) emails")
             }
             return
@@ -515,7 +525,9 @@ struct BatchOperationsView: View {
         if v3Whole {
             let tag = removeTagSelection
             removeTagSelection = ""
-            runWholeScope([.remove(tag)], title: String(localized: "Remove Tag"), verb: String(localized: "Remove")) {
+            let selected = Array(selectedIDs)
+            runWholeScope([.remove(tag)], title: String(localized: "Remove Tag"), verb: String(localized: "Remove"),
+                          previous: { ReviewStateService.shared.removeTag(tag, from: selected) }) {
                 String(localized: "Removed “\(tag)” from \($0) emails")
             }
             return
@@ -536,7 +548,9 @@ struct BatchOperationsView: View {
             }
             progressValue = 1.0
 
-            onTagApplied("", ids) // Empty tag signals removal
+            // §8 #5: remove only the chosen tag. `onTagApplied("")` cleared
+            // every tag on the emails, so "Remove tag X" removed all of them.
+            ReviewStateService.shared.removeTag(tag, from: ids)
 
             ForensicManager.shared.logAction(
                 "Bulk Tag Removed",
@@ -556,7 +570,9 @@ struct BatchOperationsView: View {
     private func performBulkClassification() {
         if v3Whole {
             let tag = selectedCategory.rawValue
-            runWholeScope([.add(tag)], title: String(localized: "Classify"), verb: String(localized: "Classify")) {
+            let selected = Array(selectedIDs)
+            runWholeScope([.add(tag)], title: String(localized: "Classify"), verb: String(localized: "Classify"),
+                          previous: { onTagApplied(tag, selected) }) {
                 String(localized: "Classified \($0) emails as \(tag)")
             }
             return
@@ -595,8 +611,10 @@ struct BatchOperationsView: View {
     private func performClearClassification() {
         if v3Whole {
             // Removes the classification tags only — other tags stay.
+            let selected = Array(selectedIDs)
             runWholeScope(BulkCategory.allCases.map { .remove($0.rawValue) },
-                          title: String(localized: "Clear Classification"), verb: String(localized: "Clear")) {
+                          title: String(localized: "Clear Classification"), verb: String(localized: "Clear"),
+                          previous: { for c in BulkCategory.allCases { ReviewStateService.shared.removeTag(c.rawValue, from: selected) } }) {
                 String(localized: "Cleared classification from \($0) emails")
             }
             return
@@ -615,7 +633,8 @@ struct BatchOperationsView: View {
             }
             progressValue = 1.0
 
-            onTagApplied("", ids) // Empty tag signals removal
+            // §8 #5: remove only the classification tags, not every tag.
+            for category in BulkCategory.allCases { ReviewStateService.shared.removeTag(category.rawValue, from: ids) }
 
             ForensicManager.shared.logAction(
                 "Bulk Classification Cleared",

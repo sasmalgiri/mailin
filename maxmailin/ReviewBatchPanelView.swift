@@ -17,6 +17,7 @@ struct ReviewBatchPanelView: View {
     @State private var hydrated: [UUID: MBOXParser.RawEmail] = [:]
     @State private var scopeTotal: Int?
     @State private var creating = false
+    @State private var fallbackNote: String?
     private var v3: Bool { modules?.isOn(.v3ReviewBatches) ?? false }
     private var createCount: Int { v3 ? (scopeTotal ?? emails.count) : emails.count }
 
@@ -112,7 +113,16 @@ struct ReviewBatchPanelView: View {
                             for try await page in ArchiveDataService.shared.streamSummaries(query: scope.query, batchSize: 5_000) {
                                 ids.append(contentsOf: page.map(\.id))
                             }
-                        } catch { return }
+                        } catch is CancellationError {
+                            return
+                        } catch {
+                            // §3-M3 (was a silent `return`): the previous engine
+                            // batches the loaded emails, and says so.
+                            fallbackNote = EngineGuard.fellBack(.v3ReviewBatches, error: error)
+                            manager.createBatches(from: emails.map(\.id), batchSize: size)
+                            hasCreatedBatches = true
+                            return
+                        }
                         manager.createBatches(from: ids, batchSize: size)
                         hasCreatedBatches = true
                         ForensicManager.shared.logAction("Review Batches Created",
@@ -128,6 +138,10 @@ struct ReviewBatchPanelView: View {
             .accessibilityLabel("Create \(max(1, (createCount + batchSize - 1) / max(1, batchSize))) review batches")
             .accessibilityHint("Splits \(createCount) emails into batches of \(batchSize)")
             if creating { ProgressView().controlSize(.small) }
+            if let fallbackNote {
+                Text(fallbackNote).font(Typography.caption1).foregroundColor(AppColors.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             Spacer()
         }
