@@ -126,6 +126,7 @@ struct FourPageShell: View {
             // switched off; say so once, with diagnostics to copy.
             EngineTripBanner()
             SafeModeBanner()
+            ScopeJobProgressBar()
             page
                 .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
                 .clipped()

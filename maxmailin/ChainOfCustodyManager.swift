@@ -94,6 +94,7 @@ final class ChainOfCustodyManager: ObservableObject {
         let event = CustodyEvent(eventType: type, actor: actor, description: description, emailIDs: emailIDs, hashBefore: hashBefore, hashAfter: hashAfter)
         events.append(event)
         saveEvents()
+        if LegalStateMirror.isEnabled { LegalStateMirror.shared.scheduleSync() }   // §3-F4 dual-write
         ForensicManager.shared.logAction("Chain of Custody: \(type.rawValue)", detail: description)
     }
 

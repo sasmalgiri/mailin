@@ -39,6 +39,11 @@ enum CapabilityWiring {
             ArchiveSnapshotPolicy.isEnabled = isOn
         case .v3SafeHTML:
             SafeHTMLPolicy.isEnabled = isOn
+        case .v3LegalState:
+            // §3-F4: the custodian/hold/seal manager dual-writes into SQLite
+            // while on; turning on migrates the existing files once.
+            LegalStateMirror.isEnabled = isOn
+            if isOn { Task { @MainActor in await LegalStateMirror.shared.activate() } }
         case .locatorReads:
             // S5. Off means the readers fall back to the stored raw MIME,
             // exactly as they did before the capability existed.
@@ -106,7 +111,6 @@ enum CapabilityWiring {
              .v3AIAnswers,
              .v3Graphs,
              .v3KeywordMonitor,
-             .v3LegalState,
              .v3EDiscovery,
              .v3Bates,
              .v3ChainOfCustody,

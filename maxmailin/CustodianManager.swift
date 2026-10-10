@@ -10,9 +10,11 @@ private let custodianLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "ma
 class CustodianManager: ObservableObject {
     static let shared = CustodianManager()
 
-    @Published var custodians: [UUID: String] = [:] { didSet { if _initialized { saveCustodians() } } }
-    @Published var legalHolds: Set<UUID> = [] { didSet { if _initialized { saveLegalHolds() } } }
-    @Published var evidenceSeals: [UUID: String] = [:] { didSet { if _initialized { saveSeals() } } }
+    // §3-F4: with `v3LegalState` on, every change is also mirrored into the
+    // archive database (coalesced); the files are always written.
+    @Published var custodians: [UUID: String] = [:] { didSet { if _initialized { saveCustodians(); mirror() } } }
+    @Published var legalHolds: Set<UUID> = [] { didSet { if _initialized { saveLegalHolds(); mirror() } } }
+    @Published var evidenceSeals: [UUID: String] = [:] { didSet { if _initialized { saveSeals(); mirror() } } }
     private var _initialized = false
 
     var defaultCustodian: String {
@@ -30,6 +32,26 @@ class CustodianManager: ObservableObject {
     private let custodiansURL = appSupportDir.appendingPathComponent("custodians.json")
     private let legalHoldsURL = appSupportDir.appendingPathComponent("legal_holds.json")
     private let sealsURL = appSupportDir.appendingPathComponent("evidence_seals.json")
+
+    private func mirror() {
+        if LegalStateMirror.isEnabled { LegalStateMirror.shared.scheduleSync() }
+    }
+
+    /// One assignment per collection, so the files are written once and the
+    /// database mirror gets one coalesced diff (v3 bulk path).
+    private var batching: Bool { LegalStateMirror.isEnabled }
+
+    /// Pulls rows written directly into the database by a whole-scope action
+    /// (§3-F4) into memory and therefore into the files. `nil` = unchanged.
+    func absorbFromDatabase(holds: Set<UUID>?, seals: [UUID: String]?, custodians newCustodians: [UUID: String]?) {
+        if let holds, holds != legalHolds { legalHolds = holds }
+        if let seals {
+            // Seals are set once: never replace an existing value.
+            let merged = evidenceSeals.merging(seals) { current, _ in current }
+            if merged.count != evidenceSeals.count { evidenceSeals = merged }
+        }
+        if let newCustodians, newCustodians != custodians { custodians = newCustodians }
+    }
 
     private init() {
         loadCustodians()
@@ -92,8 +114,14 @@ class CustodianManager: ObservableObject {
     }
 
     func assignCustodian(_ name: String, to emailIDs: [UUID]) {
-        for id in emailIDs {
-            custodians[id] = name
+        if batching {
+            var next = custodians
+            for id in emailIDs { next[id] = name }
+            custodians = next
+        } else {
+            for id in emailIDs {
+                custodians[id] = name
+            }
         }
         ForensicManager.shared.logAction("Custodian Assigned", detail: "\(name) assigned to \(emailIDs.count) emails")
     }
@@ -138,16 +166,24 @@ class CustodianManager: ObservableObject {
     }
 
     func placeLegalHold(on emailIDs: [UUID]) {
-        for id in emailIDs {
-            legalHolds.insert(id)
+        if batching {
+            legalHolds = legalHolds.union(emailIDs)
+        } else {
+            for id in emailIDs {
+                legalHolds.insert(id)
+            }
         }
         ForensicManager.shared.logAction("Legal Hold Placed", detail: "Legal hold placed on \(emailIDs.count) emails")
     }
 
     func placeLegalHold(on emails: [MBOXParser.RawEmail]) {
-        for email in emails {
-            legalHolds.insert(email.id)
-            sealEvidence(email)
+        if batching {
+            holdAndSealBatched(emails)
+        } else {
+            for email in emails {
+                legalHolds.insert(email.id)
+                sealEvidence(email)
+            }
         }
         ForensicManager.shared.logAction("Legal Hold Placed", detail: "Legal hold placed on \(emails.count) emails with evidence seals")
     }
@@ -157,17 +193,25 @@ class CustodianManager: ObservableObject {
     func placeLegalHoldBySource(_ sourceFormat: String, emails: [MBOXParser.RawEmail]) {
         let matching = emails.filter { ($0.headers["X-Source-Format"] ?? "").lowercased() == sourceFormat.lowercased() ||
             $0.rawSource.lowercased().contains(sourceFormat.lowercased()) }
-        for email in matching {
-            legalHolds.insert(email.id)
-            sealEvidence(email)
+        if batching {
+            holdAndSealBatched(matching)
+        } else {
+            for email in matching {
+                legalHolds.insert(email.id)
+                sealEvidence(email)
+            }
         }
         ForensicManager.shared.logAction("Bulk Legal Hold by Source", detail: "Legal hold placed on \(matching.count) emails from source: \(sourceFormat)")
     }
 
     func placeLegalHoldOnAll(_ emails: [MBOXParser.RawEmail]) {
-        for email in emails {
-            legalHolds.insert(email.id)
-            sealEvidence(email)
+        if batching {
+            holdAndSealBatched(emails)
+        } else {
+            for email in emails {
+                legalHolds.insert(email.id)
+                sealEvidence(email)
+            }
         }
         ForensicManager.shared.logAction("Bulk Legal Hold All", detail: "Legal hold placed on all \(emails.count) emails with evidence seals")
     }
@@ -179,10 +223,28 @@ class CustodianManager: ObservableObject {
         // re-seal with the current content — that would erase the evidence
         // that a held email was modified.
         guard evidenceSeals[email.id] == nil else { return }
+        evidenceSeals[email.id] = Self.sealHash(email)
+    }
+
+    /// The seal value for an email (unchanged definition; shared by the
+    /// single and batched paths so both produce identical seals).
+    static func sealHash(_ email: MBOXParser.RawEmail) -> String {
         let content = email.headers.sorted(by: { $0.key < $1.key }).map { "\($0.key): \($0.value)" }.joined(separator: "\n")
             + "\n\n" + email.plainBody + email.htmlBody
         let hash = SHA256.hash(data: Data(content.utf8))
-        evidenceSeals[email.id] = hash.compactMap { String(format: "%02x", $0) }.joined()
+        return hash.compactMap { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Holds + set-once seals for many emails with one assignment each.
+    private func holdAndSealBatched(_ emails: [MBOXParser.RawEmail]) {
+        var holds = legalHolds
+        var seals = evidenceSeals
+        for email in emails {
+            holds.insert(email.id)
+            if seals[email.id] == nil { seals[email.id] = Self.sealHash(email) }
+        }
+        legalHolds = holds
+        evidenceSeals = seals
     }
 
     func verifyEvidenceSeal(_ email: MBOXParser.RawEmail) -> SealVerification {

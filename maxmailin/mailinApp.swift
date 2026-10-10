@@ -75,6 +75,9 @@ struct mailinApp: App {
         SafeMode.recordLaunchStart()
         CapabilityWiring.applyStoreLevelEarly()
         DiagnosticsCenter.start()
+        // §3-S4: the continued-processing handler must be registered exactly
+        // once, before launch finishes (a second registration terminates).
+        ContinuedProcessing.register()
     }
 
     // MARK: - Scene Configuration

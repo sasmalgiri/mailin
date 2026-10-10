@@ -73,6 +73,10 @@ enum LaunchJobs {
                 AttachmentTextIndexJob.shared.kickIfNeeded(registry: modules.jobs)
             }
 
+            // §3-F5/F6: 3.0 per-email indexes; each is a no-op with its switch off.
+            FeatureIndexJob.shared.kickIfNeeded(registry: modules)
+            FingerprintJob.shared.kickIfNeeded(registry: modules)
+
             let reconcile = Task.detached(priority: .utility) {
                 let active = await StorageActivationCoordinator.shared.isActive
                 let store: any EmailArchiveStore = active ? SQLiteEmailStore.shared : EmailStore.shared

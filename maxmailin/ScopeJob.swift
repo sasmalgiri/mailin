@@ -1,0 +1,462 @@
+@testable import ArchiveCore
+//
+//  ScopeJob.swift
+//  maxmailin
+//
+//  The 3.0 whole-archive job engine (SCALE_TODO_3_0.md §3-F1, F2, S4, E1;
+//  switch: `v3ScopeEngine`).
+//
+//  A tool supplies only its per-batch step; the engine supplies everything a
+//  whole-archive action must have:
+//   • batches (flat memory at any archive size), progress, Cancel;
+//   • a crash breadcrumb (EngineGuard) and an iOS background assertion;
+//   • iPhone/iPad continued processing (BGContinuedProcessingTask) so a job
+//     keeps running after the user switches apps, with system progress UI;
+//   • a checkpoint after every batch — quit, crash, power cut or iOS kill
+//     resumes where it stopped, and the receipt says "resumed";
+//   • a receipt (§3-E1): scope, archive revision, counts, "X of Y read", and
+//     a fingerprint of exactly which emails were covered (order-independent,
+//     so it survives resume and is reproducible).
+//  The audit entry is the caller's to write — after `run` returns, i.e. after
+//  the work actually happened.
+//
+
+import Foundation
+import SwiftUI
+import CryptoKit
+#if os(iOS)
+import BackgroundTasks
+#endif
+
+// MARK: - Receipt
+
+struct ScopeJobReceipt: Codable, Sendable, Equatable {
+    let jobKey: String
+    let title: String
+    let capability: String
+    let scope: String
+    let archiveRevision: Int
+    let totalInScope: Int
+    let processed: Int
+    let unreadable: Int
+    let resumed: Bool
+    let cancelled: Bool
+    let startedAt: Date
+    let finishedAt: Date
+    /// Order-independent fingerprint of the processed email ids (hex).
+    let fingerprint: String
+
+    /// "X of Y" wording for status lines.
+    var coverageLine: String {
+        cancelled
+            ? String(localized: "Stopped after \(processed) of \(totalInScope) emails.")
+            : unreadable > 0
+                ? String(localized: "\(processed) of \(totalInScope) emails processed; \(unreadable) could not be read.")
+                : String(localized: "All \(processed) emails in scope processed.")
+    }
+
+    /// Fields for a structured document (DocumentRegistry.captureStructured).
+    var documentFields: [CapturedDocument.Field] {
+        let f = ISO8601DateFormatter()
+        return [
+            .init(key: "Job", value: title),
+            .init(key: "Scope", value: scope),
+            .init(key: "Archive revision", value: String(archiveRevision)),
+            .init(key: "Emails in scope", value: String(totalInScope)),
+            .init(key: "Emails processed", value: String(processed)),
+            .init(key: "Emails unreadable", value: String(unreadable)),
+            .init(key: "Resumed after interruption", value: resumed ? "yes" : "no"),
+            .init(key: "Cancelled", value: cancelled ? "yes" : "no"),
+            .init(key: "Started", value: f.string(from: startedAt)),
+            .init(key: "Finished", value: f.string(from: finishedAt)),
+            .init(key: "Email-set fingerprint", value: fingerprint),
+        ]
+    }
+}
+
+/// Order-independent multiset hash: each id's SHA-256 is added lane-wise
+/// (4 × UInt64, wrapping). Same set ⇒ same value regardless of order or of a
+/// resume in the middle; serialisable, so it is checkpointed.
+struct EmailSetFingerprint: Codable, Sendable, Equatable {
+    var lanes: [UInt64] = [0, 0, 0, 0]
+    var count = 0
+
+    mutating func add(_ id: UUID) {
+        let digest = SHA256.hash(data: Data(id.uuidString.utf8))
+        let bytes = Array(digest)
+        for lane in 0..<4 {
+            var v: UInt64 = 0
+            for b in 0..<8 { v = (v << 8) | UInt64(bytes[lane * 8 + b]) }
+            lanes[lane] = lanes[lane] &+ v
+        }
+        count += 1
+    }
+
+    var hex: String {
+        lanes.map { String(format: "%016llx", $0) }.joined() + "-\(count)"
+    }
+}
+
+// MARK: - Checkpoints (§3-F2)
+
+struct ScopeJobCheckpoint<State: Codable & Sendable>: Codable, Sendable {
+    var jobKey: String
+    var title: String
+    var capability: String
+    var query: EmailQuery
+    var cursorDate: Date?
+    var cursorID: UUID?
+    var processed: Int
+    var unreadable: Int
+    var total: Int
+    var fingerprint: EmailSetFingerprint
+    var state: State
+    var startedAt: Date
+    var appVersion: String
+}
+
+enum ScopeJobCheckpointStore {
+    static var directory: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return base.appendingPathComponent("ScopeJobs", isDirectory: true)
+    }
+    private static func url(_ key: String) -> URL {
+        directory.appendingPathComponent(key.replacingOccurrences(of: "[^A-Za-z0-9_.-]", with: "_", options: .regularExpression) + ".json")
+    }
+    static func save<S>(_ c: ScopeJobCheckpoint<S>) {
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try JSONEncoder().encode(c).write(to: url(c.jobKey), options: .atomic)
+        } catch { /* a missing checkpoint costs a restart, never data */ }
+    }
+    static func load<S>(_ key: String, as: S.Type) -> ScopeJobCheckpoint<S>? {
+        guard let data = try? Data(contentsOf: url(key)) else { return nil }
+        return try? JSONDecoder().decode(ScopeJobCheckpoint<S>.self, from: data)
+    }
+    static func remove(_ key: String) { try? FileManager.default.removeItem(at: url(key)) }
+
+    /// Job keys with an unfinished checkpoint (for "resume" offers).
+    static func pendingKeys() -> [String] {
+        ((try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? [])
+            .filter { $0.hasSuffix(".json") }.map { String($0.dropLast(5)) }
+    }
+}
+
+// MARK: - Progress center
+
+@MainActor
+@Observable
+final class ScopeJobCenter {
+    static let shared = ScopeJobCenter()
+
+    struct Running: Identifiable, Equatable {
+        let id: String       // job key
+        let title: String
+        var done: Int
+        var total: Int
+        var resumed: Bool
+    }
+
+    private(set) var running: [Running] = []
+    private var cancelled: Set<String> = []
+
+    func started(_ key: String, title: String, done: Int, total: Int, resumed: Bool) {
+        running.removeAll { $0.id == key }
+        running.append(Running(id: key, title: title, done: done, total: total, resumed: resumed))
+    }
+    func progress(_ key: String, done: Int, total: Int) {
+        guard let i = running.firstIndex(where: { $0.id == key }) else { return }
+        running[i].done = done
+        running[i].total = total
+    }
+    func finished(_ key: String) {
+        running.removeAll { $0.id == key }
+        cancelled.remove(key)
+    }
+    func cancel(_ key: String) { cancelled.insert(key) }
+    func isCancelled(_ key: String) -> Bool { cancelled.contains(key) }
+}
+
+// MARK: - Progress bar (shell)
+
+/// One row per running whole-archive job: title, "X of Y", progress, Cancel.
+/// Shown in the shell so a job stays visible whichever tool is open.
+struct ScopeJobProgressBar: View {
+    private var center: ScopeJobCenter { .shared }
+
+    var body: some View {
+        if !center.running.isEmpty {
+            VStack(spacing: 4) {
+                ForEach(center.running) { job in
+                    HStack(spacing: 8) {
+                        Text(job.title).font(.caption.weight(.semibold)).lineLimit(1)
+                        ProgressView(value: Double(job.done), total: Double(max(job.total, 1)))
+                            .frame(maxWidth: 220)
+                        Text("\(job.done.formatted()) of \(job.total.formatted())")
+                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        if job.resumed {
+                            Text("Resumed").font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button(String(localized: "Cancel")) { center.cancel(job.id) }
+                            .controlSize(.small)
+                    }
+                }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .background(.bar)
+        }
+    }
+}
+
+// MARK: - Runner
+
+enum ScopeJobError: LocalizedError {
+    case alreadyRunning(String)
+    var errorDescription: String? {
+        switch self { case .alreadyRunning(let t): return "“\(t)” is already running." }
+    }
+}
+
+@MainActor
+enum ScopeJob {
+    /// Runs `step` over every email in `query`, batch by batch.
+    ///
+    /// - Parameters:
+    ///   - key: stable job identity (used for resume; same key + same query
+    ///     resumes an unfinished run).
+    ///   - step: called per batch with the job's state; must be idempotent per
+    ///     batch (a crash inside a batch re-runs that batch on resume).
+    static func run<State: Codable & Sendable>(
+        key: String,
+        title: String,
+        capability: Capability,
+        query: EmailQuery,
+        batchSize: Int = 200,
+        initialState: State,
+        step: @MainActor (inout State, [MBOXParser.RawEmail]) async throws -> Void
+    ) async throws -> (state: State, receipt: ScopeJobReceipt) {
+        let center = ScopeJobCenter.shared
+        guard !center.running.contains(where: { $0.id == key }) else { throw ScopeJobError.alreadyRunning(title) }
+
+        let data = ArchiveDataService.shared
+        let total = (try? await data.count(query: query)) ?? 0
+        let revision = (try? await SQLiteEmailStore.shared.corpusRevision()) ?? 0
+
+        // Resume when an unfinished checkpoint for the same job and scope exists.
+        var cp: ScopeJobCheckpoint<State>
+        var resumed = false
+        if let saved = ScopeJobCheckpointStore.load(key, as: State.self), saved.query == query {
+            cp = saved
+            cp.total = total
+            resumed = true
+        } else {
+            cp = ScopeJobCheckpoint(jobKey: key, title: title, capability: capability.rawValue, query: query,
+                                    cursorDate: nil, cursorID: nil, processed: 0, unreadable: 0, total: total,
+                                    fingerprint: EmailSetFingerprint(), state: initialState,
+                                    startedAt: Date(), appVersion: EngineGuard.appVersion)
+        }
+
+        center.started(key, title: title, done: cp.processed, total: total, resumed: resumed)
+        defer { center.finished(key) }
+        let breadcrumb = EngineGuard.begin(capability)
+        defer { EngineGuard.end(breadcrumb) }
+        let assertion = BackgroundExecution.begin(title)
+        defer { BackgroundExecution.end(assertion) }
+        let continued = ContinuedProcessing.begin(title: title, total: total, done: cp.processed)
+        defer { ContinuedProcessing.end(continued, success: !center.isCancelled(key)) }
+
+        var wasCancelled = false
+        func shouldStop() -> Bool {
+            center.isCancelled(key) || assertion.isExpiring || ContinuedProcessing.isExpired(continued) || Task.isCancelled
+        }
+
+        func handle(_ emails: [MBOXParser.RawEmail], requested: Int) async throws {
+            try await step(&cp.state, emails)
+            for e in emails { cp.fingerprint.add(e.id) }
+            cp.processed += emails.count
+            cp.unreadable += max(0, requested - emails.count)
+            center.progress(key, done: cp.processed, total: total)
+            ContinuedProcessing.progress(continued, done: cp.processed, total: total)
+            ScopeJobCheckpointStore.save(cp)
+        }
+
+        if let text = query.text, !text.isEmpty {
+            // Ranked full-text scopes: resume by skipping what was processed
+            // (the ranked order is stable for an unchanged archive).
+            var toSkip = cp.processed
+            for try await batch in data.streamFullEmails(query: query, batchSize: batchSize) {
+                if shouldStop() { wasCancelled = true; break }
+                var emails = batch
+                if toSkip > 0 {
+                    let drop = min(toSkip, emails.count)
+                    emails.removeFirst(drop)
+                    toSkip -= drop
+                    if emails.isEmpty { continue }
+                }
+                try await handle(emails, requested: emails.count)
+            }
+        } else {
+            var cursor: EmailPageCursor? = cp.cursorDate.flatMap { d in cp.cursorID.map { EmailPageCursor(beforeDate: d, beforeID: $0) } }
+            while true {
+                if shouldStop() { wasCancelled = true; break }
+                let page = try await data.page(query: query, cursor: cursor, limit: batchSize)
+                if page.summaries.isEmpty { break }
+                let emails = (try? await data.fullEmails(ids: page.summaries.map(\.id))) ?? []
+                try await handle(emails, requested: page.summaries.count)
+                guard let next = page.nextCursor else { break }
+                cursor = next
+                cp.cursorDate = next.beforeDate
+                cp.cursorID = next.beforeID
+                ScopeJobCheckpointStore.save(cp)
+            }
+        }
+
+        // A cancelled run keeps its checkpoint so it can be resumed; a
+        // finished one removes it.
+        if !wasCancelled { ScopeJobCheckpointStore.remove(key) }
+        let receipt = ScopeJobReceipt(
+            jobKey: key, title: title, capability: capability.rawValue,
+            scope: ScopeJob.describe(query), archiveRevision: revision,
+            totalInScope: total, processed: cp.processed, unreadable: cp.unreadable,
+            resumed: resumed, cancelled: wasCancelled,
+            startedAt: cp.startedAt, finishedAt: Date(), fingerprint: cp.fingerprint.hex)
+        return (cp.state, receipt)
+    }
+
+    /// Ids-only variant for actions that need no bodies (holds, tags, Bates):
+    /// walks summaries, never hydrates emails.
+    static func runIDs<State: Codable & Sendable>(
+        key: String, title: String, capability: Capability, query: EmailQuery,
+        batchSize: Int = 1_000, initialState: State,
+        step: @MainActor (inout State, [EmailSummary]) async throws -> Void
+    ) async throws -> (state: State, receipt: ScopeJobReceipt) {
+        let center = ScopeJobCenter.shared
+        guard !center.running.contains(where: { $0.id == key }) else { throw ScopeJobError.alreadyRunning(title) }
+        let data = ArchiveDataService.shared
+        let total = (try? await data.count(query: query)) ?? 0
+        let revision = (try? await SQLiteEmailStore.shared.corpusRevision()) ?? 0
+        center.started(key, title: title, done: 0, total: total, resumed: false)
+        defer { center.finished(key) }
+        let breadcrumb = EngineGuard.begin(capability)
+        defer { EngineGuard.end(breadcrumb) }
+        let assertion = BackgroundExecution.begin(title)
+        defer { BackgroundExecution.end(assertion) }
+
+        var state = initialState
+        var fingerprint = EmailSetFingerprint()
+        var processed = 0
+        var cancelled = false
+        let started = Date()
+        for try await page in data.streamSummaries(query: query, batchSize: batchSize) {
+            if center.isCancelled(key) || assertion.isExpiring || Task.isCancelled { cancelled = true; break }
+            try await step(&state, page)
+            for s in page { fingerprint.add(s.id) }
+            processed += page.count
+            center.progress(key, done: processed, total: total)
+        }
+        let receipt = ScopeJobReceipt(
+            jobKey: key, title: title, capability: capability.rawValue, scope: describe(query),
+            archiveRevision: revision, totalInScope: total, processed: processed, unreadable: 0,
+            resumed: false, cancelled: cancelled, startedAt: started, finishedAt: Date(),
+            fingerprint: fingerprint.hex)
+        return (state, receipt)
+    }
+
+    /// Human-readable scope for receipts.
+    nonisolated static func describe(_ q: EmailQuery) -> String {
+        var parts: [String] = []
+        if let t = q.text, !t.isEmpty { parts.append("search “\(t)”") }
+        if let s = q.sender { parts.append("from \(s)") }
+        if let r = q.recipient { parts.append("to \(r)") }
+        if let d = q.domain { parts.append("domain \(d)") }
+        if let tag = q.userTag { parts.append("tag \(tag)") }
+        if let a = q.afterDate { parts.append("after \(ISO8601DateFormatter().string(from: a))") }
+        if let b = q.beforeDate { parts.append("before \(ISO8601DateFormatter().string(from: b))") }
+        if let f = q.sourceFileName { parts.append("source \(f)") }
+        return parts.isEmpty ? "whole archive" : parts.joined(separator: ", ")
+    }
+
+    /// Records a finished job as a numbered, sealed document (§3-E1) when the
+    /// receipts engine is on. Returns the document number.
+    @discardableResult
+    static func recordReceipt(_ receipt: ScopeJobReceipt, type: DocumentType = .report,
+                              extra: [CapturedDocument.Field] = [], registry: ModuleRegistry?) async -> String? {
+        guard registry?.isOn(.v3EvidenceReceipts) ?? false else { return nil }
+        let doc = CapturedDocument(title: receipt.title, sections: [
+            .init(name: String(localized: "Job receipt"), fields: receipt.documentFields + extra)
+        ])
+        return await DocumentRegistry.captureStructured(type, summary: "\(receipt.title) — \(receipt.coverageLine)", document: doc)
+    }
+}
+
+// MARK: - iPhone/iPad continued processing (§3-S4)
+
+/// Keeps a user-started job running after the app leaves the screen, with the
+/// system's progress UI and Cancel. iOS 26+; a no-op elsewhere (macOS has no
+/// such limit; older iOS uses the background assertion only).
+@MainActor
+enum ContinuedProcessing {
+    static let identifierPrefix = "com.ecosanskriti.mailin.scopejob"
+
+    final class Handle {
+        fileprivate var task: AnyObject?
+        fileprivate var expired = false
+        fileprivate let submitted: String?
+        fileprivate init(submitted: String?) { self.submitted = submitted }
+    }
+
+    private static var pending: [String: Handle] = [:]
+
+    /// Registers the launch handler. Call once, early at launch.
+    static func register() {
+        #if os(iOS)
+        if #available(iOS 26, *) {
+            BGTaskScheduler.shared.register(forTaskWithIdentifier: identifierPrefix + ".*", using: .main) { task in
+                guard let task = task as? BGContinuedProcessingTask else { task.setTaskCompleted(success: false); return }
+                MainActor.assumeIsolated {
+                    guard let handle = pending[task.identifier] else { task.setTaskCompleted(success: true); return }
+                    handle.task = task
+                    task.expirationHandler = { MainActor.assumeIsolated { handle.expired = true } }
+                }
+            }
+        }
+        #endif
+    }
+
+    static func begin(title: String, total: Int, done: Int) -> Handle {
+        #if os(iOS)
+        if #available(iOS 26, *) {
+            let id = identifierPrefix + "." + UUID().uuidString
+            let request = BGContinuedProcessingTaskRequest(identifier: id, title: title,
+                                                           subtitle: String(localized: "\(done) of \(total) emails"))
+            request.strategy = .queue
+            let handle = Handle(submitted: id)
+            pending[id] = handle
+            do { try BGTaskScheduler.shared.submit(request) } catch { pending[id] = nil }
+            return handle
+        }
+        #endif
+        return Handle(submitted: nil)
+    }
+
+    static func progress(_ handle: Handle, done: Int, total: Int) {
+        #if os(iOS)
+        if #available(iOS 26, *), let task = handle.task as? BGContinuedProcessingTask {
+            task.progress.totalUnitCount = Int64(max(total, 1))
+            task.progress.completedUnitCount = Int64(done)
+        }
+        #endif
+    }
+
+    static func isExpired(_ handle: Handle) -> Bool { handle.expired }
+
+    static func end(_ handle: Handle, success: Bool) {
+        #if os(iOS)
+        if #available(iOS 26, *), let task = handle.task as? BGContinuedProcessingTask {
+            task.setTaskCompleted(success: success)
+        }
+        #endif
+        if let id = handle.submitted { pending[id] = nil }
+    }
+}

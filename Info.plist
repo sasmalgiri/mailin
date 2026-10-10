@@ -5,6 +5,7 @@
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>com.ecosanskriti.mailin.backgroundAnalysis</string>
+		<string>com.ecosanskriti.mailin.scopejob.*</string>
 	</array>
 	<key>CFBundleDocumentTypes</key>
 	<array>

@@ -21,6 +21,9 @@ struct ArchiveHealthView: View {
     @State private var freeBytes: Int64?
     @State private var note: String?
     @State private var working = false
+    @State private var featureCoverage: (indexed: Int, total: Int) = (0, 0)
+    @State private var fingerprintRoot: String?
+    @State private var legalCounts: SQLiteEmailStore.LegalStateCounts?
 
     private static let lastIntegrityKey = "archiveHealth.lastIntegrity"
     private static let lastIntegrityDateKey = "archiveHealth.lastIntegrityDate"
@@ -81,6 +84,22 @@ struct ArchiveHealthView: View {
                 LabeledContent(String(localized: "Emails analysed"),
                                value: "\(coverage.analyzed.formatted()) of \(coverage.total.formatted())")
                 ProgressView(value: pct)
+                if modules.isOn(.v3FeatureIndex) {
+                    let fp = featureCoverage.total > 0 ? Double(featureCoverage.indexed) / Double(featureCoverage.total) : 0
+                    LabeledContent(String(localized: "Per-email analysis index (3.0)"),
+                                   value: "\(featureCoverage.indexed.formatted()) of \(featureCoverage.total.formatted())")
+                    ProgressView(value: fp)
+                }
+                if modules.isOn(.v3Fingerprints) {
+                    LabeledContent(String(localized: "Archive fingerprint")) {
+                        Text(fingerprintRoot.map { String($0.prefix(16)) + "…" } ?? String(localized: "Not built yet"))
+                            .font(.caption.monospaced()).textSelection(.enabled)
+                    }
+                }
+                if modules.isOn(.v3LegalState), let legalCounts {
+                    LabeledContent(String(localized: "Legal data in the database"),
+                                   value: String(localized: "\(legalCounts.holds) holds, \(legalCounts.seals) seals, \(legalCounts.custodians) custodian assignments"))
+                }
             }
 
             Section("3.0 engines") {
@@ -139,7 +158,12 @@ struct ArchiveHealthView: View {
     }
 
     private func loadCoverage() async {
-        coverage = (try? await SQLiteEmailStore.shared.derivedAnalysisCoverage()) ?? (0, 0)
+        let store = SQLiteEmailStore.shared
+        coverage = (try? await store.derivedAnalysisCoverage()) ?? (0, 0)
+        featureCoverage = (try? await store.featureCoverage(version: FeatureExtractor.version)) ?? (0, 0)
+        fingerprintRoot = FingerprintJob.shared.root
+        if fingerprintRoot == nil, let tree = try? await store.fingerprintTree(), tree.leaves > 0 { fingerprintRoot = tree.root }
+        legalCounts = try? await store.legalStateCounts()
     }
 
     private func runCheck() async {

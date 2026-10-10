@@ -740,7 +740,8 @@ actor SQLiteEmailStore: EmailArchiveStore {
     ///
     ///   v14 = raw-MIME blob tier (S3b)
     ///   v15 = message locators (S4/S5)
-    static let currentSchemaVersion = 18
+    ///   v19 = 3.0 legal state, fingerprint tree, feature index (additive)
+    static let currentSchemaVersion = 19
 
     private func migrateSchema(_ handle: OpaquePointer) throws {
         var v = try scalarInt(handle, "PRAGMA user_version;")
@@ -1159,6 +1160,122 @@ actor SQLiteEmailStore: EmailArchiveStore {
             try exec(handle, "PRAGMA user_version = 18;")
             v = 18
         }
+        if v < 19 {
+            // v19 (3.0 F4/F5/F6): additive only — new tables, no existing
+            // column or row changes, so a 2.x/3.0-switch-off code path reads
+            // the database exactly as before. A snapshot is taken before this
+            // runs when snapshots are on (ensureDB).
+            try inExclusiveTransaction(handle) {
+                try createSchemaV19(handle)
+                try exec(handle, "PRAGMA user_version = 19;")
+            }
+            v = 19
+        }
+    }
+
+    /// v19 tables. Every statement is IF NOT EXISTS.
+    private func createSchemaV19(_ handle: OpaquePointer) throws {
+        // F4 — legal state in the database (the JSON files stay as a mirror).
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS legal_holds(
+                email_id  TEXT PRIMARY KEY,
+                matter    TEXT NOT NULL DEFAULT '',
+                placed_at INTEGER NOT NULL
+            );
+        """)
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS evidence_seals(
+                email_id  TEXT PRIMARY KEY,
+                sha256    TEXT NOT NULL,
+                sealed_at INTEGER NOT NULL
+            );
+        """)
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS custodian_assignments(
+                email_id    TEXT PRIMARY KEY,
+                custodian   TEXT NOT NULL,
+                assigned_at INTEGER NOT NULL
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_custodian_name ON custodian_assignments(custodian);")
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS custody_events(
+                event_id TEXT PRIMARY KEY,
+                email_id TEXT,
+                at       INTEGER NOT NULL,
+                payload  BLOB NOT NULL
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_custody_events_email ON custody_events(email_id, at);")
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS review_coding(
+                workspace  TEXT NOT NULL,
+                email_id   TEXT NOT NULL,
+                field      TEXT NOT NULL,
+                value      TEXT NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY(workspace, email_id, field)
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_review_coding_field ON review_coding(workspace, field, value);")
+        // F5 — fingerprint tree: one leaf per email, one root per month.
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS fingerprints(
+                email_id TEXT PRIMARY KEY,
+                leaf     TEXT NOT NULL,
+                bucket   INTEGER NOT NULL,
+                built_at INTEGER NOT NULL
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_fingerprints_bucket ON fingerprints(bucket);")
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS fingerprint_buckets(
+                bucket   INTEGER PRIMARY KEY,
+                root     TEXT NOT NULL,
+                leaves   INTEGER NOT NULL,
+                built_at INTEGER NOT NULL
+            );
+        """)
+        // F6 — per-email feature index (versioned, incremental).
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS features(
+                email_id        TEXT PRIMARY KEY,
+                feature_version INTEGER NOT NULL,
+                pii_flags       INTEGER NOT NULL DEFAULT 0,
+                privilege       INTEGER NOT NULL DEFAULT 0,
+                language        TEXT,
+                spf             TEXT,
+                dkim            TEXT,
+                dmarc           TEXT,
+                threat_score    REAL,
+                mih             TEXT,
+                ioc_count       INTEGER NOT NULL DEFAULT 0,
+                embedding       BLOB,
+                updated_at      INTEGER NOT NULL
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_features_version ON features(feature_version);")
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_features_pii ON features(pii_flags) WHERE pii_flags != 0;")
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_features_priv ON features(privilege) WHERE privilege != 0;")
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_features_mih ON features(mih);")
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS ioc_rows(
+                email_id TEXT NOT NULL,
+                kind     TEXT NOT NULL,
+                value    TEXT NOT NULL
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_ioc_kind_value ON ioc_rows(kind, value);")
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_ioc_email ON ioc_rows(email_id);")
+        try exec(handle, """
+            CREATE TABLE IF NOT EXISTS minhash_bands(
+                band     INTEGER NOT NULL,
+                hash     INTEGER NOT NULL,
+                email_id TEXT NOT NULL
+            );
+        """)
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_minhash_band ON minhash_bands(band, hash);")
+        try exec(handle, "CREATE INDEX IF NOT EXISTS idx_minhash_email ON minhash_bands(email_id);")
     }
 
     // MARK: - Per-source index coverage (v18, 3.0 A6)
@@ -5099,9 +5216,16 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     // MARK: - Mutation
 
-    func delete(ids: Set<UUID>) throws {
-        guard !ids.isEmpty else { return }
+    func delete(ids requested: Set<UUID>) throws {
+        guard !requested.isEmpty else { return }
         let db = try ensureDB()
+        // 3.0 F4: defence in depth — an email under a legal hold recorded in
+        // the database is never deleted, whichever caller asks. The table is
+        // only populated by the v3LegalState engine, so with it off this is a
+        // no-op and behaviour is unchanged.
+        let held = try legalHeldAmong(Array(requested))
+        let ids = requested.subtracting(held)
+        guard !ids.isEmpty else { return }
         let now = Int64(Date().timeIntervalSince1970)
         try exec(db, "BEGIN TRANSACTION;")
         do {
@@ -5126,7 +5250,9 @@ actor SQLiteEmailStore: EmailArchiveStore {
                                      ("email_tags", "email_id"), ("email_domains", "email_id"),
                                      ("email_review_state", "email_id"), ("email_user_tags", "email_id"),
                                      ("email_annotations", "email_id"), ("duplicates", "duplicate_id"),
-                                     ("attachment_search", "email_id"), ("attachment_text_state", "email_id")] {
+                                     ("attachment_search", "email_id"), ("attachment_text_state", "email_id"),
+                                     ("features", "email_id"), ("ioc_rows", "email_id"),
+                                     ("minhash_bands", "email_id"), ("fingerprints", "email_id")] {
                     let stmt = try prepare(db, "DELETE FROM \(table) WHERE \(col) IN (\(placeholders));")
                     defer { sqlite3_finalize(stmt) }
                     for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
@@ -5146,7 +5272,8 @@ actor SQLiteEmailStore: EmailArchiveStore {
                       "predictive_records", "near_dup_findings", "sources", "attachments",
                       "email_participants", "email_tags", "email_domains",
                       "email_review_state", "email_user_tags", "email_annotations",
-                      "attachment_search", "attachment_text_state", "deletion_tombstones"] {
+                      "attachment_search", "attachment_text_state", "deletion_tombstones",
+                      "features", "ioc_rows", "minhash_bands", "fingerprints", "fingerprint_buckets"] {
             try exec(db, "DELETE FROM \(table);")
         }
     }
@@ -5340,6 +5467,961 @@ actor SQLiteEmailStore: EmailArchiveStore {
     private func lastError(_ db: OpaquePointer) -> String {
         guard let c = sqlite3_errmsg(db) else { return "unknown error" }
         return String(cString: c)
+    }
+}
+
+// MARK: - 3.0 engines: legal state (F4), fingerprint tree (F5), feature index (F6)
+//
+// In this file because the SQLite helpers above are private. Only the v3
+// engines call these; with their switches off the v19 tables stay empty.
+
+extension SQLiteEmailStore {
+
+    // MARK: Shared batch helpers
+
+    /// Runs one prepared statement per id (chunks of 500 per transaction).
+    private func perID(_ db: OpaquePointer, _ sql: String, _ ids: [UUID],
+                       bind: (OpaquePointer?, UUID) -> Void = { _, _ in }) throws -> Int {
+        guard !ids.isEmpty else { return 0 }
+        let stmt = try prepare(db, sql)
+        defer { sqlite3_finalize(stmt) }
+        var changed = 0
+        for chunk in ids.chunked(into: 500) {
+            try exec(db, "BEGIN TRANSACTION;")
+            do {
+                for id in chunk {
+                    sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                    bindText(stmt, 1, id.uuidString)
+                    bind(stmt, id)
+                    guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+                    changed += Int(sqlite3_changes(db))
+                }
+                try exec(db, "COMMIT;")
+            } catch { try? exec(db, "ROLLBACK;"); throw error }
+        }
+        return changed
+    }
+
+    /// The ids among `ids` present in `table` (keyed by email_id).
+    private func present(in table: String, among ids: [UUID]) throws -> Set<UUID> {
+        guard !ids.isEmpty else { return [] }
+        let db = try ensureDB()
+        var out = Set<UUID>()
+        for chunk in ids.chunked(into: 500) {
+            let marks = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, "SELECT email_id FROM \(table) WHERE email_id IN (\(marks));")
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.insert(id) } }
+        }
+        return out
+    }
+
+    private func allIDs(in table: String) throws -> Set<UUID> {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT email_id FROM \(table);")
+        defer { sqlite3_finalize(stmt) }
+        var out = Set<UUID>()
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.insert(id) } }
+        return out
+    }
+
+    // MARK: F4 — legal holds
+
+    /// Places holds; returns how many were newly placed.
+    @discardableResult
+    func legalHoldsAdd(_ ids: [UUID], matter: String = "") throws -> Int {
+        let db = try ensureDB()
+        let now = Int64(Date().timeIntervalSince1970)
+        return try perID(db, "INSERT OR IGNORE INTO legal_holds(email_id, matter, placed_at) VALUES (?,?,?);", ids) { stmt, _ in
+            self.bindText(stmt, 2, matter)
+            sqlite3_bind_int64(stmt, 3, now)
+        }
+    }
+
+    /// Places holds on every email matching a NON-TEXT query in one statement
+    /// (text scopes go through ScopeJob.runIDs + `legalHoldsAdd(_:)`).
+    @discardableResult
+    func legalHoldsAdd(query: EmailQuery, matter: String = "") throws -> Int {
+        precondition(query.text?.isEmpty ?? true, "text scopes must be resolved to ids first")
+        let db = try ensureDB()
+        let (clauses, binds) = Self.filterClauses(query)
+        let whereSQL = clauses.isEmpty ? "1=1" : clauses.joined(separator: " AND ")
+        let stmt = try prepare(db, """
+            INSERT OR IGNORE INTO legal_holds(email_id, matter, placed_at)
+            SELECT e.id, ?, ? FROM emails e WHERE \(whereSQL);
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, matter)
+        sqlite3_bind_int64(stmt, 2, Int64(Date().timeIntervalSince1970))
+        _ = bindQueryValues(stmt, binds, startingAt: 3)
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        return Int(sqlite3_changes(db))
+    }
+
+    @discardableResult
+    func legalHoldsRemove(_ ids: [UUID]) throws -> Int {
+        let db = try ensureDB()
+        return try perID(db, "DELETE FROM legal_holds WHERE email_id = ?;", ids)
+    }
+
+    func legalHeldAmong(_ ids: [UUID]) throws -> Set<UUID> { try present(in: "legal_holds", among: ids) }
+    func legalHoldIDs() throws -> Set<UUID> { try allIDs(in: "legal_holds") }
+    func legalHoldCount() throws -> Int { try scalarInt(try ensureDB(), "SELECT COUNT(*) FROM legal_holds;") }
+
+    // MARK: F4 — evidence seals (set once)
+
+    /// Records seals that do not exist yet; an existing seal is NEVER
+    /// overwritten (rule: a re-hold must not hide a modification). Returns
+    /// how many were newly recorded.
+    @discardableResult
+    func sealsSetOnce(_ seals: [UUID: String]) throws -> Int {
+        let db = try ensureDB()
+        let now = Int64(Date().timeIntervalSince1970)
+        return try perID(db, "INSERT OR IGNORE INTO evidence_seals(email_id, sha256, sealed_at) VALUES (?,?,?);",
+                         Array(seals.keys)) { stmt, id in
+            self.bindText(stmt, 2, seals[id] ?? "")
+            sqlite3_bind_int64(stmt, 3, now)
+        }
+    }
+
+    @discardableResult
+    func sealsRemove(_ ids: [UUID]) throws -> Int {
+        let db = try ensureDB()
+        return try perID(db, "DELETE FROM evidence_seals WHERE email_id = ?;", ids)
+    }
+
+    func seals(for ids: [UUID]) throws -> [UUID: String] {
+        guard !ids.isEmpty else { return [:] }
+        let db = try ensureDB()
+        var out: [UUID: String] = [:]
+        for chunk in ids.chunked(into: 500) {
+            let marks = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, "SELECT email_id, sha256 FROM evidence_seals WHERE email_id IN (\(marks));")
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out[id] = columnText(stmt, 1) } }
+        }
+        return out
+    }
+
+    func allSeals() throws -> [UUID: String] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT email_id, sha256 FROM evidence_seals;")
+        defer { sqlite3_finalize(stmt) }
+        var out: [UUID: String] = [:]
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out[id] = columnText(stmt, 1) } }
+        return out
+    }
+
+    // MARK: F4 — custodians
+
+    @discardableResult
+    func custodiansAssign(_ assignments: [UUID: String]) throws -> Int {
+        let db = try ensureDB()
+        let now = Int64(Date().timeIntervalSince1970)
+        return try perID(db, """
+            INSERT INTO custodian_assignments(email_id, custodian, assigned_at) VALUES (?,?,?)
+            ON CONFLICT(email_id) DO UPDATE SET custodian = excluded.custodian, assigned_at = excluded.assigned_at;
+        """, Array(assignments.keys)) { stmt, id in
+            self.bindText(stmt, 2, assignments[id] ?? "")
+            sqlite3_bind_int64(stmt, 3, now)
+        }
+    }
+
+    /// Assigns `custodian` to every email matching a NON-TEXT query.
+    @discardableResult
+    func custodiansAssign(_ custodian: String, query: EmailQuery) throws -> Int {
+        precondition(query.text?.isEmpty ?? true, "text scopes must be resolved to ids first")
+        let db = try ensureDB()
+        let (clauses, binds) = Self.filterClauses(query)
+        let whereSQL = clauses.isEmpty ? "1=1" : clauses.joined(separator: " AND ")
+        let stmt = try prepare(db, """
+            INSERT INTO custodian_assignments(email_id, custodian, assigned_at)
+            SELECT e.id, ?, ? FROM emails e WHERE \(whereSQL)
+            ON CONFLICT(email_id) DO UPDATE SET custodian = excluded.custodian, assigned_at = excluded.assigned_at;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, custodian)
+        sqlite3_bind_int64(stmt, 2, Int64(Date().timeIntervalSince1970))
+        _ = bindQueryValues(stmt, binds, startingAt: 3)
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        return Int(sqlite3_changes(db))
+    }
+
+    @discardableResult
+    func custodiansRemove(_ ids: [UUID]) throws -> Int {
+        let db = try ensureDB()
+        return try perID(db, "DELETE FROM custodian_assignments WHERE email_id = ?;", ids)
+    }
+
+    func allCustodianAssignments() throws -> [UUID: String] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT email_id, custodian FROM custodian_assignments;")
+        defer { sqlite3_finalize(stmt) }
+        var out: [UUID: String] = [:]
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out[id] = columnText(stmt, 1) } }
+        return out
+    }
+
+    struct CustodianTotals: Sendable, Equatable {
+        let custodian: String
+        let emails: Int
+        let held: Int
+        let firstDate: Date?
+        let lastDate: Date?
+    }
+
+    /// Per-custodian totals for the whole archive in one grouped query.
+    func custodianTotals() throws -> [CustodianTotals] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT c.custodian, COUNT(*), COUNT(h.email_id), MIN(e.date), MAX(e.date)
+            FROM custodian_assignments c
+            JOIN emails e ON e.id = c.email_id
+            LEFT JOIN legal_holds h ON h.email_id = c.email_id
+            GROUP BY c.custodian ORDER BY c.custodian;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        var out: [CustodianTotals] = []
+        while try stepRow(stmt, db) {
+            let first = sqlite3_column_type(stmt, 3) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 3)))
+            let last = sqlite3_column_type(stmt, 4) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 4)))
+            out.append(CustodianTotals(custodian: columnText(stmt, 0), emails: Int(sqlite3_column_int64(stmt, 1)),
+                                       held: Int(sqlite3_column_int64(stmt, 2)), firstDate: first, lastDate: last))
+        }
+        return out
+    }
+
+    /// Emails in the archive with no custodian.
+    func unassignedCustodianCount() throws -> Int {
+        try scalarInt(try ensureDB(), """
+            SELECT COUNT(*) FROM emails e WHERE NOT EXISTS
+              (SELECT 1 FROM custodian_assignments c WHERE c.email_id = e.id);
+        """)
+    }
+
+    // MARK: F4 — custody events and review coding
+
+    func custodyEventsAppend(_ events: [(id: String, emailID: UUID?, at: Date, payload: Data)]) throws {
+        guard !events.isEmpty else { return }
+        let db = try ensureDB()
+        let stmt = try prepare(db, "INSERT OR IGNORE INTO custody_events(event_id, email_id, at, payload) VALUES (?,?,?,?);")
+        defer { sqlite3_finalize(stmt) }
+        try exec(db, "BEGIN TRANSACTION;")
+        do {
+            for e in events {
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, e.id)
+                bindTextOrNull(stmt, 2, e.emailID?.uuidString)
+                sqlite3_bind_int64(stmt, 3, Int64(e.at.timeIntervalSince1970))
+                bindBlob(stmt, 4, e.payload)
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    func custodyEventCount() throws -> Int { try scalarInt(try ensureDB(), "SELECT COUNT(*) FROM custody_events;") }
+
+    func custodyEventPayloads(emailID: UUID? = nil) throws -> [Data] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, emailID == nil
+            ? "SELECT payload FROM custody_events ORDER BY at, event_id;"
+            : "SELECT payload FROM custody_events WHERE email_id = ? ORDER BY at, event_id;")
+        defer { sqlite3_finalize(stmt) }
+        if let emailID { bindText(stmt, 1, emailID.uuidString) }
+        var out: [Data] = []
+        while try stepRow(stmt, db) { if let d = columnBlobData(stmt, 0) { out.append(d) } }
+        return out
+    }
+
+    func reviewCodingSet(workspace: String, field: String, values: [UUID: String?]) throws {
+        guard !values.isEmpty else { return }
+        let db = try ensureDB()
+        let now = Int64(Date().timeIntervalSince1970)
+        let upsert = try prepare(db, """
+            INSERT INTO review_coding(workspace, email_id, field, value, updated_at) VALUES (?,?,?,?,?)
+            ON CONFLICT(workspace, email_id, field) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;
+        """)
+        let remove = try prepare(db, "DELETE FROM review_coding WHERE workspace = ? AND email_id = ? AND field = ?;")
+        defer { sqlite3_finalize(upsert); sqlite3_finalize(remove) }
+        try exec(db, "BEGIN TRANSACTION;")
+        do {
+            for (id, value) in values {
+                let stmt = value == nil ? remove : upsert
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, workspace)
+                bindText(stmt, 2, id.uuidString)
+                bindText(stmt, 3, field)
+                if let value {
+                    bindText(stmt, 4, value)
+                    sqlite3_bind_int64(stmt, 5, now)
+                }
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    func reviewCoding(workspace: String, field: String) throws -> [UUID: String] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT email_id, value FROM review_coding WHERE workspace = ? AND field = ?;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, workspace)
+        bindText(stmt, 2, field)
+        var out: [UUID: String] = [:]
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out[id] = columnText(stmt, 1) } }
+        return out
+    }
+
+    /// value → count for one coding field (Legal Review statistics, L14).
+    func reviewCodingCounts(workspace: String, field: String) throws -> [String: Int] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT r.value, COUNT(*) FROM review_coding r JOIN emails e ON e.id = r.email_id
+            WHERE r.workspace = ? AND r.field = ? GROUP BY r.value;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, workspace)
+        bindText(stmt, 2, field)
+        var out: [String: Int] = [:]
+        while try stepRow(stmt, db) { out[columnText(stmt, 0)] = Int(sqlite3_column_int64(stmt, 1)) }
+        return out
+    }
+
+    struct LegalStateCounts: Sendable, Equatable {
+        let holds: Int, seals: Int, custodians: Int, custodyEvents: Int, codings: Int
+    }
+
+    func legalStateCounts() throws -> LegalStateCounts {
+        let db = try ensureDB()
+        return LegalStateCounts(
+            holds: try scalarInt(db, "SELECT COUNT(*) FROM legal_holds;"),
+            seals: try scalarInt(db, "SELECT COUNT(*) FROM evidence_seals;"),
+            custodians: try scalarInt(db, "SELECT COUNT(*) FROM custodian_assignments;"),
+            custodyEvents: try scalarInt(db, "SELECT COUNT(*) FROM custody_events;"),
+            codings: try scalarInt(db, "SELECT COUNT(*) FROM review_coding;"))
+    }
+
+    // MARK: F5 — fingerprint tree
+
+    /// Month bucket (yyyymm, UTC) for an epoch second.
+    nonisolated static func fingerprintBucket(epoch: Int64) -> Int {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC") ?? .current
+        let c = cal.dateComponents([.year, .month], from: Date(timeIntervalSince1970: Double(epoch)))
+        return (c.year ?? 1970) * 100 + (c.month ?? 1)
+    }
+
+    private static func hex(_ digest: SHA256.Digest) -> String {
+        digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The leaf for one stored email. Raw MIME is the evidence: the leaf is
+    /// SHA-256 of the raw bytes — identical whether they are inline or in the
+    /// blob tier (whose digest IS that SHA-256). Rows stored without raw MIME
+    /// hash their length-prefixed plain/html/headers instead ("p:" prefix).
+    private func fingerprintLeaf(raw: Data?, digest: String?, plain: Data?, html: Data?, headers: Data?) -> String {
+        if let digest, !digest.isEmpty { return digest }
+        if let raw, !raw.isEmpty { return Self.hex(SHA256.hash(data: raw)) }
+        var h = SHA256()
+        for part in [plain, html, headers] {
+            let d = part ?? Data()
+            var len = UInt64(d.count).bigEndian
+            h.update(data: Data(bytes: &len, count: 8))
+            h.update(data: d)
+        }
+        return "p:" + Self.hex(h.finalize())
+    }
+
+    /// Computes leaves for up to `limit` emails that have none (incremental:
+    /// call until it returns 0). Returns how many leaves were written.
+    @discardableResult
+    func fingerprintBuildMissing(limit: Int = 1_000) throws -> Int {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT e.id, e.date, b.raw, b.raw_blob_digest, b.plain, b.html, b.headers_json
+            FROM emails e JOIN email_bodies b ON b.id = e.id
+            WHERE NOT EXISTS (SELECT 1 FROM fingerprints f WHERE f.email_id = e.id)
+            LIMIT ?;
+        """)
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        var rows: [(UUID, String, Int)] = []
+        do {
+            defer { sqlite3_finalize(stmt) }
+            while try stepRow(stmt, db) {
+                guard let id = columnUUID(stmt, 0) else { continue }
+                let leaf = fingerprintLeaf(raw: columnBlobData(stmt, 2), digest: columnTextOptional(stmt, 3),
+                                           plain: columnBlobData(stmt, 4), html: columnBlobData(stmt, 5),
+                                           headers: columnBlobData(stmt, 6))
+                rows.append((id, leaf, Self.fingerprintBucket(epoch: sqlite3_column_int64(stmt, 1))))
+            }
+        }
+        guard !rows.isEmpty else { return 0 }
+        let ins = try prepare(db, "INSERT OR REPLACE INTO fingerprints(email_id, leaf, bucket, built_at) VALUES (?,?,?,?);")
+        defer { sqlite3_finalize(ins) }
+        let now = Int64(Date().timeIntervalSince1970)
+        try exec(db, "BEGIN TRANSACTION;")
+        do {
+            for (id, leaf, bucket) in rows {
+                sqlite3_reset(ins); sqlite3_clear_bindings(ins)
+                bindText(ins, 1, id.uuidString)
+                bindText(ins, 2, leaf)
+                sqlite3_bind_int64(ins, 3, Int64(bucket))
+                sqlite3_bind_int64(ins, 4, now)
+                guard sqlite3_step(ins) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            // Buckets that gained leaves must be recomputed.
+            let buckets = Set(rows.map(\.2))
+            try exec(db, "DELETE FROM fingerprint_buckets WHERE bucket IN (\(buckets.map(String.init).joined(separator: ",")));")
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+        return rows.count
+    }
+
+    /// Emails still without a leaf.
+    func fingerprintMissingCount() throws -> Int {
+        try scalarInt(try ensureDB(), """
+            SELECT COUNT(*) FROM emails e WHERE NOT EXISTS (SELECT 1 FROM fingerprints f WHERE f.email_id = e.id);
+        """)
+    }
+
+    /// Merkle root over hex leaves (pairs hashed as "L|R", odd one promoted).
+    nonisolated static func merkleRoot(_ leaves: [String]) -> String {
+        guard !leaves.isEmpty else { return hexOfEmpty }
+        var level = leaves
+        while level.count > 1 {
+            var next: [String] = []
+            next.reserveCapacity((level.count + 1) / 2)
+            var i = 0
+            while i < level.count {
+                if i + 1 < level.count {
+                    next.append(SHA256.hash(data: Data((level[i] + "|" + level[i + 1]).utf8))
+                        .map { String(format: "%02x", $0) }.joined())
+                } else {
+                    next.append(level[i])
+                }
+                i += 2
+            }
+            level = next
+        }
+        return level[0]
+    }
+
+    private nonisolated static var hexOfEmpty: String {
+        SHA256.hash(data: Data()).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Recomputes every bucket root that is missing (after new leaves) and
+    /// drops leaves of deleted emails. Leaves inside a bucket are ordered by
+    /// (date, id), so the root is reproducible.
+    func fingerprintRefreshBuckets() throws {
+        let db = try ensureDB()
+        try exec(db, "DELETE FROM fingerprints WHERE NOT EXISTS (SELECT 1 FROM emails e WHERE e.id = fingerprints.email_id);")
+        let stale = try prepare(db, """
+            SELECT DISTINCT f.bucket FROM fingerprints f
+            WHERE NOT EXISTS (SELECT 1 FROM fingerprint_buckets b WHERE b.bucket = f.bucket);
+        """)
+        var buckets: [Int] = []
+        do {
+            defer { sqlite3_finalize(stale) }
+            while try stepRow(stale, db) { buckets.append(Int(sqlite3_column_int64(stale, 0))) }
+        }
+        // Buckets whose leaves were all deleted.
+        try exec(db, "DELETE FROM fingerprint_buckets WHERE NOT EXISTS (SELECT 1 FROM fingerprints f WHERE f.bucket = fingerprint_buckets.bucket);")
+        let now = Int64(Date().timeIntervalSince1970)
+        for bucket in buckets {
+            let leaves = try fingerprintLeaves(bucket: bucket).map(\.leaf)
+            try exec(db, """
+                INSERT OR REPLACE INTO fingerprint_buckets(bucket, root, leaves, built_at)
+                VALUES (\(bucket), '\(Self.merkleRoot(leaves))', \(leaves.count), \(now));
+            """)
+        }
+    }
+
+    /// Leaves of one bucket in tree order.
+    func fingerprintLeaves(bucket: Int) throws -> [(id: UUID, leaf: String)] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT f.email_id, f.leaf FROM fingerprints f JOIN emails e ON e.id = f.email_id
+            WHERE f.bucket = ? ORDER BY e.date, e.id;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, Int64(bucket))
+        var out: [(UUID, String)] = []
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append((id, columnText(stmt, 1))) } }
+        return out.map { (id: $0.0, leaf: $0.1) }
+    }
+
+    struct FingerprintTree: Sendable, Equatable {
+        let root: String
+        let leaves: Int
+        let buckets: [(bucket: Int, root: String, leaves: Int)]
+        static func == (a: Self, b: Self) -> Bool {
+            a.root == b.root && a.leaves == b.leaves && a.buckets.map(\.root) == b.buckets.map(\.root)
+        }
+    }
+
+    /// The archive root over all bucket roots (ascending by month).
+    func fingerprintTree() throws -> FingerprintTree {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT bucket, root, leaves FROM fingerprint_buckets ORDER BY bucket;")
+        defer { sqlite3_finalize(stmt) }
+        var buckets: [(Int, String, Int)] = []
+        while try stepRow(stmt, db) {
+            buckets.append((Int(sqlite3_column_int64(stmt, 0)), columnText(stmt, 1), Int(sqlite3_column_int64(stmt, 2))))
+        }
+        return FingerprintTree(root: Self.merkleRoot(buckets.map(\.1)),
+                               leaves: buckets.reduce(0) { $0 + $1.2 },
+                               buckets: buckets.map { (bucket: $0.0, root: $0.1, leaves: $0.2) })
+    }
+
+    enum FingerprintMismatch: Sendable, Equatable {
+        case changed(UUID)        // content no longer matches its leaf
+        case unreadable(UUID)     // blob missing or unreadable
+    }
+
+    /// Re-hashes the stored content of `ids` against their leaves and returns
+    /// exactly the emails that changed (F5 pinpoint). Blob-tier rows are read
+    /// and their digest re-verified.
+    func fingerprintVerify(ids: [UUID]) throws -> [FingerprintMismatch] {
+        guard !ids.isEmpty else { return [] }
+        let db = try ensureDB()
+        var out: [FingerprintMismatch] = []
+        let blobs = blobStore
+        for chunk in ids.chunked(into: 200) {
+            let marks = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, """
+                SELECT f.email_id, f.leaf, b.raw, b.raw_blob_digest, b.raw_blob_length, b.plain, b.html, b.headers_json
+                FROM fingerprints f JOIN email_bodies b ON b.id = f.email_id
+                WHERE f.email_id IN (\(marks));
+            """)
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            while try stepRow(stmt, db) {
+                guard let id = columnUUID(stmt, 0) else { continue }
+                let expected = columnText(stmt, 1)
+                if let digest = columnTextOptional(stmt, 3), !digest.isEmpty {
+                    // The blob must still exist and still hash to its digest,
+                    // and the digest must still be the leaf.
+                    let ref = BlobReference(digest: digest, length: sqlite3_column_int64(stmt, 4))
+                    do { _ = try blobs.read(ref, verify: true) } catch { out.append(.unreadable(id)); continue }
+                    if digest != expected { out.append(.changed(id)) }
+                    continue
+                }
+                let actual = fingerprintLeaf(raw: columnBlobData(stmt, 2), digest: nil,
+                                             plain: columnBlobData(stmt, 5), html: columnBlobData(stmt, 6),
+                                             headers: columnBlobData(stmt, 7))
+                if actual != expected { out.append(.changed(id)) }
+            }
+        }
+        return out
+    }
+
+    /// Ids with a leaf, in tree order, one page at a time (for verify jobs).
+    func fingerprintIDPage(afterBucket: Int?, afterID: UUID?, limit: Int) throws -> [(id: UUID, bucket: Int)] {
+        let db = try ensureDB()
+        let hasCursor = afterBucket != nil && afterID != nil
+        let stmt = try prepare(db, """
+            SELECT email_id, bucket FROM fingerprints
+            \(hasCursor ? "WHERE (bucket > ? OR (bucket = ? AND email_id > ?))" : "")
+            ORDER BY bucket, email_id LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        var idx: Int32 = 1
+        if hasCursor, let b = afterBucket, let a = afterID {
+            sqlite3_bind_int64(stmt, idx, Int64(b)); idx += 1
+            sqlite3_bind_int64(stmt, idx, Int64(b)); idx += 1
+            bindText(stmt, idx, a.uuidString); idx += 1
+        }
+        sqlite3_bind_int(stmt, idx, Int32(limit))
+        var out: [(UUID, Int)] = []
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append((id, Int(sqlite3_column_int64(stmt, 1)))) } }
+        return out.map { (id: $0.0, bucket: $0.1) }
+    }
+
+    // MARK: F6 — feature index
+
+    struct FeatureRecord: Sendable, Equatable {
+        var emailID: UUID
+        var version: Int
+        var piiFlags: Int = 0
+        var privilege: Int = 0
+        var language: String?
+        var spf: String?
+        var dkim: String?
+        var dmarc: String?
+        var threatScore: Double?
+        var mih: String?
+        var iocs: [(kind: String, value: String)] = []
+        var minhashBands: [Int64] = []
+        var embedding: Data?
+
+        static func == (a: Self, b: Self) -> Bool {
+            a.emailID == b.emailID && a.version == b.version && a.piiFlags == b.piiFlags
+                && a.privilege == b.privilege && a.language == b.language && a.spf == b.spf
+                && a.dkim == b.dkim && a.dmarc == b.dmarc && a.threatScore == b.threatScore && a.mih == b.mih
+                && a.iocs.map { $0.kind + "\u{1F}" + $0.value } == b.iocs.map { $0.kind + "\u{1F}" + $0.value }
+                && a.minhashBands == b.minhashBands && a.embedding == b.embedding
+        }
+    }
+
+    /// Writes feature rows, replacing each email's IOC rows and MinHash bands.
+    func featuresUpsert(_ records: [FeatureRecord]) throws {
+        guard !records.isEmpty else { return }
+        let db = try ensureDB()
+        let up = try prepare(db, """
+            INSERT OR REPLACE INTO features(email_id, feature_version, pii_flags, privilege, language,
+                spf, dkim, dmarc, threat_score, mih, ioc_count, embedding, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?);
+        """)
+        let delIOC = try prepare(db, "DELETE FROM ioc_rows WHERE email_id = ?;")
+        let insIOC = try prepare(db, "INSERT INTO ioc_rows(email_id, kind, value) VALUES (?,?,?);")
+        let delBand = try prepare(db, "DELETE FROM minhash_bands WHERE email_id = ?;")
+        let insBand = try prepare(db, "INSERT INTO minhash_bands(band, hash, email_id) VALUES (?,?,?);")
+        defer { [up, delIOC, insIOC, delBand, insBand].forEach { sqlite3_finalize($0) } }
+        let now = Int64(Date().timeIntervalSince1970)
+        func run(_ s: OpaquePointer?) throws {
+            guard sqlite3_step(s) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+        }
+        try exec(db, "BEGIN TRANSACTION;")
+        do {
+            for r in records {
+                let id = r.emailID.uuidString
+                sqlite3_reset(up); sqlite3_clear_bindings(up)
+                bindText(up, 1, id)
+                sqlite3_bind_int64(up, 2, Int64(r.version))
+                sqlite3_bind_int64(up, 3, Int64(r.piiFlags))
+                sqlite3_bind_int64(up, 4, Int64(r.privilege))
+                bindTextOrNull(up, 5, r.language)
+                bindTextOrNull(up, 6, r.spf)
+                bindTextOrNull(up, 7, r.dkim)
+                bindTextOrNull(up, 8, r.dmarc)
+                if let t = r.threatScore { sqlite3_bind_double(up, 9, t) } else { sqlite3_bind_null(up, 9) }
+                bindTextOrNull(up, 10, r.mih)
+                sqlite3_bind_int64(up, 11, Int64(r.iocs.count))
+                bindBlob(up, 12, r.embedding)
+                sqlite3_bind_int64(up, 13, now)
+                try run(up)
+
+                sqlite3_reset(delIOC); sqlite3_clear_bindings(delIOC)
+                bindText(delIOC, 1, id); try run(delIOC)
+                for ioc in r.iocs {
+                    sqlite3_reset(insIOC); sqlite3_clear_bindings(insIOC)
+                    bindText(insIOC, 1, id); bindText(insIOC, 2, ioc.kind); bindText(insIOC, 3, ioc.value)
+                    try run(insIOC)
+                }
+                sqlite3_reset(delBand); sqlite3_clear_bindings(delBand)
+                bindText(delBand, 1, id); try run(delBand)
+                for (band, hash) in r.minhashBands.enumerated() {
+                    sqlite3_reset(insBand); sqlite3_clear_bindings(insBand)
+                    sqlite3_bind_int64(insBand, 1, Int64(band))
+                    sqlite3_bind_int64(insBand, 2, hash)
+                    bindText(insBand, 3, id)
+                    try run(insBand)
+                }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
+    /// Emails whose features are missing or older than `version`.
+    func featureStaleIDs(version: Int, limit: Int) throws -> [UUID] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT e.id FROM emails e LEFT JOIN features f ON f.email_id = e.id
+            WHERE f.email_id IS NULL OR f.feature_version < ?
+            ORDER BY e.date DESC, e.id DESC LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, Int64(version))
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+        var out: [UUID] = []
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append(id) } }
+        return out
+    }
+
+    func featureCoverage(version: Int) throws -> (indexed: Int, total: Int) {
+        let db = try ensureDB()
+        let total = try scalarInt(db, "SELECT COUNT(*) FROM emails;")
+        let indexed = try scalarInt(db, """
+            SELECT COUNT(*) FROM features f JOIN emails e ON e.id = f.email_id WHERE f.feature_version >= \(version);
+        """)
+        return (indexed, total)
+    }
+
+    func featureFetch(ids: [UUID]) throws -> [UUID: FeatureRecord] {
+        guard !ids.isEmpty else { return [:] }
+        let db = try ensureDB()
+        var out: [UUID: FeatureRecord] = [:]
+        for chunk in ids.chunked(into: 500) {
+            let marks = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try prepare(db, """
+                SELECT email_id, feature_version, pii_flags, privilege, language, spf, dkim, dmarc,
+                       threat_score, mih, embedding FROM features WHERE email_id IN (\(marks));
+            """)
+            defer { sqlite3_finalize(stmt) }
+            for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
+            while try stepRow(stmt, db) {
+                guard let id = columnUUID(stmt, 0) else { continue }
+                out[id] = FeatureRecord(
+                    emailID: id, version: Int(sqlite3_column_int64(stmt, 1)),
+                    piiFlags: Int(sqlite3_column_int64(stmt, 2)), privilege: Int(sqlite3_column_int64(stmt, 3)),
+                    language: columnTextOptional(stmt, 4), spf: columnTextOptional(stmt, 5),
+                    dkim: columnTextOptional(stmt, 6), dmarc: columnTextOptional(stmt, 7),
+                    threatScore: sqlite3_column_type(stmt, 8) == SQLITE_NULL ? nil : sqlite3_column_double(stmt, 8),
+                    mih: columnTextOptional(stmt, 9), embedding: columnBlobData(stmt, 10))
+            }
+        }
+        return out
+    }
+
+    /// Emails whose PII flags include every bit of `mask` (0 = any PII),
+    /// newest first, one page at a time.
+    func featurePIIPage(mask: Int, offset: Int, limit: Int) throws -> [(id: UUID, flags: Int)] {
+        let db = try ensureDB()
+        let cond = mask == 0 ? "f.pii_flags != 0" : "(f.pii_flags & \(mask)) = \(mask)"
+        let stmt = try prepare(db, """
+            SELECT f.email_id, f.pii_flags FROM features f JOIN emails e ON e.id = f.email_id
+            WHERE \(cond) ORDER BY e.date DESC, e.id DESC LIMIT ? OFFSET ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        sqlite3_bind_int(stmt, 2, Int32(offset))
+        var out: [(UUID, Int)] = []
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append((id, Int(sqlite3_column_int64(stmt, 1)))) } }
+        return out.map { (id: $0.0, flags: $0.1) }
+    }
+
+    /// Count of emails per PII bit (bits 0…15).
+    func featurePIIBitCounts() throws -> [Int: Int] {
+        let db = try ensureDB()
+        var out: [Int: Int] = [:]
+        for bit in 0..<16 {
+            let n = try scalarInt(db, """
+                SELECT COUNT(*) FROM features f JOIN emails e ON e.id = f.email_id WHERE (f.pii_flags & \(1 << bit)) != 0;
+            """)
+            if n > 0 { out[bit] = n }
+        }
+        return out
+    }
+
+    func featurePrivilegedCount(minimum: Int = 1) throws -> Int {
+        try scalarInt(try ensureDB(), """
+            SELECT COUNT(*) FROM features f JOIN emails e ON e.id = f.email_id WHERE f.privilege >= \(minimum);
+        """)
+    }
+
+    func featurePrivilegedIDs(minimum: Int = 1) throws -> [UUID] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT f.email_id FROM features f JOIN emails e ON e.id = f.email_id
+            WHERE f.privilege >= ? ORDER BY e.date, e.id;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, Int64(minimum))
+        var out: [UUID] = []
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append(id) } }
+        return out
+    }
+
+    /// Distinct indicator values of one kind with how many emails carry
+    /// each, highest first, plus the total distinct (L16).
+    func iocTop(kind: String, limit: Int, offset: Int = 0) throws -> (rows: [(value: String, emails: Int)], distinct: Int) {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT i.value, COUNT(DISTINCT i.email_id) AS n FROM ioc_rows i JOIN emails e ON e.id = i.email_id
+            WHERE i.kind = ? GROUP BY i.value ORDER BY n DESC, i.value LIMIT ? OFFSET ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, kind)
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+        sqlite3_bind_int(stmt, 3, Int32(offset))
+        var rows: [(String, Int)] = []
+        while try stepRow(stmt, db) { rows.append((columnText(stmt, 0), Int(sqlite3_column_int64(stmt, 1)))) }
+        let cstmt = try prepare(db, "SELECT COUNT(DISTINCT value) FROM ioc_rows WHERE kind = ?;")
+        defer { sqlite3_finalize(cstmt) }
+        bindText(cstmt, 1, kind)
+        let distinct = try stepRow(cstmt, db) ? Int(sqlite3_column_int64(cstmt, 0)) : 0
+        return (rows.map { (value: $0.0, emails: $0.1) }, distinct)
+    }
+
+    func iocKindCounts() throws -> [String: Int] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT kind, COUNT(DISTINCT value) FROM ioc_rows GROUP BY kind;")
+        defer { sqlite3_finalize(stmt) }
+        var out: [String: Int] = [:]
+        while try stepRow(stmt, db) { out[columnText(stmt, 0)] = Int(sqlite3_column_int64(stmt, 1)) }
+        return out
+    }
+
+    /// Emails carrying an indicator value (any kind).
+    func iocEmails(value: String, limit: Int) throws -> [UUID] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT DISTINCT email_id FROM ioc_rows WHERE value = ? LIMIT ?;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, value)
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+        var out: [UUID] = []
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { out.append(id) } }
+        return out
+    }
+
+    /// Candidate near-duplicate pairs: emails sharing at least one MinHash
+    /// band bucket (LSH). The caller verifies each pair with exact Jaccard.
+    /// Bounded per call by `limit` pairs, resumable by `afterEmail`.
+    func minhashCandidatePairs(afterEmail: UUID?, limit: Int) throws -> [(UUID, UUID)] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT DISTINCT a.email_id, b.email_id FROM minhash_bands a
+            JOIN minhash_bands b ON a.band = b.band AND a.hash = b.hash AND a.email_id < b.email_id
+            \(afterEmail == nil ? "" : "WHERE a.email_id > ?")
+            ORDER BY a.email_id, b.email_id LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        var idx: Int32 = 1
+        if let afterEmail { bindText(stmt, idx, afterEmail.uuidString); idx += 1 }
+        sqlite3_bind_int(stmt, idx, Int32(limit))
+        var out: [(UUID, UUID)] = []
+        while try stepRow(stmt, db) {
+            if let a = columnUUID(stmt, 0), let b = columnUUID(stmt, 1) { out.append((a, b)) }
+        }
+        return out
+    }
+
+    /// Exact-duplicate groups by EDRM MIH, largest first (L19).
+    func mihDuplicateGroups(limit: Int, offset: Int) throws -> (groups: [(mih: String, ids: [UUID])], totalGroups: Int) {
+        let db = try ensureDB()
+        let total = try scalarInt(db, """
+            SELECT COUNT(*) FROM (SELECT f.mih FROM features f JOIN emails e ON e.id = f.email_id
+            WHERE f.mih IS NOT NULL GROUP BY f.mih HAVING COUNT(*) > 1);
+        """)
+        let stmt = try prepare(db, """
+            SELECT f.mih, GROUP_CONCAT(f.email_id) FROM features f JOIN emails e ON e.id = f.email_id
+            WHERE f.mih IS NOT NULL GROUP BY f.mih HAVING COUNT(*) > 1
+            ORDER BY COUNT(*) DESC, f.mih LIMIT ? OFFSET ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        sqlite3_bind_int(stmt, 2, Int32(offset))
+        var groups: [(String, [UUID])] = []
+        while try stepRow(stmt, db) {
+            let ids = columnText(stmt, 1).split(separator: ",").compactMap { UUID(uuidString: String($0)) }
+            groups.append((columnText(stmt, 0), ids))
+        }
+        return (groups.map { (mih: $0.0, ids: $0.1) }, total)
+    }
+
+    /// Authentication result counts (SPF/DKIM/DMARC) for IT Admin (A9).
+    func authResultCounts() throws -> [String: [String: Int]] {
+        let db = try ensureDB()
+        var out: [String: [String: Int]] = [:]
+        for col in ["spf", "dkim", "dmarc"] {
+            let stmt = try prepare(db, """
+                SELECT COALESCE(f.\(col), 'none'), COUNT(*) FROM features f JOIN emails e ON e.id = f.email_id GROUP BY 1;
+            """)
+            defer { sqlite3_finalize(stmt) }
+            var m: [String: Int] = [:]
+            while try stepRow(stmt, db) { m[columnText(stmt, 0)] = Int(sqlite3_column_int64(stmt, 1)) }
+            out[col] = m
+        }
+        return out
+    }
+
+    /// Highest threat scores (A9), with the number of scored emails.
+    func topThreats(limit: Int) throws -> (rows: [(id: UUID, score: Double)], scored: Int) {
+        let db = try ensureDB()
+        let scored = try scalarInt(db, "SELECT COUNT(*) FROM features f JOIN emails e ON e.id = f.email_id WHERE f.threat_score IS NOT NULL;")
+        let stmt = try prepare(db, """
+            SELECT f.email_id, f.threat_score FROM features f JOIN emails e ON e.id = f.email_id
+            WHERE f.threat_score IS NOT NULL ORDER BY f.threat_score DESC, f.email_id LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(limit))
+        var rows: [(UUID, Double)] = []
+        while try stepRow(stmt, db) { if let id = columnUUID(stmt, 0) { rows.append((id, sqlite3_column_double(stmt, 1))) } }
+        return (rows.map { (id: $0.0, score: $0.1) }, scored)
+    }
+
+    /// Language → count (A11).
+    func languageCounts() throws -> [String: Int] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT COALESCE(f.language, 'und'), COUNT(*) FROM features f JOIN emails e ON e.id = f.email_id GROUP BY 1;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        var out: [String: Int] = [:]
+        while try stepRow(stmt, db) { out[columnText(stmt, 0)] = Int(sqlite3_column_int64(stmt, 1)) }
+        return out
+    }
+
+    /// Embeddings page for semantic search (Q2), keyed by email id.
+    func embeddingPage(afterID: UUID?, limit: Int) throws -> [(id: UUID, vector: Data)] {
+        let db = try ensureDB()
+        let stmt = try prepare(db, """
+            SELECT f.email_id, f.embedding FROM features f
+            WHERE f.embedding IS NOT NULL \(afterID == nil ? "" : "AND f.email_id > ?")
+            ORDER BY f.email_id LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        var idx: Int32 = 1
+        if let afterID { bindText(stmt, idx, afterID.uuidString); idx += 1 }
+        sqlite3_bind_int(stmt, idx, Int32(limit))
+        var out: [(UUID, Data)] = []
+        while try stepRow(stmt, db) {
+            if let id = columnUUID(stmt, 0), let d = columnBlobData(stmt, 1) { out.append((id, d)) }
+        }
+        return out.map { (id: $0.0, vector: $0.1) }
+    }
+
+    // MARK: Grouped archive aggregates (F3 in SQL; A7/A8/A12)
+
+    /// Subjects grouped (normalised: Re:/Fwd: stripped, lowercased), largest
+    /// first, with the number of distinct subjects.
+    func subjectGroups(query: EmailQuery = .all, limit: Int, offset: Int) throws -> (rows: [(subject: String, count: Int)], distinct: Int) {
+        let db = try ensureDB()
+        let (clauses, binds) = Self.filterClauses(query)
+        let whereSQL = clauses.isEmpty ? "1=1" : clauses.joined(separator: " AND ")
+        let norm = """
+            LOWER(TRIM(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(e.subject,
+              'RE:',''),'Re:',''),'re:',''),'FW:',''),'Fwd:',''),'Fw:','')))
+            """
+        let dstmt = try prepare(db, "SELECT COUNT(DISTINCT \(norm)) FROM emails e WHERE \(whereSQL);")
+        defer { sqlite3_finalize(dstmt) }
+        _ = bindQueryValues(dstmt, binds, startingAt: 1)
+        let distinct = try stepRow(dstmt, db) ? Int(sqlite3_column_int64(dstmt, 0)) : 0
+        let stmt = try prepare(db, """
+            SELECT \(norm) AS s, COUNT(*) AS n FROM emails e WHERE \(whereSQL)
+            GROUP BY s ORDER BY n DESC, s LIMIT ? OFFSET ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        let next = bindQueryValues(stmt, binds, startingAt: 1)
+        sqlite3_bind_int(stmt, next, Int32(limit))
+        sqlite3_bind_int(stmt, next + 1, Int32(offset))
+        var rows: [(String, Int)] = []
+        while try stepRow(stmt, db) { rows.append((columnText(stmt, 0), Int(sqlite3_column_int64(stmt, 1)))) }
+        return (rows.map { (subject: $0.0, count: $0.1) }, distinct)
+    }
+
+    /// Hour-of-day × weekday activity for the whole archive (UTC), A12.
+    func activityMatrix(query: EmailQuery = .all) throws -> [[Int]] {
+        let db = try ensureDB()
+        let (clauses, binds) = Self.filterClauses(query)
+        let whereSQL = clauses.isEmpty ? "1=1" : clauses.joined(separator: " AND ")
+        let stmt = try prepare(db, """
+            SELECT CAST(strftime('%w', e.date, 'unixepoch') AS INTEGER),
+                   CAST(strftime('%H', e.date, 'unixepoch') AS INTEGER), COUNT(*)
+            FROM emails e WHERE \(whereSQL) GROUP BY 1, 2;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        _ = bindQueryValues(stmt, binds, startingAt: 1)
+        var m = Array(repeating: Array(repeating: 0, count: 24), count: 7)
+        while try stepRow(stmt, db) {
+            let w = Int(sqlite3_column_int64(stmt, 0)), h = Int(sqlite3_column_int64(stmt, 1))
+            if (0..<7).contains(w), (0..<24).contains(h) { m[w][h] = Int(sqlite3_column_int64(stmt, 2)) }
+        }
+        return m
     }
 }
 
