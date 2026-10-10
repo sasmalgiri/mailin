@@ -120,6 +120,7 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
     case v3PagedLists
     case v3SemanticSearch
     case v3Duplicates
+    case v3SearchOperators
 
     // AI Insights (Page 2)
     case v3AnalysisQueries

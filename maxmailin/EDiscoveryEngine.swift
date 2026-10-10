@@ -231,6 +231,36 @@ enum EDiscoveryEngine {
         }
     }
 
+    /// §3-Q3: the same Concordance load file with an EDRM Message
+    /// Identification Hash column (MIH — same message from any source gets
+    /// the same value, so the receiving party can de-duplicate across
+    /// productions). Rows, order and Bates numbers are those of the
+    /// standard file; only the extra trailing field differs.
+    static func exportLoadFileWithMIH(scope: ArchiveScope, batesPrefix: String = "MAIL") async -> (ExportOutcome, ArchiveExportResult?) {
+        let forensic = ForensicManager.shared
+        let sep = "\u{14}", quote = "\u{FE}"
+        return await PlatformExport.saveStreamed(suggestedName: "production_loadfile.dat") { url in
+            try await StreamedTextFile.write(to: url) { emit in
+                var header = ForensicManager.concordanceDATHeader
+                if header.hasSuffix("\n") { header.removeLast() }
+                try emit(header + "\(sep)\(quote)MIH\(quote)\n")
+                var index = 0
+                for try await batch in ArchiveDataService.shared.streamFullEmails(query: scope.query, batchSize: 200) {
+                    var chunk = ""
+                    for email in batch {
+                        index += 1
+                        var row = forensic.concordanceDATRow(email, bates: ForensicManager.batesNumber(prefix: batesPrefix, index: index))
+                        if row.hasSuffix("\n") { row.removeLast() }
+                        let body = email.plainBody.isEmpty ? FTSSearchIndex.stripHTMLText(email.htmlBody) : email.plainBody
+                        row += "\(sep)\(quote)\(FeatureExtractor.messageIdentificationHash(email, bodyText: body))\(quote)\n"
+                        chunk += row
+                    }
+                    try emit(chunk)
+                }
+            }
+        }
+    }
+
     static func exportProductionCSV(scope: ArchiveScope) async -> (ExportOutcome, ArchiveExportResult?) {
         await PlatformExport.saveStreamed(suggestedName: "production_export.csv") { url in
             try await ArchiveExportService.shared.exportForensicCSV(scope: .query(scope.query, exclusions: []), to: url)

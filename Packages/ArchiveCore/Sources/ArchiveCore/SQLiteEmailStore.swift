@@ -3601,6 +3601,35 @@ actor SQLiteEmailStore: EmailArchiveStore {
         } else if !q.includeTrashed {
             sql.append(notTrashedPredicate)
         }
+        // §3-Q4: exclusions — the negation of the matching include filter.
+        for ex in q.exclusions ?? [] {
+            switch ex.field {
+            case .sender:
+                sql.append("NOT (instr(lower(e.from_addr), lower(?)) > 0)")
+                binds.append(.text(ex.value))
+            case .recipient:
+                sql.append("""
+                    NOT EXISTS (SELECT 1 FROM email_participants px WHERE px.email_id = e.id
+                                AND px.role IN ('TO','CC','BCC') AND instr(px.normalized_address, lower(?)) > 0)
+                    """)
+                binds.append(.text(ex.value))
+            case .subject:
+                sql.append("NOT (instr(lower(e.subject), lower(?)) > 0)")
+                binds.append(.text(ex.value))
+            case .domain:
+                sql.append("NOT EXISTS (SELECT 1 FROM email_domains dx WHERE dx.email_id = e.id AND dx.domain = ?)")
+                binds.append(.text(ex.value))
+            case .tag:
+                sql.append("""
+                    NOT (EXISTS (SELECT 1 FROM email_user_tags utx WHERE utx.email_id = e.id AND utx.tag = ?)
+                         OR EXISTS (SELECT 1 FROM email_tags ptx WHERE ptx.email_id = e.id AND ptx.tag = ?))
+                    """)
+                binds.append(.text(ex.value))
+                binds.append(.text(ex.value))
+            case .attachments:
+                sql.append("e.has_attach = 0")
+            }
+        }
         return (sql, binds)
     }
 

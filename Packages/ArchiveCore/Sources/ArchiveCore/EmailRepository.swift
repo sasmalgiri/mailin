@@ -117,6 +117,9 @@ struct EmailQuery: Sendable, Equatable, Codable {
     /// streams alike. Set by `ArchiveDataService.accessLimit` for the Free
     /// tier; nil means the whole archive.
     var newestLimit: Int? = nil
+    /// §3-Q4: filters that EXCLUDE (−from:, NOT tag:, −has:attachment …).
+    /// Optional so queries saved before 3.0 still decode.
+    var exclusions: [EmailExclusion]? = nil
 
     static let all = EmailQuery()
 
@@ -128,12 +131,19 @@ struct EmailQuery: Sendable, Equatable, Codable {
             || !senders.isEmpty || !recipients.isEmpty || !subjects.isEmpty
             || !domains.isEmpty || !tags.isEmpty
             || minPriority != nil || phishingOnly || sentimentBelow != nil || !classifications.isEmpty
-            || minSenderMessages != nil || newestLimit != nil
+            || minSenderMessages != nil || newestLimit != nil || !(exclusions ?? []).isEmpty
     }
 
     var isEmpty: Bool {
         (text?.isEmpty ?? true) && beforeDate == nil && afterDate == nil && !hasStructuredFilters
     }
+}
+
+/// One excluded filter (§3-Q4).
+struct EmailExclusion: Sendable, Equatable, Codable {
+    enum Field: String, Sendable, Codable { case sender, recipient, subject, domain, tag, attachments }
+    var field: Field
+    var value: String
 }
 
 // MARK: - Part P2 — ranked search continuation

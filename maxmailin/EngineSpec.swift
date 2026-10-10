@@ -77,6 +77,11 @@ struct EngineSpec: Sendable {
                 name: String(localized: "Whole-archive duplicate groups (3.0)"),
                 detail: String(localized: "Lists exact-duplicate groups for the whole archive from the database, page by page."))
 
+        case .v3SearchOperators:
+            return EngineSpec(.archive,
+                name: String(localized: "Search exclusions (3.0)"),
+                detail: String(localized: "Search can exclude as well as include: -from:, -to:, -tag:, -label:, -domain:, -subject:, -has:attachment and NOT before any of them."))
+
         // MARK: AI Insights (Page 2)
         case .v3AnalysisQueries:
             return EngineSpec(.aiInsights, requires: [.v3FeatureIndex],

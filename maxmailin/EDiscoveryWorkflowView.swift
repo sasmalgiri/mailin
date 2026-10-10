@@ -1537,7 +1537,9 @@ struct EDiscoveryWorkflowView: View {
             let forensic = ForensicManager.shared
             switch kind {
             case .loadFile:
-                let (outcome, result) = await EDiscoveryEngine.exportLoadFile(scope: scope)
+                let (outcome, result) = (modules?.isOn(.v3FeatureIndex) ?? false)
+                    ? await EDiscoveryEngine.exportLoadFileWithMIH(scope: scope)
+                    : await EDiscoveryEngine.exportLoadFile(scope: scope)
                 if let url = outcome.url, let result {
                     forensic.logAction("E-Discovery: Load File Generated",
                                        detail: "Concordance DAT load file for \(result.recordsWritten) emails → \(url.lastPathComponent)")

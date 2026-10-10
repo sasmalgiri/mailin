@@ -23,11 +23,48 @@ enum ArchiveQueryCompiler {
     /// EmailQuery. Every recognized operator maps to a query field; nothing
     /// is silently dropped — unrecognized `key:value` tokens stay in the free
     /// text so the user can see they were searched literally.
+    /// §3-Q4 switch, pushed by the app.
+    nonisolated(unsafe) static var exclusionsEnabled = false
+
+    /// `-key:value` or `NOT key:value` → an exclusion, when supported.
+    static func exclusion(key: String, value: String) -> EmailExclusion? {
+        switch key {
+        case "from": return EmailExclusion(field: .sender, value: value)
+        case "to": return EmailExclusion(field: .recipient, value: value.lowercased())
+        case "subject": return EmailExclusion(field: .subject, value: value)
+        case "domain": return EmailExclusion(field: .domain, value: value.lowercased())
+        case "tag", "label": return EmailExclusion(field: .tag, value: value)
+        case "has":
+            let v = value.lowercased()
+            return (v == "attachment" || v == "attachments") ? EmailExclusion(field: .attachments, value: "") : nil
+        default: return nil
+        }
+    }
+
     static func compile(_ input: String, base: EmailQuery = .all) -> EmailQuery {
         var query = base
         var freeText: [String] = []
+        var negateNext = false
 
-        for token in tokenize(input) {
+        for token0 in tokenize(input) {
+            var token = token0
+            if exclusionsEnabled {
+                if token.uppercased() == "NOT" { negateNext = true; continue }
+                var negated = negateNext
+                negateNext = false
+                if token.hasPrefix("-"), token.contains(":") { negated = true; token.removeFirst() }
+                if negated, let colon = token.firstIndex(of: ":"), colon != token.startIndex {
+                    let key = token[token.startIndex..<colon].lowercased()
+                    var value = String(token[token.index(after: colon)...])
+                    if value.hasPrefix("\"") && value.hasSuffix("\"") && value.count >= 2 { value = String(value.dropFirst().dropLast()) }
+                    if let ex = exclusion(key: key, value: value) {
+                        query.exclusions = (query.exclusions ?? []) + [ex]
+                        continue
+                    }
+                    freeText.append("NOT")   // FTS understands NOT for words
+                }
+                if negated, !token.contains(":") { freeText.append("NOT") }
+            }
             guard let colon = token.firstIndex(of: ":"), colon != token.startIndex else {
                 freeText.append(token)
                 continue

@@ -6,7 +6,8 @@
 //  §3-L19 (switch: `v3Duplicates`). Exact-duplicate groups over the WHOLE
 //  archive instead of the newest 5,000. Same two keys as before — the
 //  Message-ID, then SHA-1 of From + Subject + Date + the first 200 body
-//  characters — and the same grouping rule (Message-ID groups first; an
+//  characters, then (§3-Q3) the EDRM Message Identification Hash, which
+//  matches the same message imported from different sources — and the same grouping rule (Message-ID groups first; an
 //  email joins at most one group). Pass 1 keeps only small keys per email
 //  (8-byte digests of the keys); pass 2 loads just the emails that are in a
 //  group, so memory follows the number of duplicates, not the archive.
@@ -22,6 +23,8 @@ enum DuplicatesEngine {
     struct Keys: Codable, Sendable {
         var byMessageID: [UInt64: [UUID]] = [:]
         var byContent: [UInt64: [UUID]] = [:]
+        /// §3-Q3: EDRM MIH — the same message from different sources.
+        var byMIH: [UInt64: [UUID]] = [:]
     }
 
     static func exactGroups(query: EmailQuery = .all) async throws -> (groups: [[MBOXParser.RawEmail]], receipt: ScopeJobReceipt) {
@@ -37,6 +40,8 @@ enum DuplicatesEngine {
                     (email.headers["From"] ?? "") + (email.headers["Subject"] ?? "")
                     + (email.headers["Date"] ?? "") + String(email.plainBody.prefix(200)))
                 state.byContent[DistinctCounter.fnv1a(content), default: []].append(email.id)
+                let body = email.plainBody.isEmpty ? FTSSearchIndex.stripHTMLText(email.htmlBody) : email.plainBody
+                state.byMIH[DistinctCounter.fnv1a(FeatureExtractor.messageIdentificationHash(email, bodyText: body)), default: []].append(email.id)
             }
         }
         // Same rule as before: Message-ID groups first, an email in one group only.
@@ -46,6 +51,9 @@ enum DuplicatesEngine {
             groupsOfIDs.append(ids); seen.formUnion(ids)
         }
         for ids in result.state.byContent.values where ids.count > 1 && !ids.contains(where: seen.contains) {
+            groupsOfIDs.append(ids); seen.formUnion(ids)
+        }
+        for ids in result.state.byMIH.values where ids.count > 1 && !ids.contains(where: seen.contains) {
             groupsOfIDs.append(ids); seen.formUnion(ids)
         }
         // Load only the members of groups.
