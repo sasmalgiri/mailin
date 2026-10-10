@@ -2452,38 +2452,33 @@ final class V2VerificationTests: XCTestCase {
     }
 
     #if canImport(FoundationModels)
-    /// The AI search tool retrieves via FTS5 → EmailStore (bounded evidence),
-    /// not by scanning an in-memory `[RawEmail]` corpus.
+    /// The AI search tool retrieves via FTS5 → the ACTIVE archive store
+    /// (bounded evidence), not by scanning an in-memory `[RawEmail]` corpus.
+    /// §8 #8 (2026-10-10): it used to hydrate from the v1 SwiftData store, so on
+    /// an archive held in SQLite it found ids and returned no emails. The
+    /// fixtures now live in SQLite, where every 2.x/3.0 archive lives.
     func testAISearchToolRetrievesBoundedEvidenceViaFTS() async throws {
         guard #available(macOS 26, iOS 26, *) else {
             throw XCTSkip("Foundation Models tools require macOS/iOS 26")
         }
-        let savedInMemory = EmailStore.testInMemory
-        EmailStore.testInMemory = true
-        await EmailStore.shared.resetForTesting()
-        let ftsDir = FileManager.default.temporaryDirectory.appendingPathComponent("fts_\(UUID().uuidString)")
-        FTSSearchIndex.testShardsDirectoryOverride = ftsDir
-        await FTSSearchIndex.shared.resetForTesting()
-        defer { EmailStore.testInMemory = savedInMemory; FTSSearchIndex.testShardsDirectoryOverride = nil }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("aitool_\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let env = try MailinStorageEnvironment.disposable(at: root, engine: .sqlite)
 
         let fixtures = (0..<8).map { makeEmail(mid: "<ai-\($0)@test>", subject: "Apollo \($0)", body: "project apollo status update \($0)") }
-        try await EmailStore.shared.insertBatch(fixtures, sourceFileHash: nil, batchSize: 200, progress: nil)
-        try await FTSSearchIndex.shared.clear()
-        try await FTSSearchIndex.shared.indexBatch(fixtures)
+        try await env.store.insertBatch(fixtures, batchSize: 200)
+        try await env.fts.indexBatch(fixtures)
 
-        await FTSSearchIndex.shared.resetDebugSearchCallCount()
-        let tool = SearchEmailsTool()
+        await env.fts.resetDebugSearchCallCount()
+        let tool = SearchEmailsTool(fts: env.fts, archive: ArchiveDataService(repository: env.repository))
         let output = try await tool.call(arguments: .init(query: "apollo"))
-        let dispatched = await FTSSearchIndex.shared.debugSearchCallCount
+        let dispatched = await env.fts.debugSearchCallCount
 
         XCTAssertGreaterThanOrEqual(dispatched, 1, "AI search tool must reach FTS5")
-        XCTAssertTrue(output.contains("Apollo"), "returns matching evidence")
+        XCTAssertTrue(output.contains("Apollo"), "returns matching evidence from the SQLite archive")
         let evidenceCount = output.components(separatedBy: "Subject:").count - 1
         XCTAssertGreaterThan(evidenceCount, 0, "found some evidence")
         XCTAssertLessThanOrEqual(evidenceCount, 5, "bounded evidence set (<=5), not the whole archive")
-
-        try await FTSSearchIndex.shared.clear()
-        await EmailStore.shared.resetForTesting()
     }
     #endif
 

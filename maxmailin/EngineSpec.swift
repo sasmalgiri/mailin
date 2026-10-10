@@ -10,6 +10,11 @@
 //  page owns it, what it does, what it needs, and how mature it is. The
 //  `Capability` switches delegate here so adding an engine is one entry.
 //
+//  Requirements stay within one page (a page must work on its own): AI and
+//  Professional engines never require an Archive-page engine — the scope job
+//  runs regardless of its switch, and engines that read the analysis index
+//  state its coverage.
+//
 //  All start as `.preview` (OFF): installing the build changes nothing until an
 //  engine is promoted (plan §3-M5). Promotion is a deliberate edit of
 //  `maturity` here, recorded in the plan.
@@ -84,35 +89,35 @@ struct EngineSpec: Sendable {
 
         // MARK: AI Insights (Page 2)
         case .v3AnalysisQueries:
-            return EngineSpec(.aiInsights, requires: [.v3FeatureIndex],
+            return EngineSpec(.aiInsights,
                 name: String(localized: "Whole-archive analysis (3.0)"),
                 detail: String(localized: "Dashboards, statistics, attachments, subjects and IT security figures computed for the whole archive from the analysis index."))
         case .v3AlertsAnomalies:
-            return EngineSpec(.aiInsights, requires: [.v3FeatureIndex],
+            return EngineSpec(.aiInsights,
                 name: String(localized: "Whole-archive alerts & anomalies (3.0)"),
                 detail: String(localized: "Smart alerts, anomaly detection and background findings over the whole archive."))
         case .v3PredictiveCoding:
-            return EngineSpec(.aiInsights, requires: [.v3ScopeEngine],
+            return EngineSpec(.aiInsights,
                 name: String(localized: "Whole-archive predictive coding (3.0)"),
                 detail: String(localized: "Trains on every email you have tagged and ranks the whole archive."))
         case .v3NearDuplicates:
-            return EngineSpec(.aiInsights, requires: [.v3FeatureIndex],
+            return EngineSpec(.aiInsights,
                 name: String(localized: "Whole-archive near-duplicates (3.0)"),
                 detail: String(localized: "Finds near-duplicate emails across the whole archive with recorded similarity thresholds; groups, never deletes."))
         case .v3TopicClusters:
-            return EngineSpec(.aiInsights, requires: [.v3FeatureIndex],
+            return EngineSpec(.aiInsights,
                 name: String(localized: "Whole-archive topic clusters (3.0)"),
                 detail: String(localized: "Groups the whole archive by topic."))
         case .v3Threads:
-            return EngineSpec(.aiInsights, requires: [.v3ScopeEngine],
+            return EngineSpec(.aiInsights,
                 name: String(localized: "Complete thread summaries (3.0)"),
                 detail: String(localized: "Summarises every message of a conversation, however long, in parts that fit the on-device model."))
         case .v3AIAnswers:
-            return EngineSpec(.aiInsights, requires: [.v3FeatureIndex],
+            return EngineSpec(.aiInsights,
                 name: String(localized: "Whole-archive AI answers (3.0)"),
                 detail: String(localized: "Counting questions are answered by code over the whole archive; written answers say how many emails they read."))
         case .v3Graphs:
-            return EngineSpec(.aiInsights, requires: [.v3FeatureIndex],
+            return EngineSpec(.aiInsights,
                 name: String(localized: "Whole-archive graphs (3.0)"),
                 detail: String(localized: "Relationship and knowledge graphs built from the whole archive, showing the top results with totals."))
         case .v3KeywordMonitor:
@@ -122,68 +127,68 @@ struct EngineSpec: Sendable {
 
         // MARK: Professional (Page 3)
         case .v3LegalState:
-            return EngineSpec(.professional, requires: [.v3Snapshots],
+            return EngineSpec(.professional,
                 name: String(localized: "Legal data in the archive database (3.0)"),
                 detail: String(localized: "Legal holds, evidence seals, custodians, custody events and review coding are stored in the archive database with fast bulk updates. The previous files are kept up to date too."),
                 warning: String(localized: "Takes a snapshot first. The previous files stay as a second copy for the whole of 3.0, so switching this off loses nothing."))
         case .v3EDiscovery:
-            return EngineSpec(.professional, requires: [.v3ScopeEngine],
+            return EngineSpec(.professional,
                 name: String(localized: "Whole-archive eDiscovery (3.0)"),
                 detail: String(localized: "Search, legal hold, collection verification, classification, review batches and production files cover the whole archive."))
         case .v3Bates:
-            return EngineSpec(.professional, requires: [.v3ScopeEngine],
+            return EngineSpec(.professional,
                 name: String(localized: "Whole-archive Bates numbering (3.0)"),
                 detail: String(localized: "Numbers the whole scope in date order. Numbers already assigned are never changed."))
         case .v3ChainOfCustody:
-            return EngineSpec(.professional, requires: [.v3ScopeEngine],
+            return EngineSpec(.professional,
                 name: String(localized: "Whole-archive custody verification (3.0)"),
                 detail: String(localized: "Verifies every email in scope against its stored seal."))
         case .v3Custodians:
-            return EngineSpec(.professional, requires: [.v3ScopeEngine],
+            return EngineSpec(.professional,
                 name: String(localized: "Whole-archive custodians & holds (3.0)"),
                 detail: String(localized: "Assigns custodians, places holds and verifies seals across the whole scope."))
         case .v3ReviewBatches:
-            return EngineSpec(.professional, requires: [.v3ScopeEngine],
+            return EngineSpec(.professional,
                 name: String(localized: "Whole-archive review batches (3.0)"),
                 detail: String(localized: "Builds review batches from every email in scope."))
         case .v3BatchOperations:
-            return EngineSpec(.professional, requires: [.v3ScopeEngine],
+            return EngineSpec(.professional,
                 name: String(localized: "Whole-scope batch tagging (3.0)"),
                 detail: String(localized: "Applies tags and classifications to every email in scope in the database."))
         case .v3AutomationRules:
-            return EngineSpec(.professional, requires: [.v3ScopeEngine],
+            return EngineSpec(.professional,
                 name: String(localized: "Whole-archive automation rules (3.0)"),
                 detail: String(localized: "Runs your rules over the whole scope, after showing how many emails they will touch."))
         case .v3PrivilegeScan:
-            return EngineSpec(.professional, requires: [.v3ScopeEngine],
+            return EngineSpec(.professional,
                 name: String(localized: "Whole-archive privilege scan (3.0)"),
                 detail: String(localized: "Scans every email in scope for privilege indicators and stores the flags."))
         case .v3PIIReport:
-            return EngineSpec(.professional, requires: [.v3ScopeEngine],
+            return EngineSpec(.professional,
                 name: String(localized: "Whole-archive PII report (3.0)"),
                 detail: String(localized: "Finds personal data across the whole scope, page by page."))
         case .v3IOC:
-            return EngineSpec(.professional, requires: [.v3ScopeEngine],
+            return EngineSpec(.professional,
                 name: String(localized: "Whole-archive indicator extraction (3.0)"),
                 detail: String(localized: "Extracts links, addresses, IPs and hashes from every email in scope."))
         case .v3InvestigationReport:
-            return EngineSpec(.professional, requires: [.v3ScopeEngine],
+            return EngineSpec(.professional,
                 name: String(localized: "Whole-scope investigation report (3.0)"),
                 detail: String(localized: "Builds the report sections from the whole scope rather than a loaded subset."))
         case .v3LegalReview:
-            return EngineSpec(.professional, requires: [.v3ScopeEngine],
+            return EngineSpec(.professional,
                 name: String(localized: "Whole-archive legal review statistics (3.0)"),
                 detail: String(localized: "Review progress and statistics cover every email, not a loaded subset."))
         case .v3EvidenceDesks:
-            return EngineSpec(.professional, requires: [.v3ScopeEngine],
+            return EngineSpec(.professional,
                 name: String(localized: "Whole-archive evidence desks seeding (3.0)"),
                 detail: String(localized: "Seeds source reliability from the whole scope with totals."))
         case .v3EvidenceReceipts:
-            return EngineSpec(.professional, requires: [.v3ScopeEngine],
+            return EngineSpec(.professional,
                 name: String(localized: "Provable job receipts (3.0)"),
                 detail: String(localized: "Every whole-archive job records its scope, the archive revision and a fingerprint of exactly which emails it covered, so the result can be re-run and proven."))
         case .v3PreservationExport:
-            return EngineSpec(.professional, requires: [.v3ScopeEngine],
+            return EngineSpec(.professional,
                 name: String(localized: "Preservation package export (3.0)"),
                 detail: String(localized: "Exports a BagIt package with PREMIS metadata — the archival standard — with the original emails, checksums and sidecar files."))
         default:

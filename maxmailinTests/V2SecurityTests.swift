@@ -291,7 +291,7 @@ final class V2SecurityTests: XCTestCase {
         #if os(macOS)
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent("prot-sites-\(UUID().uuidString)", isDirectory: true)
-        addTeardownBlock { try? fm.removeItem(at: root) }
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
 
         // Receipt store.
         let receipts = ImportReceiptStore(directory: root.appendingPathComponent("receipts", isDirectory: true))

@@ -888,8 +888,8 @@ final class BulkImportCoordinator {
                             envelopeProvider: envelopeProvider,
                             materializeAttachments: false,   // bulk import: no temp copy per attachment
                             sourceDigest: hash,
-                            onProgress: { prog in
-                                Task { @MainActor [weak self] in
+                            onProgress: { [weak self] prog in
+                                Task { @MainActor in
                                     self?.live.fileFraction = prog
                                     callbacks.onFileProgress?(sourceName, fileIndex, urls.count, prog)
                                 }
@@ -911,8 +911,8 @@ final class BulkImportCoordinator {
                             batchSize: batchSize,
                             envelopeProvider: envelopeProvider,
                             materializeAttachments: false,   // bulk import: no temp copy per attachment
-                            onProgress: { prog in
-                                Task { @MainActor [weak self] in
+                            onProgress: { [weak self] prog in
+                                Task { @MainActor in
                                     self?.live.fileFraction = prog
                                     callbacks.onFileProgress?(sourceName, fileIndex, urls.count, prog)
                                 }

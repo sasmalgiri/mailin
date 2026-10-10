@@ -362,6 +362,9 @@ struct AILanguageResult {
 struct SearchEmailsTool: Tool {
     let name = "searchEmails"
     let description = "Search the email archive for emails matching keywords"
+    /// Injectable for tests (disposable storage); the app uses the shared ones.
+    var fts: FTSSearchIndex = .shared
+    var archive: ArchiveDataService = .shared
 
     @Generable
     struct Arguments {
@@ -374,9 +377,9 @@ struct SearchEmailsTool: Tool {
         // or scans the whole archive (was EmailSearchIndex.hybridSearch over an
         // in-memory [RawEmail]).
         let fts = FTSQueryBuilder.freeTextOrBoolean(arguments.query) ?? FTSQueryBuilder.escapeTerm(arguments.query)
-        let ids = (try? await FTSSearchIndex.shared.searchRaw(fts, limit: 5)) ?? []
+        let ids = (try? await self.fts.searchRaw(fts, limit: 5)) ?? []
         guard !ids.isEmpty else { return "No emails found for '\(arguments.query)'" }
-        let evidence = (try? await ArchiveDataService.shared.fullEmails(ids: ids)) ?? []
+        let evidence = (try? await archive.fullEmails(ids: ids)) ?? []
         guard !evidence.isEmpty else { return "No emails found for '\(arguments.query)'" }
         var output = ""
         for e in evidence {
@@ -394,6 +397,8 @@ struct SearchEmailsTool: Tool {
 struct GetThreadInfoTool: Tool {
     let name = "getThread"
     let description = "Get all emails in a conversation thread by subject keyword"
+    var fts: FTSSearchIndex = .shared
+    var archive: ArchiveDataService = .shared
 
     @Generable
     struct Arguments {
@@ -405,8 +410,8 @@ struct GetThreadInfoTool: Tool {
         // Bounded: FTS5 finds candidate emails by subject, EmailStore hydrates
         // that bounded set, and we group only those — not the whole archive.
         let fts = FTSQueryBuilder.freeTextOrBoolean(arguments.subject) ?? FTSQueryBuilder.escapeTerm(arguments.subject)
-        let ids = (try? await FTSSearchIndex.shared.searchRaw(fts, limit: 50)) ?? []
-        let candidates = (try? await ArchiveDataService.shared.fullEmails(ids: ids)) ?? []
+        let ids = (try? await self.fts.searchRaw(fts, limit: 50)) ?? []
+        let candidates = (try? await archive.fullEmails(ids: ids)) ?? []
         let threads = ThreadGrouper.group(candidates)
         let lower = arguments.subject.lowercased()
         guard let thread = threads.first(where: { $0.subject.lowercased().contains(lower) }) else {
