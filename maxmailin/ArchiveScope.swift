@@ -31,7 +31,7 @@ struct ArchiveScope: Equatable, Sendable {
     /// Exact count, asking the store if the host did not supply it.
     func resolvedTotal() async -> Int {
         if let total { return total }
-        return (try? await ArchiveDataService.shared.count(query: query)) ?? 0
+        return (try? await ScopeJobEnvironment.archive.count(query: query)) ?? 0
     }
 
     var description: String { ScopeJob.describe(query) }

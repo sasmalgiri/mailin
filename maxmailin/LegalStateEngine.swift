@@ -70,13 +70,13 @@ final class LegalStateMirror {
             guard holdsOK, sealsOK, custodiansOK else {
                 active = false
                 legalStateLog.error("legal state verification failed: \(self.lastVerification ?? "", privacy: .public)")
-                ForensicManager.shared.logAction("Legal data move to database not verified",
+                ScopeJobEnvironment.logAction("Legal data move to database not verified",
                                                  detail: (lastVerification ?? "") + " — the files remain the source")
                 return
             }
             if first {
                 UserDefaults.standard.set(true, forKey: Self.migratedKey)
-                ForensicManager.shared.logAction("Legal data copied into the archive database",
+                ScopeJobEnvironment.logAction("Legal data copied into the archive database",
                                                  detail: (lastVerification ?? "") + " — verified; files kept as a second copy")
             }
         } catch {

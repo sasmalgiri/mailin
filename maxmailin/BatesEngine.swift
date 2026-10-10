@@ -55,7 +55,7 @@ enum BatesEngine {
         let new = all.filter { manager.assignments[$0.key] == nil }
         // One action, one audit entry: this one (merge's own entry is off).
         manager.merge(assignments: new, nextStart: result.state.next, log: false)
-        ForensicManager.shared.logAction(
+        ScopeJobEnvironment.logAction(
             "Bates Numbers Assigned",
             detail: "\(result.state.assigned) new numbers (\(result.state.first ?? "—") through \(result.state.last ?? "—")); \(result.state.skipped) already numbered, unchanged — \(result.receipt.coverageLine)")
         return (result.state, result.receipt)
@@ -145,7 +145,7 @@ enum BatesEngine {
             }
         }
         if outcome.succeeded {
-            ForensicManager.shared.logAction("Bates Index Exported", detail: "Exported CSV index with \(count) entries")
+            ScopeJobEnvironment.logAction("Bates Index Exported", detail: "Exported CSV index with \(count) entries")
         }
         return (outcome, count)
     }

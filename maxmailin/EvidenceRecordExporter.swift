@@ -57,66 +57,84 @@ enum EvidenceRecordExporter {
     }
 
     static func export(scope: ArchiveScope) async -> (ExportOutcome, Int) {
-        let store = ScopeJobEnvironment.store
-        do {
-            while try await store.fingerprintBuildMissing(limit: 1_000) > 0 {}
-            try await store.fingerprintRefreshBuckets()
-        } catch {
-            return (.failed(error.localizedDescription), 0)
+        var written = 0
+        var root = ""
+        let (outcome, _) = await PlatformExport.saveStreamed(suggestedName: "evidence_record.jsonl") { url in
+            let out = try await write(scope: scope, to: url)
+            written = out.written
+            root = out.root
+            return out.file
         }
+        if outcome.succeeded {
+            ScopeJobEnvironment.logAction("Evidence record exported",
+                detail: "\(written) emails with hash-tree proofs to archive root \(root.prefix(16))…")
+        }
+        return (outcome, written)
+    }
+
+    struct WriteError: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
+    /// Writes the record for every email in `scope` to `url` (streamed, one
+    /// month at a time). Returns how many emails it covers and the archive root.
+    static func write(scope: ArchiveScope, to url: URL) async throws
+        -> (written: Int, root: String, file: ArchiveExportResult) {
+        let store = ScopeJobEnvironment.store
+        while try await store.fingerprintBuildMissing(limit: 1_000) > 0 {}
+        try await store.fingerprintRefreshBuckets()
         guard let tree = try? await store.fingerprintTree() else {
-            return (.failed(String(localized: "the archive fingerprint could not be read")), 0)
+            throw WriteError(message: String(localized: "the archive fingerprint could not be read"))
         }
         // Emails in scope (ids only).
         var inScope = Set<UUID>()
-        do {
-            for try await page in ScopeJobEnvironment.archive.streamSummaries(query: scope.query, batchSize: 5_000) {
-                inScope.formUnion(page.map(\.id))
-            }
-        } catch {
-            return (.failed(error.localizedDescription), 0)
+        for try await page in ScopeJobEnvironment.archive.streamSummaries(query: scope.query, batchSize: 5_000) {
+            inScope.formUnion(page.map(\.id))
         }
         let bucketRoots = tree.buckets.map(\.root)
         let revision = (try? await store.corpusRevision()) ?? 0
         var written = 0
-        let (outcome, _) = await PlatformExport.saveStreamed(suggestedName: "evidence_record.jsonl") { url in
-            try await StreamedTextFile.write(to: url) { emit in
-                let enc = JSONEncoder()
-                enc.outputFormatting = [.sortedKeys]
-                struct Header: Codable {
-                    let format: String, style: String, archiveRoot: String, generatedAt: String
-                    let archiveRevision: Int, emailsInRecord: Int, buckets: [[String: String]]
-                    let hashRule: String, leafRule: String, verify: String
+        let file = try await StreamedTextFile.write(to: url) { emit in
+            let enc = JSONEncoder()
+            enc.outputFormatting = [.sortedKeys]
+            let header = Header(
+                format: "mailin-evidence-record/1", style: "RFC 4998 (Evidence Record Syntax) hash-tree proofs",
+                archiveRoot: tree.root, generatedAt: ISO8601DateFormatter().string(from: Date()),
+                archiveRevision: revision, emailsInRecord: inScope.count,
+                buckets: tree.buckets.map { ["month": String($0.bucket), "root": $0.root, "leaves": String($0.leaves)] },
+                hashRule: "parent = SHA-256 hex of \"<left>|<right>\"; an odd node is carried up unchanged",
+                leafRule: "leaf = SHA-256 hex of the email's raw MIME bytes; a leaf starting \"p:\" belongs to an email stored without raw MIME and is SHA-256 over its length-prefixed plain, HTML and header bytes",
+                verify: "Hash the email's raw MIME; fold with each step of `bucketPath` (L = sibling on the left), compare with the month root; fold with each step of `rootPath`, compare with archiveRoot.")
+            try emit(String(decoding: try enc.encode(header), as: UTF8.self) + "\n")
+            for (bucketIndex, bucket) in tree.buckets.enumerated() {
+                let leaves = try await store.fingerprintLeaves(bucket: bucket.bucket)
+                let hexes = leaves.map(\.leaf)
+                let rootPath = path(for: bucketIndex, in: bucketRoots)
+                var chunk = ""
+                for (i, leaf) in leaves.enumerated() where inScope.contains(leaf.id) {
+                    let line = Line(id: leaf.id.uuidString, leaf: leaf.leaf, month: bucket.bucket,
+                                    bucketPath: path(for: i, in: hexes), rootPath: rootPath)
+                    chunk += String(decoding: try enc.encode(line), as: UTF8.self) + "\n"
+                    written += 1
                 }
-                let header = Header(
-                    format: "mailin-evidence-record/1", style: "RFC 4998 (Evidence Record Syntax) hash-tree proofs",
-                    archiveRoot: tree.root, generatedAt: ISO8601DateFormatter().string(from: Date()),
-                    archiveRevision: revision, emailsInRecord: inScope.count,
-                    buckets: tree.buckets.map { ["month": String($0.bucket), "root": $0.root, "leaves": String($0.leaves)] },
-                    hashRule: "parent = SHA-256 hex of \"<left>|<right>\"; an odd node is carried up unchanged",
-                    leafRule: "leaf = SHA-256 hex of the email's raw MIME bytes; a leaf starting \"p:\" belongs to an email stored without raw MIME and is SHA-256 over its length-prefixed plain, HTML and header bytes",
-                    verify: "Hash the email's raw MIME; fold with each step of `bucketPath` (L = sibling on the left), compare with the month root; fold with each step of `rootPath`, compare with archiveRoot.")
-                try emit(String(data: try enc.encode(header), encoding: .utf8)! + "\n")
-                struct Line: Codable { let id: String; let leaf: String; let month: Int; let bucketPath: [Step]; let rootPath: [Step] }
-                for (bucketIndex, bucket) in tree.buckets.enumerated() {
-                    let leaves = try await store.fingerprintLeaves(bucket: bucket.bucket)
-                    let hexes = leaves.map(\.leaf)
-                    let rootPath = path(for: bucketIndex, in: bucketRoots)
-                    var chunk = ""
-                    for (i, leaf) in leaves.enumerated() where inScope.contains(leaf.id) {
-                        let line = Line(id: leaf.id.uuidString, leaf: leaf.leaf, month: bucket.bucket,
-                                        bucketPath: path(for: i, in: hexes), rootPath: rootPath)
-                        chunk += String(data: try enc.encode(line), encoding: .utf8)! + "\n"
-                        written += 1
-                    }
-                    if !chunk.isEmpty { try emit(chunk) }
-                }
+                if !chunk.isEmpty { try emit(chunk) }
             }
         }
-        if outcome.succeeded {
-            ForensicManager.shared.logAction("Evidence record exported",
-                detail: "\(written) emails with hash-tree proofs to archive root \(tree.root.prefix(16))…")
+        return (written, tree.root, file)
+    }
+
+    struct Header: Codable {
+        let format: String, style: String, archiveRoot: String, generatedAt: String
+        let archiveRevision: Int, emailsInRecord: Int, buckets: [[String: String]]
+        let hashRule: String, leafRule: String, verify: String
+    }
+    struct Line: Codable { let id: String; let leaf: String; let month: Int; let bucketPath: [Step]; let rootPath: [Step] }
+
+    /// Folds `start` up a proof path (the header's verification rule).
+    nonisolated static func fold(_ start: String, _ steps: [Step]) -> String {
+        steps.reduce(start) { h, step in
+            step.side == "L" ? SQLiteEmailStore.merkleRoot([step.hash, h]) : SQLiteEmailStore.merkleRoot([h, step.hash])
         }
-        return (outcome, written)
     }
 }

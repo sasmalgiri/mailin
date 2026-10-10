@@ -102,7 +102,7 @@ enum EDiscoveryEngine {
         ) { state, page in
             state.released += custodian.releaseLegalHoldBatched(page.map(\.id))
         }
-        ForensicManager.shared.logAction("Legal Hold Removed",
+        ScopeJobEnvironment.logAction("Legal Hold Removed",
                                          detail: "\(result.state.released) emails released — scope: \(result.receipt.scope)")
         return (result.state.released, result.receipt)
     }

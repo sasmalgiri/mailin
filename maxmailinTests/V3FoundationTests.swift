@@ -13,6 +13,7 @@
 
 import XCTest
 import SQLite3
+import CryptoKit
 @testable import maxmailin
 
 @MainActor
@@ -342,5 +343,96 @@ final class V3FoundationTests: XCTestCase {
             let third = try await BatesEngine.number(query: .all, prefix: "T", start: 3, format: format)
             XCTAssertEqual(third.state.first, "T0009")
         }
+    }
+
+    // MARK: - Evidence records (§3-E2)
+
+    /// Every line of the record proves its email on its own: the leaf is the
+    /// SHA-256 of the stored raw MIME, it folds up to its month root, and the
+    /// month root folds up to the archive root. Only emails in scope appear.
+    func testEvidenceRecord_everyProofFoldsToTheArchiveRoot() async throws {
+        let env = makeEnv()
+        try await env.store.insertBatch((0..<30).map { makeEmail($0 * 3, from: $0 % 3 == 0 ? "carol@x.org" : "alice@example.com") },
+                                        batchSize: 100)
+        let url = env.root.appendingPathComponent("record.jsonl")
+        var scope = ArchiveScope.wholeArchive
+        scope.query.sender = "alice"
+
+        let result = try await ScopeJobEnvironment.$current.withValue(env.job) {
+            try await EvidenceRecordExporter.write(scope: scope, to: url)
+        }
+        XCTAssertEqual(result.written, 20)
+
+        let lines = try String(contentsOf: url, encoding: .utf8).split(separator: "\n").map { Data($0.utf8) }
+        let header = try JSONDecoder().decode(EvidenceRecordExporter.Header.self, from: lines[0])
+        XCTAssertEqual(header.archiveRoot, result.root)
+        XCTAssertEqual(header.emailsInRecord, 20)
+        let monthRoots = Dictionary(uniqueKeysWithValues: header.buckets.map { (Int($0["month"]!)!, $0["root"]!) })
+        XCTAssertGreaterThan(monthRoots.count, 1, "the fixture spans several months")
+
+        let entries = try lines.dropFirst().map { try JSONDecoder().decode(EvidenceRecordExporter.Line.self, from: $0) }
+        XCTAssertEqual(entries.count, 20)
+        for entry in entries {
+            let id = try XCTUnwrap(UUID(uuidString: entry.id))
+            let raw = try await env.store.rawBytes(id: id)
+            let digest = SHA256.hash(data: try XCTUnwrap(raw)).map { String(format: "%02x", $0) }.joined()
+            XCTAssertEqual(entry.leaf, digest, "the leaf is the hash of the stored original")
+            let month = EvidenceRecordExporter.fold(entry.leaf, entry.bucketPath)
+            XCTAssertEqual(month, monthRoots[entry.month])
+            XCTAssertEqual(EvidenceRecordExporter.fold(month, entry.rootPath), header.archiveRoot)
+        }
+    }
+
+    /// The proof path is right for every position and every tree size,
+    /// including odd nodes carried up unchanged.
+    func testEvidenceRecord_pathFoldsForEveryPositionAndSize() {
+        for size in 1...17 {
+            let leaves = (0..<size).map { SHA256.hash(data: Data("leaf \($0)".utf8)).map { String(format: "%02x", $0) }.joined() }
+            let root = SQLiteEmailStore.merkleRoot(leaves)
+            for i in 0..<size {
+                XCTAssertEqual(EvidenceRecordExporter.fold(leaves[i], EvidenceRecordExporter.path(for: i, in: leaves)), root,
+                               "size \(size), index \(i)")
+            }
+        }
+    }
+
+    // MARK: - Preservation package (§3-E5)
+
+    /// The bag holds every original byte-for-byte, validates, and the audit
+    /// entry is written after the package exists. Adding an unlisted payload
+    /// file or changing one makes it invalid.
+    func testPreservationBag_validates_andDetectsAddedOrChangedFiles() async throws {
+        let env = makeEnv()
+        let mail = (0..<8).map { makeEmail($0) }
+        try await env.store.insertBatch(mail, batchSize: 100)
+        let bag = env.root.appendingPathComponent("bag", isDirectory: true)
+
+        let result = try await ScopeJobEnvironment.$current.withValue(env.job) {
+            try await PreservationExporter.export(scope: .wholeArchive, to: bag, organization: "Test Org")
+        }
+        XCTAssertEqual(result.originals, 8)
+        XCTAssertEqual(result.withoutOriginal, 0)
+        XCTAssertTrue(result.verified)
+        XCTAssertTrue(env.job.auditLines().contains { $0.hasPrefix("Preservation package exported") })
+
+        for id in try await idsOldestFirst(env) {
+            let stored = try await env.store.rawBytes(id: id)
+            let packaged = try Data(contentsOf: bag.appendingPathComponent("data/originals/\(id.uuidString).eml"))
+            XCTAssertEqual(packaged, stored, "byte-identical original")
+        }
+        let info = try String(contentsOf: bag.appendingPathComponent("bag-info.txt"), encoding: .utf8)
+        XCTAssertTrue(info.contains("Payload-Oxum: \(result.payloadBytes).9"), "8 originals + premis.xml")
+
+        // An unlisted payload file: incomplete bag.
+        let stray = bag.appendingPathComponent("data/originals/stray.eml")
+        try Data("not in the manifest".utf8).write(to: stray)
+        XCTAssertFalse(try PreservationExporter.verify(bag: bag), "every payload file must be listed")
+        try FileManager.default.removeItem(at: stray)
+        XCTAssertTrue(try PreservationExporter.verify(bag: bag))
+
+        // A changed original: fixity fails.
+        let first = try XCTUnwrap(try FileManager.default.contentsOfDirectory(atPath: bag.appendingPathComponent("data/originals").path).first)
+        try Data("tampered".utf8).write(to: bag.appendingPathComponent("data/originals/\(first)"))
+        XCTAssertFalse(try PreservationExporter.verify(bag: bag))
     }
 }

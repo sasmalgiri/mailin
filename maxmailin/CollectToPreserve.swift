@@ -32,7 +32,7 @@ struct CollectToPreserveToggle: View {
             }
         }
         .onChange(of: on) { _, value in
-            ForensicManager.shared.logAction("Collect-to-preserve \(value ? "on" : "off")",
+            ScopeJobEnvironment.logAction("Collect-to-preserve \(value ? "on" : "off")",
                                              detail: "Imports \(value ? "are" : "are no longer") held and sealed as they are stored")
         }
     }

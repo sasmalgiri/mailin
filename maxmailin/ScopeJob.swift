@@ -131,6 +131,33 @@ struct ScopeJobEnvironment: Sendable {
 
     static var archive: ArchiveDataService { current?.archive ?? .shared }
     static var store: SQLiteEmailStore { current?.store ?? .shared }
+
+    /// Audit entry for a 3.0 engine action — call only after the action
+    /// really happened (rule 5). In a bound environment the entry is kept
+    /// with it (`auditLines`), never in the real audit chain.
+    @MainActor
+    static func logAction(_ action: String, detail: String) {
+        guard let root = current?.root else {
+            ForensicManager.shared.logAction(action, detail: detail)
+            return
+        }
+        let url = root.appendingPathComponent("audit.log")
+        let line = Data((action + "\t" + detail.replacingOccurrences(of: "\n", with: " ") + "\n").utf8)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        if let handle = try? FileHandle(forWritingTo: url) {
+            _ = try? handle.seekToEnd()
+            try? handle.write(contentsOf: line)
+            try? handle.close()
+        } else {
+            try? line.write(to: url)
+        }
+    }
+
+    /// Audit entries recorded in this environment, oldest first.
+    func auditLines() -> [String] {
+        ((try? String(contentsOf: root.appendingPathComponent("audit.log"), encoding: .utf8)) ?? "")
+            .split(separator: "\n").map(String.init)
+    }
 }
 
 enum ScopeJobCheckpointStore {

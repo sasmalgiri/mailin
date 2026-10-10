@@ -44,7 +44,7 @@ enum BatchOperationsEngine {
         case .add(let tag): ReviewStateService.shared.addTag(tag, to: loaded)
         case .remove(let tag): ReviewStateService.shared.removeTag(tag, from: loaded)
         }
-        ForensicManager.shared.logAction(
+        ScopeJobEnvironment.logAction(
             "Bulk Tag Applied",
             detail: "\(title) on \(result.state.done) email(s) — scope: \(result.receipt.scope)")
         return (result.state.done, result.receipt)

@@ -131,13 +131,17 @@ enum PreservationExporter {
         try Data(tag.utf8).write(to: bag.appendingPathComponent("tagmanifest-sha256.txt"))
 
         let verified = try verify(bag: bag)
-        ForensicManager.shared.logAction("Preservation package exported",
+        ScopeJobEnvironment.logAction("Preservation package exported",
             detail: "\(originals) originals, \(missing) without an original, bag verified: \(verified) → \(bag.lastPathComponent)")
         return Result(bag: bag, originals: originals, withoutOriginal: missing, payloadBytes: payloadBytes, verified: verified)
     }
 
-    /// Re-hashes every file listed in both manifests (one file at a time).
+    /// RFC 8493 validation: every file listed in both manifests re-hashes to
+    /// its digest (one file at a time), every payload file under `data/` is
+    /// listed (a bag is complete), and the Payload-Oxum matches the payload's
+    /// byte and file counts.
     static func verify(bag: URL) throws -> Bool {
+        var listedPayload = Set<String>()
         for manifestName in ["manifest-sha256.txt", "tagmanifest-sha256.txt"] {
             let text = try String(contentsOf: bag.appendingPathComponent(manifestName), encoding: .utf8)
             for line in text.split(separator: "\n") {
@@ -146,7 +150,28 @@ enum PreservationExporter {
                 let path = parts[1].trimmingCharacters(in: .whitespaces)
                 guard let data = try? Data(contentsOf: bag.appendingPathComponent(path)),
                       sha256Hex(data) == parts[0] else { return false }
+                if manifestName == "manifest-sha256.txt" { listedPayload.insert(path) }
             }
+        }
+        // Completeness and Payload-Oxum.
+        let dataDir = bag.appendingPathComponent("data", isDirectory: true).standardizedFileURL
+        var payloadFiles = 0
+        var payloadBytes: Int64 = 0
+        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey]
+        guard let walker = FileManager.default.enumerator(at: dataDir, includingPropertiesForKeys: keys) else { return false }
+        for case let file as URL in walker {
+            let values = try file.resourceValues(forKeys: Set(keys))
+            guard values.isRegularFile == true else { continue }
+            let relative = "data/" + file.standardizedFileURL.path.dropFirst(dataDir.path.count + 1)
+            guard listedPayload.contains(relative) else { return false }
+            payloadFiles += 1
+            payloadBytes += Int64(values.fileSize ?? 0)
+        }
+        guard payloadFiles == listedPayload.count else { return false }
+        let info = (try? String(contentsOf: bag.appendingPathComponent("bag-info.txt"), encoding: .utf8)) ?? ""
+        if let oxum = info.split(separator: "\n").first(where: { $0.hasPrefix("Payload-Oxum:") }) {
+            let value = oxum.dropFirst("Payload-Oxum:".count).trimmingCharacters(in: .whitespaces)
+            guard value == "\(payloadBytes).\(payloadFiles)" else { return false }
         }
         return true
     }

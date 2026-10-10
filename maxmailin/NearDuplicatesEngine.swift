@@ -133,7 +133,7 @@ enum NearDuplicatesEngine {
             .init(key: "Started", value: f.string(from: started)),
             .init(key: "Finished", value: f.string(from: Date())),
         ]
-        ForensicManager.shared.logAction("Near-Duplicate Detection",
+        ScopeJobEnvironment.logAction("Near-Duplicate Detection",
             detail: "\(groupCount) groups from \(verified) verified of \(candidates) candidate pairs; threshold \(threshold); \(coverage.indexed) of \(coverage.total) emails indexed")
         return Result(groups: groupCount, verifiedPairs: verified, candidatePairs: candidates,
                       indexed: coverage.indexed, total: coverage.total, receiptFields: fields)

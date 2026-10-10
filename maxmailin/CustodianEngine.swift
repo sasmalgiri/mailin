@@ -44,7 +44,7 @@ enum CustodianEngine {
             start += chunk.count
         }
         let held = manager.legalHolds.count - before
-        ForensicManager.shared.logAction("Legal Hold Placed",
+        ScopeJobEnvironment.logAction("Legal Hold Placed",
                                          detail: "Legal hold placed on \(held) emails of custodian \(custodian) (\(ids.count) assigned) with evidence seals")
         return (held, ids.count)
     }
@@ -84,7 +84,7 @@ enum CustodianEngine {
             }
             start += chunk.count
         }
-        ForensicManager.shared.logAction(
+        ScopeJobEnvironment.logAction(
             "Evidence Seals Verified",
             detail: "\(result.verdicts.count) checked — \(result.intact) intact, \(result.broken) broken, \(result.unsealed) unsealed (whole archive)")
         return result
