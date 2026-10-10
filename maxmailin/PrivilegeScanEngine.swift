@@ -17,22 +17,31 @@ enum PrivilegeScanEngine {
 
     @discardableResult
     static func scan(query: EmailQuery) async throws -> (flagged: Int, receipt: ScopeJobReceipt) {
-        var flags: [UUID: [String]] = [:]
+        // Only the emails actually scanned change: flags elsewhere in the
+        // archive (a narrower scope, or a cancelled run) are kept. Replacing
+        // the whole dictionary erased every flag outside the scope.
+        let forensic = ForensicManager.shared
+        var flags = forensic.privilegeFlags
+        var flaggedInScope = 0
         let result = try await ScopeJob.run(
             key: "privilege.scan", title: String(localized: "Privilege scan"),
             capability: .v3PrivilegeScan, query: query, resumable: false, initialState: Progress()
         ) { state, batch in
             for email in batch {
                 let r = ForensicManager.detectPrivilege(for: email)
-                if r.isLikelyPrivileged { flags[email.id] = r.indicators }
+                if r.isLikelyPrivileged {
+                    flags[email.id] = r.indicators
+                    flaggedInScope += 1
+                } else {
+                    flags[email.id] = nil
+                }
             }
             state.emails += batch.count
         }
-        let forensic = ForensicManager.shared
         forensic.privilegeFlags = flags
-        forensic.logAction("Privilege Scan",
-                           detail: "Scanned \(result.receipt.processed) emails, flagged \(flags.count) as potentially privileged — scope: \(result.receipt.scope)")
-        return (flags.count, result.receipt)
+        ScopeJobEnvironment.logAction("Privilege Scan",
+                           detail: "Scanned \(result.receipt.processed) emails, flagged \(flaggedInScope) as potentially privileged — scope: \(result.receipt.scope); \(result.receipt.coverageLine)")
+        return (flaggedInScope, result.receipt)
     }
 
     /// The call every privilege-scan button makes: the whole-scope engine

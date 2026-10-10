@@ -80,7 +80,12 @@ enum CapabilityWiring {
             // while on; turning on migrates the existing files once.
             LegalStateMirror.isEnabled = isOn
             CollectToPreserve.engineOn = isOn
-            if isOn { Task { @MainActor in await LegalStateMirror.shared.activate() } }
+            // Recovery of an interrupted direct database write runs whatever
+            // the switch (rule 16); off means the files alone are the truth.
+            Task { @MainActor in
+                await LegalStateMirror.shared.recoverInterruptedDatabaseWrite()
+                if isOn { await LegalStateMirror.shared.activate() } else { await LegalStateMirror.shared.deactivate() }
+            }
         case .locatorReads:
             // S5. Off means the readers fall back to the stored raw MIME,
             // exactly as they did before the capability existed.

@@ -59,11 +59,18 @@ enum EDiscoveryEngine {
     /// seals go to the database per batch and are mirrored into the files
     /// once at the end; otherwise each batch is applied in one assignment.
     static func applyHold(scope: ArchiveScope) async throws -> (held: Int, sealed: Int, receipt: ScopeJobReceipt) {
-        let custodian = CustodianManager.shared
+        let custodian = ScopeJobEnvironment.custodians
         let forensic = ForensicManager.shared
         let store = ScopeJobEnvironment.store
-        let viaDatabase = LegalStateMirror.isEnabled && LegalStateMirror.shared.isActive
-        let result = try await ScopeJob.run(
+        let mirror = ScopeJobEnvironment.legalMirror
+        let viaDatabase = mirror.isOn && mirror.isActive
+        // Rule 16: rows written straight into the database reach the files
+        // even if the job stops part-way (absorbed below on success or
+        // failure; after a crash, at the next launch).
+        if viaDatabase { mirror.beginDatabaseWrite() }
+        let result: (state: HoldState, receipt: ScopeJobReceipt)
+        do {
+            result = try await ScopeJob.run(
             key: "ediscovery.hold", title: String(localized: "Apply legal hold"),
             capability: .v3EDiscovery, query: scope.query, batchSize: viaDatabase ? 500 : 2_000,
             initialState: HoldState()
@@ -84,8 +91,13 @@ enum EDiscoveryEngine {
                 state.sealed += custodian.evidenceSeals.count - before
             }
         }
+        } catch {
+            if viaDatabase { await mirror.recoverInterruptedDatabaseWrite() }
+            throw error
+        }
         if viaDatabase {
             custodian.absorbFromDatabase(holds: try await store.legalHoldIDs(), seals: try await store.allSeals(), custodians: nil)
+            mirror.endDatabaseWrite()
         }
         forensic.logAction("Legal Hold Placed",
                            detail: "\(result.state.held) emails newly held, \(result.state.sealed) sealed — scope: \(result.receipt.scope); \(result.receipt.coverageLine)")
@@ -95,7 +107,7 @@ enum EDiscoveryEngine {
     struct ReleaseState: Codable, Sendable { var released = 0 }
 
     static func releaseHold(scope: ArchiveScope) async throws -> (released: Int, receipt: ScopeJobReceipt) {
-        let custodian = CustodianManager.shared
+        let custodian = ScopeJobEnvironment.custodians
         let result = try await ScopeJob.runIDs(
             key: "ediscovery.release", title: String(localized: "Release legal hold"),
             capability: .v3EDiscovery, query: scope.query, batchSize: 5_000, initialState: ReleaseState()
@@ -118,7 +130,7 @@ enum EDiscoveryEngine {
             } catch { return n }
             return n
         }
-        let holds = CustodianManager.shared.legalHolds
+        let holds = ScopeJobEnvironment.custodians.legalHolds
         guard !holds.isEmpty else { return 0 }
         var n = 0
         do {

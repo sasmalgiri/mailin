@@ -29,17 +29,24 @@ class CustodianManager: ObservableObject {
         return dir
     }()
 
-    private let custodiansURL = appSupportDir.appendingPathComponent("custodians.json")
-    private let legalHoldsURL = appSupportDir.appendingPathComponent("legal_holds.json")
-    private let sealsURL = appSupportDir.appendingPathComponent("evidence_seals.json")
+    private let custodiansURL: URL
+    private let legalHoldsURL: URL
+    private let sealsURL: URL
+    /// Where this manager's files live (the mirror keeps its markers there).
+    let directory: URL
+
+    /// §3-F4: the database mirror this manager feeds (production: `.shared`;
+    /// a test pairs a disposable manager with its own mirror).
+    weak var mirrorTarget: LegalStateMirror?
+    private var legalMirror: LegalStateMirror { mirrorTarget ?? .shared }
 
     private func mirror() {
-        if LegalStateMirror.isEnabled { LegalStateMirror.shared.scheduleSync() }
+        if legalMirror.isOn { legalMirror.scheduleSync() }
     }
 
     /// One assignment per collection, so the files are written once and the
     /// database mirror gets one coalesced diff (v3 bulk path).
-    private var batching: Bool { LegalStateMirror.isEnabled }
+    private var batching: Bool { legalMirror.isOn }
 
     /// Pulls rows written directly into the database by a whole-scope action
     /// (§3-F4) into memory and therefore into the files. `nil` = unchanged.
@@ -53,7 +60,32 @@ class CustodianManager: ObservableObject {
         if let newCustodians, newCustodians != custodians { custodians = newCustodians }
     }
 
-    private init() {
+    /// Recovery after an interrupted database-only job: adds what the
+    /// database has and the files lack, and never removes anything (a hold
+    /// released in the files stays released). Returns how many rows were added.
+    @discardableResult
+    func absorbDatabaseAdditions(holds: Set<UUID>, seals: [UUID: String], custodians dbCustodians: [UUID: String]) -> Int {
+        let newHolds = holds.subtracting(legalHolds)
+        if !newHolds.isEmpty { legalHolds = legalHolds.union(newHolds) }
+        let newSeals = seals.filter { evidenceSeals[$0.key] == nil }
+        if !newSeals.isEmpty { evidenceSeals = evidenceSeals.merging(newSeals) { current, _ in current } }
+        let newCustodians = dbCustodians.filter { custodians[$0.key] == nil }
+        if !newCustodians.isEmpty { custodians = custodians.merging(newCustodians) { current, _ in current } }
+        return newHolds.count + newSeals.count + newCustodians.count
+    }
+
+    private convenience init() {
+        self.init(directory: Self.appSupportDir)
+    }
+
+    /// A manager over the files in `directory` (production: Application
+    /// Support/mailin; tests: a disposable folder).
+    init(directory: URL) {
+        self.directory = directory
+        custodiansURL = directory.appendingPathComponent("custodians.json")
+        legalHoldsURL = directory.appendingPathComponent("legal_holds.json")
+        sealsURL = directory.appendingPathComponent("evidence_seals.json")
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         loadCustodians()
         loadLegalHolds()
         loadSeals()

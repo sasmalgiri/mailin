@@ -5298,16 +5298,29 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     // MARK: - Mutation
 
+    /// §3-F4: whether `legal_holds` is the live, verified copy of the legal
+    /// state (set by the legal-data engine while it is on). Only then does
+    /// delete refuse held emails on its own — with the engine off the files
+    /// are the truth and a hold released there must not keep blocking.
+    private(set) var enforcesDatabaseLegalHolds = false
+    func setEnforcesDatabaseLegalHolds(_ on: Bool) { enforcesDatabaseLegalHolds = on }
+
+    /// Deletes `ids`. Returns the ids that were NOT deleted because they are
+    /// under a legal hold in the database (empty unless the legal-data engine
+    /// is on), so callers can say "X of Y deleted".
     func delete(ids requested: Set<UUID>) throws {
-        guard !requested.isEmpty else { return }
+        try deleteReportingHeld(ids: requested)
+    }
+
+    @discardableResult
+    func deleteReportingHeld(ids requested: Set<UUID>) throws -> Set<UUID> {
+        guard !requested.isEmpty else { return [] }
         let db = try ensureDB()
         // 3.0 F4: defence in depth — an email under a legal hold recorded in
-        // the database is never deleted, whichever caller asks. The table is
-        // only populated by the v3LegalState engine, so with it off this is a
-        // no-op and behaviour is unchanged.
-        let held = try legalHeldAmong(Array(requested))
+        // the database is never deleted, whichever caller asks.
+        let held = enforcesDatabaseLegalHolds ? try legalHeldAmong(Array(requested)) : []
         let ids = requested.subtracting(held)
-        guard !ids.isEmpty else { return }
+        guard !ids.isEmpty else { return held }
         let now = Int64(Date().timeIntervalSince1970)
         try exec(db, "BEGIN TRANSACTION;")
         do {
@@ -5357,6 +5370,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
             try? exec(db, "ROLLBACK;")
             throw error
         }
+        return held
     }
 
     func clearAll() throws {

@@ -125,12 +125,17 @@ struct ScopeJobEnvironment: Sendable {
     var store: SQLiteEmailStore
     /// Holds this environment's checkpoints and crash breadcrumbs.
     var root: URL
+    /// Legal files and their database mirror (nil = the app's).
+    var custodian: CustodianManager? = nil
+    var legal: LegalStateMirror? = nil
     var checkpoints: URL { root.appendingPathComponent("ScopeJobs", isDirectory: true) }
 
     @TaskLocal static var current: ScopeJobEnvironment?
 
     static var archive: ArchiveDataService { current?.archive ?? .shared }
     static var store: SQLiteEmailStore { current?.store ?? .shared }
+    @MainActor static var custodians: CustodianManager { current?.custodian ?? .shared }
+    @MainActor static var legalMirror: LegalStateMirror { current?.legal ?? .shared }
 
     /// Audit entry for a 3.0 engine action — call only after the action
     /// really happened (rule 5). In a bound environment the entry is kept

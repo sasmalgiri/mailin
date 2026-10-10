@@ -19,7 +19,7 @@ enum CustodianEngine {
     /// Ids of the group: a custodian's emails, every unassigned email, or
     /// (nil) the whole archive. Ids only — never full emails.
     static func ids(for group: String?) async throws -> [UUID] {
-        let manager = CustodianManager.shared
+        let manager = ScopeJobEnvironment.custodians
         if let group, group != unassignedKey { return manager.emailIDs(for: group) }
         var out: [UUID] = []
         for try await page in ScopeJobEnvironment.archive.streamSummaries(query: .all, batchSize: 5_000) {
@@ -30,7 +30,7 @@ enum CustodianEngine {
 
     /// Holds + set-once seals on every email of `custodian`, in batches.
     static func holdAll(custodian: String) async throws -> (held: Int, total: Int) {
-        let manager = CustodianManager.shared
+        let manager = ScopeJobEnvironment.custodians
         let ids = manager.emailIDs(for: custodian)
         let token = EngineGuard.begin(.v3Custodians)
         defer { EngineGuard.end(token) }
@@ -56,7 +56,7 @@ enum CustodianEngine {
 
     /// Verifies the seal of every HELD email in the group.
     static func verifySeals(group: String?) async throws -> SealResult {
-        let manager = CustodianManager.shared
+        let manager = ScopeJobEnvironment.custodians
         let token = EngineGuard.begin(.v3Custodians)
         defer { EngineGuard.end(token) }
         let held: [UUID]
@@ -94,30 +94,30 @@ enum CustodianEngine {
     static func assign(_ name: String, group: String?) async throws -> Int {
         let token = EngineGuard.begin(.v3Custodians)
         defer { EngineGuard.end(token) }
-        if group == nil, LegalStateMirror.isEnabled, LegalStateMirror.shared.isActive {
-            return try await LegalStateMirror.shared.assignCustodian(name, query: .all)
+        if group == nil, ScopeJobEnvironment.legalMirror.isOn, ScopeJobEnvironment.legalMirror.isActive {
+            return try await ScopeJobEnvironment.legalMirror.assignCustodian(name, query: .all)
         }
         let ids = try await ids(for: group)
-        CustodianManager.shared.assignCustodian(name, to: ids)
+        ScopeJobEnvironment.custodians.assignCustodian(name, to: ids)
         return ids.count
     }
 
     /// Emails in the archive with no custodian (exact).
     static func unassignedCount() async -> Int {
-        if LegalStateMirror.isEnabled, LegalStateMirror.shared.isActive,
+        if ScopeJobEnvironment.legalMirror.isOn, ScopeJobEnvironment.legalMirror.isActive,
            let n = try? await ScopeJobEnvironment.store.unassignedCustodianCount() { return n }
         return (try? await ids(for: unassignedKey).count) ?? 0
     }
 
     /// The custodian report with whole-archive totals — same layout as before.
     static func report() async throws -> String {
-        let manager = CustodianManager.shared
+        let manager = ScopeJobEnvironment.custodians
         let token = EngineGuard.begin(.v3Custodians)
         defer { EngineGuard.end(token) }
         struct Totals { var emails = 0, held = 0; var first: Date?, last: Date? }
         var totals: [String: Totals] = [:]
         var unassigned = 0
-        if LegalStateMirror.isEnabled, LegalStateMirror.shared.isActive {
+        if ScopeJobEnvironment.legalMirror.isOn, ScopeJobEnvironment.legalMirror.isActive {
             for t in try await ScopeJobEnvironment.store.custodianTotals() {
                 totals[t.custodian] = Totals(emails: t.emails, held: t.held, first: t.firstDate, last: t.lastDate)
             }
