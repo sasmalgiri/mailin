@@ -440,3 +440,35 @@ class SmartAutoTagger: ObservableObject {
         return ""
     }
 }
+
+// MARK: - §3-A10 whole-archive tagging (switch: `v3AnalysisQueries`)
+//
+// The NLP tag rules (`generateNLPTags`) over EVERY email, persisted per batch
+// into the archive database (derived.smart_tags), so tags survive a relaunch
+// and cover the archive. Apple Intelligence enrichment stays on the emails a
+// person is looking at — running the on-device model over every email of a
+// large archive is not practical.
+
+extension SmartAutoTagger {
+    private struct Progress: Codable, Sendable { var emails = 0 }
+
+    func generateTagsWholeArchive(query: EmailQuery = .all) async throws -> (tags: KeyCounter, receipt: ScopeJobReceipt) {
+        let store = SQLiteEmailStore.shared
+        var counts = KeyCounter()
+        let result = try await ScopeJob.run(
+            key: "autotag.whole", title: String(localized: "Smart auto-tagging"),
+            capability: .v3AnalysisQueries, query: query, initialState: Progress()
+        ) { state, batch in
+            let tagged = batch.map { ($0.id, Self.generateNLPTags($0).map(\.tag)) }
+            await Task.yield()
+            var map: [UUID: [String]] = [:]
+            for (id, tags) in tagged {
+                map[id] = tags
+                counts.add(contentsOf: tags)
+            }
+            try await store.derivedSetSmartTags(map)
+            state.emails += batch.count
+        }
+        return (counts, result.receipt)
+    }
+}

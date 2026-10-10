@@ -8,6 +8,11 @@ struct PersonalEmailOrganizerView: View {
     // corpus). Categorization/cleanup/stats run over this sample; the exact
     // archive total comes from the store.
     @State private var workingSet: [MBOXParser.RawEmail] = []
+    // §3-A10: cleanup/storage figures over the whole archive (3.0 engine).
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+    @State private var cleanup: PersonalCleanupStats?
+    @State private var cleanupNote: String?
+    private var v3: Bool { v3Modules?.isOn(.v3AnalysisQueries) ?? false }
     @State private var archiveTotal = 0
 
     // MARK: - State
@@ -119,6 +124,14 @@ struct PersonalEmailOrganizerView: View {
         .featureTutorial(.personal, key: "personal_tutorial_seen", isPresented: $showTutorial)
         .sheet(isPresented: $showCleanupWizard) { cleanupWizardSheet }
         .workingSetLimitNotice(shown: workingSet.count, total: archiveTotal)
+        .task(id: v3) {
+            guard v3, cleanup == nil else { return }
+            do {
+                let r = try await PersonalCleanupEngine.compute()
+                cleanup = r.stats
+                cleanupNote = String(localized: "Cleanup and storage figures cover all \(r.stats.emails) emails.")
+            } catch { cleanupNote = error.localizedDescription }
+        }
         .task { await loadBoundedWorkingSet() }
         .task { await loadV3Data() }
         .task { await loadV4Data() }
@@ -875,13 +888,14 @@ struct PersonalEmailOrganizerView: View {
                 (MBOXParser.parseDate($0.headers["Date"] ?? "") ?? .distantPast) >
                 (MBOXParser.parseDate($1.headers["Date"] ?? "") ?? .distantPast)
             }
+        let attachmentEmailCount = cleanup?.attachmentEmails ?? attachmentEmails.count
 
         return ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                sectionTitle("Attachments (\(totalAttachments) files in \(attachmentEmails.count) emails)",
+                sectionTitle("Attachments (\(totalAttachments) files in \(attachmentEmailCount) emails)",
                              icon: "paperclip", color: .brown)
 
-                let typeStats = attachmentTypeStats()
+                let typeStats = cleanup?.attachmentTypes ?? attachmentTypeStats()
                 HStack(spacing: 12) {
                     ForEach(typeStats.prefix(5), id: \.0) { type, count in
                         VStack(spacing: 2) {
@@ -937,16 +951,20 @@ struct PersonalEmailOrganizerView: View {
             VStack(alignment: .leading, spacing: 16) {
                 sectionTitle("Cleanup Suggestions", icon: "sparkles", color: .purple)
 
-                let duplicateCount = countDuplicates()
+                let duplicateCount = cleanup?.duplicates ?? countDuplicates()
                 let largeEmails = findLargeEmails()
-                let noSubject = workingSet.filter { ($0.headers["Subject"] ?? "").isEmpty }
+                let largeCount = cleanup?.largeEmails ?? largeEmails.count
+                let noSubjectCount = cleanup?.noSubject ?? workingSet.filter { ($0.headers["Subject"] ?? "").isEmpty }.count
+                if let cleanupNote {
+                    Text(cleanupNote).font(.system(size: 9)).foregroundColor(.secondary)
+                }
 
                 HStack(spacing: 12) {
                     cleanupCard("Potential Duplicates", value: "\(duplicateCount)", icon: "doc.on.doc", color: .indigo,
                                 description: String(localized: "Emails with identical subjects and senders"))
-                    cleanupCard("Large Emails", value: "\(largeEmails.count)", icon: "externaldrive", color: .orange,
+                    cleanupCard("Large Emails", value: "\(largeCount)", icon: "externaldrive", color: .orange,
                                 description: String(localized: "Emails over 100KB in body size"))
-                    cleanupCard("No Subject", value: "\(noSubject.count)", icon: "text.badge.xmark", color: .red,
+                    cleanupCard("No Subject", value: "\(noSubjectCount)", icon: "text.badge.xmark", color: .red,
                                 description: String(localized: "Emails missing a subject line"))
                 }
 
@@ -976,8 +994,8 @@ struct PersonalEmailOrganizerView: View {
                 Divider()
 
                 sectionTitle("Storage Breakdown", icon: "chart.pie", color: .blue)
-                let totalBodySize = workingSet.reduce(0) { $0 + $1.plainBody.count + $1.htmlBody.count }
-                let totalAttSize = workingSet.flatMap { $0.attachments }.reduce(0) { $0 + $1.size }
+                let totalBodySize = cleanup?.bodyCharacters ?? workingSet.reduce(0) { $0 + $1.plainBody.count + $1.htmlBody.count }
+                let totalAttSize = cleanup?.attachmentBytes ?? workingSet.flatMap { $0.attachments }.reduce(0) { $0 + $1.size }
                 HStack(spacing: 20) {
                     VStack {
                         Text(formatBytes(totalBodySize)).font(.system(size: 16, weight: .bold)).foregroundColor(.blue)
@@ -1725,7 +1743,8 @@ struct PersonalEmailOrganizerView: View {
     }
 
     private var totalAttachments: Int {
-        workingSet.flatMap { $0.attachments }.count
+        if let cleanup { return cleanup.attachmentTypes.reduce(0) { $0 + $1.1 } }
+        return workingSet.flatMap { $0.attachments }.count
     }
 
     private var dateRangeString: String {

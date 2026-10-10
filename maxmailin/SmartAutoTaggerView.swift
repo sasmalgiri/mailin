@@ -12,6 +12,11 @@ struct SmartAutoTaggerView: View {
     // v2: bounded most-recent working set from the store (no injected corpus).
     @State private var workingSet: [MBOXParser.RawEmail] = []
     @State private var archiveTotal = 0
+    // §3-A10: whole-archive tags (persisted) when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+    @State private var wholeTags: KeyCounter?
+    @State private var wholeNote: String?
+    private var v3: Bool { v3Modules?.isOn(.v3AnalysisQueries) ?? false }
     var isPresented: Binding<Bool>?
     @StateObject private var tagger = SmartAutoTagger()
     @State private var selectedTag: String?
@@ -115,9 +120,19 @@ struct SmartAutoTaggerView: View {
     private var tagCloudSection: some View {
         VStack(alignment: .leading, spacing: Spacing.xSmall) {
             HStack {
-                Text("\(allUniqueTags.count) unique tags across \(tagger.suggestedTags.count) emails")
-                    .font(Typography.subheadline)
-                    .fontWeight(.semibold)
+                if let wholeTags {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(wholeTags.distinct) unique tags across the whole archive")
+                            .font(Typography.subheadline).fontWeight(.semibold)
+                        Text(wholeTags.top(8).entries.map { "\($0.key) \($0.count)" }.joined(separator: " · "))
+                            .font(Typography.caption2).foregroundColor(AppColors.secondary).lineLimit(2)
+                        if let wholeNote { Text(wholeNote).font(Typography.caption2).foregroundColor(AppColors.secondary) }
+                    }
+                } else {
+                    Text("\(allUniqueTags.count) unique tags across \(tagger.suggestedTags.count) emails")
+                        .font(Typography.subheadline)
+                        .fontWeight(.semibold)
+                }
                 Spacer()
                 if selectedTag != nil {
                     Button("Clear Filter") { selectedTag = nil }
@@ -256,6 +271,13 @@ struct SmartAutoTaggerView: View {
                 archiveTotal = (try? await ArchiveDataService.shared.count()) ?? workingSet.count
             }
             await tagger.generateTags(for: workingSet)
+            if v3 {
+                do {
+                    let r = try await tagger.generateTagsWholeArchive()
+                    wholeTags = r.tags
+                    wholeNote = String(localized: "Tags saved for every email — \(r.receipt.coverageLine) The list below shows the newest emails, with Apple Intelligence suggestions.")
+                } catch { wholeNote = error.localizedDescription }
+            }
         }
     }
 }

@@ -18,6 +18,9 @@ struct EmailAnalyticsView: View {
     @State private var analyticsData: AnalyticsData?
     @State private var isComputing = false
     @State private var computeStage: String = ""
+    // §3-A13: NLP figures over the whole scope when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+    @State private var v3Note: String?
     @State private var exportError: String?
     @State private var aiEnhanced = false
     @State private var isLoadingAI = false
@@ -101,6 +104,9 @@ struct EmailAnalyticsView: View {
                     Text("\(analyticsData?.totalCount ?? 0) emails analyzed")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
+                    if let v3Note {
+                        Text(v3Note).font(Typography.caption2).foregroundColor(AppColors.secondary)
+                    }
                 }
             }
             Spacer()
@@ -938,6 +944,19 @@ struct EmailAnalyticsView: View {
     private func computeAnalytics() async {
         isComputing = true
         computeStage = "Analyzing..."
+        if v3Modules?.isOn(.v3AnalysisQueries) ?? false {
+            do {
+                let r = try await ArchiveFullAnalyticsService.shared.computeWholeArchive(scope: query)
+                v3Note = r.note.total > r.note.sampled
+                    ? String(localized: "Sentiment, PII and priority cover all \(r.note.total) emails; languages and topics use \(r.note.sampled) emails spread across them.")
+                    : nil
+                withAnimation(AnimationTiming.normal) { analyticsData = r.data; isComputing = false }
+            } catch {
+                v3Note = error.localizedDescription
+                isComputing = false
+            }
+            return
+        }
         // Bounded streaming over the injected scope from the activated store.
         let data = (try? await ArchiveFullAnalyticsService.shared.compute(scope: query)) ?? AnalyticsData()
         withAnimation(AnimationTiming.normal) {

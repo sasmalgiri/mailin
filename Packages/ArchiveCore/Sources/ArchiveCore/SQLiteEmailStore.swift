@@ -1932,6 +1932,30 @@ actor SQLiteEmailStore: EmailArchiveStore {
         } catch { try? exec(db, "ROLLBACK;"); throw error }
     }
 
+    /// Partial upsert (§3-A10): set ONLY the smart-tag column, preserving
+    /// every other derived field.
+    func derivedSetSmartTags(_ tags: [EmailID: [String]]) throws {
+        guard !tags.isEmpty else { return }
+        let db = try ensureDB()
+        let now = Int(Date().timeIntervalSince1970)
+        let stmt = try prepare(db, """
+            INSERT INTO derived(email_id, smart_tags, updated_at) VALUES (?,?,?)
+            ON CONFLICT(email_id) DO UPDATE SET smart_tags = excluded.smart_tags, updated_at = excluded.updated_at;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        try exec(db, "BEGIN TRANSACTION;")
+        do {
+            for (id, list) in tags {
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, id.uuidString)
+                bindTextOrNull(stmt, 2, list.isEmpty ? nil : list.joined(separator: "\u{1F}"))
+                sqlite3_bind_int64(stmt, 3, Int64(now))
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
+            try exec(db, "COMMIT;")
+        } catch { try? exec(db, "ROLLBACK;"); throw error }
+    }
+
     func derivedCount() throws -> Int {
         let db = try ensureDB()
         return try scalarInt(db, "SELECT COUNT(*) FROM derived;")

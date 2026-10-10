@@ -230,3 +230,58 @@ final class ArchiveFullAnalyticsService {
         }
     }
 }
+
+// MARK: - §3-A13 whole-archive NLP figures (switch: `v3AnalysisQueries`)
+//
+// The tallies above already cover the whole scope; the NLP figures read only
+// the first 5,000 emails. Here sentiment, PII and priority counts are
+// accumulated over EVERY email (same detectors, same thresholds); languages
+// and topics — which read text through a model or a topic extractor — use an
+// evenly spaced sample across the whole scope, stated on screen.
+
+extension ArchiveFullAnalyticsService {
+    struct WholeNLPNote: Sendable { let sampled: Int; let total: Int }
+
+    func computeWholeArchive(scope query: EmailQuery = .all) async throws -> (data: AnalyticsData, note: WholeNLPNote) {
+        var acc = TallyAccumulator()
+        var sentimentSum = 0.0, sentimentN = 0, positive = 0, negative = 0
+        var pii: [EmailNLPEngine.PIIType: Int] = [:]
+        var high = 0, medium = 0
+        let stream = await ArchiveDataService.shared.streamFullEmails(query: query, batchSize: 500)
+        let token = EngineGuard.begin(.v3AnalysisQueries)
+        defer { EngineGuard.end(token) }
+        for try await batch in stream {
+            try Task.checkCancellation()
+            for e in batch { acc.ingest(e) }
+            let (scores, piiBatch, priorities) = await Task.detached(priority: .userInitiated) {
+                (EmailNLPEngine.analyzeSentiment(of: batch).map(\.score),
+                 EmailNLPEngine.piiSummary(in: batch),
+                 EmailNLPEngine.scoreAllPriorities(batch).map(\.level))
+            }.value
+            for s in scores {
+                sentimentSum += s; sentimentN += 1
+                if s > 0.4 { positive += 1 }
+                if s < -0.4 { negative += 1 }
+            }
+            for (k, v) in piiBatch { pii[k, default: 0] += v }
+            high += priorities.filter { $0 == .high }.count
+            medium += priorities.filter { $0 == .medium }.count
+        }
+        var data = acc.finalize()
+        let avg = sentimentN > 0 ? sentimentSum / Double(sentimentN) : 0
+        data.avgSentiment = avg
+        data.sentimentLabel = avg > 0.4 ? "Positive" : avg < -0.4 ? "Negative" : "Neutral"
+        data.sentimentBuckets = [
+            SentimentBucket(label: String(localized: "Positive"), count: positive, color: .green),
+            SentimentBucket(label: String(localized: "Neutral"), count: sentimentN - positive - negative, color: .gray),
+            SentimentBucket(label: String(localized: "Negative"), count: negative, color: .red)
+        ]
+        data.piiCounts = pii
+        data.highPriorityCount = high
+        data.mediumPriorityCount = medium
+        let sample = try await ArchiveSample.evenlySpaced(query: query)
+        data.languages = await EmailNLPEngine.detectLanguagesHybrid(in: sample.emails)
+        data.topTopics = EmailNLPEngine.extractTopics(from: sample.emails, limit: 12)
+        return (data, WholeNLPNote(sampled: sample.emails.count, total: sample.total))
+    }
+}
