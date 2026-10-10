@@ -154,7 +154,7 @@ final class V3CompatibilityTests: XCTestCase {
 
         // Relaunch with the engine switched OFF: recovery still runs.
         env.relaunch(engineOn: false)
-        try await ScopeJobEnvironment.$current.withValue(env.job) {
+        await ScopeJobEnvironment.$current.withValue(env.job) {
             XCTAssertTrue(env.mirror.hasPendingDatabaseWrite)
             let recovered = await env.mirror.recoverInterruptedDatabaseWrite()
             XCTAssertEqual(recovered, 3, "two holds and one seal")
@@ -193,7 +193,7 @@ final class V3CompatibilityTests: XCTestCase {
         }
 
         env.mirror.enabledOverride = false
-        try await ScopeJobEnvironment.$current.withValue(env.job) {
+        await ScopeJobEnvironment.$current.withValue(env.job) {
             await env.mirror.deactivate()
             env.manager.removeLegalHold(id)                 // old path drops the seal too
             env.manager.legalHolds.insert(id)
