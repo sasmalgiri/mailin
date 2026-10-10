@@ -154,7 +154,7 @@ struct ScopeJobEnvironment: Sendable {
             try? handle.write(contentsOf: line)
             try? handle.close()
         } else {
-            try? line.write(to: url)
+            try? line.write(to: url)   // lint:allow test-environment audit log, not a user file
         }
     }
 

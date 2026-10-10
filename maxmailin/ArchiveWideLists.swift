@@ -107,7 +107,7 @@ struct ArchiveAttachmentIndexView: View {
                 .replacingOccurrences(of: "\\", with: "_").replacingOccurrences(of: "..", with: "_")
             let url = dir.appendingPathComponent(safe.isEmpty ? "attachment" : safe)
             if let b64 = attachment.base64, let data = Data(base64Encoded: b64, options: .ignoreUnknownCharacters) {
-                try? data.write(to: url, options: .atomic)
+                try? data.write(to: url, options: .atomic)   // lint:allow private temp preview copy; checked by fileExists below
             } else if let src = attachment.fileURL {
                 try? FileManager.default.copyItem(at: src, to: url)
             }

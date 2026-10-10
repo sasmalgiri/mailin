@@ -56,7 +56,7 @@ enum PluginRunnerV2 {
     static func begin(_ pluginID: String) -> URL {
         let url = directory.appendingPathComponent(pluginID.replacingOccurrences(of: "/", with: "_"))
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try? Data(pluginID.utf8).write(to: url, options: .atomic)
+        try? Data(pluginID.utf8).write(to: url, options: .atomic)   // lint:allow crash breadcrumb in app support, not a user file
         return url
     }
 
