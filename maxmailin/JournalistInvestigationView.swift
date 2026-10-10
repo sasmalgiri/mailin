@@ -1869,6 +1869,15 @@ struct JournalistInvestigationView: View {
 
     private func restoreJournalistState() {
         guard !journalistStateLoaded else { return }
+        if ReviewWorkspaceStore.load(JournalistSnapshot.self, name: JournalistSnapshot.fileName) == nil {
+            // §3-F4: the file is gone — recover the database copy, once.
+            Task { @MainActor in
+                guard let s = await ReviewWorkspaceStore.loadFromDatabase(JournalistSnapshot.self, name: JournalistSnapshot.fileName) else { return }
+                ReviewWorkspaceStore.save(s, name: JournalistSnapshot.fileName)
+                journalistStateLoaded = false
+                restoreJournalistState()
+            }
+        }
         if let s = ReviewWorkspaceStore.load(JournalistSnapshot.self, name: JournalistSnapshot.fileName) {
             leads = s.leads
             keyQuotes = s.keyQuotes

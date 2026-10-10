@@ -141,6 +141,9 @@ final class LegalStateMirror {
                 return
             }
             await store.setEnforcesDatabaseLegalHolds(true)
+            // §3-F4: the review workspaces (Legal Review, Journalist) join the
+            // database too; their files stay the first copy.
+            ReviewWorkspaceStore.mirrorExistingFiles()
             if first {
                 try? Data().write(to: migratedMarker, options: .atomic)
                 ScopeJobEnvironment.logAction("Legal data copied into the archive database",

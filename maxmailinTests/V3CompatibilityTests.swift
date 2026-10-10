@@ -476,4 +476,34 @@ final class V3CompatibilityTests: XCTestCase {
         XCTAssertEqual(AdaptiveBatch.size(requested: 200, available: perBatchEmail * 80), 80, "in between: what fits")
         XCTAssertGreaterThan(AdaptiveBatch.availableBytes(), 0, "this machine reports free memory")
     }
+
+    // MARK: - F4: review workspaces in the database
+
+    func testWorkspaces_dualWrite_codingRows_andRecoveryFromTheDatabase() async throws {
+        let env = makeEnv(engineOn: true)
+        let a = UUID(), b = UUID()
+        try await ScopeJobEnvironment.$current.withValue(env.job) {
+            var snapshot = LegalReviewSnapshot()
+            snapshot.privilege = [a: "attorneyClient", b: "notPrivileged"]
+            snapshot.responsiveness = [a: "responsive"]
+            XCTAssertNil(ReviewWorkspaceStore.save(snapshot, name: LegalReviewSnapshot.fileName))
+            await ReviewWorkspaceStore.flushDatabaseMirror()
+
+            let privilege = try await env.store.reviewCoding(workspace: "legal-review", field: "privilege")
+            XCTAssertEqual(privilege, snapshot.privilege, "per-email coding is queryable in the database")
+
+            // A changed call replaces the row; a removed one is gone.
+            snapshot.privilege = [a: "workProduct"]
+            ReviewWorkspaceStore.save(snapshot, name: LegalReviewSnapshot.fileName)
+            await ReviewWorkspaceStore.flushDatabaseMirror()
+            let after = try await env.store.reviewCoding(workspace: "legal-review", field: "privilege")
+            XCTAssertEqual(after, [a: "workProduct"])
+
+            // The file is lost: the database copy brings the workspace back.
+            try FileManager.default.removeItem(at: ReviewWorkspaceStore.url(for: LegalReviewSnapshot.fileName))
+            XCTAssertNil(ReviewWorkspaceStore.load(LegalReviewSnapshot.self, name: LegalReviewSnapshot.fileName))
+            let recovered = await ReviewWorkspaceStore.loadFromDatabase(LegalReviewSnapshot.self, name: LegalReviewSnapshot.fileName)
+            XCTAssertEqual(recovered, snapshot)
+        }
+    }
 }

@@ -232,6 +232,15 @@ struct LegalReviewWorkspaceView: View {
 
     private func restoreLegalState() {
         guard !legalStateLoaded else { return }
+        if ReviewWorkspaceStore.load(LegalReviewSnapshot.self, name: LegalReviewSnapshot.fileName) == nil {
+            // §3-F4: the file is gone — recover the database copy, once.
+            Task { @MainActor in
+                guard let s = await ReviewWorkspaceStore.loadFromDatabase(LegalReviewSnapshot.self, name: LegalReviewSnapshot.fileName) else { return }
+                ReviewWorkspaceStore.save(s, name: LegalReviewSnapshot.fileName)
+                legalStateLoaded = false
+                restoreLegalState()
+            }
+        }
         if let s = ReviewWorkspaceStore.load(LegalReviewSnapshot.self, name: LegalReviewSnapshot.fileName) {
             let privilege = s.privilege.compactMapValues(PrivilegeDesignation.init(rawValue:))
             skipNextPrivilegeMirror = !privilege.isEmpty   // restoring is not a new decision

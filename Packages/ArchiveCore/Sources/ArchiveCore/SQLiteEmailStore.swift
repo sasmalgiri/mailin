@@ -5921,6 +5921,50 @@ extension SQLiteEmailStore {
             codings: try scalarInt(db, "SELECT COUNT(*) FROM review_coding;"))
     }
 
+    // MARK: F4 — review workspaces (Legal Review, Journalist)
+
+    /// Created on first use (additive; no schema bump needed).
+    private func ensureWorkspaceTable(_ db: OpaquePointer) throws {
+        try exec(db, """
+            CREATE TABLE IF NOT EXISTS workspace_snapshots (
+                name     TEXT PRIMARY KEY,
+                json     BLOB NOT NULL,
+                saved_at INTEGER NOT NULL
+            );
+        """)
+    }
+
+    /// Stores a workspace's whole snapshot (the second copy of its file).
+    func workspaceSave(name: String, json: Data) throws {
+        let db = try ensureDB()
+        try ensureWorkspaceTable(db)
+        let stmt = try prepare(db, "INSERT OR REPLACE INTO workspace_snapshots(name, json, saved_at) VALUES (?,?,?);")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, name)
+        bindBlob(stmt, 2, json)
+        sqlite3_bind_int64(stmt, 3, Int64(Date().timeIntervalSince1970))
+        guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+    }
+
+    func workspaceLoad(name: String) throws -> Data? {
+        let db = try ensureDB()
+        try ensureWorkspaceTable(db)
+        let stmt = try prepare(db, "SELECT json FROM workspace_snapshots WHERE name = ?;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, name)
+        return try stepRow(stmt, db) ? columnBlobData(stmt, 0) : nil
+    }
+
+    /// Makes `review_coding(workspace, field)` exactly `values` (rows not in
+    /// `values` are removed) — per-email coding queryable across the archive.
+    func reviewCodingReplace(workspace: String, field: String, values: [UUID: String]) throws {
+        let current = try reviewCoding(workspace: workspace, field: field)
+        var change: [UUID: String?] = [:]
+        for (id, value) in values where current[id] != value { change[id] = value }
+        for id in current.keys where values[id] == nil { change[id] = .some(nil) }
+        if !change.isEmpty { try reviewCodingSet(workspace: workspace, field: field, values: change) }
+    }
+
     // MARK: F5 — fingerprint tree
 
     /// Month bucket (yyyymm, UTC) for an epoch second.
