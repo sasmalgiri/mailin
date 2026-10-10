@@ -5,6 +5,7 @@ struct ForensicReviewView: View {
     // §3-L9: whole-archive privilege scan when the 3.0 engine is on.
     @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
     @Environment(\.archiveScope) private var v3Scope
+    @State private var wholeDashboard: ForensicReviewManager.CodingDashboard?
     // v2: no injected corpus. Review list is a growable paged full-email window
     // from the store (infinite scroll reaches EVERY email); forensic analysis /
     // QC / privilege scan / dashboard run over a bounded working set.
@@ -154,6 +155,11 @@ struct ForensicReviewView: View {
         .sheet(isPresented: $showDashboard) { dashboardSheet }
         .sheet(isPresented: $showProductionSets) { productionSetsSheet }
         .workingSetLimitNotice(shown: workingSet.count, total: archiveTotal)
+        .task(id: forensicManager.evidenceTags.count) {
+            // §3-A11: the coding dashboard over the whole archive (3.0).
+            guard v3Modules?.isOn(.v3AnalysisQueries) ?? false else { wholeDashboard = nil; return }
+            wholeDashboard = try? await reviewManager.computeDashboardWholeArchive()
+        }
         .task { await loadInitial() }
         .task { await loadForensicFeatures() }
         .onChange(of: filterSearchText) { _, _ in Task { await runSearch() } }
@@ -1416,7 +1422,7 @@ struct ForensicReviewView: View {
     // MARK: - Status Bar
 
     private var forensicStatusBar: some View {
-        let dashboard = reviewManager.computeDashboard(emails: workingSet)
+        let dashboard = wholeDashboard ?? reviewManager.computeDashboard(emails: workingSet)
         let filtered = visibleEmails.count
         let progressPct = Int(dashboard.progress * 100)
 
@@ -1511,7 +1517,7 @@ struct ForensicReviewView: View {
     // MARK: - Dashboard Sheet
 
     private var dashboardSheet: some View {
-        let dashboard = reviewManager.computeDashboard(emails: workingSet)
+        let dashboard = wholeDashboard ?? reviewManager.computeDashboard(emails: workingSet)
         return ScrollView {
         VStack(spacing: 16) {
             HStack {

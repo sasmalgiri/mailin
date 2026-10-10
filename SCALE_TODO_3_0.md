@@ -180,22 +180,22 @@ loops, the current AI context building. Deleted only in a later release after a 
 ### A — Analysis tools (become F6 queries)
 | ID | Tool | Status |
 |---|---|---|
-| A1 | Smart Alerts, Anomaly Detection, Background Findings | [ ] |
-| A2 | Predictive Coding (train on all labelled, score all; scores persist) | [ ] |
-| A3 | Predictive Insights | [ ] |
-| A4 | Near-Duplicates: MinHash + LSH bands in SQLite, verify with exact Jaccard, record thresholds/shingle settings in the receipt (defensible), group never delete | [ ] |
-| A5 | Topic Clusters (incremental, or stated sample with whole-archive assignment) | [ ] |
-| A6 | Thread Summarizer / Story (page all members — today 200; summarise in chunks within 4,096 tokens) | [ ] |
-| A7 | Attachments grid / gallery (paged) | [ ] |
-| A8 | Subjects list (SQL group-by) | [ ] |
-| A9 | IT Admin (auth stats from F6; threat scores persisted) | [ ] |
-| A10 | Personal Organizer, Smart Auto-Tagger (tags persisted per batch) | [ ] |
-| A11 | General Analysis, Forensic Review, Journalist stats (F3) | [ ] |
-| A12 | Communication Patterns ("recent 500" block) | [ ] |
-| A13 | Full Analytics (`defaultNLPCap = 5000`) | [ ] |
-| A14 | Archive Comparison (pass the scope, not a 2,000 array) | [ ] |
-| A15 | Knowledge / Relationship graphs, AI Visualization (build from all; show top-N with totals) | [ ] |
-| A16 | Plugin Manager: plugin API v2 takes a batch stream; plugins run isolated with timeouts so a plugin cannot crash the app | [ ] |
+| A1 | Smart Alerts, Anomaly Detection, Background Findings |  [~] |
+| A2 | Predictive Coding (train on all labelled, score all; scores persist) |  [~] |
+| A3 | Predictive Insights |  [~] |
+| A4 | Near-Duplicates: MinHash + LSH bands in SQLite, verify with exact Jaccard, record thresholds/shingle settings in the receipt (defensible), group never delete |  [~] |
+| A5 | Topic Clusters (incremental, or stated sample with whole-archive assignment) |  [~] |
+| A6 | Thread Summarizer / Story (page all members — today 200; summarise in chunks within 4,096 tokens) |  [~] |
+| A7 | Attachments grid / gallery (paged) |  [~] |
+| A8 | Subjects list (SQL group-by) |  [~] |
+| A9 | IT Admin (auth stats from F6; threat scores persisted) |  [~] |
+| A10 | Personal Organizer, Smart Auto-Tagger (tags persisted per batch) |  [~] |
+| A11 | General Analysis, Forensic Review, Journalist stats (F3) |  [~] |
+| A12 | Communication Patterns ("recent 500" block) |  — streaming analysis was already whole-archive; its AI context (newest 500) moves to I4 — [~] |
+| A13 | Full Analytics (`defaultNLPCap = 5000`) |  [~] |
+| A14 | Archive Comparison (pass the scope, not a 2,000 array) |  — already compares the whole current archive (v2.1 #3); verify only — [~] |
+| A15 | Knowledge / Relationship graphs, AI Visualization (build from all; show top-N with totals) |  [~] |
+| A16 | Plugin Manager: plugin API v2 takes a batch stream; plugins run isolated with timeouts so a plugin cannot crash the app |  [~] |
 
 ### I — AI (designed around the 4,096-token reading window)
 | ID | Item | Status |
@@ -379,3 +379,4 @@ Background audits: `BUTTON_AUDIT_3_0.md` (1,083 buttons, 2026-10-09).
 | 4 | `BatesNumberingManager.assignNumbers` (old path) | Replaces every existing assignment with a fresh sequence over the loaded emails — breaks rule 3 (never renumber). The 3.0 engine skips numbered emails. Decide: guard the old path the same way (owner call — it changes old behaviour). Assignments also live in UserDefaults (whole dictionary rewritten); 3.0 keeps them in the database. | [ ] |
 | 5 | `BatchOperationsView.performRemoveTag` / `performClearClassification` (old path) | Both call `onTagApplied("")`, which clears ALL tags on the emails — "Remove Tag X" removes every tag. 3.0 path removes only the chosen tag. Fix the old path to call `removeTag(tag, from:)`. | [ ] |
 | 6 | `FoundationModelEngine.synthesizeThread` (old path) | Puts ~500 characters per message into ONE prompt; a long thread (≈ 25k tokens for 200 messages) exceeds the 4,096-token window and the caller's `try?` swallows the error — Thread Story silently shows nothing. 3.0 (`ThreadStoryEngine`) reads long threads in measured parts. Old path: at least surface the error. | [ ] |
+| 7 | `PluginManager.runPluginSandboxed` (old path) | The 30 s timeout never ends the run: when the sleep task finishes first it returns `nil`, the loop `continue`s and waits for the plugin anyway. Findings are also cut at 100 silently. 3.0 (`PluginRunnerV2`) races each call against a deadline that is honoured and reports "N of M batches timed out". | [ ] |

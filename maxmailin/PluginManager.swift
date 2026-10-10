@@ -37,7 +37,8 @@ class PluginManager: ObservableObject {
         let entry = PluginEntry(
             id: plugin.pluginID,
             plugin: plugin,
-            isEnabled: true,
+            // §3-A16: a plugin the previous launch stopped inside starts off.
+            isEnabled: !PluginRunnerV2.trippedAtLaunch.contains(plugin.pluginID),
             lastRunDate: nil,
             findingsCount: 0
         )
@@ -122,6 +123,15 @@ class PluginManager: ObservableObject {
                 }
                 continuation.resume(returning: result)
             }
+        }
+    }
+
+    /// §3-A16: store a whole-archive run's findings (v2 runner).
+    func recordWholeArchiveRun(pluginID: String, findings: [MailinPluginFinding]) {
+        pluginFindings[pluginID] = findings
+        if let idx = loadedPlugins.firstIndex(where: { $0.id == pluginID }) {
+            loadedPlugins[idx].lastRunDate = Date()
+            loadedPlugins[idx].findingsCount = findings.count
         }
     }
 

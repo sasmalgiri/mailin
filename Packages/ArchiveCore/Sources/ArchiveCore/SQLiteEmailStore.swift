@@ -6488,6 +6488,38 @@ extension SQLiteEmailStore {
         return (Int(sqlite3_column_int64(stmt, 0)), sqlite3_column_int64(stmt, 1))
     }
 
+    struct ArchiveOverview: Sendable, Equatable {
+        let emails: Int
+        let attachments: Int
+        let distinctSenders: Int
+        let firstDate: Date?
+        let lastDate: Date?
+    }
+
+    /// Whole-scope overview figures in two aggregate queries (§3-A11).
+    func archiveOverview(query: EmailQuery = .all) throws -> ArchiveOverview {
+        let db = try ensureDB()
+        let (clauses, binds) = Self.filterClauses(query)
+        let whereSQL = clauses.isEmpty ? "1=1" : clauses.joined(separator: " AND ")
+        let stmt = try prepare(db, """
+            SELECT COUNT(*), COUNT(DISTINCT lower(e.from_addr)),
+                   MIN(CASE WHEN e.date > 0 THEN e.date END), MAX(CASE WHEN e.date > 0 THEN e.date END)
+            FROM emails e WHERE \(whereSQL);
+        """)
+        defer { sqlite3_finalize(stmt) }
+        _ = bindQueryValues(stmt, binds, startingAt: 1)
+        guard try stepRow(stmt, db) else { return ArchiveOverview(emails: 0, attachments: 0, distinctSenders: 0, firstDate: nil, lastDate: nil) }
+        let emails = Int(sqlite3_column_int64(stmt, 0))
+        let senders = Int(sqlite3_column_int64(stmt, 1))
+        let first = sqlite3_column_type(stmt, 2) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 2)))
+        let last = sqlite3_column_type(stmt, 3) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 3)))
+        let astmt = try prepare(db, "SELECT COUNT(*) FROM attachments a JOIN emails e ON e.id = a.email_id WHERE \(whereSQL);")
+        defer { sqlite3_finalize(astmt) }
+        _ = bindQueryValues(astmt, binds, startingAt: 1)
+        let attachments = try stepRow(astmt, db) ? Int(sqlite3_column_int64(astmt, 0)) : 0
+        return ArchiveOverview(emails: emails, attachments: attachments, distinctSenders: senders, firstDate: first, lastDate: last)
+    }
+
     /// Hour-of-day × weekday activity for the whole archive (UTC), A12.
     func activityMatrix(query: EmailQuery = .all) throws -> [[Int]] {
         let db = try ensureDB()

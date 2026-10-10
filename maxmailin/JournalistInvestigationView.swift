@@ -6,6 +6,9 @@ struct JournalistInvestigationView: View {
     // corpus). Investigation engines/contact-browse/export run over this sample;
     // the exact archive total comes from the store.
     @State private var workingSet: [MBOXParser.RawEmail] = []
+    // §3-A11: overview figures for the whole archive (3.0 engine).
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+    @State private var overview: SQLiteEmailStore.ArchiveOverview?
     @State private var archiveTotal = 0
 
     // MARK: - State
@@ -135,6 +138,10 @@ struct JournalistInvestigationView: View {
         .featureTutorial(.journalist, key: "journalist_tutorial_seen", isPresented: $showTutorial)
         .sheet(isPresented: $showExportNotes) { exportNotesSheet }
         .workingSetLimitNotice(shown: workingSet.count, total: archiveTotal)
+        .task {
+            guard v3Modules?.isOn(.v3AnalysisQueries) ?? false else { return }
+            overview = try? await SQLiteEmailStore.shared.archiveOverview(query: ArchiveDataService.shared.scoped(.all))
+        }
         .task { await loadBoundedWorkingSet() }
         .task { await loadV3Data() }
         .onAppear { restoreJournalistState() }
@@ -1436,7 +1443,7 @@ struct JournalistInvestigationView: View {
 
                 HStack(spacing: 12) {
                     overviewCard("Key Quotes", value: "\(keyQuotes.count)", icon: "quote.opening", color: .teal)
-                    overviewCard("Attachments", value: "\(workingSet.flatMap { $0.attachments }.count)", icon: "paperclip", color: .brown)
+                    overviewCard("Attachments", value: "\(overview?.attachments ?? workingSet.flatMap { $0.attachments }.count)", icon: "paperclip", color: .brown)
                     overviewCard("Date Range", value: dateRange, icon: "calendar", color: .green)
                     overviewCard("Avg/Day", value: computeAvgPerDay(), icon: "chart.line.uptrend.xyaxis", color: .cyan)
                 }
@@ -1694,13 +1701,17 @@ struct JournalistInvestigationView: View {
 
     private func computeDateRange() -> String {
         let dates = workingSet.compactMap { MBOXParser.parseDate($0.headers["Date"] ?? "") }
-        guard let first = dates.min(), let last = dates.max() else { return "N/A" }
+        guard let first = overview?.firstDate ?? dates.min(), let last = overview?.lastDate ?? dates.max() else { return "N/A" }
         let f = DateFormatter()
         f.dateFormat = "MMM yyyy"
         return "\(f.string(from: first)) — \(f.string(from: last))"
     }
 
     private func computeAvgPerDay() -> String {
+        if let overview, let first = overview.firstDate, let last = overview.lastDate {
+            let days = max(1, Calendar.current.dateComponents([.day], from: first, to: last).day ?? 1)
+            return String(format: "%.1f", Double(overview.emails) / Double(days))
+        }
         let dates = workingSet.compactMap { MBOXParser.parseDate($0.headers["Date"] ?? "") }
         guard let first = dates.min(), let last = dates.max() else { return "N/A" }
         let days = max(1, Calendar.current.dateComponents([.day], from: first, to: last).day ?? 1)

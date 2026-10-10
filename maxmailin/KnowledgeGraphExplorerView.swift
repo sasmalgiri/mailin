@@ -3,6 +3,7 @@ import SwiftUI
 
 struct KnowledgeGraphExplorerView: View {
     let emails: [MBOXParser.RawEmail]
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
 
     @State private var graph = KnowledgeGraph()
     @State private var isBuilding = false
@@ -461,6 +462,21 @@ struct KnowledgeGraphExplorerView: View {
     private func rebuildGraph() async {
         isBuilding = true
         let newGraph = KnowledgeGraph()
+        // §3-A15: build from every email when the 3.0 engine is on.
+        if v3Modules?.isOn(.v3Graphs) ?? false {
+            let token = EngineGuard.begin(.v3Graphs)
+            defer { EngineGuard.end(token) }
+            do {
+                for try await batch in ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 500) {
+                    await Task.detached(priority: .userInitiated) { KnowledgeGraphBuilder.build(from: batch, into: newGraph) }.value
+                }
+            } catch {}
+            newGraph.save()
+            graph = newGraph
+            hasBuilt = true
+            isBuilding = false
+            return
+        }
         let emailsCopy = emails
         await Task.detached(priority: .userInitiated) {
             KnowledgeGraphBuilder.build(from: emailsCopy, into: newGraph)

@@ -7,6 +7,9 @@ struct PluginManagerView: View {
     @ObservedObject private var manager = PluginManager.shared
     @State private var selectedPluginID: String?
     @State private var isRunningAll = false
+    // §3-A16: whole-archive runs (v2 runner) when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+    @State private var v3Note: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -32,13 +35,21 @@ struct PluginManagerView: View {
                     .font(.system(.title3, design: .rounded)).fontWeight(.bold)
                 Text("\(manager.loadedPlugins.count) plugin\(manager.loadedPlugins.count == 1 ? "" : "s") loaded")
                     .font(.caption).foregroundColor(.secondary)
+                if let v3Note { Text(v3Note).font(.caption2).foregroundColor(.secondary) }
             }
             Spacer()
             if !manager.loadedPlugins.isEmpty {
                 Button {
                     isRunningAll = true
                     Task {
-                        await manager.runAllPlugins(emails: emails)
+                        if v3Modules?.isOn(.v3AnalysisQueries) ?? false {
+                            let outcomes = await manager.runAllPluginsWholeArchive()
+                            let timedOut = outcomes.values.reduce(0) { $0 + $1.timedOut }
+                            let scanned = outcomes.values.map(\.emails).max() ?? 0
+                            v3Note = String(localized: "Ran over \(scanned) emails.") + (timedOut > 0 ? " " + String(localized: "\(timedOut) batch call(s) timed out and were skipped.") : "")
+                        } else {
+                            await manager.runAllPlugins(emails: emails)
+                        }
                         isRunningAll = false
                     }
                 } label: {
@@ -152,7 +163,16 @@ struct PluginManagerView: View {
                 }
                 Spacer()
                 Button {
-                    Task { _ = await manager.runPlugin(id: entry.id, emails: emails) }
+                    Task {
+                        if v3Modules?.isOn(.v3AnalysisQueries) ?? false {
+                            if let outcome = try? await PluginRunnerV2.run(entry.plugin) {
+                                manager.recordWholeArchiveRun(pluginID: entry.id, findings: outcome.findings)
+                                v3Note = String(localized: "\(entry.name): \(outcome.findings.count) findings from \(outcome.emails) emails.")
+                            }
+                        } else {
+                            _ = await manager.runPlugin(id: entry.id, emails: emails)
+                        }
+                    }
                 } label: {
                     Label("Run", systemImage: "play.circle")
                         .font(.system(size: 11, weight: .medium))
