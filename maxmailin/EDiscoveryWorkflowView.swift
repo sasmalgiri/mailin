@@ -376,6 +376,13 @@ struct EDiscoveryWorkflowView: View {
 
     @StateObject private var manager = EDiscoveryWorkflowManager()
     @Environment(\.dismiss) private var envDismiss
+    // §3-L1…L5: with the 3.0 engine on, actions cover the whole scope.
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
+    @Environment(\.archiveScope) private var scope
+    @State private var scopeConfirm: ScopeConfirmationRequest?
+    @State private var v3HeldCount: Int?
+    @State private var v3Running = false
+    private var v3: Bool { modules?.isOn(.v3EDiscovery) ?? false }
 
     @State private var showResetConfirmation = false
     @State private var showingReleaseConfirmation = false
@@ -421,14 +428,27 @@ struct EDiscoveryWorkflowView: View {
         .adaptiveDestructiveConfirmation(
             "Release Legal Hold",
             isPresented: $showingReleaseConfirmation,
-            message: "This will remove legal hold protection from all \(emails.count) emails. They will no longer be protected from modification or deletion. This action is logged in the forensic audit trail.",
+            message: "This will remove legal hold protection from all \(scopeCount) emails. They will no longer be protected from modification or deletion. This action is logged in the forensic audit trail.",
             actionTitle: String(localized: "Release Hold")
         ) {
+            if v3 {
+                Task { @MainActor in
+                    do {
+                        let r = try await EDiscoveryEngine.releaseHold(scope: scope)
+                        v3HeldCount = await EDiscoveryEngine.heldCount(scope: scope)
+                        await ScopeJob.recordReceipt(r.receipt, registry: modules)
+                        showActionMessage(String(localized: "Legal hold released — \(r.released) emails no longer protected"))
+                    } catch { showActionMessage(error.localizedDescription) }
+                }
+                return
+            }
             for email in emails {
                 CustodianManager.shared.removeLegalHold(email.id)
             }
             showActionMessage("Legal hold released — \(emails.count) emails no longer protected")
         }
+        .scopeConfirmation($scopeConfirm)
+        .task(id: v3) { if v3 { v3HeldCount = await EDiscoveryEngine.heldCount(scope: scope) } }
         .sheet(isPresented: $showTutorial) {
             ediscoveryTutorialSheet
         }
@@ -741,6 +761,10 @@ struct EDiscoveryWorkflowView: View {
             Text("Actions")
                 .font(Typography.headline)
                 .accessibilityAddTraits(.isHeader)
+            if v3 {
+                WholeScopeNote()
+                if v3Running { ProgressView().controlSize(.small) }
+            }
 
             switch phase {
             case .identification:
@@ -852,14 +876,18 @@ struct EDiscoveryWorkflowView: View {
     }
 
     private var holdCount: Int {
-        emails.filter { CustodianManager.shared.isUnderLegalHold($0.id) }.count
+        if v3, let v3HeldCount { return v3HeldCount }
+        return emails.filter { CustodianManager.shared.isUnderLegalHold($0.id) }.count
     }
+
+    /// In 3.0 the comparisons below are against the whole scope.
+    private var scopeCount: Int { v3 ? (scope.total ?? emails.count) : emails.count }
 
     private var preservationActions: some View {
         VStack(alignment: .leading, spacing: Spacing.xSmall) {
             if holdCount > 0 {
                 Label {
-                    Text("\(holdCount) of \(emails.count) emails are under legal hold — evidence seals active. Held emails are protected from modification or deletion.")
+                    Text("\(holdCount) of \(scopeCount) emails are under legal hold — evidence seals active. Held emails are protected from modification or deletion.")
                         .font(Typography.caption1)
                 } icon: {
                     Image(systemName: "lock.shield.fill")
@@ -876,8 +904,9 @@ struct EDiscoveryWorkflowView: View {
             }
 
             HStack(spacing: Spacing.small) {
-                if holdCount < emails.count {
+                if holdCount < scopeCount {
                     Button {
+                        if v3 { confirmApplyHold(); return }
                         let collection = emails
                         Task { @MainActor in
                             CustodianManager.shared.placeLegalHold(on: collection)
@@ -1174,6 +1203,7 @@ struct EDiscoveryWorkflowView: View {
 
             HStack(spacing: Spacing.small) {
                 Button {
+                    if v3 { v3Export(.loadFile); return }
                     let dat = ForensicManager.shared.exportConcordanceDAT(emails: emails)
                     let outcome = PlatformExport.save(text: dat, suggestedName: "production_loadfile.dat")
                     if let url = outcome.url {
@@ -1192,6 +1222,7 @@ struct EDiscoveryWorkflowView: View {
                 .accessibilityLabel("Generate Concordance DAT load file")
 
                 Button {
+                    if v3 { v3Export(.productionCSV); return }
                     let csv = ForensicManager.shared.exportBulkForensicCSV(emails: emails)
                     let outcome = PlatformExport.save(text: csv, suggestedName: "production_export.csv")
                     if let url = outcome.url {
@@ -1210,6 +1241,7 @@ struct EDiscoveryWorkflowView: View {
                 .accessibilityLabel("Export production CSV")
 
                 Button {
+                    if v3 { v3Export(.privilegeLog); return }
                     let log = ForensicManager.shared.exportPrivilegeLog(emails: emails)
                     if log.isEmpty {
                         showActionMessage("No privileged emails tagged — tag emails first")
@@ -1277,6 +1309,20 @@ struct EDiscoveryWorkflowView: View {
 
     private func runIdentificationSearch() {
         manager.startPhase(.identification)
+        if v3 {
+            let info = manager.caseInfo
+            runV3 {
+                let r = try await EDiscoveryEngine.identify(scope: scope, custodians: info.custodians,
+                                                            start: info.dateRangeStart, end: info.dateRangeEnd)
+                identificationResults = (matching: r.matching, total: r.total, topDomains: r.topDomains)
+                ForensicManager.shared.logAction(
+                    "E-Discovery: Identification Search",
+                    detail: "Found \(r.matching)/\(r.total) emails matching criteria for case \(info.caseNumber) — \(r.receipt.coverageLine)")
+                await ScopeJob.recordReceipt(r.receipt, registry: modules)
+                showActionMessage(String(localized: "Found \(r.matching) of \(r.total) emails matching criteria"))
+            }
+            return
+        }
 
         var filtered = emails
 
@@ -1324,6 +1370,19 @@ struct EDiscoveryWorkflowView: View {
     // MARK: - Collection Verification
 
     private func verifyCollection() {
+        if v3 {
+            isVerifyingCollection = true
+            runV3 {
+                defer { isVerifyingCollection = false }
+                let (state, receipt) = try await EDiscoveryEngine.verifyCollection(scope: scope)
+                collectionVerification = (passed: state.passed, failed: state.failed, unverified: state.newlySealed)
+                await ScopeJob.recordReceipt(receipt, extra: state.failedIDs.prefix(500).map {
+                    .init(key: String(localized: "Failed"), value: $0.uuidString)
+                }, registry: modules)
+                showActionMessage(String(localized: "Collection verified: \(state.passed) passed, \(state.failed) failed, \(state.newlySealed) newly sealed"))
+            }
+            return
+        }
         isVerifyingCollection = true
         let collection = emails
         Task { @MainActor in
@@ -1354,6 +1413,25 @@ struct EDiscoveryWorkflowView: View {
     /// the counts, and records them as a numbered document — the audit entry
     /// is written only after the analysis has actually run.
     private func runNLPAnalysis() {
+        if v3 {
+            isRunningNLP = true
+            runV3 {
+                defer { isRunningNLP = false }
+                let (sorted, receipt) = try await EDiscoveryEngine.classify(scope: scope)
+                nlpCategories = sorted
+                ForensicManager.shared.logAction("E-Discovery: NLP Analysis",
+                    detail: "Classified \(receipt.processed) emails into \(sorted.count) categories — \(receipt.coverageLine)")
+                await DocumentRegistry.captureStructured(
+                    .report, summary: "E-Discovery NLP classification — \(receipt.processed) emails",
+                    document: CapturedDocument(title: String(localized: "NLP Classification"), sections: [
+                        .init(name: String(localized: "Categories"), fields: sorted.map {
+                            .init(key: $0.category.rawValue, value: String($0.count))
+                        }),
+                        .init(name: String(localized: "Job receipt"), fields: receipt.documentFields)]))
+                showActionMessage(String(localized: "NLP analysis complete — \(receipt.processed) emails in \(sorted.count) categories"))
+            }
+            return
+        }
         isRunningNLP = true
         let collection = emails
         Task { @MainActor in
@@ -1388,6 +1466,16 @@ struct EDiscoveryWorkflowView: View {
             showActionMessage("Review batches already exist with \(reviewedSoFar) emails reviewed — reset them in Review Batches before creating new ones")
             return
         }
+        if v3 {
+            runV3 {
+                let r = try await EDiscoveryEngine.createReviewBatches(scope: scope)
+                privilegeScanCount = r.privileged
+                reviewBatches = r.categories
+                await ScopeJob.recordReceipt(r.receipt, registry: modules)
+                showActionMessage(String(localized: "Created \(r.batches) review batches (\(r.privileged) privilege-flagged first) — open Review Batches to start"))
+            }
+            return
+        }
         let forensic = ForensicManager.shared
         forensic.runPrivilegeScan(on: emails)
         privilegeScanCount = forensic.privilegeFlags.count
@@ -1412,6 +1500,68 @@ struct EDiscoveryWorkflowView: View {
             detail: "\(batchManager.batches.count) batches of up to 50 from \(emails.count) emails (privilege-flagged first, then by category). \(privilegeScanCount) privilege-flagged. \(stats.totalTagged) previously tagged."
         )
         showActionMessage("Created \(batchManager.batches.count) review batches (\(privilegeScanCount) privilege-flagged first) — open Review Batches to start")
+    }
+
+    // MARK: - 3.0 whole-scope helpers
+
+    /// Runs a whole-scope action; errors are shown, never swallowed.
+    private func runV3(_ body: @escaping @MainActor () async throws -> Void) {
+        guard !v3Running else { return }
+        v3Running = true
+        Task { @MainActor in
+            defer { v3Running = false }
+            do { try await body() } catch { showActionMessage(error.localizedDescription) }
+        }
+    }
+
+    private func confirmApplyHold() {
+        Task { @MainActor in
+            scopeConfirm = await ScopeConfirm.request(
+                scope, title: String(localized: "Apply Legal Hold"), verb: String(localized: "Apply Hold"),
+                detail: String(localized: "Each email is sealed with its current content the first time it is held. Existing seals are never replaced.")
+            ) {
+                runV3 {
+                    let r = try await EDiscoveryEngine.applyHold(scope: scope)
+                    v3HeldCount = await EDiscoveryEngine.heldCount(scope: scope)
+                    await ScopeJob.recordReceipt(r.receipt, registry: modules)
+                    showActionMessage(String(localized: "Legal hold applied — \(r.held) emails newly held, \(r.sealed) newly sealed. \(r.receipt.coverageLine)"))
+                }
+            }
+        }
+    }
+
+    private enum V3Export { case loadFile, productionCSV, privilegeLog }
+
+    private func v3Export(_ kind: V3Export) {
+        runV3 {
+            let forensic = ForensicManager.shared
+            switch kind {
+            case .loadFile:
+                let (outcome, result) = await EDiscoveryEngine.exportLoadFile(scope: scope)
+                if let url = outcome.url, let result {
+                    forensic.logAction("E-Discovery: Load File Generated",
+                                       detail: "Concordance DAT load file for \(result.recordsWritten) emails → \(url.lastPathComponent)")
+                    _ = await DocumentRegistry.post(.export, summary: "Concordance load file — \(result.recordsWritten) emails", refs: url.lastPathComponent)
+                }
+                showActionMessage(outcome.message(String(localized: "Load file")))
+            case .productionCSV:
+                let (outcome, result) = await EDiscoveryEngine.exportProductionCSV(scope: scope)
+                if let url = outcome.url, let result {
+                    forensic.logAction("E-Discovery: Production Export",
+                                       detail: "Production CSV exported for \(result.recordsWritten) emails → \(url.lastPathComponent)")
+                    _ = await DocumentRegistry.post(.export, summary: "Production CSV — \(result.recordsWritten) emails", refs: url.lastPathComponent)
+                }
+                showActionMessage(outcome.message(String(localized: "Production CSV")))
+            case .privilegeLog:
+                let (outcome, n) = await EDiscoveryEngine.exportPrivilegeLog(scope: scope)
+                if let url = outcome.url {
+                    forensic.logAction("E-Discovery: Privilege Log",
+                                       detail: "Privilege log of \(n) privileged emails → \(url.lastPathComponent)")
+                    _ = await DocumentRegistry.post(.export, summary: "Privilege log — \(n) emails", refs: url.lastPathComponent)
+                }
+                showActionMessage(outcome.message(String(localized: "Privilege log")))
+            }
+        }
     }
 
     // MARK: - AI Enhancement

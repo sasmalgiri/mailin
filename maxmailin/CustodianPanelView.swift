@@ -28,6 +28,11 @@ struct CustodianPanelView: View {
     @State private var sealSummary: String?
     @State private var sealSummaryIsBad = false
     @State private var reportStatus: String?
+    // §3-L8: whole-archive custodian actions when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
+    @State private var v3Unassigned: Int?
+    @State private var v3Busy = false
+    private var v3: Bool { modules?.isOn(.v3Custodians) ?? false }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -60,6 +65,7 @@ struct CustodianPanelView: View {
         }
         .featureTutorial(.custodianPanel, key: "custodian_panel_tutorial_seen", isPresented: $showTutorial)
         .workingSetLimitNotice(shown: workingSet.count, total: archiveTotal)
+        .task(id: v3) { if v3 { v3Unassigned = await CustodianEngine.unassignedCount() } }
         .task {
             archiveTotal = (try? await ArchiveDataService.shared.count()) ?? 0
             guard workingSet.isEmpty else { return }
@@ -152,6 +158,7 @@ struct CustodianPanelView: View {
                 .accessibilityLabel("All Emails, \(archiveTotal)")
 
                 let unassigned = workingSet.filter { manager.custodian(for: $0.id) == nil }
+                let unassignedShown = v3 ? (v3Unassigned ?? unassigned.count) : unassigned.count
                 Button {
                     selectedCustodian = "__unassigned__"
                     showDetailOnIOS = true
@@ -161,13 +168,13 @@ struct CustodianPanelView: View {
                             .accessibilityHidden(true)
                         Text("Unassigned")
                         Spacer()
-                        Text("\(unassigned.count)")
+                        Text("\(unassignedShown)")
                             .font(Typography.caption2)
                             .foregroundColor(AppColors.secondary)
                     }
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Unassigned, \(unassigned.count) emails")
+                .accessibilityLabel("Unassigned, \(unassignedShown) emails")
 
                 ForEach(manager.allCustodians, id: \.self) { custodian in
                     Button {
@@ -276,15 +283,23 @@ struct CustodianPanelView: View {
             HStack {
                 Text("\(scopedEmails.count) emails")
                     .font(Typography.headline)
+                if v3Busy { ProgressView().controlSize(.small) }
                 Spacer()
                 if let sel = selectedCustodian, sel != "__unassigned__" {
                     Button("Place All on Legal Hold") {
+                        if v3 { v3HoldAll(sel); return }
                         manager.placeLegalHold(on: scopedEmails)
                     }
                     .buttonStyle(CompactSecondaryButtonStyle())
+                    .disabled(v3Busy)
                 }
                 let heldInScope = scopedEmails.filter { manager.isUnderLegalHold($0.id) }
-                if !heldInScope.isEmpty {
+                if v3 {
+                    Button(String(localized: "Verify All Seals")) { v3VerifySeals() }
+                        .buttonStyle(CompactSecondaryButtonStyle())
+                        .disabled(v3Busy || manager.legalHolds.isEmpty)
+                        .help("Recompute the hash of every held message in this group — the whole archive — and compare it to its seal")
+                } else if !heldInScope.isEmpty {
                     Button("Verify Seals (\(heldInScope.count))") {
                         verifySeals(heldInScope)
                     }
@@ -366,6 +381,20 @@ struct CustodianPanelView: View {
             }
         }
         .alert("Assign Custodian", isPresented: $showAssignSheet) {
+            if v3 {
+                Button(selectedCustodian == nil ? String(localized: "Assign to All Emails")
+                       : selectedCustodian == "__unassigned__" ? String(localized: "Assign to All Unassigned")
+                       : String(localized: "Assign to All of This Custodian")) {
+                    let name = newCustodianName.trimmingCharacters(in: .whitespaces)
+                    let group = selectedCustodian
+                    newCustodianName = ""
+                    v3Run {
+                        let n = try await CustodianEngine.assign(name, group: group)
+                        v3Unassigned = await CustodianEngine.unassignedCount()
+                        reportStatus = String(localized: "Assigned \(name) to \(n) emails.")
+                    }
+                }
+            }
             Button("Assign to All Visible") {
                 let scopedEmails: [MBOXParser.RawEmail] = {
                     guard let sel = selectedCustodian else { return workingSet }
@@ -380,11 +409,57 @@ struct CustodianPanelView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Assign '\(newCustodianName)' to all currently visible emails?")
+            Text(v3 ? "Assign '\(newCustodianName)' to every email in this group across the whole archive, or only to the emails listed?"
+                 : "Assign '\(newCustodianName)' to all currently visible emails?")
+        }
+    }
+
+    // MARK: - 3.0 whole-archive actions
+
+    private func v3Run(_ body: @escaping @MainActor () async throws -> Void) {
+        guard !v3Busy else { return }
+        v3Busy = true
+        Task { @MainActor in
+            defer { v3Busy = false }
+            do { try await body() } catch { reportStatus = error.localizedDescription }
+        }
+    }
+
+    private func v3HoldAll(_ custodian: String) {
+        v3Run {
+            let r = try await CustodianEngine.holdAll(custodian: custodian)
+            reportStatus = String(localized: "Legal hold placed on \(r.held) more emails of \(custodian) (\(r.total) assigned in the archive).")
+        }
+    }
+
+    private func v3VerifySeals() {
+        let group = selectedCustodian
+        v3Run {
+            let r = try await CustodianEngine.verifySeals(group: group)
+            sealVerdicts = r.verdicts
+            sealSummaryIsBad = r.broken > 0 || r.unsealed > 0
+            var parts = ["\(r.intact) intact"]
+            if r.broken > 0 { parts.append("\(r.broken) BROKEN") }
+            if r.unsealed > 0 { parts.append("\(r.unsealed) with no seal recorded") }
+            sealSummary = "Verified \(r.verdicts.count) sealed message\(r.verdicts.count == 1 ? "" : "s") across the archive: "
+                + parts.joined(separator: ", ")
+                + (r.broken > 0 ? ". Every break is recorded in the audit trail." : "")
         }
     }
 
     private func exportCustodianReport() {
+        if v3 {
+            v3Run {
+                let report = try await CustodianEngine.report()
+                let outcome = PlatformExport.save(text: report, suggestedName: "custodian_report.txt")
+                if let url = outcome.url {
+                    _ = await DocumentRegistry.capture(.report, summary: "Custodian report — whole archive",
+                                                       body: report, refs: url.lastPathComponent)
+                }
+                reportStatus = outcome.message(String(localized: "Custodian report"))
+            }
+            return
+        }
         let report = manager.custodianReport(emails: workingSet)
         let outcome = PlatformExport.save(text: report, suggestedName: "custodian_report.txt")
         if let url = outcome.url {

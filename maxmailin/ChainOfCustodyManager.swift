@@ -292,11 +292,16 @@ struct ChainOfCustodyView: View {
     @State private var showShareSheet = false
     #endif
     @State private var exportStatus: String?
+    // §3-L7: whole-scope verification when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
+    @Environment(\.archiveScope) private var scope
+    private var v3: Bool { modules?.isOn(.v3ChainOfCustody) ?? false }
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
+            if v3 { WholeScopeNote().padding(.horizontal, Spacing.medium).padding(.top, Spacing.xSmall) }
 
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.medium) {
@@ -405,7 +410,7 @@ struct ChainOfCustodyView: View {
                 }
             }
             .buttonStyle(PrimaryButtonStyle())
-            .disabled(isVerifying || emails.isEmpty)
+            .disabled(isVerifying || (!v3 && emails.isEmpty))
         }
         .padding(Spacing.medium)
         .background(AppColors.backgroundTertiary)
@@ -532,6 +537,26 @@ struct ChainOfCustodyView: View {
     }
 
     private func verifyIntegrity() {
+        if v3 {
+            isVerifying = true
+            Task { @MainActor in
+                defer { isVerifying = false }
+                do {
+                    let (state, receipt) = try await EDiscoveryEngine.verifyCollection(scope: scope, capability: .v3ChainOfCustody)
+                    integrityReport = IntegrityReport(
+                        totalChecked: receipt.processed, passed: state.passed, failed: state.failed,
+                        newlySealed: state.newlySealed, failedIDs: state.failedIDs, timestamp: receipt.finishedAt)
+                    custodyManager.recordEvent(
+                        type: .accessed, actor: ForensicManager.shared.examinerName.isEmpty ? "mailin" : ForensicManager.shared.examinerName,
+                        description: "Integrity verification: \(state.passed) passed, \(state.failed) failed, \(state.newlySealed) newly sealed — \(receipt.coverageLine)",
+                        emailIDs: state.failedIDs)
+                    await ScopeJob.recordReceipt(receipt, registry: modules)
+                } catch {
+                    exportStatus = error.localizedDescription
+                }
+            }
+            return
+        }
         isVerifying = true
         let emailsCopy = emails
         Task.detached {

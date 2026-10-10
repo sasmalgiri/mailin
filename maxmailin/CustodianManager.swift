@@ -235,6 +235,24 @@ class CustodianManager: ObservableObject {
         return hash.compactMap { String(format: "%02x", $0) }.joined()
     }
 
+    /// 3.0 whole-scope path: one batch of holds + seals in one assignment.
+    func placeLegalHoldBatched(_ emails: [MBOXParser.RawEmail]) {
+        holdAndSealBatched(emails)
+    }
+
+    /// 3.0 whole-scope release: removes holds and their seals (the same rule
+    /// as `removeLegalHold`) in one assignment each. Returns how many were held.
+    @discardableResult
+    func releaseLegalHoldBatched(_ ids: [UUID]) -> Int {
+        let held = ids.filter { legalHolds.contains($0) }
+        guard !held.isEmpty else { return 0 }
+        legalHolds = legalHolds.subtracting(held)
+        var seals = evidenceSeals
+        for id in held { seals.removeValue(forKey: id) }
+        evidenceSeals = seals
+        return held.count
+    }
+
     /// Holds + set-once seals for many emails with one assignment each.
     private func holdAndSealBatched(_ emails: [MBOXParser.RawEmail]) {
         var holds = legalHolds

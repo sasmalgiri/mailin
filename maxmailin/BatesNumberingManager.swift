@@ -197,6 +197,15 @@ struct BatesConfigView: View {
     let emails: [MBOXParser.RawEmail]
 
     @StateObject private var manager = BatesNumberingManager()
+    // §3-L6: whole-scope numbering that never renumbers.
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
+    @Environment(\.archiveScope) private var scope
+    @State private var scopeConfirm: ScopeConfirmationRequest?
+    @State private var v3Total: Int?
+    @State private var v3Busy = false
+    @State private var v3Status: String?
+    private var v3: Bool { modules?.isOn(.v3Bates) ?? false }
+    private var previewCount: Int { v3 ? (v3Total ?? emails.count) : emails.count }
     @State private var assignmentComplete = false
     @State private var exportMessage: String?
     @State private var showExportMessage = false
@@ -293,14 +302,14 @@ struct BatesConfigView: View {
                         Text("Last:")
                             .font(Typography.caption1)
                             .foregroundColor(AppColors.secondary)
-                        Text(manager.formatNumber(manager.startNumber + max(emails.count - 1, 0)))
+                        Text(manager.formatNumber(manager.startNumber + max(previewCount - 1, 0)))
                             .font(.system(.body, design: .monospaced))
                             .foregroundColor(AppColors.primary)
                     }
 
                     Spacer()
 
-                    Text("\(emails.count) emails")
+                    Text("\(previewCount) emails")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
                 }
@@ -309,9 +318,16 @@ struct BatesConfigView: View {
             .background(AppColors.backgroundTertiary)
             .cornerRadius(CornerRadius.small)
 
+            if v3 {
+                WholeScopeNote()
+                Text("Numbers already assigned are never changed; new numbers continue after the highest one used.")
+                    .font(Typography.caption1).foregroundColor(AppColors.secondary)
+            }
+
             // Actions
             HStack(spacing: Spacing.small) {
                 Button {
+                    if v3 { confirmV3Assign(); return }
                     manager.assignNumbers(to: emails)
                     assignmentComplete = true
                     // Record a numbered document of this Bates run.
@@ -327,6 +343,16 @@ struct BatesConfigView: View {
                 .accessibilityHint("Assigns sequential Bates numbers to all \(emails.count) emails sorted by date")
 
                 Button {
+                    if v3 {
+                        v3Busy = true
+                        Task { @MainActor in
+                            defer { v3Busy = false }
+                            let (outcome, n) = await BatesEngine.exportIndex(scope: scope, manager: manager)
+                            exportMessage = outcome.message(String(localized: "Bates index")) + (outcome.succeeded ? " (\(n))" : "")
+                            showExportMessage = true
+                        }
+                        return
+                    }
                     let data = manager.exportBatesIndex(emails: emails)
                     saveBatesIndex(data: data)
                 } label: {
@@ -371,6 +397,12 @@ struct BatesConfigView: View {
                 .cornerRadius(CornerRadius.small)
             }
 
+            if v3Busy { ProgressView().controlSize(.small) }
+            if let v3Status {
+                Label(v3Status, systemImage: "checkmark.circle.fill")
+                    .font(Typography.callout).foregroundColor(AppColors.success)
+            }
+
             if let message = exportMessage, showExportMessage {
                 Label(message, systemImage: "doc.text")
                     .font(Typography.caption1)
@@ -387,7 +419,21 @@ struct BatesConfigView: View {
         ) {
             manager.removeAllNumbers()
             assignmentComplete = false
+            if v3 {
+                // The database copy is removed too, or the numbers would
+                // return on the next merge.
+                Task { @MainActor in
+                    let store = SQLiteEmailStore.shared
+                    if let all = try? await store.reviewCoding(workspace: BatesEngine.workspace, field: BatesEngine.field) {
+                        try? await store.reviewCodingSet(workspace: BatesEngine.workspace, field: BatesEngine.field,
+                                                         values: all.mapValues { _ in nil })
+                    }
+                    v3Status = nil
+                }
+            }
         }
+        .scopeConfirmation($scopeConfirm)
+        .task(id: v3) { if v3 { v3Total = await scope.resolvedTotal() } }
         .adaptiveCard(cornerRadius: CornerRadius.large)
         #if os(macOS)
         .frame(minWidth: 400, maxWidth: 600)
@@ -396,6 +442,38 @@ struct BatesConfigView: View {
             ShareSheet(items: shareItems)
         }
         #endif
+    }
+
+    // MARK: - 3.0 whole-scope assignment
+
+    private func confirmV3Assign() {
+        Task { @MainActor in
+            scopeConfirm = await ScopeConfirm.request(
+                scope, title: String(localized: "Assign Bates Numbers"), verb: String(localized: "Assign"),
+                detail: String(localized: "Emails that already have a number keep it.")
+            ) {
+                v3Busy = true
+                defer { v3Busy = false }
+                do {
+                    let r = try await BatesEngine.assign(scope: scope, manager: manager)
+                    assignmentComplete = true
+                    v3Status = String(localized: "Assigned \(r.state.assigned) new Bates numbers (\(r.state.first ?? "—")–\(r.state.last ?? "—")); \(r.state.skipped) already numbered, unchanged.")
+                    await DocumentRegistry.captureStructured(.report,
+                        summary: "Bates numbering — \(r.state.assigned) new, \(r.state.skipped) unchanged",
+                        document: CapturedDocument(title: "Bates Numbering", sections: [
+                            .init(name: "Bates Numbering", fields: [
+                                .init(key: "New numbers", value: "\(r.state.assigned)"),
+                                .init(key: "First", value: r.state.first ?? "—"),
+                                .init(key: "Last", value: r.state.last ?? "—"),
+                                .init(key: "Already numbered (unchanged)", value: "\(r.state.skipped)")]),
+                            .init(name: String(localized: "Job receipt"), fields: r.receipt.documentFields)]))
+                } catch {
+                    v3Status = nil
+                    exportMessage = error.localizedDescription
+                    showExportMessage = true
+                }
+            }
+        }
     }
 
     // MARK: - File Save

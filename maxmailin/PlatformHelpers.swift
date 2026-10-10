@@ -1,5 +1,6 @@
 @testable import ArchiveCore
 import SwiftUI
+import CryptoKit
 #if os(macOS)
 import AppKit
 #else
@@ -260,6 +261,51 @@ enum PlatformExport {
 
     static func save(text: String, suggestedName: String) -> ExportOutcome {
         save(data: Data(text.utf8), suggestedName: suggestedName)
+    }
+
+    /// 3.0 whole-scope exports: the file is STREAMED by `write` (never held
+    /// in memory), then verified by re-hashing it in chunks against the
+    /// SHA-256 the writer computed while writing. macOS: save panel first;
+    /// iOS: temporary file, then the Share sheet.
+    static func saveStreamed(suggestedName: String,
+                             write: (URL) async throws -> ArchiveExportResult) async -> (ExportOutcome, ArchiveExportResult?) {
+        #if os(macOS)
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = suggestedName
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let destination = panel.url else { return (.cancelled, nil) }
+        #else
+        let destination = FileManager.default.temporaryDirectory.appendingPathComponent(suggestedName)
+        #endif
+        do {
+            let result = try await write(destination)
+            if result.cancelled { return (.cancelled, result) }
+            if let expected = result.sha256Hex {
+                guard let actual = fileSHA256(destination), actual == expected else {
+                    return (.failed(String(localized: "the saved file did not read back identical")), result)
+                }
+            }
+            #if os(macOS)
+            return (.saved(destination), result)
+            #else
+            return (share(destination), result)
+            #endif
+        } catch is CancellationError {
+            return (.cancelled, nil)
+        } catch {
+            return (.failed(error.localizedDescription), nil)
+        }
+    }
+
+    /// Chunked SHA-256 of a file (flat memory).
+    nonisolated static func fileSHA256(_ url: URL) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while let chunk = try? handle.read(upToCount: 4 * 1_048_576), !chunk.isEmpty {
+            hasher.update(data: chunk)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }
 

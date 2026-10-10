@@ -154,8 +154,9 @@ final class LegalStateMirror {
 
     /// Places a hold on every email in `query` in the database, then mirrors
     /// the result into the manager (and so the files). Returns how many new.
-    func placeHolds(query: EmailQuery, matter: String = "") async throws -> Int {
+    func placeHolds(query requested: EmailQuery, matter: String = "") async throws -> Int {
         let store = SQLiteEmailStore.shared
+        let query = ArchiveDataService.shared.scoped(requested)   // free-tier rule applies here too
         let added: Int
         if let text = query.text, !text.isEmpty {
             var ids: [UUID] = []
@@ -172,8 +173,9 @@ final class LegalStateMirror {
     }
 
     /// Assigns a custodian to every email in `query`.
-    func assignCustodian(_ name: String, query: EmailQuery) async throws -> Int {
+    func assignCustodian(_ name: String, query requested: EmailQuery) async throws -> Int {
         let store = SQLiteEmailStore.shared
+        let query = ArchiveDataService.shared.scoped(requested)
         let n: Int
         if let text = query.text, !text.isEmpty {
             var map: [UUID: String] = [:]

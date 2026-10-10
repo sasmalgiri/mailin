@@ -62,6 +62,8 @@ struct ArchiveWorkingSetView<Content: View>: View {
                         WorkingSetLimitNotice(shown: workingSet.count, total: scopeTotal)
                     }
                     content(workingSet)
+                        // 3.0: the tool's engines can act on the whole scope.
+                        .environment(\.archiveScope, ArchiveScope(query: query, total: scopeTotal, loaded: workingSet.count))
                 }
             } else {
                 VStack {

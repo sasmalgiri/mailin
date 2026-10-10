@@ -233,6 +233,7 @@ enum ScopeJob {
         capability: Capability,
         query: EmailQuery,
         batchSize: Int = 200,
+        resumable: Bool = true,
         initialState: State,
         step: @MainActor (inout State, [MBOXParser.RawEmail]) async throws -> Void
     ) async throws -> (state: State, receipt: ScopeJobReceipt) {
@@ -246,7 +247,11 @@ enum ScopeJob {
         // Resume when an unfinished checkpoint for the same job and scope exists.
         var cp: ScopeJobCheckpoint<State>
         var resumed = false
-        if let saved = ScopeJobCheckpointStore.load(key, as: State.self), saved.query == query {
+        // `resumable: false` — for jobs whose per-email results live outside
+        // `State` (too large to checkpoint): always start over, never leave a
+        // checkpoint behind.
+        if !resumable { ScopeJobCheckpointStore.remove(key) }
+        if resumable, let saved = ScopeJobCheckpointStore.load(key, as: State.self), saved.query == query {
             cp = saved
             cp.total = total
             resumed = true
@@ -278,7 +283,7 @@ enum ScopeJob {
             cp.unreadable += max(0, requested - emails.count)
             center.progress(key, done: cp.processed, total: total)
             ContinuedProcessing.progress(continued, done: cp.processed, total: total)
-            ScopeJobCheckpointStore.save(cp)
+            if resumable { ScopeJobCheckpointStore.save(cp) }
         }
 
         if let text = query.text, !text.isEmpty {
@@ -308,13 +313,13 @@ enum ScopeJob {
                 cursor = next
                 cp.cursorDate = next.beforeDate
                 cp.cursorID = next.beforeID
-                ScopeJobCheckpointStore.save(cp)
+                if resumable { ScopeJobCheckpointStore.save(cp) }
             }
         }
 
         // A cancelled run keeps its checkpoint so it can be resumed; a
         // finished one removes it.
-        if !wasCancelled { ScopeJobCheckpointStore.remove(key) }
+        if !wasCancelled || !resumable { ScopeJobCheckpointStore.remove(key) }
         let receipt = ScopeJobReceipt(
             jobKey: key, title: title, capability: capability.rawValue,
             scope: ScopeJob.describe(query), archiveRevision: revision,

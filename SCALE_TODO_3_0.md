@@ -368,3 +368,12 @@ Apple docs: `NSAttributedString` persistence note (synchronous HTML import disco
 "Performing accessibility testing for your app", SwiftUI SDK 27 notes (`@State` macro, `@ContentBuilder`).
 
 Background audits: `BUTTON_AUDIT_3_0.md` (1,083 buttons, 2026-10-09).
+
+## 8. Findings during the implementation pass (fix in the test-and-fix pass)
+
+| # | Where | Finding | Status |
+|---|---|---|---|
+| 1 | `ForensicManager.exportPrivilegeLog` (old path) | `String(format: "%-12s …", swiftString)` — `%s` reads a C pointer from a Swift `String`: garbage columns or a crash. The 3.0 path pads in Swift. Fix the old path the same way (one-line change, behaviour-preserving). | [ ] |
+| 2 | Plan text S3/S9 | The main store already set `busy_timeout=5000` and background-readable file protection before 3.0; S3/S9 wording "none set today" is wrong. | [ ] |
+| 3 | Safe Mode wording | Safe Mode = no background work + no 3.0 engines; it does not make the archive read-only. Make help text say exactly that. | [ ] |
+| 4 | `BatesNumberingManager.assignNumbers` (old path) | Replaces every existing assignment with a fresh sequence over the loaded emails — breaks rule 3 (never renumber). The 3.0 engine skips numbered emails. Decide: guard the old path the same way (owner call — it changes old behaviour). Assignments also live in UserDefaults (whole dictionary rewritten); 3.0 keeps them in the database. | [ ] |
