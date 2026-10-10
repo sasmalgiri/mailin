@@ -55,7 +55,18 @@ struct SubjectsListView: View {
         }
     }
 
+    // §3-A8: every subject in the archive when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+
     var body: some View {
+        if v3Modules?.isOn(.v3AnalysisQueries) ?? false {
+            ArchiveSubjectGroupsView { ids in clusterFilterIDs = ids }
+        } else {
+            windowBody
+        }
+    }
+
+    private var windowBody: some View {
         VStack(spacing: 0) {
             HStack(spacing: Spacing.xSmall) {
                 Image(systemName: "magnifyingglass")

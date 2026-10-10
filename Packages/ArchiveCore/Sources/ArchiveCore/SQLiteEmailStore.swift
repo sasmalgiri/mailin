@@ -6408,6 +6408,62 @@ extension SQLiteEmailStore {
         return (rows.map { (subject: $0.0, count: $0.1) }, distinct)
     }
 
+    struct AttachmentRow: Sendable, Equatable {
+        let rowID: Int64
+        let emailID: UUID
+        let position: Int
+        let filename: String
+        let mimeType: String
+        let sizeBytes: Int
+        let emailDate: Date
+        let emailSubject: String
+    }
+
+    /// Every attachment in the archive, keyset-paged by row id (§3-A7),
+    /// optionally filtered by file name / type (contains, case-insensitive).
+    func attachmentRowsPage(after rowID: Int64?, nameContains: String?, limit: Int) throws -> [AttachmentRow] {
+        let db = try ensureDB()
+        var conditions = ["1=1"]
+        if rowID != nil { conditions.append("a.attachment_id > ?") }
+        let filter = nameContains?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if !filter.isEmpty { conditions.append("(instr(lower(a.filename), ?) > 0 OR instr(lower(a.mime_type), ?) > 0)") }
+        let stmt = try prepare(db, """
+            SELECT a.attachment_id, a.email_id, a.position, a.filename, a.mime_type, a.size_bytes, e.date, e.subject
+            FROM attachments a JOIN emails e ON e.id = a.email_id
+            WHERE \(conditions.joined(separator: " AND "))
+            ORDER BY a.attachment_id LIMIT ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        var idx: Int32 = 1
+        if let rowID { sqlite3_bind_int64(stmt, idx, rowID); idx += 1 }
+        if !filter.isEmpty { bindText(stmt, idx, filter); idx += 1; bindText(stmt, idx, filter); idx += 1 }
+        sqlite3_bind_int(stmt, idx, Int32(limit))
+        var out: [AttachmentRow] = []
+        while try stepRow(stmt, db) {
+            guard let id = columnUUID(stmt, 1) else { continue }
+            out.append(AttachmentRow(rowID: sqlite3_column_int64(stmt, 0), emailID: id,
+                                     position: Int(sqlite3_column_int64(stmt, 2)), filename: columnText(stmt, 3),
+                                     mimeType: columnText(stmt, 4), sizeBytes: Int(sqlite3_column_int64(stmt, 5)),
+                                     emailDate: Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 6))),
+                                     emailSubject: columnText(stmt, 7)))
+        }
+        return out
+    }
+
+    /// Exact count and total bytes for `attachmentRowsPage` with the same filter.
+    func attachmentRowsTotals(nameContains: String?) throws -> (count: Int, bytes: Int64) {
+        let db = try ensureDB()
+        let filter = nameContains?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let stmt = try prepare(db, """
+            SELECT COUNT(*), COALESCE(SUM(a.size_bytes), 0) FROM attachments a JOIN emails e ON e.id = a.email_id
+            \(filter.isEmpty ? "" : "WHERE instr(lower(a.filename), ?) > 0 OR instr(lower(a.mime_type), ?) > 0");
+        """)
+        defer { sqlite3_finalize(stmt) }
+        if !filter.isEmpty { bindText(stmt, 1, filter); bindText(stmt, 2, filter) }
+        guard try stepRow(stmt, db) else { return (0, 0) }
+        return (Int(sqlite3_column_int64(stmt, 0)), sqlite3_column_int64(stmt, 1))
+    }
+
     /// Hour-of-day × weekday activity for the whole archive (UTC), A12.
     func activityMatrix(query: EmailQuery = .all) throws -> [[Int]] {
         let db = try ensureDB()

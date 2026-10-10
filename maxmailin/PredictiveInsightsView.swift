@@ -9,6 +9,10 @@ struct PredictiveInsightsView: View {
     @State private var selectedTab: PredTab = .urgency
     /// Bounded archive size loaded from the store for display/enablement only.
     @State private var totalCount = 0
+    // §3-A3: whole-archive insights when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
+    @State private var v3Note: String?
+    private var v3: Bool { modules?.isOn(.v3AnalysisQueries) ?? false }
 
     enum PredTab: String, CaseIterable {
         case urgency = "Urgency"
@@ -46,6 +50,9 @@ struct PredictiveInsightsView: View {
                     .font(.system(.title3, design: .rounded)).fontWeight(.bold)
                 Text("Urgency, outcomes, and risk forecasts")
                     .font(.caption).foregroundColor(.secondary)
+                if let v3Note {
+                    Text(v3Note).font(.caption2).foregroundColor(.secondary)
+                }
             }
             Spacer()
             if summary != nil {
@@ -383,6 +390,20 @@ struct PredictiveInsightsView: View {
     // MARK: - Actions
 
     private func runAnalysis() {
+        if v3 {
+            isAnalyzing = true
+            Task { @MainActor in
+                defer { isAnalyzing = false }
+                do {
+                    let r = try await PredictiveInsightsEngine.analyze()
+                    summary = r.summary
+                    v3Note = r.urgentTotal > r.summary.urgentEmails.count
+                        ? String(localized: "\(r.scanned) emails analysed; \(r.urgentTotal) need attention — the strongest \(r.summary.urgentEmails.count) are listed. Thread outcomes use recent activity.")
+                        : String(localized: "\(r.scanned) emails analysed. Thread outcomes use recent activity.")
+                } catch { v3Note = error.localizedDescription }
+            }
+            return
+        }
         isAnalyzing = true
         Task {
             let result = (try? await PredictiveEngine.analyze(from: .shared))

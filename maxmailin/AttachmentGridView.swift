@@ -58,7 +58,18 @@ struct AttachmentGridView: View {
 
     private var totalSize: Int { filteredItems.reduce(0) { $0 + $1.attachment.size } }
 
+    // §3-A7: the whole archive's attachments when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+
     var body: some View {
+        if v3Modules?.isOn(.v3AnalysisQueries) ?? false {
+            ArchiveAttachmentIndexView()
+        } else {
+            windowBody
+        }
+    }
+
+    private var windowBody: some View {
         VStack(spacing: 0) {
             headerBar
             Divider()

@@ -11,6 +11,12 @@ struct ITAdminAnalysisView: View {
     @State private var canLoadMore = true
     @State private var isLoadingPage = false
     @State private var workingSet: [MBOXParser.RawEmail] = []
+    // §3-A9: whole-archive batch figures when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+    @State private var whole: ITAdminWholeStats?
+    @State private var wholeRunning = false
+    @State private var wholeNote: String?
+    private var v3Stats: Bool { v3Modules?.isOn(.v3AnalysisQueries) ?? false }
     @State private var archiveTotal = 0
     @State private var itExportStatus: String?
     @State private var selectedFullEmail: MBOXParser.RawEmail?
@@ -1121,7 +1127,100 @@ struct ITAdminAnalysisView: View {
 
     // MARK: - Batch Analysis
 
+    @ViewBuilder
     private var batchAnalysisView: some View {
+        if v3Stats {
+            wholeArchiveBatchView
+        } else {
+            windowBatchAnalysisView
+        }
+    }
+
+    /// The same sections over the whole archive (§3-A9).
+    private var wholeArchiveBatchView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if let s = whole {
+                    sectionTitle("Batch Email Analysis (\(s.total) emails — whole archive)", icon: "chart.bar", color: .teal)
+                    if let wholeNote { Text(wholeNote).font(.system(size: 9)).foregroundColor(.secondary) }
+                    HStack(spacing: 12) {
+                        batchStatCard("SPF Pass", value: "\(s.spfPass)", total: s.total, color: .green)
+                        batchStatCard("DKIM Pass", value: "\(s.dkimPass)", total: s.total, color: .green)
+                        batchStatCard("DMARC Pass", value: "\(s.dmarcPass)", total: s.total, color: .green)
+                        batchStatCard("TLS Encrypted", value: "\(s.tls)", total: s.total, color: .blue)
+                    }
+                    Divider()
+                    sectionTitle("Top Sending Domains (\(s.domains.count) total)", icon: "globe", color: .blue)
+                    ForEach(Array(s.domains.prefix(15)), id: \.0) { domain, count in
+                        HStack {
+                            Text(domain).font(.system(size: 11, design: .monospaced))
+                            Spacer()
+                            ProgressView(value: Double(count), total: Double(max(s.total, 1))).frame(width: 100).tint(.teal)
+                            Text("\(count)").font(.system(size: 11, weight: .bold, design: .monospaced)).frame(width: 60, alignment: .trailing)
+                        }
+                    }
+                    Divider()
+                    sectionTitle("Mail Clients (\(s.clients.count) total)", icon: "envelope.badge.person.crop", color: .purple)
+                    ForEach(Array(s.clients.prefix(10)), id: \.0) { client, count in
+                        HStack {
+                            Text(client).font(.system(size: 10, design: .monospaced)).lineLimit(1)
+                            Spacer()
+                            Text("\(count)").font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundColor(.purple)
+                        }
+                    }
+                    Divider()
+                    sectionTitle("Attachment Summary", icon: "paperclip", color: .brown)
+                    HStack(spacing: 20) {
+                        VStack {
+                            Text("\(s.emailsWithAttachments)").font(.system(size: 18, weight: .bold)).foregroundColor(.brown)
+                            Text("Emails with\nattachments").font(.system(size: 9)).foregroundColor(.secondary).multilineTextAlignment(.center)
+                        }
+                        VStack {
+                            Text("\(s.attachments)").font(.system(size: 18, weight: .bold)).foregroundColor(.brown)
+                            Text("Total\nattachments").font(.system(size: 9)).foregroundColor(.secondary).multilineTextAlignment(.center)
+                        }
+                    }
+                    Divider()
+                    sectionTitle("Threat Assessment", icon: "shield.checkered", color: .red)
+                    HStack(spacing: 12) {
+                        batchStatCard("High Risk", value: "\(s.high)", total: s.total, color: .red)
+                        batchStatCard("Medium Risk", value: "\(s.medium)", total: s.total, color: .orange)
+                        batchStatCard("Low Risk", value: "\(s.low)", total: s.total, color: .yellow)
+                        batchStatCard("Clean", value: "\(s.clean)", total: s.total, color: .green)
+                    }
+                    ForEach(s.highRisk, id: \.email.id) { item in
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 9)).foregroundColor(.red)
+                            Text(item.email.headers["From"]?.components(separatedBy: "<").first?.trimmingCharacters(in: .whitespaces) ?? "?")
+                                .font(.system(size: 10, weight: .medium)).lineLimit(1)
+                            Text(item.email.headers["Subject"] ?? "").font(.system(size: 9)).foregroundColor(.secondary).lineLimit(1)
+                            Spacer()
+                            Text("Score: \(item.score)").font(.system(size: 9, weight: .bold, design: .monospaced)).foregroundColor(.red)
+                        }
+                    }
+                    Divider()
+                    aiSecurityBriefSection
+                } else {
+                    ProgressView(wholeRunning ? String(localized: "Computing figures for the whole archive…") : "")
+                        .frame(maxWidth: .infinity)
+                    if let wholeNote { Text(wholeNote).font(.system(size: 10)).foregroundColor(.secondary) }
+                }
+            }
+            .padding(12)
+        }
+        .task {
+            guard whole == nil, !wholeRunning else { return }
+            wholeRunning = true
+            defer { wholeRunning = false }
+            do {
+                let r = try await ITAdminStatsEngine.compute()
+                whole = r.stats
+                wholeNote = r.receipt.coverageLine
+            } catch { wholeNote = error.localizedDescription }
+        }
+    }
+
+    private var windowBatchAnalysisView: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 sectionTitle("Batch Email Analysis (\(workingSet.count) emails)", icon: "chart.bar", color: .teal)
