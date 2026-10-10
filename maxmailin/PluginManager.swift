@@ -8,6 +8,9 @@
 //
 
 import Foundation
+import os
+
+private let pluginTimeoutLog = Logger(subsystem: "com.ecosanskriti.maxmailin", category: "Plugins")
 
 @MainActor
 class PluginManager: ObservableObject {
@@ -15,6 +18,8 @@ class PluginManager: ObservableObject {
 
     @Published private(set) var loadedPlugins: [PluginEntry] = []
     @Published private(set) var pluginFindings: [String: [MailinPluginFinding]] = [:]
+    /// The deadline one plugin call gets (§8 #7); tests shorten it.
+    var sandboxTimeout: Duration = .seconds(30)
 
     struct PluginEntry: Identifiable {
         let id: String
@@ -96,32 +101,28 @@ class PluginManager: ObservableObject {
         return findings
     }
 
+    /// Runs a plugin with a 30 s deadline that is honoured (§8 #7): the
+    /// previous version raced the plugin against a sleep inside a task group,
+    /// but a group waits for every child, so a plugin that never returned
+    /// kept the call waiting forever. Now the first of {plugin, deadline}
+    /// resumes the call; a stuck plugin is abandoned, not awaited. Findings
+    /// are no longer cut at 100 without a word (rule 6).
     private func runPluginSandboxed(_ plugin: MailinPlugin, emails: [MailinPluginEmail]) async -> [MailinPluginFinding] {
-        let maxFindings = 100
-        let timeout: UInt64 = 30_000_000_000
-
-        return await withCheckedContinuation { continuation in
+        let timeout = sandboxTimeout
+        let box = UncheckedPluginBox(plugin)
+        return await withCheckedContinuation { (continuation: CheckedContinuation<[MailinPluginFinding], Never>) in
+            let gate = PluginResumeGate()
+            let work = Task {
+                let findings = await box.plugin.analyze(emails: emails)
+                if gate.claim() { continuation.resume(returning: findings) }
+            }
             Task {
-                let result = await withTaskGroup(of: [MailinPluginFinding]?.self) { group in
-                    group.addTask {
-                        let findings = await plugin.analyze(emails: emails)
-                        return Array(findings.prefix(maxFindings))
-                    }
-
-                    group.addTask {
-                        try? await Task.sleep(nanoseconds: timeout)
-                        return nil
-                    }
-
-                    for await result in group {
-                        if let findings = result {
-                            group.cancelAll()
-                            return findings
-                        }
-                    }
-                    return []
+                try? await Task.sleep(for: timeout)
+                if gate.claim() {
+                    work.cancel()
+                    pluginTimeoutLog.warning("plugin \(box.plugin.pluginID, privacy: .public) exceeded its time limit and was abandoned")
+                    continuation.resume(returning: [])
                 }
-                continuation.resume(returning: result)
             }
         }
     }
@@ -184,4 +185,21 @@ class PluginManager: ObservableObject {
         }
         return text
     }
+}
+
+/// Lets exactly one of the plugin and its deadline resume the call.
+private final class PluginResumeGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    func claim() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if done { return false }
+        done = true
+        return true
+    }
+}
+
+private struct UncheckedPluginBox: @unchecked Sendable {
+    let plugin: MailinPlugin
+    init(_ plugin: MailinPlugin) { self.plugin = plugin }
 }

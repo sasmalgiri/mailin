@@ -336,4 +336,51 @@ final class V3CompatibilityTests: XCTestCase {
         let message = await ScopeJobEnvironment.$current.withValue(env.job) { EngineGuard.fellBack(.v3IOC, error: Boom()) }
         XCTAssertTrue(message.contains("boom") && message.contains("previous engine"), message)
     }
+
+    // MARK: - Old-path bug fixes (§8 #1, #7)
+
+    private final class StuckPlugin: MailinPlugin {
+        let pluginID = "test.stuck", pluginName = "Stuck", pluginVersion = "1", pluginDescription = "never returns"
+        func analyze(emails: [MailinPluginEmail]) async -> [MailinPluginFinding] {
+            try? await Task.sleep(for: .seconds(600))   // far past the deadline; ends when cancelled
+            return []
+        }
+        func export(emails: [MailinPluginEmail], format: String) async -> Data? { nil }
+    }
+
+    private final class ManyFindingsPlugin: MailinPlugin {
+        let pluginID = "test.many", pluginName = "Many", pluginVersion = "1", pluginDescription = "150 findings"
+        func analyze(emails: [MailinPluginEmail]) async -> [MailinPluginFinding] {
+            (0..<150).map { MailinPluginFinding(title: "f\($0)", detail: "", severity: .info, relatedEmailIDs: []) }
+        }
+        func export(emails: [MailinPluginEmail], format: String) async -> Data? { nil }
+    }
+
+    /// #7: the deadline really ends the call (it used to wait for the plugin).
+    func testPluginDeadline_endsTheCall_andFindingsAreNotCut() async {
+        let manager = PluginManager()
+        manager.sandboxTimeout = .milliseconds(300)
+        manager.register(plugin: StuckPlugin())
+        manager.register(plugin: ManyFindingsPlugin())
+        let started = Date()
+        let stuck = await manager.runPlugin(id: "test.stuck", emails: [])
+        XCTAssertTrue(stuck.isEmpty)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5, "the deadline ended the call")
+        let many = await manager.runPlugin(id: "test.many", emails: [])
+        XCTAssertEqual(many.count, 150, "no silent cut at 100")
+    }
+
+    /// #1: the privilege log's columns are real text (`%s` with a Swift
+    /// String printed garbage or crashed).
+    func testPrivilegeLog_columnsCarryTheRealText() {
+        let forensic = ForensicManager.shared
+        let saved = forensic.evidenceTags
+        defer { forensic.evidenceTags = saved }
+        let email = makeEmail(1, from: "Ann Example <ann@a.com>", tag: "pl")
+        forensic.evidenceTags = [email.id: .privileged]
+        let log = forensic.exportPrivilegeLog(emails: [email])
+        XCTAssertTrue(log.contains("Ann Example <ann@a.com>"), log)
+        XCTAssertTrue(log.contains("S 1"), "subject column")
+        XCTAssertTrue(log.contains("No.      Date"), "header padded to the same widths")
+    }
 }

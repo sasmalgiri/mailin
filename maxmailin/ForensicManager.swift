@@ -1327,7 +1327,12 @@ class ForensicManager: ObservableObject {
         log += "Date: \(displayFormatter.string(from: Date()))\n"
         log += "Total Privileged Documents: \(privileged.count)\n\n"
 
-        log += String(format: "%-8s %-12s %-30s %-30s %s\n", "No.", "Date", "From", "To", "Subject")
+        // §8 #1: `%s` reads a C pointer, not a Swift String (garbage or a
+        // crash). Columns are padded in Swift instead, same widths.
+        func col(_ s: String, _ width: Int) -> String {
+            s.count >= width ? s + " " : s + String(repeating: " ", count: width - s.count) + " "
+        }
+        log += col("No.", 8) + col("Date", 12) + col("From", 30) + col("To", 30) + "Subject\n"
         log += String(repeating: "-", count: 120) + "\n"
 
         for (i, email) in privileged.enumerated() {
@@ -1336,12 +1341,7 @@ class ForensicManager: ObservableObject {
             let to = String((email.headers["To"] ?? "N/A").prefix(28))
             let subject = String((email.headers["Subject"] ?? "N/A").prefix(50))
 
-            log += String(format: "%-8d %-12s %-30s %-30s %s\n",
-                          i + 1,
-                          String(date),
-                          from,
-                          to,
-                          subject)
+            log += col(String(i + 1), 8) + col(date, 12) + col(from, 30) + col(to, 30) + subject + "\n"
 
             if let annotation = annotations[email.id] {
                 log += "         Basis: \(annotation.text)\n"
