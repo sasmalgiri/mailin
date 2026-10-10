@@ -119,6 +119,15 @@ struct ArchiveHealthView: View {
                 }
             }
 
+            if modules.isOn(.v3AIAnswers), ModelVersionWatch.needsRecheck {
+                Section("AI") {
+                    Label {
+                        Text("The system or its on-device model changed since the AI answer checks last passed (\(ModelVersionWatch.checkedBuild ?? String(localized: "never recorded"))). Re-run the AI answer checks on \(ModelVersionWatch.currentBuild).")
+                            .font(.caption)
+                    } icon: { Image(systemName: "sparkles") }
+                }
+            }
+
             Section("Diagnostics (kept on this device)") {
                 let d = DiagnosticsCenter.shared.summary()
                 LabeledContent(String(localized: "Crash reports"), value: "\(d.crashes)")

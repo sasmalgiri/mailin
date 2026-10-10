@@ -376,7 +376,7 @@ struct SearchEmailsTool: Tool {
         let fts = FTSQueryBuilder.freeTextOrBoolean(arguments.query) ?? FTSQueryBuilder.escapeTerm(arguments.query)
         let ids = (try? await FTSSearchIndex.shared.searchRaw(fts, limit: 5)) ?? []
         guard !ids.isEmpty else { return "No emails found for '\(arguments.query)'" }
-        let evidence = (try? await EmailStore.shared.emails(withIDs: ids)) ?? []
+        let evidence = (try? await ArchiveDataService.shared.fullEmails(ids: ids)) ?? []
         guard !evidence.isEmpty else { return "No emails found for '\(arguments.query)'" }
         var output = ""
         for e in evidence {
@@ -406,7 +406,7 @@ struct GetThreadInfoTool: Tool {
         // that bounded set, and we group only those — not the whole archive.
         let fts = FTSQueryBuilder.freeTextOrBoolean(arguments.subject) ?? FTSQueryBuilder.escapeTerm(arguments.subject)
         let ids = (try? await FTSSearchIndex.shared.searchRaw(fts, limit: 50)) ?? []
-        let candidates = (try? await EmailStore.shared.emails(withIDs: ids)) ?? []
+        let candidates = (try? await ArchiveDataService.shared.fullEmails(ids: ids)) ?? []
         let threads = ThreadGrouper.group(candidates)
         let lower = arguments.subject.lowercased()
         guard let thread = threads.first(where: { $0.subject.lowercased().contains(lower) }) else {
@@ -2010,6 +2010,17 @@ struct FoundationModelEngine {
         emails: [MBOXParser.RawEmail],
         context: String = ""
     ) async -> String? {
+        // §3-I4: with the 3.0 engine on, read emails chosen from the whole
+        // archive (relevance or an even spread) instead of the given window.
+        var emails = emails
+        var basedOn: String?
+        if AIContextSelector.isEnabled {
+            let name: String = { if case .security = scope { return "security" } else { return "other" } }()
+            if let selection = await AIContextSelector.select(for: name) {
+                emails = selection.emails
+                basedOn = selection.note
+            }
+        }
         guard isAvailable, !emails.isEmpty else { return nil }
 
         let roles: [ExpertRole]
@@ -2067,6 +2078,7 @@ struct FoundationModelEngine {
             }
         }
 
+        if let basedOn, !output.isEmpty { output += "\n" + basedOn }
         return output.isEmpty ? nil : output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -4445,7 +4457,7 @@ struct FoundationModelEngine {
             tools.append(TopicDrillTool(emails: emails))
         }
 
-        return tools
+        return ArchiveQueryTools.merged(with: tools)
     }
 
     // MARK: - Archive Profile (pre-computed stats over ALL emails)

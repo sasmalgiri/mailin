@@ -44,6 +44,9 @@ enum CapabilityWiring {
             BackgroundAnalysisManager.wholeArchiveEnabled = isOn
         case .v3PredictiveCoding:
             PredictiveCodingEngine.wholeArchiveEnabled = isOn
+        case .v3AIAnswers:
+            // §3-I3/I4: AI enhancements read emails chosen from the whole archive.
+            AIContextSelector.isEnabled = isOn
         case .v3LegalState:
             // §3-F4: the custodian/hold/seal manager dual-writes into SQLite
             // while on; turning on migrates the existing files once.
@@ -111,7 +114,6 @@ enum CapabilityWiring {
              .v3NearDuplicates,
              .v3TopicClusters,
              .v3Threads,
-             .v3AIAnswers,
              .v3Graphs,
              .v3KeywordMonitor,
              .v3EDiscovery,

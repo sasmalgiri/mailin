@@ -6520,6 +6520,37 @@ extension SQLiteEmailStore {
         return ArchiveOverview(emails: emails, attachments: attachments, distinctSenders: senders, firstDate: first, lastDate: last)
     }
 
+    enum GroupField: String, Sendable { case sender, domain }
+
+    /// Counts grouped by sender address or sender domain over a scope, paged,
+    /// with the number of distinct values (§3-I1 tools, §3-H5 rollups).
+    func groupedCounts(query: EmailQuery = .all, by field: GroupField, limit: Int, offset: Int = 0)
+        throws -> (rows: [AggregateBucket], distinct: Int) {
+        let db = try ensureDB()
+        let (clauses, binds) = Self.filterClauses(query)
+        let whereSQL = clauses.isEmpty ? "1=1" : clauses.joined(separator: " AND ")
+        let key: String
+        switch field {
+        case .sender: key = "lower(e.from_addr)"
+        case .domain: key = "lower(substr(e.from_addr, instr(e.from_addr, '@') + 1))"
+        }
+        let dstmt = try prepare(db, "SELECT COUNT(DISTINCT \(key)) FROM emails e WHERE \(whereSQL) AND e.from_addr <> '';")
+        defer { sqlite3_finalize(dstmt) }
+        _ = bindQueryValues(dstmt, binds, startingAt: 1)
+        let distinct = try stepRow(dstmt, db) ? Int(sqlite3_column_int64(dstmt, 0)) : 0
+        let stmt = try prepare(db, """
+            SELECT \(key) AS k, COUNT(*) AS c FROM emails e WHERE \(whereSQL) AND e.from_addr <> ''
+            GROUP BY k ORDER BY c DESC, k LIMIT ? OFFSET ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        let next = bindQueryValues(stmt, binds, startingAt: 1)
+        sqlite3_bind_int(stmt, next, Int32(limit))
+        sqlite3_bind_int(stmt, next + 1, Int32(offset))
+        var out: [AggregateBucket] = []
+        while try stepRow(stmt, db) { out.append(AggregateBucket(value: columnText(stmt, 0), count: Int(sqlite3_column_int64(stmt, 1)))) }
+        return (out, distinct)
+    }
+
     /// Hour-of-day × weekday activity for the whole archive (UTC), A12.
     func activityMatrix(query: EmailQuery = .all) throws -> [[Int]] {
         let db = try ensureDB()

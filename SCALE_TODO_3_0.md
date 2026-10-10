@@ -200,12 +200,12 @@ loops, the current AI context building. Deleted only in a later release after a 
 ### I — AI (designed around the 4,096-token reading window)
 | ID | Item | Status |
 |---|---|---|
-| I1 | **AI answers via FoundationModels `Tool`s** that call our queries (count, top-K, find, timeline) — the model decides which question to ask, our code counts; ≤ 3–5 tools per request, short descriptions (Apple guidance) | [ ] |
-| I2 | **Token budget**: measure with `tokenCount(for:)`/`contextSize`; handle `contextSizeExceeded` by condensing the transcript; long material map-reduced across sessions | [ ] |
-| I3 | **Retrieval for narrative answers** from the whole archive (FTS + Q1/Q2), answers state "based on N of M emails" | [ ] |
-| I4 | **"Enhance with AI" buttons** pick the most relevant emails by retrieval (today newest 500) and say how many | [ ] |
-| I5 | **Prompt versioning** per model version (Apple "Updating prompts for new model versions") + the existing typed-question checks re-run on each OS update | [ ] |
-| I6 | Optional **Private Cloud Compute** model for larger context — online feature, off by default, behind the cloud-AI consent toggle | [ ] |
+| I1 | **AI answers via FoundationModels `Tool`s** that call our queries (count, top-K, find, timeline) — the model decides which question to ask, our code counts; ≤ 3–5 tools per request, short descriptions (Apple guidance) | [~] |
+| I2 | **Token budget**: measure with `tokenCount(for:)`/`contextSize`; handle `contextSizeExceeded` by condensing the transcript; long material map-reduced across sessions | [~] |
+| I3 | **Retrieval for narrative answers** from the whole archive (FTS + Q1/Q2), answers state "based on N of M emails" | [~] |
+| I4 | **"Enhance with AI" buttons** pick the most relevant emails by retrieval (today newest 500) and say how many | [~] |
+| I5 | **Prompt versioning** per model version (Apple "Updating prompts for new model versions") + the existing typed-question checks re-run on each OS update | [~] |
+| I6 | Optional **Private Cloud Compute** model for larger context — online feature, off by default, behind the cloud-AI consent toggle | — **owner-bound**: needs the `com.apple.developer.private-cloud-compute` entitlement provisioned by Apple, and it is an online feature (owner decision for 3.0 Private) — [ ] |
 
 ### Q — Search and similarity
 | ID | Item | Status |
@@ -380,3 +380,4 @@ Background audits: `BUTTON_AUDIT_3_0.md` (1,083 buttons, 2026-10-09).
 | 5 | `BatchOperationsView.performRemoveTag` / `performClearClassification` (old path) | Both call `onTagApplied("")`, which clears ALL tags on the emails — "Remove Tag X" removes every tag. 3.0 path removes only the chosen tag. Fix the old path to call `removeTag(tag, from:)`. | [ ] |
 | 6 | `FoundationModelEngine.synthesizeThread` (old path) | Puts ~500 characters per message into ONE prompt; a long thread (≈ 25k tokens for 200 messages) exceeds the 4,096-token window and the caller's `try?` swallows the error — Thread Story silently shows nothing. 3.0 (`ThreadStoryEngine`) reads long threads in measured parts. Old path: at least surface the error. | [ ] |
 | 7 | `PluginManager.runPluginSandboxed` (old path) | The 30 s timeout never ends the run: when the sleep task finishes first it returns `nil`, the loop `continue`s and waits for the plugin anyway. Findings are also cut at 100 silently. 3.0 (`PluginRunnerV2`) races each call against a deadline that is honoured and reports "N of M batches timed out". | [ ] |
+| 8 | `SearchEmailsTool` / `GetThreadInfoTool` (AI assistant tools) | Hydrated FTS hits from `EmailStore` (the v1 SwiftData store) — on an archive held in SQLite (every 2.x/3.0 archive) the assistant's search tool found ids but returned "No emails found". **Fixed in place (bug fix, 2026-10-10)**: hydrate via `ArchiveDataService.fullEmails(ids:)`, the active-store router. Needs a test. | [~] |
