@@ -369,6 +369,32 @@ Apple docs: `NSAttributedString` persistence note (synchronous HTML import disco
 
 Background audits: `BUTTON_AUDIT_3_0.md` (1,083 buttons, 2026-10-09).
 
+## 7b. Clause-by-clause gaps (audit 2026-10-10) — implement before the test pass
+
+Every `[~]` row was checked against its own wording. A row is not done until every clause below is.
+
+| Row | Missing clause | Status |
+|---|---|---|
+| F1 | adaptive batch size from `os_proc_available_memory`; generalise `ExportRunCenter` | [ ] |
+| F4 | Legal Review + Journalist workspaces into SQLite | [ ] |
+| F5 | fingerprint tree as THE verification path (Verify buttons); old seals keep verifying | [ ] |
+| F6 | named entities in the feature index | [ ] |
+| M2 | tripped switches come back with a new app version (unless the user switched them off) | [ ] |
+| M3 | a fallback is stated in the job receipt | [ ] |
+| S6 | Safe Mode makes the archive read-only (plan) + help text says exactly what it does (#3) | [ ] |
+| E2 | evidence record included in productions and case bundles | [ ] |
+| E4 | collection fields shown in ImportReceiptView | [ ] |
+| E6 | test that checks every part of a redacted export | [ ] |
+| A12/I4 | Communication Patterns AI context by retrieval, stating how many | [ ] |
+| Q2 | written decision gate: vec1 vs sqlite-vec (before any extension) | [ ] |
+| P1 | ArchiveCore strict-concurrency diagnostics fixed; Swift 6 mode | [ ] |
+| P2 | parser unsafe sites marked / moved to Span | [ ] |
+| P3 | coverage-guided fuzzing (libFuzzer) — or the toolchain limit stated | [ ] |
+| P6 | iOS SDK 27 build confirmed | [ ] |
+| R3 | SIZE_LIMITS_DESIGN.md, help, store copy | [ ] |
+| X1 | owner decision on which entry points go | owner |
+| §8 #1, #5, #6, #7 | old-path bug fixes | [ ] |
+
 ## 8. Findings during the implementation pass (fix in the test-and-fix pass)
 
 | # | Where | Finding | Status |
