@@ -112,3 +112,8 @@ enum ScopeConfirm {
                                  detail: detail, destructive: destructive, action: action)
     }
 }
+
+/// §3-H (switch: `v3PagedLists`): read by views that page lists.
+enum V3Paging {
+    nonisolated(unsafe) static var isOn = false
+}

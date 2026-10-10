@@ -4480,6 +4480,25 @@ private func handleMultipleFiles(_ urls: [URL]) {
         panel.nameFieldStringValue = "export.pst"
         let response = panel.runModal()
         guard response == .OK, let url = panel.url else { return }
+        if V3Paging.isOn {
+            // §3-H9: parts below the format's 50 GB ceiling and below the
+            // destination's maximum file size (FAT32: 4 GB). One part keeps
+            // the chosen name; more become name-0001.pst, name-0002.pst …
+            runStreamingExport("Exporting PST") { service in
+                let dir = url.deletingLastPathComponent()
+                let base = url.deletingPathExtension().lastPathComponent
+                let parts = try await service.exportPSTParts(scope: scope, toDirectory: dir, baseName: base,
+                                                             onProgress: self.exportProgress)
+                let messages = parts.reduce(0) { $0 + $1.messages }
+                if parts.count == 1, let only = parts.first {
+                    try? FileManager.default.removeItem(at: url)
+                    try FileManager.default.moveItem(at: only.url, to: url)
+                    return "Exported \(messages) emails to PST."
+                }
+                return "Exported \(messages) emails to \(parts.count) PST files (\(base)-0001.pst …) — each below the size this drive and Outlook accept."
+            }
+            return
+        }
         runStreamingExport("Exporting PST") { service in
             // Streams every message in scope straight to disk — no count
             // cap; the PST format's own 50 GB ceiling is the only limit.

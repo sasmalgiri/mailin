@@ -967,6 +967,70 @@ final class ArchiveExportService {
         return (saved, false)
     }
 
+    // MARK: - PST parts (§3-H9)
+
+    /// The largest part this destination accepts: the volume's maximum file
+    /// size when the filesystem reports one (FAT32: 4 GB − 1), else 45 GB —
+    /// under the PST format's 50 GB ceiling with room for the final index.
+    static func pstPartBytes(for directory: URL) -> UInt64 {
+        let formatSafe: UInt64 = 45_000_000_000
+        if let max = (try? directory.resourceValues(forKeys: [.volumeMaximumFileSizeKey]))?.volumeMaximumFileSize,
+           max > 0 {
+            // Leave 5 % for the B-trees written at finalize.
+            return min(formatSafe, UInt64(Double(max) * 0.95))
+        }
+        return formatSafe
+    }
+
+    /// Streams the scope into numbered PST files, each a complete, valid PST
+    /// below `partBytes`. Returns the files and messages per file.
+    func exportPSTParts(scope: ArchiveSelectionScope,
+                        toDirectory directory: URL,
+                        baseName: String = "archive",
+                        partBytes: UInt64? = nil,
+                        onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> [(url: URL, messages: Int)] {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let limit = partBytes ?? Self.pstPartBytes(for: directory)
+        let total = try await archive.count(scope: scope)
+        var parts: [(url: URL, messages: Int)] = []
+        var part = 1
+        func newWriter() throws -> (PSTStreamWriter, URL) {
+            let url = directory.appendingPathComponent(String(format: "%@-%04d.pst", baseName, part))
+            return (try PSTStreamWriter(url: url), url)
+        }
+        var (writer, url) = try newWriter()
+        var inPart = 0
+        var done = 0
+        do {
+            for try await batch in archive.streamSelected(scope: scope) {
+                try Task.checkCancellation()
+                for email in batch {
+                    if inPart > 0, writer.dataBytesWritten >= limit {
+                        let n = try writer.finalize()
+                        parts.append((url, n))
+                        part += 1
+                        (writer, url) = try newWriter()
+                        inPart = 0
+                    }
+                    try writer.append(email: email)
+                    inPart += 1
+                    done += 1
+                }
+                onProgress?(done, total)
+            }
+            if inPart > 0 {
+                parts.append((url, try writer.finalize()))
+            } else {
+                writer.abort()
+                try? FileManager.default.removeItem(at: url)
+            }
+            return parts
+        } catch {
+            writer.abort()
+            throw error
+        }
+    }
+
     // MARK: - PST (streaming, uncapped)
 
     /// Streams the whole scope into a PST file on disk. Memory stays bounded

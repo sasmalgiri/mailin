@@ -116,6 +116,10 @@ final class PSTStreamWriter {
     private var nextBid: UInt64 = 4
     private var nextIdx: UInt32 = 0x21   // 0x20 is reserved for the root folder
     private var offset: UInt64 = 4096    // data starts at first page after header
+
+    /// Bytes of message data written so far (§3-H9: lets a caller close the
+    /// file and start the next part before a size limit).
+    var dataBytesWritten: UInt64 { offset }
     private var finished = false
 
     private var messageCount: Int { messageNids.count }

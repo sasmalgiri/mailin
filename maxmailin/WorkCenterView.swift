@@ -28,6 +28,10 @@ struct WorkCenterView: View {
     @State private var migratedCount = 0
     @State private var coverage: (analyzed: Int, total: Int) = (0, 0)
     @State private var documents: [SQLiteEmailStore.IssuedDocument] = []
+    // §3-H1: page through every document with the total shown (3.0 engine).
+    @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
+    @State private var documentTotal: Int?
+    private var pagedLists: Bool { v3Modules?.isOn(.v3PagedLists) ?? false }
     @State private var docSearch = ""
     @State private var docDateFilterOn = false
     @State private var docFrom = Date()
@@ -555,8 +559,25 @@ struct WorkCenterView: View {
                         documentDetail(doc)
                     }
                 }
+                if pagedLists, let documentTotal, documents.count < documentTotal {
+                    Button(String(localized: "Load more (\(documents.count) of \(documentTotal))")) {
+                        Task { await loadMoreDocuments() }
+                    }
+                    .onAppear { Task { await loadMoreDocuments() } }
+                }
             }
         }
+    }
+
+    @MainActor
+    private func loadMoreDocuments() async {
+        let needle = docSearch.trimmingCharacters(in: .whitespaces)
+        let store = SQLiteEmailStore.shared
+        let next = needle.isEmpty
+            ? (try? await store.recentDocuments(limit: 200, offset: documents.count)) ?? []
+            : (try? await store.lookupDocuments(matching: needle, limit: 200, offset: documents.count)) ?? []
+        let known = Set(documents.map(\.number))
+        documents += next.filter { !known.contains($0.number) }
     }
 
     @ViewBuilder
@@ -779,6 +800,9 @@ struct WorkCenterView: View {
     @MainActor
     private func reloadDocuments() async {
         let needle = docSearch.trimmingCharacters(in: .whitespaces)
+        if pagedLists {
+            documentTotal = try? await SQLiteEmailStore.shared.documentCount(matching: needle)
+        }
         if needle.isEmpty {
             documents = (try? await SQLiteEmailStore.shared.recentDocuments()) ?? []
         } else {
@@ -1039,8 +1063,23 @@ struct WorkCenterView: View {
         await WorkflowService.seedBuiltins()
         personaTemplates = WorkflowCatalog.templates(for: personaRaw)
         if personaTemplates.isEmpty { personaTemplates = WorkflowCatalog.all }
-        openRuns = ((try? await store.instances(status: "open")) ?? [])
-            + ((try? await store.instances(status: "released")) ?? [])
+        if pagedLists {
+            // §3-H2: every open / released run, not only the latest 200.
+            var all: [SQLiteEmailStore.StoredInstance] = []
+            for status in ["open", "released"] {
+                var offset = 0
+                while true {
+                    let page = (try? await store.instances(status: status, limit: 500, offset: offset)) ?? []
+                    all += page
+                    if page.count < 500 { break }
+                    offset += page.count
+                }
+            }
+            openRuns = all
+        } else {
+            openRuns = ((try? await store.instances(status: "open")) ?? [])
+                + ((try? await store.instances(status: "released")) ?? [])
+        }
         var vmap: [String: [SQLiteEmailStore.StoredVariant]] = [:]
         for def in personaTemplates {
             vmap[def.defID] = (try? await store.variants(defID: def.defID)) ?? []

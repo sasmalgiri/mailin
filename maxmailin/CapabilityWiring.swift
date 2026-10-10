@@ -51,6 +51,9 @@ enum CapabilityWiring {
             ArchiveRetrievalService.semanticFusionEnabled = isOn
         case .v3SearchOperators:
             ArchiveQueryCompiler.exclusionsEnabled = isOn
+        case .v3PagedLists:
+            SQLiteEmailStore.unboundedIDLookups = isOn
+            V3Paging.isOn = isOn
         case .v3LegalState:
             // §3-F4: the custodian/hold/seal manager dual-writes into SQLite
             // while on; turning on migrates the existing files once.
@@ -111,7 +114,6 @@ enum CapabilityWiring {
              .v3ScopeEngine,
              .v3FeatureIndex,
              .v3Fingerprints,
-             .v3PagedLists,
              .v3Duplicates,
              .v3AnalysisQueries,
              .v3NearDuplicates,

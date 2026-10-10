@@ -16,6 +16,8 @@ struct ForensicReviewView: View {
     @State private var workingSet: [MBOXParser.RawEmail] = []
     @State private var archiveTotal = 0
     @State private var searchHits: [MBOXParser.RawEmail] = []
+    // §3-H4: every search hit, paged (3.0 engine) — ids first, bodies per page.
+    @State private var v3SearchIDs: [UUID] = []
     @State private var selectedFullEmail: MBOXParser.RawEmail?
 
     /// Emails shown in the review list: FTS hits when searching, else the paged
@@ -183,6 +185,12 @@ struct ForensicReviewView: View {
         guard canLoadMore, !isLoadingPage else { return }
         isLoadingPage = true
         defer { isLoadingPage = false }
+        if !v3SearchIDs.isEmpty, !searchHits.isEmpty {
+            let next = Array(v3SearchIDs.dropFirst(searchHits.count).prefix(100))
+            searchHits += (try? await ArchiveDataService.shared.fullEmails(ids: next)) ?? []
+            canLoadMore = searchHits.count < v3SearchIDs.count
+            return
+        }
         guard let page = try? await ArchiveDataService.shared.page(query: .all, cursor: pageCursor, limit: 100) else { return }
         let full = (try? await ArchiveDataService.shared.fullEmails(ids: page.summaries.map(\.id))) ?? []
         pagedEmails.append(contentsOf: full)
@@ -192,7 +200,26 @@ struct ForensicReviewView: View {
 
     private func runSearch() async {
         let q = filterSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { searchHits = []; return }
+        guard !q.isEmpty else {
+            searchHits = []
+            if !v3SearchIDs.isEmpty { v3SearchIDs = []; canLoadMore = pageCursor != nil || pagedEmails.isEmpty }
+            return
+        }
+        if V3Paging.isOn {
+            var query = EmailQuery.all
+            query.text = q
+            var ids: [UUID] = []
+            do {
+                for try await page in ArchiveDataService.shared.streamSummaries(query: query, batchSize: 1_000) {
+                    ids.append(contentsOf: page.map(\.id))
+                }
+            } catch {}
+            v3SearchIDs = ids
+            let first = Array(ids.prefix(100))
+            searchHits = (try? await ArchiveDataService.shared.fullEmails(ids: first)) ?? []
+            canLoadMore = ids.count > searchHits.count
+            return
+        }
         searchHits = ((try? await ArchiveRetrievalService.shared.retrieve(q, limit: 200)) ?? []).map(\.email)
     }
 

@@ -67,7 +67,7 @@ struct EngineSpec: Sendable {
         case .v3PagedLists:
             return EngineSpec(.archive,
                 name: String(localized: "Complete lists (3.0)"),
-                detail: String(localized: "Documents, workflow runs, search results, senders and tags load page by page with the total shown, instead of stopping at a fixed number."))
+                detail: String(localized: "Documents, workflow runs, search results, senders and tags load page by page with the total shown, instead of stopping at a fixed number. Large PST exports are split into parts each drive and Outlook accept."))
         case .v3SemanticSearch:
             return EngineSpec(.archive, requires: [.v3FeatureIndex],
                 name: String(localized: "Meaning-based search (3.0)"),

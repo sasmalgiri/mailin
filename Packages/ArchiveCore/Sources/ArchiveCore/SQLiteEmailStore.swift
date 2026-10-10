@@ -2803,10 +2803,10 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return out
     }
 
-    func instances(status: String? = nil, limit: Int = 200) throws -> [StoredInstance] {
+    func instances(status: String? = nil, limit: Int = 200, offset: Int = 0) throws -> [StoredInstance] {
         let db = try ensureDB()
-        let clause = status.map { "WHERE status = '\($0)'" } ?? ""
-        let stmt = try prepare(db, "SELECT wf_number, def_id, title, status, created_at, created_by, updated_at, reverses FROM workflow_instances \(clause) ORDER BY updated_at DESC LIMIT \(limit);")
+        let clause = status.map { "WHERE status = '\($0.replacingOccurrences(of: "'", with: "''"))'" } ?? ""
+        let stmt = try prepare(db, "SELECT wf_number, def_id, title, status, created_at, created_by, updated_at, reverses FROM workflow_instances \(clause) ORDER BY updated_at DESC LIMIT \(limit) OFFSET \(max(0, offset));")
         defer { sqlite3_finalize(stmt) }
         var out: [StoredInstance] = []
         while try stepRow(stmt, db) {
@@ -2943,16 +2943,36 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return number
     }
 
-    func recentDocuments(limit: Int = 200) throws -> [IssuedDocument] {
-        try documentQuery(where: "1=1", bind: nil, limit: limit)
+    /// §3-H2: exact number of workflow runs (optionally by status).
+    func instanceCount(status: String? = nil) throws -> Int {
+        let db = try ensureDB()
+        guard let status else { return try scalarInt(db, "SELECT COUNT(*) FROM workflow_instances;") }
+        let stmt = try prepare(db, "SELECT COUNT(*) FROM workflow_instances WHERE status = ?;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, status)
+        return try stepRow(stmt, db) ? Int(sqlite3_column_int64(stmt, 0)) : 0
+    }
+
+    func recentDocuments(limit: Int = 200, offset: Int = 0) throws -> [IssuedDocument] {
+        try documentQuery(where: "1=1", bind: nil, limit: limit, offset: offset)
+    }
+
+    /// §3-H1: exact number of documents (optionally matching), for "N of M".
+    func documentCount(matching needle: String? = nil) throws -> Int {
+        let db = try ensureDB()
+        guard let needle, !needle.isEmpty else { return try scalarInt(db, "SELECT COUNT(*) FROM documents;") }
+        let stmt = try prepare(db, "SELECT COUNT(*) FROM documents WHERE doc_number LIKE ? COLLATE NOCASE OR summary LIKE ? COLLATE NOCASE;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, "%\(needle)%"); bindText(stmt, 2, "%\(needle)%")
+        return try stepRow(stmt, db) ? Int(sqlite3_column_int64(stmt, 0)) : 0
     }
 
     /// Case-insensitive match on number or summary — the "display document"
     /// lookup.
-    func lookupDocuments(matching needle: String, limit: Int = 200) throws -> [IssuedDocument] {
+    func lookupDocuments(matching needle: String, limit: Int = 200, offset: Int = 0) throws -> [IssuedDocument] {
         try documentQuery(
             where: "doc_number LIKE ? COLLATE NOCASE OR summary LIKE ? COLLATE NOCASE",
-            bind: "%\(needle)%", limit: limit)
+            bind: "%\(needle)%", limit: limit, offset: offset)
     }
 
     /// Every document of one type, newest first — deliberately uncapped, so
@@ -2961,9 +2981,9 @@ actor SQLiteEmailStore: EmailArchiveStore {
         try documentQuery(where: "doc_type = ?", bind: type, limit: nil)
     }
 
-    private func documentQuery(where clause: String, bind: String?, limit: Int?) throws -> [IssuedDocument] {
+    private func documentQuery(where clause: String, bind: String?, limit: Int?, offset: Int = 0) throws -> [IssuedDocument] {
         let db = try ensureDB()
-        let limitClause = limit.map { " LIMIT \($0)" } ?? ""
+        let limitClause = limit.map { " LIMIT \($0) OFFSET \(max(0, offset))" } ?? ""
         let stmt = try prepare(db, """
             SELECT doc_number, doc_type, created_at, summary, refs, created_by, reverses, reversed_by
             FROM documents WHERE \(clause)
@@ -3323,7 +3343,9 @@ actor SQLiteEmailStore: EmailArchiveStore {
         let latestDate: Date?
     }
 
-    func senderRollups(limit: Int) throws -> [SenderRollup] {
+    func senderRollups(limit requested: Int) throws -> [SenderRollup] {
+        // §3-H5: one row per distinct sender — complete under v3PagedLists.
+        let limit = Self.unboundedIDLookups ? Int(Int32.max) : requested
         let db = try ensureDB()
         let stmt = try prepare(db, """
             SELECT from_addr, COUNT(*) AS c, COALESCE(SUM(size_bytes), 0), MAX(date)
@@ -4155,7 +4177,8 @@ actor SQLiteEmailStore: EmailArchiveStore {
         let db = try ensureDB()
         let stmt = try prepare(db, "SELECT DISTINCT tag FROM email_user_tags ORDER BY tag LIMIT ?;")
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_int(stmt, 1, Int32(limit))
+        // §3-H6: the whole tag vocabulary under v3PagedLists.
+        sqlite3_bind_int(stmt, 1, Self.unboundedIDLookups ? Int32.max : Int32(limit))
         var out: [String] = []
         while try stepRow(stmt, db) { out.append(columnText(stmt, 0)) }
         return out
@@ -4747,7 +4770,13 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     /// Emails whose attachment FILENAME or extracted CONTENT matches the FTS
     /// query — bounded by `limit`, never a materialized result set.
-    func attachmentTextSearch(_ ftsQuery: String, limit: Int = 2_000) throws -> Set<UUID> {
+    /// §3-H (switch: `v3PagedLists`): id-set lookups, sender rollups and the
+    /// tag vocabulary return every row — one per distinct id / sender / tag,
+    /// never per email body, so the old fixed limits only hid data.
+    nonisolated(unsafe) static var unboundedIDLookups = false
+
+    func attachmentTextSearch(_ ftsQuery: String, limit requested: Int = 2_000) throws -> Set<UUID> {
+        let limit = Self.unboundedIDLookups ? Int(Int32.max) : requested
         let trimmed = ftsQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
         do {

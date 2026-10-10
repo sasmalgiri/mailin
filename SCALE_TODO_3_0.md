@@ -229,15 +229,15 @@ loops, the current AI context building. Deleted only in a later release after a 
 ### H — Other hidden limits
 | ID | Where | Status |
 |---|---|---|
-| H1 | Documents list / search (200) → paged | [ ] |
-| H2 | Workflow runs (200) → paged | [ ] |
-| H3 | Attachment text search (2,000) → paged | [ ] |
-| H4 | Search results (FTS 50 / ranked 100) → paged or "N of M" everywhere shown | [ ] |
-| H5 | Sender rollups (200) → paged | [ ] |
-| H6 | Tag vocabulary (2,000) → paged | [ ] |
-| H7 | IMAP fetch/search → chunked "All" option | [ ] |
-| H8 | Gmail / Outlook fetch (5,000 stepper) → paged "All" option | [ ] |
-| H9 | PST export splits below 50 GB; FAT32 targets split below 4 GB | [ ] |
+| H1 | Documents list / search (200) → paged | [~] |
+| H2 | Workflow runs (200) → paged | [~] |
+| H3 | Attachment text search (2,000) → paged | [~] |
+| H4 | Search results (FTS 50 / ranked 100) → paged or "N of M" everywhere shown | [~] |
+| H5 | Sender rollups (200) → paged | [~] |
+| H6 | Tag vocabulary (2,000) → paged | [~] |
+| H7 | IMAP fetch/search → chunked "All" option | — n/a in 3.0: the fetch screens are not reachable (finding #9) — [~] |
+| H8 | Gmail / Outlook fetch (5,000 stepper) → paged "All" option | — n/a in 3.0: the fetch screens are not reachable (finding #9) — [~] |
+| H9 | PST export splits below 50 GB; FAT32 targets split below 4 GB | [~] |
 
 ### X — Experience
 | ID | Item | Status |
@@ -381,3 +381,4 @@ Background audits: `BUTTON_AUDIT_3_0.md` (1,083 buttons, 2026-10-09).
 | 6 | `FoundationModelEngine.synthesizeThread` (old path) | Puts ~500 characters per message into ONE prompt; a long thread (≈ 25k tokens for 200 messages) exceeds the 4,096-token window and the caller's `try?` swallows the error — Thread Story silently shows nothing. 3.0 (`ThreadStoryEngine`) reads long threads in measured parts. Old path: at least surface the error. | [ ] |
 | 7 | `PluginManager.runPluginSandboxed` (old path) | The 30 s timeout never ends the run: when the sleep task finishes first it returns `nil`, the loop `continue`s and waits for the plugin anyway. Findings are also cut at 100 silently. 3.0 (`PluginRunnerV2`) races each call against a deadline that is honoured and reports "N of M batches timed out". | [ ] |
 | 8 | `SearchEmailsTool` / `GetThreadInfoTool` (AI assistant tools) | Hydrated FTS hits from `EmailStore` (the v1 SwiftData store) — on an archive held in SQLite (every 2.x/3.0 archive) the assistant's search tool found ids but returned "No emails found". **Fixed in place (bug fix, 2026-10-10)**: hydrate via `ArchiveDataService.fullEmails(ids:)`, the active-store router. Needs a test. | [~] |
+| 9 | `IMAPConfigView`, `CloudConnectView` (Gmail / Outlook) | Not reachable: nothing presents these views (`IMAPClient`, `GmailConnector`, `OutlookConnector` are only used by them). Consistent with offline-first 3.0 Private, so H7/H8 have no effect in 3.0. Owner decision: keep as dormant code for a future online edition, or remove in R1. If exposed, the "All" option must fetch in chunks (IMAP `FETCH` ranges; Gmail/Graph page tokens) and import per chunk. | [ ] |
