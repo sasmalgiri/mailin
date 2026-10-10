@@ -111,9 +111,11 @@ final class SafeMode {
         guard !armed else { return }
         armed = true
         if isActive {
+            // §3-S6: the archive is read-only for this launch.
+            Task { try? await SQLiteEmailStore.shared.setReadOnly(true) }
             ForensicManager.shared.logAction(
                 "Started in Safe Mode",
-                detail: "The previous launches stopped within \(Int(Self.settleDelay.components.seconds)) seconds; background work and 3.0 engines are paused for this launch")
+                detail: "The previous launches stopped within \(Int(Self.settleDelay.components.seconds)) seconds; the archive is read-only and background work and 3.0 engines are paused for this launch")
         }
         Task { @MainActor in
             try? await Task.sleep(for: Self.settleDelay)
@@ -127,6 +129,7 @@ final class SafeMode {
     func leave() {
         isActive = false
         actionNote = nil
+        Task { try? await SQLiteEmailStore.shared.setReadOnly(false) }
     }
 
     func note(_ text: String) { actionNote = text }
@@ -144,7 +147,7 @@ struct SafeModeBanner: View {
                         .accessibilityHidden(true)   // the heading says it
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Safe Mode").font(Typography.callout).fontWeight(.semibold)
-                        Text("mailin stopped twice right after starting. Background work and the new 3.0 engines are paused for this launch; your archive is untouched. Choose what to do — nothing runs on its own.")
+                        Text("mailin stopped twice right after starting. For this launch the archive is read-only — nothing can change it — and background work and the new 3.0 engines are paused. You can read, search and export. Choose what to do — nothing runs on its own.")
                             .font(Typography.caption1).foregroundColor(AppColors.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }

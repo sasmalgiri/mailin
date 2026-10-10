@@ -116,7 +116,7 @@ struct ArchiveHealthView: View {
                 LabeledContent(String(localized: "Calls that fell back to the previous engine"),
                                value: "\(EngineGuard.loadFallbacks().count)")
                 if SafeMode.shared.isActive {
-                    Label(String(localized: "This launch is in Safe Mode."), systemImage: "lifepreserver")
+                    Label(String(localized: "This launch is in Safe Mode: the archive is read-only and background work is paused."), systemImage: "lifepreserver")
                         .foregroundStyle(.orange)
                 }
             }

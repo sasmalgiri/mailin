@@ -426,4 +426,22 @@ final class V3CompatibilityTests: XCTestCase {
         XCTAssertTrue(entry.contains("not included in this export"), "attachments are named, not carried")
         XCTAssertGreaterThanOrEqual(redacted.redactionCount, 5, "subject, Cc, plain, HTML attribute, file name")
     }
+
+    // MARK: - S6: Safe Mode makes the archive read-only
+
+    func testSafeModeReadOnly_blocksWrites_allowsReads_andLifts() async throws {
+        let env = makeEnv(engineOn: false)
+        try await env.store.insertBatch([makeEmail(0, from: "a@a.com", tag: "ro")], batchSize: 10)
+        try await env.store.setReadOnly(true)
+        do {
+            try await env.store.insertBatch([makeEmail(1, from: "a@a.com", tag: "ro")], batchSize: 10)
+            XCTFail("a write must fail while read-only")
+        } catch {}
+        let whileReadOnly = try await env.archive.count(query: .all)
+        XCTAssertEqual(whileReadOnly, 1, "reads still work; nothing was written")
+        try await env.store.setReadOnly(false)
+        try await env.store.insertBatch([makeEmail(2, from: "a@a.com", tag: "ro")], batchSize: 10)
+        let after = try await env.archive.count(query: .all)
+        XCTAssertEqual(after, 2)
+    }
 }

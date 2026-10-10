@@ -555,8 +555,18 @@ actor SQLiteEmailStore: EmailArchiveStore {
             _ = try? writeSnapshot(handle, reason: "before-upgrade-v\(v)-to-v\(Self.currentSchemaVersion)")
         }
         try migrateSchema(handle)
+        // §3-S6: Safe Mode opens the archive read-only (after any migration,
+        // so an upgrade still completes); writes fail with a named error.
+        if readOnly { try exec(handle, "PRAGMA query_only = ON;") }
         self.db = handle
         return handle
+    }
+
+    /// §3-S6: Safe Mode — no write can reach the archive while on.
+    private(set) var readOnly = false
+    func setReadOnly(_ on: Bool) throws {
+        readOnly = on
+        if let db { try exec(db, on ? "PRAGMA query_only = ON;" : "PRAGMA query_only = OFF;") }
     }
 
     // MARK: - Snapshots (§3-S1)
