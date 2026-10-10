@@ -409,12 +409,20 @@ struct AuditTrailView: View {
             ($0.timestamp, $0.sequence, $0.action, $0.detail, $0.examiner)
         }
         inputs.chainVerified = chainOK
-        PlatformClipboard.copyString(CaseActivityReportBuilder.build(inputs))
+        let report = CaseActivityReportBuilder.build(inputs)
+        // The numbered RPT document carries the report itself, so opening
+        // it in Documents reproduces it (it used to be an empty record).
+        var saved = false
+        if let number = inputs.documentNumber {
+            saved = (try? await SQLiteEmailStore.shared.attachDocumentPayload(number, body: report)) != nil
+        }
+        PlatformClipboard.copyString(report)
         forensicManager.logAction(
             "Daily activity report generated",
-            detail: "Chain \(chainOK == true ? "verified" : chainOK == false ? String(localized: "FAILED verification") : "not verifiable"); report copied to clipboard")
+            detail: "Chain \(chainOK == true ? "verified" : chainOK == false ? String(localized: "FAILED verification") : "not verifiable"); report \(saved ? "saved as \(inputs.documentNumber ?? "") and " : "")copied to clipboard")
+        let where_ = saved ? String(localized: "Saved as \(inputs.documentNumber ?? "") and copied") : String(localized: "Report copied (it could not be saved to Documents)")
         dailyReportNote = chainOK == false
-            ? "Report copied — WARNING: the audit chain FAILED verification."
-            : "Report copied — paste it into the case file."
+            ? "\(where_) — WARNING: the audit chain FAILED verification."
+            : "\(where_) — paste it into the case file."
     }
 }

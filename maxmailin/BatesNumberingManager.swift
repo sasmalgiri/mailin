@@ -402,11 +402,9 @@ struct BatesConfigView: View {
 
     private func saveBatesIndex(data: Data) {
         #if os(macOS)
-        if PlatformFileSaver.saveData(data, suggestedName: "BatesIndex_\(manager.prefix).csv") {
-            exportMessage = "Bates index exported successfully."
-        } else {
-            exportMessage = "Export cancelled."
-        }
+        // Distinguish a cancelled panel from a failed write.
+        exportMessage = PlatformExport.save(data: data, suggestedName: "BatesIndex_\(manager.prefix).csv")
+            .message(String(localized: "Bates index"))
         showExportMessage = true
         #else
         let url = FileManager.default.temporaryDirectory

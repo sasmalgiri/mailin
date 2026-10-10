@@ -175,6 +175,10 @@ class CustodianManager: ObservableObject {
     // MARK: - Evidence Sealing
 
     func sealEvidence(_ email: MBOXParser.RawEmail) {
+        // A seal is set once, at the first hold. Re-applying a hold must not
+        // re-seal with the current content — that would erase the evidence
+        // that a held email was modified.
+        guard evidenceSeals[email.id] == nil else { return }
         let content = email.headers.sorted(by: { $0.key < $1.key }).map { "\($0.key): \($0.value)" }.joined(separator: "\n")
             + "\n\n" + email.plainBody + email.htmlBody
         let hash = SHA256.hash(data: Data(content.utf8))

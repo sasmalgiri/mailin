@@ -1041,9 +1041,6 @@ struct ContentView: View {
                         } else {
                             modelVM.review.addTag(tag, to: idArray)
                         }
-                    },
-                    onExportRequested: { _, _ in
-                        appState.triggerExport = true
                     }
                 )
             }

@@ -68,6 +68,7 @@ struct GeneralAnalysisView: View {
         }
         .overlay { if AnalysisCoordinator.isEnabled { AnalysisProgressOverlay(coordinator: coordinator) } }
         .featureTutorial(.general, key: "general_tutorial_seen", isPresented: $showTutorial)
+        .workingSetLimitNotice(shown: workingSet.count, total: archiveTotal)
         .task { archiveTotal = (try? await ArchiveDataService.shared.count()) ?? 0 }
         .task { await loadV3Data() }
         .task { await loadV4Data() }

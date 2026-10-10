@@ -11,6 +11,7 @@ import SwiftUI
 struct SmartAutoTaggerView: View {
     // v2: bounded most-recent working set from the store (no injected corpus).
     @State private var workingSet: [MBOXParser.RawEmail] = []
+    @State private var archiveTotal = 0
     var isPresented: Binding<Bool>?
     @StateObject private var tagger = SmartAutoTagger()
     @State private var selectedTag: String?
@@ -98,6 +99,7 @@ struct SmartAutoTaggerView: View {
                 }
             }
         }
+        .workingSetLimitNotice(shown: workingSet.count, total: archiveTotal)
         .onAppear { startTagging() }
         #if os(macOS)
         .toolWindowFrame()
@@ -251,6 +253,7 @@ struct SmartAutoTaggerView: View {
                 let stream = ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200)
                 do { for try await b in stream { acc.append(contentsOf: b); if acc.count >= 2000 { break } } } catch { }
                 workingSet = Array(acc.prefix(2000))
+                archiveTotal = (try? await ArchiveDataService.shared.count()) ?? workingSet.count
             }
             await tagger.generateTags(for: workingSet)
         }

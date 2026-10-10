@@ -101,6 +101,10 @@ extension ArchiveExportService {
         let total = try await archive.count(scope: scope)
         for try await batch in archive.streamSelected(scope: scope) {
             try Task.checkCancellation()
+            // Load this batch's stored seals: only the visible list page is
+            // resident, so without this every other sealed email counted as
+            // "unverified".
+            await forensic.prefetchForensicWindow(ids: batch.map(\.id))
             for email in batch {
                 let result = forensic.verifyEmailIntegrity(email)
                 if forensic.perEmailHashes[email.id] == nil { unverified += 1 }

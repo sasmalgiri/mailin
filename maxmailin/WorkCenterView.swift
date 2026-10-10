@@ -44,6 +44,7 @@ struct WorkCenterView: View {
     @State private var docPayloadType: String = "text/markdown"
     @State private var showFullWork = false
     @State private var csvSaved = false
+    @State private var docExportError: String? = nil
     @State private var docViewMode = 0   // 0 = Table, 1 = Readable text
     @State private var reportType = "RPT"
     @State private var reportResult: CrossDocumentReport.Result? = nil
@@ -55,6 +56,7 @@ struct WorkCenterView: View {
     @State private var reportNotice: String? = nil
     @State private var reportError: String? = nil
     @State private var newNote = ""
+    @State private var reverseCandidate: SQLiteEmailStore.IssuedDocument? = nil
     @AppStorage("selectedPersona") private var personaRaw = "general"
     @State private var isLoading = true
     @State private var topSuggestion: NextBestAction.Suggestion? = nil
@@ -600,7 +602,7 @@ struct WorkCenterView: View {
                 Button("Add") { Task { await addNote(doc.number) } }
                     .controlSize(.small).disabled(newNote.trimmingCharacters(in: .whitespaces).isEmpty)
                 if doc.reversedBy == nil && doc.reverses == nil {
-                    Button("Reverse") { Task { await reverse(doc) } }
+                    Button("Reverse…") { reverseCandidate = doc }
                         .controlSize(.small).tint(.orange)
                         .help("Post a reversal (storno) — the correction model; the record is never edited in place")
                 }
@@ -610,6 +612,22 @@ struct WorkCenterView: View {
         .padding(.vertical, 2)
         .sheet(isPresented: $showFullWork) {
             fullWorkSheet(doc)
+        }
+        // A reversal is permanent (it cannot itself be reversed), so it is
+        // confirmed first rather than posted on a single click.
+        .confirmationDialog(
+            "Reverse \(reverseCandidate?.number ?? "")?",
+            isPresented: Binding(get: { reverseCandidate?.number == doc.number },
+                                 set: { if !$0 { reverseCandidate = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Post Reversal", role: .destructive) {
+                if let target = reverseCandidate { Task { await reverse(target) } }
+                reverseCandidate = nil
+            }
+            Button("Cancel", role: .cancel) { reverseCandidate = nil }
+        } message: {
+            Text("This posts a permanent reversal document referencing \(doc.number) and records it in the audit trail. The original stays on record; the reversal cannot be undone.")
         }
     }
 
@@ -639,6 +657,11 @@ struct WorkCenterView: View {
                 }
             }
             .padding(Spacing.medium)
+            if let docExportError {
+                Label(docExportError, systemImage: "exclamationmark.triangle.fill")
+                    .font(Typography.caption1).foregroundColor(.orange)
+                    .padding(.horizontal, Spacing.medium)
+            }
             Picker("", selection: $docViewMode) {
                 Text("Table").tag(0)
                 Text("Readable").tag(1)
@@ -712,8 +735,12 @@ struct WorkCenterView: View {
         panel.allowedContentTypes = [.commaSeparatedText]
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        try? table.csv().write(to: url, atomically: true, encoding: .utf8)
-        csvSaved = true
+        do {
+            try table.csv().write(to: url, atomically: true, encoding: .utf8)
+            csvSaved = true
+        } catch {
+            docExportError = String(localized: "The CSV couldn't be saved: \(error.localizedDescription)")
+        }
     }
     #endif
 
@@ -726,6 +753,7 @@ struct WorkCenterView: View {
         docPayload = p?.body
         docPayloadType = p?.contentType ?? "text/markdown"
         csvSaved = false
+        docExportError = nil
         newNote = ""
     }
 

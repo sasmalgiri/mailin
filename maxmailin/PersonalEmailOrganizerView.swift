@@ -118,6 +118,7 @@ struct PersonalEmailOrganizerView: View {
         .overlay { if AnalysisCoordinator.isEnabled { AnalysisProgressOverlay(coordinator: coordinator) } }
         .featureTutorial(.personal, key: "personal_tutorial_seen", isPresented: $showTutorial)
         .sheet(isPresented: $showCleanupWizard) { cleanupWizardSheet }
+        .workingSetLimitNotice(shown: workingSet.count, total: archiveTotal)
         .task { await loadBoundedWorkingSet() }
         .task { await loadV3Data() }
         .task { await loadV4Data() }

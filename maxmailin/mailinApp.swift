@@ -457,7 +457,7 @@ struct mailinApp: App {
             }
             .disabled(!appState.hasParsedEmails)
 
-            Button("Batch Print All Filtered...") {
+            Button("Save All Filtered for Printing...") {
                 appState.triggerBatchPrint = true
             }
             .disabled(!appState.hasFilteredEmails)

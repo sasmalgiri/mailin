@@ -184,10 +184,19 @@ struct InvestigationReportGenerator {
 
     /// Generate a PDF report with optional AI-enhanced analysis.
     /// This async variant attempts to gather AI insights before generating the report.
+    /// A titled block of lines appended after the analysis (e.g. the
+    /// journalist's leads and key quotes) so the PDF carries the work the
+    /// user did, not only the computed sections.
+    struct AppendixSection {
+        var title: String
+        var lines: [String]
+    }
+
     static func generateReport(
         emails: [MBOXParser.RawEmail],
         title: String,
-        investigatorName: String
+        investigatorName: String,
+        appendix: [AppendixSection] = []
     ) async -> Data {
         var aiInsights: String? = nil
 
@@ -205,7 +214,8 @@ struct InvestigationReportGenerator {
             emails: emails,
             title: title,
             investigatorName: investigatorName,
-            aiInsights: aiInsights
+            aiInsights: aiInsights,
+            appendix: appendix
         )
     }
 
@@ -214,7 +224,8 @@ struct InvestigationReportGenerator {
         emails: [MBOXParser.RawEmail],
         title: String,
         investigatorName: String,
-        aiInsights: String? = nil
+        aiInsights: String? = nil,
+        appendix: [AppendixSection] = []
     ) -> Data {
         var mediaBox = CGRect(x: 0, y: 0, width: pageWidth, height: pageHeight)
         let pdfData = NSMutableData()
@@ -288,6 +299,17 @@ struct InvestigationReportGenerator {
         if let aiInsights = aiInsights, !aiInsights.isEmpty {
             finishAndStartNewPage(state: state)
             drawAIEnhancedAnalysis(state: state, insights: aiInsights)
+        }
+
+        // === User's own work (leads, quotes, …) ===
+        for section in appendix where !section.lines.isEmpty {
+            finishAndStartNewPage(state: state)
+            drawSectionHeader(section.title, state: state)
+            for line in section.lines {
+                ensureSpace(state: state, needed: 30)
+                drawText(line, attrs: bodyAttrs, state: state, maxWidth: contentWidth)
+                state.currentY -= 4
+            }
         }
 
         // Close the final page

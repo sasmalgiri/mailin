@@ -97,28 +97,35 @@ final class ChainOfCustodyManager: ObservableObject {
         ForensicManager.shared.logAction("Chain of Custody: \(type.rawValue)", detail: description)
     }
 
-    func verifyIntegrity(of emails: [MBOXParser.RawEmail]) -> IntegrityReport {
+    func verifyIntegrity(of emails: [MBOXParser.RawEmail]) async -> IntegrityReport {
         let forensic = ForensicManager.shared
         var failedIDs: [UUID] = []
-        var newlySealed = 0
 
-        // Auto-seal emails that don't have stored hashes yet
+        // Load the ORIGINAL seals from the store first. Without this, an email
+        // outside the in-memory window looked unsealed, was "sealed" with its
+        // current content, and then verified against itself — a tampered
+        // email passed.
+        await forensic.prefetchForensicWindow(ids: emails.map(\.id))
+
+        // Seal only emails that truly have no stored seal yet; they are new
+        // baselines, not verifications.
         let unsealed = emails.filter { forensic.perEmailHashes[$0.id] == nil }
+        let unsealedIDs = Set(unsealed.map(\.id))
         if !unsealed.isEmpty {
             forensic.storeEmailHashes(unsealed)
-            newlySealed = unsealed.count
         }
 
-        for email in emails {
+        for email in emails where !unsealedIDs.contains(email.id) {
             let result = forensic.verifyEmailIntegrity(email)
             if !result.passed {
                 failedIDs.append(email.id)
             }
         }
+        let newlySealed = unsealed.count
 
         return IntegrityReport(
             totalChecked: emails.count,
-            passed: emails.count - failedIDs.count,
+            passed: emails.count - newlySealed - failedIDs.count,
             failed: failedIDs.count,
             newlySealed: newlySealed,
             failedIDs: failedIDs,
@@ -283,6 +290,7 @@ struct ChainOfCustodyView: View {
     @State private var shareItems: [Any] = []
     @State private var showShareSheet = false
     #endif
+    @State private var exportStatus: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -404,17 +412,24 @@ struct ChainOfCustodyView: View {
     }
 
     private var actionsSection: some View {
-        HStack(spacing: Spacing.small) {
-            Button("Record Event") { showRecordEvent = true }
-                .buttonStyle(SecondaryButtonStyle())
+        VStack(alignment: .leading, spacing: Spacing.xxSmall) {
+            HStack(spacing: Spacing.small) {
+                Button("Record Event") { showRecordEvent = true }
+                    .buttonStyle(SecondaryButtonStyle())
 
-            Button("Export Audit Trail") { exportAuditTrail() }
-                .buttonStyle(SecondaryButtonStyle())
-                .disabled(custodyManager.events.isEmpty)
+                Button("Export Audit Trail") { exportAuditTrail() }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(custodyManager.events.isEmpty)
 
-            Button("Export PDF Report") { exportPDFReport() }
-                .buttonStyle(SecondaryButtonStyle())
-                .disabled(custodyManager.events.isEmpty)
+                Button("Export PDF Report") { exportPDFReport() }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(custodyManager.events.isEmpty)
+            }
+            if let exportStatus {
+                Text(exportStatus)
+                    .font(Typography.caption1)
+                    .foregroundColor(AppColors.secondary)
+            }
         }
     }
 
@@ -527,16 +542,30 @@ struct ChainOfCustodyView: View {
         }
     }
 
+    #if os(macOS)
+    /// Save, read back, then sign with a `.sig` sidecar — the same
+    /// tamper-evidence the iOS share path has always produced.
+    private func saveSigned(_ data: Data, name: String, auditAction: String) {
+        let outcome = PlatformExport.save(data: data, suggestedName: name)
+        guard let url = outcome.url else {
+            exportStatus = outcome.message(name)
+            return
+        }
+        do {
+            let sig = try ExportSigner.shared.signFile(url)
+            exportStatus = String(localized: "Saved \(url.lastPathComponent) and its signature \(sig.lastPathComponent).")
+            _ = try? HMACChainAuditLog.shared.append(action: auditAction, detail: "\(url.lastPathComponent) saved and signed")
+        } catch {
+            exportStatus = String(localized: "Saved \(url.lastPathComponent), but it could not be signed: \(error.localizedDescription)")
+            _ = try? HMACChainAuditLog.shared.append(action: auditAction, detail: "\(url.lastPathComponent) saved UNSIGNED: \(error.localizedDescription)")
+        }
+    }
+    #endif
+
     private func exportAuditTrail() {
         let data = custodyManager.exportAuditTrail()
         #if os(macOS)
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = "chain_of_custody_audit.csv"
-        panel.allowedContentTypes = [.commaSeparatedText]
-        let result = panel.runModal()
-        if result == .OK, let url = panel.url {
-            try? data.write(to: url, options: .atomic)
-        }
+        saveSigned(data, name: "chain_of_custody_audit.csv", auditAction: "export.auditTrail")
         #else
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("chain_of_custody_audit.csv")
         do {
@@ -562,13 +591,7 @@ struct ChainOfCustodyView: View {
     private func exportPDFReport() {
         let data = custodyManager.generateCustodyReport()
         #if os(macOS)
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = "chain_of_custody_report.pdf"
-        panel.allowedContentTypes = [.pdf]
-        let result = panel.runModal()
-        if result == .OK, let url = panel.url {
-            try? data.write(to: url, options: .atomic)
-        }
+        saveSigned(data, name: "chain_of_custody_report.pdf", auditAction: "export.custodyReport")
         #else
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("chain_of_custody_report.pdf")
         do {

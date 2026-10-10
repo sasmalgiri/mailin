@@ -161,8 +161,7 @@ struct GDPRReportConfigView: View {
     private func generateReport() {
         let subject = dataSubject.trimmingCharacters(in: .whitespacesAndNewlines)
         let subjectLower = subject.lowercased()
-
-        let matchingEmails = emails.filter { email in
+        func mentionsSubject(_ email: MBOXParser.RawEmail) -> Bool {
             let from = (email.headers["From"] ?? "").lowercased()
             let to = (email.headers["To"] ?? "").lowercased()
             let cc = (email.headers["Cc"] ?? "").lowercased()
@@ -171,33 +170,49 @@ struct GDPRReportConfigView: View {
                    cc.contains(subjectLower) || body.contains(subjectLower)
         }
 
-        guard !matchingEmails.isEmpty else {
-            generationError = "No emails found mentioning \"\(subject)\". Enter a name or email address that appears in your archive."
-            return
-        }
-
         isGenerating = true
         generationError = nil
 
-        Task.detached(priority: .userInitiated) {
-            let pdfData = await GDPRComplianceReport.generate(emails: emails, dataSubject: subject)
-
-            await MainActor.run {
-                isGenerating = false
-
-                guard !pdfData.isEmpty else {
-                    generationError = "Failed to generate PDF report."
-                    return
+        Task { @MainActor in
+            // A data-subject request must cover ALL of the person's mail, not
+            // the newest-2,000 working set: stream the whole archive in
+            // batches and keep only the matches.
+            var matchingEmails: [MBOXParser.RawEmail] = []
+            do {
+                for try await batch in ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200) {
+                    matchingEmails.append(contentsOf: batch.filter(mentionsSubject))
                 }
-
-                generatedPDFData = pdfData
-                // Record a numbered document of this compliance report.
-                let bytes = pdfData.count
-                Task { await DocumentRegistry.captureStructured(.report,
-                    summary: String(localized: "GDPR compliance report"),
-                    document: CapturedDocument(title: String(localized: "GDPR Compliance Report"), sections: [
-                      .init(name: String(localized: "GDPR Report"), fields: [.init(key: "PDF size (bytes)", value: "\(bytes)")])])) }
+            } catch {
+                isGenerating = false
+                generationError = "The archive could not be searched completely: \(error.localizedDescription). No partial report was produced."
+                return
             }
+
+            guard !matchingEmails.isEmpty else {
+                isGenerating = false
+                generationError = "No emails found mentioning \"\(subject)\". Enter a name or email address that appears in your archive."
+                return
+            }
+
+            let pdfData = await GDPRComplianceReport.generate(emails: matchingEmails, dataSubject: subject)
+
+            isGenerating = false
+
+            guard !pdfData.isEmpty else {
+                generationError = "Failed to generate PDF report."
+                return
+            }
+
+            generatedPDFData = pdfData
+            // Record a numbered document of this compliance report.
+            let bytes = pdfData.count
+            let matched = matchingEmails.count
+            await DocumentRegistry.captureStructured(.report,
+                summary: String(localized: "GDPR compliance report — \(matched) emails"),
+                document: CapturedDocument(title: String(localized: "GDPR Compliance Report"), sections: [
+                  .init(name: String(localized: "GDPR Report"), fields: [
+                    .init(key: "Emails matched (whole archive)", value: "\(matched)"),
+                    .init(key: "PDF size (bytes)", value: "\(bytes)")])]))
         }
     }
 }

@@ -2454,7 +2454,7 @@ struct ParsedEmailListView: View {
                         let summary = EmailNLPEngine.summarizeEmail(email)
                         PlatformClipboard.copyString(summary)
                     } label: {
-                        Label("Summarize", systemImage: "sparkles")
+                        Label("Summarize (copy to clipboard)", systemImage: "sparkles")
                     }
                 }
 

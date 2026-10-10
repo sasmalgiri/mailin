@@ -1,5 +1,6 @@
 @testable import ArchiveCore
 import XCTest
+import PDFKit
 @testable import maxmailin
 
 /// Parts Q/R/S regression net — the final legacy-corpus cutover:
@@ -2037,6 +2038,96 @@ final class V2CutoverTests: XCTestCase {
         for value in ["Report:     RPT-2026-0001", "Seal:       SHA-256 ff", "  Owner: c", "    Released: 2"] {
             XCTAssertTrue(pdf.contains(value), "PDF text missing \(value)")
         }
+    }
+
+    // MARK: - Button audit 2026-10-09 (BUTTON_AUDIT_3_0.md)
+
+    /// P0-2: an email whose original seal is only in the STORE (not in the
+    /// in-memory window) must be verified against that stored seal. Before
+    /// the fix, verify "auto-sealed" it with its current content and then
+    /// compared current vs current — a tampered email passed.
+    @MainActor
+    func testCustodyVerify_detectsTamperAgainstStoredSeal() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("custody-verify-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            ForensicManager.testStoreOverride = nil
+        }
+        ForensicManager.testStoreOverride = SQLiteEmailStore(directory: root)
+        let fm = ForensicManager.shared
+        fm.clearForensicData()
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        let id = UUID()
+        let original = MBOXParser.RawEmail(id: id, headers: ["Subject": "Contract"], rawSource: "Subject: Contract\n\nPay 100",
+                                           messageType: "received", attachments: [], timestamp: "",
+                                           domains: [], plainBody: "Pay 100", htmlBody: "")
+        fm.storeEmailHashes([original])
+        try await Task.sleep(nanoseconds: 500_000_000)        // seal lands in the store
+        fm.perEmailHashes.removeValue(forKey: id)             // outside the resident window
+
+        var tampered = original
+        tampered.rawSource = "Subject: Contract\n\nPay 900"
+        let report = await ChainOfCustodyManager.shared.verifyIntegrity(of: [tampered])
+        XCTAssertEqual(report.failed, 1, "the tampered email must fail against its stored seal")
+        XCTAssertEqual(report.passed, 0)
+        XCTAssertEqual(report.newlySealed, 0, "an email sealed in the store is not 'newly sealed'")
+    }
+
+    /// Re-applying a legal hold must not re-seal a held email with its
+    /// current content (that erased the evidence of modification).
+    @MainActor
+    func testLegalHoldSeal_isNotOverwrittenOnReapply() {
+        let manager = CustodianManager.shared
+        let id = UUID()
+        defer { manager.removeLegalHold(id) }
+        let original = MBOXParser.RawEmail(id: id, headers: ["Subject": "Held"], rawSource: "x",
+                                           messageType: "received", attachments: [], timestamp: "",
+                                           domains: [], plainBody: "original body", htmlBody: "")
+        manager.placeLegalHold(on: [original])
+        var modified = original
+        modified.plainBody = "modified body"
+        manager.placeLegalHold(on: [modified])                // re-apply after modification
+        guard case .tampered = manager.verifyEvidenceSeal(modified) else {
+            return XCTFail("the seal from the first hold must still detect the modification")
+        }
+    }
+
+    /// Hand-built CSVs used to leave the RFC 2822 Date ("Mon, 12 Aug …")
+    /// unquoted and rewrite commas to ";". csvRow keeps every value intact.
+    func testCSVRow_keepsCommasDatesAndQuotes() {
+        let row = csvRow(["Doe, Jane", "Mon, 12 Aug 2026 10:00:00 +0000", "He said \"hi\"", "=SUM(A1)"])
+        XCTAssertEqual(row, "\"Doe, Jane\",\"Mon, 12 Aug 2026 10:00:00 +0000\",\"He said \"\"hi\"\"\",\"'=SUM(A1)\"\n")
+    }
+
+    /// Legal Review coding survives a round trip through the workspace store.
+    func testLegalReviewSnapshot_roundTrips() {
+        let name = "legal-review-test-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(at: ReviewWorkspaceStore.url(for: name)) }
+        let id = UUID()
+        let snapshot = LegalReviewSnapshot(
+            privilege: [id: "Attorney-Client"], responsiveness: [id: "Responsive"],
+            issueTags: [id: ["Employment"]], notes: [id: "Advice from counsel"],
+            definedIssueTags: ["Employment"],
+            audit: [.init(date: Date(timeIntervalSince1970: 1_700_000_000), emailID: id,
+                          field: "Privilege", oldValue: "Unreviewed", newValue: "Attorney-Client")])
+        XCTAssertNil(ReviewWorkspaceStore.save(snapshot, name: name))
+        XCTAssertEqual(ReviewWorkspaceStore.load(LegalReviewSnapshot.self, name: name), snapshot)
+    }
+
+    /// The investigation PDF carries the user's own leads/quotes appendix.
+    @MainActor
+    func testInvestigationReport_includesAppendix() throws {
+        let email = MBOXParser.RawEmail(headers: ["Subject": "Hello", "From": "a@b.c", "Date": "Mon, 12 Aug 2026 10:00:00 +0000"],
+                                        rawSource: "Subject: Hello\n\nBody", messageType: "received", attachments: [],
+                                        timestamp: "", domains: [], plainBody: "Body", htmlBody: "")
+        let data = InvestigationReportGenerator.generateReport(
+            emails: [email], title: "Investigation Report", investigatorName: "Tester",
+            appendix: [.init(title: "Investigation Leads", lines: ["[High] Offshore payments lead"])])
+        let pdf = try XCTUnwrap(PDFDocument(data: data))
+        let text = (0..<pdf.pageCount).compactMap { pdf.page(at: $0)?.string }.joined(separator: "\n")
+        XCTAssertTrue(text.contains("Offshore payments lead"), "appendix line missing from the PDF")
     }
 
     /// The report source query is uncapped and type-exact: older documents

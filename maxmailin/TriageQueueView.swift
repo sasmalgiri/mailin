@@ -266,29 +266,37 @@ struct TriageQueueView: View {
         Task { @MainActor in
             var q = EmailQuery.all
             q.userTag = TriageVerdict.confirmedPhishing.rawValue
-            let confirmed = await ArchiveDataService.shared.workingSet(query: q, cap: 2_000)
-            let iocs = IOCExtractor.extract(from: confirmed)
-            var csv = "Type,Value,Source Email\n"
-            func esc(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
-            for ioc in iocs {
-                csv += [ioc.type.rawValue, ioc.value, ioc.emailSubject].map(esc).joined(separator: ",") + "\n"
-            }
-            #if os(macOS)
-            let panel = NSSavePanel()
-            panel.nameFieldStringValue = "mailin_ioc_blocklist.csv"
-            panel.allowedContentTypes = [.commaSeparatedText]
-            guard panel.runModal() == .OK, let url = panel.url else { return }
+            // Every confirmed email, streamed in batches — the blocklist used
+            // to stop silently at the newest 2,000.
+            var iocs: [IOCEntry] = []
+            var seen = Set<String>()
+            var confirmedCount = 0
             do {
-                try csv.write(to: url, atomically: true, encoding: .utf8)
+                for try await batch in ArchiveDataService.shared.streamFullEmails(query: q, batchSize: 200) {
+                    confirmedCount += batch.count
+                    for ioc in IOCExtractor.extract(from: batch)
+                    where seen.insert("\(ioc.type.rawValue):\(ioc.value.lowercased())").inserted {
+                        iocs.append(ioc)
+                    }
+                }
+            } catch {
+                exportError = String(localized: "The confirmed emails could not all be read: \(error.localizedDescription). No blocklist was saved.")
+                return
+            }
+            var csv = csvRow(["Type", "Value", "Source Email"])
+            for ioc in iocs { csv += csvRow([ioc.type.rawValue, ioc.value, ioc.emailSubject]) }
+            let outcome = PlatformExport.save(text: csv, suggestedName: "mailin_ioc_blocklist.csv")
+            switch outcome {
+            case .saved(let url), .shared(let url):
                 _ = await DocumentRegistry.post(
                     .export,
-                    summary: "IOC blocklist: \(iocs.count) indicators from \(confirmed.count) confirmed emails",
+                    summary: "IOC blocklist: \(iocs.count) indicators from \(confirmedCount) confirmed emails",
                     refs: url.lastPathComponent)
-            } catch { exportError = error.localizedDescription }
-            #else
-            let url = FileManager.default.temporaryDirectory.appendingPathComponent("mailin_ioc_blocklist.csv")
-            try? csv.write(to: url, atomically: true, encoding: .utf8)
-            #endif
+            case .failed:
+                exportError = outcome.message(String(localized: "IOC blocklist"))
+            case .cancelled:
+                break
+            }
         }
     }
 

@@ -14,7 +14,6 @@ struct BatchOperationsView: View {
     @Binding var selectedIDs: Set<UUID>
 
     var onTagApplied: (String, [UUID]) -> Void
-    var onExportRequested: ([MBOXParser.RawEmail], String) -> Void
 
     var isPresented: Binding<Bool>?
     @Environment(\.dismiss) private var envDismiss
@@ -559,43 +558,86 @@ struct BatchOperationsView: View {
         }
     }
 
+    /// Exports exactly the selected emails in the chosen format through the
+    /// streamed export service (MBOX archive, signed forensic CSV, or one PDF
+    /// per email). The audit entry and document are written only after the
+    /// export has actually completed.
     private func performBulkExport() {
+        let ids = Set(selectedEmails.map(\.id))
+        guard !ids.isEmpty else { return }
+        let format = exportFormat
+        #if os(macOS)
+        let destination: URL
+        if format == .pdf {
+            let panel = NSOpenPanel()
+            panel.canChooseDirectories = true
+            panel.canChooseFiles = false
+            panel.canCreateDirectories = true
+            panel.prompt = String(localized: "Export Here")
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            destination = url
+        } else {
+            let name = format == .mbox ? "selected_emails.mbox" : "selected_emails.csv"
+            guard let url = PlatformFileSaver.savePanel(suggestedName: name) else { return }
+            destination = url
+        }
+        #else
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("batch_export_\(UUID().uuidString)")
+        let destination = format == .pdf ? base
+            : base.appendingPathExtension(format == .mbox ? "mbox" : "csv")
+        if format == .pdf {
+            try? FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        }
+        #endif
+
         isProcessing = true
         progressValue = 0
         resultMessage = nil
-
-        let toExport = selectedEmails
-        let format = exportFormat.rawValue
-
+        let scope = ArchiveSelectionScope.explicit(ids)
         Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 50000000)
-            let total = Double(toExport.count)
-            for (index, _) in toExport.enumerated() {
-                progressValue = Double(index + 1) / total
+            let service = ArchiveExportService.shared
+            let progress: @MainActor (Int, Int) -> Void = { done, total in
+                progressValue = total > 0 ? Double(done) / Double(total) : 0
+            }
+            var message: String
+            do {
+                let result: ArchiveExportResult
+                switch format {
+                case .mbox: result = try await service.exportMBOXArchive(scope: scope, to: destination, onProgress: progress)
+                case .csv: result = try await service.exportForensicCSV(scope: scope, to: destination, onProgress: progress)
+                case .pdf: result = try await service.exportPDFFiles(scope: scope, to: destination, onProgress: progress)
+                }
+                if result.cancelled {
+                    message = String(localized: "Export cancelled after \(result.recordsWritten) of \(ids.count) emails.")
+                } else {
+                    let written = result.recordsWritten
+                    ForensicManager.shared.logAction(
+                        "Bulk Export",
+                        detail: "Exported \(written) of \(ids.count) selected email(s) as \(format.rawValue) → \(destination.lastPathComponent)")
+                    await DocumentRegistry.captureStructured(.export,
+                        summary: "Bulk export — \(written) emails as \(format.rawValue)",
+                        document: CapturedDocument(title: String(localized: "Bulk Export"), sections: [
+                          .init(name: String(localized: "Bulk Export"), fields: [
+                            .init(key: "Emails selected", value: "\(ids.count)"),
+                            .init(key: "Emails exported", value: "\(written)"),
+                            .init(key: "Format", value: format.rawValue),
+                            .init(key: "Destination", value: destination.lastPathComponent)])]),
+                        refs: destination.lastPathComponent)
+                    message = written == ids.count
+                        ? String(localized: "Exported \(written) emails as \(format.rawValue) — \(destination.lastPathComponent)")
+                        : String(localized: "Exported \(written) of \(ids.count) emails as \(format.rawValue) — the rest could not be read from the archive.")
+                    #if os(iOS)
+                    if case .failed(let why) = PlatformExport.share(destination) { message += " " + why }
+                    #endif
+                }
+            } catch {
+                message = String(localized: "Export failed: \(error.localizedDescription)")
             }
             progressValue = 1.0
-
-            onExportRequested(toExport, format)
-
-            ForensicManager.shared.logAction(
-                "Bulk Export",
-                detail: "Exported \(toExport.count) email(s) as \(format)"
-            )
-            // Record a numbered document of this bulk export.
-            let exportCount = toExport.count
-            let exportFormat = "\(format)"
-            Task { await DocumentRegistry.captureStructured(.export,
-                summary: "Bulk export — \(exportCount) emails as \(exportFormat)",
-                document: CapturedDocument(title: String(localized: "Bulk Export"), sections: [
-                  .init(name: String(localized: "Bulk Export"), fields: [
-                    .init(key: "Emails", value: "\(exportCount)"),
-                    .init(key: "Format", value: exportFormat)])])) }
-
             withAnimation(AnimationTiming.fast) {
-                resultMessage = "Exported \(toExport.count) email\(toExport.count == 1 ? "" : "s") as \(format)"
+                resultMessage = message
                 isProcessing = false
             }
-
             clearResultAfterDelay()
         }
     }

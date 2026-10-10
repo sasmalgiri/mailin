@@ -156,6 +156,7 @@ final class ExportRunCenter {
 struct ExportProgressOverlayView: View {
     @State private var center = ExportRunCenter.shared
     @State private var copied = false
+    @State private var receiptSaveNote: String?
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -295,9 +296,9 @@ struct ExportProgressOverlayView: View {
                     .font(.system(size: 11))
                     .help("Show the exported file or folder in Finder")
                 }
-                Button("Save receipt…") { saveReceipt(receipt) }
+                Button(receiptSaveNote ?? String(localized: "Save receipt…")) { saveReceipt(receipt) }
                     .font(.system(size: 11))
-                    .help("Save this receipt as plain text")
+                    .help(receiptSaveNote ?? String(localized: "Save this receipt as plain text"))
                 #endif
                 Spacer()
                 Text(receipt.completedAt, format: .dateTime.hour().minute())
@@ -338,7 +339,12 @@ struct ExportProgressOverlayView: View {
         panel.nameFieldStringValue = "mailin-export-receipt.txt"
         panel.allowedContentTypes = [.plainText]
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        try? receipt.plainText().write(to: url, atomically: true, encoding: .utf8)
+        do {
+            try receipt.plainText().write(to: url, atomically: true, encoding: .utf8)
+            receiptSaveNote = String(localized: "Receipt saved")
+        } catch {
+            receiptSaveNote = String(localized: "Receipt not saved: \(error.localizedDescription)")
+        }
     }
     #endif
 }

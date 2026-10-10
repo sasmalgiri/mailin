@@ -313,7 +313,13 @@ final class IMAPClient: ObservableObject {
             return []
         }
 
-        let uidList = uids.prefix(500).map(String.init).joined(separator: ",")
+        // Newest matches first (UIDs ascend with arrival), and say when the
+        // fetch is limited — it used to take the OLDEST 500 silently.
+        let fetchLimit = 500
+        let chosen = uids.suffix(fetchLimit)
+        let uidList = chosen.map(String.init).joined(separator: ",")
+        let limitNote = uids.count > fetchLimit
+            ? " — showing the newest \(fetchLimit) of \(uids.count) matches; narrow the search to see older ones" : ""
         let fetchResp = try await sendCommand("FETCH \(uidList) (FLAGS BODY[])", longRunning: true)
         let rawMessages = extractFetchBodies(from: fetchResp)
         var emails: [MBOXParser.RawEmail] = []
@@ -328,7 +334,7 @@ final class IMAPClient: ObservableObject {
         }
 
         fetchedEmails = emails
-        statusMessage = "Found \(emails.count) messages"
+        statusMessage = "Found \(emails.count) messages\(limitNote)"
         return emails
     }
 
@@ -352,7 +358,11 @@ final class IMAPClient: ObservableObject {
         }
 
         imapLog.info("Search returned \(uids.count) results")
-        let uidList = uids.prefix(200).map(String.init).joined(separator: ",")
+        let fetchLimit = 200
+        let chosen = uids.suffix(fetchLimit)
+        let uidList = chosen.map(String.init).joined(separator: ",")
+        let limitNote = uids.count > fetchLimit
+            ? " — showing the newest \(fetchLimit) of \(uids.count) matches; narrow the search to see older ones" : ""
 
         let fetchResp = try await sendCommand(
             "FETCH \(uidList) (FLAGS BODY[])",
@@ -372,7 +382,7 @@ final class IMAPClient: ObservableObject {
         }
 
         fetchedEmails = emails
-        statusMessage = "Found \(emails.count) messages for: \(query)"
+        statusMessage = "Found \(emails.count) messages for: \(query)\(limitNote)"
         return emails
     }
 

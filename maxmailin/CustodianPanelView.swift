@@ -27,10 +27,7 @@ struct CustodianPanelView: View {
     @State private var sealVerdicts: [UUID: CustodianManager.SealVerification] = [:]
     @State private var sealSummary: String?
     @State private var sealSummaryIsBad = false
-    #if os(iOS)
-    @State private var showShareSheet = false
-    @State private var shareItems: [Any] = []
-    #endif
+    @State private var reportStatus: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -62,6 +59,7 @@ struct CustodianPanelView: View {
             #endif
         }
         .featureTutorial(.custodianPanel, key: "custodian_panel_tutorial_seen", isPresented: $showTutorial)
+        .workingSetLimitNotice(shown: workingSet.count, total: archiveTotal)
         .task {
             archiveTotal = (try? await ArchiveDataService.shared.count()) ?? 0
             guard workingSet.isEmpty else { return }
@@ -80,6 +78,11 @@ struct CustodianPanelView: View {
                 Text("Assign custodians to emails and manage legal holds.")
                     .font(Typography.caption1)
                     .foregroundColor(AppColors.secondary)
+                if let reportStatus {
+                    Text(reportStatus)
+                        .font(Typography.caption2)
+                        .foregroundColor(AppColors.secondary)
+                }
             }
             Spacer()
             Button {
@@ -379,27 +382,16 @@ struct CustodianPanelView: View {
         } message: {
             Text("Assign '\(newCustodianName)' to all currently visible emails?")
         }
-        #if os(iOS)
-        .sheet(isPresented: $showShareSheet) {
-            ShareSheet(items: shareItems)
-        }
-        #endif
     }
 
     private func exportCustodianReport() {
         let report = manager.custodianReport(emails: workingSet)
-        #if os(macOS)
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = "custodian_report.txt"
-        panel.canCreateDirectories = true
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        #else
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("custodian_report.txt")
-        #endif
-        try? report.write(to: url, atomically: true, encoding: .utf8)
-        #if os(iOS)
-        shareItems = [url]
-        showShareSheet = true
-        #endif
+        let outcome = PlatformExport.save(text: report, suggestedName: "custodian_report.txt")
+        if let url = outcome.url {
+            let n = workingSet.count
+            Task { await DocumentRegistry.capture(.report, summary: "Custodian report — \(n) emails",
+                                                  body: report, refs: url.lastPathComponent) }
+        }
+        reportStatus = outcome.message(String(localized: "Custodian report"))
     }
 }

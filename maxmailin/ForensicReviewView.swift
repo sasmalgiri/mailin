@@ -150,6 +150,7 @@ struct ForensicReviewView: View {
         .featureTutorial(.forensicReview, key: "forensic_review_tutorial_seen", isPresented: $showTutorial)
         .sheet(isPresented: $showDashboard) { dashboardSheet }
         .sheet(isPresented: $showProductionSets) { productionSetsSheet }
+        .workingSetLimitNotice(shown: workingSet.count, total: archiveTotal)
         .task { await loadInitial() }
         .task { await loadForensicFeatures() }
         .onChange(of: filterSearchText) { _, _ in Task { await runSearch() } }

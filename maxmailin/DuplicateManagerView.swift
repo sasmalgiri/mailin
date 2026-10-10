@@ -382,15 +382,27 @@ struct DuplicateManagerView: View {
                     message: "Every email keeps exactly one copy — \(archiveDupIDs.count) redundant row\(archiveDupIDs.count == 1 ? "" : "s") will be deleted. Review state on the removed copies is discarded.",
                     actionTitle: String(localized: "Remove Duplicates")
                 ) {
-                    let ids = Set(archiveDupIDs)
-                    archiveDupIDs = []
+                    // Held emails are never removed — the same protection the
+                    // per-group removal applies.
+                    let (ids, blocked) = CustodianManager.shared.filterProtected(Set(archiveDupIDs))
                     isRemoving = true
                     Task { @MainActor in
-                        _ = await DocumentRegistry.post(
-                            .cleanup, summary: "Removed \(ids.count) exact duplicate(s) archive-wide")
-                        _ = await model.removeDuplicateEmailsAwaiting(ids: ids)
-                        stripRemoved(ids)
+                        let ok = ids.isEmpty ? true : await model.removeDuplicateEmailsAwaiting(ids: ids)
+                        if ok {
+                            // Record the cleanup only once it has actually happened.
+                            if !ids.isEmpty {
+                                _ = await DocumentRegistry.post(
+                                    .cleanup, summary: "Removed \(ids.count) exact duplicate(s) archive-wide")
+                            }
+                            stripRemoved(ids)
+                            archiveDupIDs = Array(blocked)
+                        }
                         isRemoving = false
+                        if !ok {
+                            legalHoldWarning = "The duplicates could not be removed — nothing was changed. Try again."
+                        } else if !blocked.isEmpty {
+                            legalHoldWarning = "\(blocked.count) duplicate(s) kept — under legal hold with evidence seal."
+                        }
                     }
                 }
             }

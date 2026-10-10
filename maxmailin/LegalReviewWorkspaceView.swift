@@ -110,6 +110,11 @@ struct LegalReviewWorkspaceView: View {
     @State private var isRunningAIScan = false
     @State private var scanResultMessage: String?
     @State private var reviewStartTime: Date = Date()
+    /// Coding is saved to disk (ReviewWorkspaceStore) and restored on open.
+    @State private var legalStateLoaded = false
+    @State private var skipNextPrivilegeMirror = false
+    @State private var legalSaveError: String?
+    @State private var legalExportStatus: String?
 
     // v3: KG + NLP + Anomaly
     @State private var graph = KnowledgeGraph()
@@ -196,15 +201,87 @@ struct LegalReviewWorkspaceView: View {
         .sheet(isPresented: $showPrivilegeLog) { privilegeLogSheet }
         .sheet(isPresented: $showDashboard) { reviewDashboardSheet }
         .sheet(isPresented: $showPDFExport) { pdfPrivilegeReportSheet }
+        .workingSetLimitNotice(shown: workingSet.count, total: archiveTotal)
         .task { await loadInitial() }
         .task { await loadV3Data() }
         .onChange(of: filterSearchText) { _, _ in Task { await runSearch() } }
         .onChange(of: selectedEmailIDs) { _, ids in Task { await hydrateSelected(ids.first) } }
+        .onChange(of: privilegeAssignments) { old, new in
+            mirrorPrivilegeToEvidenceTags(old: old, new: new)
+            saveLegalState()
+        }
+        .onChange(of: responsivenessAssignments) { _, _ in saveLegalState() }
+        .onChange(of: issueTagAssignments) { _, _ in saveLegalState() }
+        .onChange(of: legalNotes) { _, _ in saveLegalState() }
+        .onChange(of: definedIssueTags) { _, _ in saveLegalState() }
+        .onChange(of: auditTrail.count) { _, _ in saveLegalState() }
+    }
+
+    // MARK: - Durable coding (ReviewWorkspaceStore)
+
+    private static let privilegedDesignations: Set<PrivilegeDesignation> =
+        [.attorneyClient, .workProduct, .jointDefense, .partiallyPrivileged]
+
+    private func restoreLegalState() {
+        guard !legalStateLoaded else { return }
+        if let s = ReviewWorkspaceStore.load(LegalReviewSnapshot.self, name: LegalReviewSnapshot.fileName) {
+            let privilege = s.privilege.compactMapValues(PrivilegeDesignation.init(rawValue:))
+            skipNextPrivilegeMirror = !privilege.isEmpty   // restoring is not a new decision
+            privilegeAssignments = privilege
+            responsivenessAssignments = s.responsiveness.compactMapValues(ResponsivenessTag.init(rawValue:))
+            issueTagAssignments = s.issueTags.mapValues(Set.init)
+            legalNotes = s.notes
+            if let tags = s.definedIssueTags { definedIssueTags = tags }
+            auditTrail = s.audit.map { ($0.date, $0.emailID, $0.field, $0.oldValue, $0.newValue) }
+        }
+        legalStateLoaded = true
+    }
+
+    private func saveLegalState() {
+        guard legalStateLoaded else { return }
+        let snapshot = LegalReviewSnapshot(
+            privilege: privilegeAssignments.mapValues(\.rawValue),
+            responsiveness: responsivenessAssignments.mapValues(\.rawValue),
+            issueTags: issueTagAssignments.mapValues { Array($0).sorted() },
+            notes: legalNotes,
+            definedIssueTags: definedIssueTags,
+            audit: auditTrail.map { .init(date: $0.date, emailID: $0.emailID, field: $0.field,
+                                          oldValue: $0.oldValue, newValue: $0.newValue) })
+        if let error = ReviewWorkspaceStore.save(snapshot, name: LegalReviewSnapshot.fileName) {
+            legalSaveError = String(localized: "Your review coding couldn't be saved: \(error.localizedDescription)")
+        } else {
+            legalSaveError = nil
+        }
+    }
+
+    /// Privileged calls become the app's Privileged evidence tag, so the
+    /// Privilege Log, Case Bundle and tagged exports include them; a call
+    /// changed to not-privileged clears a Privileged tag this workspace set.
+    /// Each change is written to the tamper-evident audit log.
+    private func mirrorPrivilegeToEvidenceTags(old: [UUID: PrivilegeDesignation], new: [UUID: PrivilegeDesignation]) {
+        guard legalStateLoaded else { return }
+        if skipNextPrivilegeMirror { skipNextPrivilegeMirror = false; return }
+        var changed = 0
+        for id in Set(old.keys).union(new.keys) where old[id] != new[id] {
+            changed += 1
+            let isPrivileged = new[id].map { Self.privilegedDesignations.contains($0) } ?? false
+            let current = forensicManager.evidenceTags[id]
+            if isPrivileged, current != .privileged {
+                forensicManager.tag(id, as: .privileged)
+            } else if !isPrivileged, current == .privileged {
+                forensicManager.tag(id, as: .none)
+            }
+        }
+        if changed > 0 {
+            forensicManager.logAction("Legal Review: privilege coding",
+                                      detail: "\(changed) designation\(changed == 1 ? "" : "s") changed")
+        }
     }
 
     // MARK: - v2 bounded loaders
 
     private func loadInitial() async {
+        restoreLegalState()
         archiveTotal = (try? await ArchiveDataService.shared.count()) ?? 0
         if pagedEmails.isEmpty { await loadNextPage() }
         if workingSet.isEmpty {
@@ -1163,21 +1240,7 @@ struct LegalReviewWorkspaceView: View {
                 Text("Privilege Review Report").font(.title3).fontWeight(.bold)
                 Spacer()
                 Button("Generate PDF") {
-                    Task {
-                        let privilegedEmails = workingSet.filter {
-                            let priv = privilegeAssignments[$0.id] ?? .unreviewed
-                            return priv != .unreviewed && priv != .notPrivileged
-                        }
-                        let target = privilegedEmails.isEmpty ? workingSet : privilegedEmails
-                        let data = await InvestigationReportGenerator.generateReport(
-                            emails: target,
-                            title: String(localized: "Privilege Review Report"),
-                            investigatorName: "Legal Reviewer"
-                        )
-                        #if os(macOS)
-                        _ = PlatformFileSaver.saveData(data, suggestedName: "privilege_report.pdf")
-                        #endif
-                    }
+                    Task { await generatePrivilegeReportPDF() }
                 }
                 .buttonStyle(.borderedProminent).tint(.indigo)
                 Button("Done") { showPDFExport = false }
@@ -1194,6 +1257,9 @@ struct LegalReviewWorkspaceView: View {
                 Text("Privileged: \(privileged)")
                 Text("PII findings: \(piiFindings.count)")
                 Text("Audit trail entries: \(auditTrail.count)")
+                if let legalExportStatus {
+                    Text(legalExportStatus).foregroundColor(.secondary).padding(.top, 4)
+                }
             }
             .font(.system(size: 12))
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1764,6 +1830,14 @@ struct LegalReviewWorkspaceView: View {
 
         return VStack(spacing: 0) {
             Divider()
+            if let note = legalSaveError ?? legalExportStatus {
+                Text(note)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(legalSaveError != nil ? .orange : .secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, Spacing.small)
+                    .padding(.vertical, 3)
+            }
             HStack(spacing: Spacing.small) {
                 HStack(spacing: 4) {
                     ProgressView(value: progress)
@@ -2084,22 +2158,97 @@ struct LegalReviewWorkspaceView: View {
         return terms.filter { body.contains($0) }
     }
 
-    private func exportPrivilegeLog() {
-        var csv = "Bates Number,From,To,Date,Subject,Privilege Designation,Basis\n"
-        for email in workingSet {
-            let priv = privilegeAssignments[email.id] ?? .unreviewed
-            guard priv != .unreviewed && priv != .notPrivileged else { continue }
-            let bates = batesManager.getBatesNumber(for: email.id) ?? ""
-            let from = (email.headers["From"] ?? "").replacingOccurrences(of: ",", with: ";")
-            let to = (email.headers["To"] ?? "").replacingOccurrences(of: ",", with: ";")
-            let date = email.headers["Date"] ?? ""
-            let subject = (email.headers["Subject"] ?? "").replacingOccurrences(of: ",", with: ";")
-            let basis = (legalNotes[email.id] ?? "").replacingOccurrences(of: ",", with: ";")
-            csv += "\(bates),\(from),\(to),\(date),\(subject),\(priv.rawValue),\(basis)\n"
+    /// Every email coded privileged in this workspace — hydrated by id from
+    /// the store, so calls made on list pages beyond the 2,000-email working
+    /// set are included.
+    private func codedPrivilegedEmails() async -> [MBOXParser.RawEmail] {
+        let ids = privilegeAssignments.filter { Self.privilegedDesignations.contains($0.value) }.map(\.key)
+        guard !ids.isEmpty else { return [] }
+        let emails = (try? await ArchiveDataService.shared.fullEmails(ids: ids)) ?? []
+        func date(_ e: MBOXParser.RawEmail) -> Date {
+            e.headers["Date"].flatMap { MBOXParser.parseDate($0) } ?? .distantPast
         }
-        #if os(macOS)
-        _ = PlatformFileSaver.saveText(csv, suggestedName: "privilege_log.csv")
-        #endif
+        return emails.sorted { date($0) < date($1) }
+    }
+
+    private func exportPrivilegeLog() {
+        Task { @MainActor in
+            let emails = await codedPrivilegedEmails()
+            guard !emails.isEmpty else {
+                legalExportStatus = String(localized: "No emails are coded privileged yet — code them first.")
+                return
+            }
+            // RFC 4180 quoting: commas inside names, subjects and RFC 2822
+            // dates stay intact instead of being rewritten or shifting columns.
+            var csv = csvRow(["Bates Number", "From", "To", "Date", "Subject", "Privilege Designation", "Basis"])
+            for email in emails {
+                let priv = privilegeAssignments[email.id] ?? .unreviewed
+                csv += csvRow([batesManager.getBatesNumber(for: email.id) ?? "",
+                               email.headers["From"] ?? "", email.headers["To"] ?? "",
+                               email.headers["Date"] ?? "", email.headers["Subject"] ?? "",
+                               priv.rawValue, legalNotes[email.id] ?? ""])
+            }
+            let outcome = PlatformExport.save(text: csv, suggestedName: "privilege_log.csv")
+            if let url = outcome.url {
+                forensicManager.logAction("Legal Review: privilege log exported",
+                                          detail: "\(emails.count) privileged emails → \(url.lastPathComponent)")
+                await DocumentRegistry.capture(.export, summary: "Privilege log — \(emails.count) emails", body: csv,
+                                               refs: url.lastPathComponent)
+            }
+            legalExportStatus = outcome.message(String(localized: "Privilege log"))
+        }
+    }
+
+    /// The Privilege Review Report: every privileged call with its basis,
+    /// Bates number and the email's identifying headers — not a generic
+    /// investigation report. Bates-stamped and SHA-256 verified on write.
+    private func generatePrivilegeReportPDF() async {
+        let emails = await codedPrivilegedEmails()
+        guard !emails.isEmpty else {
+            legalExportStatus = String(localized: "No emails are coded privileged yet — code them first.")
+            return
+        }
+        let examiner = forensicManager.examinerName
+        var counts: [PrivilegeDesignation: Int] = [:]
+        for email in emails { counts[privilegeAssignments[email.id] ?? .unreviewed, default: 0] += 1 }
+        let reviewed = privilegeAssignments.values.filter { $0 != .unreviewed }.count
+        var lines = ["PRIVILEGE REVIEW REPORT", ""]
+        lines.append("Generated:  \(ISO8601DateFormatter().string(from: Date()))\(examiner.isEmpty ? "" : " by \(examiner)")")
+        if !forensicManager.caseNumber.isEmpty { lines.append("Case:       \(forensicManager.caseNumber)") }
+        lines.append("Reviewed:   \(reviewed) emails coded")
+        lines.append("Privileged: \(emails.count)")
+        for d in PrivilegeDesignation.allCases where (counts[d] ?? 0) > 0 {
+            lines.append("  \(d.rawValue): \(counts[d] ?? 0)")
+        }
+        lines += ["", "PRIVILEGED EMAILS"]
+        for email in emails {
+            lines.append("")
+            let bates = batesManager.getBatesNumber(for: email.id)
+            lines.append("\(bates.map { "\($0)  ·  " } ?? "")\((privilegeAssignments[email.id] ?? .unreviewed).rawValue)")
+            lines.append("  Date:    \(email.headers["Date"] ?? "")")
+            lines.append("  From:    \(email.headers["From"] ?? "")")
+            lines.append("  To:      \(email.headers["To"] ?? "")")
+            lines.append("  Subject: \(email.headers["Subject"] ?? "")")
+            let basis = legalNotes[email.id] ?? ""
+            lines.append("  Basis:   \(basis.isEmpty ? "— (no basis recorded)" : basis)")
+        }
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("privilege_report.pdf")
+        do {
+            let rendered = try BatesPDFRenderer.renderVerified(
+                lines: lines,
+                metadata: .init(batesNumber: "PRIVILEGE REPORT", caseNumber: forensicManager.caseNumber, examiner: examiner),
+                to: temp)
+            let outcome = PlatformExport.save(data: try Data(contentsOf: temp), suggestedName: "privilege_report.pdf")
+            if let url = outcome.url {
+                forensicManager.logAction("Legal Review: privilege report",
+                                          detail: "\(emails.count) privileged emails, \(rendered.pages) pages, SHA-256 \(rendered.sha256Hex) → \(url.lastPathComponent)")
+                await DocumentRegistry.capture(.report, summary: "Privilege review report — \(emails.count) privileged emails",
+                                               body: lines.joined(separator: "\n"), refs: url.lastPathComponent)
+            }
+            legalExportStatus = outcome.message(String(localized: "Privilege report"))
+        } catch {
+            legalExportStatus = String(localized: "The privilege report couldn't be created: \(error.localizedDescription)")
+        }
     }
 }
 

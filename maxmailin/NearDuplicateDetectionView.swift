@@ -269,17 +269,20 @@ struct NearDuplicateDetectionView: View {
                         .cornerRadius(CornerRadius.small)
                 }
 
-                // Remove button
+                // Near-duplicates differ in content, so nothing is deleted
+                // here — the group is only hidden from this list (Reset View
+                // brings it back). Exact duplicates are removed in Duplicates.
                 Button {
                     let _ = withAnimation {
                         removedGroupIDs.insert(group.id)
                     }
                 } label: {
-                    Label("Remove All Duplicates", systemImage: "trash")
+                    Label("Hide This Group", systemImage: "eye.slash")
                         .font(Typography.caption1)
                 }
                 .buttonStyle(SecondaryButtonStyle())
                 .controlSize(.small)
+                .help("Hide this group from the list. Nothing is deleted — Reset View shows it again.")
                 .padding(.top, Spacing.xxSmall)
             }
         } label: {

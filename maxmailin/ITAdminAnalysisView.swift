@@ -12,6 +12,7 @@ struct ITAdminAnalysisView: View {
     @State private var isLoadingPage = false
     @State private var workingSet: [MBOXParser.RawEmail] = []
     @State private var archiveTotal = 0
+    @State private var itExportStatus: String?
     @State private var selectedFullEmail: MBOXParser.RawEmail?
     @State private var searchHits: [MBOXParser.RawEmail] = []
 
@@ -122,6 +123,7 @@ struct ITAdminAnalysisView: View {
         .overlay { if AnalysisCoordinator.isEnabled { AnalysisProgressOverlay(coordinator: coordinator) } }
         .featureTutorial(.itAdmin, key: "it_admin_tutorial_seen", isPresented: $showTutorial)
         .sheet(isPresented: $showExportSheet) { exportReportSheet }
+        .workingSetLimitNotice(shown: workingSet.count, total: archiveTotal)
         .task { await loadInitial() }
         .task { await loadV3Data() }
         .onChange(of: filterSearchText) { _, _ in Task { await runSearch() } }
@@ -1865,6 +1867,12 @@ struct ITAdminAnalysisView: View {
                     .buttonStyle(.borderedProminent).tint(.teal)
                 Button("Done") { showExportSheet = false }
             }
+            if let itExportStatus {
+                Text(itExportStatus)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
 
             let authStats = computeAuthStats()
             let tlsCount = computeTLSCount()
@@ -1889,22 +1897,27 @@ struct ITAdminAnalysisView: View {
     }
 
     private func exportCSV() {
-        var csv = "From,Subject,Date,SPF,DKIM,DMARC,TLS,Threat Score,From Domain,Return-Path Domain\n"
+        // RFC 4180 quoting: the Date header ("Mon, 12 Aug …") and names with
+        // commas used to shift every column; values are no longer rewritten.
+        var csv = csvRow(["From", "Subject", "Date", "SPF", "DKIM", "DMARC", "TLS", "Threat Score",
+                          "From Domain", "Return-Path Domain"])
         for email in workingSet {
             let auth = parseAuthStatus(email)
-            let from = (email.headers["From"] ?? "").replacingOccurrences(of: ",", with: ";")
-            let subject = (email.headers["Subject"] ?? "").replacingOccurrences(of: ",", with: ";")
-            let date = email.headers["Date"] ?? ""
             let hasTLS = email.headers.contains { k, v in
                 k.lowercased().hasPrefix("received") && (v.lowercased().contains("tls") || v.lowercased().contains("esmtps"))
             }
-            let fromDomain = extractDomain(from: email.headers["From"] ?? "")
-            let returnDomain = extractDomain(from: email.headers["Return-Path"] ?? "")
-            let threat = threatScores[email.id] ?? 0
-            csv += "\(from),\(subject),\(date),\(auth.spf),\(auth.dkim),\(auth.dmarc),\(hasTLS ? "Yes" : "No"),\(threat),\(fromDomain),\(returnDomain)\n"
+            csv += csvRow([email.headers["From"] ?? "", email.headers["Subject"] ?? "", email.headers["Date"] ?? "",
+                           auth.spf, auth.dkim, auth.dmarc, hasTLS ? "Yes" : "No",
+                           String(threatScores[email.id] ?? 0),
+                           extractDomain(from: email.headers["From"] ?? ""),
+                           extractDomain(from: email.headers["Return-Path"] ?? "")])
         }
-        #if os(macOS)
-        _ = PlatformFileSaver.saveText(csv, suggestedName: "it_security_report.csv")
-        #endif
+        let outcome = PlatformExport.save(text: csv, suggestedName: "it_security_report.csv")
+        if let url = outcome.url {
+            let n = workingSet.count
+            Task { await DocumentRegistry.capture(.report, summary: "IT security report — \(n) emails",
+                                                  body: csv, refs: url.lastPathComponent) }
+        }
+        itExportStatus = outcome.message(String(localized: "IT security report"))
     }
 }

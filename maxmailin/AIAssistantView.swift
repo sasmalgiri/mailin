@@ -1513,13 +1513,15 @@ struct AIAssistantView: View {
     }
 
     private func exportEmailsAsCSV(_ emails: [MBOXParser.RawEmail]) {
-        var csv = "From,To,Subject,Date,Body\n"
+        // Full body (it used to be cut to 500 characters under a column
+        // called "Body"); RFC 4180 quoting keeps line breaks inside the cell.
+        var csv = csvRow(["From", "To", "Subject", "Date", "Body"])
         for email in emails {
-            let from = (email.headers["From"] ?? email.headers["from"] ?? "").replacingOccurrences(of: "\"", with: "\"\"")
-            let to = (email.headers["To"] ?? email.headers["to"] ?? "").replacingOccurrences(of: "\"", with: "\"\"")
-            let subj = (email.headers["Subject"] ?? email.headers["subject"] ?? "").replacingOccurrences(of: "\"", with: "\"\"")
-            let body = String(email.plainBody.prefix(500)).replacingOccurrences(of: "\"", with: "\"\"").replacingOccurrences(of: "\n", with: " ")
-            csv += "\"\(from)\",\"\(to)\",\"\(subj)\",\"\(email.timestamp)\",\"\(body)\"\n"
+            csv += csvRow([email.headers["From"] ?? email.headers["from"] ?? "",
+                           email.headers["To"] ?? email.headers["to"] ?? "",
+                           email.headers["Subject"] ?? email.headers["subject"] ?? "",
+                           email.timestamp,
+                           email.plainBody])
         }
         #if os(macOS)
         if let url = PlatformFileSaver.savePanel(suggestedName: "ai_search_results.csv", allowedTypes: [.commaSeparatedText]) {

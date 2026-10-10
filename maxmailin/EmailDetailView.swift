@@ -696,7 +696,7 @@ struct EmailDetailView: View {
             }
         case .word:
             Button { if storeManager.requirePremium() { exportAsWord() } } label: {
-                Label("Word Document (.doc)", systemImage: "doc.badge.ellipsis")
+                Label("Word-compatible Document (.doc)", systemImage: "doc.badge.ellipsis")
             }
         case .batesPDF:
             Button { if storeManager.requireProfessional() { exportBatesStampedPDF() } } label: {

@@ -19,6 +19,10 @@ struct JournalistInvestigationView: View {
     @State private var showExportNotes = false
     @State private var keyQuotes: [KeyQuote] = []
     @State private var bookmarkedEmailIDs: Set<UUID> = []
+    /// Leads, quotes and bookmarks are saved (ReviewWorkspaceStore) and
+    /// restored on open — they used to vanish when the window closed.
+    @State private var journalistStateLoaded = false
+    @State private var journalistStatus: String?
     @State private var sentimentCache: [UUID: SentimentResult] = [:]
     @State private var hasSentimentAnalysis = false
 
@@ -89,15 +93,15 @@ struct JournalistInvestigationView: View {
         }
     }
 
-    struct Lead: Identifiable {
-        let id = UUID()
+    struct Lead: Identifiable, Codable, Equatable {
+        var id = UUID()
         var title: String
         var notes: String
         var linkedEmailIDs: [UUID] = []
         var priority: Priority = .medium
         var created: Date = Date()
 
-        enum Priority: String, CaseIterable {
+        enum Priority: String, CaseIterable, Codable {
             case high = "High"
             case medium = "Medium"
             case low = "Low"
@@ -112,8 +116,8 @@ struct JournalistInvestigationView: View {
         }
     }
 
-    struct KeyQuote: Identifiable {
-        let id = UUID()
+    struct KeyQuote: Identifiable, Codable, Equatable {
+        var id = UUID()
         var text: String
         var emailID: UUID
         var from: String
@@ -130,8 +134,13 @@ struct JournalistInvestigationView: View {
         .overlay { if AnalysisCoordinator.isEnabled { AnalysisProgressOverlay(coordinator: coordinator) } }
         .featureTutorial(.journalist, key: "journalist_tutorial_seen", isPresented: $showTutorial)
         .sheet(isPresented: $showExportNotes) { exportNotesSheet }
+        .workingSetLimitNotice(shown: workingSet.count, total: archiveTotal)
         .task { await loadBoundedWorkingSet() }
         .task { await loadV3Data() }
+        .onAppear { restoreJournalistState() }
+        .onChange(of: leads) { _, _ in saveJournalistState() }
+        .onChange(of: keyQuotes) { _, _ in saveJournalistState() }
+        .onChange(of: bookmarkedEmailIDs) { _, _ in saveJournalistState() }
         .task { await loadV4Data() }
         .task { await loadInvestigationFeatures() }
         .sheet(isPresented: $showPDFExport) { pdfExportSheet }
@@ -1566,18 +1575,7 @@ struct JournalistInvestigationView: View {
                 Text("Export Investigation Report").font(.title3).fontWeight(.bold)
                 Spacer()
                 Button("Generate PDF") {
-                    Task {
-                        let bookmarked = workingSet.filter { bookmarkedEmailIDs.contains($0.id) }
-                        let target = bookmarked.isEmpty ? workingSet : bookmarked
-                        let data = await InvestigationReportGenerator.generateReport(
-                            emails: target,
-                            title: String(localized: "Investigation Report"),
-                            investigatorName: "Journalist"
-                        )
-                        #if os(macOS)
-                        _ = PlatformFileSaver.saveData(data, suggestedName: "investigation_report.pdf")
-                        #endif
-                    }
+                    Task { await generateInvestigationPDF() }
                 }
                 .buttonStyle(.borderedProminent).tint(.purple)
                 Button("Done") { showPDFExport = false }
@@ -1590,6 +1588,9 @@ struct JournalistInvestigationView: View {
                 Text("• \(leads.count) investigation leads")
                 Text("• \(keyQuotes.count) key quotes")
                 Text("• AI-enhanced analysis (if available)")
+                if let journalistStatus {
+                    Text(journalistStatus).foregroundColor(.secondary).padding(.top, 4)
+                }
             }
             .font(.system(size: 11))
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1831,8 +1832,69 @@ struct JournalistInvestigationView: View {
 
     private func performExport() {
         let text = generateExportText()
-        #if os(macOS)
-        _ = PlatformFileSaver.saveText(text, suggestedName: "investigation_notes.txt")
-        #endif
+        let outcome = PlatformExport.save(text: text, suggestedName: "investigation_notes.txt")
+        if let url = outcome.url {
+            Task { await DocumentRegistry.capture(.report, summary: "Investigation notes — \(leads.count) leads, \(keyQuotes.count) quotes",
+                                                  body: text, refs: url.lastPathComponent) }
+        }
+        journalistStatus = outcome.message(String(localized: "Investigation notes"))
+    }
+
+    // MARK: - Durable work (ReviewWorkspaceStore)
+
+    private struct JournalistSnapshot: Codable {
+        var leads: [Lead]
+        var keyQuotes: [KeyQuote]
+        var bookmarks: [UUID]
+        static let fileName = "journalist"
+    }
+
+    private func restoreJournalistState() {
+        guard !journalistStateLoaded else { return }
+        if let s = ReviewWorkspaceStore.load(JournalistSnapshot.self, name: JournalistSnapshot.fileName) {
+            leads = s.leads
+            keyQuotes = s.keyQuotes
+            bookmarkedEmailIDs = Set(s.bookmarks)
+        }
+        journalistStateLoaded = true
+    }
+
+    private func saveJournalistState() {
+        guard journalistStateLoaded else { return }
+        let snapshot = JournalistSnapshot(leads: leads, keyQuotes: keyQuotes, bookmarks: Array(bookmarkedEmailIDs))
+        if let error = ReviewWorkspaceStore.save(snapshot, name: JournalistSnapshot.fileName) {
+            journalistStatus = String(localized: "Your leads and quotes couldn't be saved: \(error.localizedDescription)")
+        }
+    }
+
+    /// The PDF carries the journalist's own work — leads and key quotes —
+    /// alongside the analysis of the bookmarked (or all loaded) emails.
+    private func generateInvestigationPDF() async {
+        let bookmarked = workingSet.filter { bookmarkedEmailIDs.contains($0.id) }
+        let target = bookmarked.isEmpty ? workingSet : bookmarked
+        var appendix: [InvestigationReportGenerator.AppendixSection] = []
+        if !leads.isEmpty {
+            appendix.append(.init(title: String(localized: "Investigation Leads"), lines: leads.map {
+                "[\($0.priority.rawValue)] \($0.title)" + ($0.notes.isEmpty ? "" : " — \($0.notes)")
+            }))
+        }
+        if !keyQuotes.isEmpty {
+            appendix.append(.init(title: String(localized: "Key Quotes"), lines: keyQuotes.map {
+                "“\($0.text)” — \($0.from)\($0.date.isEmpty ? "" : ", \($0.date)")"
+            }))
+        }
+        let examiner = ForensicManager.shared.examinerName
+        let data = await InvestigationReportGenerator.generateReport(
+            emails: target,
+            title: String(localized: "Investigation Report"),
+            investigatorName: examiner.isEmpty ? String(localized: "Investigator") : examiner,
+            appendix: appendix)
+        let outcome = PlatformExport.save(data: data, suggestedName: "investigation_report.pdf")
+        if let url = outcome.url {
+            _ = await DocumentRegistry.post(.report,
+                summary: "Investigation report — \(target.count) emails, \(leads.count) leads, \(keyQuotes.count) quotes",
+                refs: url.lastPathComponent)
+        }
+        journalistStatus = outcome.message(String(localized: "Investigation report"))
     }
 }

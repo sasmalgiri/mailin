@@ -55,8 +55,8 @@ struct UnifiedExportSections: View {
             Section(headline) { EmptyView() }
         }
         if included(.word) {
-            button("Word Document (.doc)", icon: "doc.richtext",
-                   help: "One Word document, one page per email") { exportWord() }
+            button("Word-compatible Document (.doc)", icon: "doc.richtext",
+                   help: "One HTML document Word opens as .doc, one page per email") { exportWord() }
         }
         if included(.csv) {
             button("Spreadsheet (.csv)", icon: "tablecells",

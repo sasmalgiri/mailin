@@ -48,12 +48,21 @@ struct ArchiveWorkingSetView<Content: View>: View {
     @ViewBuilder var content: ([MBOXParser.RawEmail]) -> Content
 
     @State private var workingSet: [MBOXParser.RawEmail] = []
+    @State private var scopeTotal = 0
     @State private var isLoaded = false
 
     var body: some View {
         Group {
             if isLoaded {
-                content(workingSet)
+                VStack(spacing: 0) {
+                    // The tool only sees the newest `cap` emails. Say so, so
+                    // "all emails", "no anomalies in the archive" and the like
+                    // are never read as covering mail the tool never received.
+                    if scopeTotal > workingSet.count {
+                        WorkingSetLimitNotice(shown: workingSet.count, total: scopeTotal)
+                    }
+                    content(workingSet)
+                }
             } else {
                 VStack {
                     Spacer()
@@ -66,7 +75,40 @@ struct ArchiveWorkingSetView<Content: View>: View {
         }
         .task(id: query) {
             workingSet = await ArchiveDataService.shared.workingSet(query: query, cap: cap)
+            scopeTotal = (try? await ArchiveDataService.shared.count(query: query)) ?? workingSet.count
             isLoaded = true
         }
+    }
+}
+
+extension View {
+    /// For tools that stream their own bounded working set: pins the
+    /// limit notice above the tool when it holds fewer emails than its scope.
+    func workingSetLimitNotice(shown: Int, total: Int) -> some View {
+        safeAreaInset(edge: .top, spacing: 0) {
+            if total > shown && shown > 0 {
+                WorkingSetLimitNotice(shown: shown, total: total)
+            }
+        }
+    }
+}
+
+/// Shown above a tool whose working set is smaller than its scope.
+struct WorkingSetLimitNotice: View {
+    let shown: Int
+    let total: Int
+
+    var body: some View {
+        HStack(alignment: .top, spacing: Spacing.xSmall) {
+            Image(systemName: "exclamationmark.circle.fill")
+                .foregroundColor(.orange)
+            Text("This tool is working on the newest \(shown.formatted()) of the \(total.formatted()) emails in this scope. Older emails are not included in its results, holds or exports — narrow the scope (date range, sender, folder or search) to work on them.")
+                .font(Typography.caption1)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(Spacing.xSmall)
+        .background(Color.orange.opacity(0.12))
+        .accessibilityElement(children: .combine)
     }
 }

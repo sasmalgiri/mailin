@@ -320,7 +320,12 @@ struct ImportMeasurementView: View {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        try? encoder.encode(measurement).write(to: url, options: .atomic)
+        do {
+            try encoder.encode(measurement).write(to: url, options: .atomic)
+            errorMessage = nil
+        } catch {
+            errorMessage = String(localized: "The measurement couldn't be saved: \(error.localizedDescription)")
+        }
     }
     #endif
 }

@@ -198,9 +198,18 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
                     if let url = PlatformFileSaver.savePanel(suggestedName: "headers_export.csv") {
                         let scope: ArchiveSelectionScope = .query(modelVM.currentArchiveQuery, exclusions: [])
                         ExportRunCenter.shared.run(title: String(localized: "Exporting headers CSV")) {
-                            _ = try? await ArchiveExportService.shared.exportHeadersCSV(
-                                scope: scope, to: url,
-                                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
+                            do {
+                                try await ArchiveExportService.shared.exportHeadersCSV(
+                                    scope: scope, to: url,
+                                    onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
+                            } catch is CancellationError {
+                                // The run center reports a cancelled run itself.
+                            } catch {
+                                // A failure must not finish as if it succeeded.
+                                ExportRunCenter.shared.recordFailure(
+                                    destination: url, isFolder: false, requested: nil,
+                                    message: error.localizedDescription)
+                            }
                         }
                     }
                     #endif
@@ -407,9 +416,6 @@ struct V7SheetsModifier: ViewModifier {
                                 modelVM.review.addTag(tag, to: idArray)
                             }
                         },
-                        onExportRequested: { emailsToExport, format in
-                            appState.triggerExport = true
-                        },
                         isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Batch Operations"))
                     )
                 }
@@ -432,9 +438,6 @@ struct V7SheetsModifier: ViewModifier {
                             } else {
                                 modelVM.review.addTag(tag, to: idArray)
                             }
-                        },
-                        onExportRequested: { emailsToExport, format in
-                            appState.triggerExport = true
                         },
                         isPresented: $appState.showBatchOperations
                     )

@@ -392,6 +392,10 @@ struct EDiscoveryWorkflowView: View {
     @State private var isVerifyingCollection = false
     // Review
     @State private var reviewBatches: [(category: String, count: Int)]?
+    /// NLP classification of the collection — computed by Run NLP Analysis
+    /// (once), not re-run on every redraw of the view.
+    @State private var nlpCategories: [(category: EmailNLPEngine.EmailCategory, count: Int)]?
+    @State private var isRunningNLP = false
     @State private var privilegeScanCount = 0
 
     var body: some View {
@@ -843,7 +847,7 @@ struct EDiscoveryWorkflowView: View {
                 Label(identificationResults == nil ? String(localized: "Run Search") : String(localized: "Re-Run Search"), systemImage: "magnifyingglass")
             }
             .buttonStyle(PrimaryButtonStyle())
-            .accessibilityLabel("Run search across all emails with current criteria")
+            .accessibilityLabel("Run search across the emails in this collection with current criteria")
         }
     }
 
@@ -874,14 +878,20 @@ struct EDiscoveryWorkflowView: View {
             HStack(spacing: Spacing.small) {
                 if holdCount < emails.count {
                     Button {
-                        CustodianManager.shared.placeLegalHold(on: emails)
-                        ForensicManager.shared.storeEmailHashes(emails)
-                        showActionMessage("Legal hold applied with evidence seals — \(emails.count) emails protected")
+                        let collection = emails
+                        Task { @MainActor in
+                            CustodianManager.shared.placeLegalHold(on: collection)
+                            // Load stored seals first so existing originals are kept,
+                            // not replaced in memory by the current content.
+                            await ForensicManager.shared.prefetchForensicWindow(ids: collection.map(\.id))
+                            ForensicManager.shared.storeEmailHashes(collection)
+                            showActionMessage("Legal hold applied with evidence seals — \(collection.count) emails protected")
+                        }
                     } label: {
                         Label("Apply Legal Hold", systemImage: "lock.shield")
                     }
                     .buttonStyle(PrimaryButtonStyle())
-                    .accessibilityLabel("Apply legal hold to all emails")
+                    .accessibilityLabel("Apply legal hold to the \(emails.count) emails in this collection")
                     .accessibilityHint("Places legal hold with cryptographic evidence seals and stores integrity hashes")
                 }
 
@@ -892,7 +902,7 @@ struct EDiscoveryWorkflowView: View {
                         Label("Release Legal Hold", systemImage: "lock.open")
                     }
                     .buttonStyle(SecondaryButtonStyle())
-                    .accessibilityLabel("Release legal hold from all emails")
+                    .accessibilityLabel("Release legal hold from the emails in this collection")
                 }
             }
         }
@@ -1005,11 +1015,10 @@ struct EDiscoveryWorkflowView: View {
 
     private var processingActions: some View {
         VStack(alignment: .leading, spacing: Spacing.xSmall) {
-            let classified = EmailNLPEngine.classifyAll(emails)
-            let categories = classified.sorted { $0.value > $1.value }
+            let categories = (nlpCategories ?? []).map { (key: $0.category, value: $0.count) }
 
             if !categories.isEmpty {
-                Text("Classification preview:")
+                Text("Classification of \(emails.count) emails:")
                     .font(Typography.caption1)
                     .foregroundColor(AppColors.secondary)
                 ForEach(categories, id: \.key) { category, count in
@@ -1025,16 +1034,15 @@ struct EDiscoveryWorkflowView: View {
             }
 
             Button {
-                ForensicManager.shared.logAction(
-                    "E-Discovery: NLP Analysis",
-                    detail: "NLP analysis executed on \(emails.count) emails"
-                )
-                showActionMessage("NLP analysis complete on \(emails.count) emails")
+                runNLPAnalysis()
             } label: {
-                Label("Run NLP Analysis", systemImage: "brain")
+                Label(isRunningNLP ? String(localized: "Analyzing…")
+                      : nlpCategories == nil ? String(localized: "Run NLP Analysis") : String(localized: "Re-run NLP Analysis"),
+                      systemImage: "brain")
             }
             .buttonStyle(PrimaryButtonStyle())
-            .accessibilityLabel("Run NLP analysis on all emails")
+            .disabled(isRunningNLP || emails.isEmpty)
+            .accessibilityLabel("Run NLP classification on the emails in this collection")
 
             Button {
                 showPIIReport = true
@@ -1167,14 +1175,16 @@ struct EDiscoveryWorkflowView: View {
             HStack(spacing: Spacing.small) {
                 Button {
                     let dat = ForensicManager.shared.exportConcordanceDAT(emails: emails)
-                    #if os(macOS)
-                    _ = PlatformFileSaver.saveText(dat, suggestedName: "production_loadfile.dat")
-                    #endif
-                    ForensicManager.shared.logAction(
-                        "E-Discovery: Load File Generated",
-                        detail: "Concordance DAT load file for \(emails.count) emails"
-                    )
-                    showActionMessage("Load file generated")
+                    let outcome = PlatformExport.save(text: dat, suggestedName: "production_loadfile.dat")
+                    if let url = outcome.url {
+                        ForensicManager.shared.logAction(
+                            "E-Discovery: Load File Generated",
+                            detail: "Concordance DAT load file for \(emails.count) emails → \(url.lastPathComponent)"
+                        )
+                        let n = emails.count
+                        Task { await DocumentRegistry.post(.export, summary: "Concordance load file — \(n) emails", refs: url.lastPathComponent) }
+                    }
+                    showActionMessage(outcome.message(String(localized: "Load file")))
                 } label: {
                     Label("Generate Load File", systemImage: "doc.text")
                 }
@@ -1183,14 +1193,16 @@ struct EDiscoveryWorkflowView: View {
 
                 Button {
                     let csv = ForensicManager.shared.exportBulkForensicCSV(emails: emails)
-                    #if os(macOS)
-                    _ = PlatformFileSaver.saveText(csv, suggestedName: "production_export.csv")
-                    #endif
-                    ForensicManager.shared.logAction(
-                        "E-Discovery: Production Export",
-                        detail: "Production CSV exported for \(emails.count) emails"
-                    )
-                    showActionMessage("Production export complete")
+                    let outcome = PlatformExport.save(text: csv, suggestedName: "production_export.csv")
+                    if let url = outcome.url {
+                        ForensicManager.shared.logAction(
+                            "E-Discovery: Production Export",
+                            detail: "Production CSV exported for \(emails.count) emails → \(url.lastPathComponent)"
+                        )
+                        let n = emails.count
+                        Task { await DocumentRegistry.post(.export, summary: "Production CSV — \(n) emails", refs: url.lastPathComponent) }
+                    }
+                    showActionMessage(outcome.message(String(localized: "Production CSV")))
                 } label: {
                     Label("Export", systemImage: "square.and.arrow.up")
                 }
@@ -1202,14 +1214,15 @@ struct EDiscoveryWorkflowView: View {
                     if log.isEmpty {
                         showActionMessage("No privileged emails tagged — tag emails first")
                     } else {
-                        #if os(macOS)
-                        _ = PlatformFileSaver.saveText(log, suggestedName: "privilege_log.csv")
-                        #endif
-                        ForensicManager.shared.logAction(
-                            "E-Discovery: Privilege Log",
-                            detail: "Privilege log generated for \(emails.count) emails"
-                        )
-                        showActionMessage("Privilege log generated")
+                        let outcome = PlatformExport.save(text: log, suggestedName: "privilege_log.csv")
+                        if let url = outcome.url {
+                            ForensicManager.shared.logAction(
+                                "E-Discovery: Privilege Log",
+                                detail: "Privilege log generated for \(emails.count) emails → \(url.lastPathComponent)"
+                            )
+                            Task { await DocumentRegistry.post(.export, summary: "Privilege log", refs: url.lastPathComponent) }
+                        }
+                        showActionMessage(outcome.message(String(localized: "Privilege log")))
                     }
                 } label: {
                     Label("Privilege Log", systemImage: "doc.text.magnifyingglass")
@@ -1312,38 +1325,93 @@ struct EDiscoveryWorkflowView: View {
 
     private func verifyCollection() {
         isVerifyingCollection = true
-        ForensicManager.shared.storeEmailHashes(emails)
-        let result = ForensicManager.shared.batchVerifyAllEmails(emails)
-        collectionVerification = (passed: result.passed, failed: result.failed, unverified: result.unverified)
+        let collection = emails
+        Task { @MainActor in
+            let forensic = ForensicManager.shared
+            // Verify against the ORIGINAL stored seals before sealing anything.
+            // Sealing first made every email outside the in-memory window
+            // verify against its own current content — a tampered email passed.
+            await forensic.prefetchForensicWindow(ids: collection.map(\.id))
+            let result = forensic.batchVerifyAllEmails(collection)
+            // Emails with no seal at all get their first (baseline) seal now.
+            let unsealed = collection.filter { forensic.perEmailHashes[$0.id] == nil }
+            if !unsealed.isEmpty { forensic.storeEmailHashes(unsealed) }
+            collectionVerification = (passed: result.passed, failed: result.failed, unverified: result.unverified)
 
-        let sourceFiles = Set(emails.compactMap { $0.headers["sourceFile"] }).count
-        ForensicManager.shared.logAction(
-            "E-Discovery: Collection Verified",
-            detail: "Collection of \(emails.count) emails from \(max(1, sourceFiles)) source(s): \(result.passed) verified, \(result.failed) failed, \(result.unverified) newly sealed"
-        )
-        isVerifyingCollection = false
-        showActionMessage("Collection verified: \(result.passed) passed, \(result.failed) failed, \(result.unverified) newly sealed")
+            let sourceFiles = Set(collection.compactMap { $0.headers["sourceFile"] }).count
+            forensic.logAction(
+                "E-Discovery: Collection Verified",
+                detail: "Collection of \(collection.count) emails from \(max(1, sourceFiles)) source(s): \(result.passed) verified, \(result.failed) failed, \(result.unverified) newly sealed"
+            )
+            isVerifyingCollection = false
+            showActionMessage("Collection verified: \(result.passed) passed, \(result.failed) failed, \(result.unverified) newly sealed")
+        }
+    }
+
+    // MARK: - NLP Analysis
+
+    /// Classifies every email in the collection off the main thread, shows
+    /// the counts, and records them as a numbered document — the audit entry
+    /// is written only after the analysis has actually run.
+    private func runNLPAnalysis() {
+        isRunningNLP = true
+        let collection = emails
+        Task { @MainActor in
+            let counts = await Task.detached(priority: .userInitiated) {
+                EmailNLPEngine.classifyAll(collection)
+            }.value
+            let sorted = counts.sorted { $0.value > $1.value }.map { (category: $0.key, count: $0.value) }
+            nlpCategories = sorted
+            isRunningNLP = false
+            ForensicManager.shared.logAction(
+                "E-Discovery: NLP Analysis",
+                detail: "Classified \(collection.count) emails into \(sorted.count) categories")
+            await DocumentRegistry.captureStructured(
+                .report, summary: "E-Discovery NLP classification — \(collection.count) emails",
+                document: CapturedDocument(title: String(localized: "NLP Classification"), sections: [
+                    .init(name: String(localized: "Categories"), fields: sorted.map {
+                        .init(key: $0.category.rawValue, value: String($0.count))
+                    })]))
+            showActionMessage("NLP analysis complete — \(collection.count) emails in \(sorted.count) categories")
+        }
     }
 
     // MARK: - Review Batches
 
+    /// Creates real review batches (Review Batches panel) — privilege-flagged
+    /// emails first, then grouped by category — instead of only a count list.
+    /// Existing batches with review progress are never overwritten.
     private func createReviewBatches() {
-        let classified = EmailNLPEngine.classifyAll(emails)
-        let batches = classified
-            .sorted { $0.value > $1.value }
-            .map { (category: $0.key.rawValue, count: $0.value) }
+        let batchManager = ReviewBatchManager.shared
+        let reviewedSoFar = batchManager.batches.reduce(0) { $0 + $1.reviewedIDs.count }
+        if reviewedSoFar > 0 {
+            showActionMessage("Review batches already exist with \(reviewedSoFar) emails reviewed — reset them in Review Batches before creating new ones")
+            return
+        }
+        let forensic = ForensicManager.shared
+        forensic.runPrivilegeScan(on: emails)
+        privilegeScanCount = forensic.privilegeFlags.count
 
-        ForensicManager.shared.runPrivilegeScan(on: emails)
-        privilegeScanCount = ForensicManager.shared.privilegeFlags.count
+        var categoryOf: [UUID: EmailNLPEngine.EmailCategory] = [:]
+        for email in emails { categoryOf[email.id] = EmailNLPEngine.classify(email) }
+        var counts: [EmailNLPEngine.EmailCategory: Int] = [:]
+        for c in categoryOf.values { counts[c, default: 0] += 1 }
+        let order = counts.sorted { $0.value > $1.value }.map(\.key)
+        let rank = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($1, $0) })
+        let ordered = emails.map(\.id).sorted { a, b in
+            let pa = forensic.privilegeFlags[a] != nil, pb = forensic.privilegeFlags[b] != nil
+            if pa != pb { return pa }
+            return (categoryOf[a].flatMap { rank[$0] } ?? 0) < (categoryOf[b].flatMap { rank[$0] } ?? 0)
+        }
+        batchManager.createBatches(from: ordered, batchSize: 50, namePrefix: "Review")
+        reviewBatches = order.map { (category: $0.rawValue, count: counts[$0] ?? 0) }
 
-        reviewBatches = batches
-
-        let stats = ForensicManager.shared.computeReviewerStats()
-        ForensicManager.shared.logAction(
+        let stats = forensic.computeReviewerStats()
+        forensic.logAction(
             "E-Discovery: Review Batches Created",
-            detail: "\(batches.count) category batches from \(emails.count) emails. \(privilegeScanCount) privilege-flagged. \(stats.totalTagged) previously tagged."
+            detail: "\(batchManager.batches.count) batches of up to 50 from \(emails.count) emails (privilege-flagged first, then by category). \(privilegeScanCount) privilege-flagged. \(stats.totalTagged) previously tagged."
         )
-        showActionMessage("Created \(batches.count) review batches, \(privilegeScanCount) privilege flags")
+        showActionMessage("Created \(batchManager.batches.count) review batches (\(privilegeScanCount) privilege-flagged first) — open Review Batches to start")
     }
 
     // MARK: - AI Enhancement
@@ -1615,10 +1683,8 @@ struct EDiscoveryWorkflowView: View {
 
     private func exportSummary() {
         let summary = manager.exportWorkflowSummary()
-        #if os(macOS)
-        _ = PlatformFileSaver.saveText(summary, suggestedName: "ediscovery_workflow_\(manager.caseInfo.caseNumber).txt")
-        #endif
-        showActionMessage("Summary exported")
+        let outcome = PlatformExport.save(text: summary, suggestedName: "ediscovery_workflow_\(manager.caseInfo.caseNumber).txt")
+        showActionMessage(outcome.message(String(localized: "Summary")))
     }
 
     private func printSummary() {

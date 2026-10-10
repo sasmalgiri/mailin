@@ -160,11 +160,8 @@ struct IOCExtractorView: View {
     @State private var filterType: IOCEntry.IOCType?
     @State private var searchText = ""
     @State private var showTutorial = false
+    @State private var exportStatus: String?
     @Environment(\.dismiss) private var dismiss
-    #if os(iOS)
-    @State private var shareItems: [Any] = []
-    @State private var showShareSheet = false
-    #endif
 
     private var filteredEntries: [IOCEntry] {
         var result = entries
@@ -198,6 +195,14 @@ struct IOCExtractorView: View {
                     .buttonStyle(.plain)
             }
             .padding()
+            if let exportStatus {
+                Text(exportStatus)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                    .padding(.bottom, 6)
+            }
             Divider()
 
             if isExtracting {
@@ -257,10 +262,6 @@ struct IOCExtractorView: View {
         .featureTutorial(.iocExtractor, key: "ioc_extractor_tutorial_seen", isPresented: $showTutorial)
         #if os(macOS)
         .toolWindowFrame()
-        #else
-        .sheet(isPresented: $showShareSheet) {
-            ShareSheet(items: shareItems)
-        }
         #endif
     }
 
@@ -318,28 +319,16 @@ struct IOCExtractorView: View {
 
     private func exportCSV() {
         let csv = IOCExtractor.exportAsCSV(filteredEntries)
-        // Record a numbered document of this export — the IOC list is the
-        // saved work, retrievable later from Work Center ▸ Documents.
         let iocCount = filteredEntries.count
-        Task { await DocumentRegistry.capture(.export,
-            summary: "IOC export — \(iocCount) indicator\(iocCount == 1 ? "" : "s")", body: csv) }
-        #if os(macOS)
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.commaSeparatedText]
-        panel.nameFieldStringValue = "ioc_indicators.csv"
-        if panel.runModal() == .OK, let url = panel.url {
-            try? csv.write(to: url, atomically: true, encoding: .utf8)
+        let outcome = PlatformExport.save(text: csv, suggestedName: "ioc_indicators.csv")
+        // Record the numbered export document only when the file was really
+        // saved or shared — a cancelled save is not an export.
+        if let url = outcome.url {
+            Task { await DocumentRegistry.capture(.export,
+                summary: "IOC export — \(iocCount) indicator\(iocCount == 1 ? "" : "s")", body: csv,
+                refs: url.lastPathComponent) }
         }
-        #else
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("ioc_indicators.csv")
-        do {
-            try csv.write(to: url, atomically: true, encoding: .utf8)
-            shareItems = [url]
-            showShareSheet = true
-        } catch {
-            // Best-effort; share sheet won't present if write fails.
-        }
-        #endif
+        exportStatus = outcome.message(String(localized: "IOC list"))
     }
 
     private func copyToClipboard(_ text: String) {
