@@ -46,6 +46,8 @@ struct CapabilityMatrixView: View {
                         pageSection(page)
                     }
                     footnote
+                    // §3-M4: old vs 3.0 engine on the same emails (test builds only).
+                    if scope == nil { ShadowComparisonPanel() }
                 }
                 .padding(20)
             }

@@ -266,4 +266,31 @@ final class V3CompatibilityTests: XCTestCase {
         XCTAssertEqual(forensic.privilegeFlags[elsewhere], ["attorney-client"],
                        "a scan of one scope must not erase flags set on other emails")
     }
+
+    // MARK: - Shadow comparison (§3-M4)
+
+    func testShadowComparison_differencesListsEveryChangedKey() {
+        XCTAssertEqual(ShadowComparison.differences(previous: ["a": 1, "b": 2], current: ["a": 1, "b": 3, "c": 1]),
+                       ["b: 2 → 3", "c: 0 → 1"])
+        XCTAssertTrue(ShadowComparison.differences(previous: ["a": 1], current: ["a": 1]).isEmpty)
+    }
+
+    /// The harness runs every pair on the same newest-N emails of a disposable
+    /// archive and records a report per tool next to it, not in the app.
+    func testShadowComparison_runsEveryPairOnTheSameEmails() async throws {
+        let env = makeEnv(engineOn: false)
+        try await env.store.insertBatch((0..<12).map { makeEmail($0, from: "pat@corp.com", tag: "sh") }, batchSize: 20)
+        let reports = try await ScopeJobEnvironment.$current.withValue(env.job) {
+            try await ShadowComparison.run(subset: 10)
+        }
+        XCTAssertEqual(reports.count, ShadowComparison.pairs.count)
+        XCTAssertTrue(reports.allSatisfy { $0.subset == 10 }, "the previous engines got exactly the newest 10")
+        let recorded = ScopeJobEnvironment.$current.withValue(env.job) { ShadowComparison.recorded() }
+        XCTAssertEqual(recorded.count, reports.count, "reports are written beside the disposable archive")
+        // Same detector on the same emails: these two must agree exactly.
+        for tool in [String(localized: "PII report"), String(localized: "NLP classification"), String(localized: "Keyword sweep")] {
+            let r = try XCTUnwrap(reports.first { $0.tool == tool })
+            XCTAssertTrue(r.matches, "\(tool): \(r.differences)")
+        }
+    }
 }
