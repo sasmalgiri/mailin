@@ -54,10 +54,32 @@ enum CapabilityWiring {
         case .v3PagedLists:
             SQLiteEmailStore.unboundedIDLookups = isOn
             V3Paging.isOn = isOn
+        case .v3EvidenceReceipts:
+            // §3-E4: import receipts record who, which tool and the settings.
+            if isOn {
+                let provider: @Sendable () -> (custodian: String?, tool: String, settings: [String: String]) = {
+                    let defaults = UserDefaults.standard
+                    let state = ModuleStateStore(url: ModuleStateStore.productionURL).load()
+                    var settings: [String: String] = [:]
+                    for c in [Capability.blobTier, .offsetParser, .externalStorage, .locatorReads] {
+                        settings[c.rawValue] = state.isCapabilitySet(c) ? "on" : "off"
+                    }
+                    if let caseNumber = defaults.string(forKey: "forensicCaseNumber"), !caseNumber.isEmpty {
+                        settings["caseNumber"] = caseNumber
+                    }
+                    let examiner = defaults.string(forKey: "forensicExaminerName")
+                    return (custodian: (examiner?.isEmpty ?? true) ? nil : examiner,
+                            tool: "mailin \(EngineGuard.appVersion)", settings: settings)
+                }
+                ImportReceipt.collectionContextProvider = provider
+            } else {
+                ImportReceipt.collectionContextProvider = nil
+            }
         case .v3LegalState:
             // §3-F4: the custodian/hold/seal manager dual-writes into SQLite
             // while on; turning on migrates the existing files once.
             LegalStateMirror.isEnabled = isOn
+            CollectToPreserve.engineOn = isOn
             if isOn { Task { @MainActor in await LegalStateMirror.shared.activate() } }
         case .locatorReads:
             // S5. Off means the readers fall back to the stored raw MIME,
@@ -134,7 +156,6 @@ enum CapabilityWiring {
              .v3InvestigationReport,
              .v3LegalReview,
              .v3EvidenceDesks,
-             .v3EvidenceReceipts,
              .v3PreservationExport:
             // Gated at the point of use — the surface asks the registry. No
             // pushed flag to keep in step, which is the preferable shape;

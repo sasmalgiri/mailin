@@ -218,13 +218,13 @@ loops, the current AI context building. Deleted only in a later release after a 
 ### E — Evidence and defensibility
 | ID | Item | Status |
 |---|---|---|
-| E1 | **Job receipts** record scope query, archive revision, counts and the **fingerprint of the exact email set**; "Re-run and prove" button | [ ] |
-| E2 | **Long-term evidence records** in RFC 4998 style (hash tree + timestamps) exported with productions and case bundles | [ ] |
-| E3 | **Time-stamping**: optional RFC 3161 token on fingerprint-tree heads (online toggle; token never part of the digest); offline alternative: print/email the tree root (linked time-stamping) | [ ] |
-| E4 | Collection receipts at import state custodian, source, tool, settings, hashes (EDRM processing guidance) | [ ] |
-| E5 | **Preservation export**: BagIt bag with PREMIS metadata (original, processed copy, sidecars) — the archival standard ePADD uses; opens the library/archives market | [ ] |
-| E6 | **Redaction completeness**: redacted exports never carry the unredacted HTML part or attachments (ePADD lesson); test checks every part of a redacted export | [ ] |
-| E7 | **Collect-to-preserve** option: a matter can auto-hold and seal everything as it is imported (2026 e-discovery practice) | [ ] |
+| E1 | **Job receipts** record scope query, archive revision, counts and the **fingerprint of the exact email set**; "Re-run and prove" button |  [~] |
+| E2 | **Long-term evidence records** in RFC 4998 style (hash tree + timestamps) exported with productions and case bundles |  [~] |
+| E3 | **Time-stamping**: optional RFC 3161 token on fingerprint-tree heads (online toggle; token never part of the digest); offline alternative: print/email the tree root (linked time-stamping) | [ ] — offline alternative done (archive root shown in Health and in every evidence record); **owner-bound**: RFC 3161 needs a chosen time-stamping authority and network access (online toggle) | [~] |
+| E4 | Collection receipts at import state custodian, source, tool, settings, hashes (EDRM processing guidance) |  — receipt fields written; show them in ImportReceiptView in the test pass — [~] |
+| E5 | **Preservation export**: BagIt bag with PREMIS metadata (original, processed copy, sidecars) — the archival standard ePADD uses; opens the library/archives market |  [~] |
+| E6 | **Redaction completeness**: redacted exports never carry the unredacted HTML part or attachments (ePADD lesson); test checks every part of a redacted export |  — already structural (RedactedEmail carries no HTML part or attachment bytes); test to write — [~] |
+| E7 | **Collect-to-preserve** option: a matter can auto-hold and seal everything as it is imported (2026 e-discovery practice) |  [~] |
 
 ### H — Other hidden limits
 | ID | Where | Status |

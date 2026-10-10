@@ -30,6 +30,7 @@ struct CustodianPanelView: View {
     @State private var reportStatus: String?
     // §3-L8: whole-archive custodian actions when the 3.0 engine is on.
     @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
+    private var v3Modules: ModuleRegistry? { modules }
     @State private var v3Unassigned: Int?
     @State private var v3Busy = false
     private var v3: Bool { modules?.isOn(.v3Custodians) ?? false }
@@ -210,6 +211,12 @@ struct CustodianPanelView: View {
             .padding(.bottom, Spacing.small)
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(manager.legalHolds.count) emails under legal hold")
+            if v3Modules?.isOn(.v3LegalState) ?? false {
+                CollectToPreserveToggle()
+                    .font(Typography.caption1)
+                    .padding(.horizontal, Spacing.small)
+                    .padding(.bottom, Spacing.small)
+            }
         }
     }
 

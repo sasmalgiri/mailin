@@ -430,6 +430,25 @@ struct ChainOfCustodyView: View {
                 Button("Export PDF Report") { exportPDFReport() }
                     .buttonStyle(SecondaryButtonStyle())
                     .disabled(custodyManager.events.isEmpty)
+
+                if modules?.isOn(.v3Fingerprints) ?? false {
+                    // §3-E2: per-email hash-tree proofs to the archive root.
+                    Button(String(localized: "Export Evidence Record")) {
+                        Task { @MainActor in
+                            let (outcome, n) = await EvidenceRecordExporter.export(scope: scope)
+                            exportStatus = outcome.message(String(localized: "Evidence record")) + (outcome.succeeded ? " (\(n))" : "")
+                        }
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .help("Every email in scope with a hash-tree proof to the archive fingerprint — verifiable with SHA-256 alone")
+                }
+
+                if modules?.isOn(.v3PreservationExport) ?? false {
+                    // §3-E5: BagIt + PREMIS preservation package.
+                    Button(String(localized: "Export Preservation Package")) { exportPreservationPackage() }
+                        .buttonStyle(SecondaryButtonStyle())
+                        .help("A BagIt bag with every original message and PREMIS metadata — the archival standard")
+                }
             }
             if let exportStatus {
                 Text(exportStatus)
@@ -533,6 +552,41 @@ struct ChainOfCustodyView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(AppColors.error.opacity(0.1))
             .cornerRadius(CornerRadius.small)
+        }
+    }
+
+    private func exportPreservationPackage() {
+        let stamp = ISO8601DateFormatter().string(from: Date()).prefix(10)
+        let name = "mailin-preservation-\(stamp)"
+        #if os(macOS)
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = String(localized: "Create Package Here")
+        guard panel.runModal() == .OK, let parent = panel.url else { exportStatus = String(localized: "Preservation package not saved — cancelled."); return }
+        let bag = parent.appendingPathComponent(name, isDirectory: true)
+        #else
+        let bag = FileManager.default.temporaryDirectory.appendingPathComponent(name, isDirectory: true)
+        try? FileManager.default.removeItem(at: bag)
+        #endif
+        exportStatus = String(localized: "Building the preservation package…")
+        Task { @MainActor in
+            do {
+                let r = try await PreservationExporter.export(scope: scope, to: bag,
+                                                              organization: ForensicManager.shared.examinerName)
+                exportStatus = String(localized: "Preservation package: \(r.originals) originals") +
+                    (r.withoutOriginal > 0 ? String(localized: ", \(r.withoutOriginal) without a stored original") : "") +
+                    (r.verified ? String(localized: " — every file verified.") : String(localized: " — VERIFICATION FAILED, do not rely on this package."))
+                #if os(iOS)
+                if r.verified { _ = PlatformExport.share(bag) }
+                #endif
+                if r.verified {
+                    _ = await DocumentRegistry.post(.export, summary: "Preservation package — \(r.originals) originals", refs: bag.lastPathComponent)
+                }
+            } catch {
+                exportStatus = String(localized: "Preservation package failed: \(error.localizedDescription)")
+            }
         }
     }
 

@@ -127,6 +127,15 @@ struct ImportReceipt: Codable, Sendable, Equatable {
 
     /// Bumped when receipt fields/semantics change. v3 = keyed HMAC signing (§8).
     var schemaVersion: Int = 3
+    /// §3-E4 collection context (EDRM processing guidance): who the
+    /// material belongs to, which tool collected it, and the settings in
+    /// force. Optional so receipts written before 3.0 still decode.
+    var custodian: String? = nil
+    var collectingTool: String? = nil
+    var collectionSettings: [String: String]? = nil
+
+    /// Supplied by the app (the package cannot see app settings).
+    nonisolated(unsafe) static var collectionContextProvider: (@Sendable () -> (custodian: String?, tool: String, settings: [String: String]))?
     // Source
     var sources: [SourceRecord] = []
     // Outcome (see header for exact semantics)

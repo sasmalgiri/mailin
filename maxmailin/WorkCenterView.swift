@@ -31,6 +31,7 @@ struct WorkCenterView: View {
     // §3-H1: page through every document with the total shown (3.0 engine).
     @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
     @State private var documentTotal: Int?
+    @State private var proveResult: String?
     private var pagedLists: Bool { v3Modules?.isOn(.v3PagedLists) ?? false }
     @State private var docSearch = ""
     @State private var docDateFilterOn = false
@@ -604,6 +605,23 @@ struct WorkCenterView: View {
                                 .font(Typography.caption2).foregroundColor(AppColors.secondary)
                         }
                     }
+                }
+            }
+            if let payload = docPayload, payload.contains("Email-set fingerprint"), payload.contains("Scope query (JSON)") {
+                // §3-E1: re-run the job's scope and compare the email set.
+                Button {
+                    Task { @MainActor in
+                        proveResult = String(localized: "Re-running the scope…")
+                        proveResult = await ScopeJob.prove(documentPayload: payload)
+                    }
+                } label: {
+                    Label(String(localized: "Re-run and prove"), systemImage: "checkmark.seal")
+                        .font(Typography.caption1)
+                }
+                .controlSize(.small)
+                .help("Runs the same scope again and checks it yields exactly the same emails")
+                if let proveResult {
+                    Text(proveResult).font(Typography.caption2).foregroundColor(AppColors.secondary)
                 }
             }
             if let payload = docPayload, !payload.isEmpty {

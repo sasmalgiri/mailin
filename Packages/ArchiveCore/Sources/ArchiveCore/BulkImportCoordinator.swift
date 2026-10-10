@@ -1006,6 +1006,11 @@ final class BulkImportCoordinator {
 
         // Phase 12: build, sign (self-hash) and persist the import receipt.
         var receipt = ImportReceipt(startedAt: startedAt, completedAt: completedAt)
+        if let context = ImportReceipt.collectionContextProvider?() {
+            receipt.custodian = context.custodian
+            receipt.collectingTool = context.tool
+            receipt.collectionSettings = context.settings
+        }
         receipt.sources = sources
         receipt.discovered = summary.discovered
         receipt.parsed = summary.parsed

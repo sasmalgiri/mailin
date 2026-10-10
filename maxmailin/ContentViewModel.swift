@@ -287,8 +287,12 @@ class ContentViewModel: ObservableObject {
             // (C1) Forensic email hashes over every COMMITTED batch, so hash
             // coverage matches the persisted corpus, not just the preview.
             if forensicEnabled {
+                // §3-E7: collect-to-preserve — the matter holds and seals each
+                // committed batch as it lands (3.0 legal-data engine).
+                let preserve = CollectToPreserve.isOn
                 callbacks.onCommittedBatch = { batch in
                     ForensicManager.shared.storeEmailHashes(batch)
+                    if preserve { CustodianManager.shared.placeLegalHoldBatched(batch) }
                 }
             }
 

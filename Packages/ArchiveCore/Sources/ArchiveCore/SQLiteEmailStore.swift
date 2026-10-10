@@ -6609,6 +6609,20 @@ extension SQLiteEmailStore {
         return (out, distinct)
     }
 
+    /// §3-E5: the EXACT stored raw MIME bytes of one email (inline column or
+    /// blob file, digest-verified) — for preservation copies. nil when the
+    /// row was stored without raw MIME.
+    func rawBytes(id: UUID) throws -> Data? {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT raw, raw_blob_digest, raw_blob_length FROM email_bodies WHERE id = ?;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, id.uuidString)
+        guard try stepRow(stmt, db) else { return nil }
+        if let inline = columnBlobData(stmt, 0), !inline.isEmpty { return inline }
+        guard let digest = columnTextOptional(stmt, 1), !digest.isEmpty else { return nil }
+        return try blobStore.read(BlobReference(digest: digest, length: sqlite3_column_int64(stmt, 2)), verify: true)
+    }
+
     /// Hour-of-day × weekday activity for the whole archive (UTC), A12.
     func activityMatrix(query: EmailQuery = .all) throws -> [[Int]] {
         let db = try ensureDB()

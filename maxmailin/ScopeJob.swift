@@ -45,6 +45,8 @@ struct ScopeJobReceipt: Codable, Sendable, Equatable {
     let finishedAt: Date
     /// Order-independent fingerprint of the processed email ids (hex).
     let fingerprint: String
+    /// The scope as an `EmailQuery` (JSON) — what "Re-run and prove" re-runs.
+    var queryJSON: String? = nil
 
     /// "X of Y" wording for status lines.
     var coverageLine: String {
@@ -70,7 +72,7 @@ struct ScopeJobReceipt: Codable, Sendable, Equatable {
             .init(key: "Started", value: f.string(from: startedAt)),
             .init(key: "Finished", value: f.string(from: finishedAt)),
             .init(key: "Email-set fingerprint", value: fingerprint),
-        ]
+        ] + (queryJSON.map { [.init(key: "Scope query (JSON)", value: $0)] } ?? [])
     }
 }
 
@@ -325,7 +327,8 @@ enum ScopeJob {
             scope: ScopeJob.describe(query), archiveRevision: revision,
             totalInScope: total, processed: cp.processed, unreadable: cp.unreadable,
             resumed: resumed, cancelled: wasCancelled,
-            startedAt: cp.startedAt, finishedAt: Date(), fingerprint: cp.fingerprint.hex)
+            startedAt: cp.startedAt, finishedAt: Date(), fingerprint: cp.fingerprint.hex,
+            queryJSON: ScopeJob.json(query))
         return (cp.state, receipt)
     }
 
@@ -364,8 +367,45 @@ enum ScopeJob {
             jobKey: key, title: title, capability: capability.rawValue, scope: describe(query),
             archiveRevision: revision, totalInScope: total, processed: processed, unreadable: 0,
             resumed: false, cancelled: cancelled, startedAt: started, finishedAt: Date(),
-            fingerprint: fingerprint.hex)
+            fingerprint: fingerprint.hex, queryJSON: json(query))
         return (state, receipt)
+    }
+
+    nonisolated static func json(_ q: EmailQuery) -> String? {
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.sortedKeys]
+        enc.dateEncodingStrategy = .iso8601
+        return (try? enc.encode(q)).flatMap { String(data: $0, encoding: .utf8) }
+    }
+
+    /// §3-E1 "Re-run and prove": re-runs the receipt's scope now and compares
+    /// the fingerprint of the email set. Same fingerprint = exactly the same
+    /// emails; otherwise says how the set differs in size.
+    static func prove(documentPayload payload: String) async -> String? {
+        guard let data = payload.data(using: .utf8),
+              let doc = try? JSONDecoder().decode(CapturedDocument.self, from: data) else { return nil }
+        let fields = doc.sections.flatMap(\.fields)
+        guard let expected = fields.first(where: { $0.key == "Email-set fingerprint" })?.value,
+              let qjson = fields.first(where: { $0.key == "Scope query (JSON)" })?.value,
+              let qdata = qjson.data(using: .utf8) else { return nil }
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        guard let query = try? dec.decode(EmailQuery.self, from: qdata) else {
+            return String(localized: "The receipt's scope could not be read.")
+        }
+        var fp = EmailSetFingerprint()
+        do {
+            for try await page in ArchiveDataService.shared.streamSummaries(query: query, batchSize: 5_000) {
+                for s in page { fp.add(s.id) }
+            }
+        } catch {
+            return String(localized: "The scope could not be re-run: \(error.localizedDescription)")
+        }
+        let then = fields.first(where: { $0.key == "Emails processed" })?.value ?? "?"
+        if fp.hex == expected {
+            return String(localized: "Proved: re-running the scope now gives exactly the same \(fp.count) emails (fingerprint matches).")
+        }
+        return String(localized: "Not the same set: the receipt covered \(then) emails, the scope now gives \(fp.count). The archive changed since the job ran.")
     }
 
     /// Human-readable scope for receipts.
