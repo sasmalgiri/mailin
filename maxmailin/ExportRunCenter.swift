@@ -155,6 +155,10 @@ final class ExportRunCenter {
 /// is waiting to be read.
 struct ExportProgressOverlayView: View {
     @State private var center = ExportRunCenter.shared
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
+    /// §3-F1: with the 3.0 scope engine on, progress shows in the shell's
+    /// job bar with every other running job; the receipt card stays here.
+    private var progressInJobBar: Bool { modules?.isOn(.v3ScopeEngine) ?? false }
     @State private var copied = false
     @State private var receiptSaveNote: String?
 
@@ -164,7 +168,7 @@ struct ExportProgressOverlayView: View {
             // presented even when neither card is showing.
             Color.clear.frame(width: 1, height: 1).allowsHitTesting(false)
             if center.isActive {
-                progressCard
+                if !progressInJobBar { progressCard }
             } else if center.showReceipt, let receipt = center.lastReceipt {
                 receiptCard(receipt)
             }

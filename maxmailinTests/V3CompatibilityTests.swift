@@ -466,4 +466,14 @@ final class V3CompatibilityTests: XCTestCase {
             XCTAssertEqual(off.emails.count, 5, "engine off: the window as given")
         }
     }
+
+    // MARK: - F1: batch size follows free memory
+
+    func testAdaptiveBatch_followsFreeMemory_neverZero_neverAboveTheRequest() {
+        let perBatchEmail = UInt64(AdaptiveBatch.bytesPerEmail) * 8
+        XCTAssertEqual(AdaptiveBatch.size(requested: 200, available: 0), AdaptiveBatch.minimum, "under pressure: slower, not stopped")
+        XCTAssertEqual(AdaptiveBatch.size(requested: 200, available: 64 * 1_073_741_824), 200, "plenty: the tool's own size")
+        XCTAssertEqual(AdaptiveBatch.size(requested: 200, available: perBatchEmail * 80), 80, "in between: what fits")
+        XCTAssertGreaterThan(AdaptiveBatch.availableBytes(), 0, "this machine reports free memory")
+    }
 }

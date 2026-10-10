@@ -26,6 +26,7 @@ import SwiftUI
 import CryptoKit
 #if os(iOS)
 import BackgroundTasks
+import os
 #endif
 
 // MARK: - Receipt
@@ -239,10 +240,32 @@ final class ScopeJobCenter {
 /// Shown in the shell so a job stays visible whichever tool is open.
 struct ScopeJobProgressBar: View {
     private var center: ScopeJobCenter { .shared }
+    @State private var exports = ExportRunCenter.shared
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
+    /// §3-F1: with the 3.0 scope engine on, a running export is listed here
+    /// too — one place for all running work, with the same Cancel.
+    private var showsExport: Bool { (modules?.isOn(.v3ScopeEngine) ?? false) && exports.isActive }
 
     var body: some View {
-        if !center.running.isEmpty {
+        if !center.running.isEmpty || showsExport {
             VStack(spacing: 4) {
+                if showsExport {
+                    HStack(spacing: 8) {
+                        Text(exports.title).font(.caption.weight(.semibold)).lineLimit(1)
+                            .accessibilityHidden(true)
+                        ProgressView(value: exports.fraction)
+                            .frame(maxWidth: 220)
+                            .accessibilityLabel(exports.title)
+                            .accessibilityValue(String(localized: "\(exports.done) of \(exports.total) emails"))
+                        Text("\(exports.done.formatted()) of \(exports.total.formatted())")
+                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                        Spacer()
+                        Button(String(localized: "Cancel")) { exports.cancel() }
+                            .controlSize(.small)
+                            .accessibilityLabel(String(localized: "Cancel \(exports.title)"))
+                    }
+                }
                 ForEach(center.running) { job in
                     HStack(spacing: 8) {
                         Text(job.title).font(.caption.weight(.semibold)).lineLimit(1)
@@ -268,6 +291,35 @@ struct ScopeJobProgressBar: View {
             .padding(.horizontal, 12).padding(.vertical, 6)
             .background(.bar)
         }
+    }
+}
+
+// MARK: - Adaptive batch size (§3-F1)
+
+/// How many full emails one batch may hold, from the memory actually free:
+/// iPhone/iPad ask the OS what the app may still use
+/// (`os_proc_available_memory`); the Mac uses physical memory minus what the
+/// app already uses. A batch is given at most an eighth of that at a
+/// conservative 256 KB per hydrated email; never more than the tool asked
+/// for, never fewer than 25 (a job slows down under pressure, it never stops).
+enum AdaptiveBatch {
+    static let bytesPerEmail = 256 * 1024
+    static let minimum = 25
+
+    static func availableBytes() -> UInt64 {
+        #if os(iOS)
+        return UInt64(os_proc_available_memory())
+        #else
+        let physical = ProcessInfo.processInfo.physicalMemory
+        let used = currentFootprintBytes()
+        // The app should not plan to use more than half of the Mac's memory.
+        return physical / 2 > used ? physical / 2 - used : 0
+        #endif
+    }
+
+    static func size(requested: Int, available: UInt64 = availableBytes()) -> Int {
+        let fits = Int(min(available / 8 / UInt64(bytesPerEmail), UInt64(Int.max)))
+        return max(minimum, min(requested, fits))
     }
 }
 
@@ -355,7 +407,7 @@ enum ScopeJob {
             // Ranked full-text scopes: resume by skipping what was processed
             // (the ranked order is stable for an unchanged archive).
             var toSkip = cp.processed
-            for try await batch in data.streamFullEmails(query: query, batchSize: batchSize) {
+            for try await batch in data.streamFullEmails(query: query, batchSize: AdaptiveBatch.size(requested: batchSize)) {
                 if shouldStop() { wasCancelled = true; break }
                 var emails = batch
                 if toSkip > 0 {
@@ -371,7 +423,7 @@ enum ScopeJob {
             var cursor: EmailPageCursor? = cp.cursorDate.flatMap { d in cp.cursorID.map { EmailPageCursor(beforeDate: d, beforeID: $0) } }
             while true {
                 if shouldStop() { wasCancelled = true; break }
-                let page = try await data.page(query: query, cursor: cursor, limit: batchSize)
+                let page = try await data.page(query: query, cursor: cursor, limit: AdaptiveBatch.size(requested: batchSize))
                 if page.summaries.isEmpty { break }
                 let emails = (try? await data.fullEmails(ids: page.summaries.map(\.id))) ?? []
                 try await handle(emails, requested: page.summaries.count)
