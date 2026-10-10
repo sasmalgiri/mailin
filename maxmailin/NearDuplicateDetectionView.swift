@@ -22,6 +22,11 @@ struct NearDuplicateDetectionView: View {
     @State private var persistedGroupCount = 0
     @State private var loadedGroupCount = 0
     @Environment(\.dismiss) private var envDismiss
+    // §3-A4: whole-archive near-duplicates when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
+    @State private var v3Note: String?
+    private var v3: Bool { modules?.isOn(.v3NearDuplicates) ?? false }
+    private var activeAlgoVersion: Int { v3 ? NearDuplicatesEngine.algoVersion : Self.algoVersion }
 
     private var visibleGroups: [EmailNLPEngine.NearDuplicateGroup] {
         groups.filter { !removedGroupIDs.contains($0.id) }
@@ -35,7 +40,8 @@ struct NearDuplicateDetectionView: View {
             if isAnalyzing {
                 VStack {
                     Spacer()
-                    ProgressView("Analyzing \(min(emails.count, 10_000)) emails for near-duplicates...")
+                    ProgressView(v3 ? String(localized: "Comparing the whole archive for near-duplicates…")
+                                 : "Analyzing \(min(emails.count, 10_000)) emails for near-duplicates...")
                         .font(Typography.callout)
                     Spacer()
                 }
@@ -138,6 +144,9 @@ struct NearDuplicateDetectionView: View {
                 .foregroundColor(AppColors.primary)
             Text("Near-Duplicate Detection")
                 .font(Typography.headline)
+            if let v3Note {
+                Text(v3Note).font(Typography.caption2).foregroundColor(AppColors.secondary).lineLimit(2)
+            }
             Spacer()
             TutorialHelpButton(showTutorial: $showTutorial)
             if isPresented != nil {
@@ -365,7 +374,7 @@ struct NearDuplicateDetectionView: View {
             let revision = (try? await ArchiveCorpusRevision.shared.reconciled()) ?? 0
             let meta = (try? await store.nearDuplicateMeta()) ?? (algoVersion: 0, corpusRevision: 0)
             let count = (try? await store.nearDuplicateGroupCount()) ?? 0
-            guard count > 0, meta.algoVersion == Self.algoVersion, meta.corpusRevision == revision else {
+            guard count > 0, meta.algoVersion == activeAlgoVersion, meta.corpusRevision == revision else {
                 analyze()
                 return
             }
@@ -406,6 +415,29 @@ struct NearDuplicateDetectionView: View {
     }
 
     private func analyze() {
+        if v3 {
+            isAnalyzing = true
+            removedGroupIDs.removeAll()
+            let currentThreshold = threshold
+            Task { @MainActor in
+                defer { isAnalyzing = false }
+                do {
+                    let r = try await NearDuplicatesEngine.run(threshold: currentThreshold)
+                    v3Note = String(localized: "\(r.groups) groups from \(r.verifiedPairs) verified pairs; \(r.indexed) of \(r.total) emails indexed and compared.")
+                    groups = []
+                    loadedGroupCount = 0
+                    persistedGroupCount = r.groups
+                    await loadNextPersistedPage()
+                    await DocumentRegistry.captureStructured(.report,
+                        summary: "Near-duplicates — \(r.groups) groups",
+                        document: CapturedDocument(title: String(localized: "Near-Duplicate Detection"), sections: [
+                            .init(name: String(localized: "Method and coverage"), fields: r.receiptFields)]))
+                } catch {
+                    v3Note = error.localizedDescription
+                }
+            }
+            return
+        }
         isAnalyzing = true
         removedGroupIDs.removeAll()
         let emailsCopy = emails

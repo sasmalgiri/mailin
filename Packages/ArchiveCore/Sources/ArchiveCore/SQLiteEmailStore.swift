@@ -6270,18 +6270,22 @@ extension SQLiteEmailStore {
 
     /// Candidate near-duplicate pairs: emails sharing at least one MinHash
     /// band bucket (LSH). The caller verifies each pair with exact Jaccard.
-    /// Bounded per call by `limit` pairs, resumable by `afterEmail`.
-    func minhashCandidatePairs(afterEmail: UUID?, limit: Int) throws -> [(UUID, UUID)] {
+    /// Keyset-paged on (first, second) so no pair is skipped or repeated.
+    func minhashCandidatePairs(after: (UUID, UUID)?, limit: Int) throws -> [(UUID, UUID)] {
         let db = try ensureDB()
         let stmt = try prepare(db, """
             SELECT DISTINCT a.email_id, b.email_id FROM minhash_bands a
             JOIN minhash_bands b ON a.band = b.band AND a.hash = b.hash AND a.email_id < b.email_id
-            \(afterEmail == nil ? "" : "WHERE a.email_id > ?")
+            \(after == nil ? "" : "WHERE (a.email_id > ? OR (a.email_id = ? AND b.email_id > ?))")
             ORDER BY a.email_id, b.email_id LIMIT ?;
         """)
         defer { sqlite3_finalize(stmt) }
         var idx: Int32 = 1
-        if let afterEmail { bindText(stmt, idx, afterEmail.uuidString); idx += 1 }
+        if let after {
+            bindText(stmt, idx, after.0.uuidString); idx += 1
+            bindText(stmt, idx, after.0.uuidString); idx += 1
+            bindText(stmt, idx, after.1.uuidString); idx += 1
+        }
         sqlite3_bind_int(stmt, idx, Int32(limit))
         var out: [(UUID, UUID)] = []
         while try stepRow(stmt, db) {

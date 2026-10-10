@@ -203,7 +203,7 @@ class PredictiveCodingEngine: ObservableObject {
                 // model score} + versions, then score the REST of the archive
                 // as a bounded background job (debounced).
                 self.persistTrainingRecords(predictions: finalPredictions)
-                self.scheduleArchiveScoring()
+                if Self.wholeArchiveEnabled { self.scheduleWholeArchiveTraining() } else { self.scheduleArchiveScoring() }
             }
         }
     }
@@ -626,5 +626,136 @@ class PredictiveCodingEngine: ObservableObject {
               let decoded = try? JSONDecoder().decode(PersistedTags.self, from: data) else { return }
         relevantIDs = Set(decoded.relevant.compactMap { UUID(uuidString: $0) })
         irrelevantIDs = Set(decoded.irrelevant.compactMap { UUID(uuidString: $0) })
+    }
+}
+
+
+// MARK: - §3-A2 whole-archive training and scoring (switch: `v3PredictiveCoding`)
+//
+// Learns from EVERY labelled email (features are recomputed for labels the
+// loaded window never contained) with IDF weights over the whole archive, then
+// scores every email with the same ensemble and persists the scores. The
+// confidence buckets and the "review next" suggestions cover the archive.
+// Same tokeniser, embedding and ensemble as the windowed path.
+
+extension PredictiveCodingEngine {
+    nonisolated(unsafe) static var wholeArchiveEnabled = false
+
+    private struct Progress: Codable, Sendable { var emails = 0 }
+
+    /// The features `buildVectors` and `scoreBatch` compute for one email.
+    nonisolated static func features(of email: MBOXParser.RawEmail, embedding: NLEmbedding?, tokenizer: NLTokenizer)
+        -> (tf: [String: Double], vector: [Double]?) {
+        let text = (email.headers["Subject"] ?? "") + ". " + String(email.plainBody.prefix(500))
+        let vector = embedding?.vector(for: text)
+        let normalized = text.lowercased()
+        tokenizer.string = normalized
+        var tf: [String: Double] = [:]
+        tokenizer.enumerateTokens(in: normalized.startIndex..<normalized.endIndex) { range, _ in
+            let word = String(normalized[range])
+            if word.count >= 2 { tf[word, default: 0] += 1.0 }
+            return true
+        }
+        let maxTF = tf.values.max() ?? 1.0
+        for (k, v) in tf { tf[k] = v / maxTF }
+        return (tf, vector)
+    }
+
+    func scheduleWholeArchiveTraining() {
+        guard !relevantIDs.isEmpty else { return }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(5))   // debounce tag bursts, as before
+            try? await self?.trainAndScoreWholeArchive()
+        }
+    }
+
+    func trainAndScoreWholeArchive() async throws {
+        let relIDs = relevantIDs, irrIDs = irrelevantIDs
+        let labeled = relIDs.union(irrIDs)
+        let store = SQLiteEmailStore.shared
+        let revision = (try? await store.corpusRevision()) ?? 0
+
+        // Pass 1 — document frequency over the archive + every label's features.
+        var docFrequency: [String: Int] = [:]
+        var labeledTokens: [UUID: [String: Double]] = [:]
+        var labeledVectors: [UUID: [Double]] = [:]
+        var total = 0
+        _ = try await ScopeJob.run(
+            key: "predictive.learn", title: String(localized: "Predictive coding: learning"),
+            capability: .v3PredictiveCoding, query: .all, resumable: false, initialState: Progress()
+        ) { state, batch in
+            let computed = await Task.detached(priority: .utility) { () -> [(UUID, [String: Double], [Double]?)] in
+                let embedding = NLEmbedding.sentenceEmbedding(for: .english)
+                let tokenizer = NLTokenizer(unit: .word)
+                return batch.map { email in
+                    let f = Self.features(of: email, embedding: labeled.contains(email.id) ? embedding : nil, tokenizer: tokenizer)
+                    return (email.id, f.tf, f.vector)
+                }
+            }.value
+            for (id, tf, vector) in computed {
+                for token in tf.keys { docFrequency[token, default: 0] += 1 }
+                if labeled.contains(id) {
+                    labeledTokens[id] = tf
+                    if let vector { labeledVectors[id] = vector }
+                }
+            }
+            total += batch.count
+            state.emails += batch.count
+        }
+        let n = Double(max(total, 1))
+        var idf: [String: Double] = [:]
+        idf.reserveCapacity(docFrequency.count)
+        for (token, df) in docFrequency { idf[token] = log(n / Double(df + 1)) + 1.0 }
+        docFrequency = [:]
+        let trainTokens = labeledTokens, trainVectors = labeledVectors, idfWeights = idf
+
+        // Pass 2 — score every email, persist, summarise.
+        var distribution = ["High Relevant": 0, "Likely Relevant": 0, "Uncertain": 0, "Likely Irrelevant": 0, "High Irrelevant": 0]
+        var uncertain: [(UUID, Double)] = []
+        var visible: [UUID: Double] = [:]
+        let loadedIDs = Set(predictions.keys)
+        let result = try await ScopeJob.run(
+            key: "predictive.score", title: String(localized: "Predictive coding: scoring"),
+            capability: .v3PredictiveCoding, query: .all, resumable: false, initialState: Progress()
+        ) { state, batch in
+            let scores = await Task.detached(priority: .utility) {
+                Self.scoreBatchPublic(batch, relevantIDs: relIDs, irrelevantIDs: irrIDs,
+                                      labeledTokens: trainTokens, labeledVectors: trainVectors, idfWeights: idfWeights)
+            }.value
+            try await store.predictiveUpsertScores(scores, modelVersion: Self.modelVersion,
+                                                   featureVersion: Self.featureVersion, corpusRevision: revision)
+            for (id, score) in scores {
+                switch score {
+                case 0.8...: distribution["High Relevant", default: 0] += 1
+                case 0.6..<0.8: distribution["Likely Relevant", default: 0] += 1
+                case 0.4..<0.6: distribution["Uncertain", default: 0] += 1
+                case 0.2..<0.4: distribution["Likely Irrelevant", default: 0] += 1
+                default: distribution["High Irrelevant", default: 0] += 1
+                }
+                if !labeled.contains(id) && score > 0.25 && score < 0.75 {
+                    uncertain.append((id, abs(score - 0.5)))
+                    if uncertain.count > 200 {   // keep only the most uncertain 20 candidates' neighbourhood
+                        uncertain.sort { $0.1 < $1.1 }
+                        uncertain.removeLast(uncertain.count - 20)
+                    }
+                }
+                if loadedIDs.contains(id) { visible[id] = score }
+            }
+            state.emails += batch.count
+        }
+        for (id, score) in visible { predictions[id] = score }
+        suggestedForReview = uncertain.sorted { $0.1 < $1.1 }.prefix(20).map(\.0)
+        confidenceDistribution = distribution
+        ForensicManager.shared.logAction("Predictive Coding",
+            detail: "Trained on \(trainTokens.count) labelled emails (\(relIDs.count) relevant, \(irrIDs.count) not); scored \(result.receipt.processed) emails; model v\(Self.modelVersion)")
+    }
+
+    /// `scoreBatch` for the whole-archive path (same function, reachable here).
+    nonisolated static func scoreBatchPublic(
+        _ batch: [MBOXParser.RawEmail], relevantIDs: Set<UUID>, irrelevantIDs: Set<UUID>,
+        labeledTokens: [UUID: [String: Double]], labeledVectors: [UUID: [Double]], idfWeights: [String: Double]
+    ) -> [UUID: Double] {
+        scoreBatch(batch, relevantIDs: relevantIDs, irrelevantIDs: irrelevantIDs,
+                   labeledTokens: labeledTokens, labeledVectors: labeledVectors, idfWeights: idfWeights)
     }
 }

@@ -9,6 +9,12 @@ struct SmartAlertsView: View {
     @State private var showTutorial = false
     @State private var expandedAlertID: UUID?
     @Environment(\.dismiss) private var envDismiss
+    // §3-A1: whole-archive alerts when the 3.0 engine is on.
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
+    @Environment(\.archiveScope) private var scope
+    @State private var hydrated: [UUID: MBOXParser.RawEmail] = [:]
+    @State private var v3Note: String?
+    private var v3: Bool { modules?.isOn(.v3AlertsAnomalies) ?? false }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,6 +23,9 @@ struct SmartAlertsView: View {
                     .foregroundColor(AppColors.warning)
                 Text("Smart Alerts")
                     .font(Typography.headline)
+                if let v3Note {
+                    Text(v3Note).font(Typography.caption2).foregroundColor(AppColors.secondary)
+                }
                 Spacer()
                 TutorialHelpButton(showTutorial: $showTutorial)
                 if isPresented != nil {
@@ -129,8 +138,10 @@ struct SmartAlertsView: View {
     }
 
     private func affectedEmailsList(_ alert: SmartAlert) -> some View {
-        let affected = emails.filter { alert.emailIDs.contains($0.id) }.prefix(20)
-        return ForEach(Array(affected), id: \.id) { email in
+        let affected: [MBOXParser.RawEmail] = v3
+            ? alert.emailIDs.prefix(20).compactMap { id in hydrated[id] ?? emails.first(where: { $0.id == id }) }
+            : Array(emails.filter { alert.emailIDs.contains($0.id) }.prefix(20))
+        return ForEach(affected, id: \.id) { email in
             HStack(spacing: 6) {
                 Image(systemName: "envelope")
                     .font(.system(size: 9))
@@ -163,6 +174,27 @@ struct SmartAlertsView: View {
     }
 
     private func analyze() {
+        if v3 {
+            isAnalyzing = true
+            Task { @MainActor in
+                defer { isAnalyzing = false }
+                do {
+                    let r = try await SmartNotificationManager().analyzeForAlertsWholeArchive(query: scope.query)
+                    alerts = r.alerts
+                    // First 20 affected emails of every alert (what the rows show).
+                    let ids = Array(Set(r.alerts.flatMap { $0.emailIDs.prefix(20) }))
+                    var map: [UUID: MBOXParser.RawEmail] = [:]
+                    for start in stride(from: 0, to: ids.count, by: 200) {
+                        for e in (try? await ArchiveDataService.shared.fullEmails(ids: Array(ids[start..<min(start + 200, ids.count)]))) ?? [] {
+                            map[e.id] = e
+                        }
+                    }
+                    hydrated = map
+                    v3Note = r.receipt.coverageLine
+                } catch { v3Note = error.localizedDescription }
+            }
+            return
+        }
         isAnalyzing = true
         let emailsCopy = emails
         Task {

@@ -39,6 +39,11 @@ enum CapabilityWiring {
             ArchiveSnapshotPolicy.isEnabled = isOn
         case .v3SafeHTML:
             SafeHTMLPolicy.isEnabled = isOn
+        case .v3AlertsAnomalies:
+            // §3-A1: background findings over the whole archive.
+            BackgroundAnalysisManager.wholeArchiveEnabled = isOn
+        case .v3PredictiveCoding:
+            PredictiveCodingEngine.wholeArchiveEnabled = isOn
         case .v3LegalState:
             // §3-F4: the custodian/hold/seal manager dual-writes into SQLite
             // while on; turning on migrates the existing files once.
@@ -103,8 +108,6 @@ enum CapabilityWiring {
              .v3SemanticSearch,
              .v3Duplicates,
              .v3AnalysisQueries,
-             .v3AlertsAnomalies,
-             .v3PredictiveCoding,
              .v3NearDuplicates,
              .v3TopicClusters,
              .v3Threads,
