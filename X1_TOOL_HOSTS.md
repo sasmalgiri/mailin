@@ -1,5 +1,21 @@
 # X1 — tool hosts inventory (2026-10-10)
 
+## Decision and what was done (owner, 2026-10-11: "going with your suggestion")
+
+- **No entry point removed.** Every button, menu item and palette entry still opens its tool.
+- **One scope rule everywhere** (`maxmailin/ToolScope.swift`): every host — sidebar, Professional / AI page,
+  tool window, iOS sheet — opens the tool on the Archive page's current filter, with a visible
+  "Current filter · N emails | Whole archive · M emails" choice (both counts shown before anything runs).
+  The Professional page used to open everything on the whole archive, and the AI Digest / Report Builder /
+  Email Analytics from the sidebar or a menu ignored the filter.
+- **One construction per Professional tool**: the Archive sidebar now builds the 15 Professional-page tools through
+  `ProfessionalDestinationView`, the same view the Professional page uses (test
+  `testProfessionalTools_haveOneConstruction` keeps it that way).
+- The AI Insights page keeps its own source/date scope picker (already visible and explicit).
+- The "×3" counts for Email Analytics and Reply Stats in the list view are per-platform presentations of one tool
+  (macOS inspector, iOS sheets), not duplicate entry points; nothing to remove.
+
+
 Generated from the code: every place a tool view is constructed. Tools with more than one host are listed;
 the same tool opened from different places today gets **different scopes** (sidebar hub = the current filter;
 Professional / AI page = the whole archive; tool windows = the query passed by the menu).

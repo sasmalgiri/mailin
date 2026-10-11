@@ -743,4 +743,30 @@ final class V3CompatibilityTests: XCTestCase {
         let data = try XCTUnwrap(Data(base64Encoded: EnterpriseLicense.publicKeyBase64))
         XCTAssertNoThrow(try Curve25519.Signing.PublicKey(rawRepresentation: data))
     }
+
+    // MARK: - X1: one scope rule for every host
+
+    /// Every host opens a tool on the current filter; the whole archive is
+    /// the user's explicit choice; no filter means the whole archive.
+    func testToolScope_filterByDefault_wholeArchiveOnRequest() {
+        var filter = EmailQuery.all
+        filter.sender = "alice"
+        XCTAssertEqual(ToolScope.query(filter: filter, wholeArchive: false), filter)
+        XCTAssertEqual(ToolScope.query(filter: filter, wholeArchive: true), .all)
+        XCTAssertEqual(ToolScope.query(filter: .all, wholeArchive: false), .all)
+    }
+
+    /// The Professional page and the Archive sidebar build each Professional
+    /// tool through the same view, so they cannot drift apart again.
+    func testProfessionalTools_haveOneConstruction() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let content = try String(contentsOf: root.appendingPathComponent("maxmailin/ContentView.swift"), encoding: .utf8)
+        for tool in ["BatesConfigView(", "ChainOfCustodyView(", "EDiscoveryWorkflowView(", "RedactionConfigView(",
+                     "ReviewBatchPanelView(", "InvestigationReportConfigSheet(", "EvidenceDesksStudioView("] {
+            let start = try XCTUnwrap(content.range(of: "private func hubDestinationContent"))
+            let end = try XCTUnwrap(content.range(of: "case .settings:", range: start.upperBound..<content.endIndex))
+            XCTAssertFalse(content[start.lowerBound..<end.lowerBound].contains(tool),
+                           "\(tool) is built in the sidebar switch again; build it in ProfessionalDestinationView")
+        }
+    }
 }

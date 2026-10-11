@@ -243,7 +243,7 @@ loops, the current AI context building. Deleted only in a later release after a 
 ### X — Experience
 | ID | Item | Status |
 |---|---|---|
-| X1 | **One tool, one host** (~70 entry points → ~35 tools) | — inventory and proposal in X1_TOOL_HOSTS.md; **owner decision** which entry points go (not reversible by a switch) — [~] |
+| X1 | **One tool, one host** (~70 entry points → ~35 tools) | — owner chose the suggestion (2026-10-11): no entry point removed; one scope rule for every host (current filter + visible whole-archive choice with counts, `ToolScope.swift`); Professional tools built once (`ProfessionalDestinationView`); tests `testToolScope_*`, `testProfessionalTools_haveOneConstruction`; UI check in V5 — [~] |
 | X2 | Confirmation-with-count component (rule 4) used by every whole-archive action | — `ScopeConfirmation` (ArchiveScope.swift) used by the whole-scope L actions — [~] |
 | X3 | Release note + in-app note: "results now cover your whole archive" | — What's New 3.0 entries (preview wording; App Store text is the owner's) — [~] |
 | X4 | **Accessibility to Apple's Nutrition Label standard**: VoiceOver, Voice Control, Larger Text, Sufficient Contrast, Dark Interface, Differentiate Without Color, Reduced Motion; automated accessibility audits in UI tests; declare the labels in App Store Connect | Implemented: 3.0 views swept (decorative icons hidden, progress bars labelled with "X of Y emails", Cancel names its job + Voice Control input labels, list rows read as one element, status = shape + text); no fixed sizes or animations in 3.0 views. `maxmailinUITests/AccessibilityAuditUITests.swift` runs `performAccessibilityAudit(for: .all)` on the main window and Settings ▸ Modules (owner present). Declaration evidence per feature in `ACCESSIBILITY_3_0.md` (V10 decides what to declare) — [~] |
@@ -393,7 +393,7 @@ Every `[~]` row was checked against its own wording. A row is not done until eve
 | P3 | coverage-guided fuzzing (libFuzzer) — or the toolchain limit stated. **Toolchain limit confirmed:** Apple's Xcode toolchain rejects `-sanitize=fuzzer` on macOS; Linux is out (Apple frameworks). Harness implemented and type-checked: `Fuzz/` package (MIME parser + every routed format via the parser factory, ASan on), `Scripts/fuzz.sh` (seed corpus from the demo mailbox, 30 min, findings saved for regression tests). **Running it needs the swift.org macOS toolchain — owner decision (a download)** | [x] harness / owner: toolchain |
 | P6 | iOS SDK 27 build confirmed — it was BROKEN (S8 used the AppKit-only `.timeout` option); fixed with an own 10 s deadline; 8 Swift-6 warnings in new code fixed; iOS and macOS build with zero warnings | [x] (this commit) |
 | R3 | SIZE_LIMITS_DESIGN.md, help, store copy | [x] 16b3df0 |
-| X1 | owner decision on which entry points go | owner |
+| X1 | owner decision on which entry points go | decided 2026-10-11 — none removed, one scope rule (see X1 row) |
 | §8 #1, #5, #6, #7 | old-path bug fixes | [x] code 18304e7, be0829d |
 
 ## 8. Findings during the implementation pass (fix in the test-and-fix pass)

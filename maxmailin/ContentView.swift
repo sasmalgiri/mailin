@@ -111,6 +111,11 @@ struct ContentView: View {
             .sheet(isPresented: $showFeatureGuide) {
                 FeatureGuideView(isPresented: $showFeatureGuide)
             }
+            // §3-X1: tools opened outside the Archive page (Professional /
+            // AI pages, tool windows) open on this same filter.
+            .onChange(of: modelVM.currentArchiveQuery, initial: true) { _, query in
+                CurrentArchiveFilter.shared.query = query
+            }
             // Drag a file ANYWHERE in the window to import it (v2.1 backlog
             // #15). The pre-import hub has its own target; this one catches
             // drops on the list, detail and sidebar once an archive is open.
@@ -894,7 +899,9 @@ struct ContentView: View {
     /// bounded working set streamed from the store for the CURRENT query —
     /// never the resident preview arrays.
     private func hubWorkingSet<Content: View>(@ViewBuilder content: @escaping ([MBOXParser.RawEmail]) -> Content) -> some View {
-        ArchiveWorkingSetView(query: modelVM.currentArchiveQuery, content: content)
+        // §3-X1: the same scope rule as every other host — the current
+        // filter, with the whole archive one tap away.
+        ScopedWorkingSet(filter: modelVM.currentArchiveQuery, content: content)
     }
 
     /// §3.3 R1: a destination whose page is off is never built — not from a
@@ -929,29 +936,6 @@ struct ContentView: View {
         case .emailInbox:
             emailInboxDestination
 
-        case .achMatrix:
-            ACHMatrixStudioView()
-                .navigationTitle("Hypothesis Matrix (ACH)")
-
-        case .factMatrix:
-            FactEvidenceStudioView()
-                .navigationTitle("Fact–Evidence Matrix")
-
-        case .actionRegister:
-            ActionRegisterStudioView()
-                .navigationTitle("Action Register")
-
-        case .evidenceDesks:
-            hubWorkingSet { EvidenceDesksStudioView(workingSet: $0) }
-                .navigationTitle("Evidence Desks")
-
-        case .reasoningStudio:
-            ReasoningStudioView()
-                .navigationTitle("Reasoning Studio")
-
-        case .eDiscovery:
-            hubWorkingSet { EDiscoveryWorkflowView(emails: $0) }
-                .navigationTitle("eDiscovery Workflow")
         case .predictiveCoding:
             hubWorkingSet { PredictiveCodingView(emails: $0, engine: predictiveEngine) }
                 .navigationTitle("Predictive Coding")
@@ -965,20 +949,11 @@ struct ContentView: View {
         case .iocExtractor:
             hubWorkingSet { IOCExtractorView(emails: $0) }
                 .navigationTitle("IOC Extractor")
-        case .phishingTriage:
-            TriageQueueView()
-                .navigationTitle("Phishing Triage")
-        case .storyFile:
-            StoryFileView()
-                .navigationTitle("Story File")
         case .workCenter:
             WorkCenterView(onOpenDestination: { destination in
                 handleHubNavigation(destination)
             })
                 .navigationTitle("Work Center")
-        case .reviewDashboard:
-            ReviewDashboardView()
-                .navigationTitle("Review Dashboard")
         case .smartAlerts:
             hubWorkingSet { SmartAlertsView(emails: $0) }
                 .navigationTitle("Smart Alerts")
@@ -988,12 +963,8 @@ struct ContentView: View {
         case .nearDuplicates:
             hubWorkingSet { NearDuplicateDetectionView(emails: $0) }
                 .navigationTitle("Near Duplicates")
-        case .chainOfCustody:
-            hubWorkingSet { ChainOfCustodyView(emails: $0) }
-                .navigationTitle("Chain of Custody")
-
         case .emailAnalytics:
-            EmailAnalyticsView()
+            ToolScopeHost(filter: modelVM.currentArchiveQuery) { EmailAnalyticsView(query: $0) }
                 .navigationTitle("Email Analytics")
         case .topicClusters:
             hubWorkingSet { emails in
@@ -1027,7 +998,7 @@ struct ContentView: View {
                 .navigationTitle("Executive Dashboard")
 
         case .reportBuilder:
-            ReportBuilderView()
+            ToolScopeHost(filter: modelVM.currentArchiveQuery) { ReportBuilderView(scope: $0) }
                 .navigationTitle("Report Builder")
         case .batchOperations:
             hubWorkingSet { emails in
@@ -1051,15 +1022,6 @@ struct ContentView: View {
         case .forensicReview:
             ForensicReviewView(selectedEmailIDs: $selectedEmailIDs)
                 .navigationTitle("Forensic Review")
-        case .investigationReport:
-            hubWorkingSet { InvestigationReportConfigSheet(emails: $0, senderEmail: viewModel.senderEmail) }
-                .navigationTitle("Investigation Report")
-        case .batesNumbering:
-            hubWorkingSet { BatesConfigView(emails: $0) }
-                .navigationTitle("Bates Numbering")
-        case .redaction:
-            hubWorkingSet { RedactionConfigView(emails: $0, exportQuery: modelVM.currentArchiveQuery) }
-                .navigationTitle("Redaction")
         case .automationRules:
             hubWorkingSet { AutomationRulesView(emails: $0) }
                 .navigationTitle("Automation Rules")
@@ -1082,7 +1044,7 @@ struct ContentView: View {
         case .aiDigest:
             // Zero-array digest: the generator streams a bounded working set
             // of the selected period from the store itself.
-            AIDigestView()
+            ToolScopeHost(filter: modelVM.currentArchiveQuery) { AIDigestView(scope: $0) }
                 .navigationTitle("AI Digest")
         case .smartAutoTagger:
             SmartAutoTaggerView()
@@ -1121,12 +1083,6 @@ struct ContentView: View {
                 isModuleEnabled: { modules.isEnabled($0) }
             )
             .navigationTitle("\(personaManager.selectedPersona.shortLabel) Hub")
-        case .reviewBatches:
-            hubWorkingSet { ReviewBatchPanelView(emails: $0, manager: reviewBatchManager) }
-                .navigationTitle("Review Batches")
-        case .custodianPanel:
-            CustodianPanelView(manager: custodianManager)
-                .navigationTitle("Custodian Panel")
         case .workspaceManager:
             WorkspaceManagerView()
                 .navigationTitle("Workspaces")
@@ -1149,6 +1105,12 @@ struct ContentView: View {
                 sidebarSelection = dest
             })
             .navigationTitle("Feature Explorer")
+        // §3-X1: Professional-page tools are built by the same view as on the
+        // Professional page (one construction per tool), on the current filter.
+        case .achMatrix, .factMatrix, .actionRegister, .evidenceDesks, .reasoningStudio, .eDiscovery, .custodianPanel, .chainOfCustody, .batesNumbering, .redaction, .reviewBatches, .investigationReport, .phishingTriage, .storyFile, .reviewDashboard:
+            ProfessionalDestinationView(destination: destination, filter: modelVM.currentArchiveQuery,
+                                        senderEmail: viewModel.senderEmail)
+
         case .settings:
             EmptyView()
         }

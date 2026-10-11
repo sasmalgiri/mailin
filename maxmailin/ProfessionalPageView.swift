@@ -242,6 +242,11 @@ struct ProfessionalPageView: View {
 /// hydrated through `ArchiveWorkingSetView` (bounded, never the corpus).
 struct ProfessionalDestinationView: View {
     let destination: HubDestination
+    /// §3-X1: the filter the tool opens on (nil = the Archive page's current
+    /// filter); the whole archive is one tap away in `ToolScopeHost`. The
+    /// Archive page's sidebar builds these tools through this same view.
+    var filter: EmailQuery? = nil
+    var senderEmail: String = ""
 
     var body: some View {
         switch destination {
@@ -252,23 +257,23 @@ struct ProfessionalDestinationView: View {
         case .actionRegister:
             ActionRegisterStudioView().navigationTitle("Action Register")
         case .evidenceDesks:
-            ArchiveWorkingSetView(query: .all) { EvidenceDesksStudioView(workingSet: $0) }.navigationTitle("Evidence Desks")
+            ScopedWorkingSet(filter: filter) { EvidenceDesksStudioView(workingSet: $0) }.navigationTitle("Evidence Desks")
         case .reasoningStudio:
             ReasoningStudioView().navigationTitle("Reasoning Studio")
         case .eDiscovery:
-            ArchiveWorkingSetView(query: .all) { EDiscoveryWorkflowView(emails: $0) }.navigationTitle("eDiscovery Workflow")
+            ScopedWorkingSet(filter: filter) { EDiscoveryWorkflowView(emails: $0) }.navigationTitle("eDiscovery Workflow")
         case .custodianPanel:
             CustodianPanelView(manager: CustodianManager.shared).navigationTitle("Custodian Panel")
         case .chainOfCustody:
-            ArchiveWorkingSetView(query: .all) { ChainOfCustodyView(emails: $0) }.navigationTitle("Chain of Custody")
+            ScopedWorkingSet(filter: filter) { ChainOfCustodyView(emails: $0) }.navigationTitle("Chain of Custody")
         case .batesNumbering:
-            ArchiveWorkingSetView(query: .all) { BatesConfigView(emails: $0) }.navigationTitle("Bates Numbering")
+            ScopedWorkingSet(filter: filter) { BatesConfigView(emails: $0) }.navigationTitle("Bates Numbering")
         case .redaction:
-            ArchiveWorkingSetView(query: .all) { RedactionConfigView(emails: $0, exportQuery: .all) }.navigationTitle("Redaction")
+            ToolScopeHost(filter: filter) { q in ArchiveWorkingSetView(query: q) { RedactionConfigView(emails: $0, exportQuery: q) } }.navigationTitle("Redaction")
         case .reviewBatches:
-            ArchiveWorkingSetView(query: .all) { ReviewBatchPanelView(emails: $0, manager: ReviewBatchManager.shared) }.navigationTitle("Review Batches")
+            ScopedWorkingSet(filter: filter) { ReviewBatchPanelView(emails: $0, manager: ReviewBatchManager.shared) }.navigationTitle("Review Batches")
         case .investigationReport:
-            ArchiveWorkingSetView(query: .all) { InvestigationReportConfigSheet(emails: $0, senderEmail: "") }.navigationTitle("Investigation Report")
+            ScopedWorkingSet(filter: filter) { InvestigationReportConfigSheet(emails: $0, senderEmail: senderEmail) }.navigationTitle("Investigation Report")
         case .phishingTriage:
             TriageQueueView().navigationTitle("Phishing Triage")
         case .storyFile:

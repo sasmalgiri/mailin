@@ -108,7 +108,7 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
                 guard shown else { return }
                 appState.showPredictiveCoding = false
                 ToolWindowPresenter.shared.open(title: String(localized: "Predictive Coding")) { AnyView(Group {
-                ArchiveWorkingSetView(query: currentQuery) { emails in
+                ScopedWorkingSet(filter: currentQuery) { emails in
                     PredictiveCodingView(emails: emails, engine: predictiveEngine, isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Predictive Coding")))
                 }
                     #if os(macOS)
@@ -120,7 +120,7 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
             })
         #else
         v = AnyView(v.sheet(isPresented: $appState.showPredictiveCoding) {
-                ArchiveWorkingSetView(query: currentQuery) { emails in
+                ScopedWorkingSet(filter: currentQuery) { emails in
                     PredictiveCodingView(emails: emails, engine: predictiveEngine, isPresented: $appState.showPredictiveCoding)
                 }
                     #if os(macOS)
@@ -158,7 +158,7 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
                 guard shown else { return }
                 appState.showReviewBatches = false
                 ToolWindowPresenter.shared.open(title: String(localized: "Review Batches")) { AnyView(Group {
-                ArchiveWorkingSetView(query: currentQuery) { emails in
+                ScopedWorkingSet(filter: currentQuery) { emails in
                     ReviewBatchPanelView(emails: emails, manager: reviewBatchManager, isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Review Batches")))
                 }
                     #if os(macOS)
@@ -170,7 +170,7 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
             })
         #else
         v = AnyView(v.sheet(isPresented: $appState.showReviewBatches) {
-                ArchiveWorkingSetView(query: currentQuery) { emails in
+                ScopedWorkingSet(filter: currentQuery) { emails in
                     ReviewBatchPanelView(emails: emails, manager: reviewBatchManager, isPresented: $appState.showReviewBatches)
                 }
                     #if os(macOS)
@@ -235,7 +235,7 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
                 guard shown else { return }
                 appState.showAttachmentGrid = false
                 ToolWindowPresenter.shared.open(title: String(localized: "Attachments")) { AnyView(Group {
-                ArchiveWorkingSetView(query: currentQuery) { emails in
+                ScopedWorkingSet(filter: currentQuery) { emails in
                     AttachmentGridView(emails: emails)
                 }
                     #if os(macOS)
@@ -247,7 +247,7 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
             })
         #else
         v = AnyView(v.sheet(isPresented: $appState.showAttachmentGrid) {
-                ArchiveWorkingSetView(query: currentQuery) { emails in
+                ScopedWorkingSet(filter: currentQuery) { emails in
                     AttachmentGridView(emails: emails)
                 }
                     #if os(macOS)
@@ -285,7 +285,7 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
                 guard shown else { return }
                 appState.showRelationshipGraph = false
                 ToolWindowPresenter.shared.open(title: String(localized: "Relationship Graph")) { AnyView(Group {
-                ArchiveWorkingSetView(query: currentQuery) { emails in
+                ScopedWorkingSet(filter: currentQuery) { emails in
                     RelationshipGraphView(emails: emails, senderEmail: senderEmail, isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Relationship Graph")))
                 }
                     .resizableSheet()
@@ -296,7 +296,7 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
             })
         #else
         v = AnyView(v.sheet(isPresented: $appState.showRelationshipGraph) {
-                ArchiveWorkingSetView(query: currentQuery) { emails in
+                ScopedWorkingSet(filter: currentQuery) { emails in
                     RelationshipGraphView(emails: emails, senderEmail: senderEmail, isPresented: $appState.showRelationshipGraph)
                 }
                     .resizableSheet()
@@ -310,7 +310,7 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
                 guard shown else { return }
                 appState.showArchiveComparison = false
                 ToolWindowPresenter.shared.open(title: String(localized: "Archive Comparison")) { AnyView(Group {
-                ArchiveWorkingSetView(query: currentQuery) { emails in
+                ScopedWorkingSet(filter: currentQuery) { emails in
                     ArchiveComparisonSheetWrapper(archiveA: emails)
                 }
                     #if os(macOS)
@@ -322,7 +322,7 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
             })
         #else
         v = AnyView(v.sheet(isPresented: $appState.showArchiveComparison) {
-                ArchiveWorkingSetView(query: currentQuery) { emails in
+                ScopedWorkingSet(filter: currentQuery) { emails in
                     ArchiveComparisonSheetWrapper(archiveA: emails)
                 }
                     #if os(macOS)
@@ -337,7 +337,7 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
                 guard shown else { return }
                 appState.showInvestigationReport = false
                 ToolWindowPresenter.shared.open(title: String(localized: "Investigation Reports")) { AnyView(Group {
-                ArchiveWorkingSetView(query: currentQuery) { emails in
+                ScopedWorkingSet(filter: currentQuery) { emails in
                     InvestigationReportConfigSheet(emails: emails, senderEmail: senderEmail, isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Investigation Reports")))
                 }
                     .resizableSheet()
@@ -348,7 +348,7 @@ struct AdvancedFeatureSheetsModifier: ViewModifier {
             })
         #else
         v = AnyView(v.sheet(isPresented: $appState.showInvestigationReport) {
-                ArchiveWorkingSetView(query: currentQuery) { emails in
+                ScopedWorkingSet(filter: currentQuery) { emails in
                     InvestigationReportConfigSheet(emails: emails, senderEmail: senderEmail, isPresented: $appState.showInvestigationReport)
                 }
                     .resizableSheet()
@@ -379,7 +379,7 @@ struct V7SheetsModifier: ViewModifier {
                 guard shown else { return }
                 appState.showAutomationRules = false
                 ToolWindowPresenter.shared.open(title: String(localized: "Automation Rules")) { AnyView(Group {
-                ArchiveWorkingSetView(query: query) { emails in
+                ScopedWorkingSet(filter: query) { emails in
                     AutomationRulesView(emails: emails)
                 }
                     .resizableSheet()
@@ -390,7 +390,7 @@ struct V7SheetsModifier: ViewModifier {
             })
         #else
         v = AnyView(v.sheet(isPresented: $appState.showAutomationRules) {
-                ArchiveWorkingSetView(query: query) { emails in
+                ScopedWorkingSet(filter: query) { emails in
                     AutomationRulesView(emails: emails)
                 }
                     .resizableSheet()
@@ -404,7 +404,7 @@ struct V7SheetsModifier: ViewModifier {
                 guard shown else { return }
                 appState.showBatchOperations = false
                 ToolWindowPresenter.shared.open(title: String(localized: "Batch Operations")) { AnyView(Group {
-                ArchiveWorkingSetView(query: query) { emails in
+                ScopedWorkingSet(filter: query) { emails in
                     BatchOperationsView(
                         emails: emails,
                         selectedIDs: $selectedEmailIDs,
@@ -427,7 +427,7 @@ struct V7SheetsModifier: ViewModifier {
             })
         #else
         v = AnyView(v.sheet(isPresented: $appState.showBatchOperations) {
-                ArchiveWorkingSetView(query: query) { emails in
+                ScopedWorkingSet(filter: query) { emails in
                     BatchOperationsView(
                         emails: emails,
                         selectedIDs: $selectedEmailIDs,
@@ -453,7 +453,7 @@ struct V7SheetsModifier: ViewModifier {
                 guard shown else { return }
                 appState.showThreadSummarizer = false
                 ToolWindowPresenter.shared.open(title: String(localized: "Thread Summarizer")) { AnyView(Group {
-                ArchiveWorkingSetView(query: query) { emails in
+                ScopedWorkingSet(filter: query) { emails in
                     ThreadSummarizerView(threadEmails: emails, isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Thread Summarizer")))
                 }
                     .resizableSheet()
@@ -464,7 +464,7 @@ struct V7SheetsModifier: ViewModifier {
             })
         #else
         v = AnyView(v.sheet(isPresented: $appState.showThreadSummarizer) {
-                ArchiveWorkingSetView(query: query) { emails in
+                ScopedWorkingSet(filter: query) { emails in
                     ThreadSummarizerView(threadEmails: emails, isPresented: $appState.showThreadSummarizer)
                 }
                     .resizableSheet()
@@ -478,7 +478,7 @@ struct V7SheetsModifier: ViewModifier {
                 guard shown else { return }
                 appState.showSmartAlerts = false
                 ToolWindowPresenter.shared.open(title: String(localized: "Smart Alerts")) { AnyView(Group {
-                ArchiveWorkingSetView(query: query) { emails in
+                ScopedWorkingSet(filter: query) { emails in
                     SmartAlertsView(emails: emails, isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Smart Alerts")))
                 }
                     .resizableSheet()
@@ -489,7 +489,7 @@ struct V7SheetsModifier: ViewModifier {
             })
         #else
         v = AnyView(v.sheet(isPresented: $appState.showSmartAlerts) {
-                ArchiveWorkingSetView(query: query) { emails in
+                ScopedWorkingSet(filter: query) { emails in
                     SmartAlertsView(emails: emails, isPresented: $appState.showSmartAlerts)
                 }
                     .resizableSheet()
@@ -517,7 +517,7 @@ struct V7ForensicSheetsModifier: ViewModifier {
                 appState.showEDiscovery = false
                 let capturedQuery = query
                 ToolWindowPresenter.shared.open(title: String(localized: "E-Discovery Workflow")) { AnyView(Group {
-                    ArchiveWorkingSetView(query: capturedQuery) { emails in
+                    ScopedWorkingSet(filter: capturedQuery) { emails in
                         EDiscoveryWorkflowView(
                             emails: emails,
                             isPresented: Binding(
@@ -529,7 +529,7 @@ struct V7ForensicSheetsModifier: ViewModifier {
             })
         #else
         v = AnyView(v.sheet(isPresented: $appState.showEDiscovery) {
-                ArchiveWorkingSetView(query: query) { emails in
+                ScopedWorkingSet(filter: query) { emails in
                     EDiscoveryWorkflowView(emails: emails, isPresented: $appState.showEDiscovery)
                 }
                     .resizableSheet()
@@ -540,7 +540,7 @@ struct V7ForensicSheetsModifier: ViewModifier {
                 guard shown else { return }
                 appState.showBatesNumbering = false
                 ToolWindowPresenter.shared.open(title: String(localized: "Bates Numbering")) { AnyView(Group {
-                ArchiveWorkingSetView(query: query) { emails in
+                ScopedWorkingSet(filter: query) { emails in
                     BatesConfigView(emails: emails)
                 }
                     .resizableSheet()
@@ -551,7 +551,7 @@ struct V7ForensicSheetsModifier: ViewModifier {
             })
         #else
         v = AnyView(v.sheet(isPresented: $appState.showBatesNumbering) {
-                ArchiveWorkingSetView(query: query) { emails in
+                ScopedWorkingSet(filter: query) { emails in
                     BatesConfigView(emails: emails)
                 }
                     .resizableSheet()
@@ -565,7 +565,7 @@ struct V7ForensicSheetsModifier: ViewModifier {
                 guard shown else { return }
                 appState.showRedaction = false
                 ToolWindowPresenter.shared.open(title: String(localized: "Redaction")) { AnyView(Group {
-                ArchiveWorkingSetView(query: query) { emails in
+                ScopedWorkingSet(filter: query) { emails in
                     RedactionConfigView(emails: emails, exportQuery: query)
                 }
                     .resizableSheet()
@@ -576,7 +576,7 @@ struct V7ForensicSheetsModifier: ViewModifier {
             })
         #else
         v = AnyView(v.sheet(isPresented: $appState.showRedaction) {
-                ArchiveWorkingSetView(query: query) { emails in
+                ScopedWorkingSet(filter: query) { emails in
                     RedactionConfigView(emails: emails, exportQuery: query)
                 }
                     .resizableSheet()
@@ -590,7 +590,7 @@ struct V7ForensicSheetsModifier: ViewModifier {
                 guard shown else { return }
                 appState.showGDPRReport = false
                 ToolWindowPresenter.shared.open(title: String(localized: "GDPR Compliance")) { AnyView(Group {
-                ArchiveWorkingSetView(query: query) { emails in
+                ScopedWorkingSet(filter: query) { emails in
                     GDPRReportConfigView(emails: emails, isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "GDPR Compliance")))
                 }
                     .resizableSheet()
@@ -601,7 +601,7 @@ struct V7ForensicSheetsModifier: ViewModifier {
             })
         #else
         v = AnyView(v.sheet(isPresented: $appState.showGDPRReport) {
-                ArchiveWorkingSetView(query: query) { emails in
+                ScopedWorkingSet(filter: query) { emails in
                     GDPRReportConfigView(emails: emails, isPresented: $appState.showGDPRReport)
                 }
                     .resizableSheet()
@@ -615,7 +615,7 @@ struct V7ForensicSheetsModifier: ViewModifier {
                 guard shown else { return }
                 appState.showChainOfCustody = false
                 ToolWindowPresenter.shared.open(title: String(localized: "Chain of Custody")) { AnyView(Group {
-                ArchiveWorkingSetView(query: query) { emails in
+                ScopedWorkingSet(filter: query) { emails in
                     ChainOfCustodyView(emails: emails, isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Chain of Custody")))
                 }
                     .resizableSheet()
@@ -626,7 +626,7 @@ struct V7ForensicSheetsModifier: ViewModifier {
             })
         #else
         v = AnyView(v.sheet(isPresented: $appState.showChainOfCustody) {
-                ArchiveWorkingSetView(query: query) { emails in
+                ScopedWorkingSet(filter: query) { emails in
                     ChainOfCustodyView(emails: emails, isPresented: $appState.showChainOfCustody)
                 }
                     .resizableSheet()
@@ -651,7 +651,7 @@ struct V8SheetsModifier: ViewModifier {
                 guard shown else { return }
                 appState.showNearDuplicates = false
                 ToolWindowPresenter.shared.open(title: String(localized: "Near-Duplicates")) { AnyView(Group {
-                ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
+                ScopedWorkingSet(filter: modelVM.currentArchiveQuery) { emails in
                     NearDuplicateDetectionView(emails: emails, isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Near-Duplicates")))
                 }
                     .resizableSheet()
@@ -659,7 +659,7 @@ struct V8SheetsModifier: ViewModifier {
             })
         #else
         v = AnyView(v.sheet(isPresented: $appState.showNearDuplicates) {
-                ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
+                ScopedWorkingSet(filter: modelVM.currentArchiveQuery) { emails in
                     NearDuplicateDetectionView(emails: emails, isPresented: $appState.showNearDuplicates)
                 }
                     .resizableSheet()
@@ -702,7 +702,7 @@ struct V8SheetsModifier: ViewModifier {
                 ToolWindowPresenter.shared.open(title: String(localized: "AI Digest")) { AnyView(Group {
                 // Zero-array digest: the generator streams a bounded working
                 // set of the selected period from the store itself.
-                AIDigestView(isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "AI Digest")))
+                ToolScopeHost(filter: modelVM.currentArchiveQuery) { q in AIDigestView(isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "AI Digest")), scope: q) }
                     .resizableSheet()
             }) }
             })
@@ -710,7 +710,7 @@ struct V8SheetsModifier: ViewModifier {
         v = AnyView(v.sheet(isPresented: $appState.showAIDigest) {
                 // Zero-array digest: the generator streams a bounded working
                 // set of the selected period from the store itself.
-                AIDigestView(isPresented: $appState.showAIDigest)
+                ToolScopeHost(filter: modelVM.currentArchiveQuery) { q in AIDigestView(isPresented: $appState.showAIDigest, scope: q) }
                     .resizableSheet()
             })
         #endif
@@ -733,7 +733,7 @@ struct V9SheetsModifier: ViewModifier {
                 ToolWindowPresenter.shared.open(title: String(localized: "Executive Dashboard")) { AnyView(Group {
                 // Query injection: the dashboard streams the current scope
                 // from SQLite in bounded pages (no array plumbing).
-                ExecutiveDashboardView(query: modelVM.currentArchiveQuery, isPresented: ToolWindowPresenter.closeBinding(title: "Executive Dashboard"))
+                ToolScopeHost(filter: modelVM.currentArchiveQuery) { q in ExecutiveDashboardView(query: q, isPresented: ToolWindowPresenter.closeBinding(title: "Executive Dashboard")) }
                     .resizableSheet()
             }) }
             })
@@ -741,7 +741,7 @@ struct V9SheetsModifier: ViewModifier {
         v = AnyView(v.sheet(isPresented: $appState.showExecutiveDashboard) {
                 // Query injection: the dashboard streams the current scope
                 // from SQLite in bounded pages (no array plumbing).
-                ExecutiveDashboardView(query: modelVM.currentArchiveQuery, isPresented: $appState.showExecutiveDashboard)
+                ToolScopeHost(filter: modelVM.currentArchiveQuery) { q in ExecutiveDashboardView(query: q, isPresented: $appState.showExecutiveDashboard) }
                     .resizableSheet()
             })
         #endif
@@ -750,13 +750,13 @@ struct V9SheetsModifier: ViewModifier {
                 guard shown else { return }
                 appState.showReportBuilder = false
                 ToolWindowPresenter.shared.open(title: String(localized: "Report Builder")) { AnyView(Group {
-                ReportBuilderView(isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Report Builder")))
+                ToolScopeHost(filter: modelVM.currentArchiveQuery) { q in ReportBuilderView(isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Report Builder")), scope: q) }
                     .resizableSheet()
             }) }
             })
         #else
         v = AnyView(v.sheet(isPresented: $appState.showReportBuilder) {
-                ReportBuilderView(isPresented: $appState.showReportBuilder)
+                ToolScopeHost(filter: modelVM.currentArchiveQuery) { q in ReportBuilderView(isPresented: $appState.showReportBuilder, scope: q) }
                     .resizableSheet()
             })
         #endif
@@ -765,7 +765,7 @@ struct V9SheetsModifier: ViewModifier {
                 guard shown else { return }
                 appState.showKeywordMonitor = false
                 ToolWindowPresenter.shared.open(title: String(localized: "Keyword Monitor")) { AnyView(Group {
-                ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
+                ScopedWorkingSet(filter: modelVM.currentArchiveQuery) { emails in
                     KeywordMonitorView(emails: emails, isPresented: ToolWindowPresenter.closeBinding(title: String(localized: "Keyword Monitor")))
                 }
                     .resizableSheet()
@@ -773,7 +773,7 @@ struct V9SheetsModifier: ViewModifier {
             })
         #else
         v = AnyView(v.sheet(isPresented: $appState.showKeywordMonitor) {
-                ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
+                ScopedWorkingSet(filter: modelVM.currentArchiveQuery) { emails in
                     KeywordMonitorView(emails: emails, isPresented: $appState.showKeywordMonitor)
                 }
                     .resizableSheet()
@@ -833,7 +833,7 @@ struct V9UtilitySheetsModifier: ViewModifier {
                 guard shown else { return }
                 appState.showAllAttachmentsGallery = false
                 ToolWindowPresenter.shared.open(title: String(localized: "Attachment Gallery")) { AnyView(Group {
-                ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
+                ScopedWorkingSet(filter: modelVM.currentArchiveQuery) { emails in
                     AllAttachmentsGalleryView(emails: emails)
                 }
                     .resizableSheet()
@@ -841,7 +841,7 @@ struct V9UtilitySheetsModifier: ViewModifier {
             }
             #else
             .sheet(isPresented: $appState.showAllAttachmentsGallery) {
-                ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
+                ScopedWorkingSet(filter: modelVM.currentArchiveQuery) { emails in
                     AllAttachmentsGalleryView(emails: emails)
                 }
                     .resizableSheet()
@@ -852,7 +852,7 @@ struct V9UtilitySheetsModifier: ViewModifier {
                 guard shown else { return }
                 appState.showIOCExtractor = false
                 ToolWindowPresenter.shared.open(title: String(localized: "IOC Extractor")) { AnyView(Group {
-                ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
+                ScopedWorkingSet(filter: modelVM.currentArchiveQuery) { emails in
                     IOCExtractorView(emails: emails)
                 }
                     .resizableSheet()
@@ -860,7 +860,7 @@ struct V9UtilitySheetsModifier: ViewModifier {
             }
             #else
             .sheet(isPresented: $appState.showIOCExtractor) {
-                ArchiveWorkingSetView(query: modelVM.currentArchiveQuery) { emails in
+                ScopedWorkingSet(filter: modelVM.currentArchiveQuery) { emails in
                     IOCExtractorView(emails: emails)
                 }
                     .resizableSheet()
