@@ -19,7 +19,7 @@ import Foundation
 @MainActor
 enum AIContextSelector {
     nonisolated(unsafe) static var isEnabled = false
-    static let defaultCount = 500
+    nonisolated static let defaultCount = 500
 
     static let securityQuery = "password OR verify OR urgent OR invoice OR wire OR suspended OR login OR account OR phishing OR attachment"
 

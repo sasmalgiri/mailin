@@ -15,7 +15,7 @@ import SwiftUI
 
 @MainActor
 enum ArchiveSample {
-    static let defaultSize = 5_000
+    nonisolated static let defaultSize = 5_000
 
     /// Every k-th email in date order, so the sample spans the whole range.
     static func evenlySpaced(query: EmailQuery = .all, size: Int = defaultSize) async throws

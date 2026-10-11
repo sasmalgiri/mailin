@@ -107,16 +107,28 @@ enum SafeHTMLRenderer {
         // A CSP that forbids every fetch is the backstop behind the sanitizer:
         // even something the regexes missed cannot load.
         let guarded = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data: cid:; style-src 'unsafe-inline'; font-src data:\">" + html
+        // `.timeout` is an AppKit option; on iPhone/iPad the same 10 s limit is
+        // enforced here, so a pathological message can never hang the view.
+        #if os(macOS)
+        let options: [NSAttributedString.DocumentReadingOptionKey: Any] =
+            [.timeout: 10.0, .characterEncoding: String.Encoding.utf8.rawValue]
+        #else
+        let options: [NSAttributedString.DocumentReadingOptionKey: Any] =
+            [.characterEncoding: String.Encoding.utf8.rawValue]
+        #endif
+        let gate = RenderResumeGate()
         return try await withCheckedThrowingContinuation { continuation in
-            NSAttributedString.loadFromHTML(
-                string: guarded,
-                options: [.timeout: 10.0, .characterEncoding: String.Encoding.utf8.rawValue]
-            ) { attributed, _, error in
+            NSAttributedString.loadFromHTML(string: guarded, options: options) { attributed, _, error in
+                guard gate.claim() else { return }
                 if let attributed {
                     continuation.resume(returning: attributed)
                 } else {
                     continuation.resume(throwing: RenderError.conversionFailed(error?.localizedDescription ?? "no output"))
                 }
+            }
+            Task {
+                try? await Task.sleep(for: .seconds(10))
+                if gate.claim() { continuation.resume(throwing: RenderError.conversionFailed("timed out after 10 s")) }
             }
         }
         #else
@@ -135,5 +147,17 @@ enum SafeHTMLRenderer {
     /// network-capable importer.
     nonisolated static func plainTextFallback(_ html: String) -> NSAttributedString {
         NSAttributedString(string: FTSSearchIndex.stripHTMLText(html))
+    }
+}
+
+/// Lets exactly one of the conversion and its deadline resume the call.
+private final class RenderResumeGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    func claim() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if done { return false }
+        done = true
+        return true
     }
 }

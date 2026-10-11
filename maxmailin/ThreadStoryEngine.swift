@@ -107,7 +107,7 @@ enum ThreadStoryEngine {
         var notes: [String] = []
         for (i, part) in parts.enumerated() {
             try Task.checkCancellation()
-            await onUpdate(String(localized: "Reading part \(i + 1) of \(parts.count) (\(thread.count) messages)…"))
+            onUpdate(String(localized: "Reading part \(i + 1) of \(parts.count) (\(thread.count) messages)…"))
             let session = LanguageModelSession(instructions: """
                 You condense part of an email conversation into plain facts for a later summary. \
                 Write 3 to 5 short sentences: who wrote, on which dates, what was asked, decided or left open. \
@@ -129,14 +129,14 @@ enum ThreadStoryEngine {
         var story = ""
         for try await snapshot in session.loggedStreamResponse(to: "Condensed parts of the conversation:\n\n\(joined)") {
             story = snapshot.content
-            await onUpdate(story)
+            onUpdate(story)
         }
         if FoundationModelEngine.looksLikeParroting(story) {
             story = FoundationModelEngine.deterministicThreadSummary(thread)
         }
         let header = String(localized: "Told from all \(thread.count) messages, read in \(parts.count) parts.") + "\n\n"
         let full = header + FoundationModelEngine.withoutUnwitnessedDates(story, thread: thread)
-        await onUpdate(full)
+        onUpdate(full)
         return full
     }
     #endif

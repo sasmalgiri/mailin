@@ -382,16 +382,16 @@ Every `[~]` row was checked against its own wording. A row is not done until eve
 | M2 | tripped switches come back with a new app version (unless the user switched them off) | [x] code 18304e7 |
 | M3 | a fallback is stated in the job receipt — and every 3.0 seam really falls back (withFallback had no callers; 9 silent catches fixed) | [x] code 18304e7 |
 | S6 | Safe Mode makes the archive read-only (plan) + help text says exactly what it does (#3) | [x] code 75dd04d |
-| E2 | evidence record included in productions and case bundles | [ ] |
+| E2 | evidence record included in productions and case bundles | [x] code cafd4bb |
 | E4 | collection fields shown in ImportReceiptView | [x] code e50b4d1 |
 | E6 | test that checks every part of a redacted export | [x] test e50b4d1 |
 | A12/I4 | Communication Patterns AI context by retrieval, stating how many — and a user's scope is never swapped for an archive sample (finding #19) | [x] code ddd095a |
-| Q2 | written decision gate: vec1 vs sqlite-vec (before any extension) | [ ] |
+| Q2 | written decision gate: vec1 vs sqlite-vec (before any extension) — SEMANTIC_SEARCH_DECISION.md | [x] 16b3df0 |
 | P1 | ArchiveCore strict-concurrency diagnostics fixed; Swift 6 mode | [ ] |
 | P2 | parser unsafe sites marked / moved to Span | [ ] |
 | P3 | coverage-guided fuzzing (libFuzzer) — or the toolchain limit stated | [ ] |
-| P6 | iOS SDK 27 build confirmed | [ ] |
-| R3 | SIZE_LIMITS_DESIGN.md, help, store copy | [ ] |
+| P6 | iOS SDK 27 build confirmed — it was BROKEN (S8 used the AppKit-only `.timeout` option); fixed with an own 10 s deadline; 8 Swift-6 warnings in new code fixed; iOS and macOS build with zero warnings | [x] (this commit) |
+| R3 | SIZE_LIMITS_DESIGN.md, help, store copy | [x] 16b3df0 |
 | X1 | owner decision on which entry points go | owner |
 | §8 #1, #5, #6, #7 | old-path bug fixes | [x] code 18304e7, be0829d |
 

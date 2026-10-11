@@ -73,7 +73,8 @@ struct TopCorrespondentsTool: Tool {
         if let d = f.date(from: arguments.from) { q.afterDate = d }
         if let d = f.date(from: arguments.to) { q.beforeDate = d.addingTimeInterval(86_400) }
         let field: SQLiteEmailStore.GroupField = arguments.groupBy.lowercased().contains("domain") ? .domain : .sender
-        let scoped = await MainActor.run { ArchiveDataService.shared.scoped(q) }
+        let query = q
+        let scoped = await MainActor.run { ArchiveDataService.shared.scoped(query) }
         let r = try await SQLiteEmailStore.shared.groupedCounts(query: scoped, by: field, limit: 10)
         guard !r.rows.isEmpty else { return "No emails in that range." }
         let lines = r.rows.enumerated().map { "\($0.offset + 1). \($0.element.value): \($0.element.count) emails" }

@@ -247,7 +247,7 @@ extension ArchiveFullAnalyticsService {
         var sentimentSum = 0.0, sentimentN = 0, positive = 0, negative = 0
         var pii: [EmailNLPEngine.PIIType: Int] = [:]
         var high = 0, medium = 0
-        let stream = await ArchiveDataService.shared.streamFullEmails(query: query, batchSize: 500)
+        let stream = ArchiveDataService.shared.streamFullEmails(query: query, batchSize: 500)
         let token = EngineGuard.begin(.v3AnalysisQueries)
         defer { EngineGuard.end(token) }
         for try await batch in stream {

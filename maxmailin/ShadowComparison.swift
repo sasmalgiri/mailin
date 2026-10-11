@@ -25,7 +25,7 @@ import StoreKit
 @MainActor
 enum ShadowComparison {
     /// The old engines' working-set size.
-    static let maxSubset = 2_000
+    nonisolated static let maxSubset = 2_000
 
     struct Report: Codable, Sendable, Identifiable {
         var id: String { tool + "@" + ISO8601DateFormatter().string(from: date) }
