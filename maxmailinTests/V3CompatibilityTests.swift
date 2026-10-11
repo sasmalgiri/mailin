@@ -802,4 +802,26 @@ final class V3CompatibilityTests: XCTestCase {
         XCTAssertEqual(r.emails.map(\.plainBody), emails.map(\.plainBody), "bodies stay")
         XCTAssertEqual(r.deferred.count, 10 - 3, "three 3,000-byte sources fit in 10,000")
     }
+
+    // MARK: - Chunked reads release each chunk
+
+    /// Reading a file chunk by chunk in a background task must not keep every
+    /// chunk until the task ends (autoreleased `FileHandle.read` storage). The
+    /// 1.5 GB import peaked at +1.9 GB before the fix, +755 MB after.
+    func testChunkedFileDigest_releasesEachChunk() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("digest-\(UUID().uuidString).bin")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let block = Data(repeating: 0x5A, count: 1_048_576)
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        let out = try FileHandle(forWritingTo: url)
+        for _ in 0..<192 { try out.write(contentsOf: block) }
+        try out.close()
+        let growth = try await Task.detached(priority: .utility) { () -> Int64 in
+            let before = Int64(bitPattern: currentFootprintBytes())
+            _ = try BulkImportCoordinator.fileDigest(url)
+            let after = Int64(bitPattern: currentFootprintBytes())
+            return after - before
+        }.value
+        XCTAssertLessThan(growth, 64 * 1_048_576, "a 192 MB file must not stay resident while it is hashed (grew \(growth / 1_048_576) MB)")
+    }
 }

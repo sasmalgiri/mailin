@@ -181,7 +181,7 @@ struct OffsetMBOXScanner: Sendable {
             try Task.checkCancellation()
 
             let chunk: Data?
-            do { chunk = try handle.read(upToCount: windowBytes) }
+            do { chunk = try autoreleasepool { try handle.read(upToCount: windowBytes) } }
             catch {
                 // Guard rail: an I/O error is an error. Returning what we have
                 // so far as if the file had ended would silently drop mail.
@@ -316,7 +316,7 @@ struct OffsetMBOXScanner: Sendable {
         while head.count < limit {
             let want = min(Self.headerReadStep, limit - head.count)
             let chunk: Data?
-            do { chunk = try handle.read(upToCount: want) }
+            do { chunk = try autoreleasepool { try handle.read(upToCount: want) } }
             catch {
                 throw ExtractionError.invalidEmail(
                     reason: "I/O error reading headers at offset \(messageRange.offset): \(error.localizedDescription)")

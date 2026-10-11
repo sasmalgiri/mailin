@@ -113,7 +113,7 @@ final class ExportSigner {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
         defer { try? handle.close() }
         var digest = SHA256()
-        while let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty {
+        while let chunk = try? autoreleasepool { try handle.read(upToCount: 1 << 20) }, !chunk.isEmpty {
             digest.update(data: chunk)
         }
         return verify(Data(digest.finalize()), signature: signature, publicKey: publicKey)

@@ -1140,12 +1140,17 @@ final class BulkImportCoordinator {
         }.value
     }
 
-    private nonisolated static func fileDigest(_ url: URL) throws -> String {
+    /// Chunked SHA-256 of a file. Each chunk is read inside an autorelease
+    /// pool: `FileHandle.read` returns autoreleased storage, and a background
+    /// task has no pool that drains between iterations — every chunk of a
+    /// 1.5 GB source stayed resident until the task ended (+1.9 GB peak,
+    /// found 2026-10-11). Internal for the regression test.
+    nonisolated static func fileDigest(_ url: URL) throws -> String {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         var hasher = SHA256()
         while true {
-            let chunk = try handle.read(upToCount: 1_048_576) ?? Data()
+            let chunk = try autoreleasepool { try handle.read(upToCount: 1_048_576) } ?? Data()
             if chunk.isEmpty { break }
             hasher.update(data: chunk)
         }

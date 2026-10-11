@@ -341,7 +341,7 @@ struct OffsetImportEngine: Sendable {
         var hasher = SHA256()
         while true {
             let chunk: Data?
-            do { chunk = try handle.read(upToCount: chunkSize) }
+            do { chunk = try autoreleasepool { try handle.read(upToCount: chunkSize) } }
             catch { throw LocatorReadError.ioError(error.localizedDescription) }
             guard let chunk, !chunk.isEmpty else { break }
             hasher.update(data: chunk)
