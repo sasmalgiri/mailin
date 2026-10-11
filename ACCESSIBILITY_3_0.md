@@ -29,3 +29,25 @@ while any issue remains. It needs the owner at the Mac to approve automation.
 - `ArchiveWideLists`: subject rows read "subject, N emails"; the attachment row's document icon is hidden.
 - `CrashSafety` banners: decorative icons are hidden (the heading carries the meaning).
 - `ShadowComparisonPanel`: status is an icon plus text, with an accessibility value.
+
+## App Store Connect declarations (owner decision 2026-10-11)
+
+The owner chose to declare the labels without a manual VoiceOver / Voice Control pass, set the way comparable
+productivity apps (Apple Mail, Notes, Pages) declare them for text-based apps without media. The automated audit
+(`AccessibilityAuditUITests`) still runs in the V5 UI session; any issue it reports is fixed before submission.
+
+Enter the same answers for **iPhone, iPad and Mac** (App Store Connect ▸ App ▸ Accessibility):
+
+| Feature | Answer |
+|---|---|
+| VoiceOver | Yes |
+| Voice Control | Yes |
+| Larger Text | Yes |
+| Dark Interface | Yes |
+| Differentiate Without Color Alone | Yes |
+| Sufficient Contrast | Yes |
+| Reduced Motion | Yes |
+| Captions | No — the app has no video or audio content |
+| Audio Descriptions | No — the app has no video content |
+
+Accessibility URL (optional field): leave empty, or point it to the support page once one exists.
