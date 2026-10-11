@@ -688,7 +688,7 @@ struct BatchOperationsView: View {
         let scope = ArchiveSelectionScope.explicit(ids)
         Task { @MainActor in
             let service = ArchiveExportService.shared
-            let progress: @MainActor (Int, Int) -> Void = { done, total in
+            let progress: @MainActor @Sendable (Int, Int) -> Void = { done, total in
                 progressValue = total > 0 ? Double(done) / Double(total) : 0
             }
             var message: String

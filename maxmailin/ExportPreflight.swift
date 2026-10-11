@@ -252,7 +252,7 @@ final class ExportJobRunner {
     static let shared = ExportJobRunner()
 
     /// v1-faithful RFC-822 renderer for .eml when the host provides one.
-    var emlRender: (@MainActor (MBOXParser.RawEmail) -> String)?
+    var emlRender: (@MainActor @Sendable (MBOXParser.RawEmail) -> String)?
     /// iOS delivery: hand the finished artifact to the host's share sheet.
     var share: ((URL) -> Void)?
     /// Host error binding (menus cannot host alerts themselves).
@@ -417,10 +417,10 @@ final class ExportJobRunner {
         let url = request.destinationURL
         let cap = request.cap
         let write = request.writeOptions
-        let onProgress: @MainActor (Int, Int) -> Void = { [weak self] in self?.progress($0, $1) }
+        let onProgress: @MainActor @Sendable (Int, Int) -> Void = { [weak self] in self?.progress($0, $1) }
         // T3: folder formats report input position through onProgress and the
         // produced-file count separately.
-        let onProduced: @MainActor (Int) -> Void = { count in ExportRunCenter.shared.noteProduced(count) }
+        let onProduced: @MainActor @Sendable (Int) -> Void = { count in ExportRunCenter.shared.noteProduced(count) }
 
         switch request.format {
         case .word:

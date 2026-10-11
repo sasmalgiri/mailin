@@ -881,20 +881,14 @@ final class BulkImportCoordinator {
                     if offsetEligible {
                         var engine = OffsetImportEngine()
                         if let ceiling = options.fullParseCeilingBytes { engine.fullParseCeilingBytes = ceiling }
-                        fileReport = try await engine.importMessages(
-                            fileURL: url,
-                            senderEmail: options.senderEmail,
-                            batchSize: batchSize,
-                            envelopeProvider: envelopeProvider,
-                            materializeAttachments: false,   // bulk import: no temp copy per attachment
-                            sourceDigest: hash,
-                            onProgress: { [weak self] prog in
-                                Task { @MainActor in
-                                    self?.live.fileFraction = prog
-                                    callbacks.onFileProgress?(sourceName, fileIndex, urls.count, prog)
-                                }
-                            }
-                        ) { imported in
+                        // §3-P1: the engine parses off the main actor and hands
+                        // each batch to main-actor sinks (Sendable), so the
+                        // coordinator's state is only touched on the main actor.
+                        let progressSink = MainActorSink<Double> { [weak self] prog in
+                            self?.live.fileFraction = prog
+                            callbacks.onFileProgress?(sourceName, fileIndex, urls.count, prog)
+                        }
+                        let batchSink = MainActorSink<[OffsetImportEngine.Imported]> { imported in
                             batchLocators.removeAll(keepingCapacity: true)
                             if options.recordLocators {
                                 for item in imported {
@@ -904,20 +898,31 @@ final class BulkImportCoordinator {
                             }
                             try await persistBatch(imported.map(\.email))
                         }
+                        fileReport = try await engine.importMessages(
+                            fileURL: url,
+                            senderEmail: options.senderEmail,
+                            batchSize: batchSize,
+                            envelopeProvider: envelopeProvider,
+                            materializeAttachments: false,   // bulk import: no temp copy per attachment
+                            sourceDigest: hash,
+                            onProgress: { @Sendable prog in Task { try? await progressSink.send(prog) } }
+                        ) { @Sendable imported in
+                            try await batchSink.send(imported)
+                        }
                     } else {
+                        let progressSink = MainActorSink<Double> { [weak self] prog in
+                            self?.live.fileFraction = prog
+                            callbacks.onFileProgress?(sourceName, fileIndex, urls.count, prog)
+                        }
+                        let batchSink = MainActorSink<[MBOXParser.RawEmail]> { batch in try await persistBatch(batch) }
                         fileReport = try await ParserFactory.parseStreamingCallback(
                             fileURL: url,
                             senderEmail: options.senderEmail,
                             batchSize: batchSize,
                             envelopeProvider: envelopeProvider,
                             materializeAttachments: false,   // bulk import: no temp copy per attachment
-                            onProgress: { [weak self] prog in
-                                Task { @MainActor in
-                                    self?.live.fileFraction = prog
-                                    callbacks.onFileProgress?(sourceName, fileIndex, urls.count, prog)
-                                }
-                            },
-                            onBatch: persistBatch
+                            onProgress: { @Sendable prog in Task { try? await progressSink.send(prog) } },
+                            onBatch: { @Sendable batch in try await batchSink.send(batch) }
                         )
                     }
                 } catch {
@@ -1182,4 +1187,15 @@ final class BulkImportCoordinator {
             $0 + ((try? $1.url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
         }
     }
+}
+
+/// §3-P1: a main-actor endpoint that work running off the main actor can
+/// send values to. Being main-actor isolated it is Sendable, so the closures
+/// handed to a nonisolated engine capture only the sink — never the caller's
+/// mutable state — and every value is handled on the main actor.
+@MainActor
+final class MainActorSink<Input: Sendable> {
+    private let body: (Input) async throws -> Void
+    init(_ body: @escaping (Input) async throws -> Void) { self.body = body }
+    func send(_ input: Input) async throws { try await body(input) }
 }

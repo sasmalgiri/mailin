@@ -12,7 +12,8 @@
 
 import XCTest
 import Foundation
-@testable import ArchiveCore
+// §3-P1: ArchiveCore is Swift 6; this test target is still Swift 5 (module by module).
+@preconcurrency @testable import ArchiveCore
 
 final class DeferredMessageIntegrityTests: XCTestCase {
 
@@ -422,7 +423,7 @@ final class DeferredMessageIntegrityTests: XCTestCase {
         _ = try await importFixture(f, ceiling: Self.ceiling)
         let service = await ArchiveExportService(archive: f.archive)
         let folder = f.root.appendingPathComponent("pdf-like", isDirectory: true)
-        var rendered: [String] = []
+        nonisolated(unsafe) var rendered: [String] = []
         // A renderer like PDF/TIFF/MSG: it reads the decoded body and would
         // happily produce a header-only document for a deferred message.
         let result = try await service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder) { email, index in
@@ -576,7 +577,7 @@ final class DeferredMessageIntegrityTests: XCTestCase {
         let out = f.root.appendingPathComponent("out.mbox")
         var kept = ExportWriteOptions(); kept.keepPartialOnCancel = true
 
-        func editSourceInPlace() throws {
+        @Sendable func editSourceInPlace() throws {
             var bytes = try Data(contentsOf: f.mbox)
             let marker = Data("Line 60 of a message".utf8)
             let at = try XCTUnwrap(bytes.range(of: marker)?.lowerBound)
@@ -657,7 +658,7 @@ final class DeferredMessageIntegrityTests: XCTestCase {
         let service = await ArchiveExportService(archive: f.archive)
         let folder = f.root.appendingPathComponent("pdf-like", isDirectory: true)
         var kept = ExportWriteOptions(); kept.keepPartialOnCancel = true
-        var renders = 0, lastDone = -1
+        nonisolated(unsafe) var renders = 0, lastDone = -1
         do {
             _ = try await service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder, batchSize: 1, write: kept,
                                                      onProgress: { d, _ in lastDone = d }) { email, index in

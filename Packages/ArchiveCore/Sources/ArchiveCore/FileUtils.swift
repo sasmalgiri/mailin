@@ -47,17 +47,63 @@ public enum FileUtilsError: Error, CustomStringConvertible {
     }
 }
 
+// MARK: - Concurrency-safe settings (§3-P1)
+
+/// A setting read and written from any thread, behind a lock. Replaces the
+/// plain `static var`s, which were unsynchronised shared state.
+final class LockedSetting<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Value
+    init(_ value: Value) { stored = value }
+    var value: Value {
+        get { lock.lock(); defer { lock.unlock() }; return stored }
+        set { lock.lock(); stored = newValue; lock.unlock() }
+    }
+}
+
 // MARK: - Policy & Security
 
 public struct FileUtilsPolicy {
-    public static var sandboxRoot: String? = nil
-    public static var allowedSubdirs: [String] = []
-    public static var dryRun: Bool = false
-    public static var failOnViolation: Bool = true
-    public static var violationHandler: ((_ path: String, _ msg: String) -> Void)? = nil
-    public static var allowedUser: String? = nil // Only allow access as this user (by name)
-    public static var allowedGroup: String? = nil
-    public static var warnOnLoosePermissions: Bool = true
+    private static let _sandboxRootSetting = LockedSetting<String?>(nil)
+    public static var sandboxRoot: String? {
+        get { _sandboxRootSetting.value }
+        set { _sandboxRootSetting.value = newValue }
+    }
+    private static let _allowedSubdirsSetting = LockedSetting<[String]>([])
+    public static var allowedSubdirs: [String] {
+        get { _allowedSubdirsSetting.value }
+        set { _allowedSubdirsSetting.value = newValue }
+    }
+    private static let _dryRunSetting = LockedSetting<Bool>(false)
+    public static var dryRun: Bool {
+        get { _dryRunSetting.value }
+        set { _dryRunSetting.value = newValue }
+    }
+    private static let _failOnViolationSetting = LockedSetting<Bool>(true)
+    public static var failOnViolation: Bool {
+        get { _failOnViolationSetting.value }
+        set { _failOnViolationSetting.value = newValue }
+    }
+    private static let _violationHandlerSetting = LockedSetting<((_ path: String, _ msg: String) -> Void)?>(nil)
+    public static var violationHandler: ((_ path: String, _ msg: String) -> Void)? {
+        get { _violationHandlerSetting.value }
+        set { _violationHandlerSetting.value = newValue }
+    }
+    private static let _allowedUserSetting = LockedSetting<String?>(nil)
+    public static var allowedUser: String? {
+        get { _allowedUserSetting.value }
+        set { _allowedUserSetting.value = newValue }
+    } // Only allow access as this user (by name)
+    private static let _allowedGroupSetting = LockedSetting<String?>(nil)
+    public static var allowedGroup: String? {
+        get { _allowedGroupSetting.value }
+        set { _allowedGroupSetting.value = newValue }
+    }
+    private static let _warnOnLoosePermissionsSetting = LockedSetting<Bool>(true)
+    public static var warnOnLoosePermissions: Bool {
+        get { _warnOnLoosePermissionsSetting.value }
+        set { _warnOnLoosePermissionsSetting.value = newValue }
+    }
 }
 
 // MARK: - Logging & Auditing
@@ -65,13 +111,23 @@ public struct FileUtilsPolicy {
 public enum LogLevel: Int { case none = 0, error, warning, info, debug, verbose }
 public class FileUtilsAudit {
     private static let queue = DispatchQueue(label: "com.mailin.fileUtilsAudit")
-    private static var _logs: [(Date, String, String)] = []
+    /// Guarded by `queue` (every access is inside `queue.sync`).
+    nonisolated(unsafe) private static var _logs: [(Date, String, String)] = []
     public static var logs: [(Date, String, String)] {
         queue.sync { _logs }
     }
-    public static var maxLogCount = 1000
-    public static var level: LogLevel = .info
-    private static var _plugins: [(_ event: String, _ path: String, _ info: [String: Any]) -> Void] = []
+    private static let _maxLogCountSetting = LockedSetting<Int>(1000)
+    public static var maxLogCount: Int {
+        get { _maxLogCountSetting.value }
+        set { _maxLogCountSetting.value = newValue }
+    }
+    private static let _levelSetting = LockedSetting<LogLevel>(.info)
+    public static var level: LogLevel {
+        get { _levelSetting.value }
+        set { _levelSetting.value = newValue }
+    }
+    /// Guarded by `queue` (every access is inside `queue.sync`).
+    nonisolated(unsafe) private static var _plugins: [(_ event: String, _ path: String, _ info: [String: Any]) -> Void] = []
     public static var plugins: [(_ event: String, _ path: String, _ info: [String: Any]) -> Void] {
         get { queue.sync { _plugins } }
         set { queue.sync { _plugins = newValue } }
@@ -206,7 +262,11 @@ public class FileUtils {
 
     // MARK: - .lock Dotlock Files (with expiry)
 
-    public static var dotLockMaxAge: TimeInterval = 300 // seconds (5 min)
+    private static let _dotLockMaxAgeSetting = LockedSetting<TimeInterval>(300)
+    public static var dotLockMaxAge: TimeInterval {
+        get { _dotLockMaxAgeSetting.value }
+        set { _dotLockMaxAgeSetting.value = newValue }
+    } // seconds (5 min)
     public static func createDotLock(for path: String) throws -> URL {
         let lockPath = try ensureSandbox(path) + ".lock"
         FileUtilsAudit.log("Creating dotlock", level: .debug, path: lockPath)
@@ -273,16 +333,21 @@ public class FileUtils {
 
     // MARK: - Timed Temp File Expiry & Background Cleanup
 
-    public static var tempFileLifetime: TimeInterval = 86400 // 1 day
-    private static var cleanupTask: DispatchSourceTimer?
+    private static let _tempFileLifetimeSetting = LockedSetting<TimeInterval>(86400)
+    public static var tempFileLifetime: TimeInterval {
+        get { _tempFileLifetimeSetting.value }
+        set { _tempFileLifetimeSetting.value = newValue }
+    } // 1 day
+    private static let cleanupTask = LockedSetting<DispatchSourceTimer?>(nil)
     public static func startTempFileCleanup() {
-        cleanupTask?.cancel()
-        cleanupTask = DispatchSource.makeTimerSource(queue: .global())
-        cleanupTask?.schedule(deadline: .now(), repeating: 3600)
-        cleanupTask?.setEventHandler {
+        let timer = DispatchSource.makeTimerSource(queue: .global())
+        timer.schedule(deadline: .now(), repeating: 3600)
+        timer.setEventHandler {
             cleanupExpiredTempFiles()
         }
-        cleanupTask?.resume()
+        cleanupTask.value?.cancel()
+        cleanupTask.value = timer
+        timer.resume()
     }
     @discardableResult
     public static func createTemporaryFile(prefix: String = "mbox") throws -> URL {
@@ -315,7 +380,11 @@ public class FileUtils {
         }
     }
     // MARK: - File Versioning
-    public static var maxBackupVersions: Int = 10
+    private static let _maxBackupVersionsSetting = LockedSetting<Int>(10)
+    public static var maxBackupVersions: Int {
+        get { _maxBackupVersionsSetting.value }
+        set { _maxBackupVersionsSetting.value = newValue }
+    }
     public static func backupFile(at path: String, backupDir: String = "Backups") throws {
         let spath = try ensureSandbox(path)
         guard fileExists(at: spath) else { throw FileUtilsError.fileNotFound }
@@ -389,7 +458,8 @@ public class FileUtils {
     public static var hostname: String {
         var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
         gethostname(&buffer, buffer.count)
-        return String(cString: buffer)
+        let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+        return String(decoding: bytes, as: UTF8.self)
     }
     public static var processID: Int32 { getpid() }
     public static var currentTime: TimeInterval { Date().timeIntervalSince1970 }
@@ -419,7 +489,11 @@ public class FileUtils {
     }
 
     // MARK: - Virtual Path Mapping (for demo/test/sandbox)
-    public static var pathMapper: ((String) -> String)? = nil
+    private static let _pathMapperSetting = LockedSetting<((String) -> String)?>(nil)
+    public static var pathMapper: ((String) -> String)? {
+        get { _pathMapperSetting.value }
+        set { _pathMapperSetting.value = newValue }
+    }
     private static func mapped(_ path: String) -> String {
         if let map = pathMapper { return map(path) }
         return path

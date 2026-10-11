@@ -36,7 +36,7 @@ extension ArchiveExportService {
     func exportForensicCSV(scope: ArchiveSelectionScope, to url: URL,
                            batesPrefix: String = "MAIL",
                            limit: Int? = nil,
-                           onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
+                           onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
         let forensic = ForensicManager.shared
         return try await exportTextDocument(
             scope: scope, to: url, limit: limit, signed: true,
@@ -51,7 +51,7 @@ extension ArchiveExportService {
     @discardableResult
     func exportConcordanceDAT(scope: ArchiveSelectionScope, to url: URL,
                               batesPrefix: String = "MAIL",
-                              onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
+                              onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
         let forensic = ForensicManager.shared
         return try await exportTextDocument(
             scope: scope, to: url, signed: true,
@@ -65,7 +65,7 @@ extension ArchiveExportService {
     /// Hash manifest CSV — signed.
     @discardableResult
     func exportHashManifest(scope: ArchiveSelectionScope, to url: URL,
-                            onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
+                            onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
         let forensic = ForensicManager.shared
         return try await exportTextDocument(
             scope: scope, to: url, signed: true,
@@ -81,7 +81,7 @@ extension ArchiveExportService {
     func exportRelativityCSV(scope: ArchiveSelectionScope, to url: URL,
                              batesPrefix: String = "MAIL",
                              custodianName: String = "", caseNumber: String = "",
-                             onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
+                             onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
         try await exportTextDocument(
             scope: scope, to: url, signed: true,
             header: { _ in ExportManager.relativityLoadFileHeader + "\r\n" },
@@ -95,7 +95,7 @@ extension ArchiveExportService {
     /// Streaming integrity verification — same math as
     /// `ForensicManager.batchVerifyAllEmails`, but over a bounded stream.
     func verifyIntegrity(scope: ArchiveSelectionScope,
-                         onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> (passed: Int, failed: Int, unverified: Int) {
+                         onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil) async throws -> (passed: Int, failed: Int, unverified: Int) {
         let forensic = ForensicManager.shared
         var passed = 0, failed = 0, unverified = 0, done = 0
         let total = try await archive.count(scope: scope)

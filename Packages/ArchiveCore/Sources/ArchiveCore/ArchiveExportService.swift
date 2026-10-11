@@ -110,7 +110,7 @@ final class ArchiveExportService {
                 format: ArchiveExportFormat,
                 to url: URL,
                 batchSize: Int = 200,
-                onProgress: (@MainActor (Int) -> Void)? = nil) async throws -> ArchiveExportResult {
+                onProgress: (@MainActor @Sendable (Int) -> Void)? = nil) async throws -> ArchiveExportResult {
         FileManager.default.createFile(atPath: url.path, contents: nil)
         let handle = try FileHandle(forWritingTo: url)
         defer { try? handle.close() }
@@ -187,7 +187,7 @@ final class ArchiveExportService {
         maxBytes: Int? = nil,
         header: @MainActor (Int) -> String = { _ in "" },
         footer: @MainActor (Int) -> String = { _ in "" },
-        onProgress: (@MainActor (Int, Int) -> Void)? = nil,
+        onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil,
         rawStream: (@MainActor (MBOXParser.RawEmail) async throws -> RawStreamPlan?)? = nil,
         row: @MainActor (MBOXParser.RawEmail, Int) throws -> String
     ) async throws -> ArchiveExportResult {
@@ -381,8 +381,8 @@ final class ArchiveExportService {
         limit: Int? = nil,
         write options: ExportWriteOptions = ExportWriteOptions(),
         locatedRawExtension: String? = nil,
-        onProgress: (@MainActor (Int, Int) -> Void)? = nil,
-        onProduced: (@MainActor (Int) -> Void)? = nil,
+        onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil,
+        onProduced: (@MainActor @Sendable (Int) -> Void)? = nil,
         content: @MainActor (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)?
     ) async throws -> ArchiveExportResult {
         beginSourceLedger()
@@ -642,10 +642,10 @@ final class ArchiveExportService {
     @discardableResult
     func exportEMLFiles(scope: ArchiveSelectionScope, to folder: URL,
                         limit: Int? = nil,
-                        render: (@MainActor (MBOXParser.RawEmail) -> String)? = nil,
+                        render: (@MainActor @Sendable (MBOXParser.RawEmail) -> String)? = nil,
                         write options: ExportWriteOptions = ExportWriteOptions(),
-                        onProgress: (@MainActor (Int, Int) -> Void)? = nil,
-                        onProduced: (@MainActor (Int) -> Void)? = nil) async throws -> ArchiveExportResult {
+                        onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil,
+                        onProduced: (@MainActor @Sendable (Int) -> Void)? = nil) async throws -> ArchiveExportResult {
         try await exportMessageFiles(scope: scope, to: folder, limit: limit, write: options,
                                      locatedRawExtension: "eml", onProgress: onProgress, onProduced: onProduced) { email, index in
             let eml = render?(email) ?? (email.rawSource.isEmpty
@@ -661,8 +661,8 @@ final class ArchiveExportService {
     func exportMSGFiles(scope: ArchiveSelectionScope, to folder: URL,
                         limit: Int? = nil,
                         write options: ExportWriteOptions = ExportWriteOptions(),
-                        onProgress: (@MainActor (Int, Int) -> Void)? = nil,
-                        onProduced: (@MainActor (Int) -> Void)? = nil) async throws -> ArchiveExportResult {
+                        onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil,
+                        onProduced: (@MainActor @Sendable (Int) -> Void)? = nil) async throws -> ArchiveExportResult {
         try await exportMessageFiles(scope: scope, to: folder, limit: limit, write: options, onProgress: onProgress, onProduced: onProduced) { email, index in
             guard let data = MSGWriter.write(email: email) else { return nil }
             return (Self.messageFilename(index: index, subject: email.headers["Subject"], ext: "msg"), data)
@@ -674,7 +674,7 @@ final class ArchiveExportService {
     func exportDetailedCSV(scope: ArchiveSelectionScope, to url: URL,
                            limit: Int? = nil,
                            write options: ExportWriteOptions = ExportWriteOptions(),
-                           onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
+                           onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
         try await exportTextDocument(
             scope: scope, to: url, limit: limit, write: options,
             header: { _ in "Date,From,To,CC,Subject,Type,Labels,Has Attachments,Attachment Count,Risk Score,Body Preview\n" },
@@ -721,7 +721,7 @@ final class ArchiveExportService {
     @discardableResult
     func exportJSONArchive(scope: ArchiveSelectionScope, to url: URL,
                            limit: Int? = nil,
-                           onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
+                           onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
         let encoder = JSONEncoder()
         let iso = ISO8601DateFormatter()
         var first = true
@@ -756,7 +756,7 @@ final class ArchiveExportService {
     @discardableResult
     func exportWordArchive(scope: ArchiveSelectionScope, to url: URL,
                            limit: Int? = nil,
-                           onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
+                           onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
         func esc(_ s: String) -> String {
             s.replacingOccurrences(of: "&", with: "&amp;")
                 .replacingOccurrences(of: "<", with: "&lt;")
@@ -806,7 +806,7 @@ final class ArchiveExportService {
     func exportMBOXArchive(scope: ArchiveSelectionScope, to url: URL,
                            limit: Int? = nil,
                            write options: ExportWriteOptions = ExportWriteOptions(),
-                           onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
+                           onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
         try await exportTextDocument(
             scope: scope, to: url, limit: limit, write: options,
             onProgress: onProgress,
@@ -862,7 +862,7 @@ final class ArchiveExportService {
                               baseName: String = "archive",
                               partitionBytes: Int = 2 * 1_073_741_824,
                               limit: Int? = nil,
-                              onProgress: (@MainActor (Int, Int) -> Void)? = nil)
+                              onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil)
     async throws -> [ArchiveExportResult] {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
@@ -914,7 +914,7 @@ final class ArchiveExportService {
     func exportMarkdownArchive(scope: ArchiveSelectionScope, to url: URL,
                                limit: Int? = nil,
                                write options: ExportWriteOptions = ExportWriteOptions(),
-                               onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
+                               onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil) async throws -> ArchiveExportResult {
         try await exportTextDocument(
             scope: scope, to: url, limit: limit, write: options,
             header: { total in "# mailin email export — \(total) email(s)\n\n" },
@@ -935,7 +935,7 @@ final class ArchiveExportService {
     /// `maxAttachments` is the free-tier cap (nil = unlimited).
     func exportAttachments(scope: ArchiveSelectionScope, to folder: URL,
                            maxAttachments: Int? = nil,
-                           onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> (saved: Int, capped: Bool) {
+                           onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil) async throws -> (saved: Int, capped: Bool) {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         var saved = 0, emailsDone = 0
         let total = try await archive.count(scope: scope)
@@ -988,7 +988,7 @@ final class ArchiveExportService {
                         toDirectory directory: URL,
                         baseName: String = "archive",
                         partBytes: UInt64? = nil,
-                        onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> [(url: URL, messages: Int)] {
+                        onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil) async throws -> [(url: URL, messages: Int)] {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let limit = partBytes ?? Self.pstPartBytes(for: directory)
         let total = try await archive.count(scope: scope)
@@ -1038,7 +1038,7 @@ final class ArchiveExportService {
     /// size ceiling is the PST format's own 50 GB, surfaced as an error.
     func exportPST(scope: ArchiveSelectionScope,
                    to url: URL,
-                   onProgress: (@MainActor (Int, Int) -> Void)? = nil) async throws -> Int {
+                   onProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil) async throws -> Int {
         let total = try await archive.count(scope: scope)
         let writer = try PSTStreamWriter(url: url)
         do {

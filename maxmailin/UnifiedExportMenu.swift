@@ -34,7 +34,7 @@ struct UnifiedExportSections: View {
     /// exports capped); the detail view passes requirePremium (its policy).
     var gate: () -> Bool = { true }
     /// v1-faithful RFC-822 renderer for .eml (default: stored raw source).
-    var emlRender: (@MainActor (MBOXParser.RawEmail) -> String)? = nil
+    var emlRender: (@MainActor @Sendable (MBOXParser.RawEmail) -> String)? = nil
     /// Formats the host already offers with its own (single-email) rendition.
     var omit: Set<UnifiedExportFormat> = []
     /// Exact number of emails the scope will export (shown as the menu
@@ -184,7 +184,11 @@ struct UnifiedExportSections: View {
     private func request(_ format: UnifiedExportFormat, title: String, destination: URL, isFolder: Bool) {
         guard gate() else { return }
         let runner = ExportJobRunner.shared
-        runner.emlRender = emlRender
+        if let render = emlRender {
+            runner.emlRender = { email in render(email) }
+        } else {
+            runner.emlRender = nil
+        }
         runner.share = share
         runner.storeManager = storeManager
         runner.onError = { message in errorMessage = message }

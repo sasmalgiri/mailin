@@ -11,7 +11,8 @@
 
 import XCTest
 import Foundation
-@testable import ArchiveCore
+// §3-P1: ArchiveCore is Swift 6; this test target is still Swift 5 (module by module).
+@preconcurrency @testable import ArchiveCore
 
 final class ExportResumeTests: XCTestCase {
 
@@ -60,7 +61,7 @@ final class ExportResumeTests: XCTestCase {
     func testTextDocument_keptPartialEndsAtTheReportedBatch_andResumeCompletesExactly() async throws {
         let env = try await makeEnv(count: 500); defer { try? FileManager.default.removeItem(at: env.root) }
         let url = env.root.appendingPathComponent("rows.txt")
-        var lastProgress = (done: -1, total: -1)
+        nonisolated(unsafe) var lastProgress = (done: -1, total: -1)
         var kept = ExportWriteOptions(); kept.keepPartialOnCancel = true
 
         do {
@@ -123,7 +124,7 @@ final class ExportResumeTests: XCTestCase {
     func testMessageFiles_keptPartialHoldsOnlyReportedRecords_andResumeAddsTheRest() async throws {
         let env = try await makeEnv(count: 500); defer { try? FileManager.default.removeItem(at: env.root) }
         let folder = env.root.appendingPathComponent("files", isDirectory: true)
-        var lastDone = -1
+        nonisolated(unsafe) var lastDone = -1
         var kept = ExportWriteOptions(); kept.keepPartialOnCancel = true
         do {
             _ = try await env.service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder, batchSize: 200, write: kept,
@@ -158,11 +159,11 @@ final class ExportResumeTests: XCTestCase {
     func testMessageFiles_skippedInputs_resumeByInputPositionNotByProducedCount() async throws {
         let env = try await makeEnv(count: 300); defer { try? FileManager.default.removeItem(at: env.root) }
         let folder = env.root.appendingPathComponent("skips", isDirectory: true)
-        var lastDone = -1, lastProduced = -1
+        nonisolated(unsafe) var lastDone = -1, lastProduced = -1
         var kept = ExportWriteOptions(); kept.keepPartialOnCancel = true
         // Every third message is skipped by the renderer (as a withheld or
         // unrenderable message would be); the run fails after the first batch.
-        func render(_ email: MBOXParser.RawEmail, _ index: Int) throws -> (filename: String, data: Data)? {
+        @Sendable func render(_ email: MBOXParser.RawEmail, _ index: Int) throws -> (filename: String, data: Data)? {
             let mid = email.headers["Message-ID"] ?? ""
             let n = Int(mid.split(separator: "-")[1].split(separator: "@")[0]) ?? 0
             if n % 3 == 0 { return nil }
@@ -209,7 +210,7 @@ final class ExportResumeTests: XCTestCase {
             XCTFail()
         } catch is Injected {}
         var resume = ExportWriteOptions(); resume.skipFirst = 40; resume.append = true; resume.keepPartialOnCancel = true
-        let render: @MainActor (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)? = { email, index in
+        let render: @MainActor @Sendable (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)? = { email, index in
             ("\(index).txt", Data((email.headers["Message-ID"] ?? "").utf8))
         }
 
@@ -320,11 +321,11 @@ final class ExportResumeTests: XCTestCase {
     func testTextDocument_resumeInterruptedDuringPrefixReplay_keepsTheCheckpoint() async throws {
         let env = try await makeEnv(count: 600); defer { try? FileManager.default.removeItem(at: env.root) }
         let url = env.root.appendingPathComponent("rows.txt")
-        let row: @MainActor (MBOXParser.RawEmail, Int) throws -> String = { email, position in
+        let row: @MainActor @Sendable (MBOXParser.RawEmail, Int) throws -> String = { email, position in
             "\(position)|\(email.headers["Message-ID"] ?? "")\n"
         }
         var kept = ExportWriteOptions(); kept.keepPartialOnCancel = true
-        var lastDone = -1
+        nonisolated(unsafe) var lastDone = -1
         do {
             _ = try await env.service.exportTextDocument(scope: .query(.all, exclusions: []), to: url, batchSize: 200, write: kept,
                                                          onProgress: { d, _ in lastDone = d }) { email, position in
@@ -339,7 +340,7 @@ final class ExportResumeTests: XCTestCase {
         // Resume 1: batch 100, fails at position 450 (inside the first NEW batch).
         var resume = ExportWriteOptions(); resume.skipFirst = 400; resume.append = true; resume.keepPartialOnCancel = true
         resume.expectedAppendOffset = sizeAt400; resume.expectedAppendSHA256 = shaAt400
-        var reports: [Int] = []
+        nonisolated(unsafe) var reports: [Int] = []
         do {
             _ = try await env.service.exportTextDocument(scope: .query(.all, exclusions: []), to: url, batchSize: 100, write: resume,
                                                          onProgress: { d, _ in reports.append(d) }) { email, position in
@@ -367,7 +368,7 @@ final class ExportResumeTests: XCTestCase {
     func testMessageFiles_resumeInterruptedDuringPrefixReplay_keepsTheManifestBoundary() async throws {
         let env = try await makeEnv(count: 600); defer { try? FileManager.default.removeItem(at: env.root) }
         let folder = env.root.appendingPathComponent("replay", isDirectory: true)
-        let render: @MainActor (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)? = { email, index in
+        let render: @MainActor @Sendable (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)? = { email, index in
             ("\(index).txt", Data((email.headers["Message-ID"] ?? "").utf8))
         }
         var kept = ExportWriteOptions(); kept.keepPartialOnCancel = true
@@ -384,7 +385,7 @@ final class ExportResumeTests: XCTestCase {
         XCTAssertEqual(try txtFiles().count, 400)
 
         var resume = ExportWriteOptions(); resume.skipFirst = 400; resume.append = true; resume.keepPartialOnCancel = true
-        var reports: [Int] = [], produced: [Int] = []
+        nonisolated(unsafe) var reports: [Int] = [], produced: [Int] = []
         do {
             _ = try await env.service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder, batchSize: 100, write: resume,
                                                          onProgress: { d, _ in reports.append(d) }, onProduced: { produced.append($0) }) { email, index in
@@ -418,11 +419,11 @@ final class ExportResumeTests: XCTestCase {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let existing = folder.appendingPathComponent("7.txt")
         try Data("already here\n".utf8).write(to: existing)
-        let render: @MainActor (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)? = { email, index in
+        let render: @MainActor @Sendable (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)? = { email, index in
             ("\(index).txt", Data((email.headers["Message-ID"] ?? "").utf8))
         }
         var kept = ExportWriteOptions(); kept.keepPartialOnCancel = true; kept.collision = .skipExisting
-        var lastProduced = -1
+        nonisolated(unsafe) var lastProduced = -1
         do {
             _ = try await env.service.exportMessageFiles(scope: .query(.all, exclusions: []), to: folder, batchSize: 40, write: kept,
                                                          onProduced: { lastProduced = $0 }) { email, index in
@@ -539,7 +540,7 @@ final class ExportResumeTests: XCTestCase {
     func testManifest_trailingEntriesPastTheBoundary_areCutBack_soTheNextResumeStaysValid() async throws {
         let env = try await makeEnv(count: 120); defer { try? FileManager.default.removeItem(at: env.root) }
         let folder = env.root.appendingPathComponent("trailing", isDirectory: true)
-        let render: @MainActor (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)? = { email, index in
+        let render: @MainActor @Sendable (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)? = { email, index in
             ("\(index).txt", Data((email.headers["Message-ID"] ?? "").utf8))
         }
         var kept = ExportWriteOptions(); kept.keepPartialOnCancel = true
@@ -601,7 +602,7 @@ final class ExportResumeTests: XCTestCase {
     func testManifest_asASymlink_isRefusedBeforeAnyReadOrWrite_andAFreshRunNeverWritesThroughOne() async throws {
         let env = try await makeEnv(count: 120); defer { try? FileManager.default.removeItem(at: env.root) }
         let folder = env.root.appendingPathComponent("symlinked-manifest", isDirectory: true)
-        let render: @MainActor (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)? = { email, index in
+        let render: @MainActor @Sendable (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)? = { email, index in
             ("\(index).txt", Data((email.headers["Message-ID"] ?? "").utf8))
         }
         var kept = ExportWriteOptions(); kept.keepPartialOnCancel = true
@@ -672,7 +673,7 @@ final class ExportResumeTests: XCTestCase {
     func testManifest_strayThatCannotBeRemoved_refusesTheResume_andKeepsItsEntryForTheRetry() async throws {
         let env = try await makeEnv(count: 120); defer { try? FileManager.default.removeItem(at: env.root) }
         let folder = env.root.appendingPathComponent("locked-stray", isDirectory: true)
-        let render: @MainActor (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)? = { email, index in
+        let render: @MainActor @Sendable (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)? = { email, index in
             ("\(index).txt", Data((email.headers["Message-ID"] ?? "").utf8))
         }
         var kept = ExportWriteOptions(); kept.keepPartialOnCancel = true
@@ -749,7 +750,7 @@ final class ExportResumeTests: XCTestCase {
     func testWriterCleanup_inaccessibleStrays_keepTheirEntries_andTheRetryYieldsExactlyTheOutputSet() async throws {
         let env = try await makeEnv(count: 120); defer { try? FileManager.default.removeItem(at: env.root) }
         let folder = env.root.appendingPathComponent("unsearchable", isDirectory: true)
-        let render: @MainActor (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)? = { email, index in
+        let render: @MainActor @Sendable (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)? = { email, index in
             ("\(index).txt", Data((email.headers["Message-ID"] ?? "").utf8))
         }
         var kept = ExportWriteOptions(); kept.keepPartialOnCancel = true
@@ -797,7 +798,7 @@ final class ExportResumeTests: XCTestCase {
         try FileManager.default.createDirectory(at: controlDir, withIntermediateDirectories: true)
         let sentinel = controlDir.appendingPathComponent("sentinel.txt")
         try Data("do not delete".utf8).write(to: sentinel)
-        let render: @MainActor (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)? = { email, index in
+        let render: @MainActor @Sendable (MBOXParser.RawEmail, Int) throws -> (filename: String, data: Data)? = { email, index in
             ("\(index).txt", Data((email.headers["Message-ID"] ?? "").utf8))
         }
         for keep in [false, true] {

@@ -719,7 +719,9 @@ struct MBOXParser {
         return String(data: data, encoding: encoding)
     }
 
-    private static let cachedISOFormatter = ISO8601DateFormatter()
+    /// ISO8601DateFormatter is thread-safe (Apple: formatters are safe to
+    /// use from multiple threads since iOS 7 / macOS 10.9).
+    nonisolated(unsafe) private static let cachedISOFormatter = ISO8601DateFormatter()
 
     private static let dateFormats = [
         "EEE, dd MMM yyyy HH:mm:ss Z",

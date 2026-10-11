@@ -55,7 +55,7 @@ protocol EmailArchiveStore: Sendable {
         sourceFileHash: String?,
         accountID: String?,
         batchSize: Int,
-        progress: ((Int, Int) -> Void)?
+        progress: (@Sendable (Int, Int) -> Void)?
     ) async throws
 
     func totalCount() async throws -> Int

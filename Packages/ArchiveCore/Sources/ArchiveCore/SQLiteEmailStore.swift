@@ -497,7 +497,10 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return out
     }
 
-    deinit { if let db { sqlite3_close(db) } }
+    /// The handle as the nonisolated `deinit` may read it: the actor's last
+    /// reference is gone by then, so nothing else can touch it (§3-P1).
+    nonisolated(unsafe) private var handleForDeinit: OpaquePointer?
+    deinit { if let handleForDeinit { sqlite3_close(handleForDeinit) } }
 
     /// B5: after the archive's volume was detached and re-attached, the open
     /// handle still points at the OLD mount and every statement fails with
@@ -506,6 +509,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     func reopenConnection() {
         if let db { sqlite3_close(db) }
         db = nil
+        handleForDeinit = nil
     }
 
     // MARK: - Open / schema
@@ -559,6 +563,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
         // so an upgrade still completes); writes fail with a named error.
         if readOnly { try exec(handle, "PRAGMA query_only = ON;") }
         self.db = handle
+        handleForDeinit = handle
         return handle
     }
 
@@ -2386,7 +2391,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
         sourceFileHash: String?,
         accountID: String?,
         batchSize: Int,
-        progress: ((Int, Int) -> Void)?
+        progress: (@Sendable (Int, Int) -> Void)?
     ) throws {
         _ = try insertBatch(
             emails, sourceFileHash: sourceFileHash, accountID: accountID,
@@ -2411,7 +2416,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
         dedupPolicy: DedupPolicy,
         respectTombstones: Bool = true,
         batchSize: Int,
-        progress: ((Int, Int) -> Void)?,
+        progress: (@Sendable (Int, Int) -> Void)?,
         progressCheckpoint: ImportProgressCheckpoint? = nil,
         locators: [UUID: LocatorRecord] = [:]
     ) throws -> BatchInsertResult {

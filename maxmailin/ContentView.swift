@@ -3889,10 +3889,6 @@ private func handleMultipleFiles(_ urls: [URL]) {
         }
     }
 
-    /// Standard progress hook for the runner's overlay.
-    private var exportProgress: @MainActor (Int, Int) -> Void {
-        { done, total in ExportRunCenter.shared.update(done: done, total: total) }
-    }
 
     /// Free-limit messaging shared by capped exports; returns the status
     /// message and raises the paywall when the cap truncated the export.
@@ -3928,7 +3924,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             let result = try await service.exportEMLFiles(
                 scope: scope, to: folderURL, limit: cap,
                 render: { vm.exportEmailAsEML($0) },
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "EML export \(Self.exportCancelledSuffix)" }
             ForensicManager.shared.logAction("Export Selection", detail: "Exported \(result.recordsWritten) selected emails as EML")
             return await self.cappedExportMessage(written: result.recordsWritten, scope: scope, what: String(localized: "selected emails"))
@@ -3952,7 +3948,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             // Streams the selection; each PDF rendered per message (bounded).
             let result = try await service.exportPDFFiles(
                 scope: scope, to: folderURL, limit: cap,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "PDF export \(Self.exportCancelledSuffix)" }
             ForensicManager.shared.logAction("Individual PDF Export", detail: "\(result.recordsWritten) exported")
             return await self.cappedExportMessage(written: result.recordsWritten, scope: scope, what: String(localized: "PDFs"))
@@ -3982,7 +3978,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             let result = try await service.exportEMLFiles(
                 scope: scope, to: folderURL, limit: cap,
                 render: { vm.exportEmailAsEML($0) },
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "EML export \(Self.exportCancelledSuffix)" }
             #if os(iOS)
             if result.recordsWritten > 0 { self.iOSShareFile(at: folderURL) }
@@ -4010,7 +4006,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             // Streamed row-by-row from the store; incremental file writes.
             let result = try await service.exportDetailedCSV(
                 scope: scope, to: url, limit: cap,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "CSV export \(Self.exportCancelledSuffix)" }
             #if os(iOS)
             self.iOSShareFile(at: url)
@@ -4035,7 +4031,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             // Streamed + signed: Ed25519 over the incrementally computed SHA-256.
             let result = try await service.exportForensicCSV(
                 scope: scope, to: url,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "Forensic CSV export \(Self.exportCancelledSuffix)" }
             forensic.logAction("Bulk Forensic Export", detail: "Exported \(result.recordsWritten) emails as forensic CSV to \(url.lastPathComponent) (signed, sha256 \(result.sha256Hex?.prefix(12) ?? ""))")
             #if os(iOS)
@@ -4059,7 +4055,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
         runStreamingExport("Exporting Concordance load file") { service in
             let result = try await service.exportConcordanceDAT(
                 scope: scope, to: url,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "Concordance export \(Self.exportCancelledSuffix)" }
             forensic.logAction("Concordance Export", detail: "Exported \(result.recordsWritten) emails as Concordance .dat (signed)")
             #if os(iOS)
@@ -4181,7 +4177,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
         runStreamingExport("Exporting tagged emails") { service in
             let result = try await service.exportForensicCSV(
                 scope: .explicit(taggedIDs), to: url,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "Tagged export \(Self.exportCancelledSuffix)" }
             forensic.logAction("Tagged Export", detail: "Exported \(result.recordsWritten) tagged emails (signed)")
             #if os(iOS)
@@ -4209,7 +4205,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             // streamed scope — not the preview arrays.
             let contactCount = try await service.exportVCard(
                 scope: scope, to: url,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             #if os(iOS)
             self.iOSShareFile(at: url)
             #endif
@@ -4231,7 +4227,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             // Events are extracted per streamed email and written incrementally.
             let events = try await service.exportICS(
                 scope: scope, to: url,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             guard events > 0 else { return "ICS export \(Self.exportCancelledSuffix)" }
             #if os(iOS)
             self.iOSShareFile(at: url)
@@ -4254,7 +4250,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
         runStreamingExport("Exporting hash manifest") { service in
             let result = try await service.exportHashManifest(
                 scope: scope, to: url,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "Hash manifest export \(Self.exportCancelledSuffix)" }
             forensic.logAction("Hash Manifest Export", detail: "Exported hash manifest for \(result.recordsWritten) emails (signed)")
             #if os(iOS)
@@ -4279,7 +4275,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             // materializes; the file itself is the print artifact.
             let result = try await service.exportBatchPrintText(
                 scope: scope, to: url,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "Batch print \(Self.exportCancelledSuffix)" }
             #if os(iOS)
             self.iOSShareFile(at: url)
@@ -4306,7 +4302,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             // Rendered per streamed message — bounded memory at any scale.
             let result = try await service.exportTIFFFiles(
                 scope: scope, to: folderURL,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "TIFF export \(Self.exportCancelledSuffix)" }
             #if os(iOS)
             if result.recordsWritten > 0 { self.iOSShareFile(at: folderURL) }
@@ -4336,7 +4332,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             // cap (ArchiveExportService.portableHTMLMaxEmails) — surfaced below.
             let result = try await service.exportPortableHTML(
                 scope: scope, to: folderURL, limit: cap,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "HTML export \(Self.exportCancelledSuffix)" }
             #if os(macOS)
             NSWorkspace.shared.selectFile(folderURL.appendingPathComponent("index.html").path, inFileViewerRootedAtPath: folderURL.path)
@@ -4422,7 +4418,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             // over bounded batches from the store.
             let result = try await service.verifyIntegrity(
                 scope: scope,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             var message = "Integrity: \(result.passed) passed"
             if result.failed > 0 { message += ", \(result.failed) FAILED" }
             if result.unverified > 0 { message += ", \(result.unverified) unverified" }
@@ -4448,7 +4444,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             // MSG is per-message OLE2 — streams unbounded (unlike PST).
             let result = try await service.exportMSGFiles(
                 scope: scope, to: url,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "MSG export \(Self.exportCancelledSuffix)" }
             return "Exported \(result.recordsWritten) MSG files."
         }
@@ -4490,7 +4486,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
                 let dir = url.deletingLastPathComponent()
                 let base = url.deletingPathExtension().lastPathComponent
                 let parts = try await service.exportPSTParts(scope: scope, toDirectory: dir, baseName: base,
-                                                             onProgress: self.exportProgress)
+                                                             onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
                 let messages = parts.reduce(0) { $0 + $1.messages }
                 if parts.count == 1, let only = parts.first {
                     try? FileManager.default.removeItem(at: url)
@@ -4507,7 +4503,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             let count = try await service.exportPST(
                 scope: scope,
                 to: url,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             return "Exported \(count) emails to PST."
         }
         #else
@@ -4543,7 +4539,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             let result = try await service.exportRelativityCSV(
                 scope: scope, to: url,
                 custodianName: custodian, caseNumber: caseNumber,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "Relativity export \(Self.exportCancelledSuffix)" }
             return "Exported Relativity load file (\(result.recordsWritten) records, signed)."
         }
@@ -4553,7 +4549,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             let result = try await service.exportRelativityCSV(
                 scope: scope, to: url,
                 custodianName: custodian, caseNumber: caseNumber,
-                onProgress: self.exportProgress)
+                onProgress: { ExportRunCenter.shared.update(done: $0, total: $1) })
             if result.cancelled { return "Relativity export \(Self.exportCancelledSuffix)" }
             shareItems = [url]
             showShareSheet = true

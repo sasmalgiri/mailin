@@ -334,7 +334,7 @@ final class V3CompatibilityTests: XCTestCase {
             XCTAssertTrue(receipt.documentFields.contains { $0.key == "Calls that fell back to the previous engine" && $0.value == "1" })
             XCTAssertTrue(env.job.auditLines().contains { $0.hasPrefix("Fell back to the previous engine") })
         }
-        let message = await ScopeJobEnvironment.$current.withValue(env.job) { EngineGuard.fellBack(.v3IOC, error: Boom()) }
+        let message = ScopeJobEnvironment.$current.withValue(env.job) { EngineGuard.fellBack(.v3IOC, error: Boom()) }
         XCTAssertTrue(message.contains("boom") && message.contains("previous engine"), message)
     }
 
@@ -453,7 +453,7 @@ final class V3CompatibilityTests: XCTestCase {
         try await env.store.insertBatch((0..<30).map { makeEmail($0, from: "a@a.com", tag: "ai") }, batchSize: 50)
         let all = try await env.archive.fullEmails(ids: try await ids(env))
         let one = [all[3]]
-        try await ScopeJobEnvironment.$current.withValue(env.job) {
+        await ScopeJobEnvironment.$current.withValue(env.job) {
             let kept = await AIContextSelector.context(for: one, isWindow: false, scopeName: "other", enabled: true)
             XCTAssertEqual(kept.emails.map(\.id), [all[3].id], "one email asked about stays one email")
             XCTAssertNil(kept.basedOn)
