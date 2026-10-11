@@ -96,7 +96,7 @@ extension ArchiveExportService {
         var quoter = MBOXRecordBuilder.StreamingQuoter(enabled: plan.quoteFromLines)
         var remaining = Int(plan.range.length)
         while remaining > 0 {
-            guard let chunk = try autoreleasepool { try handle.read(upToCount: min(chunkSize, remaining)) }, !chunk.isEmpty else {
+            guard let chunk = try autoreleasepool(invoking: { try handle.read(upToCount: min(chunkSize, remaining)) }), !chunk.isEmpty else {
                 // The file shrank under us: a short record must be an error,
                 // never a record that looks complete.
                 throw LocatorReadError.rangeUnresolvable(plan.range, fileSize: Int64(Int(plan.range.length) - remaining))

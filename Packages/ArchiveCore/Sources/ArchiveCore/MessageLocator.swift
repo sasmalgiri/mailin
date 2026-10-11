@@ -244,7 +244,7 @@ struct LocatorReader: Sendable {
         var hasher = SHA256()
         while true {
             let chunk: Data?
-            do { chunk = try autoreleasepool { try handle.read(upToCount: chunkSize) } }
+            do { chunk = try autoreleasepool(invoking: { try handle.read(upToCount: chunkSize) }) }
             catch { throw LocatorReadError.ioError(error.localizedDescription) }
             guard let chunk, !chunk.isEmpty else { break }
             hasher.update(data: chunk)
@@ -271,7 +271,7 @@ struct LocatorReader: Sendable {
             var remaining = range.length
             while remaining > 0 {
                 let want = Int(min(Int64(chunkSize), remaining))
-                guard let chunk = try autoreleasepool { try handle.read(upToCount: want) }, !chunk.isEmpty else {
+                guard let chunk = try autoreleasepool(invoking: { try handle.read(upToCount: want) }), !chunk.isEmpty else {
                     throw LocatorReadError.rangeUnresolvable(range, fileSize: range.end - remaining)
                 }
                 try sink(chunk)

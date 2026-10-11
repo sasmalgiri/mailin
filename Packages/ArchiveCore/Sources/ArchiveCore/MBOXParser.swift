@@ -339,7 +339,7 @@ struct MBOXParser {
                 // §7.1: a READ ERROR must throw — treating it as EOF would
                 // silently truncate the archive ("fake EOF" data loss).
                 let chunk: Data?
-                do { chunk = try autoreleasepool { try handle.read(upToCount: chunkSize) } }
+                do { chunk = try autoreleasepool(invoking: { try handle.read(upToCount: chunkSize) }) }
                 catch {
                     throw ExtractionError.invalidEmail(
                         reason: "I/O error reading \(fileURL.lastPathComponent) at offset \((try? handle.offset()) ?? 0): \(error.localizedDescription)")

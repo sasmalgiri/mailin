@@ -1150,7 +1150,7 @@ final class BulkImportCoordinator {
         defer { try? handle.close() }
         var hasher = SHA256()
         while true {
-            let chunk = try autoreleasepool { try handle.read(upToCount: 1_048_576) } ?? Data()
+            let chunk = try autoreleasepool(invoking: { try handle.read(upToCount: 1_048_576) }) ?? Data()
             if chunk.isEmpty { break }
             hasher.update(data: chunk)
         }

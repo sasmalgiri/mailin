@@ -135,7 +135,7 @@ struct BlobStore: Sendable {
         var total: Int64 = 0
         do {
             while true {
-                guard let chunk = try autoreleasepool { try input.read(upToCount: chunkSize) }, !chunk.isEmpty else { break }
+                guard let chunk = try autoreleasepool(invoking: { try input.read(upToCount: chunkSize) }), !chunk.isEmpty else { break }
                 hasher.update(data: chunk)
                 try output.write(contentsOf: chunk)
                 total += Int64(chunk.count)
