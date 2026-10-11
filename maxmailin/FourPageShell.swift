@@ -137,6 +137,7 @@ struct FourPageShell: View {
             // stopped inside, and decide whether this launch is Safe Mode.
             SafeMode.shared.evaluateAtLaunch(registry: modules)
             EngineTripCenter.shared.checkAtLaunch(registry: modules)
+            SnapshotLocation.restoreAtLaunch()
             ArchiveSnapshots.scheduleIfDue()
             IdleCheckpoint.start()
             router.reconcile(with: modules)

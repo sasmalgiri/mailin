@@ -11,6 +11,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ArchiveHealthView: View {
     @Environment(ModuleRegistry.self) private var modules
@@ -24,6 +25,8 @@ struct ArchiveHealthView: View {
     @State private var featureCoverage: (indexed: Int, total: Int) = (0, 0)
     @State private var fingerprintRoot: String?
     @State private var legalCounts: SQLiteEmailStore.LegalStateCounts?
+    @State private var choosingSnapshotFolder = false
+    @State private var snapshotFolder: URL?
 
     private static let lastIntegrityKey = "archiveHealth.lastIntegrity"
     private static let lastIntegrityDateKey = "archiveHealth.lastIntegrityDate"
@@ -47,6 +50,11 @@ struct ArchiveHealthView: View {
                 if !modules.isOn(.v3Snapshots) {
                     Text("Archive snapshots are off. Turn on “Archive snapshots (3.0)” in Modules to keep a restorable copy before every upgrade and once a day.")
                         .font(.caption).foregroundStyle(.secondary)
+                }
+                if let failure = ArchiveSnapshotPolicy.upgradeSnapshotFailure {
+                    Label(String(localized: "No snapshot could be taken before the last upgrade: \(failure)"),
+                          systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
                 }
                 if snapshots.isEmpty {
                     Text("No snapshots yet.").foregroundStyle(.secondary)
@@ -76,6 +84,32 @@ struct ArchiveHealthView: View {
                         }
                     }
                     .disabled(working || snapshots.isEmpty)
+                }
+                // §3-S1: an external location, e.g. a backup disk.
+                LabeledContent(String(localized: "Snapshot folder")) {
+                    if let snapshotFolder {
+                        Text(ArchiveSnapshotPolicy.reachableExternalDirectory == nil
+                             ? String(localized: "\(snapshotFolder.lastPathComponent) (not connected — saving beside the archive)")
+                             : snapshotFolder.lastPathComponent)
+                    } else {
+                        Text("Beside the archive")
+                    }
+                }
+                HStack {
+                    Button(String(localized: "Choose snapshot folder…")) { choosingSnapshotFolder = true }
+                        .disabled(working)
+                    if snapshotFolder != nil {
+                        Button(String(localized: "Save beside the archive")) {
+                            SnapshotLocation.clear()
+                            note = String(localized: "Snapshots will be saved beside the archive. Snapshots already in the other folder stay there.")
+                            reload()
+                        }
+                        .disabled(working)
+                    }
+                }
+                .fileImporter(isPresented: $choosingSnapshotFolder, allowedContentTypes: [.folder]) { result in
+                    if case .success(let url) = result { note = SnapshotLocation.choose(url) }
+                    reload()
                 }
             }
 
@@ -163,6 +197,7 @@ struct ArchiveHealthView: View {
 
     private func reload() {
         snapshots = ArchiveSnapshots.all()
+        snapshotFolder = SnapshotLocation.chosen
         freeBytes = (try? SQLiteEmailStore.shared.snapshotDirectory.deletingLastPathComponent()
             .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
             .volumeAvailableCapacityForImportantUsage

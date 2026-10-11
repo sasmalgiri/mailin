@@ -36,6 +36,73 @@ enum IdleCheckpoint {
     }
 }
 
+/// §3-S1 external location: the folder the user chose for snapshots, kept
+/// as a security-scoped bookmark so access survives relaunch. When the
+/// folder is not reachable (disk detached) snapshots go beside the store.
+@MainActor
+enum SnapshotLocation {
+    private static let bookmarkKey = "archiveSnapshots.externalBookmark"
+    private static var accessed: URL?
+
+    /// The chosen folder, reachable or not; nil = beside the archive.
+    static var chosen: URL? { ArchiveSnapshotPolicy.externalDirectory }
+
+    /// Resolves the saved bookmark at launch.
+    static func restoreAtLaunch() {
+        guard accessed == nil, let data = UserDefaults.standard.data(forKey: bookmarkKey) else { return }
+        var stale = false
+        guard let url = try? URL(resolvingBookmarkData: data, options: resolveOptions, relativeTo: nil,
+                                 bookmarkDataIsStale: &stale) else { return }
+        activate(url)
+        if stale, let fresh = try? url.bookmarkData(options: creationOptions, includingResourceValuesForKeys: nil, relativeTo: nil) {
+            UserDefaults.standard.set(fresh, forKey: bookmarkKey)
+        }
+    }
+
+    /// Uses `url` for snapshots after checking it. Returns the line to show.
+    static func choose(_ url: URL) -> String {
+        let scoped = url.startAccessingSecurityScopedResource()
+        let verdict = ArchiveSnapshotPolicy.verdict(for: url)
+        guard verdict.isUsable else {
+            if scoped { url.stopAccessingSecurityScopedResource() }
+            return verdict.message ?? String(localized: "That folder cannot hold snapshots.")
+        }
+        guard let data = try? url.bookmarkData(options: creationOptions, includingResourceValuesForKeys: nil, relativeTo: nil) else {
+            if scoped { url.stopAccessingSecurityScopedResource() }
+            return String(localized: "mailin could not keep access to that folder. Choose it again.")
+        }
+        if scoped { url.stopAccessingSecurityScopedResource() }
+        UserDefaults.standard.set(data, forKey: bookmarkKey)
+        activate(url)
+        ForensicManager.shared.logAction("Snapshot folder chosen", detail: url.path)
+        let line = String(localized: "Snapshots will be saved in “\(url.lastPathComponent)”.")
+        return verdict.message.map { line + " " + $0 } ?? line
+    }
+
+    /// Back to beside the archive. Snapshots already in the folder stay there.
+    static func clear() {
+        accessed?.stopAccessingSecurityScopedResource()
+        accessed = nil
+        ArchiveSnapshotPolicy.externalDirectory = nil
+        UserDefaults.standard.removeObject(forKey: bookmarkKey)
+        ForensicManager.shared.logAction("Snapshot folder reset", detail: "snapshots are saved beside the archive")
+    }
+
+    private static func activate(_ url: URL) {
+        accessed?.stopAccessingSecurityScopedResource()
+        accessed = url.startAccessingSecurityScopedResource() ? url : nil
+        ArchiveSnapshotPolicy.externalDirectory = url
+    }
+
+    #if os(macOS)
+    private static let creationOptions: URL.BookmarkCreationOptions = .withSecurityScope
+    private static let resolveOptions: URL.BookmarkResolutionOptions = .withSecurityScope
+    #else
+    private static let creationOptions: URL.BookmarkCreationOptions = []
+    private static let resolveOptions: URL.BookmarkResolutionOptions = []
+    #endif
+}
+
 @MainActor
 enum ArchiveSnapshots {
     private static let lastScheduledKey = "archiveSnapshots.lastScheduled"

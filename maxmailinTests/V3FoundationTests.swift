@@ -333,6 +333,77 @@ final class V3FoundationTests: XCTestCase {
                       "receipts state what was left out: \(described)")
     }
 
+    /// §3-S1 external location: snapshots go to the chosen folder when it is
+    /// reachable, are listed from both places, and fall back beside the
+    /// store when the folder is gone (a detached disk never costs a snapshot).
+    func testSnapshots_externalFolder_usedWhenReachable_fallsBackWhenDetached() async throws {
+        let env = makeEnv()
+        try await env.store.insertBatch((0..<3).map { makeEmail($0) }, batchSize: 100)
+        let external = env.root.appendingPathComponent("BackupDisk", isDirectory: true)
+        try FileManager.default.createDirectory(at: external, withIntermediateDirectories: true)
+        ArchiveSnapshotPolicy.externalDirectory = external
+        defer { ArchiveSnapshotPolicy.externalDirectory = nil }
+
+        let outside = try await env.store.snapshot(reason: "manual")
+        XCTAssertTrue(outside.url.path.hasPrefix(external.path), "written to the chosen folder: \(outside.url.path)")
+        XCTAssertTrue(env.store.snapshots().contains { $0.url == outside.url }, "listed with the others")
+        XCTAssertEqual(env.store.snapshots().first { $0.url == outside.url }?.reason, "manual",
+                       "a manual snapshot is never taken for a rolling one (the schedule prunes those)")
+        _ = try await env.store.snapshot(reason: "scheduled")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outside.url.path), "the schedule keeps manual snapshots")
+
+        try FileManager.default.removeItem(at: external)   // the disk is detached
+        let beside = try await env.store.snapshot(reason: "manual")
+        XCTAssertTrue(beside.url.path.hasPrefix(env.store.snapshotDirectory.path), "falls back beside the store")
+        XCTAssertTrue(ArchiveSnapshotPolicy.verdict(for: env.root).isUsable)
+        XCTAssertFalse(ArchiveSnapshotPolicy.verdict(for: env.root.appendingPathComponent("missing")).isUsable)
+    }
+
+    /// §3-S1 restore: a snapshot brings the archive back, the database it
+    /// replaced is kept first, and a damaged snapshot replaces nothing.
+    func testSnapshots_restoreBringsBackTheArchive_keepsTheCurrentOne_refusesADamagedFile() async throws {
+        let env = makeEnv()
+        try await env.store.insertBatch((0..<3).map { makeEmail($0) }, batchSize: 100)
+        let snap = try await env.store.snapshot(reason: "manual")
+        try await env.store.insertBatch((3..<5).map { makeEmail($0) }, batchSize: 100)
+        let v5 = try await env.archive.count()
+        XCTAssertEqual(v5, 5)
+
+        let damaged = env.root.appendingPathComponent("damaged.db")
+        try Data(repeating: 0x41, count: 8_192).write(to: damaged)
+        do {
+            try await env.store.restore(from: damaged)
+            XCTFail("a damaged snapshot must be refused")
+        } catch {}
+        let still = try await env.archive.count()
+        XCTAssertEqual(still, 5, "nothing was replaced")
+
+        try await env.store.restore(from: snap.url)
+        let back = try await env.archive.count()
+        XCTAssertEqual(back, 3)
+        XCTAssertTrue(env.store.snapshots().contains { $0.reason == "before restore" }, "the replaced database is kept")
+    }
+
+    /// §3-S1 / rule 2: an archive opened for a schema upgrade gets a snapshot
+    /// first, and the upgrade still completes.
+    func testMigration_leavesASnapshotBeforeTheUpgrade() async throws {
+        let env = makeEnv()
+        try await env.store.insertBatch((0..<3).map { makeEmail($0) }, batchSize: 100)
+        await env.store.reopenConnection()
+        var db: OpaquePointer?
+        let path = env.store.storeDirectory.appendingPathComponent("emails.db").path
+        XCTAssertEqual(sqlite3_open(path, &db), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(db, "PRAGMA user_version = 18;", nil, nil, nil), SQLITE_OK)
+        sqlite3_close(db)
+
+        ArchiveSnapshotPolicy.isEnabled = true
+        defer { ArchiveSnapshotPolicy.isEnabled = false }
+        let n = try await env.archive.count()
+        XCTAssertEqual(n, 3, "the upgrade completed and nothing was lost")
+        XCTAssertTrue(env.store.snapshots().contains { $0.reason == "before upgrade" }, "a snapshot was taken first")
+        XCTAssertNil(ArchiveSnapshotPolicy.upgradeSnapshotFailure)
+    }
+
     /// Queries saved before 3.0 (no `exclusions` key) still decode.
     func testEmailQuery_decodesPre30JSON() throws {
         var q = EmailQuery()

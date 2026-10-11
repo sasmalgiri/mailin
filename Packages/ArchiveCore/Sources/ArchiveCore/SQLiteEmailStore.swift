@@ -556,7 +556,12 @@ actor SQLiteEmailStore: EmailArchiveStore {
         if ArchiveSnapshotPolicy.isEnabled,
            let v = try? scalarInt(handle, "PRAGMA user_version;"),
            v >= 1, v < Self.currentSchemaVersion {
-            _ = try? writeSnapshot(handle, reason: "before-upgrade-v\(v)-to-v\(Self.currentSchemaVersion)")
+            do {
+                _ = try writeSnapshot(handle, reason: "before-upgrade-v\(v)-to-v\(Self.currentSchemaVersion)")
+                ArchiveSnapshotPolicy.upgradeSnapshotFailure = nil
+            } catch {
+                ArchiveSnapshotPolicy.upgradeSnapshotFailure = error.localizedDescription
+            }
         }
         try migrateSchema(handle)
         // §3-S6: Safe Mode opens the archive read-only (after any migration,
@@ -580,6 +585,16 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// (the store itself refuses cloud locations).
     nonisolated var snapshotDirectory: URL { directory.appendingPathComponent("Snapshots", isDirectory: true) }
 
+    /// §3-S1: where the next snapshot is written — the user's chosen folder
+    /// when it is reachable, otherwise beside the store, so a detached disk
+    /// never costs a snapshot.
+    nonisolated var snapshotWriteDirectory: URL { ArchiveSnapshotPolicy.reachableExternalDirectory ?? snapshotDirectory }
+
+    /// Every folder snapshots are listed (and pruned) from.
+    nonisolated var snapshotDirectories: [URL] {
+        [snapshotDirectory] + [ArchiveSnapshotPolicy.reachableExternalDirectory].compactMap { $0 }
+    }
+
     /// Writes a consistent copy of the live database with `VACUUM INTO` (safe
     /// while other connections read and write; the copy is compact and
     /// self-contained, with no -wal to lose).
@@ -593,11 +608,12 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     private func writeSnapshot(_ handle: OpaquePointer, reason: String) throws -> ArchiveSnapshot {
         let fm = FileManager.default
-        try fm.createDirectory(at: snapshotDirectory, withIntermediateDirectories: true)
-        ArtifactProtection.applyBackgroundReadable(to: snapshotDirectory)
+        let target = snapshotWriteDirectory
+        try fm.createDirectory(at: target, withIntermediateDirectories: true)
+        ArtifactProtection.applyBackgroundReadable(to: target)
         let dbURL = directory.appendingPathComponent("emails.db")
         let size = ((try? fm.attributesOfItem(atPath: dbURL.path)[.size]) as? NSNumber)?.int64Value ?? 0
-        let available = (try? snapshotDirectory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
+        let available = (try? target.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
             .volumeAvailableCapacityForImportantUsage ?? Int64.max
         let needed = size + ArchiveSnapshotPolicy.headroomBytes
         guard available >= needed else {
@@ -605,7 +621,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
         }
         let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
         let safeReason = reason.replacingOccurrences(of: "[^A-Za-z0-9-]", with: "-", options: .regularExpression)
-        let url = snapshotDirectory.appendingPathComponent("emails-\(stamp)-\(safeReason).db")
+        let url = target.appendingPathComponent("emails-\(stamp)-\(safeReason).db")
         let escaped = url.path.replacingOccurrences(of: "'", with: "''")
         do {
             try exec(handle, "VACUUM INTO '\(escaped)';")
@@ -621,14 +637,19 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// Snapshots on disk, newest first.
     nonisolated func snapshots() -> [ArchiveSnapshot] {
         let fm = FileManager.default
-        guard let files = try? fm.contentsOfDirectory(at: snapshotDirectory,
-                                                      includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey]) else { return [] }
+        let files = snapshotDirectories.flatMap {
+            (try? fm.contentsOfDirectory(at: $0, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey])) ?? []
+        }
         return files.filter { $0.pathExtension == "db" && $0.lastPathComponent.hasPrefix("emails-") }
             .map { url in
                 let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
                 let name = url.deletingPathExtension().lastPathComponent
+                // Only files named "-scheduled" are rolling: a manual snapshot
+                // must never be pruned by the daily schedule.
                 let reason = name.contains("before-upgrade") ? "before upgrade"
-                    : name.contains("before-restore") ? "before restore" : "scheduled"
+                    : name.contains("before-restore") ? "before restore"
+                    : name.hasSuffix("-scheduled") ? "scheduled"
+                    : name.hasSuffix("-manual") ? "manual" : "other"
                 return ArchiveSnapshot(url: url, date: values?.contentModificationDate ?? .distantPast,
                                        reason: reason, bytes: Int64(values?.fileSize ?? 0))
             }
@@ -667,9 +688,11 @@ actor SQLiteEmailStore: EmailArchiveStore {
         sqlite3_close(check)
         guard verdict == "ok" else { throw ArchiveSnapshotError.integrityCheckFailed(verdict) }
 
-        // 2. Keep the current database.
+        // 2. Keep the current database. If that copy cannot be written (no
+        // space, folder gone) the restore stops: replacing the database
+        // without it would destroy data (rule 1).
         let current = try ensureDB()
-        _ = try? writeSnapshot(current, reason: "before-restore")
+        _ = try writeSnapshot(current, reason: "before-restore")
 
         // 3. Swap files with the connection closed.
         reopenConnection()

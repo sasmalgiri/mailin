@@ -56,6 +56,39 @@ public enum ArchiveSnapshotPolicy {
     /// Free space required beyond the snapshot itself, so a snapshot never
     /// fills the disk.
     public static let headroomBytes: Int64 = 512 * 1024 * 1024
+
+    /// §3-S1 external location: a folder the user chose (an external disk, a
+    /// second internal volume). Pushed by the app, which holds the
+    /// security-scoped access. nil = beside the store only.
+    nonisolated(unsafe) public static var externalDirectory: URL?
+
+    /// Why the snapshot before the last schema upgrade could not be written
+    /// (shown on the Health page); nil when it was written or none was due.
+    nonisolated(unsafe) public static var upgradeSnapshotFailure: String?
+
+    /// The chosen folder's snapshot subfolder when it is reachable right now
+    /// (disk attached, folder present and writable); nil otherwise.
+    public static var reachableExternalDirectory: URL? {
+        guard let base = externalDirectory else { return nil }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: base.path, isDirectory: &isDir), isDir.boolValue,
+              FileManager.default.isWritableFile(atPath: base.path) else { return nil }
+        return base.appendingPathComponent("mailin Snapshots", isDirectory: true)
+    }
+
+    /// Judges a folder offered as the snapshot location: cloud, network and
+    /// read-only volumes are refused (a copy there leaves the device or can be
+    /// corrupted); removable disks are the point and are accepted.
+    static func verdict(for directory: URL) -> ArchiveLocationVerdict {
+        let v = ArchiveLocationPolicy.verdict(for: directory)
+        if case .warn(_, let free) = v, isRemovable(directory) { return .ok(freeBytes: free) }
+        return v
+    }
+
+    private static func isRemovable(_ directory: URL) -> Bool {
+        let values = try? directory.resourceValues(forKeys: [.volumeIsRemovableKey, .volumeIsEjectableKey])
+        return values?.volumeIsRemovable == true || values?.volumeIsEjectable == true
+    }
 }
 
 /// One snapshot file on disk.
