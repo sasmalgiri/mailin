@@ -2674,7 +2674,68 @@
       }
     },
     "%@ (not connected — saving beside the archive)" : {
-
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ (nicht verbunden — Sicherung neben dem Archiv)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ (no conectado; se guarda junto al archivo)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ (non connecté — enregistrement à côté de l’archive)"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ (कनेक्ट नहीं — संग्रह के पास सहेजा जा रहा है)"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ (non collegato — salvataggio accanto all’archivio)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@（未接続 — アーカイブの隣に保存中）"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@(연결되지 않음 — 보관함 옆에 저장 중)"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ (não conectado — salvando ao lado do arquivo)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@（未连接 — 正存储在归档旁边）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@（未連接 — 正儲存在封存旁邊）"
+          }
+        }
+      }
     },
     "%@ (Pro)" : {
       "localizations" : {
@@ -54662,7 +54723,68 @@
       }
     },
     "Beside the archive" : {
-
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Neben dem Archiv"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Junto al archivo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "À côté de l’archive"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "संग्रह के पास"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Accanto all’archivio"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アーカイブの隣"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보관함 옆"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ao lado do arquivo"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "归档旁边"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "封存旁邊"
+          }
+        }
+      }
     },
     "Best Value" : {
       "localizations" : {
@@ -64816,7 +64938,68 @@
       }
     },
     "Choose snapshot folder…" : {
-
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Snapshot-Ordner wählen …"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elegir carpeta de instantáneas…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choisir le dossier des instantanés…"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "स्नैपशॉट फ़ोल्डर चुनें…"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scegli la cartella delle istantanee…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スナップショットのフォルダを選択…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "스냅샷 폴더 선택…"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escolher pasta de instantâneos…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择快照文件夹…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇快照檔案夾…"
+          }
+        }
+      }
     },
     "Choose what happens to matching emails." : {
       "localizations" : {
@@ -170789,7 +170972,69 @@
     },
     "mailin could not keep access to that folder. Choose it again." : {
       "comment" : "Error message when the snapshot folder cannot be accessed.",
-      "isCommentAutoGenerated" : true
+      "isCommentAutoGenerated" : true,
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin konnte den Zugriff auf diesen Ordner nicht behalten. Wählen Sie ihn erneut."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin no pudo conservar el acceso a esa carpeta. Vuelve a elegirla."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin n’a pas pu conserver l’accès à ce dossier. Choisissez-le à nouveau."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin उस फ़ोल्डर तक पहुँच बनाए नहीं रख सका। उसे फिर से चुनें।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin non ha potuto mantenere l’accesso a quella cartella. Sceglila di nuovo."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin はそのフォルダへのアクセスを保持できませんでした。もう一度選択してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin이 해당 폴더에 대한 접근 권한을 유지할 수 없습니다. 다시 선택하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O mailin não conseguiu manter o acesso a essa pasta. Escolha-a novamente."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin 无法保留对该文件夹的访问权限。请重新选择。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mailin 無法保留對該檔案夾的取用權限。請重新選擇。"
+          }
+        }
+      }
     },
     "mailin follows your system language and is available in 11 languages. To use a different language for mailin only, add mailin under System Settings ▸ General ▸ Language & Region ▸ Applications. The change applies the next time mailin opens." : {
       "localizations" : {
@@ -191609,7 +191854,68 @@
       }
     },
     "No snapshot could be taken before the last upgrade: %@" : {
-
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vor dem letzten Upgrade konnte kein Snapshot erstellt werden: %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo crear una instantánea antes de la última actualización: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucun instantané n’a pu être créé avant la dernière mise à niveau : %@"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "पिछले अपग्रेड से पहले कोई स्नैपशॉट नहीं लिया जा सका: %@"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non è stato possibile creare un’istantanea prima dell’ultimo aggiornamento: %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前回のアップグレード前にスナップショットを作成できませんでした：%@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "마지막 업그레이드 전에 스냅샷을 만들 수 없었습니다: %@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível criar um instantâneo antes da última atualização: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上次升级前未能创建快照：%@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上次升級前未能建立快照：%@"
+          }
+        }
+      }
     },
     "No snapshots yet." : {
       "comment" : "A message displayed when there are no snapshots available.",
@@ -247589,7 +247895,68 @@
       }
     },
     "Save beside the archive" : {
-
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Neben dem Archiv sichern"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guardar junto al archivo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enregistrer à côté de l’archive"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "संग्रह के पास सहेजें"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salva accanto all’archivio"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アーカイブの隣に保存"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보관함 옆에 저장"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salvar ao lado do arquivo"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "存储在归档旁边"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "儲存在封存旁邊"
+          }
+        }
+      }
     },
     "Save Current as Preset" : {
       "localizations" : {
@@ -248427,7 +248794,69 @@
     },
     "Save tags to every email…" : {
       "comment" : "A button that saves tags to every email in the archive.",
-      "isCommentAutoGenerated" : true
+      "isCommentAutoGenerated" : true,
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tags in jeder E-Mail speichern …"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guardar etiquetas en todos los correos…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enregistrer les étiquettes dans chaque e-mail…"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "हर ईमेल में टैग सहेजें…"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salva i tag in ogni email…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべてのメールにタグを保存…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "모든 이메일에 태그 저장…"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salvar etiquetas em todos os e-mails…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将标签存储到每封邮件…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "將標籤儲存到每封郵件…"
+          }
+        }
+      }
     },
     "Save the complete audit log for the case record" : {
       "localizations" : {
@@ -253769,7 +254198,68 @@
       }
     },
     "Search can exclude as well as include: put - or NOT before any filter (from:, to:, subject:, domain:, tag:, source:, type:, evidence:, filename:, before:, after:, has:attachment, is:pinned)." : {
-
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Suche kann ausschließen wie einschließen: Setzen Sie - oder NOT vor einen beliebigen Filter (from:, to:, subject:, domain:, tag:, source:, type:, evidence:, filename:, before:, after:, has:attachment, is:pinned)."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La búsqueda puede excluir además de incluir: pon - o NOT delante de cualquier filtro (from:, to:, subject:, domain:, tag:, source:, type:, evidence:, filename:, before:, after:, has:attachment, is:pinned)."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La recherche peut exclure aussi bien qu’inclure : placez - ou NOT devant n’importe quel filtre (from:, to:, subject:, domain:, tag:, source:, type:, evidence:, filename:, before:, after:, has:attachment, is:pinned)."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "खोज शामिल करने के साथ-साथ बाहर भी कर सकती है: किसी भी फ़िल्टर से पहले - या NOT लगाएँ (from:, to:, subject:, domain:, tag:, source:, type:, evidence:, filename:, before:, after:, has:attachment, is:pinned)।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La ricerca può escludere oltre che includere: metti - o NOT davanti a qualsiasi filtro (from:, to:, subject:, domain:, tag:, source:, type:, evidence:, filename:, before:, after:, has:attachment, is:pinned)."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "検索では含めるだけでなく除外もできます。任意のフィルタの前に - または NOT を付けます（from:、to:、subject:、domain:、tag:、source:、type:、evidence:、filename:、before:、after:、has:attachment、is:pinned）。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "검색은 포함뿐 아니라 제외도 할 수 있습니다. 어떤 필터 앞에든 - 또는 NOT을 붙이세요(from:, to:, subject:, domain:, tag:, source:, type:, evidence:, filename:, before:, after:, has:attachment, is:pinned)."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A busca pode excluir além de incluir: coloque - ou NOT antes de qualquer filtro (from:, to:, subject:, domain:, tag:, source:, type:, evidence:, filename:, before:, after:, has:attachment, is:pinned)."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索既可以包含也可以排除：在任意筛选条件前加 - 或 NOT（from:、to:、subject:、domain:、tag:、source:、type:、evidence:、filename:、before:、after:、has:attachment、is:pinned）。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋既可以包含也可以排除：在任意篩選條件前加 - 或 NOT（from:、to:、subject:、domain:、tag:、source:、type:、evidence:、filename:、before:、after:、has:attachment、is:pinned）。"
+          }
+        }
+      }
     },
     "Search commands..." : {
       "localizations" : {
@@ -271984,7 +272474,68 @@
       }
     },
     "Snapshot folder" : {
-
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Snapshot-Ordner"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Carpeta de instantáneas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dossier des instantanés"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "स्नैपशॉट फ़ोल्डर"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cartella delle istantanee"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スナップショットのフォルダ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "스냅샷 폴더"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pasta de instantâneos"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "快照文件夹"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "快照檔案夾"
+          }
+        }
+      }
     },
     "Snapshot saved." : {
       "comment" : "A message displayed when a snapshot is saved.",
@@ -272119,11 +272670,134 @@
       }
     },
     "Snapshots will be saved beside the archive. Snapshots already in the other folder stay there." : {
-
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Snapshots werden neben dem Archiv gesichert. Snapshots, die bereits im anderen Ordner liegen, bleiben dort."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las instantáneas se guardarán junto al archivo. Las que ya están en la otra carpeta permanecen allí."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les instantanés seront enregistrés à côté de l’archive. Ceux déjà présents dans l’autre dossier y restent."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "स्नैपशॉट संग्रह के पास सहेजे जाएँगे। दूसरे फ़ोल्डर में पहले से मौजूद स्नैपशॉट वहीं रहेंगे।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le istantanee verranno salvate accanto all’archivio. Quelle già presenti nell’altra cartella restano lì."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スナップショットはアーカイブの隣に保存されます。別のフォルダにある既存のスナップショットはそのまま残ります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "스냅샷이 보관함 옆에 저장됩니다. 다른 폴더에 이미 있는 스냅샷은 그대로 남습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Os instantâneos serão salvos ao lado do arquivo. Os que já estão na outra pasta permanecem lá."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "快照将存储在归档旁边。另一个文件夹中已有的快照会保留在那里。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "快照將儲存在封存旁邊。另一個檔案夾中已有的快照會保留在那裡。"
+          }
+        }
+      }
     },
     "Snapshots will be saved in “%@”." : {
       "comment" : "Line to show after choosing a snapshot folder. The argument is the name of the folder.",
-      "isCommentAutoGenerated" : true
+      "isCommentAutoGenerated" : true,
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Snapshots werden in „%@“ gesichert."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las instantáneas se guardarán en «%@»."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les instantanés seront enregistrés dans « %@ »."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "स्नैपशॉट “%@” में सहेजे जाएँगे।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le istantanee verranno salvate in “%@”."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スナップショットは“%@”に保存されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "스냅샷이 ‘%@’에 저장됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Os instantâneos serão salvos em “%@”."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "快照将存储在“%@”中。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "快照將儲存在「%@」中。"
+          }
+        }
+      }
     },
     "Social" : {
       "extractionState" : "manual",
@@ -284646,7 +285320,69 @@
     },
     "Tag every email" : {
       "comment" : "Button title to save all tags to every email in the archive.",
-      "isCommentAutoGenerated" : true
+      "isCommentAutoGenerated" : true,
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jede E-Mail taggen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Etiquetar todos los correos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Étiqueter chaque e-mail"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "हर ईमेल को टैग करें"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tagga ogni email"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべてのメールにタグ付け"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "모든 이메일에 태그 지정"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Etiquetar todos os e-mails"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "为每封邮件添加标签"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "為每封郵件加上標籤"
+          }
+        }
+      }
     },
     "Tag Evidence" : {
       "localizations" : {
@@ -288380,7 +289116,69 @@
     },
     "That folder cannot hold snapshots." : {
       "comment" : "Error message when the chosen snapshot folder is not usable.",
-      "isCommentAutoGenerated" : true
+      "isCommentAutoGenerated" : true,
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieser Ordner kann keine Snapshots aufnehmen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esa carpeta no puede guardar instantáneas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce dossier ne peut pas contenir d’instantanés."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "वह फ़ोल्डर स्नैपशॉट नहीं रख सकता।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quella cartella non può contenere istantanee."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "そのフォルダにはスナップショットを保存できません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "해당 폴더에는 스냅샷을 저장할 수 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa pasta não pode guardar instantâneos."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该文件夹无法存放快照。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "該檔案夾無法存放快照。"
+          }
+        }
+      }
     },
     "The 6 Phases" : {
       "localizations" : {
