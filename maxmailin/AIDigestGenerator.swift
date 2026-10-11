@@ -61,8 +61,24 @@ struct AIDigestGenerator {
         period: TimePeriod,
         customStart: Date? = nil,
         customEnd: Date? = nil,
-        baseQuery: EmailQuery = .all
+        baseQuery: EmailQuery = .all,
+        v3: Bool = false
     ) async -> [DigestSection] {
+        // §3-A17: the whole-period digest (switch `v3AnalysisQueries`); the
+        // previous engine below if it throws (§3-M3).
+        if v3 {
+            do {
+                let q = await DigestEngine.periodQuery(baseQuery, period: period, customStart: customStart, customEnd: customEnd)
+                return try await DigestEngine.digest(query: q)
+            } catch is CancellationError {
+                return []
+            } catch {
+                let line = await EngineGuard.fellBack(.v3AnalysisQueries, error: error)
+                let previous = await generateDigest(period: period, customStart: customStart, customEnd: customEnd, baseQuery: baseQuery)
+                return [DigestSection(title: String(localized: "Note"), icon: "info.circle",
+                                      items: [DigestItem(headline: line, detail: "", emailIDs: [], priority: .low)])] + previous
+            }
+        }
         // F14: the caller's scope (Page 2 source/date) is the base; the
         // period narrows it further.
         var query = baseQuery
@@ -501,7 +517,7 @@ struct AIDigestGenerator {
         }
     }
 
-    private static func normalizeSubject(_ subject: String) -> String {
+    static func normalizeSubject(_ subject: String) -> String {
         var s = subject.trimmingCharacters(in: .whitespacesAndNewlines)
         let prefixes = ["re:", "fw:", "fwd:", "re: re:", "fw: fw:"]
         var changed = true
@@ -519,7 +535,7 @@ struct AIDigestGenerator {
         return s.isEmpty ? "(No Subject)" : s
     }
 
-    private static func extractEmailAddress(from header: String) -> String {
+    static func extractEmailAddress(from header: String) -> String {
         if let openAngle = header.firstIndex(of: "<"),
            let closeAngle = header.firstIndex(of: ">"),
            openAngle < closeAngle {
@@ -531,7 +547,7 @@ struct AIDigestGenerator {
         return ""
     }
 
-    private static func bodyText(for email: MBOXParser.RawEmail) -> String {
+    static func bodyText(for email: MBOXParser.RawEmail) -> String {
         if !email.plainBody.isEmpty { return email.plainBody }
         if !email.htmlBody.isEmpty {
             return email.htmlBody
@@ -542,7 +558,7 @@ struct AIDigestGenerator {
         return ""
     }
 
-    private static func formatSize(_ bytes: Int) -> String {
+    static func formatSize(_ bytes: Int) -> String {
         if bytes < 1024 { return "\(bytes) B" }
         if bytes < 1024 * 1024 { return "\(bytes / 1024) KB" }
         return String(format: "%.1f MB", Double(bytes) / (1024.0 * 1024.0))
@@ -575,7 +591,7 @@ struct AIDigestGenerator {
 
     #if canImport(FoundationModels)
     @available(macOS 26, iOS 26, *)
-    private static func whatsNewSection() -> DigestSection? {
+    static func whatsNewSection() -> DigestSection? {
         var items: [DigestItem] = []
 
         // Proactive findings from import-time analysis

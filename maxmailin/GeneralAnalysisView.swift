@@ -223,7 +223,7 @@ struct GeneralAnalysisView: View {
 
         if digestSections.isEmpty {
             isGeneratingDigest = true
-            let sections = await AIDigestGenerator.generateDigest(period: .today)
+            let sections = await AIDigestGenerator.generateDigest(period: .today, v3: v3Modules?.isOn(.v3AnalysisQueries) ?? false)
             digestSections = sections
             isGeneratingDigest = false
         }

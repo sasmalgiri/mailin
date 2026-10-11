@@ -204,26 +204,28 @@ class KnowledgeGraph: Codable, @unchecked Sendable {
         guard nodes[sourceID] != nil, nodes[targetID] != nil else { return nil }
         if sourceID == targetID { return [sourceID] }
 
-        var visited: Set<String> = [sourceID]
-        var queue: [(String, [String])] = [(sourceID, [sourceID])]
+        // No visit limit: the graph is already in memory and this breadth-first
+        // search is linear in its size (a moving queue head and a parent map
+        // instead of copied paths). Stopping after 500 nodes reported "no
+        // path" for people who are connected.
+        var parent: [String: String] = [sourceID: sourceID]
+        var queue: [String] = [sourceID]
+        var head = 0
 
-        while !queue.isEmpty {
-            let (current, path) = queue.removeFirst()
-            let neighborNodes = neighbors(of: current)
-
-            for neighbor in neighborNodes {
+        while head < queue.count {
+            let current = queue[head]
+            head += 1
+            for neighbor in neighbors(of: current) where parent[neighbor.id] == nil {
+                parent[neighbor.id] = current
                 if neighbor.id == targetID {
-                    return path + [neighbor.id]
+                    var path = [targetID]
+                    var step = targetID
+                    while step != sourceID, let p = parent[step] { path.append(p); step = p }
+                    return path.reversed()
                 }
-                if !visited.contains(neighbor.id) {
-                    visited.insert(neighbor.id)
-                    queue.append((neighbor.id, path + [neighbor.id]))
-                }
+                queue.append(neighbor.id)
             }
-
-            if visited.count > 500 { break }
         }
-
         return nil
     }
 

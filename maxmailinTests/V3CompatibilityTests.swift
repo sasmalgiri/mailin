@@ -626,4 +626,43 @@ final class V3CompatibilityTests: XCTestCase {
         let fresh = LanguageModelSession()
         XCTAssertFalse(fresh.condenseTranscriptForRetry(), "an empty transcript has nothing to condense")
     }
+
+    // MARK: - A17: the AI Digest covers the whole period
+
+    /// The previous digest read the newest 1,000 emails and filtered them to
+    /// the period in memory; the whole-period digest counts every email in
+    /// it, says how much of each list it shows, and checks new contacts
+    /// against the archive before the period.
+    func testDigest_wholePeriod_exactTotals_listsSayNofM_newContactsCheckedBeforeThePeriod() async throws {
+        let env = makeEnv(engineOn: false)
+        try await env.store.insertBatch([makeEmail(0, from: "old@x.com", tag: "before")], batchSize: 10)
+        try await env.store.insertBatch((10..<1_210).map { makeEmail($0, from: $0 % 2 == 0 ? "new@y.com" : "old@x.com", tag: "a17") },
+                                        batchSize: 500)
+        let start = Date(timeIntervalSince1970: 1_704_067_200 + 10 * 86_400)
+        let end = Date(timeIntervalSince1970: 1_704_067_200 + 2_000 * 86_400)
+        try await ScopeJobEnvironment.$current.withValue(env.job) {
+            let q = DigestEngine.periodQuery(.all, period: .custom, customStart: start, customEnd: end)
+            let sections = try await DigestEngine.digest(query: q, narrate: false)
+            let lines = sections.flatMap { $0.items.map(\.headline) }
+            XCTAssertTrue(lines.contains("Total: 1200 emails"), "every email of the period is counted: \(lines.prefix(3))")
+            XCTAssertTrue(lines.contains(String(localized: "\(5) of \(1_200) conversations shown")), "lists say N of M: \(lines)")
+            let contacts = sections.first { $0.title == String(localized: "New Contacts") }
+            XCTAssertEqual(contacts?.items.first?.headline, "new@y.com", "only the address with no earlier email is new")
+            XCTAssertEqual(contacts?.items.first?.emailIDs.count, 600)
+            XCTAssertFalse(contacts?.items.contains { $0.headline == "old@x.com" } ?? true)
+        }
+    }
+
+    // MARK: - A15: graph paths are found however far apart
+
+    func testKnowledgeGraph_findsAPathPastFiveHundredNodes() {
+        let graph = KnowledgeGraph()
+        for i in 0...700 { _ = graph.addNode(KGNode(id: "p\(i)", type: .person, label: "P\(i)")) }
+        for i in 0..<700 { _ = graph.addEdge(KGEdge(sourceID: "p\(i)", targetID: "p\(i + 1)", type: .communicatesWith)) }
+        let path = graph.shortestPath(from: "p0", to: "p700")
+        XCTAssertEqual(path?.count, 701, "the search used to stop after 500 nodes and report no path")
+        XCTAssertEqual(path?.first, "p0")
+        XCTAssertEqual(path?.last, "p700")
+        XCTAssertEqual(graph.shortestPath(from: "p3", to: "p5"), ["p3", "p4", "p5"])
+    }
 }

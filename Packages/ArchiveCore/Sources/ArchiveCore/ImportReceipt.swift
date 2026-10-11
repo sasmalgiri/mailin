@@ -285,6 +285,10 @@ struct ImportReceipt: Codable, Sendable, Equatable {
         contentHash = try c.decodeIfPresent(String.self, forKey: .contentHash) ?? ""
         signature = try c.decodeIfPresent(String.self, forKey: .signature) ?? ""
         signingKeyID = try c.decodeIfPresent(String.self, forKey: .signingKeyID) ?? ""
+        // §3-E4 collection context (absent on receipts written before 3.0).
+        custodian = try c.decodeIfPresent(String.self, forKey: .custodian)
+        collectingTool = try c.decodeIfPresent(String.self, forKey: .collectingTool)
+        collectionSettings = try c.decodeIfPresent([String: String].self, forKey: .collectionSettings)
     }
 }
 

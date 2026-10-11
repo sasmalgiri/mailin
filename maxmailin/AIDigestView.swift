@@ -23,6 +23,7 @@ struct AIDigestView: View {
     @State private var customEnd = Date()
     @State private var showTutorial = false
     @Environment(\.dismiss) private var envDismiss
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -210,13 +211,15 @@ struct AIDigestView: View {
         let start = customStart
         let end = customEnd
         let base = scope ?? .all
+        let v3 = modules?.isOn(.v3AnalysisQueries) ?? false
 
         Task.detached {
             let results = await AIDigestGenerator.generateDigest(
                 period: period,
                 customStart: period == .custom ? start : nil,
                 customEnd: period == .custom ? end : nil,
-                baseQuery: base
+                baseQuery: base,
+                v3: v3
             )
             await MainActor.run {
                 sections = results

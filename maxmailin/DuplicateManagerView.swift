@@ -436,21 +436,23 @@ struct DuplicateManagerView: View {
                     let r = try await DuplicatesEngine.exactGroups()
                     duplicateGroups = r.groups
                     var note = String(localized: "Exact duplicates: whole archive — \(r.receipt.coverageLine)")
+                    nearDuplicateGroups = []
                     if includeNear {
-                        // Near-duplicates across the whole archive are the
-                        // Near-Duplicates tool's job (MinHash index); here they
-                        // are still found among the newest 5,000.
-                        var emails: [MBOXParser.RawEmail] = []
-                        for try await b in ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200) {
-                            emails.append(contentsOf: b); if emails.count >= 5000 { break }
+                        // Near-duplicates are the whole-archive MinHash
+                        // engine's job (no window of the newest emails here);
+                        // its groups are reviewed in Near-Duplicates.
+                        if modules?.isOn(.v3NearDuplicates) ?? false {
+                            do {
+                                let near = try await NearDuplicatesEngine.run(threshold: threshold)
+                                note += " " + String(localized: "Near-duplicates: \(near.groups) groups across the whole archive (\(near.indexed) of \(near.total) emails indexed) — review them in Near-Duplicates.")
+                            } catch is CancellationError {
+                                throw CancellationError()
+                            } catch {
+                                note += " " + String(localized: "Near-duplicates could not be found: \(error.localizedDescription)")
+                            }
+                        } else {
+                            note += " " + String(localized: "Near-duplicates across the whole archive need “Whole-archive near-duplicates (3.0)” in Settings ▸ Modules.")
                         }
-                        let window = Array(emails.prefix(5000))
-                        nearDuplicateGroups = await Task.detached(priority: .utility) {
-                            Self.findNearDuplicates(in: window, threshold: threshold)
-                        }.value
-                        note += " " + String(localized: "Near-duplicates: newest \(window.count) emails — use Near-Duplicates for the whole archive.")
-                    } else {
-                        nearDuplicateGroups = []
                     }
                     v3Note = note
                 } catch is CancellationError {

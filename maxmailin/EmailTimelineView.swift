@@ -522,8 +522,10 @@ struct EmailTimelineView: View {
                 .padding(.vertical, Spacing.xxxSmall)
             }
 
-            if bucketEmails.count > 50 {
-                Text("... and \(bucketEmails.count - 50) more")
+            // The list is a preview: say how much of the period it shows.
+            let bucketTotal = bucket.sentCount + bucket.receivedCount
+            if bucketTotal > min(bucketEmails.count, 50) {
+                Text("Showing \(min(bucketEmails.count, 50)) of \(bucketTotal) emails in this period")
                     .font(Typography.caption1)
                     .foregroundColor(AppColors.secondary)
             }

@@ -62,11 +62,11 @@ enum PredictiveInsightsEngine {
         urgent.sort { $0.score > $1.score }
         if urgent.count > keptUrgent { urgent.removeLast(urgent.count - keptUrgent) }
 
-        let anomalies = (try? await AnomalyDetectionEngine.detectAnomalies(from: .shared)) ?? []
+        let anomalies = (try? await AnomalyDetectionEngine.detectAnomalies(from: ScopeJobEnvironment.archive)) ?? []
         let security = forecast(total: total, highPhishing: highPhishing, medPhishing: medPhishing,
                                 piiCount: piiCount, criticalPII: criticalPII,
                                 securityAnomalies: anomalies.filter { $0.type == .newDomain || $0.type == .recipientAnomaly }.count)
-        let recent = try await PredictiveEngine.recentWorkingSet(from: .shared, query: query)
+        let recent = try await PredictiveEngine.recentWorkingSet(from: ScopeJobEnvironment.archive, query: query)
         let threads = await Task.detached(priority: .userInitiated) { PredictiveEngine.predictThreadOutcomes(emails: recent) }.value
         return Result(summary: .init(urgentEmails: urgent, threadPredictions: threads, securityForecast: security),
                       urgentTotal: urgentTotal, scanned: result.receipt.processed)

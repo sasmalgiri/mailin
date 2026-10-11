@@ -174,7 +174,7 @@ loops, the current AI context building. Deleted only in a later release after a 
 | L16 | IOC Extractor (F6 rows) | [~] |
 | L17 | Keyword Monitor (FTS whole archive) | [~] |
 | L18 | Evidence Desks ▸ Seed (F3 top sources with totals) | [~] |
-| L19 | Duplicates ▸ groups from SQL, paged (today 5,000 loader) | [~] |
+| L19 | Duplicates ▸ groups from SQL, paged (today 5,000 loader) | — the 3.0 path still found near-duplicates in a newest-5,000 window (rule 6); now runs the whole-archive near-duplicate engine and points to Near-Duplicates; lint ceiling lowered — [~] |
 | — | GDPR data-subject report, Triage IOC blocklist, Redact & Export — already whole-archive (2026-10-09); keep, add to F7/F8 | [x] (uncommitted) |
 
 ### A — Analysis tools (become F6 queries)
@@ -194,8 +194,9 @@ loops, the current AI context building. Deleted only in a later release after a 
 | A12 | Communication Patterns ("recent 500" block) |  — streaming analysis was already whole-archive; its AI context (newest 500) moves to I4 — [~] |
 | A13 | Full Analytics (`defaultNLPCap = 5000`) |  [~] |
 | A14 | Archive Comparison (pass the scope, not a 2,000 array) |  — already compares the whole current archive (v2.1 #3); verify only — [~] |
-| A15 | Knowledge / Relationship graphs, AI Visualization (build from all; show top-N with totals) |  [~] |
+| A15 | Knowledge / Relationship graphs, AI Visualization (build from all; show top-N with totals) |  — path search no longer stops after 500 nodes and reports "no path" for connected people (linear BFS; test `testKnowledgeGraph_findsAPathPastFiveHundredNodes`) — [~] |
 | A16 | Plugin Manager: plugin API v2 takes a batch stream; plugins run isolated with timeouts so a plugin cannot crash the app |  [~] |
+| A17 | **AI Digest** (added 2026-10-11 — the plan had missed it: it read the newest 1,000 of the scope and filtered to the period in memory, so long periods were understated and old archives empty): period as a query bound, every email streamed into running totals, lists "N of M", new contacts checked against the archive before the period, predictions from A3, AI narrates code-computed figures | `DigestEngine.swift` (switch `v3AnalysisQueries`, fallback to the previous digest); test `testDigest_wholePeriod_*` — [~] |
 
 ### I — AI (designed around the 4,096-token reading window)
 | ID | Item | Status |

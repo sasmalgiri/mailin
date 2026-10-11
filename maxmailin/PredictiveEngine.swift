@@ -346,7 +346,12 @@ struct PredictiveEngine {
     // MARK: - Digest Items
 
     static func digestItems(emails: [MBOXParser.RawEmail]) -> [(title: String, detail: String, priority: Int)] {
-        let summary = analyze(emails: emails)
+        digestItems(summary: analyze(emails: emails))
+    }
+
+    /// The digest lines for a summary already computed (§3-A17 passes the
+    /// whole-period summary from `PredictiveInsightsEngine`).
+    static func digestItems(summary: PredictionSummary) -> [(title: String, detail: String, priority: Int)] {
         var items: [(title: String, detail: String, priority: Int)] = []
 
         let critical = summary.urgentEmails.filter { $0.urgency >= .high }
