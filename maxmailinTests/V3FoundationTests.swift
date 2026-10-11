@@ -678,4 +678,34 @@ final class V3FoundationTests: XCTestCase {
         // At least a third of the 10 ms ticks that fit in the render time ran.
         XCTAssertGreaterThanOrEqual(Double(ticks.n), max(1, elapsed * 100 / 3), "main actor starved: \(ticks.n) ticks in \(elapsed) s")
     }
+
+    // MARK: - A6: a long thread is read whole
+
+    /// Thread Story pages every member of the thread (the previous path
+    /// stopped at 200): 650 replies → 650 messages, oldest first.
+    func testThreadStory_completeThread_readsEveryMember() async throws {
+        let env = makeEnv()
+        let thread = (0..<650).map { i -> MBOXParser.RawEmail in
+            var e = makeEmail(i, subject: i == 0 ? "Plan" : "Re: Plan", tag: "th")
+            if i > 0 {
+                e.headers["In-Reply-To"] = "<th-\(i - 1)@test>"
+                e.headers["References"] = "<th-0@test> <th-\(i - 1)@test>"
+            }
+            return e
+        }
+        try await env.store.insertBatch(thread, batchSize: 200)
+        try await env.store.insertBatch((0..<20).map { makeEmail(1_000 + $0, subject: "Other \($0)", tag: "ot") }, batchSize: 20)
+        _ = try await ArchiveThreadService(store: env.store).backfillThreadKeys()
+        try await ScopeJobEnvironment.$current.withValue(env.job) {
+            var q = EmailQuery(); q.subjectContains = "Plan"; q.sort = .dateAsc
+            var oldest: MBOXParser.RawEmail?
+            for try await batch in env.archive.streamFullEmails(query: q, batchSize: 1) { oldest = batch.first; break }
+            let first = try XCTUnwrap(oldest)
+            let members = try await ThreadStoryEngine.completeThread(of: first)
+            XCTAssertEqual(members.count, 650)
+            XCTAssertEqual(members.first?.headers["Subject"], "Plan")
+            let dates = members.compactMap { MBOXParser.parseDate($0.headers["Date"]) }
+            XCTAssertEqual(dates, dates.sorted(), "oldest first")
+        }
+    }
 }

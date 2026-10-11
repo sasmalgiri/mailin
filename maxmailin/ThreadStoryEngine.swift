@@ -23,20 +23,25 @@ import FoundationModels
 
 @MainActor
 enum ThreadStoryEngine {
+    /// The thread index of the bound archive (tests) or the app's.
+    private static var threads: ArchiveThreadService {
+        ScopeJobEnvironment.current.map { ArchiveThreadService(store: $0.store) } ?? .shared
+    }
+
     /// Every message of the thread `email` belongs to, oldest first.
     static func completeThread(of email: MBOXParser.RawEmail) async throws -> [MBOXParser.RawEmail] {
-        guard let key = try await ArchiveThreadService.shared.threadKey(for: email.id) else { return [email] }
+        guard let key = try await threads.threadKey(for: email.id) else { return [email] }
         var ids: [UUID] = []
         var offset = 0
         while true {
-            let page = try await ArchiveThreadService.shared.emailIDs(inThread: key, limit: 500, offset: offset)
+            let page = try await threads.emailIDs(inThread: key, limit: 500, offset: offset)
             ids.append(contentsOf: page)
             if page.count < 500 { break }
             offset += page.count
         }
         var members: [MBOXParser.RawEmail] = []
         for start in stride(from: 0, to: ids.count, by: 200) {
-            members += try await ArchiveDataService.shared.fullEmails(ids: Array(ids[start..<min(start + 200, ids.count)]))
+            members += try await ScopeJobEnvironment.archive.fullEmails(ids: Array(ids[start..<min(start + 200, ids.count)]))
         }
         let sorted = members.sorted {
             (MBOXParser.parseDate($0.headers["Date"]) ?? .distantPast) < (MBOXParser.parseDate($1.headers["Date"]) ?? .distantPast)
@@ -49,7 +54,7 @@ enum ThreadStoryEngine {
     static func completeThreads(for emails: [MBOXParser.RawEmail], maxThreads: Int = 3) async throws -> [MBOXParser.RawEmail]? {
         var keys: [String: MBOXParser.RawEmail] = [:]
         for email in emails.prefix(500) {
-            if let key = try await ArchiveThreadService.shared.threadKey(for: email.id), keys[key] == nil {
+            if let key = try await threads.threadKey(for: email.id), keys[key] == nil {
                 keys[key] = email
                 if keys.count > maxThreads { return nil }
             }

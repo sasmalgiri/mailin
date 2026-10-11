@@ -99,7 +99,7 @@ enum GoldenArchive {
 enum GoldenTool: String, CaseIterable, Sendable {
     case search, exclusions, pii, keywords, privilege, indicators, itAdmin, duplicates, bates, fingerprint, shadow
     case identify, classify, reviewPlan, verify, productionFiles, custodians, batchTag, automation
-    case investigationReport, personalCleanup, predictive, nearDuplicates, aggregates
+    case investigationReport, personalCleanup, predictive, nearDuplicates, aggregates, topics
 }
 
 @MainActor
@@ -341,6 +341,14 @@ struct V3GoldenTests {
             #expect(distinct.count == Set(emails.map { $0.headers["Subject"] ?? "" }).count)
             #expect(stat.count == total && stat.sum == Double(emails.reduce(0) { $0 + $1.plainBody.count }))
             #expect(months.total == total)
+
+        case .topics:
+            // §3-A5: clusters are built on a stated sample; EVERY email is
+            // then assigned to a topic or counted as unassigned.
+            let r = try await TopicClustersEngine.run()
+            #expect(r.sampled > 0 && r.sampled <= total)
+            #expect(r.assigned + r.unassigned == total, "\(r.assigned) + \(r.unassigned) of \(total)")
+            #expect(r.receipt.processed == total)
         }
     }
 }

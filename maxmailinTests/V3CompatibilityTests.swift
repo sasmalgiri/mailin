@@ -316,6 +316,52 @@ final class V3CompatibilityTests: XCTestCase {
         }
     }
 
+    // MARK: - M1: every 3.0 engine is a switch, off in App Store builds
+
+    func testEveryEngine_hasAMatrixEntry_andIsOffInAppStoreBuilds() {
+        let engines = Capability.allCases.filter { $0.rawValue.hasPrefix("v3") }
+        XCTAssertGreaterThanOrEqual(engines.count, 35, "the L/A/I/Q/S engines")
+        for capability in engines {
+            let spec = EngineSpec.of(capability)
+            XCTAssertNotNil(spec, "\(capability) has a matrix entry")
+            XCTAssertFalse(spec?.name.isEmpty ?? true)
+            XCTAssertFalse(Capability.defaultOn(maturity: capability.maturity, isEngine: true, beta: false),
+                           "\(capability) must be off by default until promoted (M5)")
+        }
+    }
+
+    // MARK: - M2: the app stopped inside an engine → off at the next launch
+
+    func testKillInsideEngine_nextLaunchSwitchesItOff_andRecordsTheTrip() throws {
+        let env = makeEnv(engineOn: false)
+        let stateURL = env.root.appendingPathComponent("modules.json")
+        try ScopeJobEnvironment.$current.withValue(env.job) {
+            let registry = ModuleRegistry(store: ModuleStateStore(url: stateURL), trapsOnMisuse: false)
+            registry.set(.v3SafeHTML, enabled: true)
+            XCTAssertTrue(registry.isOn(.v3SafeHTML))
+
+            // A run that finished leaves nothing; one the process died in
+            // leaves its breadcrumb (dated before this launch).
+            EngineGuard.end(EngineGuard.begin(.v3SafeHTML))
+            let died = EngineGuard.begin(.v3SafeHTML)
+            try FileManager.default.setAttributes([.modificationDate: EngineGuard.launchDate.addingTimeInterval(-60)],
+                                                  ofItemAtPath: died.url.path)
+            let current = EngineGuard.begin(.v3IOC)   // running in THIS launch: not a leftover
+            defer { EngineGuard.end(current) }
+
+            let center = EngineTripCenter()
+            center.checkAtLaunch(registry: registry)
+            XCTAssertEqual(center.newlyTripped, [.v3SafeHTML])
+            XCTAssertFalse(registry.isOn(.v3SafeHTML), "switched off: the previous path is used")
+            XCTAssertEqual(EngineGuard.lastTrip(.v3SafeHTML)?.capability, Capability.v3SafeHTML.rawValue)
+            XCTAssertTrue(env.job.auditLines().contains { $0.hasPrefix("Engine switched off after an unexpected stop") })
+
+            let again = EngineTripCenter()
+            again.checkAtLaunch(registry: registry)
+            XCTAssertTrue(again.newlyTripped.isEmpty, "a breadcrumb trips once")
+        }
+    }
+
     // MARK: - M3: a fallback is recorded, audited and stated in the receipt
 
     private struct Boom: LocalizedError { var errorDescription: String? { "boom" } }

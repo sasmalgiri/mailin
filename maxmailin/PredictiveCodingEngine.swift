@@ -672,7 +672,9 @@ extension PredictiveCodingEngine {
     func trainAndScoreWholeArchive() async throws {
         let relIDs = relevantIDs, irrIDs = irrelevantIDs
         let labeled = relIDs.union(irrIDs)
-        let store = SQLiteEmailStore.shared
+        // The archive the scope job reads (bound in tests), so scores land
+        // beside the emails they were computed from.
+        let store = ScopeJobEnvironment.store
         let revision = (try? await store.corpusRevision()) ?? 0
 
         // Pass 1 — document frequency over the archive + every label's features.
@@ -746,7 +748,7 @@ extension PredictiveCodingEngine {
         for (id, score) in visible { predictions[id] = score }
         suggestedForReview = uncertain.sorted { $0.1 < $1.1 }.prefix(20).map(\.0)
         confidenceDistribution = distribution
-        ForensicManager.shared.logAction("Predictive Coding",
+        ScopeJobEnvironment.logAction("Predictive Coding",
             detail: "Trained on \(trainTokens.count) labelled emails (\(relIDs.count) relevant, \(irrIDs.count) not); scored \(result.receipt.processed) emails; model v\(Self.modelVersion)")
     }
 
