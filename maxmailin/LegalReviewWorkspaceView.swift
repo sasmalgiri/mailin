@@ -1325,7 +1325,9 @@ struct LegalReviewWorkspaceView: View {
             Spacer()
         }
         .padding(20)
+        #if os(macOS)
         .frame(width: 500, height: 400)
+        #endif
     }
 
     // MARK: - PII Warning (v3)
@@ -2042,7 +2044,9 @@ struct LegalReviewWorkspaceView: View {
             }
         }
         .padding(20)
+        #if os(macOS)
         .frame(width: 700, height: 550)
+        #endif
     }
 
     // MARK: - Dashboard Sheet
@@ -2111,7 +2115,9 @@ struct LegalReviewWorkspaceView: View {
             Spacer()
         }
         .padding(20)
+        #if os(macOS)
         .frame(width: 500, height: 450)
+        #endif
     }
 
     private func dashStat(_ title: String, value: String, color: Color) -> some View {

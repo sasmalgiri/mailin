@@ -18,7 +18,9 @@ struct CustomExpertConfigView: View {
                 expertList
             }
         }
+        #if os(macOS)
         .frame(minWidth: 400, minHeight: 300)
+        #endif
         .sheet(isPresented: $showingAddSheet) {
             ExpertEditSheet(onSave: { expert in
                 manager.addExpert(expert)
@@ -224,6 +226,8 @@ private struct ExpertEditSheet: View {
             }
         }
         .padding()
+        #if os(macOS)
         .frame(width: 420)
+        #endif
     }
 }

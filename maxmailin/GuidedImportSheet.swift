@@ -146,7 +146,11 @@ struct GuidedImportSheet: View {
             Divider()
             footer
         }
+        #if os(macOS)
+        // A sheet minimum on the Mac only: on iPhone a 540-pt minimum is wider
+        // than the screen and clipped both edges.
         .frame(minWidth: 540, minHeight: 460)
+        #endif
         .onAppear {
             guard !didSeedChoices else { return }
             chosenDedup = dedupPolicy

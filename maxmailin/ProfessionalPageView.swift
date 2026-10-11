@@ -74,7 +74,9 @@ struct ProfessionalPageView: View {
                         }
                     }
             }
+            #if os(macOS)
             .frame(minWidth: 900, minHeight: 640)
+            #endif
         }
         .accessibilityIdentifier("professional.page")
     }

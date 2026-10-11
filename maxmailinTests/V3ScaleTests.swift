@@ -80,6 +80,10 @@ final class V3ScaleTests: XCTestCase {
         var job: ScopeJobEnvironment { ScopeJobEnvironment(archive: archive, store: store, root: root) }
     }
 
+    /// Footprint growth over the baseline; 0 when memory fell below it (the
+    /// unsigned `&-` wrapped to ~18 EB and failed the 1M run, 2026-10-11).
+    static func growth(_ now: UInt64, over base: UInt64) -> UInt64 { now > base ? now - base : 0 }
+
     private func build(_ n: Int, headersOnly: Bool) async throws -> (Env, peakInsert: UInt64) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("scale-\(UUID().uuidString)", isDirectory: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
@@ -91,7 +95,7 @@ final class V3ScaleTests: XCTestCase {
         for start in stride(from: 0, to: n, by: batch) {
             let emails = (start..<min(start + batch, n)).map { Self.email($0, headersOnly: headersOnly) }
             try await store.insertBatch(emails, batchSize: batch)
-            peak = max(peak, currentFootprintBytes() &- base)
+            peak = max(peak, Self.growth(currentFootprintBytes(), over: base))
         }
         return (Env(root: root, store: store, archive: ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))), peak)
     }
@@ -102,7 +106,7 @@ final class V3ScaleTests: XCTestCase {
         let sampler = Task.detached(priority: .high) { () -> UInt64 in
             var peak: UInt64 = 0
             while !Task.isCancelled {
-                peak = max(peak, currentFootprintBytes() &- base)
+                peak = max(peak, Self.growth(currentFootprintBytes(), over: base))
                 try? await Task.sleep(for: .milliseconds(250))
             }
             return peak

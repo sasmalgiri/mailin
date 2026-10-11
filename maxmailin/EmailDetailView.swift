@@ -12,6 +12,13 @@ import UIKit
 #endif
 
 struct EmailDetailView: View {
+    /// Previous / Next email buttons: a full touch target on iPhone and iPad
+    /// (Apple's 44 pt minimum), compact on the Mac.
+    #if os(iOS)
+    static let stepButtonSize: CGFloat = 44
+    #else
+    static let stepButtonSize: CGFloat = 24
+    #endif
     /// One re-extraction per message, shared by all its attachments.
     private let attachmentCache = AttachmentHydrator.Cache()
 
@@ -285,7 +292,8 @@ struct EmailDetailView: View {
                         } label: {
                             Image(systemName: "chevron.left")
                                 .font(.system(size: 11, weight: .semibold))
-                                .frame(width: 24, height: 22)
+                                .frame(width: Self.stepButtonSize, height: Self.stepButtonSize)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .disabled(!hasPrev)
@@ -305,7 +313,8 @@ struct EmailDetailView: View {
                         } label: {
                             Image(systemName: "chevron.right")
                                 .font(.system(size: 11, weight: .semibold))
-                                .frame(width: 24, height: 22)
+                                .frame(width: Self.stepButtonSize, height: Self.stepButtonSize)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .disabled(!hasNext)
@@ -395,8 +404,12 @@ struct EmailDetailView: View {
     private var cleanToggle: some View {
         HStack(spacing: Spacing.small) {
             Toggle(isOn: $showCleanView) {
-                Label("Clean Quote View", systemImage: "text.quote")
-                    .font(Typography.callout)
+                Label {
+                    Text("Clean Quote View")
+                } icon: {
+                    Image(systemName: "text.quote").accessibilityHidden(true)
+                }
+                .font(Typography.callout)
             }
             .toggleStyle(SwitchToggleStyle())
             .help("Hide quoted reply text (lines starting with >) for easier reading")

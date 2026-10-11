@@ -853,6 +853,13 @@ extension View {
 struct PlanBadgeButton: View {
     @EnvironmentObject private var store: StoreManager
     @Environment(\.purchasePresentationTarget) private var target
+    #if os(iOS)
+    /// On iPhone the page tabs need the width: the badge shows its icon only.
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    private var compact: Bool { horizontalSizeClass == .compact }
+    #else
+    private let compact = false
+    #endif
 
     var body: some View {
         let tier = store.effectiveTier
@@ -860,10 +867,16 @@ struct PlanBadgeButton: View {
         Button {
             store.requestPurchase(StoreManager.planBadgeRequestTier(current: tier), target: target)
         } label: {
-            Label(label, systemImage: tier == .free ? "arrow.up.circle.fill" : "checkmark.seal.fill")
-                .font(.system(size: 12, weight: .semibold))
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
+            Group {
+                if compact {
+                    Image(systemName: tier == .free ? "arrow.up.circle.fill" : "checkmark.seal.fill")
+                } else {
+                    Label(label, systemImage: tier == .free ? "arrow.up.circle.fill" : "checkmark.seal.fill")
+                }
+            }
+            .font(.system(size: 12, weight: .semibold))
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
@@ -886,7 +899,7 @@ struct PlanAndPurchasesSection: View {
 
     private var ownershipText: String {
         #if ENTERPRISE_EDITION
-        return String(localized: "Enterprise edition: every feature is included in the purchase price.")
+        return store.license.summary
         #else
         switch store.effectiveTier {
         case .free: return String(localized: "No purchase. Import up to 100 MB, browse the first 500 results of any list or search, 5 Ask queries a day.")

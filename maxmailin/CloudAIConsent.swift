@@ -139,7 +139,9 @@ struct CloudAIConsentSheet: View {
             }
         }
         .padding(20)
+        #if os(macOS)
         .frame(width: 480)
+        #endif
         .accessibilityIdentifier("cloudAI.consent")
     }
 }

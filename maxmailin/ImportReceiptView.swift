@@ -547,6 +547,8 @@ struct LatestImportReceiptView: View {
     receipt.warnings = ["2 messages could not be read and were skipped."]
     try? receipt.finalize()
     return ImportReceiptView(receipt: receipt)
+        #if os(macOS)
         .frame(width: 700, height: 760)
+        #endif
 }
 #endif

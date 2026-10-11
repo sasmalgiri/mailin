@@ -955,7 +955,9 @@ struct WorkflowRunnerView: View {
             }
             .padding(Spacing.medium)
         }
+        #if os(macOS)
         .frame(minWidth: 520, minHeight: 480)
+        #endif
     }
 
     // MARK: - Logic

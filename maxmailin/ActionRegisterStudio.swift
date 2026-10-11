@@ -472,6 +472,8 @@ private struct EffectivenessReviewSheet: View {
             }
         }
         .padding()
+        #if os(macOS)
         .frame(minWidth: 420)
+        #endif
     }
 }

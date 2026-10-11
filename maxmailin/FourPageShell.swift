@@ -106,6 +106,7 @@ struct FourPageShell: View {
                         }
                     }
                 )
+                .layoutPriority(1)
                 // The current-plan control sits on the page strip, so it is
                 // on every page and every platform without crowding a page's
                 // own toolbar. Not built in the enterprise edition (no IAP).
@@ -383,6 +384,8 @@ struct PageNotBuiltView: View {
             detail: String(localized: "Live Mail is planned for this release but is not implemented in this build.")
         )
     }
+    #if os(macOS)
     .frame(width: 620, height: 380)
+    #endif
 }
 #endif

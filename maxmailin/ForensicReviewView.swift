@@ -1622,7 +1622,9 @@ struct ForensicReviewView: View {
         }
         .padding(20)
         }
+        #if os(macOS)
         .frame(width: 500)
+        #endif
         .frame(minHeight: 450)
     }
 
@@ -1694,7 +1696,9 @@ struct ForensicReviewView: View {
             }
         }
         .padding(20)
+        #if os(macOS)
         .frame(width: 500, height: 400)
+        #endif
     }
 
     // MARK: - Review Queue

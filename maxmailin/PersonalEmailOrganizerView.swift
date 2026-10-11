@@ -1326,7 +1326,9 @@ struct PersonalEmailOrganizerView: View {
             Spacer()
         }
         .padding(20)
+        #if os(macOS)
         .frame(width: 500, height: 400)
+        #endif
     }
 
     // MARK: - Action Items Section (v5)

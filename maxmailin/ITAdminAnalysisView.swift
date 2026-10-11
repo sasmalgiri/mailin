@@ -2043,7 +2043,9 @@ struct ITAdminAnalysisView: View {
             Spacer()
         }
         .padding(20)
+        #if os(macOS)
         .frame(width: 500, height: 400)
+        #endif
     }
 
     private func exportCSV() {

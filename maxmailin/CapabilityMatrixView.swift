@@ -52,7 +52,9 @@ struct CapabilityMatrixView: View {
                 .padding(20)
             }
         }
+        #if os(macOS)
         .frame(minWidth: 560, minHeight: 420)
+        #endif
         .confirmationDialog(
             pendingOff.map { "Switch off “\($0.displayName)”?" } ?? "",
             isPresented: Binding(get: { pendingOff != nil },

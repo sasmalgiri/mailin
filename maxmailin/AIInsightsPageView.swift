@@ -77,70 +77,95 @@ struct AIInsightsPageView: View {
         .accessibilityIdentifier("aiInsights.page")
     }
 
+    /// One row when it fits (Mac, iPad); on a narrow screen the tabs get
+    /// their own row and the scope controls scroll sideways, instead of every
+    /// label being squeezed to "…".
     private var scopeBar: some View {
-        HStack(spacing: 12) {
-            Picker("", selection: $tab) {
-                ForEach(Tab.allCases) { Label($0.rawValue, systemImage: $0.symbol).tag($0) }
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                tabPicker
+                freeQuota
+                Spacer()
+                scopeControls
             }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 360)
-            .accessibilityIdentifier("aiInsights.tabs")
-
-            #if !ENTERPRISE_EDITION
-            if !storeManager.isPremium {
-                // The Free allowance Ask enforces, visible before the sixth
-                // query is refused; one tap opens Personal selected.
-                let remaining = max(0, AIAssistantView.freeQueryLimit - freeQueryCount)
-                Button {
-                    storeManager.requestPurchase(.personal,
-                                                 feature: String(localized: "AI Insights"),
-                                                 reason: String(localized: "Personal and Professional remove the daily Ask limit and include Summaries and Reports."),
-                                                 target: purchaseTarget)
-                } label: {
-                    Text("\(remaining) of \(AIAssistantView.freeQueryLimit) free Ask queries left today")
-                        .font(.caption)
-                        .lineLimit(1)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(remaining == 0 ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
-                .help("The Free plan allows \(AIAssistantView.freeQueryLimit) Ask queries a day. Click to see plans.")
-                .accessibilityIdentifier("aiInsights.freeQuota")
-            }
-            #endif
-
-            Spacer()
-
-            Menu {
-                Button("Whole archive") { selectedSource = nil }
-                if !sources.isEmpty {
-                    Divider()
-                    ForEach(sources, id: \.sourceID) { source in
-                        Button(source.filename) { selectedSource = source.filename }
+            VStack(alignment: .leading, spacing: 8) {
+                tabPicker
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        freeQuota
+                        scopeControls
                     }
                 }
-            } label: {
-                Label(selectedSource ?? "Whole archive", systemImage: "archivebox")
-                    .lineLimit(1)
-            }
-            .help("Which imported source the page works on")
-            .accessibilityIdentifier("aiInsights.scope.source")
-
-            Menu {
-                Picker("Date", selection: $dateScope) {
-                    ForEach(ArchiveDateScope.allCases) { Text($0.rawValue).tag($0) }
-                }
-            } label: {
-                Label(dateScope.rawValue, systemImage: "calendar")
-            }
-            .help("Limit the page to a date range")
-            .accessibilityIdentifier("aiInsights.scope.date")
-
-            if modules.isOn(.aiAssistant) {
-                semanticIndexControl
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    private var tabPicker: some View {
+        Picker("", selection: $tab) {
+            ForEach(Tab.allCases) { Label($0.rawValue, systemImage: $0.symbol).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .frame(maxWidth: 360)
+        .accessibilityIdentifier("aiInsights.tabs")
+    }
+
+    @ViewBuilder
+    private var freeQuota: some View {
+        #if !ENTERPRISE_EDITION
+        if !storeManager.isPremium {
+            // The Free allowance Ask enforces, visible before the sixth
+            // query is refused; one tap opens Personal selected.
+            let remaining = max(0, AIAssistantView.freeQueryLimit - freeQueryCount)
+            Button {
+                storeManager.requestPurchase(.personal,
+                                             feature: String(localized: "AI Insights"),
+                                             reason: String(localized: "Personal and Professional remove the daily Ask limit and include Summaries and Reports."),
+                                             target: purchaseTarget)
+            } label: {
+                Text("\(remaining) of \(AIAssistantView.freeQueryLimit) free Ask queries left today")
+                    .font(.caption)
+                    .lineLimit(1)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(remaining == 0 ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+            .help("The Free plan allows \(AIAssistantView.freeQueryLimit) Ask queries a day. Click to see plans.")
+            .accessibilityIdentifier("aiInsights.freeQuota")
+        }
+        #endif
+    }
+
+    @ViewBuilder
+    private var scopeControls: some View {
+        Menu {
+            Button("Whole archive") { selectedSource = nil }
+            if !sources.isEmpty {
+                Divider()
+                ForEach(sources, id: \.sourceID) { source in
+                    Button(source.filename) { selectedSource = source.filename }
+                }
+            }
+        } label: {
+            Label(selectedSource ?? "Whole archive", systemImage: "archivebox")
+                .lineLimit(1)
+        }
+        .help("Which imported source the page works on")
+        .accessibilityIdentifier("aiInsights.scope.source")
+
+        Menu {
+            Picker("Date", selection: $dateScope) {
+                ForEach(ArchiveDateScope.allCases) { Text($0.rawValue).tag($0) }
+            }
+        } label: {
+            Label(dateScope.rawValue, systemImage: "calendar")
+        }
+        .help("Limit the page to a date range")
+        .accessibilityIdentifier("aiInsights.scope.date")
+
+        if modules.isOn(.aiAssistant) {
+            semanticIndexControl
+        }
     }
 
     /// I4: opt-in, resumable, visible progress, off by default.

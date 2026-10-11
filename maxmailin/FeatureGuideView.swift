@@ -112,7 +112,9 @@ struct FeatureGuideView: View {
                             }
                         }
                 }
+                #if os(macOS)
                 .frame(minWidth: 440, minHeight: 480)
+                #endif
             }
         }
         .toolWindowFrame()

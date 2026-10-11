@@ -3407,10 +3407,8 @@ struct EmailRowView: View {
                 }
 
                 Spacer()
-
-                Image(systemName: "chevron.right")
-                    .font(.caption2)
-                    .foregroundColor(Color(.tertiaryLabel))
+                // No chevron here: the iPhone list's NavigationLink draws one,
+                // and the iPad list selects in place (two chevrons, found in V9).
             }
         }
         .padding(.vertical, 10)

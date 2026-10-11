@@ -259,7 +259,9 @@ struct ImportMeasurementView: View {
         }
         .formStyle(.grouped)
         .navigationTitle("Measure an Import")
+        #if os(macOS)
         .frame(minWidth: 480, minHeight: 420)
+        #endif
         #if os(iOS)
         .fileImporter(isPresented: $showPicker, allowedContentTypes: [.data, .folder]) { outcome in
             if case .success(let url) = outcome { file = url }

@@ -107,7 +107,9 @@ struct ExportPreflightSheet: View {
             footer
         }
         .padding(20)
+        #if os(macOS)
         .frame(width: 440)
+        #endif
         .task(id: request.options) { await refreshEstimate() }
         .accessibilityIdentifier("export.preflight")
     }

@@ -779,7 +779,9 @@ struct ContentView: View {
                         }
                     }
             }
+            #if os(macOS)
             .frame(minWidth: 480, minHeight: 520)
+            #endif
         }
         .sheet(isPresented: $showGettingStarted) {
             GettingStartedView(isPresented: $showGettingStarted)

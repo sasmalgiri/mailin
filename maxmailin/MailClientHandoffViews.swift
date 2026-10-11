@@ -66,7 +66,9 @@ struct MailClientImportSheet: View {
             Divider()
             footer
         }
+        #if os(macOS)
         .frame(minWidth: 560, minHeight: 440)
+        #endif
         .accessibilityIdentifier("handoff.import")
     }
 
@@ -254,7 +256,9 @@ struct MailClientExportSheet: View {
             }
             .padding(16)
         }
+        #if os(macOS)
         .frame(minWidth: 560, minHeight: 460)
+        #endif
         .accessibilityIdentifier("handoff.export")
         #if os(iOS)
         .fileImporter(isPresented: $showPicker, allowedContentTypes: [.folder]) { r in

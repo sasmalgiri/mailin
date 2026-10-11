@@ -753,7 +753,9 @@ struct WorkCenterView: View {
             HStack { Spacer(); Button("Done") { showFullWork = false } }
                 .padding(Spacing.medium)
         }
+        #if os(macOS)
         .frame(minWidth: 560, minHeight: 480)
+        #endif
     }
 
     /// The readable rendering — from the structured fields when the payload is

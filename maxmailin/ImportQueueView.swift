@@ -186,7 +186,9 @@ struct ImportQueueView: View {
                 .listStyle(.inset)
             }
         }
+        #if os(macOS)
         .frame(minWidth: 520, minHeight: 340)
+        #endif
         .accessibilityIdentifier("import.queue")
     }
 

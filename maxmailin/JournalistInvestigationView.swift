@@ -1611,7 +1611,9 @@ struct JournalistInvestigationView: View {
             Spacer()
         }
         .padding(20)
+        #if os(macOS)
         .frame(width: 500, height: 350)
+        #endif
     }
 
     private var investigationChecklist: some View {
@@ -1659,7 +1661,9 @@ struct JournalistInvestigationView: View {
             }
         }
         .padding(20)
+        #if os(macOS)
         .frame(width: 600, height: 500)
+        #endif
     }
 
     // MARK: - Helpers
