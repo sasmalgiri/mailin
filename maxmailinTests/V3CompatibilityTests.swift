@@ -12,6 +12,7 @@
 
 import XCTest
 import SQLite3
+import FoundationModels
 @testable import maxmailin
 
 @MainActor
@@ -591,5 +592,36 @@ final class V3CompatibilityTests: XCTestCase {
         let old = #"{"formatVersion":2,"caseTitle":"t","exportedBy":"x","exportedAt":"2026-01-01T00:00:00Z","note":"","emails":[],"achMatrices":[],"factMatrices":[],"actionRegisters":[],"evidenceDesks":[],"reasoningCases":[]}"#
         let dec = JSONDecoder(); dec.dateDecodingStrategy = .iso8601
         XCTAssertNil(try dec.decode(CaseBundle.self, from: Data(old.utf8)).evidenceRecord)
+    }
+
+    // MARK: - I1: the timeline tool counts the whole archive
+
+    func testEmailTimeline_countsEveryMonthExactly_andFoldsLongSpansIntoYears() async throws {
+        guard #available(macOS 26, iOS 26, *) else { throw XCTSkip("FoundationModels needs OS 26") }
+        let env = makeEnv(engineOn: false)
+        try await env.store.insertBatch((0..<7).map { makeEmail($0, from: "a@a.com", tag: "i1") }, batchSize: 10)
+        try await ScopeJobEnvironment.$current.withValue(env.job) {
+            let months = try await EmailTimelineTool.monthlyCounts(.all)
+            XCTAssertEqual(months.reduce(0) { $0 + $1.count }, 7, "every email is counted once")
+            var bySender = EmailQuery.all
+            bySender.sender = "nobody@x.com"
+            let none = try await EmailTimelineTool.monthlyCounts(bySender)
+            XCTAssertTrue(none.isEmpty)
+        }
+        let long = (0..<40).map { (month: String(format: "%04d-%02d", 2020 + $0 / 12, $0 % 12 + 1), count: 1) }
+        let text = EmailTimelineTool.render(long, scope: "all")
+        XCTAssertTrue(text.hasPrefix("40 emails"), "the total stays exact: \(text)")
+        XCTAssertTrue(text.contains("2020: 12") && text.contains("2023: 4"), "long spans are listed per year: \(text)")
+    }
+
+    // MARK: - I2: a full context window is recognised
+
+    func testContextOverflow_isRecognised_otherErrorsAreNot() throws {
+        guard #available(macOS 26, iOS 26, *) else { throw XCTSkip("FoundationModels needs OS 26") }
+        let overflow = LanguageModelSession.GenerationError.exceededContextWindowSize(.init(debugDescription: "full"))
+        XCTAssertTrue(LanguageModelSession.isContextOverflow(overflow))
+        XCTAssertFalse(LanguageModelSession.isContextOverflow(CancellationError()))
+        let fresh = LanguageModelSession()
+        XCTAssertFalse(fresh.condenseTranscriptForRetry(), "an empty transcript has nothing to condense")
     }
 }

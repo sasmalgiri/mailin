@@ -7363,6 +7363,27 @@ enum ModelCallLog {
 
 @available(macOS 26, iOS 26, *)
 extension LanguageModelSession {
+    /// §3-I2: the transcript outgrew the model's context window.
+    static func isContextOverflow(_ error: Swift.Error) -> Bool {
+        if let e = error as? LanguageModelSession.GenerationError, case .exceededContextWindowSize = e { return true }
+        if #available(macOS 27, iOS 27, *), let e = error as? LanguageModelError, case .contextSizeExceeded = e { return true }
+        return false
+    }
+
+    /// §3-I2 (Apple: "Recover from a full context window"): keeps the
+    /// instructions (first entry) and the latest context (last entry) so the
+    /// request can be retried. False when the transcript cannot be condensed
+    /// in place on this OS, or is already that small.
+    func condenseTranscriptForRetry() -> Bool {
+        if #available(macOS 27, iOS 27, *) {
+            let entries = Array(transcript)
+            guard entries.count > 2 else { return false }
+            transcript = Transcript(entries: [entries.first, entries.last].compactMap { $0 })
+            return true
+        }
+        return false
+    }
+
     func loggedRespond(to prompt: String, file: StaticString = #fileID, line: Int = #line) async throws -> Response<String> {
         let site = "\(file):\(line)"
         await ModelScheduler.waitForTurn()
@@ -7376,6 +7397,17 @@ extension LanguageModelSession {
             let response = try await respond(to: prompt)
             ModelCallLog.finished(site, since: start, outputChars: response.content.count)
             return response
+        } catch where Self.isContextOverflow(error) && condenseTranscriptForRetry() {
+            // §3-I2: condensed to the instructions and the latest context; one retry.
+            ModelCallLog.logger.notice("MODEL-CALL condensed site=\(site, privacy: .public) reason=context")
+            do {
+                let response = try await respond(to: prompt)
+                ModelCallLog.finished(site, since: start, outputChars: response.content.count)
+                return response
+            } catch {
+                ModelCallLog.failed(site, since: start, error: error)
+                throw error
+            }
         } catch {
             ModelCallLog.failed(site, since: start, error: error)
             throw error
@@ -7396,6 +7428,17 @@ extension LanguageModelSession {
             let response = try await respond(to: prompt, generating: type)
             ModelCallLog.finished(site, since: start, outputChars: String(describing: response.content).count)
             return response
+        } catch where Self.isContextOverflow(error) && condenseTranscriptForRetry() {
+            // §3-I2: condensed to the instructions and the latest context; one retry.
+            ModelCallLog.logger.notice("MODEL-CALL condensed site=\(site, privacy: .public) reason=context")
+            do {
+                let response = try await respond(to: prompt, generating: type)
+                ModelCallLog.finished(site, since: start, outputChars: String(describing: response.content).count)
+                return response
+            } catch {
+                ModelCallLog.failed(site, since: start, error: error)
+                throw error
+            }
         } catch {
             ModelCallLog.failed(site, since: start, error: error)
             throw error

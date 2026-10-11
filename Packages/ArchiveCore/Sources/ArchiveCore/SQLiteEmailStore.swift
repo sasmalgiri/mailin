@@ -3331,6 +3331,26 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return out
     }
 
+    /// §3-I1: email volume per month for a NON-TEXT query (sender,
+    /// recipient, dates, tags …) — one GROUP BY, whole archive.
+    func monthlyCounts(query: EmailQuery) throws -> [AggregateBucket] {
+        precondition(query.text?.isEmpty ?? true, "text scopes are counted from their hits")
+        let db = try ensureDB()
+        let (clauses, binds) = Self.filterClauses(query)
+        let whereSQL = clauses.isEmpty ? "1=1" : clauses.joined(separator: " AND ")
+        let stmt = try prepare(db, """
+            SELECT strftime('%Y-%m', e.date, 'unixepoch') AS m, COUNT(*) AS c
+            FROM emails e WHERE \(whereSQL) GROUP BY m ORDER BY m;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        _ = bindQueryValues(stmt, binds, startingAt: 1)
+        var out: [AggregateBucket] = []
+        while try stepRow(stmt, db) {
+            out.append(AggregateBucket(value: columnText(stmt, 0), count: Int(sqlite3_column_int64(stmt, 1))))
+        }
+        return out
+    }
+
     /// Total stored size in bytes (SUM aggregate — never streams bodies).
     func totalSizeBytes() throws -> Int {
         let db = try ensureDB()
