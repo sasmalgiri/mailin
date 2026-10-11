@@ -89,7 +89,7 @@ enum PluginRunnerV2 {
     static func run(_ plugin: MailinPlugin, query: EmailQuery = .all) async throws -> Outcome {
         let breadcrumb = begin(plugin.pluginID)
         defer { end(breadcrumb) }
-        let data = ArchiveDataService.shared
+        let data = ScopeJobEnvironment.archive
         let total = try await data.count(query: query)
         var outcome = Outcome(findings: [], batches: 0, timedOut: 0, emails: 0)
         let v2 = plugin as? MailinPluginV2

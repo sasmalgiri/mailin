@@ -45,8 +45,8 @@ struct CountEmailsTool: Tool {
         if let d = f.date(from: arguments.from) { q.afterDate = d }
         if let d = f.date(from: arguments.to) { q.beforeDate = d.addingTimeInterval(86_400) }
         let query = q
-        let n = try await ArchiveDataService.shared.count(query: query)
-        let total = try await ArchiveDataService.shared.count()
+        let n = try await ScopeJobEnvironment.archive.count(query: query)
+        let total = try await ScopeJobEnvironment.archive.count()
         return "\(n) of \(total) emails in the archive match (\(ScopeJob.describe(query)))."
     }
 }
@@ -75,8 +75,8 @@ struct TopCorrespondentsTool: Tool {
         if let d = f.date(from: arguments.to) { q.beforeDate = d.addingTimeInterval(86_400) }
         let field: SQLiteEmailStore.GroupField = arguments.groupBy.lowercased().contains("domain") ? .domain : .sender
         let query = q
-        let scoped = await MainActor.run { ArchiveDataService.shared.scoped(query) }
-        let r = try await SQLiteEmailStore.shared.groupedCounts(query: scoped, by: field, limit: 10)
+        let scoped = await MainActor.run { ScopeJobEnvironment.archive.scoped(query) }
+        let r = try await ScopeJobEnvironment.store.groupedCounts(query: scoped, by: field, limit: 10)
         guard !r.rows.isEmpty else { return "No emails in that range." }
         let lines = r.rows.enumerated().map { "\($0.offset + 1). \($0.element.value): \($0.element.count) emails" }
         return "Top \(r.rows.count) of \(r.distinct) \(field == .domain ? "domains" : "senders"):\n" + lines.joined(separator: "\n")

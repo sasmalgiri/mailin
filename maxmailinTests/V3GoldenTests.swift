@@ -99,7 +99,7 @@ enum GoldenArchive {
 enum GoldenTool: String, CaseIterable, Sendable {
     case search, exclusions, pii, keywords, privilege, indicators, itAdmin, duplicates, bates, fingerprint, shadow
     case identify, classify, reviewPlan, verify, productionFiles, custodians, batchTag, automation
-    case investigationReport, personalCleanup, predictive, nearDuplicates, aggregates, topics
+    case investigationReport, personalCleanup, predictive, nearDuplicates, aggregates, topics, aiTools
 }
 
 @MainActor
@@ -349,6 +349,21 @@ struct V3GoldenTests {
             #expect(r.sampled > 0 && r.sampled <= total)
             #expect(r.assigned + r.unassigned == total, "\(r.assigned) + \(r.unassigned) of \(total)")
             #expect(r.receipt.processed == total)
+
+        case .aiTools:
+            // §3-I1: the model asks, our code counts — the tool's sentence
+            // carries the exact SQL count over the whole archive.
+            #if canImport(FoundationModels)
+            if #available(macOS 26, iOS 26, *) {
+                let north = GoldenArchive.count { $0.from == GoldenArchive.north }
+                let answer = try await CountEmailsTool().call(arguments: .init(
+                    words: "", sender: "alice", recipient: "", from: "", to: ""))
+                #expect(answer.hasPrefix("\(north) of \(total) emails"), "\(answer)")
+                let words = try await CountEmailsTool().call(arguments: .init(
+                    words: "confidential", sender: "", recipient: "", from: "", to: ""))
+                #expect(words.hasPrefix("\(GoldenArchive.count(\.confidentialKeyword)) of \(total)"), "\(words)")
+            }
+            #endif
         }
     }
 }
