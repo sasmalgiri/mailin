@@ -44,3 +44,5 @@ Screenshots/
 
 # Custom build output folders
 build-*/
+Fuzz/.build/
+Fuzz/Corpus/
