@@ -2428,7 +2428,16 @@ struct FoundationModelEngine {
             return finalContent
         }
 
-        var narrative = try await generate(prompt)
+        var narrative: String
+        do {
+            narrative = try await generate(prompt)
+        } catch {
+            // §8 #6: a long thread overflows the 4,096-token window; callers
+            // use `try?`, so the story used to come back empty without a word.
+            guard let outline = threadOutlineAfterFailure(error, sorted: sorted) else { throw error }
+            await onUpdate(outline)
+            return outline
+        }
         // Garbage gate: a small model can still parrot structure. Detect the
         // known failure shapes and retry ONCE with a corrective instruction;
         // if it still parrots, return an honest deterministic summary
@@ -2510,6 +2519,14 @@ struct FoundationModelEngine {
 
     /// Deterministic, always-correct fallback: who, when, about what — built
     /// from the messages themselves, no model involved.
+    /// For a context overflow: the outline built from the messages, saying
+    /// why it is not a story. Any other error: nil (the caller rethrows).
+    static func threadOutlineAfterFailure(_ error: Error, sorted: [MBOXParser.RawEmail]) -> String? {
+        guard LanguageModelSession.isContextOverflow(error) else { return nil }
+        let note = String(localized: "This thread is too long for the on-device model to read in one go, so here is its outline from the messages themselves. Thread Story (in the email's menu) reads long threads in parts.")
+        return note + "\n\n" + deterministicThreadSummary(sorted)
+    }
+
     static func deterministicThreadSummary(_ sorted: [MBOXParser.RawEmail]) -> String {
         let dateFmt = DateFormatter()
         dateFmt.dateStyle = .medium

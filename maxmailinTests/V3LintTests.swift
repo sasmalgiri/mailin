@@ -34,6 +34,8 @@ struct V3LintTests {
         ("forceCast", #"\bas!\s"#),
         ("forceTry", #"\btry!\s"#),
         ("silentUserWrite", #"try\?\s+[^\n]*\.write\(to:\s*url\b"#),
+        // A save panel that skips the organisation's export policy (use ManagedSavePanel).
+        ("unmanagedSavePanel", #"\bNSSavePanel\(\)"#),
     ]
     /// rule → (first, second within `span` lines after it).
     private static let pairRules: [(String, String, String, Int)] = [
@@ -127,6 +129,7 @@ struct V3LintTests {
             ("forceCast", "let v = x as! String"),
             ("forceTry", "let r = try! NSRegularExpression(pattern: p)"),
             ("silentUserWrite", "try? data.write(to: url)"),
+            ("unmanagedSavePanel", "let panel = NSSavePanel()"),
         ]
         for (rule, line) in samples {
             #expect(try Self.lint(line)[rule] == 1, "\(rule) fires")

@@ -628,6 +628,18 @@ final class V3CompatibilityTests: XCTestCase {
         XCTAssertFalse(fresh.condenseTranscriptForRetry(), "an empty transcript has nothing to condense")
     }
 
+    /// §8 #6: the old Thread Story path gives the thread's outline (and says
+    /// why) when the thread overflows the model; other errors still throw.
+    func testOldThreadStory_overflowGivesTheOutline_notNothing() throws {
+        guard #available(macOS 26, iOS 26, *) else { throw XCTSkip("FoundationModels needs OS 26") }
+        let thread = (0..<3).map { makeEmail($0, from: "ann@example.com") }
+        let overflow = LanguageModelSession.GenerationError.exceededContextWindowSize(.init(debugDescription: "full"))
+        let outline = try XCTUnwrap(FoundationModelEngine.threadOutlineAfterFailure(overflow, sorted: thread))
+        XCTAssertTrue(outline.hasSuffix(FoundationModelEngine.deterministicThreadSummary(thread)))
+        XCTAssertGreaterThan(outline.count, FoundationModelEngine.deterministicThreadSummary(thread).count)
+        XCTAssertNil(FoundationModelEngine.threadOutlineAfterFailure(CancellationError(), sorted: thread))
+    }
+
     // MARK: - A17: the AI Digest covers the whole period
 
     /// The previous digest read the newest 1,000 emails and filtered them to

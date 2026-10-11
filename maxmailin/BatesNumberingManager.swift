@@ -362,14 +362,15 @@ struct BatesConfigView: View {
             HStack(spacing: Spacing.small) {
                 Button {
                     if v3 { confirmV3Assign(); return }
+                    guard OrgPolicy.confirmAllowed(.produce) else { return }
                     let n = manager.assignNumbers(to: emails).count
                     lastAssigned = n
                     assignmentComplete = true
-                    // Record a numbered document of this Bates run.
-                    Task { await DocumentRegistry.captureStructured(.report,
+                    // Record a numbered document of this Bates run (only when it numbered something — rule 5).
+                    if n > 0 { Task { await DocumentRegistry.captureStructured(.report,
                         summary: "Bates numbering — \(n) emails",
                         document: CapturedDocument(title: "Bates Numbering", sections: [
-                          .init(name: "Bates Numbering", fields: [.init(key: "Emails", value: "\(n)")])])) }
+                          .init(name: "Bates Numbering", fields: [.init(key: "Emails", value: "\(n)")])])) } }
                 } label: {
                     Label("Assign Bates Numbers", systemImage: "number.square.fill")
                 }

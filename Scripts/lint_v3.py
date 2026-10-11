@@ -28,6 +28,7 @@ LINE_RULES = {
     "forceCast":            r"\bas!\s",
     "forceTry":             r"\btry!\s",
     "silentUserWrite":      r"try\?\s+[^\n]*\.write\(to:\s*url\b",
+    "unmanagedSavePanel":   r"\bNSSavePanel\(\)",
 }
 # Pair rules: a line matching `first` with a line matching `second` within N lines after it.
 PAIR_RULES = {

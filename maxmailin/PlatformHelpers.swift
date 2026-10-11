@@ -103,7 +103,7 @@ import UniformTypeIdentifiers
 @MainActor
 enum PlatformFileSaver {
     static func savePanel(suggestedName: String, allowedTypes: [UTType]? = nil) -> URL? {
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()   // honours the organisation's export policy
         panel.nameFieldStringValue = suggestedName
         panel.canCreateDirectories = true
         if let types = allowedTypes {
@@ -218,7 +218,7 @@ enum PlatformExport {
         // Enterprise: the organisation's export policy and the person's role.
         if let why = OrgPolicy.denial(.export) { return .failed(why) }
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = suggestedName
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return .cancelled }
@@ -245,6 +245,7 @@ enum PlatformExport {
     #if os(iOS)
     /// Presents the Share sheet for a file (or folder) already on disk.
     static func share(_ url: URL) -> ExportOutcome {
+        if let why = OrgPolicy.denial(.export) { return .failed(why) }
         guard let scene = UIApplication.shared.connectedScenes
                 .compactMap({ $0 as? UIWindowScene }).first(where: { $0.activationState == .foregroundActive })
                 ?? UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first,
@@ -273,7 +274,7 @@ enum PlatformExport {
                              write: (URL) async throws -> ArchiveExportResult) async -> (ExportOutcome, ArchiveExportResult?) {
         if let why = OrgPolicy.denial(.export) { return (.failed(why), nil) }
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = suggestedName
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let destination = panel.url else { return (.cancelled, nil) }

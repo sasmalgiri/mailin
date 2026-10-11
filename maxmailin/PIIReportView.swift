@@ -348,6 +348,28 @@ struct PIIReportView: View {
         #endif
     }
 
+    /// The pre-3.0 export of the findings on screen.
+    private func exportCSVPrevious() {
+        func esc(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
+        var csv = "Type,Value,Risk,Context,Email Subject,Email ID\n"
+        for finding in findings {
+            csv += [finding.type.rawValue, finding.value,
+                    String(format: "%.1f", finding.contextualRiskScore),
+                    finding.riskContext.rawValue, finding.emailSubject,
+                    finding.emailID.uuidString].map(esc).joined(separator: ",") + "\n"
+        }
+        // One funnel for both platforms (policy, read-back, iOS Share sheet);
+        // the numbered document is recorded only once it is saved (rule 5).
+        let piiCount = findings.count
+        let outcome = PlatformExport.save(text: csv, suggestedName: "mailin_pii_report.csv")
+        if let url = outcome.url {
+            Task { await DocumentRegistry.capture(.report,
+                summary: "PII report — \(piiCount) finding\(piiCount == 1 ? "" : "s")", body: csv, refs: url.lastPathComponent) }
+        } else if case .failed(let why) = outcome {
+            exportError = why
+        }
+    }
+
     private func exportCSV() {
         if v3 {
             Task { @MainActor in
@@ -360,30 +382,7 @@ struct PIIReportView: View {
             }
             return
         }
-        func esc(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
-        var csv = "Type,Value,Risk,Context,Email Subject,Email ID\n"
-        for finding in findings {
-            csv += [finding.type.rawValue, finding.value,
-                    String(format: "%.1f", finding.contextualRiskScore),
-                    finding.riskContext.rawValue, finding.emailSubject,
-                    finding.emailID.uuidString].map(esc).joined(separator: ",") + "\n"
-        }
-        // Record a numbered document of this PII report.
-        let piiCount = findings.count
-        Task { await DocumentRegistry.capture(.report,
-            summary: "PII report — \(piiCount) finding\(piiCount == 1 ? "" : "s")", body: csv) }
-        #if os(macOS)
-        let panel = ManagedSavePanel()
-        panel.nameFieldStringValue = "mailin_pii_report.csv"
-        panel.allowedContentTypes = [.commaSeparatedText]
-        panel.canCreateDirectories = true
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        do { try csv.write(to: url, atomically: true, encoding: .utf8) }
-        catch { exportError = error.localizedDescription }
-        #else
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mailin_pii_report.csv")
-        try? csv.write(to: url, atomically: true, encoding: .utf8)
-        #endif
+        exportCSVPrevious()
     }
 }
 

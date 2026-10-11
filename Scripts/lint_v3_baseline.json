@@ -21,9 +21,6 @@
   "maxmailin/BatesNumberingManager.swift": {
    "documentBeforeSave": 1
   },
-  "maxmailin/ChainOfCustodyManager.swift": {
-   "discardedSaveOutcome": 1
-  },
   "maxmailin/CustodianPanelView.swift": {
    "countBreakCap": 1,
    "documentBeforeSave": 1
@@ -58,14 +55,10 @@
   "maxmailin/JournalistInvestigationView.swift": {
    "countBreakCap": 1
   },
-  "maxmailin/KnowledgeGraph.swift": {
-   "countBreakCap": 1
-  },
   "maxmailin/LegalReviewWorkspaceView.swift": {
    "countBreakCap": 1
   },
   "maxmailin/PIIReportView.swift": {
-   "silentUserWrite": 1,
    "workingSetCap": 1
   },
   "maxmailin/PersonalEmailOrganizerView.swift": {

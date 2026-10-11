@@ -579,7 +579,11 @@ struct ChainOfCustodyView: View {
                     (r.withoutOriginal > 0 ? String(localized: ", \(r.withoutOriginal) without a stored original") : "") +
                     (r.verified ? String(localized: " — every file verified.") : String(localized: " — VERIFICATION FAILED, do not rely on this package."))
                 #if os(iOS)
-                if r.verified { _ = PlatformExport.share(bag) }
+                // Registered only once it really left through the Share sheet (rule 5).
+                if r.verified, case .failed(let why) = PlatformExport.share(bag) {
+                    exportStatus = String(localized: "Preservation package failed: \(why)")
+                    return
+                }
                 #endif
                 if r.verified {
                     _ = await DocumentRegistry.post(.export, summary: "Preservation package — \(r.originals) originals", refs: bag.lastPathComponent)
