@@ -33,6 +33,8 @@ struct CustodianPanelView: View {
     private var v3Modules: ModuleRegistry? { modules }
     @State private var v3Unassigned: Int?
     @State private var v3Busy = false
+    /// Rule 4 / §3-X2: whole-archive actions show the affected count first.
+    @State private var scopeConfirm: ScopeConfirmationRequest?
     private var v3: Bool { modules?.isOn(.v3Custodians) ?? false }
 
     var body: some View {
@@ -387,6 +389,7 @@ struct CustodianPanelView: View {
                 }
             }
         }
+        .scopeConfirmation($scopeConfirm)
         .alert("Assign Custodian", isPresented: $showAssignSheet) {
             if v3 {
                 Button(selectedCustodian == nil ? String(localized: "Assign to All Emails")
@@ -401,10 +404,16 @@ struct CustodianPanelView: View {
                         let ids = Set(manager.emailIDs(for: sel))
                         return workingSet.filter { ids.contains($0.id) }.map(\.id)
                     }()
-                    v3Run(previous: { manager.assignCustodian(name, to: visibleIDs) }) {
-                        let n = try await CustodianEngine.assign(name, group: group)
-                        v3Unassigned = await CustodianEngine.unassignedCount()
-                        reportStatus = String(localized: "Assigned \(name) to \(n) emails.")
+                    Task { @MainActor in
+                        scopeConfirm = ScopeConfirmationRequest(
+                            title: String(localized: "Assign Custodian"), verb: String(localized: "Assign"),
+                            count: await groupCount(group), detail: nil, destructive: false) {
+                            v3Run(previous: { manager.assignCustodian(name, to: visibleIDs) }) {
+                                let n = try await CustodianEngine.assign(name, group: group)
+                                v3Unassigned = await CustodianEngine.unassignedCount()
+                                reportStatus = String(localized: "Assigned \(name) to \(n) emails.")
+                            }
+                        }
                     }
                 }
             }
@@ -452,7 +461,24 @@ struct CustodianPanelView: View {
         }
     }
 
+    /// Emails in a group across the archive (for the count shown first).
+    private func groupCount(_ group: String?) async -> Int {
+        if let group, group != CustodianEngine.unassignedKey { return manager.emailIDs(for: group).count }
+        if group == nil { return (try? await ArchiveDataService.shared.count()) ?? 0 }
+        return await CustodianEngine.unassignedCount()
+    }
+
     private func v3HoldAll(_ custodian: String, visible: [MBOXParser.RawEmail]) {
+        Task { @MainActor in
+            scopeConfirm = ScopeConfirmationRequest(
+                title: String(localized: "Place All on Legal Hold"), verb: String(localized: "Apply Hold"),
+                count: await groupCount(custodian),
+                detail: String(localized: "Each email is sealed with its current content the first time it is held. Existing seals are never replaced."),
+                destructive: false) { v3HoldAllConfirmed(custodian, visible: visible) }
+        }
+    }
+
+    private func v3HoldAllConfirmed(_ custodian: String, visible: [MBOXParser.RawEmail]) {
         v3Run(previous: { manager.placeLegalHold(on: visible) }) {
             let r = try await CustodianEngine.holdAll(custodian: custodian)
             reportStatus = String(localized: "Legal hold placed on \(r.held) more emails of \(custodian) (\(r.total) assigned in the archive).")

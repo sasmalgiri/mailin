@@ -16,6 +16,8 @@ struct SmartAutoTaggerView: View {
     @Environment(ModuleRegistry.self) private var v3Modules: ModuleRegistry?
     @State private var wholeTags: KeyCounter?
     @State private var wholeNote: String?
+    /// Rule 4: tagging every email shows the count first.
+    @State private var scopeConfirm: ScopeConfirmationRequest?
     private var v3: Bool { v3Modules?.isOn(.v3AnalysisQueries) ?? false }
     var isPresented: Binding<Bool>?
     @StateObject private var tagger = SmartAutoTagger()
@@ -89,6 +91,19 @@ struct SmartAutoTaggerView: View {
                 }
             } else {
                 VStack(spacing: 0) {
+                    // §3-A10: saving tags on every email is the user's choice,
+                    // with the count shown first — never on opening the tool.
+                    if v3 && wholeTags == nil {
+                        Button(String(localized: "Save tags to every email…")) {
+                            Task { @MainActor in
+                                scopeConfirm = await ScopeConfirm.request(
+                                    .wholeArchive, title: String(localized: "Tag every email"), verb: String(localized: "Tag")
+                                ) { await saveWholeArchiveTags() }
+                            }
+                        }
+                        .buttonStyle(SecondaryButtonStyle())
+                        .padding(.top, Spacing.small)
+                    }
                     // Tag cloud summary
                     tagCloudSection
                         .padding(Spacing.medium)
@@ -105,6 +120,7 @@ struct SmartAutoTaggerView: View {
             }
         }
         .workingSetLimitNotice(shown: workingSet.count, total: archiveTotal)
+        .scopeConfirmation($scopeConfirm)
         .onAppear { startTagging() }
         #if os(macOS)
         .toolWindowFrame()
@@ -271,17 +287,21 @@ struct SmartAutoTaggerView: View {
                 archiveTotal = (try? await ArchiveDataService.shared.count()) ?? workingSet.count
             }
             await tagger.generateTags(for: workingSet)
-            if v3 {
-                do {
-                    let r = try await tagger.generateTagsWholeArchive()
-                    wholeTags = r.tags
-                    wholeNote = String(localized: "Tags saved for every email — \(r.receipt.coverageLine) The list below shows the newest emails, with Apple Intelligence suggestions.")
-                } catch is CancellationError {
-                } catch {
-                    // §3-M3: the previous engine's suggestions (above) stay on screen.
-                    wholeNote = EngineGuard.fellBack(.v3AnalysisQueries, error: error)
-                }
-            }
+        }
+    }
+
+    /// Saves tags on every email in the archive (§3-A10), after the count was
+    /// confirmed. Opening the tool only suggests tags for the loaded emails.
+    private func saveWholeArchiveTags() async {
+        guard v3 else { return }
+        do {
+            let r = try await tagger.generateTagsWholeArchive()
+            wholeTags = r.tags
+            wholeNote = String(localized: "Tags saved for every email — \(r.receipt.coverageLine) The list below shows the newest emails, with Apple Intelligence suggestions.")
+        } catch is CancellationError {
+        } catch {
+            // §3-M3: the previous engine's suggestions (above) stay on screen.
+            wholeNote = EngineGuard.fellBack(.v3AnalysisQueries, error: error)
         }
     }
 }

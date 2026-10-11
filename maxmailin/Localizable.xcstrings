@@ -248406,6 +248406,9 @@
         }
       }
     },
+    "Save tags to every email…" : {
+
+    },
     "Save the complete audit log for the case record" : {
       "localizations" : {
         "de" : {
@@ -284606,6 +284609,9 @@
           }
         }
       }
+    },
+    "Tag every email" : {
+
     },
     "Tag Evidence" : {
       "localizations" : {
