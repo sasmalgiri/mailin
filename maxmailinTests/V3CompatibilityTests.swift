@@ -769,4 +769,15 @@ final class V3CompatibilityTests: XCTestCase {
                            "\(tool) is built in the sidebar switch again; build it in ProfessionalDestinationView")
         }
     }
+
+    // MARK: - M5: TestFlight builds run the 3.0 engines
+
+    func testBetaBuilds_turnPreviewEnginesOn_appStoreBuildsDoNot() {
+        XCTAssertTrue(Capability.defaultOn(maturity: .preview, isEngine: true, beta: true), "TestFlight runs the 3.0 engines")
+        XCTAssertFalse(Capability.defaultOn(maturity: .preview, isEngine: true, beta: false), "the App Store keeps them off until promoted")
+        XCTAssertFalse(Capability.defaultOn(maturity: .preview, isEngine: false, beta: true), "only 3.0 engines, not other previews")
+        XCTAssertFalse(Capability.defaultOn(maturity: .experimental, isEngine: true, beta: true))
+        XCTAssertTrue(Capability.defaultOn(maturity: .stable, isEngine: false, beta: false))
+        XCTAssertFalse(BetaEnvironment.isBeta, "tests always see the shipping defaults")
+    }
 }

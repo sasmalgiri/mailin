@@ -139,6 +139,10 @@ struct FourPageShell: View {
             SafeMode.shared.evaluateAtLaunch(registry: modules)
             EngineTripCenter.shared.checkAtLaunch(registry: modules)
             SnapshotLocation.restoreAtLaunch()
+            // §3-M5: TestFlight builds run the 3.0 engines by default.
+            Task { @MainActor in
+                if await BetaEnvironment.detect() { CapabilityWiring.applyAll(modules) }
+            }
             ArchiveSnapshots.scheduleIfDue()
             IdleCheckpoint.start()
             router.reconcile(with: modules)

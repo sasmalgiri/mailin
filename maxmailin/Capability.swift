@@ -227,8 +227,17 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
     }
 
     /// Whether this capability is on for a user who has never touched the
-    /// matrix. Stable capabilities are on; anything unproven is off.
-    var defaultsOn: Bool { maturity == .stable }
+    /// matrix. Stable capabilities are on; anything unproven is off — except
+    /// that a TestFlight / development build turns the 3.0 preview engines on,
+    /// so the TestFlight period M5 requires actually runs them
+    /// (BetaEnvironment.swift).
+    var defaultsOn: Bool {
+        Self.defaultOn(maturity: maturity, isEngine: EngineSpec.of(self) != nil, beta: BetaEnvironment.isBeta)
+    }
+
+    static func defaultOn(maturity: Maturity, isEngine: Bool, beta: Bool) -> Bool {
+        maturity == .stable || (maturity == .preview && isEngine && beta)
+    }
 
     // MARK: Dependencies
 
