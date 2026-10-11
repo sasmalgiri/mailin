@@ -180,6 +180,11 @@ final class V3FoundationTests: XCTestCase {
         let v2 = try await env.store.legalHoldsAdd([ids[0]], matter: "M-1")
         XCTAssertEqual(v2, 0, "a hold is placed once")
 
+        // Engine off: the files are the truth, the table does not block (M6).
+        let offHeld = try await env.store.deleteReportingHeld(ids: [ids[3]])
+        XCTAssertEqual(offHeld, [])
+        await env.store.setEnforcesDatabaseLegalHolds(true)
+
         try await env.store.delete(ids: Set(ids))
         let left = try await idsOldestFirst(env)
         XCTAssertEqual(Set(left), Set([ids[0], ids[1]]), "held emails survive; unheld ones are deleted")

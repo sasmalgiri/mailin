@@ -319,7 +319,9 @@ enum AdaptiveBatch {
 
     static func size(requested: Int, available: UInt64 = availableBytes()) -> Int {
         let fits = Int(min(available / 8 / UInt64(bytesPerEmail), UInt64(Int.max)))
-        return max(minimum, min(requested, fits))
+        // Memory only ever shrinks a batch (to no less than `minimum`); it
+        // never grows one past what the tool asked for.
+        return min(requested, max(minimum, fits))
     }
 }
 

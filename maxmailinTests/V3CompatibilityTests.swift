@@ -476,6 +476,8 @@ final class V3CompatibilityTests: XCTestCase {
         XCTAssertEqual(AdaptiveBatch.size(requested: 200, available: 0), AdaptiveBatch.minimum, "under pressure: slower, not stopped")
         XCTAssertEqual(AdaptiveBatch.size(requested: 200, available: 64 * 1_073_741_824), 200, "plenty: the tool's own size")
         XCTAssertEqual(AdaptiveBatch.size(requested: 200, available: perBatchEmail * 80), 80, "in between: what fits")
+        XCTAssertEqual(AdaptiveBatch.size(requested: 5, available: 0), 5, "never larger than the tool asked for")
+        XCTAssertEqual(AdaptiveBatch.size(requested: 5, available: 64 * 1_073_741_824), 5)
         XCTAssertGreaterThan(AdaptiveBatch.availableBytes(), 0, "this machine reports free memory")
     }
 
