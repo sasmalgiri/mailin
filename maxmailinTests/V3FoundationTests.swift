@@ -590,4 +590,92 @@ final class V3FoundationTests: XCTestCase {
         }
         XCTAssertTrue(env.job.auditLines().allSatisfy { $0.hasPrefix("Bates Numbers Assigned") })
     }
+
+    // MARK: - S2 / S9: connection settings and two writers
+
+    /// The 3.0 connection settings read back from a connection, and two
+    /// stores writing the same archive at once never fail with "database is
+    /// locked" (busy wait + write lock taken up front).
+    func testSQLiteHygiene_settingsReadBack_andTwoWritersNeverBusy() async throws {
+        let was = SQLiteHygiene.isEnabled
+        SQLiteHygiene.isEnabled = true
+        defer { SQLiteHygiene.isEnabled = was }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("v3found-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(root.appendingPathComponent("probe.db").path, &db), SQLITE_OK)
+        let handle = try XCTUnwrap(db)
+        defer { sqlite3_close(handle) }
+        SQLiteHygiene.apply(to: handle)
+        func pragma(_ name: String) -> Int {
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(handle, "PRAGMA \(name);", -1, &stmt, nil) == SQLITE_OK else { return -1 }
+            defer { sqlite3_finalize(stmt) }
+            return sqlite3_step(stmt) == SQLITE_ROW ? Int(sqlite3_column_int64(stmt, 0)) : -1
+        }
+        XCTAssertEqual(pragma("busy_timeout"), 5000)
+        XCTAssertEqual(pragma("wal_autocheckpoint"), 10000)
+        #if os(macOS)
+        XCTAssertEqual(pragma("checkpoint_fullfsync"), 1)
+        #endif
+        XCTAssertEqual(SQLiteHygiene.beginWrite, "BEGIN IMMEDIATE TRANSACTION;")
+
+        let dir = root.appendingPathComponent("store", isDirectory: true)
+        let first = SQLiteEmailStore(directory: dir)
+        try await first.insertBatch([makeEmail(0, tag: "warm")], batchSize: 1)   // schema created once
+        let second = SQLiteEmailStore(directory: dir)
+        let a = (1...400).map { makeEmail($0, tag: "a") }
+        let b = (1...400).map { makeEmail($0, tag: "b") }
+        async let x: Void = { for chunk in stride(from: 0, to: a.count, by: 20) { try await first.insertBatch(Array(a[chunk..<chunk + 20]), batchSize: 20) } }()
+        async let y: Void = { for chunk in stride(from: 0, to: b.count, by: 20) { try await second.insertBatch(Array(b[chunk..<chunk + 20]), batchSize: 20) } }()
+        try await x
+        try await y
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts", isDirectory: true))
+        let archive = ArchiveDataService(repository: EmailStoreRepository(store: SQLiteEmailStore(directory: dir), fts: fts))
+        let stored = try await archive.count(query: .all)
+        XCTAssertEqual(stored, 801, "every write from both connections landed")
+    }
+
+    // MARK: - S8: safe HTML
+
+    /// Every auto-loading remote reference is removed (pixels, CSS, frames,
+    /// scripts, refresh); inline cid: images, text and click-only links stay.
+    func testSafeHTML_removesEveryRemoteFetch_keepsInlineContent() {
+        let html = """
+            <html><head><link rel="stylesheet" href="https://t.example/a.css">\
+            <style>@import url(https://t.example/b.css); body { background: url('https://t.example/bg.png') }</style>\
+            <meta http-equiv="refresh" content="0;url=https://t.example/r"></head>\
+            <body onload="track()"><img src="https://t.example/pixel.gif" width="1"><img src=//t.example/p2.gif>\
+            <img srcset="https://t.example/x.png 2x"><img src="cid:logo@mail"><video poster="https://t.example/p.jpg"></video>\
+            <script>fetch('https://t.example/s')</script><iframe src="https://t.example/f"></iframe>\
+            <a href="https://example.com/read">Read</a><p>Hello there</p></body></html>
+            """
+        let safe = SafeHTMLRenderer.sanitize(html)
+        XCTAssertFalse(safe.html.contains("t.example"), safe.html)
+        XCTAssertFalse(safe.html.lowercased().contains("onload"))
+        XCTAssertTrue(safe.html.contains("cid:logo@mail"))
+        XCTAssertTrue(safe.html.contains("https://example.com/read"), "a link loads nothing until it is clicked")
+        XCTAssertTrue(safe.html.contains("Hello there"))
+        XCTAssertGreaterThanOrEqual(safe.blockedRemoteItems, 6, "pixel ×2, srcset, poster, CSS url, @import")
+    }
+
+    /// A 5 MB message is sanitized and converted off the main thread: the
+    /// main actor keeps running while it renders.
+    func testSafeHTML_largeMessageDoesNotBlockTheMainThread() async throws {
+        final class Ticks { var n = 0 }
+        let ticks = Ticks()
+        let big = "<p>" + String(repeating: "word <b>x</b> ", count: 360_000) + "</p>"
+        XCTAssertGreaterThan(big.utf8.count, 5_000_000)
+        let ticker = Task { @MainActor in
+            while !Task.isCancelled { ticks.n += 1; try? await Task.sleep(for: .milliseconds(10)) }
+        }
+        let started = Date()
+        _ = try? await SafeHTMLRenderer.render(big)
+        let elapsed = Date().timeIntervalSince(started)
+        ticker.cancel()
+        // At least a third of the 10 ms ticks that fit in the render time ran.
+        XCTAssertGreaterThanOrEqual(Double(ticks.n), max(1, elapsed * 100 / 3), "main actor starved: \(ticks.n) ticks in \(elapsed) s")
+    }
 }

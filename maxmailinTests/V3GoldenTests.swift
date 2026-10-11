@@ -98,6 +98,8 @@ enum GoldenArchive {
 
 enum GoldenTool: String, CaseIterable, Sendable {
     case search, exclusions, pii, keywords, privilege, indicators, itAdmin, duplicates, bates, fingerprint, shadow
+    case identify, classify, reviewPlan, verify, productionFiles, custodians, batchTag, automation
+    case investigationReport, personalCleanup, predictive, nearDuplicates, aggregates
 }
 
 @MainActor
@@ -108,7 +110,12 @@ struct V3GoldenTests {
         let root: URL
         let store: SQLiteEmailStore
         let archive: ArchiveDataService
-        var job: ScopeJobEnvironment { ScopeJobEnvironment(archive: archive, store: store, root: root) }
+        /// Legal files of this archive only (never the app's).
+        let custodians: CustodianManager
+        let legal: LegalStateMirror
+        var job: ScopeJobEnvironment {
+            ScopeJobEnvironment(archive: archive, store: store, root: root, custodian: custodians, legal: legal)
+        }
     }
 
     private static func makeEnv() async throws -> Env {
@@ -119,14 +126,23 @@ struct V3GoldenTests {
         let emails = GoldenArchive.emails
         try await store.insertBatch(emails, batchSize: 100)
         try await fts.indexBatch(emails)
+        let custodians = CustodianManager(directory: root.appendingPathComponent("legal", isDirectory: true))
+        let legal = LegalStateMirror(manager: custodians)
+        legal.enabledOverride = false
         return Env(root: root, store: store,
-                   archive: ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts)))
+                   archive: ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts)),
+                   custodians: custodians, legal: legal)
     }
 
     @Test("Tool answer equals the planted facts", arguments: GoldenTool.allCases)
     func toolMatchesGolden(_ tool: GoldenTool) async throws {
         let env = try await Self.makeEnv()
-        defer { try? FileManager.default.removeItem(at: env.root) }
+        // Evidence hashes and audit rows go to this archive, never the app's.
+        ForensicManager.testStoreOverride = env.store
+        defer {
+            ForensicManager.testStoreOverride = nil
+            try? FileManager.default.removeItem(at: env.root)
+        }
         try await ScopeJobEnvironment.$current.withValue(env.job) {
             try await check(tool, env)
         }
@@ -209,6 +225,122 @@ struct V3GoldenTests {
                 let r = try #require(reports.first { $0.tool == name })
                 #expect(r.matches, "\(name): \(r.differences)")
             }
+
+        case .identify:
+            let all = try await EDiscoveryEngine.identify(scope: .wholeArchive, custodians: [], start: nil, end: nil)
+            #expect(all.matching == total && all.total == total)
+            let alice = try await EDiscoveryEngine.identify(scope: .wholeArchive, custodians: ["alice"], start: nil, end: nil)
+            #expect(alice.matching == GoldenArchive.count { $0.from == GoldenArchive.north })
+            // Dates: the first ten emails (3 days apart from the base date).
+            let end = Date(timeIntervalSince1970: GoldenArchive.baseEpoch + 9 * 3 * 86_400)
+            let early = try await EDiscoveryEngine.identify(scope: .wholeArchive, custodians: [], start: nil, end: end)
+            #expect(early.matching == GoldenArchive.specs.filter { ($0.duplicateOf ?? $0.index) <= 9 }.count)
+
+        case .classify:
+            let (categories, receipt) = try await EDiscoveryEngine.classify(scope: .wholeArchive)
+            #expect(categories.reduce(0) { $0 + $1.count } == total, "every email in exactly one category")
+            #expect(receipt.processed == total)
+
+        case .reviewPlan:
+            let plan = try await EDiscoveryEngine.planReviewBatches(scope: .wholeArchive)
+            #expect(plan.ordered.count == total && Set(plan.ordered).count == total, "every email once")
+            #expect(plan.flags.count == GoldenArchive.count(\.privileged))
+            let privileged = Set(plan.flags.keys)
+            #expect(Set(plan.ordered.prefix(privileged.count)) == privileged, "privilege-flagged first")
+
+        case .verify:
+            let (first, _) = try await EDiscoveryEngine.verifyCollection(scope: .wholeArchive)
+            #expect(first.newlySealed == total && first.passed == 0 && first.failed == 0, "first run: baselines")
+            let (second, _) = try await EDiscoveryEngine.verifyCollection(scope: .wholeArchive)
+            #expect(second.passed == total && second.failed == 0 && second.newlySealed == 0, "second run: all verify")
+
+        case .productionFiles:
+            let exporter = ArchiveExportService(archive: env.archive)
+            let dat = env.root.appendingPathComponent("load.dat"), csv = env.root.appendingPathComponent("prod.csv")
+            let d = try await exporter.exportConcordanceDAT(scope: .query(.all, exclusions: []), to: dat)
+            #expect(d.recordsWritten == total)
+            let datRows = try String(contentsOf: dat, encoding: .utf8).split(separator: "\n").count
+            #expect(datRows == total + 1, "header + one row per email")
+            let c = try await exporter.exportForensicCSV(scope: .query(.all, exclusions: []), to: csv)
+            #expect(c.recordsWritten == total)
+
+        case .custodians:
+            #expect(await CustodianEngine.unassignedCount() == total)
+            #expect(try await CustodianEngine.assign("Alice", group: nil) == total)
+            #expect(await CustodianEngine.unassignedCount() == 0)
+            #expect(try await CustodianEngine.ids(for: "Alice").count == total)
+            let report = try await CustodianEngine.report()
+            #expect(report.contains("Alice"))
+
+        case .batchTag:
+            let (added, _) = try await BatchOperationsEngine.apply(.add("golden"), scope: .wholeArchive, loaded: [])
+            #expect(added == total)
+            var tagged = EmailQuery(); tagged.userTag = "golden"
+            #expect(try await env.archive.count(query: tagged) == total)
+            var north = EmailQuery(); north.sender = "alice"
+            let (removed, _) = try await BatchOperationsEngine.apply(.remove("golden"), scope: ArchiveScope(query: north, total: nil, loaded: nil), loaded: [])
+            #expect(removed == GoldenArchive.count { $0.from == GoldenArchive.north })
+            #expect(try await env.archive.count(query: tagged) == GoldenArchive.count { $0.from == GoldenArchive.south }, "only the scope lost the tag")
+
+        case .automation:
+            let rules = AutomationRulesEngine(rules: [AutomationRule(
+                name: "Golden", conditions: [.senderContains("alice")], actions: [.flagForReview])])
+            let r = try await AutomationRulesRunEngine.run(scope: .wholeArchive, engine: rules)
+            #expect(r.results.count == GoldenArchive.count { $0.from == GoldenArchive.north })
+            #expect(r.matched.count == r.results.count)
+            #expect(r.receipt.processed == total)
+
+        case .investigationReport:
+            let (pdf, receipt) = try await InvestigationReportEngine.build(scope: .wholeArchive, title: "Golden", investigator: "Test")
+            #expect(pdf.starts(with: Data("%PDF".utf8)))
+            #expect(receipt.processed == total)
+
+        case .personalCleanup:
+            let (stats, _) = try await PersonalCleanupEngine.compute()
+            #expect(stats.emails == total)
+            #expect(stats.attachmentEmails == 0)
+            #expect(stats.noSubject == 0)
+            #expect(stats.duplicates == GoldenArchive.specs.filter { $0.duplicateOf != nil }.count)
+
+        case .predictive:
+            let r = try await PredictiveInsightsEngine.analyze()
+            #expect(r.scanned == total)
+
+        case .nearDuplicates:
+            let records = GoldenArchive.emails.map(FeatureExtractor.features(for:))
+            // The store assigns its own ids; key the features by the stored ids.
+            var stored: [UUID] = []
+            for try await page in env.archive.streamSummaries(query: .all, batchSize: 100) { stored += page.map(\.id) }
+            #expect(stored.count == records.count)
+            let full = try await env.archive.fullEmails(ids: stored)
+            try await env.store.featuresUpsert(full.map(FeatureExtractor.features(for:)))
+            let r = try await NearDuplicatesEngine.run(threshold: 0.9)
+            #expect(r.indexed == total && r.total == total)
+            // 36, 38 and 39 are the same message: at least one group holding
+            // their two verified pairs.
+            #expect(r.groups >= 1 && r.verifiedPairs >= 2, "\(r.groups) groups, \(r.verifiedPairs) pairs")
+
+        case .aggregates:
+            // §3-F3: batch-merged aggregates equal the in-memory answer.
+            let emails = GoldenArchive.emails
+            var merged = KeyCounter(), distinct = DistinctCounter(), stat = RunningStat()
+            var months = TimeHistogram(.month)
+            for chunk in stride(from: 0, to: emails.count, by: 7).map({ Array(emails[$0..<min($0 + 7, emails.count)]) }) {
+                var k = KeyCounter(), d = DistinctCounter(), st = RunningStat(), h = TimeHistogram(.month)
+                for e in chunk {
+                    k.add(e.headers["From"] ?? "")
+                    d.add(e.headers["Subject"] ?? "")
+                    st.add(Double(e.plainBody.count))
+                    if let date = MBOXParser.parseDate(e.headers["Date"]) { h.add(date, calendar: Calendar(identifier: .gregorian)) }
+                }
+                merged.merge(k); distinct.merge(d); stat.merge(st); months.merge(h)
+            }
+            let fromCounts = Dictionary(grouping: emails, by: { $0.headers["From"] ?? "" }).mapValues(\.count)
+            #expect(merged.counts == fromCounts)
+            #expect(merged.ranked().first?.count == fromCounts.values.max())
+            #expect(distinct.count == Set(emails.map { $0.headers["Subject"] ?? "" }).count)
+            #expect(stat.count == total && stat.sum == Double(emails.reduce(0) { $0 + $1.plainBody.count }))
+            #expect(months.total == total)
         }
     }
 }

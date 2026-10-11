@@ -99,7 +99,7 @@ enum EDiscoveryEngine {
             custodian.absorbFromDatabase(holds: try await store.legalHoldIDs(), seals: try await store.allSeals(), custodians: nil)
             mirror.endDatabaseWrite()
         }
-        forensic.logAction("Legal Hold Placed",
+        ScopeJobEnvironment.logAction("Legal Hold Placed",
                            detail: "\(result.state.held) emails newly held, \(result.state.sealed) sealed — scope: \(result.receipt.scope); \(result.receipt.coverageLine)")
         return (result.state.held, result.state.sealed, result.receipt)
     }
@@ -195,7 +195,7 @@ enum EDiscoveryEngine {
                 state.newlySealed += unsealed.count
             }
         }
-        forensic.logAction("E-Discovery: Collection Verified",
+        ScopeJobEnvironment.logAction("E-Discovery: Collection Verified",
                            detail: "\(result.state.passed) verified, \(result.state.failed) failed, \(result.state.newlySealed) newly sealed — \(result.receipt.coverageLine)")
         return (result.state, result.receipt)
     }
@@ -220,11 +220,11 @@ enum EDiscoveryEngine {
 
     struct BatchPlan: Codable, Sendable { var seen = 0 }
 
-    /// Every email in scope, privilege-flagged first, then by category size —
-    /// the previous ordering — as real review batches. Privilege flags are
-    /// collected across the whole scope and published once.
-    static func createReviewBatches(scope: ArchiveScope) async throws
-        -> (batches: Int, privileged: Int, categories: [(category: String, count: Int)], receipt: ScopeJobReceipt) {
+    /// The review plan: every email in scope, privilege-flagged first, then
+    /// by category size — the previous ordering. Reads only (testable on a
+    /// disposable archive); `createReviewBatches` publishes it.
+    static func planReviewBatches(scope: ArchiveScope) async throws
+        -> (ordered: [UUID], flags: [UUID: [String]], categories: [(category: String, count: Int)], receipt: ScopeJobReceipt) {
         var categoryOf: [UUID: String] = [:]
         var flags: [UUID: [String]] = [:]
         var order: [UUID] = []
@@ -247,19 +247,26 @@ enum EDiscoveryEngine {
             }
             state.seen += batch.count
         }
-        let forensic = ForensicManager.shared
-        forensic.privilegeFlags = flags
         let rank = Dictionary(uniqueKeysWithValues: counts.ranked().enumerated().map { ($1.key, $0) })
         let ordered = order.sorted { a, b in
             let pa = flags[a] != nil, pb = flags[b] != nil
             if pa != pb { return pa }
             return (categoryOf[a].flatMap { rank[$0] } ?? 0) < (categoryOf[b].flatMap { rank[$0] } ?? 0)
         }
+        return (ordered, flags, counts.ranked().map { (category: $0.key, count: $0.count) }, result.receipt)
+    }
+
+    /// Publishes the plan as real review batches; privilege flags collected
+    /// across the whole scope are published once.
+    static func createReviewBatches(scope: ArchiveScope) async throws
+        -> (batches: Int, privileged: Int, categories: [(category: String, count: Int)], receipt: ScopeJobReceipt) {
+        let plan = try await planReviewBatches(scope: scope)
+        ForensicManager.shared.privilegeFlags = plan.flags
         let batchManager = ReviewBatchManager.shared
-        batchManager.createBatches(from: ordered, batchSize: 50, namePrefix: "Review")
-        forensic.logAction("E-Discovery: Review Batches Created",
-                           detail: "\(batchManager.batches.count) batches of up to 50 from \(ordered.count) emails (privilege-flagged first, then by category). \(flags.count) privilege-flagged. \(result.receipt.coverageLine)")
-        return (batchManager.batches.count, flags.count, counts.ranked().map { (category: $0.key, count: $0.count) }, result.receipt)
+        batchManager.createBatches(from: plan.ordered, batchSize: 50, namePrefix: "Review")
+        ScopeJobEnvironment.logAction("E-Discovery: Review Batches Created",
+                           detail: "\(batchManager.batches.count) batches of up to 50 from \(plan.ordered.count) emails (privilege-flagged first, then by category). \(plan.flags.count) privilege-flagged. \(plan.receipt.coverageLine)")
+        return (batchManager.batches.count, plan.flags.count, plan.categories, plan.receipt)
     }
 
     // MARK: L5 — Production files (streamed, verified)

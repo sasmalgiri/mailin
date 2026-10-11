@@ -192,6 +192,12 @@ final class AutomationRulesEngine: ObservableObject {
 
     private static let storageKey = "com.mailin.automationRules"
 
+    /// Rules given directly, never read from or written to the settings
+    /// (observers do not run in an initialiser) — for tests.
+    init(rules: [AutomationRule]) {
+        self.rules = rules
+    }
+
     init() {
         if let data = UserDefaults.standard.data(forKey: Self.storageKey),
            let decoded = try? JSONDecoder().decode([AutomationRule].self, from: data) {
