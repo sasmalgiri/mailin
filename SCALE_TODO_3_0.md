@@ -272,7 +272,7 @@ loops, the current AI context building. Deleted only in a later release after a 
 | V1 | Every tool on 100k and 1M: result == SQL count, memory flat, Cancel, resume; 10M store/paging; publish table | me | [ ] |
 | V2 | 1 GB real-format fixtures (mbox, PST, EML folder, Maildir, Apple Mail, gzip, mixed) | me | [ ] |
 | V3 | Chaos run: kill mid-job, disk full, drive unplugged, iPad locked → relaunch, resume, answers match golden set | me | [ ] |
-| V4 | Full unit + package suites; Thread Sanitizer run | me | [ ] |
+| V4 | Full unit + package suites; Thread Sanitizer run | me | 2026-10-11 (54bf349): app unit suite 801 passed / 0 failed (13 opt-in scale/fixture tests skipped, 9 StoreKit tests not run — need the StoreKit config); ArchiveCore 59 / 0 failed, and 0 ThreadSanitizer reports. Still open: Thread Sanitizer on the app target (scheme diagnostic), StoreKit suite — [~] |
 | V5 | Mac UI suites + press-every-button crawl (needs the owner present to approve automation) | owner + me | [ ] |
 | V6 | iPad simulator + real-device lock/suspend checks | me + owner | [ ] |
 | V7 | Release build: verify-no-network, idle CPU, launch/resume time with a 1M archive **without the debugger** (watchdog) | me | [ ] |
