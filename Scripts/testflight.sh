@@ -7,6 +7,10 @@
 #   Scripts/testflight.sh --build 302 --upload        # ...and upload to App Store Connect
 #   Scripts/testflight.sh --build 302 --platform ios  # one platform only (ios | macos | both)
 #   Scripts/testflight.sh --build 302 --tests         # run the purchase + gate tests first
+#   Scripts/testflight.sh --build 302 --edition enterprise --upload
+#                                                     # the Custom App (Apple Business Manager):
+#                                                     # bundle com.ecosanskriti.mailin.enterprise,
+#                                                     # ENTERPRISE_EDITION, no StoreKit (LICENSING.md)
 #
 # The build number is passed to xcodebuild (CURRENT_PROJECT_VERSION), so the
 # project file is never edited; App Store Connect requires a new number for
@@ -26,6 +30,7 @@ PROJECT=maxmailin.xcodeproj
 SCHEME=maxmailin
 TEAM=6TPTCJD42Q
 BUNDLE_ID=com.ecosanskriti.mailin
+EDITION=public
 XB=/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild
 
 BUILD=""
@@ -38,14 +43,27 @@ while (( $# )); do
         --platform) PLATFORM="$2"; shift 2 ;;
         --upload) UPLOAD=1; shift ;;
         --tests) RUN_TESTS=1; shift ;;
+        --edition) EDITION="$2"; shift 2 ;;
         -h|--help) sed -n '3,20p' "$0"; exit 0 ;;
         *) echo "unknown option: $1"; exit 2 ;;
     esac
 done
 [[ -n "$BUILD" && "$BUILD" == <-> ]] || { echo "--build <integer> is required (higher than any build already uploaded)"; exit 2; }
 case "$PLATFORM" in ios|macos|both) ;; *) echo "--platform must be ios, macos or both"; exit 2 ;; esac
+# Edition overrides go on the xcodebuild command line, so the project file is
+# never edited (one target builds both editions).
+EDITION_SETTINGS=()
+case "$EDITION" in
+    public) ;;
+    enterprise)
+        BUNDLE_ID=com.ecosanskriti.mailin.enterprise
+        EDITION_SETTINGS=(PRODUCT_BUNDLE_IDENTIFIER=$BUNDLE_ID "SWIFT_ACTIVE_COMPILATION_CONDITIONS=NO_NETWORK_BUILD ENTERPRISE_EDITION")
+        ;;
+    *) echo "--edition must be public or enterprise"; exit 2 ;;
+esac
 
 OUT="$ROOT/build-testflight/$BUILD"
+[[ "$EDITION" == enterprise ]] && OUT="$ROOT/build-testflight/$BUILD-enterprise"
 mkdir -p "$OUT"
 LOG="$OUT/testflight.log"
 : > "$LOG"
@@ -132,7 +150,7 @@ run_platform() {
     local archive="$OUT/mailin-$platform.xcarchive"
     say "== $platform: archive"
     $XB archive -project $PROJECT -scheme $SCHEME -configuration Release -destination "$destination" \
-        -archivePath "$archive" CURRENT_PROJECT_VERSION="$BUILD" -allowProvisioningUpdates "${AUTH[@]}" \
+        -archivePath "$archive" CURRENT_PROJECT_VERSION="$BUILD" "${EDITION_SETTINGS[@]}" -allowProvisioningUpdates "${AUTH[@]}" \
         > "$OUT/archive-$platform.log" 2>&1 || fail "$platform archive failed — see $OUT/archive-$platform.log"
     verify_archive "$platform" "$archive"
 

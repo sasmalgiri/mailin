@@ -12,6 +12,7 @@
 
 import XCTest
 import SQLite3
+import CryptoKit
 import FoundationModels
 @testable import maxmailin
 
@@ -684,5 +685,62 @@ final class V3CompatibilityTests: XCTestCase {
         q.userTag = "pending"
         let left = try await env.archive.count(query: q)
         XCTAssertEqual(left, 2, "every write landed before the re-query")
+    }
+
+    // MARK: - Enterprise licensing
+
+    private func licenseKey(_ payload: [String: Any], signer: Curve25519.Signing.PrivateKey) throws -> String {
+        func b64(_ d: Data) -> String {
+            d.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: "")
+        }
+        let json = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+        return "MAILIN1.\(b64(json)).\(b64(try signer.signature(for: json)))"
+    }
+
+    /// Valid → Professional; 30 days of grace after expiry; then Personal —
+    /// never less (the archive stays readable). Tampered or foreign keys fail.
+    func testEnterpriseLicense_validGraceExpiredInvalid() throws {
+        let signer = Curve25519.Signing.PrivateKey()
+        let pub = signer.publicKey.rawRepresentation.base64EncodedString()
+        let base: [String: Any] = ["v": 1, "org": "Acme LLP", "seats": 25, "issued": "2026-01-01", "id": "T1"]
+        var dated = base; dated["expires"] = "2026-12-31"
+        let key = try licenseKey(dated, signer: signer)
+        let f = ISO8601DateFormatter()
+        func at(_ s: String) -> EnterpriseLicense { EnterpriseLicense.evaluate(key: key, now: f.date(from: s)!, publicKey: pub) }
+
+        XCTAssertEqual(at("2026-12-31T23:00:00Z").tier, .professional, "valid through the expiry day")
+        guard case .grace(_, let left) = at("2027-01-10T00:00:00Z").status else { return XCTFail("grace after expiry") }
+        XCTAssertEqual(left, 21)
+        XCTAssertEqual(at("2027-01-10T00:00:00Z").tier, .professional)
+        guard case .expired = at("2027-02-15T00:00:00Z").status else { return XCTFail("expired after grace") }
+        XCTAssertEqual(at("2027-02-15T00:00:00Z").tier, .personal, "never below Personal: the archive stays usable")
+
+        let perpetual = try licenseKey(base, signer: signer)
+        XCTAssertEqual(EnterpriseLicense.evaluate(key: perpetual, now: f.date(from: "2040-01-01T00:00:00Z")!, publicKey: pub).tier, .professional)
+
+        var parts = key.split(separator: ".").map(String.init)
+        parts[1] = parts[1].replacingOccurrences(of: "A", with: "B")
+        guard case .invalid = EnterpriseLicense.evaluate(key: parts.joined(separator: "."), now: Date(), publicKey: pub).status else { return XCTFail("tampered key") }
+        let other = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation.base64EncodedString()
+        guard case .invalid = EnterpriseLicense.evaluate(key: key, now: Date(), publicKey: other).status else { return XCTFail("foreign key") }
+        guard case .missing = EnterpriseLicense.evaluate(key: "  ", now: Date()).status else { return XCTFail("empty") }
+        guard case .invalid = EnterpriseLicense.evaluate(key: "hello", now: Date()).status else { return XCTFail("garbage") }
+    }
+
+    /// Setting the clock back does not revive an expired key: the latest
+    /// date seen is kept and used whenever the clock reads earlier.
+    func testEnterpriseLicense_clockCannotRunBackwards() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "license-\(UUID().uuidString)"))
+        let future = Date().addingTimeInterval(400 * 86_400).timeIntervalSince1970
+        defaults.set(future, forKey: "enterprise.licenseClockHighWater")
+        _ = EnterpriseLicense.current(defaults: defaults, managedKey: nil)
+        XCTAssertEqual(defaults.double(forKey: "enterprise.licenseClockHighWater"), future, "the high-water mark never moves back")
+    }
+
+    /// The embedded public key is a real Ed25519 key.
+    func testEnterpriseLicense_embeddedPublicKeyIsUsable() throws {
+        let data = try XCTUnwrap(Data(base64Encoded: EnterpriseLicense.publicKeyBase64))
+        XCTAssertNoThrow(try Curve25519.Signing.PublicKey(rawRepresentation: data))
     }
 }

@@ -56,6 +56,7 @@ struct AboutView: View {
                             .font(Typography.caption2)
                             .foregroundColor(AppColors.secondary)
                     }
+                    EnterpriseLicenseSection()
                 }
                 #endif
 
@@ -366,6 +367,60 @@ struct AboutView: View {
         }
     }
 }
+
+#if ENTERPRISE_EDITION
+/// The organization's license: what is in force, and a place to paste a key
+/// when the organization does not push one through MDM.
+private struct EnterpriseLicenseSection: View {
+    @EnvironmentObject private var store: StoreManager
+    @State private var entering = false
+    @State private var key = ""
+    @State private var note: String?
+
+    var body: some View {
+        VStack(spacing: Spacing.xxSmall) {
+            Text(store.license.summary)
+                .font(Typography.caption1)
+                .foregroundColor(store.license.tier == .professional ? AppColors.secondary : .orange)
+                .multilineTextAlignment(.center)
+                .accessibilityIdentifier("about.license")
+            if ManagedConfig.licenseKey == nil {
+                if entering {
+                    TextField(String(localized: "License key"), text: $key)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption.monospaced())
+                        .frame(maxWidth: 320)
+                        .onSubmit(apply)
+                    HStack {
+                        Button(String(localized: "Cancel")) { entering = false; key = "" }
+                        Button(String(localized: "Use this key"), action: apply)
+                            .keyboardShortcut(.defaultAction)
+                            .disabled(key.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                    .controlSize(.small)
+                } else {
+                    Button(String(localized: "Enter license key…")) { entering = true }
+                        .controlSize(.small)
+                }
+            }
+            if let note { Text(note).font(Typography.caption2).foregroundColor(AppColors.secondary) }
+        }
+        .padding(.top, Spacing.xxSmall)
+    }
+
+    private func apply() {
+        let result = store.enterLicenseKey(key)
+        if case .invalid(let why) = result.status {
+            note = why
+        } else {
+            note = nil
+            entering = false
+            key = ""
+            ForensicManager.shared.logAction("Enterprise license key entered", detail: result.summary)
+        }
+    }
+}
+#endif
 
 #Preview {
     AboutView()

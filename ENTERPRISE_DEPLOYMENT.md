@@ -52,11 +52,15 @@ Example (Jamf-style plist payload):
   verification with a content mismatch. `examinerName` from managed config is recorded
   as the sealing identity.
 
-## Licensing (current state)
+## Licensing
 
-Consumer in-app purchases do not flow through Apple Business Manager volume purchasing.
-Until the dedicated enterprise SKU ships, pilot deployments use the `licenseKey` managed
-key. Contact sasmalgiri@gmail.com for pilot licensing.
+mailin Enterprise (`com.ecosanskriti.mailin.enterprise`) is a free Custom App in Apple
+Business Manager; the organization's license is a signed key, checked offline on the
+device. Push it as the `licenseKey` managed key (or users paste it in About mailin ▸
+Enter license key…). A valid key unlocks everything; without one — or 30 days after
+expiry — the archive, search and exports keep working and only the Professional tools
+wait for a key. Seats are stated on the key, not enforced on the device. Details and
+how keys are issued: `LICENSING.md`. Contact sasmalgiri@gmail.com for licensing.
 
 ## Data flow summary (for security review)
 

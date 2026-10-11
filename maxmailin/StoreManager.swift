@@ -342,7 +342,8 @@ class StoreManager: ObservableObject {
     /// unlocked. Otherwise the tier StoreKit's verified transactions proved.
     var effectiveTier: PurchaseTier {
         #if ENTERPRISE_EDITION
-        return .professional
+        // The organization's signed license (EnterpriseLicense.swift).
+        return currentTier
         #else
         #if DEBUG
         if debugUnlocksAllTiers { return .professional }
@@ -350,6 +351,29 @@ class StoreManager: ObservableObject {
         return currentTier
         #endif
     }
+
+    /// Enterprise edition: the license in force (always `.missing` elsewhere).
+    @Published private(set) var license = EnterpriseLicense(status: .missing)
+
+    #if ENTERPRISE_EDITION
+    /// A key pasted in Settings ▸ About. An MDM key, when present, wins.
+    /// Returns the new license so the screen can say what happened.
+    @discardableResult
+    func enterLicenseKey(_ key: String) -> EnterpriseLicense {
+        let checked = EnterpriseLicense.evaluate(key: key, now: Date())
+        if case .invalid = checked.status { return checked }
+        UserDefaults.standard.set(key.trimmingCharacters(in: .whitespacesAndNewlines),
+                                  forKey: EnterpriseLicense.enteredKeyDefaultsKey)
+        refreshLicense()
+        return license
+    }
+
+    func refreshLicense() {
+        license = EnterpriseLicense.current()
+        currentTier = license.tier
+        publishAccessScope()
+    }
+    #endif
 
     var isPremium: Bool { effectiveTier >= .personal }
     var isProfessional: Bool { effectiveTier >= .professional }
@@ -369,8 +393,10 @@ class StoreManager: ObservableObject {
 
     init() {
         #if ENTERPRISE_EDITION
-        // Enterprise edition: everything is included; never touch StoreKit.
-        currentTier = .professional
+        // Enterprise edition: no purchases, never touch StoreKit; the tier
+        // is the organization's signed license (LICENSING.md).
+        license = EnterpriseLicense.current()
+        currentTier = license.tier
         #else
         transactionListener = listenForTransactions()
         Task { await loadProducts() }
@@ -402,7 +428,9 @@ class StoreManager: ObservableObject {
         if arguments.contains("-mailinRealStore") {
             debugUnlocksAllTiers = false
             simulatedTier = nil
+            #if !ENTERPRISE_EDITION
             Task { await checkEntitlements() }
+            #endif
             return
         }
         guard let index = arguments.firstIndex(of: "-mailinSimulateTier"), index + 1 < arguments.count else { return }

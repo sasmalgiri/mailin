@@ -376,6 +376,7 @@ struct mailinApp: App {
         // About window
         Window("About mailin", id: "about") {
             AboutView()
+                .environmentObject(storeManager)
         }
         .windowResizability(.contentSize)
         .defaultSize(width: 400, height: 500)
