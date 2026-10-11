@@ -824,4 +824,23 @@ final class V3CompatibilityTests: XCTestCase {
         }.value
         XCTAssertLessThan(growth, 64 * 1_048_576, "a 192 MB file must not stay resident while it is hashed (grew \(growth / 1_048_576) MB)")
     }
+
+    // MARK: - Safe Mode counts only launches that die
+
+    /// Quitting normally (or iOS moving the app to the background) settles the
+    /// launch however short it was: two quick quit-and-reopens must not put
+    /// the next launch in read-only Safe Mode.
+    func testSafeMode_aNormalQuitSettlesTheLaunch() {
+        let key = "safeMode.unsettledLaunches"
+        let saved = UserDefaults.standard.integer(forKey: key)
+        defer { UserDefaults.standard.set(saved, forKey: key) }
+        UserDefaults.standard.set(2, forKey: key)
+        SafeMode.installSettleObservers()
+        #if os(macOS)
+        NotificationCenter.default.post(name: NSApplication.willTerminateNotification, object: nil)
+        #else
+        NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
+        #endif
+        XCTAssertEqual(SafeMode.unsettledLaunchCount, 0, "a normal quit is not a crash")
+    }
 }

@@ -99,11 +99,46 @@ final class SafeMode {
     /// have not yet "settled" (stayed up for `settleDelay`), and decides Safe
     /// Mode: two earlier launches that never settled, plus this one.
     nonisolated static func recordLaunchStart() {
+        // The unit-test host is this app: test runs start and stop it in
+        // seconds, which is not a crash, and must not leave the user's next
+        // launch in Safe Mode.
+        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else {
+            decidedAtLaunch = false
+            return
+        }
         let defaults = UserDefaults.standard
         let count = defaults.integer(forKey: unsettledLaunchesKey) + 1
         defaults.set(count, forKey: unsettledLaunchesKey)
         decidedAtLaunch = count >= 3
+        // A launch that ends normally — the user quits, or iOS moves the app
+        // to the background — settled, however short it was. Only a launch
+        // that dies within `settleDelay` counts toward Safe Mode (opening and
+        // quitting twice within 20 s used to make the next launch read-only).
+        installSettleObservers()
     }
+
+    /// Resets the counter when the launch ends normally. Separate so a test
+    /// can post the notification and see the counter cleared.
+    nonisolated static func installSettleObservers(defaults: UserDefaults = .standard) {
+        settledObservers = settleNotifications.map { name in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil) { _ in
+                defaults.set(0, forKey: unsettledLaunchesKey)
+            }
+        }
+    }
+
+    nonisolated static var unsettledLaunchCount: Int { UserDefaults.standard.integer(forKey: unsettledLaunchesKey) }
+
+    nonisolated(unsafe) private static var settledObservers: [NSObjectProtocol] = []
+
+    nonisolated private static var settleNotifications: [Notification.Name] {
+        #if os(macOS)
+        return [NSApplication.willTerminateNotification]
+        #else
+        return [UIApplication.willTerminateNotification, UIApplication.didEnterBackgroundNotification]
+        #endif
+    }
+
 
     /// Logs a Safe Mode launch and arms the "settled" timer that resets the
     /// counter once this launch has stayed up. Idempotent.

@@ -1013,7 +1013,12 @@ struct InterfaceLocalizationTests {
         struct Entry: Decodable {
             struct Localization: Decodable {
                 struct Unit: Decodable { let state: String; let value: String }
+                struct Variant: Decodable { let stringUnit: Unit? }
+                struct Variations: Decodable { let plural: [String: Variant]? }
                 let stringUnit: Unit?
+                let variations: Variations?
+                /// The plain value, or a plural entry's `other` form.
+                var text: String? { stringUnit?.value ?? variations?.plural?["other"]?.stringUnit?.value }
             }
             let shouldTranslate: Bool?
             let extractionState: String?
@@ -1067,7 +1072,7 @@ struct InterfaceLocalizationTests {
         for key in Self.translatableKeys(catalog) {
             let locs = catalog.strings[key]?.localizations ?? [:]
             for lang in Self.languages {
-                let value = locs[lang]?.stringUnit?.value ?? ""
+                let value = locs[lang]?.text ?? ""
                 if value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     missing[lang, default: []].append(key)
                 }
@@ -1087,7 +1092,7 @@ struct InterfaceLocalizationTests {
             let expected = Self.placeholders(key)
             let locs = catalog.strings[key]?.localizations ?? [:]
             for lang in Self.languages {
-                guard let value = locs[lang]?.stringUnit?.value, !value.isEmpty else { continue }
+                guard let value = locs[lang]?.text, !value.isEmpty else { continue }
                 if Self.placeholders(value) != expected {
                     broken.append("\(lang): \(key)")
                 }
