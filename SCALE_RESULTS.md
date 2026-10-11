@@ -50,6 +50,28 @@ Related rows executed the same day: disk full and drive unplugged mid-import
 reason and resumes exactly; Release build idle CPU 0.0 % over 60 s with the owner's archive (80 index
 shards; footprint 731 MB, shards closed after idle eviction).
 
+## Executed 2026-10-11 — import rows re-run on the 3.0 build (V2)
+
+Debug, app-hosted, `MAILIN_SCALE=1`. Fixtures as in the 2026-09-26/27 sections (`Sent-x16.*` regenerated with
+`make_scale_fixture.py`, identical sizes). Every row reconciles exactly (discovered = parsed = inserted = stored).
+
+| Row | Result | Wall | Throughput |
+|---|---|---|---|
+| mbox 1.5 GB, streaming parser + export round trip | 8,416 / 0 dupes, PASS | 242.7 s (import 114.7 s) | 12.6 MiB/s · 73 msg/s |
+| ZIP 1.5 GB (stored member) | 8,416 / 0, PASS | 129.2 s | 11.2 MiB/s · 65 msg/s |
+| mbox 1.5 GB, **offset engine** (3.0 default) | 8,416 / 0, PASS | 452.9 s | 3.2 MiB/s · 19 msg/s |
+| EML folder 1 GB | PASS | 107.3 s | — |
+| Maildir 1 GB | PASS | 106.2 s | — |
+| Apple Mail package 1 GB | PASS | 74.4 s | — |
+| EMLX folder 1 GB | PASS | 85.2 s | — |
+| gzip mbox 1 GB | PASS | 114.6 s | — |
+| mixed four formats 1 GB | PASS | 88.4 s | — |
+| message above the row ceiling (blob tier) | PASS | 8.5 s | — |
+
+Finding: on 2026-09-26 the offset engine and the streaming parser ran at the same speed (1.3 MiB/s); the
+streaming parser is now ~4× faster than the offset engine. Correctness is equal; the gap is to be profiled
+before release (the offset engine is the default import engine, S4).
+
 ## Executed 2026-09-26 — 1.5 GB through the production import path
 
 Path: `BulkImportCoordinator.runImport` over disposable storage (store +
