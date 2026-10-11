@@ -5,6 +5,28 @@ is built on the `live-mail` feature branch and is not part of this release. Ever
 **implemented and building**; the Phase J test pass (`MAILIN_3_0_TODO.md`) is what turns
 "implemented" into "verified", and `RELEASE_READINESS.md` records which rows have executed numbers.
 
+## Whole-archive engines and editions (2026-10-10 / 11, SCALE_TODO_3_0.md)
+
+- **35 whole-archive engines** (Settings ▸ Modules ▸ 3.0 engines): legal, analysis and AI tools work on
+  every email instead of the newest 2,000, with progress, Cancel, resume after interruption and a job
+  receipt that proves the exact set covered. Each sits beside the previous engine, which still runs
+  when the switch is off or the new engine fails. **TestFlight builds turn them on by default; the
+  App Store build keeps them off until each passes its TestFlight period** (M5).
+- Crash safety: an engine that crashes is switched off on the next launch; two crashes at launch open
+  Safe Mode (read-only archive). Snapshots before every upgrade and daily, optionally on an external
+  disk; restore keeps the replaced database.
+- Search can exclude any filter (`-from:`, `NOT before:` …). Every tool opens on the current filter
+  with the whole archive one tap away, from every place it can be opened.
+- AI answers ask the archive (exact counts, top senders, a monthly timeline) and say how many emails
+  they read; a full context window is condensed and retried. The AI Digest covers the whole period.
+- Evidence: fingerprint tree over every email, RFC 4998-style evidence records in productions and case
+  bundles, BagIt/PREMIS preservation export, collection receipts at import.
+- **Two editions from one build**: the public App Store app (in-app purchases) and the enterprise
+  Custom App, unlocked by an offline-checked signed license key (LICENSING.md).
+- Verified: full unit suite (801 + package 59, Thread Sanitizer clean), 40-email golden archive for
+  every tool, 100k and 1M-email scale runs, 30-minute coverage-guided parser fuzzing (0 findings),
+  disk-full and drive-unplugged runs, Release build verify-no-network PASS, zero sockets on iPhone.
+
 ## Archive (Page 1)
 
 - **Three-pane shell.** Mailboxes / sources / labels / saved searches · list · detail, all paged by
