@@ -95,15 +95,16 @@ enum OrgPolicy {
     static func denial(_ permission: OrgPermission, role: OrgRole,
                        allowExport: Bool = true, allowPrint: Bool = true,
                        org: String? = nil) -> String? {
-        let who = org.map { String(localized: "\($0) has") } ?? String(localized: "Your organization has")
         if permission == .export && !allowExport {
-            return String(localized: "\(who) turned off exporting and sharing from mailin on this device.")
+            return org.map { String(localized: "\($0) has turned off exporting and sharing from mailin on this device.") }
+                ?? String(localized: "Your organization has turned off exporting and sharing from mailin on this device.")
         }
         if permission == .print && !allowPrint {
-            return String(localized: "\(who) turned off printing from mailin on this device.")
+            return org.map { String(localized: "\($0) has turned off printing from mailin on this device.") }
+                ?? String(localized: "Your organization has turned off printing from mailin on this device.")
         }
         guard role < permission.minimumRole else { return nil }
-        return String(localized: "Your role is \(role.displayName). Only \(permission.minimumRole.displayName)s and above can \(permission.displayName).")
+        return String(localized: "Your role is \(role.displayName). To \(permission.displayName), the \(permission.minimumRole.displayName) role or higher is needed.")
     }
 
     /// The person's role on this device. Unmanaged, or managed without a

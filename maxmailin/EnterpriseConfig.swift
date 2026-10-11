@@ -26,8 +26,28 @@ enum ManagedConfig {
 
     static let managedDefaultsKey = "com.apple.configuration.managed"
 
+    /// The organisation's settings. iOS (and MDMs that send Managed App
+    /// Configuration) deliver them in the `com.apple.configuration.managed`
+    /// dictionary. On macOS, Jamf, Intune and Kandji usually deliver them as a
+    /// configuration profile for the app's preference domain, which FORCES the
+    /// keys at the top level — those are read too (a forced key wins).
     private static var dict: [String: Any] {
-        UserDefaults.standard.dictionary(forKey: managedDefaultsKey) ?? [:]
+        let defaults = UserDefaults.standard
+        return merged(managed: defaults.dictionary(forKey: managedDefaultsKey) ?? [:],
+                      isForced: { defaults.objectIsForced(forKey: $0) },
+                      value: { defaults.object(forKey: $0) })
+    }
+
+    /// The merge, with the defaults lookups passed in (testable without a
+    /// profile installed). Only keys of the schema are taken from the top level.
+    static func merged(managed: [String: Any],
+                       isForced: (String) -> Bool,
+                       value: (String) -> Any?) -> [String: Any] {
+        var config = managed
+        for key in schema.keys where isForced(key) {
+            if let forced = value(key) { config[key] = forced }
+        }
+        return config
     }
 
     /// True when any MDM configuration is present.

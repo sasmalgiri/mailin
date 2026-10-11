@@ -69,6 +69,14 @@ buyers, build if time allows · **Not needed** — does not apply to an offline,
 | X-3 | Security documentation: whitepaper, assurance pack, no-network proof | done (refresh numbers) | — |
 | X-4 | Accessibility conformance statement | done (`ACCESSIBILITY_3_0.md`) | — |
 
+## Status (2026-10-11)
+
+Done (dc6f782 and the following commit): A-1 – A-4 roles and funnels (store gate for delete and holds), B-2
+export / print policy, V-1 validation, V-2 / C-1 Managed App Feedback with licence id, B-3 JSON Lines audit
+export, P-1 – P-3 schema files / sample profile / guide, X-2 offboarding, macOS profile-forced keys read
+(tested). Every new string translated into the 10 languages.
+Remaining: P-4 declarative ManagedApp configuration (recommended, later); V5 UI check of the refusal messages.
+
 ## Build order (Required items)
 
 1. **A-1 – A-4** roles and permission funnel (largest, highest value).

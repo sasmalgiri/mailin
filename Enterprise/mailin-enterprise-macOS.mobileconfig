@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Sample macOS configuration profile for mailin Enterprise (ENTERPRISE_TODO.md P-2).
+  Edit the values, then upload it to your MDM (or deploy it with Apple Business
+  Manager's built-in device management). Keys: ENTERPRISE_DEPLOYMENT.md.
+  The licenseKey below is a placeholder; paste the key issued for your organization.
+-->
+<plist version="1.0">
+<dict>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>PayloadType</key><string>com.ecosanskriti.mailin.enterprise</string>
+            <key>PayloadIdentifier</key><string>com.ecosanskriti.mailin.enterprise.settings</string>
+            <key>PayloadUUID</key><string>35A3C2C0-A5CB-45BA-BBD6-25D638DBE41D</string>
+            <key>PayloadVersion</key><integer>1</integer>
+            <key>PayloadDisplayName</key><string>mailin Enterprise settings</string>
+            <key>orgName</key><string>Acme Legal LLP</string>
+            <key>examinerName</key><string></string>
+            <key>role</key><string>examiner</string>
+            <key>allowExport</key><true/>
+            <key>allowPrint</key><true/>
+            <key>requireBiometricLock</key><true/>
+            <key>disableCloudAI</key><true/>
+            <key>caseNumberPrefix</key><string>ACME</string>
+            <key>licenseKey</key><string>MAILIN1.paste-your-key-here</string>
+            <key>disabledModules</key><array/>
+        </dict>
+    </array>
+    <key>PayloadDisplayName</key><string>mailin Enterprise</string>
+    <key>PayloadIdentifier</key><string>com.ecosanskriti.mailin.enterprise.profile</string>
+    <key>PayloadScope</key><string>System</string>
+    <key>PayloadType</key><string>Configuration</string>
+    <key>PayloadUUID</key><string>FD5C88C5-1DBD-46DB-9BA5-7B25011BE5D6</string>
+    <key>PayloadVersion</key><integer>1</integer>
+</dict>
+</plist>

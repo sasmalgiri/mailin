@@ -379,7 +379,8 @@ private struct ManagedPolicySection: View {
     var body: some View {
         let role = OrgPolicy.role
         VStack(alignment: .leading, spacing: 4) {
-            Text("Managed by \(ManagedConfig.orgName ?? String(localized: "your organization"))")
+            Text(ManagedConfig.orgName.map { String(localized: "Managed by \($0)") }
+                 ?? String(localized: "Managed by your organization"))
                 .font(Typography.caption1.weight(.semibold))
             Text("Your role: \(role.displayName) — \(role.summary)")
                 .font(Typography.caption2)

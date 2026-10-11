@@ -28,7 +28,10 @@ for, and the networking code is not compiled in at all (`NO_NETWORK_BUILD`).
 | `requireBiometricLock` | lock always on | `BiometricLockManager` | manual |
 | `caseNumberPrefix` | preset Bates / case prefix | `BatesNumberingManager` | manual |
 | `disabledModules` | page hard-off; Settings shows "unavailable — locked by your organisation"; applies without relaunch | `ModuleRegistry.orgDisabledReason`, policy observation | `ManagedPolicyTests` |
-| `licenseKey` | pilot licensing (E2 interim) | About | — |
+| `licenseKey` | signed licence key, checked offline (valid / 30-day grace / Personal floor) | `EnterpriseLicense` | `testEnterpriseLicense_*` |
+| `role` | viewer / reviewer / examiner / administrator; unknown → viewer | `OrgPolicy` at every funnel; permanent delete and holds refused in the archive (`StorePolicyGate`) | `testOrgPolicy_*`, `testStoreGate_*` |
+| `allowExport`, `allowPrint` | data-loss controls for every role | `PlatformExport`, `ManagedSavePanel`, print funnels | `testOrgPolicy_exportAndPrintPoliciesBindEveryRole` |
+| (all keys) | validated; problems shown in About and reported in Managed App Feedback | `ManagedConfig.validationIssues`, `publishFeedback` | `testManagedConfig_*` |
 
 Malformed keys are ignored with a fault log; an unknown module name in `disabledModules` is ignored.
 

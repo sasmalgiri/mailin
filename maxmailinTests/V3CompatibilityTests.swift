@@ -896,6 +896,21 @@ final class V3CompatibilityTests: XCTestCase {
         XCTAssertTrue(ManagedConfig.validationIssues(of: ["orgName": "Acme", "role": "reviewer", "allowPrint": false]).isEmpty)
     }
 
+    /// macOS profiles force keys at the top level of the app's domain: those
+    /// are read and win over the managed dictionary; unforced keys and keys
+    /// outside the schema are not taken.
+    func testManagedConfig_profileForcedKeysWin() {
+        let topLevel: [String: Any] = ["role": "viewer", "allowExport": false, "colour": "blue", "orgName": "Local"]
+        let forced: Set<String> = ["role", "allowExport", "colour"]
+        let config = ManagedConfig.merged(managed: ["role": "administrator", "orgName": "Acme"],
+                                          isForced: { forced.contains($0) },
+                                          value: { topLevel[$0] })
+        XCTAssertEqual(config["role"] as? String, "viewer")
+        XCTAssertEqual(config["allowExport"] as? Bool, false)
+        XCTAssertEqual(config["orgName"] as? String, "Acme", "an unforced top-level key must not override")
+        XCTAssertNil(config["colour"], "keys outside the schema are not read from the top level")
+    }
+
     /// The MDM can read the licence id (seat accounting), role and problems.
     func testManagedConfig_feedbackCarriesLicenceAndRole() throws {
         let payload = EnterpriseLicense.Payload(v: 1, org: "Acme", seats: 5, issued: "2026-01-01", expires: nil, id: "ACME-1")
