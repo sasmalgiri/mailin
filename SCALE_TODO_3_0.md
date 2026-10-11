@@ -269,16 +269,16 @@ loops, the current AI context building. Deleted only in a later release after a 
 ### V — Verification before shipping
 | ID | Item | Who | Status |
 |---|---|---|---|
-| V1 | Every tool on 100k and 1M: result == SQL count, memory flat, Cancel, resume; 10M store/paging; publish table | me | [ ] |
+| V1 | Every tool on 100k and 1M: result == SQL count, memory flat, Cancel, resume; 10M store/paging; publish table | me | 2026-10-11: 100k every run; **1M passed** (8 tools exact, peak growth ≤ 369 MB, SCALE_RESULTS.md); Cancel/resume by unit tests; 10M headers-only tier not yet run — [~] |
 | V2 | 1 GB real-format fixtures (mbox, PST, EML folder, Maildir, Apple Mail, gzip, mixed) | me | [ ] |
-| V3 | Chaos run: kill mid-job, disk full, drive unplugged, iPad locked → relaunch, resume, answers match golden set | me | [ ] |
+| V3 | Chaos run: kill mid-job, disk full, drive unplugged, iPad locked → relaunch, resume, answers match golden set | me | 2026-10-11: disk full + drive unplugged mid-import pass (FaultVolumeTests); interrupted job resumes to the same fingerprint (V3FoundationTests); background/foreground mid-AI-answer on the iPhone simulator resumes (V6 walkthrough, deadline fix); physical lock needs a device — [~] |
 | V4 | Full unit + package suites; Thread Sanitizer run | me | 2026-10-11 (54bf349): app unit suite 801 passed / 0 failed (13 opt-in scale/fixture tests skipped, 9 StoreKit tests not run — need the StoreKit config); ArchiveCore 59 / 0 failed, and 0 ThreadSanitizer reports. Still open: Thread Sanitizer on the app target (scheme diagnostic), StoreKit suite — [~] |
 | V5 | Mac UI suites + press-every-button crawl (needs the owner present to approve automation) | owner + me | [ ] |
-| V6 | iPad simulator + real-device lock/suspend checks | me + owner | [ ] |
-| V7 | Release build: verify-no-network, idle CPU, launch/resume time with a 1M archive **without the debugger** (watchdog) | me | [ ] |
+| V6 | iPad simulator + real-device lock/suspend checks | me + owner | 2026-10-11 on the iPhone 18 Pro simulator (owner: no device): suspend/resume mid-work keeps state and count; 9 iPhone layout/behaviour defects found and fixed (80e8321, 08b17bd); real-device file-protection lock not possible without a device — [~] |
+| V7 | Release build: verify-no-network, idle CPU, launch/resume time with a 1M archive **without the debugger** (watchdog) | me | 2026-10-11: Release macOS verify-no-network PASS (8/8), idle CPU 0.0 %, 0 sockets, with the owner's archive; launch time on a 1M archive not yet measured — [~] |
 | V8 | Localization complete; build 603+; TestFlight; App Store | owner | [ ] |
-| V9 | Release build on a real iPhone/iPad: opening HTML mail, AI, search, exports make **zero network requests** unless an online toggle is on | me + owner | [ ] |
-| V10 | Accessibility audit pass (X4) and App Store Accessibility Nutrition Labels filled in | me + owner | [ ] |
+| V9 | Release build on a real iPhone/iPad: opening HTML mail, AI, search, exports make **zero network requests** unless an online toggle is on | me + owner | 2026-10-11 on the iPhone simulator (owner: no device), Release build: HTML mail with remote images/pixel/iframe/script, search, AI, share sheet — 0 sockets (lsof) and no nettop record for the process; remote content blocked — [x] simulator |
+| V10 | Accessibility audit pass (X4) and App Store Accessibility Nutrition Labels filled in | me + owner | labels decided by the owner (ACCESSIBILITY_3_0.md, a5dbfa0); automated audit runs in the V5 session — [~] |
 
 ## 4. Order of work (gates between steps)
 

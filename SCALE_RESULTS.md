@@ -23,6 +23,33 @@ exercises byte volume, attachment decoding, FTS sharding across years and
 the store at 1.5 GB, but its vocabulary and sender population are those of
 one mailbox.
 
+## Executed 2026-10-11 — 3.0 whole-archive engines at 1,000,000 emails (V1)
+
+Test: `V3ScaleTests.testScaleTier_everyToolAnswersExactly_memoryFlat`, `MAILIN_SCALE_TIER=1m`, Debug,
+app-hosted, nothing else running. A synthetic archive of 1,000,000 emails is generated batch by batch with
+known answers; every tool's result must equal the SQL count, and footprint growth must stay under 700 MB.
+Result: **TEST SUCCEEDED** (the 100k tier passes in every full run).
+
+| Tool | Wall | Peak footprint growth |
+|---|---|---|
+| insert 1,000,000 | — | 176 MB |
+| count | 0.2 s | 0 MB |
+| sender filter | 0.4 s | 11 MB |
+| keyword sweep (FTS, whole archive) | 209.8 s | 369 MB |
+| PII report (every email) | 292.1 s | 130 MB |
+| IT stats (every email) | 279.7 s | 130 MB |
+| Bates numbering (every email) | 70.0 s | 152 MB |
+| fingerprint tree | 158.8 s | 141 MB |
+
+An earlier run the same day failed only in the test: memory fell below its baseline and the unsigned growth
+wrapped (fixed: growth clamps at 0); a second run hit SQLite "disk I/O error" while builds and the fault test
+ran beside it on a near-full disk; this third run had the machine to itself.
+
+Related rows executed the same day: disk full and drive unplugged mid-import
+(`FaultVolumeTests`, package, on the 512 MB fault volume) — both pass: the import pauses with the named
+reason and resumes exactly; Release build idle CPU 0.0 % over 60 s with the owner's archive (80 index
+shards; footprint 731 MB, shards closed after idle eviction).
+
 ## Executed 2026-09-26 — 1.5 GB through the production import path
 
 Path: `BulkImportCoordinator.runImport` over disposable storage (store +
