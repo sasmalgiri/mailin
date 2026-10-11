@@ -101,7 +101,7 @@ enum GoldenTool: String, CaseIterable, Sendable {
 }
 
 @MainActor
-@Suite("Golden archive: every 3.0 tool's answer matches what was planted")
+@Suite("Golden archive: every 3.0 tool's answer matches what was planted", .serialized)
 struct V3GoldenTests {
 
     private struct Env {
@@ -148,8 +148,12 @@ struct V3GoldenTests {
             let r = try await PIIEngine.scan(scope: .wholeArchive)
             #expect(r.counts[.ssnPattern] == GoldenArchive.count(\.ssn))
             #expect(r.counts[.ipAddress] == GoldenArchive.count { $0.ip != nil })
-            #expect(r.emailsWithPII == GoldenArchive.count { $0.ssn || $0.ip != nil },
-                    "no personal data found where none was planted")
+            // The detector also reads headers (risk context "header"): every
+            // email's From and To address is a finding, so every email has
+            // personal data — and nothing beyond what was planted is found.
+            #expect(r.counts[.emailAddress] == 2 * total, "From + To of every email: \(r.counts)")
+            #expect(Set(r.counts.keys) == [.ssnPattern, .ipAddress, .emailAddress], "nothing that was not planted: \(r.counts)")
+            #expect(r.emailsWithPII == total)
 
         case .keywords:
             let (matches, receipt) = try await KeywordMonitorEngine.scan(
