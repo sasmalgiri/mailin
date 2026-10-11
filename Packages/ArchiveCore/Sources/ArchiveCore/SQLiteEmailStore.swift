@@ -1410,7 +1410,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// A source fully ingested: recorded as a session, its in-progress row gone.
     func importCheckpointRecord(sha256: String, sourceName: String, emailCount: Int) throws {
         let db = try ensureDB()
-        try exec(db, "BEGIN TRANSACTION;")
+        try exec(db, SQLiteHygiene.beginWrite)
         do {
             let stmt = try prepare(db, "INSERT OR REPLACE INTO import_sessions(sha256, source_name, email_count, completed_at) VALUES (?,?,?,?);")
             defer { sqlite3_finalize(stmt) }
@@ -1845,7 +1845,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 predictive=excluded.predictive, smart_tags=excluded.smart_tags, updated_at=excluded.updated_at;
         """)
         defer { sqlite3_finalize(stmt) }
-        try exec(db, "BEGIN TRANSACTION;")
+        try exec(db, SQLiteHygiene.beginWrite)
         do {
             for r in records {
                 sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
@@ -1934,7 +1934,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
             ON CONFLICT(email_id) DO UPDATE SET topic = excluded.topic, updated_at = excluded.updated_at;
         """)
         defer { sqlite3_finalize(stmt) }
-        try exec(db, "BEGIN TRANSACTION;")
+        try exec(db, SQLiteHygiene.beginWrite)
         do {
             for (id, topic) in topics {
                 sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
@@ -1958,7 +1958,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
             ON CONFLICT(email_id) DO UPDATE SET smart_tags = excluded.smart_tags, updated_at = excluded.updated_at;
         """)
         defer { sqlite3_finalize(stmt) }
-        try exec(db, "BEGIN TRANSACTION;")
+        try exec(db, SQLiteHygiene.beginWrite)
         do {
             for (id, list) in tags {
                 sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
@@ -2040,7 +2040,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 thread_key = excluded.thread_key, confidence = excluded.confidence, updated_at = excluded.updated_at;
         """)
         defer { sqlite3_finalize(stmt) }
-        try exec(db, "BEGIN TRANSACTION;")
+        try exec(db, SQLiteHygiene.beginWrite)
         do {
             for row in rows {
                 sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
@@ -2114,7 +2114,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 updated_at = excluded.updated_at;
         """)
         defer { sqlite3_finalize(stmt) }
-        try exec(db, "BEGIN TRANSACTION;")
+        try exec(db, SQLiteHygiene.beginWrite)
         do {
             for row in rows {
                 sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
@@ -2146,7 +2146,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 updated_at = excluded.updated_at;
         """)
         defer { sqlite3_finalize(stmt) }
-        try exec(db, "BEGIN TRANSACTION;")
+        try exec(db, SQLiteHygiene.beginWrite)
         do {
             for (id, score) in scores {
                 sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
@@ -2237,7 +2237,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     func nearDuplicatesReplace(_ rows: [NearDupMemberRow], algoVersion: Int, corpusRevision: Int) throws {
         let db = try ensureDB()
         let now = Int64(Date().timeIntervalSince1970)
-        try exec(db, "BEGIN TRANSACTION;")
+        try exec(db, SQLiteHygiene.beginWrite)
         do {
             try exec(db, "DELETE FROM near_dup_findings;")
             let stmt = try prepare(db, """
@@ -2466,7 +2466,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
         var offset = 0
         for chunk in emails.chunked(into: max(1, batchSize)) {
-            try exec(db, "BEGIN TRANSACTION;")
+            try exec(db, SQLiteHygiene.beginWrite)
             do {
                 for (i, email) in chunk.enumerated() {
                     let idStr = email.id.uuidString
@@ -4048,7 +4048,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
             ON CONFLICT(email_id) DO UPDATE SET \(flag.rawValue) = excluded.\(flag.rawValue), updated_at = excluded.updated_at;
         """)
         defer { sqlite3_finalize(stmt) }
-        try exec(db, "BEGIN TRANSACTION;")
+        try exec(db, SQLiteHygiene.beginWrite)
         do {
             for id in ids {
                 sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
@@ -4146,7 +4146,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
         let db = try ensureDB()
         let stmt = try prepare(db, sql)
         defer { sqlite3_finalize(stmt) }
-        try exec(db, "BEGIN TRANSACTION;")
+        try exec(db, SQLiteHygiene.beginWrite)
         do {
             for id in ids {
                 sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
@@ -4274,7 +4274,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     ) throws {
         let db = try ensureDB()
         let now = Int64(Date().timeIntervalSince1970)
-        try exec(db, "BEGIN TRANSACTION;")
+        try exec(db, SQLiteHygiene.beginWrite)
         do {
             let flagStmt = try prepare(db, """
                 INSERT INTO email_review_state(email_id, pinned, is_read, archived, trashed, updated_at)
@@ -4472,7 +4472,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     func applyHeaderFidelity(_ updates: [HeaderFidelityUpdate]) throws {
         guard !updates.isEmpty else { return }
         let db = try ensureDB()
-        try exec(db, "BEGIN TRANSACTION;")
+        try exec(db, SQLiteHygiene.beginWrite)
         do {
             let insertTag = try prepare(db, "INSERT OR IGNORE INTO email_tags(email_id, tag) VALUES (?,?);")
             defer { sqlite3_finalize(insertTag) }
@@ -4618,7 +4618,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// attachments/tags/domains side tables (§3 parity for old imports).
     func applyFidelity(id: UUID, from email: MBOXParser.RawEmail) throws {
         let db = try ensureDB()
-        try exec(db, "BEGIN TRANSACTION;")
+        try exec(db, SQLiteHygiene.beginWrite)
         do {
             let idStr = id.uuidString
             let update = try prepare(db, """
@@ -4754,7 +4754,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// delete-then-insert.
     func attachmentTextIndex(emailID: UUID, texts: [(filename: String, content: String)]) throws {
         let db = try ensureDB()
-        try exec(db, "BEGIN TRANSACTION;")
+        try exec(db, SQLiteHygiene.beginWrite)
         do {
             let clear = try prepare(db, "DELETE FROM attachment_search WHERE email_id = ?;")
             defer { sqlite3_finalize(clear) }
@@ -4882,7 +4882,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
             ON CONFLICT(email_id) DO NOTHING;
         """)
         defer { sqlite3_finalize(stmt) }
-        try exec(db, "BEGIN TRANSACTION;")
+        try exec(db, SQLiteHygiene.beginWrite)
         do {
             for (id, h) in hashes {
                 sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
@@ -4933,7 +4933,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
               """
         let stmt = try prepare(db, sql)
         defer { sqlite3_finalize(stmt) }
-        try exec(db, "BEGIN TRANSACTION;")
+        try exec(db, SQLiteHygiene.beginWrite)
         do {
             for id in ids {
                 sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
@@ -5234,7 +5234,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
             VALUES (?,'NONE','',NULL,'');
         """)
         defer { sqlite3_finalize(stmt) }
-        try exec(db, "BEGIN TRANSACTION;")
+        try exec(db, SQLiteHygiene.beginWrite)
         do {
             for id in ids {
                 sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
@@ -5338,7 +5338,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
         guard !ids.isEmpty else { return held }
         try ensureEntityTable(db)
         let now = Int64(Date().timeIntervalSince1970)
-        try exec(db, "BEGIN TRANSACTION;")
+        try exec(db, SQLiteHygiene.beginWrite)
         do {
             for chunk in Array(ids).chunked(into: 500) {
                 let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
@@ -5437,6 +5437,13 @@ actor SQLiteEmailStore: EmailArchiveStore {
     func checkpoint() throws {
         let db = try ensureDB()
         try exec(db, "PRAGMA wal_checkpoint(TRUNCATE);")
+    }
+
+    /// §3-S9: a PASSIVE checkpoint (never waits for or blocks a reader or
+    /// writer), for when the app is idle.
+    func checkpointPassive() throws {
+        guard let db else { return }   // nothing open, nothing to fold
+        try exec(db, "PRAGMA wal_checkpoint(PASSIVE);")
     }
 
     // MARK: - Row → RawEmail
@@ -5612,7 +5619,7 @@ extension SQLiteEmailStore {
         defer { sqlite3_finalize(stmt) }
         var changed = 0
         for chunk in ids.chunked(into: 500) {
-            try exec(db, "BEGIN TRANSACTION;")
+            try exec(db, SQLiteHygiene.beginWrite)
             do {
                 for id in chunk {
                     sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
@@ -5833,7 +5840,7 @@ extension SQLiteEmailStore {
         let db = try ensureDB()
         let stmt = try prepare(db, "INSERT OR IGNORE INTO custody_events(event_id, email_id, at, payload) VALUES (?,?,?,?);")
         defer { sqlite3_finalize(stmt) }
-        try exec(db, "BEGIN TRANSACTION;")
+        try exec(db, SQLiteHygiene.beginWrite)
         do {
             for e in events {
                 sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
@@ -5871,7 +5878,7 @@ extension SQLiteEmailStore {
         """)
         let remove = try prepare(db, "DELETE FROM review_coding WHERE workspace = ? AND email_id = ? AND field = ?;")
         defer { sqlite3_finalize(upsert); sqlite3_finalize(remove) }
-        try exec(db, "BEGIN TRANSACTION;")
+        try exec(db, SQLiteHygiene.beginWrite)
         do {
             for (id, value) in values {
                 let stmt = value == nil ? remove : upsert
@@ -6031,7 +6038,7 @@ extension SQLiteEmailStore {
         let ins = try prepare(db, "INSERT OR REPLACE INTO fingerprints(email_id, leaf, bucket, built_at) VALUES (?,?,?,?);")
         defer { sqlite3_finalize(ins) }
         let now = Int64(Date().timeIntervalSince1970)
-        try exec(db, "BEGIN TRANSACTION;")
+        try exec(db, SQLiteHygiene.beginWrite)
         do {
             for (id, leaf, bucket) in rows {
                 sqlite3_reset(ins); sqlite3_clear_bindings(ins)
@@ -6302,7 +6309,7 @@ extension SQLiteEmailStore {
         func run(_ s: OpaquePointer?) throws {
             guard sqlite3_step(s) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
         }
-        try exec(db, "BEGIN TRANSACTION;")
+        try exec(db, SQLiteHygiene.beginWrite)
         do {
             for r in records {
                 let id = r.emailID.uuidString

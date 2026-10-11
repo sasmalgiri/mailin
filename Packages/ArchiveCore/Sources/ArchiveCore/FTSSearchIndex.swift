@@ -333,7 +333,7 @@ actor FTSSearchIndex {
         let db = try ensureShard(year: Self.year(for: email))
         // Wrap the FTS row + registry upsert in ONE transaction (same guarantee
         // as indexBatch) so the two can never drift on a mid-write failure.
-        try exec(db, "BEGIN TRANSACTION;")
+        try exec(db, SQLiteHygiene.beginWrite)
         do {
             try insertWithHandle(email, db: db)
             try exec(db, "COMMIT;")
@@ -355,7 +355,7 @@ actor FTSSearchIndex {
         }
         for (year, group) in byYear {
             let db = try ensureShard(year: year)
-            try exec(db, "BEGIN TRANSACTION;")
+            try exec(db, SQLiteHygiene.beginWrite)
             do {
                 for email in group {
                     try insertWithHandle(email, db: db)
@@ -725,7 +725,7 @@ actor FTSSearchIndex {
         let idString = id.uuidString
         for year in try discoverAllShardYears() {
             let db = try ensureShard(year: year)
-            try exec(db, "BEGIN TRANSACTION;")
+            try exec(db, SQLiteHygiene.beginWrite)
             do {
                 let stmt = try prepare(db, "DELETE FROM email_search WHERE email_id = ?;")
                 bindText(stmt, 1, idString)
@@ -767,7 +767,7 @@ actor FTSSearchIndex {
             if sqlite3_step(check) == SQLITE_ROW { dupes = Int(sqlite3_column_int(check, 0)) }
             sqlite3_finalize(check)
             guard dupes > 0 else { continue }
-            try exec(db, "BEGIN TRANSACTION;")
+            try exec(db, SQLiteHygiene.beginWrite)
             do {
                 try exec(db, """
                     DELETE FROM email_search

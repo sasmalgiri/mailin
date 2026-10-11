@@ -138,6 +138,7 @@ struct FourPageShell: View {
             SafeMode.shared.evaluateAtLaunch(registry: modules)
             EngineTripCenter.shared.checkAtLaunch(registry: modules)
             ArchiveSnapshots.scheduleIfDue()
+            IdleCheckpoint.start()
             router.reconcile(with: modules)
             #if DEBUG
             storeManager.applyDebugLaunchOverride()

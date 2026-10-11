@@ -14,6 +14,28 @@ import Foundation
 import AppKit
 #endif
 
+/// §3-S9: folds the write-ahead log into the archive while nothing is
+/// running — no import in the queue, no whole-archive job — every two
+/// minutes, with the hygiene switch on. Passive: it never waits for or
+/// blocks anyone.
+@MainActor
+enum IdleCheckpoint {
+    private static var task: Task<Void, Never>?
+
+    static func start() {
+        guard task == nil else { return }
+        task = Task { @MainActor in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(120))
+                guard SQLiteHygiene.isEnabled, SafeMode.shared.allowsBackgroundWork,
+                      !ImportQueue.shared.isActive, ScopeJobCenter.shared.running.isEmpty,
+                      !ExportRunCenter.shared.isActive else { continue }
+                try? await SQLiteEmailStore.shared.checkpointPassive()
+            }
+        }
+    }
+}
+
 @MainActor
 enum ArchiveSnapshots {
     private static let lastScheduledKey = "archiveSnapshots.lastScheduled"

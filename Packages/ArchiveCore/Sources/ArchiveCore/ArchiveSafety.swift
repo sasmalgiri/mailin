@@ -31,7 +31,17 @@ public enum SQLiteHygiene {
         #if os(macOS)
         sqlite3_exec(handle, "PRAGMA checkpoint_fullfsync = ON;", nil, nil, nil)
         #endif
+        // §3-S9: checkpoints happen when the app is idle (`checkpointWhenIdle`);
+        // the automatic one stays only as a safety net at ~40 MB of log, so a
+        // large import is not interrupted by a checkpoint every 4 MB.
+        sqlite3_exec(handle, "PRAGMA wal_autocheckpoint = 10000;", nil, nil, nil)
     }
+
+    /// §3-S9: write transactions take the write lock up front
+    /// (`BEGIN IMMEDIATE`), so a second connection gets a clean busy wait at
+    /// the start instead of SQLITE_BUSY in the middle of a transaction. Off:
+    /// the previous deferred `BEGIN`.
+    public static var beginWrite: String { isEnabled ? "BEGIN IMMEDIATE TRANSACTION;" : "BEGIN TRANSACTION;" }
 }
 
 public enum ArchiveSnapshotPolicy {

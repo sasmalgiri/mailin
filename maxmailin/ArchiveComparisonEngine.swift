@@ -97,6 +97,7 @@ final class ArchiveComparisonEngine: @unchecked Sendable {
         guard sqlite3_open(scratchURL.path, &handle) == SQLITE_OK, let handle else {
             throw EngineError.sqlite("could not create \(scratchURL.lastPathComponent)")
         }
+        SQLiteHygiene.apply(to: handle)   // §3-S9: every connection
         db = handle
         try exec("""
             PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF; PRAGMA temp_store = FILE;
