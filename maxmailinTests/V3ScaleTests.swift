@@ -82,7 +82,7 @@ final class V3ScaleTests: XCTestCase {
 
     /// Footprint growth over the baseline; 0 when memory fell below it (the
     /// unsigned `&-` wrapped to ~18 EB and failed the 1M run, 2026-10-11).
-    static func growth(_ now: UInt64, over base: UInt64) -> UInt64 { now > base ? now - base : 0 }
+    nonisolated static func growth(_ now: UInt64, over base: UInt64) -> UInt64 { now > base ? now - base : 0 }
 
     private func build(_ n: Int, headersOnly: Bool) async throws -> (Env, peakInsert: UInt64) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("scale-\(UUID().uuidString)", isDirectory: true)

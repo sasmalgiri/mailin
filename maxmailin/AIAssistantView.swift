@@ -75,6 +75,9 @@ struct AIAssistantView: View {
     @EnvironmentObject private var storeManager: StoreManager
 
     static let freeQueryLimit = 5
+    /// Appended to a model answer cut off by the deadline. Such an answer is
+    /// not counted against the Free allowance.
+    static let timedOutNote = "\n\n(Response timed out — partial result shown)"
 
     #if os(iOS)
     @State private var showShareSheet = false
@@ -3238,7 +3241,7 @@ struct AIAssistantView: View {
                 streamingAnswer = ""
                 withAnimation(AnimationTiming.normal) {
                     conversationHistory.append((query: currentQuery, answer: answer, timestamp: Date(), relatedEmailIDs: retrievedIDs))
-                    if !storeManager.isPremium { freeQueryCount += 1 }
+                    if !storeManager.isPremium && !answer.hasSuffix(Self.timedOutNote) { freeQueryCount += 1 }
                 }
                 // The expert pipeline runs inside askFoundationModelStreaming,
                 // which this view cannot inspect — so routing and findings are
@@ -3278,7 +3281,7 @@ struct AIAssistantView: View {
                 streamingAnswer = ""
                 withAnimation(AnimationTiming.normal) {
                     conversationHistory.append((query: currentQuery, answer: answer, timestamp: Date(), relatedEmailIDs: retrievedIDs))
-                    if !storeManager.isPremium { freeQueryCount += 1 }
+                    if !storeManager.isPremium && !answer.hasSuffix(Self.timedOutNote) { freeQueryCount += 1 }
                 }
                 finishMetrics(metrics, startedAt: metricsStart,
                               answer: answer, citedEmailIDs: retrievedIDs)
@@ -3422,7 +3425,7 @@ struct AIAssistantView: View {
                 }
                 withAnimation(AnimationTiming.normal) {
                     conversationHistory.append((query: currentQuery, answer: answer, timestamp: Date(), relatedEmailIDs: retrievedIDs))
-                    if !storeManager.isPremium { freeQueryCount += 1 }
+                    if !storeManager.isPremium && !answer.hasSuffix(Self.timedOutNote) { freeQueryCount += 1 }
                 }
                 finishMetrics(metrics, startedAt: metricsStart,
                               answer: answer, citedEmailIDs: retrievedIDs,
@@ -3505,7 +3508,7 @@ struct AIAssistantView: View {
                 }
                 withAnimation(AnimationTiming.normal) {
                     conversationHistory.append((query: currentQuery, answer: answer, timestamp: Date(), relatedEmailIDs: retrievedIDs))
-                    if !storeManager.isPremium { freeQueryCount += 1 }
+                    if !storeManager.isPremium && !answer.hasSuffix(Self.timedOutNote) { freeQueryCount += 1 }
                 }
                 finishMetrics(metrics, startedAt: metricsStart,
                               answer: answer, citedEmailIDs: retrievedIDs,
@@ -3553,7 +3556,7 @@ struct AIAssistantView: View {
                 }
                 withAnimation(AnimationTiming.normal) {
                     conversationHistory.append((query: currentQuery, answer: answer, timestamp: Date(), relatedEmailIDs: retrievedIDs))
-                    if !storeManager.isPremium { freeQueryCount += 1 }
+                    if !storeManager.isPremium && !answer.hasSuffix(Self.timedOutNote) { freeQueryCount += 1 }
                 }
                 finishMetrics(metrics, startedAt: metricsStart,
                               answer: answer, citedEmailIDs: retrievedIDs)
@@ -3632,7 +3635,7 @@ struct AIAssistantView: View {
                         }
                     }
                     group.addTask {
-                        try await Task.sleep(for: .seconds(60))
+                        try await ActiveTimeDeadline.sleep(seconds: 60)
                         throw TimeoutError()
                     }
                     guard let result = try await group.next() else {
@@ -3653,7 +3656,7 @@ struct AIAssistantView: View {
             } catch is TimeoutError {
                 let partial = streamingAnswer
                 if !EvidenceFallback.isUnusable(partial) {
-                    return partial + "\n\n(Response timed out — partial result shown)"
+                    return partial + Self.timedOutNote
                 }
                 return await FoundationModelEngine.fallbackAnswer(for: query, reason: "Apple Intelligence took too long")
             } catch {
@@ -3676,7 +3679,7 @@ struct AIAssistantView: View {
                         }
                     }
                     group.addTask {
-                        try await Task.sleep(for: .seconds(30))
+                        try await ActiveTimeDeadline.sleep(seconds: 30)
                         throw TimeoutError()
                     }
                     guard let result = try await group.next() else {
@@ -3696,7 +3699,7 @@ struct AIAssistantView: View {
             } catch is TimeoutError {
                 let partial = streamingAnswer
                 if !EvidenceFallback.isUnusable(partial) {
-                    return partial + "\n\n(Response timed out — partial result shown)"
+                    return partial + Self.timedOutNote
                 }
                 return await FoundationModelEngine.fallbackAnswer(for: query, reason: "Apple Intelligence took too long")
             } catch {

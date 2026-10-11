@@ -47,6 +47,9 @@ struct StorageRequirement: Sendable, Equatable {
     var hardFloorBytes: Int64
 
     /// What the import genuinely cannot finish without.
+    /// What the import itself takes, without the fixed reserve.
+    var importBytes: Int64 { max(0, total - hardFloorBytes) }
+
     var total: Int64 {
         originalCopyBytes + storeBytes + indexBytes + walBytes + spoolBytes + hardFloorBytes
     }
@@ -87,10 +90,12 @@ enum StoragePlan: Sendable, Equatable {
     var summary: String {
         let fmt = { (b: Int64) in ByteCountFormatter.string(fromByteCount: b, countStyle: .file) }
         switch self {
+        // The import's own space is stated apart from the fixed reserve: a
+        // 6 KB file read "needs about 1.07 GB" (V6 walkthrough, 2026-10-11).
         case .ok(let requirement, let free):
-            return "Needs about \(fmt(requirement.total)); \(fmt(free)) free."
+            return "Adds about \(fmt(requirement.importBytes)) (\(fmt(requirement.hardFloorBytes)) is always kept free); \(fmt(free)) free."
         case .tight(let requirement, let free, let remaining):
-            return "Needs about \(fmt(requirement.total)) of the \(fmt(free)) free, leaving only \(fmt(remaining)). The import will run, but free up space soon."
+            return "Adds about \(fmt(requirement.importBytes)) of the \(fmt(free)) free (\(fmt(requirement.hardFloorBytes)) is always kept free), leaving only \(fmt(remaining)). The import will run, but free up space soon."
         case .insufficient(let requirement, let free, let missing):
             return "Not enough space: this import needs about \(fmt(requirement.total)) but only \(fmt(free)) is free — \(fmt(missing)) short. Free up space, choose another destination, or import fewer files."
         }

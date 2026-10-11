@@ -1339,15 +1339,7 @@ struct ContentView: View {
                 }
             }
             .navigationDestination(for: UUID.self) { emailID in
-                if let email = modelVM.visibleEmails.first(where: { $0.id == emailID }) {
-                    EmailDetailView(
-                        email: email,
-                        orderedIDs: modelVM.visibleOrderedIDs,
-                        onNavigate: { newID in selectedEmailIDs = [newID] },
-                        onClose: { withAnimation { selectedEmailIDs = [] } },
-                        searchText: modelVM.searchText
-                    )
-                }
+                PhoneEmailDetailHost(initialID: emailID, modelVM: modelVM)
             }
             .sheet(isPresented: $showWorkCenter) {
                 NavigationStack {
@@ -4861,3 +4853,42 @@ private func handleMultipleFiles(_ urls: [URL]) {
 }
 
 // MARK: - Advanced Feature Sheets Modifier
+
+#if os(iOS)
+/// iPhone: the email pushed onto the navigation stack. Previous / Next and
+/// Close used to set `selectedEmailIDs` — the iPad/Mac selection, which this
+/// pushed screen never reads — so on iPhone they did nothing (found in the
+/// V6 simulator walkthrough, 2026-10-11). The host keeps the email on screen
+/// itself and closes by popping.
+private struct PhoneEmailDetailHost: View {
+    let initialID: UUID
+    @ObservedObject var modelVM: ParsedEmailListViewModel
+    @State private var currentID: UUID?
+    @State private var fetched: MBOXParser.RawEmail?
+    @Environment(\.dismiss) private var dismiss
+
+    private var shownID: UUID { currentID ?? initialID }
+
+    var body: some View {
+        Group {
+            if let email = modelVM.visibleEmails.first(where: { $0.id == shownID }) ?? fetched.flatMap({ $0.id == shownID ? $0 : nil }) {
+                EmailDetailView(
+                    email: email,
+                    orderedIDs: modelVM.visibleOrderedIDs,
+                    onNavigate: { newID in currentID = newID },
+                    onClose: { dismiss() },
+                    searchText: modelVM.searchText
+                )
+                .id(email.id)
+            } else {
+                ProgressView()
+            }
+        }
+        .task(id: shownID) {
+            // An email outside the loaded page of the list is read from the store.
+            guard !modelVM.visibleEmails.contains(where: { $0.id == shownID }) else { return }
+            fetched = try? await ArchiveDataService.shared.fullEmails(ids: [shownID]).first
+        }
+    }
+}
+#endif

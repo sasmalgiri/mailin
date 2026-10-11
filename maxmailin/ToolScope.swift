@@ -84,3 +84,21 @@ struct ScopedWorkingSet<Content: View>: View {
         }
     }
 }
+
+/// A deadline that counts only time the app is in the foreground: an answer
+/// started just before the user switched away is not cut off as "timed out"
+/// for the time the system kept the app suspended (V6 walkthrough,
+/// 2026-10-11). On the Mac the app is never suspended, so it is wall time.
+enum ActiveTimeDeadline {
+    static func sleep(seconds: Double) async throws {
+        #if os(iOS)
+        var counted = 0.0
+        while counted < seconds {
+            try await Task.sleep(for: .milliseconds(500))
+            if await MainActor.run(body: { UIApplication.shared.applicationState == .active }) { counted += 0.5 }
+        }
+        #else
+        try await Task.sleep(for: .seconds(seconds))
+        #endif
+    }
+}

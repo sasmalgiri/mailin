@@ -298,6 +298,7 @@ struct EmailDetailView: View {
                         .buttonStyle(.plain)
                         .disabled(!hasPrev)
                         .help("Open the previous email in the current filtered list (↑ or K)")
+                        .accessibilityLabel(String(localized: "Previous email"))
                         .keyboardShortcut(.upArrow, modifiers: [.command])
 
                         if let idx = currentIndex {
@@ -319,6 +320,7 @@ struct EmailDetailView: View {
                         .buttonStyle(.plain)
                         .disabled(!hasNext)
                         .help("Open the next email in the current filtered list (↓ or J)")
+                        .accessibilityLabel(String(localized: "Next email"))
                         .keyboardShortcut(.downArrow, modifiers: [.command])
                     }
                     .padding(.horizontal, 6)

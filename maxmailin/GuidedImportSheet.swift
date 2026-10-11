@@ -343,7 +343,7 @@ struct GuidedImportSheet: View {
                 : "Skip messages already in the archive")
             row("Originals", chosenCopiesOriginals
                 ? "Copied into the archive"
-                : "Referenced where they are")
+                : "Stored in the archive; very large messages read from the original file")
             row("Attachments", chosenIndexAttachmentText
                 ? "Contents indexed in the background after import"
                 : "Stored and exported; contents not indexed")

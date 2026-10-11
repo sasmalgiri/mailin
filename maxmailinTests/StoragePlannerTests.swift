@@ -90,6 +90,15 @@ struct StoragePlannerTests {
         #expect(plan.summary.contains("free"))
     }
 
+    @Test("A tiny import states its own size, apart from the fixed reserve")
+    func tinyImportIsNotGigabytes() {
+        let plan = StoragePlanner.plan(sourceBytes: 6_000, copyOriginals: false,
+                                       freeBytes: 2 * TiB, volumeCapacityBytes: 4 * TiB)
+        #expect(plan.requirement.importBytes < 1_048_576, "a 6 KB import adds kilobytes: \(plan.summary)")
+        #expect(plan.summary.hasPrefix("Adds about"), "\(plan.summary)")
+        #expect(plan.summary.contains("always kept free"))
+    }
+
     @Test("A fit that leaves almost nothing proceeds but says so")
     func tightFitProceedsWithAWarning() {
         let requirement = StoragePlanner.requirement(
