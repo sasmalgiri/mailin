@@ -163,6 +163,10 @@ final class ReviewStateService: ObservableObject {
         persist("annotation") { [store] in try await store.annotationSet(text.isEmpty ? nil : text, id: id) }
     }
 
+    /// Waits until every write issued so far has landed (writes are chained
+    /// in UI order), so a re-query sees them.
+    func waitForWrites() async { await persistChain?.value }
+
     private func persist(_ what: String, _ body: @escaping @Sendable () async throws -> Void) {
         let previous = persistChain
         persistChain = Task { @MainActor in

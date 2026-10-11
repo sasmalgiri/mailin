@@ -23,6 +23,8 @@ struct TriageQueueView: View {
     @State private var queue: [MBOXParser.RawEmail] = []
     @State private var scores: [UUID: (risk: String?, iocCount: Int)] = [:]
     @State private var confirmedCount = 0
+    /// Every email awaiting a verdict; the queue holds the first `queueCap`.
+    @State private var pendingTotal = 0
     @State private var isLoading = true
     @State private var exportError: String?
 
@@ -66,7 +68,9 @@ struct TriageQueueView: View {
                     .font(Typography.title2)
                 Text(isLoading
                      ? "Loading…"
-                     : "\(queue.count) awaiting verdict — every intake and verdict is recorded in the audit trail")
+                     : pendingTotal > queue.count
+                        ? "Showing \(queue.count) of \(pendingTotal) awaiting verdict — the next ones load when these are done; every intake and verdict is recorded in the audit trail"
+                        : "\(queue.count) awaiting verdict — every intake and verdict is recorded in the audit trail")
                     .font(Typography.caption1)
                     .foregroundColor(AppColors.secondary)
                 if let note = triage.lastIntakeNote {
@@ -235,13 +239,19 @@ struct TriageQueueView: View {
     private func issueVerdict(_ verdict: TriageVerdict, for email: MBOXParser.RawEmail) {
         TriageQueueService.shared.issueVerdict(verdict, for: email)
         queue.removeAll { $0.id == email.id }
+        pendingTotal = max(0, pendingTotal - 1)
         if verdict == .confirmedPhishing { confirmedCount += 1 }
+        // The shown part is done but more are waiting: load the next ones.
+        if queue.isEmpty && pendingTotal > 0 {
+            Task { await ReviewStateService.shared.waitForWrites(); await reload() }
+        }
     }
 
     @MainActor
     private func reload() async {
         queue = await ArchiveDataService.shared.workingSet(
             query: TriageQueueService.pendingQuery, cap: Self.queueCap)
+        pendingTotal = (try? await ArchiveDataService.shared.count(query: TriageQueueService.pendingQuery)) ?? queue.count
         var confirmedQuery = EmailQuery.all
         confirmedQuery.userTag = TriageVerdict.confirmedPhishing.rawValue
         confirmedCount = (try? await ArchiveDataService.shared.count(query: confirmedQuery)) ?? 0

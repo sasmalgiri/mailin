@@ -665,4 +665,24 @@ final class V3CompatibilityTests: XCTestCase {
         XCTAssertEqual(path?.last, "p700")
         XCTAssertEqual(graph.shortestPath(from: "p3", to: "p5"), ["p3", "p4", "p5"])
     }
+
+    // MARK: - Triage: a re-query after verdicts sees them
+
+    /// The triage queue reloads its next part once the shown part is done;
+    /// it waits for the verdict writes first so decided emails never return.
+    func testReviewState_waitForWrites_thenAQuerySeesEveryWrite() async throws {
+        let env = makeEnv(engineOn: false)
+        try await env.store.insertBatch((0..<6).map { makeEmail($0, from: "a@a.com", tag: "tq") }, batchSize: 10)
+        let all = try await ids(env)
+        ReviewStateService.testStoreOverride = env.store
+        defer { ReviewStateService.testStoreOverride = nil }
+        let review = ReviewStateService()
+        review.addTag("pending", to: all)
+        review.removeTag("pending", from: Array(all.prefix(4)))
+        await review.waitForWrites()
+        var q = EmailQuery.all
+        q.userTag = "pending"
+        let left = try await env.archive.count(query: q)
+        XCTAssertEqual(left, 2, "every write landed before the re-query")
+    }
 }
