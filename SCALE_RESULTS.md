@@ -59,7 +59,7 @@ Debug, app-hosted, `MAILIN_SCALE=1`. Fixtures as in the 2026-09-26/27 sections (
 |---|---|---|---|
 | mbox 1.5 GB, streaming parser + export round trip | 8,416 / 0 dupes, PASS | 242.7 s (import 114.7 s) | 12.6 MiB/s · 73 msg/s |
 | ZIP 1.5 GB (stored member) | 8,416 / 0, PASS | 129.2 s | 11.2 MiB/s · 65 msg/s |
-| mbox 1.5 GB, **offset engine** (3.0 default) | 8,416 / 0, PASS | 452.9 s | 3.2 MiB/s · 19 msg/s |
+| mbox 1.5 GB, **offset engine** (3.0 default) | 8,416 / 0 exact; **memory check FAILS when run alone** (peak +1.9 GB > 1 GiB ceiling; it passed in sequence only because it started on a 1.5 GB baseline) | 452.9 s | 3.2 MiB/s · 19 msg/s |
 | EML folder 1 GB | PASS | 107.3 s | — |
 | Maildir 1 GB | PASS | 106.2 s | — |
 | Apple Mail package 1 GB | PASS | 74.4 s | — |
@@ -68,9 +68,14 @@ Debug, app-hosted, `MAILIN_SCALE=1`. Fixtures as in the 2026-09-26/27 sections (
 | mixed four formats 1 GB | PASS | 88.4 s | — |
 | message above the row ceiling (blob tier) | PASS | 8.5 s | — |
 
-Finding: on 2026-09-26 the offset engine and the streaming parser ran at the same speed (1.3 MiB/s); the
-streaming parser is now ~4× faster than the offset engine. Correctness is equal; the gap is to be profiled
-before release (the offset engine is the default import engine, S4).
+**Open finding — import memory (offset engine, the 3.0 default).** Run alone, the 1.5 GB row peaks at
++1.85–1.97 GB over baseline (2026-09-26: +452 MiB). Bisection: already present at 7230eea (2026-10-08), so it
+predates the 3.0 engine work; the parallel parse added 2026-09-28 is not the cause (one worker: same peak, and
+3× faster in Debug), nor the batch size (34 smaller batches: same peak). Memory is released afterwards in
+later runs (666 MiB – 2.2 GiB across sequential rows), so it is a high-water mark, not a leak — but the cause
+is not yet known and it must be profiled (Instruments Allocations) before 3.0 ships, because it is the
+default import path on iPhone. Speed: streaming 12.6 MiB/s, offset 3.2 MiB/s in Debug (Release measured 86 MiB/s
+on 2026-09-28).
 
 ## Executed 2026-09-26 — 1.5 GB through the production import path
 

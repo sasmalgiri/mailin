@@ -114,7 +114,8 @@ struct ProductionImportRun {
 /// found, so a full disk never silently ends a later run.
 final class TestTempHygiene: XCTestCase {
     static let prefixes = ["format-", "large-message-", "handoff-", "reloc-", "enospc-", "eject-", "v1lib-", "v2lib-",
-                           "mboxrd-", "throughput-", "mailin-container-", "measure-", "overflow-"]
+                           "mboxrd-", "throughput-", "mailin-container-", "measure-", "overflow-",
+                           "scale-", "golden-"]
 
     func testSweepStaleDisposableStores() throws {
         let fm = FileManager.default
