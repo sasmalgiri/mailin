@@ -375,17 +375,17 @@ Every `[~]` row was checked against its own wording. A row is not done until eve
 
 | Row | Missing clause | Status |
 |---|---|---|
-| F1 | adaptive batch size from `os_proc_available_memory`; generalise `ExportRunCenter` | [ ] |
-| F4 | Legal Review + Journalist workspaces into SQLite | [ ] |
-| F5 | fingerprint tree as THE verification path (Verify buttons); old seals keep verifying | [ ] |
-| F6 | named entities in the feature index | [ ] |
-| M2 | tripped switches come back with a new app version (unless the user switched them off) | [ ] |
-| M3 | a fallback is stated in the job receipt | [ ] |
-| S6 | Safe Mode makes the archive read-only (plan) + help text says exactly what it does (#3) | [ ] |
+| F1 | adaptive batch size from `os_proc_available_memory`; generalise `ExportRunCenter` | [x] code cdf4795 |
+| F4 | Legal Review + Journalist workspaces into SQLite | [x] code 2f8a230 |
+| F5 | fingerprint tree as THE verification path (Verify buttons); old seals keep verifying | [x] code 2853911 |
+| F6 | named entities in the feature index (`entity_rows`, `entityTop`, extractor v2). **Plan corrected:** the sentence embedding is NOT duplicated into `features` — it lives in the existing on-device semantic index (`SemanticIndex.swift`, `embeddings.db`, its own resumable job), which Q2's fusion reads; the `features.embedding` column stays NULL | [x] code |
+| M2 | tripped switches come back with a new app version (unless the user switched them off) | [x] code 18304e7 |
+| M3 | a fallback is stated in the job receipt — and every 3.0 seam really falls back (withFallback had no callers; 9 silent catches fixed) | [x] code 18304e7 |
+| S6 | Safe Mode makes the archive read-only (plan) + help text says exactly what it does (#3) | [x] code 75dd04d |
 | E2 | evidence record included in productions and case bundles | [ ] |
-| E4 | collection fields shown in ImportReceiptView | [ ] |
-| E6 | test that checks every part of a redacted export | [ ] |
-| A12/I4 | Communication Patterns AI context by retrieval, stating how many | [ ] |
+| E4 | collection fields shown in ImportReceiptView | [x] code e50b4d1 |
+| E6 | test that checks every part of a redacted export | [x] test e50b4d1 |
+| A12/I4 | Communication Patterns AI context by retrieval, stating how many — and a user's scope is never swapped for an archive sample (finding #19) | [x] code ddd095a |
 | Q2 | written decision gate: vec1 vs sqlite-vec (before any extension) | [ ] |
 | P1 | ArchiveCore strict-concurrency diagnostics fixed; Swift 6 mode | [ ] |
 | P2 | parser unsafe sites marked / moved to Span | [ ] |
@@ -393,7 +393,7 @@ Every `[~]` row was checked against its own wording. A row is not done until eve
 | P6 | iOS SDK 27 build confirmed | [ ] |
 | R3 | SIZE_LIMITS_DESIGN.md, help, store copy | [ ] |
 | X1 | owner decision on which entry points go | owner |
-| §8 #1, #5, #6, #7 | old-path bug fixes | [ ] |
+| §8 #1, #5, #6, #7 | old-path bug fixes | [x] code 18304e7, be0829d |
 
 ## 8. Findings during the implementation pass (fix in the test-and-fix pass)
 

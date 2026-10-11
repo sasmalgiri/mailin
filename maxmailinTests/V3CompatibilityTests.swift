@@ -537,4 +537,32 @@ final class V3CompatibilityTests: XCTestCase {
             XCTAssertEqual(withoutTree.broken, 0, "the old seal alone cannot see a change to the stored original")
         }
     }
+
+    // MARK: - F6: named entities in the analysis index
+
+    func testEntities_extractedStoredCountedAndDeletedWithTheEmail() async throws {
+        let found = FeatureExtractor.entities(in: "Yesterday Tim Cook met Satya Nadella at Microsoft in Seattle to discuss the plan.")
+        XCTAssertTrue(found.contains { $0.kind == "person" }, "people are found: \(found)")
+        XCTAssertTrue(found.contains { $0.kind == "place" || $0.kind == "organization" }, "places/organisations are found: \(found)")
+
+        let env = makeEnv(engineOn: false)
+        try await env.store.insertBatch((0..<3).map { makeEmail($0, from: "a@a.com", tag: "ent") }, batchSize: 10)
+        let all = try await ids(env)
+        var records: [SQLiteEmailStore.FeatureRecord] = []
+        for (i, id) in all.enumerated() {
+            var r = SQLiteEmailStore.FeatureRecord(emailID: id, version: FeatureExtractor.version)
+            r.entities = [(kind: "person", value: "Pat Lee")] + (i == 0 ? [(kind: "person", value: "Sam Roe")] : [])
+            records.append(r)
+        }
+        try await env.store.featuresUpsert(records)
+        let top = try await env.store.entityTop(kind: "person", limit: 10)
+        XCTAssertEqual(top.distinct, 2)
+        XCTAssertEqual(top.rows.first?.value, "Pat Lee")
+        XCTAssertEqual(top.rows.first?.emails, 3, "counted across the whole archive")
+
+        try await env.store.delete(ids: [all[0]])
+        let after = try await env.store.entityTop(kind: "person", limit: 10)
+        XCTAssertEqual(after.distinct, 1, "a deleted email's entities go with it")
+        XCTAssertEqual(after.rows.first?.emails, 2)
+    }
 }

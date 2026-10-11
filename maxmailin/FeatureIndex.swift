@@ -31,7 +31,8 @@ private let featureLog = Logger(subsystem: "com.ecosanskriti.maxmailin", categor
 
 enum FeatureExtractor {
     /// Bump when any detector changes; rows below are recomputed.
-    static let version = 1
+    /// 2: named entities (§3-F6).
+    static let version = 2
 
     /// PII bit per type, stable across versions (stored in the database).
     static func piiBit(_ type: EmailNLPEngine.PIIType) -> Int {
@@ -85,7 +86,32 @@ enum FeatureExtractor {
         r.language = language(of: text)
         r.mih = messageIdentificationHash(email, bodyText: text)
         r.minhashBands = MinHash.bands(of: text)
+        r.entities = entities(in: text)
         return r
+    }
+
+    /// People, organisations and places named in the text (NaturalLanguage
+    /// name tagger, on device), each value once per email.
+    static func entities(in text: String) -> [(kind: String, value: String)] {
+        guard !text.isEmpty else { return [] }
+        let tagger = NLTagger(tagSchemes: [.nameType])
+        tagger.string = text
+        var seen = Set<String>()
+        var out: [(kind: String, value: String)] = []
+        let options: NLTagger.Options = [.omitWhitespace, .omitPunctuation, .joinNames]
+        tagger.enumerateTags(in: text.startIndex..<text.endIndex, unit: .word, scheme: .nameType, options: options) { tag, range in
+            let kind: String
+            switch tag {
+            case .personalName?: kind = "person"
+            case .organizationName?: kind = "organization"
+            case .placeName?: kind = "place"
+            default: return true
+            }
+            let value = String(text[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if value.count >= 2, seen.insert(kind + "\u{1F}" + value).inserted { out.append((kind: kind, value: value)) }
+            return true
+        }
+        return out
     }
 
     static func language(of text: String) -> String? {

@@ -5331,6 +5331,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
         let held = enforcesDatabaseLegalHolds ? try legalHeldAmong(Array(requested)) : []
         let ids = requested.subtracting(held)
         guard !ids.isEmpty else { return held }
+        try ensureEntityTable(db)
         let now = Int64(Date().timeIntervalSince1970)
         try exec(db, "BEGIN TRANSACTION;")
         do {
@@ -5368,7 +5369,8 @@ actor SQLiteEmailStore: EmailArchiveStore {
                                      ("email_annotations", "email_id"), ("duplicates", "duplicate_id"),
                                      ("attachment_search", "email_id"), ("attachment_text_state", "email_id"),
                                      ("features", "email_id"), ("ioc_rows", "email_id"),
-                                     ("minhash_bands", "email_id"), ("fingerprints", "email_id")] {
+                                     ("minhash_bands", "email_id"), ("fingerprints", "email_id"),
+                                     ("entity_rows", "email_id")] {
                     let stmt = try prepare(db, "DELETE FROM \(table) WHERE \(col) IN (\(placeholders));")
                     defer { sqlite3_finalize(stmt) }
                     for (i, id) in chunk.enumerated() { bindText(stmt, Int32(i + 1), id.uuidString) }
@@ -5385,12 +5387,13 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     func clearAll() throws {
         let db = try ensureDB()
+        try ensureEntityTable(db)
         for table in ["emails", "email_bodies", "derived", "duplicates", "thread_keys",
                       "predictive_records", "near_dup_findings", "sources", "attachments",
                       "email_participants", "email_tags", "email_domains",
                       "email_review_state", "email_user_tags", "email_annotations",
                       "attachment_search", "attachment_text_state", "deletion_tombstones",
-                      "features", "ioc_rows", "minhash_bands", "fingerprints", "fingerprint_buckets"] {
+                      "features", "ioc_rows", "minhash_bands", "fingerprints", "fingerprint_buckets", "entity_rows"] {
             try exec(db, "DELETE FROM \(table);")
         }
     }
@@ -6224,6 +6227,8 @@ extension SQLiteEmailStore {
         var iocs: [(kind: String, value: String)] = []
         var minhashBands: [Int64] = []
         var embedding: Data?
+        /// §3-F6: named entities (kind = "person" / "organization" / "place").
+        var entities: [(kind: String, value: String)] = []
 
         static func == (a: Self, b: Self) -> Bool {
             a.emailID == b.emailID && a.version == b.version && a.piiFlags == b.piiFlags
@@ -6231,13 +6236,53 @@ extension SQLiteEmailStore {
                 && a.dkim == b.dkim && a.dmarc == b.dmarc && a.threatScore == b.threatScore && a.mih == b.mih
                 && a.iocs.map { $0.kind + "\u{1F}" + $0.value } == b.iocs.map { $0.kind + "\u{1F}" + $0.value }
                 && a.minhashBands == b.minhashBands && a.embedding == b.embedding
+                && a.entities.map { $0.kind + "\u{1F}" + $0.value } == b.entities.map { $0.kind + "\u{1F}" + $0.value }
         }
+    }
+
+    /// §3-F6: named entities per email (created on first use; additive).
+    private func ensureEntityTable(_ db: OpaquePointer) throws {
+        try exec(db, """
+            CREATE TABLE IF NOT EXISTS entity_rows(
+                email_id TEXT NOT NULL,
+                kind     TEXT NOT NULL,
+                value    TEXT NOT NULL
+            );
+        """)
+        try exec(db, "CREATE INDEX IF NOT EXISTS idx_entity_kind_value ON entity_rows(kind, value);")
+        try exec(db, "CREATE INDEX IF NOT EXISTS idx_entity_email ON entity_rows(email_id);")
+    }
+
+    /// The most frequent entities of `kind` across the archive, with the
+    /// number of emails each appears in and the number of distinct values.
+    func entityTop(kind: String, limit: Int, offset: Int = 0) throws -> (rows: [(value: String, emails: Int)], distinct: Int) {
+        let db = try ensureDB()
+        try ensureEntityTable(db)
+        let stmt = try prepare(db, """
+            SELECT value, COUNT(DISTINCT email_id) AS n FROM entity_rows WHERE kind = ?
+            GROUP BY value ORDER BY n DESC, value LIMIT ? OFFSET ?;
+        """)
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, kind)
+        sqlite3_bind_int(stmt, 2, Int32(limit))
+        sqlite3_bind_int(stmt, 3, Int32(offset))
+        var rows: [(String, Int)] = []
+        while try stepRow(stmt, db) { rows.append((columnText(stmt, 0), Int(sqlite3_column_int64(stmt, 1)))) }
+        let count = try prepare(db, "SELECT COUNT(DISTINCT value) FROM entity_rows WHERE kind = ?;")
+        defer { sqlite3_finalize(count) }
+        bindText(count, 1, kind)
+        let distinct = try stepRow(count, db) ? Int(sqlite3_column_int64(count, 0)) : 0
+        return (rows.map { (value: $0.0, emails: $0.1) }, distinct)
     }
 
     /// Writes feature rows, replacing each email's IOC rows and MinHash bands.
     func featuresUpsert(_ records: [FeatureRecord]) throws {
         guard !records.isEmpty else { return }
         let db = try ensureDB()
+        try ensureEntityTable(db)
+        let delEntity = try prepare(db, "DELETE FROM entity_rows WHERE email_id = ?;")
+        let insEntity = try prepare(db, "INSERT INTO entity_rows(email_id, kind, value) VALUES (?,?,?);")
+        defer { sqlite3_finalize(delEntity); sqlite3_finalize(insEntity) }
         let up = try prepare(db, """
             INSERT OR REPLACE INTO features(email_id, feature_version, pii_flags, privilege, language,
                 spf, dkim, dmarc, threat_score, mih, ioc_count, embedding, updated_at)
@@ -6278,6 +6323,13 @@ extension SQLiteEmailStore {
                     sqlite3_reset(insIOC); sqlite3_clear_bindings(insIOC)
                     bindText(insIOC, 1, id); bindText(insIOC, 2, ioc.kind); bindText(insIOC, 3, ioc.value)
                     try run(insIOC)
+                }
+                sqlite3_reset(delEntity); sqlite3_clear_bindings(delEntity)
+                bindText(delEntity, 1, id); try run(delEntity)
+                for entity in r.entities {
+                    sqlite3_reset(insEntity); sqlite3_clear_bindings(insEntity)
+                    bindText(insEntity, 1, id); bindText(insEntity, 2, entity.kind); bindText(insEntity, 3, entity.value)
+                    try run(insEntity)
                 }
                 sqlite3_reset(delBand); sqlite3_clear_bindings(delBand)
                 bindText(delBand, 1, id); try run(delBand)
