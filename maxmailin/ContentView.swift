@@ -4117,7 +4117,9 @@ private func handleMultipleFiles(_ urls: [URL]) {
                 return
             }
             do {
-                try await CaseBundleService.exportResolvingSources(caseTitle: title, emails: emails, to: url)
+                try await CaseBundleService.exportResolvingSources(
+                    caseTitle: title, emails: emails,
+                    includeEvidenceRecord: modules.isOn(.v3Fingerprints), to: url)
                 // Says how many were read, not how many were tagged: a tagged
                 // id the archive can no longer produce must not be counted as
                 // if it travelled.

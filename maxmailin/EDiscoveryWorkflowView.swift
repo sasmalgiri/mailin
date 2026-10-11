@@ -384,6 +384,8 @@ struct EDiscoveryWorkflowView: View {
     @State private var v3Running = false
     /// §3-M3: prefixed to the next action message after a fallback.
     @State private var fallbackPrefix: String?
+    /// §3-E2: a production was just saved; offer its evidence record.
+    @State private var productionRecordOffered = false
     private var v3: Bool { modules?.isOn(.v3EDiscovery) ?? false }
 
     @State private var showResetConfirmation = false
@@ -1262,6 +1264,19 @@ struct EDiscoveryWorkflowView: View {
                 .buttonStyle(SecondaryButtonStyle())
                 .accessibilityLabel("Generate privilege log")
             }
+            // §3-E2: the production's evidence record — a hash-tree proof per
+            // email to the archive fingerprint — saved alongside, one tap.
+            if productionRecordOffered {
+                Button(String(localized: "Save evidence record for this production")) {
+                    Task { @MainActor in
+                        let (outcome, n) = await EvidenceRecordExporter.export(scope: scope)
+                        showActionMessage(outcome.message(String(localized: "Evidence record")) + (outcome.succeeded ? " (\(n))" : ""))
+                        if case .cancelled = outcome {} else { productionRecordOffered = false }
+                    }
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .help("Every produced email with a hash-tree proof to the archive fingerprint — verifiable with SHA-256 alone")
+            }
         }
     }
 
@@ -1576,6 +1591,7 @@ struct EDiscoveryWorkflowView: View {
                                        detail: "Concordance DAT load file for \(result.recordsWritten) emails → \(url.lastPathComponent)")
                     _ = await DocumentRegistry.post(.export, summary: "Concordance load file — \(result.recordsWritten) emails", refs: url.lastPathComponent)
                 }
+                if outcome.succeeded, modules?.isOn(.v3Fingerprints) ?? false { productionRecordOffered = true }
                 showActionMessage(outcome.message(String(localized: "Load file")))
             case .productionCSV:
                 let (outcome, result) = await EDiscoveryEngine.exportProductionCSV(scope: scope)
@@ -1584,6 +1600,7 @@ struct EDiscoveryWorkflowView: View {
                                        detail: "Production CSV exported for \(result.recordsWritten) emails → \(url.lastPathComponent)")
                     _ = await DocumentRegistry.post(.export, summary: "Production CSV — \(result.recordsWritten) emails", refs: url.lastPathComponent)
                 }
+                if outcome.succeeded, modules?.isOn(.v3Fingerprints) ?? false { productionRecordOffered = true }
                 showActionMessage(outcome.message(String(localized: "Production CSV")))
             case .privilegeLog:
                 let (outcome, n) = await EDiscoveryEngine.exportPrivilegeLog(scope: scope)

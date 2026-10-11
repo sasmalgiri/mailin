@@ -81,47 +81,63 @@ enum EvidenceRecordExporter {
     /// month at a time). Returns how many emails it covers and the archive root.
     static func write(scope: ArchiveScope, to url: URL) async throws
         -> (written: Int, root: String, file: ArchiveExportResult) {
+        var inScope = Set<UUID>()
+        for try await page in ScopeJobEnvironment.archive.streamSummaries(query: scope.query, batchSize: 5_000) {
+            inScope.formUnion(page.map(\.id))
+        }
+        var written = 0
+        var root = ""
+        let file = try await StreamedTextFile.write(to: url) { emit in
+            (written, root) = try await emitRecord(for: inScope, emit: emit)
+        }
+        return (written, root, file)
+    }
+
+    /// The record for exactly `ids` as one JSON-lines text — what a case
+    /// bundle carries (§3-E2), sealed with the bundle.
+    static func record(for ids: Set<UUID>) async throws -> (text: String, written: Int, root: String) {
+        var text = ""
+        let (written, root) = try await emitRecord(for: ids) { text += $0 }
+        return (text, written, root)
+    }
+
+    /// Builds missing leaves, then emits the header and one proof line per
+    /// email in `inScope`, month by month.
+    private static func emitRecord(for inScope: Set<UUID>, emit: (String) throws -> Void) async throws -> (Int, String) {
         let store = ScopeJobEnvironment.store
         while try await store.fingerprintBuildMissing(limit: 1_000) > 0 {}
         try await store.fingerprintRefreshBuckets()
         guard let tree = try? await store.fingerprintTree() else {
             throw WriteError(message: String(localized: "the archive fingerprint could not be read"))
         }
-        // Emails in scope (ids only).
-        var inScope = Set<UUID>()
-        for try await page in ScopeJobEnvironment.archive.streamSummaries(query: scope.query, batchSize: 5_000) {
-            inScope.formUnion(page.map(\.id))
-        }
         let bucketRoots = tree.buckets.map(\.root)
         let revision = (try? await store.corpusRevision()) ?? 0
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.sortedKeys]
+        let header = Header(
+            format: "mailin-evidence-record/1", style: "RFC 4998 (Evidence Record Syntax) hash-tree proofs",
+            archiveRoot: tree.root, generatedAt: ISO8601DateFormatter().string(from: Date()),
+            archiveRevision: revision, emailsInRecord: inScope.count,
+            buckets: tree.buckets.map { ["month": String($0.bucket), "root": $0.root, "leaves": String($0.leaves)] },
+            hashRule: "parent = SHA-256 hex of \"<left>|<right>\"; an odd node is carried up unchanged",
+            leafRule: "leaf = SHA-256 hex of the email's raw MIME bytes; a leaf starting \"p:\" belongs to an email stored without raw MIME and is SHA-256 over its length-prefixed plain, HTML and header bytes",
+            verify: "Hash the email's raw MIME; fold with each step of `bucketPath` (L = sibling on the left), compare with the month root; fold with each step of `rootPath`, compare with archiveRoot.")
+        try emit(String(decoding: try enc.encode(header), as: UTF8.self) + "\n")
         var written = 0
-        let file = try await StreamedTextFile.write(to: url) { emit in
-            let enc = JSONEncoder()
-            enc.outputFormatting = [.sortedKeys]
-            let header = Header(
-                format: "mailin-evidence-record/1", style: "RFC 4998 (Evidence Record Syntax) hash-tree proofs",
-                archiveRoot: tree.root, generatedAt: ISO8601DateFormatter().string(from: Date()),
-                archiveRevision: revision, emailsInRecord: inScope.count,
-                buckets: tree.buckets.map { ["month": String($0.bucket), "root": $0.root, "leaves": String($0.leaves)] },
-                hashRule: "parent = SHA-256 hex of \"<left>|<right>\"; an odd node is carried up unchanged",
-                leafRule: "leaf = SHA-256 hex of the email's raw MIME bytes; a leaf starting \"p:\" belongs to an email stored without raw MIME and is SHA-256 over its length-prefixed plain, HTML and header bytes",
-                verify: "Hash the email's raw MIME; fold with each step of `bucketPath` (L = sibling on the left), compare with the month root; fold with each step of `rootPath`, compare with archiveRoot.")
-            try emit(String(decoding: try enc.encode(header), as: UTF8.self) + "\n")
-            for (bucketIndex, bucket) in tree.buckets.enumerated() {
-                let leaves = try await store.fingerprintLeaves(bucket: bucket.bucket)
-                let hexes = leaves.map(\.leaf)
-                let rootPath = path(for: bucketIndex, in: bucketRoots)
-                var chunk = ""
-                for (i, leaf) in leaves.enumerated() where inScope.contains(leaf.id) {
-                    let line = Line(id: leaf.id.uuidString, leaf: leaf.leaf, month: bucket.bucket,
-                                    bucketPath: path(for: i, in: hexes), rootPath: rootPath)
-                    chunk += String(decoding: try enc.encode(line), as: UTF8.self) + "\n"
-                    written += 1
-                }
-                if !chunk.isEmpty { try emit(chunk) }
+        for (bucketIndex, bucket) in tree.buckets.enumerated() {
+            let leaves = try await store.fingerprintLeaves(bucket: bucket.bucket)
+            let hexes = leaves.map(\.leaf)
+            let rootPath = path(for: bucketIndex, in: bucketRoots)
+            var chunk = ""
+            for (i, leaf) in leaves.enumerated() where inScope.contains(leaf.id) {
+                let line = Line(id: leaf.id.uuidString, leaf: leaf.leaf, month: bucket.bucket,
+                                bucketPath: path(for: i, in: hexes), rootPath: rootPath)
+                chunk += String(decoding: try enc.encode(line), as: UTF8.self) + "\n"
+                written += 1
             }
+            if !chunk.isEmpty { try emit(chunk) }
         }
-        return (written, tree.root, file)
+        return (written, tree.root)
     }
 
     struct Header: Codable {

@@ -59,6 +59,11 @@ struct CaseBundle: Codable {
     var actionRegisters: [ActionRegisterModel] = []
     var evidenceDesks: [EvidenceDeskModel] = []
     var reasoningCases: [ReasoningCaseModel] = []
+
+    /// §3-E2: RFC 4998-style evidence record for exactly these emails (JSON
+    /// lines: header + one hash-tree proof per email), sealed with the bundle.
+    /// Optional, so older readers and older bundles are unaffected.
+    var evidenceRecord: String? = nil
 }
 
 /// The on-disk envelope: payload + detached seal over the exact payload bytes.
@@ -116,6 +121,7 @@ enum CaseBundleService {
         emails: [MBOXParser.RawEmail],
         note: String = "",
         archive: ArchiveDataService = .shared,
+        includeEvidenceRecord: Bool = false,
         to url: URL
     ) async throws {
         var resolved: [MBOXParser.RawEmail] = []
@@ -141,7 +147,11 @@ enum CaseBundleService {
             }
             resolved.append(email)
         }
-        try export(caseTitle: caseTitle, emails: resolved, note: note, exactBytes: exactBytes, to: url)
+        let record = includeEvidenceRecord
+            ? try await EvidenceRecordExporter.record(for: Set(resolved.map(\.id))).text
+            : nil
+        try export(caseTitle: caseTitle, emails: resolved, note: note, exactBytes: exactBytes,
+                   evidenceRecord: record, to: url)
     }
 
     /// Builds a sealed bundle from a set of emails + all current studio
@@ -157,6 +167,7 @@ enum CaseBundleService {
         evidenceDesks: [EvidenceDeskModel]? = nil,
         reasoningCases: [ReasoningCaseModel]? = nil,
         exactBytes: [UUID: Data] = [:],
+        evidenceRecord: String? = nil,
         to url: URL
     ) throws {
         // F05: refuse before anything is written. An empty rawSource would be
@@ -192,6 +203,7 @@ enum CaseBundleService {
         bundle.actionRegisters = actionRegisters ?? ActionRegisterStore.shared.registers
         bundle.evidenceDesks = evidenceDesks ?? EvidenceDeskStore.shared.desks
         bundle.reasoningCases = reasoningCases ?? ReasoningCaseStore.shared.cases
+        bundle.evidenceRecord = evidenceRecord
 
         let enc = JSONEncoder()
         enc.outputFormatting = [.sortedKeys]
@@ -211,7 +223,7 @@ enum CaseBundleService {
         envelopeEnc.dateEncodingStrategy = .iso8601
         try envelopeEnc.encode(envelope).write(to: url, options: .atomic)
 
-        ForensicManager.shared.logAction(
+        ScopeJobEnvironment.logAction(
             "Case bundle exported",
             detail: "\(caseTitle): \(bundle.emails.count) emails, sealed \(receipt.sha256Hex.prefix(12))…")
     }

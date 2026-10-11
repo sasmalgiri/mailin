@@ -565,4 +565,31 @@ final class V3CompatibilityTests: XCTestCase {
         XCTAssertEqual(after.distinct, 1, "a deleted email's entities go with it")
         XCTAssertEqual(after.rows.first?.emails, 2)
     }
+
+    // MARK: - E2: evidence records travel with case bundles
+
+    func testEvidenceRecordForIDs_provesExactlyThoseEmails_andBundlesStillDecodeWithout() async throws {
+        let env = makeEnv(engineOn: false)
+        try await env.store.insertBatch((0..<6).map { makeEmail($0 * 20, from: "a@a.com", tag: "e2") }, batchSize: 10)
+        let all = try await ids(env)
+        let chosen = Set(all.prefix(2))
+        try await ScopeJobEnvironment.$current.withValue(env.job) {
+            let record = try await EvidenceRecordExporter.record(for: chosen)
+            XCTAssertEqual(record.written, 2)
+            let lines = record.text.split(separator: "\n").map { Data($0.utf8) }
+            let header = try JSONDecoder().decode(EvidenceRecordExporter.Header.self, from: lines[0])
+            let roots = Dictionary(uniqueKeysWithValues: header.buckets.map { (Int($0["month"]!)!, $0["root"]!) })
+            let entries = try lines.dropFirst().map { try JSONDecoder().decode(EvidenceRecordExporter.Line.self, from: $0) }
+            XCTAssertEqual(Set(entries.compactMap { UUID(uuidString: $0.id) }), chosen)
+            for e in entries {
+                let month = EvidenceRecordExporter.fold(e.leaf, e.bucketPath)
+                XCTAssertEqual(month, roots[e.month])
+                XCTAssertEqual(EvidenceRecordExporter.fold(month, e.rootPath), header.archiveRoot)
+            }
+        }
+        // A bundle written before 3.0 has no `evidenceRecord` key.
+        let old = #"{"formatVersion":2,"caseTitle":"t","exportedBy":"x","exportedAt":"2026-01-01T00:00:00Z","note":"","emails":[],"achMatrices":[],"factMatrices":[],"actionRegisters":[],"evidenceDesks":[],"reasoningCases":[]}"#
+        let dec = JSONDecoder(); dec.dateDecodingStrategy = .iso8601
+        XCTAssertNil(try dec.decode(CaseBundle.self, from: Data(old.utf8)).evidenceRecord)
+    }
 }
