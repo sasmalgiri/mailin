@@ -708,4 +708,63 @@ final class V3FoundationTests: XCTestCase {
             XCTAssertEqual(dates, dates.sorted(), "oldest first")
         }
     }
+
+    // MARK: - H9: PST export in parts
+
+    /// A PST export larger than the destination accepts is written as
+    /// numbered parts, each a complete PST that opens again, every email once.
+    func testPSTExport_splitsIntoValidParts_everyEmailOnce() async throws {
+        let env = makeEnv()
+        try await env.store.insertBatch((0..<60).map { makeEmail($0, tag: "pst") }, batchSize: 60)
+        let out = env.root.appendingPathComponent("pst", isDirectory: true)
+        let exporter = ArchiveExportService(archive: env.archive)
+        let parts = try await exporter.exportPSTParts(scope: .query(.all, exclusions: []), toDirectory: out,
+                                                      baseName: "m", partBytes: 4_000)
+        XCTAssertGreaterThan(parts.count, 1, "small part size forces several files")
+        XCTAssertEqual(parts.first?.url.lastPathComponent, "m-0001.pst")
+        XCTAssertEqual(parts.reduce(0) { $0 + $1.messages }, 60)
+        var subjects = Set<String>()
+        for part in parts {
+            let parsed = try PSTParser.parse(fileURL: part.url, senderEmail: "")
+            XCTAssertEqual(parsed.count, part.messages, part.url.lastPathComponent)
+            for email in parsed { subjects.insert(email.headers["Subject"] ?? "") }
+        }
+        XCTAssertEqual(subjects.count, 60, "every email in exactly one part")
+        XCTAssertLessThanOrEqual(ArchiveExportService.pstPartBytes(for: out), 45_000_000_000, "below the format's 50 GB")
+    }
+
+    // MARK: - Q3: EDRM Message Identification Hash
+
+    /// The same message from two sources (different stored ids and header
+    /// order) has one MIH; a changed body has another.
+    func testMessageIdentificationHash_sameMessageAnySource_changesWithContent() {
+        let a = makeEmail(7, tag: "mih")
+        var b = makeEmail(7, tag: "mih")
+        b.rawSource = b.headers.sorted { $0.key > $1.key }.map { "\($0.key): \($0.value)" }.joined(separator: "\n") + "\n\n" + b.plainBody
+        XCTAssertNotEqual(a.id, b.id)
+        let ha = FeatureExtractor.messageIdentificationHash(a, bodyText: a.plainBody)
+        XCTAssertEqual(ha, FeatureExtractor.messageIdentificationHash(b, bodyText: b.plainBody))
+        XCTAssertNotEqual(ha, FeatureExtractor.messageIdentificationHash(a, bodyText: a.plainBody + " edited"))
+        XCTAssertFalse(ha.isEmpty)
+    }
+
+    // MARK: - E7: collect-to-preserve
+
+    /// Import holds and seals each committed batch when collect-to-preserve
+    /// is on — also with forensic mode off (it used to run only inside the
+    /// forensic branch, so the toggle silently did nothing).
+    func testCollectToPreserve_holdsEveryCommittedBatch_withOrWithoutForensicMode() throws {
+        final class Calls { var hashed = 0, held = 0 }
+        let batch = (0..<3).map { makeEmail($0, tag: "ctp") }
+        for (forensic, preserve) in [(false, true), (true, true), (true, false)] {
+            let calls = Calls()
+            let work = try XCTUnwrap(ContentViewModel.committedBatchWork(
+                forensic: forensic, preserve: preserve,
+                hash: { calls.hashed += $0.count }, hold: { calls.held += $0.count }))
+            work(batch)
+            XCTAssertEqual(calls.hashed, forensic ? 3 : 0, "forensic \(forensic), preserve \(preserve)")
+            XCTAssertEqual(calls.held, preserve ? 3 : 0, "forensic \(forensic), preserve \(preserve)")
+        }
+        XCTAssertNil(ContentViewModel.committedBatchWork(forensic: false, preserve: false, hash: { _ in }, hold: { _ in }))
+    }
 }

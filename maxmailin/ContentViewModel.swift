@@ -216,6 +216,20 @@ class ContentViewModel: ObservableObject {
     /// unlimited). Checked here, at the service boundary, as well as by the
     /// UI funnel, so a caller that skipped the sheet still cannot ingest past
     /// it. A denied run imports nothing and reports the reason.
+
+    /// What runs on each committed import batch: forensic hashes (forensic
+    /// mode) and collect-to-preserve holds + seals (§3-E7) — each on its own
+    /// switch; nil when neither is on.
+    static func committedBatchWork(forensic: Bool, preserve: Bool,
+                                   hash: @escaping @MainActor ([MBOXParser.RawEmail]) -> Void,
+                                   hold: @escaping @MainActor ([MBOXParser.RawEmail]) -> Void)
+        -> (@MainActor ([MBOXParser.RawEmail]) -> Void)? {
+        guard forensic || preserve else { return nil }
+        return { batch in
+            if forensic { hash(batch) }
+            if preserve { hold(batch) }
+        }
+    }
     func parseSelectedFiles(_ urls: [URL], dedupPolicy: DedupPolicy, maxEmails: Int? = nil,
                             copiesOriginals: Bool = true, inputByteLimit: Int? = nil) {
         guard !isParsing else { return }
@@ -292,15 +306,14 @@ class ContentViewModel: ObservableObject {
             callbacks.nextSource = { remaining in ImportQueue.shared.preferredNext(among: remaining) }
             // (C1) Forensic email hashes over every COMMITTED batch, so hash
             // coverage matches the persisted corpus, not just the preview.
-            if forensicEnabled {
-                // §3-E7: collect-to-preserve — the matter holds and seals each
-                // committed batch as it lands (3.0 legal-data engine).
-                let preserve = CollectToPreserve.isOn
-                callbacks.onCommittedBatch = { batch in
-                    ForensicManager.shared.storeEmailHashes(batch)
-                    if preserve { CustodianManager.shared.placeLegalHoldBatched(batch) }
-                }
-            }
+            // §3-E7: collect-to-preserve — the matter holds and seals each
+            // committed batch as it lands (3.0 legal-data engine). It used to
+            // run only with forensic mode on, so the toggle (shown whenever
+            // the legal-data engine is on) silently did nothing without it.
+            callbacks.onCommittedBatch = Self.committedBatchWork(
+                forensic: forensicEnabled, preserve: CollectToPreserve.isOn,
+                hash: { ForensicManager.shared.storeEmailHashes($0) },
+                hold: { CustodianManager.shared.placeLegalHoldBatched($0) })
 
             // S4: the engine choice is the matrix switch, read here because
             // the coordinator is not main-actor (on by default in 3.0).
