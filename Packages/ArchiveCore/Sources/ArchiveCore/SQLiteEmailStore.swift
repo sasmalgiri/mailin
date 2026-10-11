@@ -5401,6 +5401,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     @discardableResult
     func deleteReportingHeld(ids requested: Set<UUID>) throws -> Set<UUID> {
         guard !requested.isEmpty else { return [] }
+        try StorePolicyGate.enforce(.deleteEmails)
         let db = try ensureDB()
         // 3.0 F4: defence in depth — an email under a legal hold recorded in
         // the database is never deleted, whichever caller asks.
@@ -5733,7 +5734,10 @@ extension SQLiteEmailStore {
 
     /// Places holds; returns how many were newly placed.
     @discardableResult
-    func legalHoldsAdd(_ ids: [UUID], matter: String = "") throws -> Int {
+    /// `sync`: mirroring holds already placed through the files (authorised
+    /// where they were placed), not a new decision — the role gate is skipped.
+    func legalHoldsAdd(_ ids: [UUID], matter: String = "", sync: Bool = false) throws -> Int {
+        if !sync { try StorePolicyGate.enforce(.placeHold) }
         let db = try ensureDB()
         let now = Int64(Date().timeIntervalSince1970)
         return try perID(db, "INSERT OR IGNORE INTO legal_holds(email_id, matter, placed_at) VALUES (?,?,?);", ids) { stmt, _ in
@@ -5746,6 +5750,7 @@ extension SQLiteEmailStore {
     /// (text scopes go through ScopeJob.runIDs + `legalHoldsAdd(_:)`).
     @discardableResult
     func legalHoldsAdd(query: EmailQuery, matter: String = "") throws -> Int {
+        try StorePolicyGate.enforce(.placeHold)
         precondition(query.text?.isEmpty ?? true, "text scopes must be resolved to ids first")
         let db = try ensureDB()
         let (clauses, binds) = Self.filterClauses(query)
@@ -5763,7 +5768,8 @@ extension SQLiteEmailStore {
     }
 
     @discardableResult
-    func legalHoldsRemove(_ ids: [UUID]) throws -> Int {
+    func legalHoldsRemove(_ ids: [UUID], sync: Bool = false) throws -> Int {
+        if !sync { try StorePolicyGate.enforce(.releaseHold) }
         let db = try ensureDB()
         return try perID(db, "DELETE FROM legal_holds WHERE email_id = ?;", ids)
     }

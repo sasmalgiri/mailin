@@ -259,6 +259,7 @@ struct CapabilityMatrixView: View {
                     Toggle("", isOn: Binding(
                         get: { modules.switchPosition(capability) },
                         set: { newValue in
+                            guard OrgPolicy.confirmAllowed(.manageModules) else { return }   // enterprise role
                             EngineGuard.noteUserChoice(capability)   // §3-M2: the user's choice wins over a trip
                             if newValue {
                                 modules.set(capability, enabled: true)

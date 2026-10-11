@@ -219,6 +219,12 @@ class ContentViewModel: ObservableObject {
     func parseSelectedFiles(_ urls: [URL], dedupPolicy: DedupPolicy, maxEmails: Int? = nil,
                             copiesOriginals: Bool = true, inputByteLimit: Int? = nil) {
         guard !isParsing else { return }
+        // Service boundary: no caller imports past the person's role.
+        if let why = OrgPolicy.denial(.importMail) {
+            statusMessage = why
+            statusColor = .orange
+            return
+        }
 
         statusMessage = "Parsing files..."
         statusColor = .blue

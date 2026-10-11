@@ -215,6 +215,8 @@ enum PlatformExport {
     /// as exported only if it is really there, byte for byte).
     /// iOS: write to a temporary file and present the Share sheet.
     static func save(data: Data, suggestedName: String) -> ExportOutcome {
+        // Enterprise: the organisation's export policy and the person's role.
+        if let why = OrgPolicy.denial(.export) { return .failed(why) }
         #if os(macOS)
         let panel = NSSavePanel()
         panel.nameFieldStringValue = suggestedName
@@ -269,6 +271,7 @@ enum PlatformExport {
     /// iOS: temporary file, then the Share sheet.
     static func saveStreamed(suggestedName: String,
                              write: (URL) async throws -> ArchiveExportResult) async -> (ExportOutcome, ArchiveExportResult?) {
+        if let why = OrgPolicy.denial(.export) { return (.failed(why), nil) }
         #if os(macOS)
         let panel = NSSavePanel()
         panel.nameFieldStringValue = suggestedName
@@ -328,6 +331,7 @@ enum PlatformPrinter {
     #if os(macOS)
     @MainActor
     static func printText(_ text: String) {
+        guard OrgPolicy.confirmAllowed(.print) else { return }
         let printView = NSTextView(frame: NSRect(x: 0, y: 0, width: 468, height: 648))
         printView.string = text
         printView.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
@@ -339,6 +343,7 @@ enum PlatformPrinter {
     #else
     @MainActor
     static func printText(_ text: String) {
+        guard OrgPolicy.confirmAllowed(.print) else { return }
         let formatter = UISimpleTextPrintFormatter(text: text)
         let controller = UIPrintInteractionController.shared
         controller.printFormatter = formatter

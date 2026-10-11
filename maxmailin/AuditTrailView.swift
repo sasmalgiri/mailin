@@ -69,6 +69,8 @@ struct AuditTrailView: View {
     @ObservedObject var forensicManager: ForensicManager
     @ObservedObject var storeManager: StoreManager
     var onExport: () -> Void
+    /// Enterprise B-3: machine-readable export for a SIEM / records system.
+    var onExportJSON: (() -> Void)? = nil
     var onClose: (() -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
@@ -157,8 +159,11 @@ struct AuditTrailView: View {
                 .disabled(isGeneratingDailyReport)
                 .help("End-of-day case log: verifies the chain, then copies today's activity report to the clipboard")
                 if storeManager.isProfessional {
-                    Button {
-                        onExport()
+                    Menu {
+                        Button(String(localized: "Readable report (.txt)")) { onExport() }
+                        if let onExportJSON {
+                            Button(String(localized: "For a SIEM or records system (.jsonl)")) { onExportJSON() }
+                        }
                     } label: {
                         Label("Export", systemImage: "square.and.arrow.up")
                     }

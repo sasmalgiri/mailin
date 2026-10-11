@@ -843,4 +843,88 @@ final class V3CompatibilityTests: XCTestCase {
         #endif
         XCTAssertEqual(SafeMode.unsettledLaunchCount, 0, "a normal quit is not a crash")
     }
+
+    // MARK: - Enterprise authorisation
+
+    /// The fixed matrix: each role does everything the one below it does,
+    /// and nothing above.
+    func testOrgPolicy_roleMatrix() {
+        for permission in OrgPermission.allCases {
+            for role in OrgRole.allCases {
+                let denied = OrgPolicy.denial(permission, role: role) != nil
+                XCTAssertEqual(denied, role < permission.minimumRole, "\(role) / \(permission)")
+            }
+        }
+        XCTAssertNil(OrgPolicy.denial(.review, role: .reviewer))
+        XCTAssertNotNil(OrgPolicy.denial(.deleteEmails, role: .examiner), "only Administrators delete permanently")
+        XCTAssertNotNil(OrgPolicy.denial(.releaseHold, role: .examiner), "only Administrators release holds")
+        XCTAssertNotNil(OrgPolicy.denial(.review, role: .viewer), "Viewers only read")
+    }
+
+    /// Data-loss rules apply to every role, Administrators included.
+    func testOrgPolicy_exportAndPrintPoliciesBindEveryRole() {
+        XCTAssertNotNil(OrgPolicy.denial(.export, role: .administrator, allowExport: false))
+        XCTAssertNil(OrgPolicy.denial(.print, role: .administrator, allowExport: false), "export policy does not touch printing")
+        XCTAssertNotNil(OrgPolicy.denial(.print, role: .administrator, allowPrint: false))
+        XCTAssertNil(OrgPolicy.denial(.export, role: .examiner))
+    }
+
+    /// Unmanaged → Administrator (unchanged behaviour); an unknown role value
+    /// fails closed to Viewer and is reported.
+    func testOrgPolicy_unmanagedIsAdministrator_typoFailsClosed() {
+        let key = ManagedConfig.managedDefaultsKey
+        let saved = UserDefaults.standard.dictionary(forKey: key)
+        defer { UserDefaults.standard.set(saved, forKey: key) }
+        UserDefaults.standard.removeObject(forKey: key)
+        XCTAssertEqual(OrgPolicy.role, .administrator)
+        UserDefaults.standard.set(["role": "examinr", "orgName": "Acme"], forKey: key)
+        XCTAssertEqual(OrgPolicy.role, .viewer, "a typo never grants more than meant")
+        XCTAssertTrue(ManagedConfig.validationIssues.contains { $0.contains("examinr") })
+        UserDefaults.standard.set(["role": "Examiner"], forKey: key)
+        XCTAssertEqual(OrgPolicy.role, .examiner, "case does not matter")
+    }
+
+    /// Wrong types, unknown keys and unknown modules are all reported.
+    func testManagedConfig_validationReportsEveryProblem() {
+        let issues = ManagedConfig.validationIssues(of: [
+            "orgName": "Acme", "allowExport": "no", "colour": "blue", "disabledModules": ["aiInsights", "games"],
+        ])
+        XCTAssertEqual(issues.count, 3, "\(issues)")
+        XCTAssertTrue(issues.contains { $0.contains("allowExport") })
+        XCTAssertTrue(issues.contains { $0.contains("colour") })
+        XCTAssertTrue(issues.contains { $0.contains("games") })
+        XCTAssertTrue(ManagedConfig.validationIssues(of: ["orgName": "Acme", "role": "reviewer", "allowPrint": false]).isEmpty)
+    }
+
+    /// The MDM can read the licence id (seat accounting), role and problems.
+    func testManagedConfig_feedbackCarriesLicenceAndRole() throws {
+        let payload = EnterpriseLicense.Payload(v: 1, org: "Acme", seats: 5, issued: "2026-01-01", expires: nil, id: "ACME-1")
+        let feedback = ManagedConfig.feedback(license: EnterpriseLicense(status: .valid(payload)))
+        XCTAssertEqual(feedback["licenseID"] as? String, "ACME-1")
+        XCTAssertEqual(feedback["licenseState"] as? String, "valid")
+        XCTAssertNotNil(feedback["role"] as? String)
+        XCTAssertNotNil(feedback["configIssues"] as? [String])
+        XCTAssertTrue(JSONSerialization.isValidJSONObject(feedback), "MDMs read it as a plist / JSON")
+    }
+
+    /// The archive itself refuses permanent deletion and hold changes when the
+    /// role does not allow them — whichever screen or engine asks; mirroring
+    /// holds already placed is not a new decision and still runs.
+    func testStoreGate_refusesDeleteAndHoldChanges_mirrorStillSyncs() async throws {
+        let env = makeEnv(engineOn: false)
+        try await env.store.insertBatch((0..<3).map { makeEmail($0, from: "a@a.com", tag: "gate") }, batchSize: 10)
+        let all = try await ids(env)
+        let saved = StorePolicyGate.check
+        defer { StorePolicyGate.check = saved }
+        StorePolicyGate.check = { action in
+            OrgPolicy.denial(action == .placeHold ? .placeHold : (action == .releaseHold ? .releaseHold : .deleteEmails), role: .reviewer)
+        }
+        do { try await env.store.delete(ids: [all[0]]); XCTFail("a Reviewer cannot delete") } catch is StorePolicyError {}
+        do { _ = try await env.store.legalHoldsAdd([all[0]]); XCTFail("a Reviewer cannot place a hold") } catch is StorePolicyError {}
+        let mirrored = try await env.store.legalHoldsAdd([all[1]], sync: true)
+        XCTAssertEqual(mirrored, 1, "mirroring an existing hold is not a new decision")
+        do { _ = try await env.store.legalHoldsRemove([all[1]]); XCTFail("a Reviewer cannot release") } catch is StorePolicyError {}
+        let remaining = try await ids(env)
+        XCTAssertEqual(remaining.count, 3, "nothing was deleted")
+    }
 }

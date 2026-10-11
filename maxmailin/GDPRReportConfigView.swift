@@ -93,7 +93,7 @@ struct GDPRReportConfigView: View {
 
                         if generatedPDFData != nil {
                             Button {
-                                showFileExporter = true
+                                if OrgPolicy.confirmAllowed(.export) { showFileExporter = true }
                             } label: {
                                 HStack(spacing: Spacing.xSmall) {
                                     Image(systemName: "square.and.arrow.down")

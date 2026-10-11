@@ -771,7 +771,7 @@ struct WorkCenterView: View {
     #if os(macOS)
     @MainActor
     private func exportCSV(_ table: DocumentTable, number: String) {
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "\(number).csv"
         panel.allowedContentTypes = [.commaSeparatedText]
         panel.canCreateDirectories = true
@@ -1052,7 +1052,7 @@ struct WorkCenterView: View {
     #if os(macOS)
     @MainActor
     private func exportReportCSV(_ r: CrossDocumentReport.Result) {
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "\(postedReport ?? "\(reportType)_report").csv"
         panel.allowedContentTypes = [.commaSeparatedText]
         panel.canCreateDirectories = true
@@ -1073,7 +1073,7 @@ struct WorkCenterView: View {
 
     @MainActor
     private func exportReportPDF(_ r: CrossDocumentReport.Result, number: String) {
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "\(number).pdf"
         panel.allowedContentTypes = [.pdf]
         panel.canCreateDirectories = true

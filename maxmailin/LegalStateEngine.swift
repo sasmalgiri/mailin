@@ -192,8 +192,8 @@ final class LegalStateMirror {
             let holds = manager.legalHolds
             let addHolds = holds.subtracting(syncedHolds)
             let removeHolds = syncedHolds.subtracting(holds)
-            if !addHolds.isEmpty { try await store.legalHoldsAdd(Array(addHolds)) }
-            if !removeHolds.isEmpty { try await store.legalHoldsRemove(Array(removeHolds)) }
+            if !addHolds.isEmpty { try await store.legalHoldsAdd(Array(addHolds), sync: true) }
+            if !removeHolds.isEmpty { try await store.legalHoldsRemove(Array(removeHolds), sync: true) }
             syncedHolds = holds
 
             let seals = manager.evidenceSeals

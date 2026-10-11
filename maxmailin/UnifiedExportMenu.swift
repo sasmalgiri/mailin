@@ -149,7 +149,7 @@ struct UnifiedExportSections: View {
     /// Save-panel destination for single-document formats.
     private func documentDestination(_ name: String, type: UTType?) -> URL? {
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = name
         panel.canCreateDirectories = true
         if let type { panel.allowedContentTypes = [type] }

@@ -75,6 +75,7 @@ class BatesNumberingManager: ObservableObject {
     /// Returns the numbers assigned by this call.
     @discardableResult
     func assignNumbers(to emails: [MBOXParser.RawEmail]) -> [UUID: String] {
+        guard OrgPolicy.allows(.produce) else { return [:] }   // enterprise role (OrgPolicy)
         let sorted = emails.filter { assignments[$0.id] == nil }.sorted { email1, email2 in
             let date1 = MBOXParser.parseDate(email1.headers["Date"])
             let date2 = MBOXParser.parseDate(email2.headers["Date"])

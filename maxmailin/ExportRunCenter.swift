@@ -339,7 +339,7 @@ struct ExportProgressOverlayView: View {
 
     #if os(macOS)
     private func saveReceipt(_ receipt: ExportReceipt) {
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "mailin-export-receipt.txt"
         panel.allowedContentTypes = [.plainText]
         guard panel.runModal() == .OK, let url = panel.url else { return }

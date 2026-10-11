@@ -821,7 +821,7 @@ struct ReportBuilderView: View {
     private func saveReport() {
         #if os(macOS)
         guard let pdf = generatedPDF else { return }
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.allowedContentTypes = [.pdf]
         panel.nameFieldStringValue = "\(reportTitle).pdf"
         let response = panel.runModal()

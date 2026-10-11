@@ -3790,7 +3790,7 @@ struct AttachmentsPopoverButton: View {
             return
         }
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = att.filename
         panel.canCreateDirectories = true
         if panel.runModal() == .OK, let dest = panel.url {

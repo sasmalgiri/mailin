@@ -41,6 +41,7 @@ enum BatesEngine {
 
     static func assign(scope: ArchiveScope, manager: BatesNumberingManager)
         async throws -> (state: AssignState, receipt: ScopeJobReceipt) {
+        if let why = OrgPolicy.denial(.produce) { throw StorePolicyError.denied(why) }   // enterprise role
         let store = ScopeJobEnvironment.store
         let stored = try await store.reviewCoding(workspace: workspace, field: field)
         // Numbers from the previous engine (kept in the manager) are part of
@@ -68,6 +69,7 @@ enum BatesEngine {
     /// `start`.
     static func number(query scopeQuery: EmailQuery, prefix: String, start: Int,
                        format: (Int) -> String) async throws -> (state: AssignState, receipt: ScopeJobReceipt) {
+        if let why = OrgPolicy.denial(.produce) { throw StorePolicyError.denied(why) }   // enterprise role
         let store = ScopeJobEnvironment.store
         let alreadyNumbered = try await store.reviewCoding(workspace: workspace, field: field)
         let used = alreadyNumbered.values.compactMap { numericPart($0, prefix: prefix) }.max() ?? 0

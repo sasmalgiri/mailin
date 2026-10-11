@@ -60,6 +60,10 @@ struct AboutView: View {
                 }
                 #endif
 
+                if ManagedConfig.isManaged {
+                    ManagedPolicySection()
+                }
+
                 // maxmailin SwiftData status — confirms the v2 storage layer
                 // is wired and reachable from the UI.
                 swiftDataStatusBadge
@@ -368,6 +372,37 @@ struct AboutView: View {
     }
 }
 
+/// Enterprise (ENTERPRISE_TODO.md A-2, V-1): the role this device runs with,
+/// what it allows, the organisation's data-loss rules, and any problem in the
+/// configuration the MDM pushed.
+private struct ManagedPolicySection: View {
+    var body: some View {
+        let role = OrgPolicy.role
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Managed by \(ManagedConfig.orgName ?? String(localized: "your organization"))")
+                .font(Typography.caption1.weight(.semibold))
+            Text("Your role: \(role.displayName) — \(role.summary)")
+                .font(Typography.caption2)
+                .foregroundColor(AppColors.secondary)
+            if !ManagedConfig.allowExport {
+                Text("Exporting and sharing are turned off by your organization.")
+                    .font(Typography.caption2).foregroundColor(.orange)
+            }
+            if !ManagedConfig.allowPrint {
+                Text("Printing is turned off by your organization.")
+                    .font(Typography.caption2).foregroundColor(.orange)
+            }
+            ForEach(ManagedConfig.validationIssues, id: \.self) { issue in
+                Label(issue, systemImage: "exclamationmark.triangle")
+                    .font(Typography.caption2).foregroundColor(.orange)
+            }
+        }
+        .frame(maxWidth: 360, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("about.managedPolicy")
+    }
+}
+
 #if ENTERPRISE_EDITION
 /// The organization's license: what is in force, and a place to paste a key
 /// when the organization does not push one through MDM.
@@ -409,6 +444,7 @@ private struct EnterpriseLicenseSection: View {
     }
 
     private func apply() {
+        if let why = OrgPolicy.denial(.manageLicense) { note = why; return }   // enterprise role
         let result = store.enterLicenseKey(key)
         if case .invalid(let why) = result.status {
             note = why

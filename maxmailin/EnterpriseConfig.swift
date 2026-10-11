@@ -3,6 +3,8 @@ import Foundation
 import CryptoKit
 import os.log
 
+private let enterpriseLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "mailin", category: "ManagedConfig")
+
 // MARK: - Managed App Configuration (V3-E1)
 //
 // Reads the MDM-pushed dictionary Apple defines for managed apps
@@ -62,6 +64,101 @@ enum ManagedConfig {
     /// locked by the organization, not merely defaulted off.
     static var disabledModules: [String] {
         dict["disabledModules"] as? [String] ?? []
+    }
+
+    // MARK: Enterprise authorisation and data-loss keys (ENTERPRISE_TODO.md)
+
+    /// `role`: viewer | reviewer | examiner | administrator (OrgPolicy).
+    static var roleValue: String? { dict["role"] as? String }
+
+    /// `allowExport` (default true): saving, exporting and sharing out of mailin.
+    static var allowExport: Bool { dict["allowExport"] as? Bool ?? true }
+
+    /// `allowPrint` (default true).
+    static var allowPrint: Bool { dict["allowPrint"] as? Bool ?? true }
+
+    // MARK: Validation (V-1)
+
+    /// Every key this app understands, with its expected type.
+    enum KeyType: String { case string, bool, stringArray = "array of strings" }
+    static let schema: [String: KeyType] = [
+        "orgName": .string, "examinerName": .string, "disableCloudAI": .bool,
+        "requireBiometricLock": .bool, "caseNumberPrefix": .string, "licenseKey": .string,
+        "disabledModules": .stringArray, "role": .string, "allowExport": .bool, "allowPrint": .bool,
+    ]
+
+    /// Problems in the pushed configuration — wrong types, unknown keys,
+    /// unrecognised values — so an admin's typo is visible on the device and
+    /// in the MDM console instead of being silently ignored.
+    static func validationIssues(of config: [String: Any]) -> [String] {
+        var issues: [String] = []
+        for key in config.keys.sorted() {
+            guard let expected = schema[key] else {
+                issues.append(String(localized: "Unknown key “\(key)” — ignored."))
+                continue
+            }
+            let value = config[key]
+            let ok: Bool
+            switch expected {
+            case .string: ok = value is String
+            case .bool: ok = value is Bool
+            case .stringArray: ok = value is [String]
+            }
+            if !ok { issues.append(String(localized: "“\(key)” should be a \(expected.rawValue) — ignored.")) }
+        }
+        if let role = config["role"] as? String, OrgRole(rawValue: role.lowercased()) == nil {
+            issues.append(String(localized: "“role” is “\(role)”, which is not viewer, reviewer, examiner or administrator — Viewer is used until it is corrected."))
+        }
+        if let modules = config["disabledModules"] as? [String] {
+            for m in modules where AppModule(rawValue: m) == nil {
+                issues.append(String(localized: "“disabledModules” lists “\(m)”, which is not a module — ignored."))
+            }
+        }
+        return issues
+    }
+
+    static var validationIssues: [String] { validationIssues(of: dict) }
+
+    // MARK: Feedback to the MDM (V-2, C-1)
+
+    static let feedbackKey = "com.apple.feedback.managed"
+
+    /// What the organisation's MDM can read back (Managed Application
+    /// Feedback): version, edition, licence id for seat accounting, the role
+    /// in force and any configuration problems. Nothing from the archive.
+    static func feedback(license: EnterpriseLicense?, now: Date = Date()) -> [String: Any] {
+        let info = Bundle.main.infoDictionary ?? [:]
+        var out: [String: Any] = [
+            "appVersion": info["CFBundleShortVersionString"] as? String ?? "",
+            "appBuild": info["CFBundleVersion"] as? String ?? "",
+            "role": OrgPolicy.role.rawValue,
+            "allowExport": allowExport,
+            "allowPrint": allowPrint,
+            "configIssues": validationIssues,
+            "reportedAt": ISO8601DateFormatter().string(from: now),
+        ]
+        #if ENTERPRISE_EDITION
+        out["edition"] = "enterprise"
+        #else
+        out["edition"] = "public"
+        #endif
+        if let license {
+            switch license.status {
+            case .missing: out["licenseState"] = "missing"
+            case .invalid: out["licenseState"] = "invalid"
+            case .valid(let p): out["licenseState"] = "valid"; out["licenseID"] = p.id; out["licenseOrg"] = p.org; out["licenseExpires"] = p.expires ?? "never"
+            case .grace(let p, _): out["licenseState"] = "grace"; out["licenseID"] = p.id; out["licenseOrg"] = p.org; out["licenseExpires"] = p.expires ?? ""
+            case .expired(let p): out["licenseState"] = "expired"; out["licenseID"] = p.id; out["licenseOrg"] = p.org; out["licenseExpires"] = p.expires ?? ""
+            }
+        }
+        return out
+    }
+
+    /// Writes the feedback dictionary (managed installs only).
+    static func publishFeedback(license: EnterpriseLicense?) {
+        guard isManaged else { return }
+        UserDefaults.standard.set(feedback(license: license), forKey: feedbackKey)
+        for issue in validationIssues { enterpriseLog.error("managed configuration: \(issue, privacy: .public)") }
     }
 
     /// One-line provenance string for reports and About.

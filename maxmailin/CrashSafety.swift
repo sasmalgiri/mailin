@@ -119,10 +119,10 @@ final class SafeMode {
 
     /// Resets the counter when the launch ends normally. Separate so a test
     /// can post the notification and see the counter cleared.
-    nonisolated static func installSettleObservers(defaults: UserDefaults = .standard) {
+    nonisolated static func installSettleObservers() {
         settledObservers = settleNotifications.map { name in
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil) { _ in
-                defaults.set(0, forKey: unsettledLaunchesKey)
+                UserDefaults.standard.set(0, forKey: unsettledLaunchesKey)
             }
         }
     }

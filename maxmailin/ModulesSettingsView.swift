@@ -130,7 +130,7 @@ struct ModulesSettingsView: View {
         ) {
             if let module = pendingDisable {
                 Button("Turn off and keep my work") {
-                    modules.disable(module, retention: .keepArtifacts)
+                    if OrgPolicy.confirmAllowed(.manageModules) { modules.disable(module, retention: .keepArtifacts) }
                     pendingDisable = nil
                 }
                 Button("Cancel", role: .cancel) { pendingDisable = nil }

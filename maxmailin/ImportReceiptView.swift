@@ -349,7 +349,7 @@ struct ImportReceiptView: View {
 
     private func save() {
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "mailin-import-receipt.txt"
         panel.allowedContentTypes = [.plainText]
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -363,6 +363,7 @@ struct ImportReceiptView: View {
 
     #if os(macOS)
     private func printReceipt() {
+        guard OrgPolicy.confirmAllowed(.print) else { return }   // enterprise policy (OrgPolicy)
         let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 468, height: 648))
         textView.string = plainText()
         textView.font = .monospacedSystemFont(ofSize: 10, weight: .regular)

@@ -464,7 +464,9 @@ class ForensicManager: ObservableObject {
         }
         let sequence = auditSequence
         let previousHash = lastAuditHash
-        let examiner = examinerName.isEmpty ? "Unknown" : examinerName
+        let examinerOnly = examinerName.isEmpty ? "Unknown" : examinerName
+        // Enterprise: the authority the action was taken with (OrgPolicy).
+        let examiner = ManagedConfig.isManaged ? "\(examinerOnly) (\(OrgPolicy.role.rawValue))" : examinerOnly
         let timestamp = Date()
 
         let entryHash = computeEntryHash(
@@ -1216,6 +1218,62 @@ class ForensicManager: ObservableObject {
         footer += String(repeating: "-", count: 76) + "\n"
         footer += "DISCLAIMER: " + LegalComplianceManager.forensicDisclaimer + "\n"
         try handle.write(contentsOf: Data(footer.utf8))
+        return total
+    }
+
+    /// Enterprise B-3: the full audit log as JSON Lines for a SIEM or records
+    /// system. Line 1 is a header (format, organisation, case, entry count,
+    /// chain status and the chain head); every further line is one entry with
+    /// its HMAC and the previous hash, so a gap or edit shows after ingestion.
+    /// Streamed in pages, like the text export.
+    func exportAuditLogJSONLines(to url: URL) async throws -> Int {
+        let iso = ISO8601DateFormatter()
+        let total = try await store.forensicAuditCount()
+        let integrity = await verifyAuditLogIntegrityStreamed()
+        let chain: String
+        switch integrity {
+        case .verified: chain = "verified"
+        case .tampered(let details): chain = "failed: \(details)"
+        case .noData: chain = "empty"
+        case .unknown: chain = "not checked"
+        }
+        func line(_ object: [String: Any]) throws -> Data {
+            var d = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+            d.append(0x0A)
+            return d
+        }
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        var head = ""
+        var seq = 0
+        var body = Data()
+        // Entries first into the file after a placeholder-free header: the
+        // chain head is known only at the end, so the header carries the
+        // verification result and the trailer line carries the head.
+        try handle.write(contentsOf: try line([
+            "type": "header", "format": "mailin-audit/1",
+            "organization": ManagedConfig.orgName ?? organization,
+            "case": caseNumber, "examiner": examinerName,
+            "exportedAt": iso.string(from: Date()), "entries": total, "chain": chain,
+        ]))
+        while true {
+            let page = try await store.forensicAuditPage(fromSeq: seq, limit: 1_000)
+            if page.isEmpty { break }
+            body.removeAll(keepingCapacity: true)
+            for entry in page {
+                body.append(try line([
+                    "type": "entry", "seq": entry.seq, "timestamp": iso.string(from: entry.timestamp),
+                    "action": entry.action, "detail": entry.detail, "examiner": entry.examiner,
+                    "hmac": entry.entryHash, "previous": entry.previousHash,
+                ]))
+                head = entry.entryHash
+                seq = entry.seq + 1
+            }
+            try handle.write(contentsOf: body)
+            if page.count < 1_000 { break }
+        }
+        try handle.write(contentsOf: try line(["type": "trailer", "chainHead": head, "entries": total]))
         return total
     }
 

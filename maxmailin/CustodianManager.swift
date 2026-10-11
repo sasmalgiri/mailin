@@ -177,17 +177,20 @@ class CustodianManager: ObservableObject {
     // MARK: - Legal Hold
 
     func placeLegalHold(_ emailID: UUID) {
+        guard OrgPolicy.confirmAllowed(.placeHold) else { return }   // enterprise role (OrgPolicy)
         legalHolds.insert(emailID)
         ForensicManager.shared.logAction("Legal Hold Placed", detail: "Email \(emailID) placed under legal hold")
     }
 
     func placeLegalHold(_ emailID: UUID, email: MBOXParser.RawEmail) {
+        guard OrgPolicy.confirmAllowed(.placeHold) else { return }   // enterprise role (OrgPolicy)
         legalHolds.insert(emailID)
         sealEvidence(email)
         ForensicManager.shared.logAction("Legal Hold Placed", detail: "Email \(emailID) placed under legal hold with evidence seal")
     }
 
     func removeLegalHold(_ emailID: UUID) {
+        guard OrgPolicy.confirmAllowed(.releaseHold) else { return }   // enterprise role (OrgPolicy)
         legalHolds.remove(emailID)
         evidenceSeals.removeValue(forKey: emailID)
         ForensicManager.shared.logAction("Legal Hold Removed", detail: "Legal hold removed from email \(emailID)")
@@ -198,6 +201,7 @@ class CustodianManager: ObservableObject {
     }
 
     func placeLegalHold(on emailIDs: [UUID]) {
+        guard OrgPolicy.confirmAllowed(.placeHold) else { return }   // enterprise role (OrgPolicy)
         if batching {
             legalHolds = legalHolds.union(emailIDs)
         } else {
@@ -209,6 +213,7 @@ class CustodianManager: ObservableObject {
     }
 
     func placeLegalHold(on emails: [MBOXParser.RawEmail]) {
+        guard OrgPolicy.confirmAllowed(.placeHold) else { return }   // enterprise role (OrgPolicy)
         if batching {
             holdAndSealBatched(emails)
         } else {
@@ -223,6 +228,7 @@ class CustodianManager: ObservableObject {
     // MARK: - Bulk Legal Hold by Source
 
     func placeLegalHoldBySource(_ sourceFormat: String, emails: [MBOXParser.RawEmail]) {
+        guard OrgPolicy.confirmAllowed(.placeHold) else { return }   // enterprise role (OrgPolicy)
         let matching = emails.filter { ($0.headers["X-Source-Format"] ?? "").lowercased() == sourceFormat.lowercased() ||
             $0.rawSource.lowercased().contains(sourceFormat.lowercased()) }
         if batching {
@@ -237,6 +243,7 @@ class CustodianManager: ObservableObject {
     }
 
     func placeLegalHoldOnAll(_ emails: [MBOXParser.RawEmail]) {
+        guard OrgPolicy.confirmAllowed(.placeHold) else { return }   // enterprise role (OrgPolicy)
         if batching {
             holdAndSealBatched(emails)
         } else {
@@ -269,6 +276,7 @@ class CustodianManager: ObservableObject {
 
     /// 3.0 whole-scope path: one batch of holds + seals in one assignment.
     func placeLegalHoldBatched(_ emails: [MBOXParser.RawEmail]) {
+        guard OrgPolicy.allows(.placeHold) else { return }   // enterprise role (OrgPolicy)
         holdAndSealBatched(emails)
     }
 
@@ -276,6 +284,7 @@ class CustodianManager: ObservableObject {
     /// as `removeLegalHold`) in one assignment each. Returns how many were held.
     @discardableResult
     func releaseLegalHoldBatched(_ ids: [UUID]) -> Int {
+        guard OrgPolicy.allows(.releaseHold) else { return 0 }   // enterprise role (OrgPolicy)
         let held = ids.filter { legalHolds.contains($0) }
         guard !held.isEmpty else { return 0 }
         legalHolds = legalHolds.subtracting(held)

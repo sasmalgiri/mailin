@@ -1723,7 +1723,8 @@ struct ContentView: View {
         .sheet(isPresented: $appState.showAuditTrail) {
             AuditTrailView(forensicManager: forensicManager,
                            storeManager: storeManager,
-                           onExport: { exportAuditLog() })
+                           onExport: { exportAuditLog() },
+                           onExportJSON: { exportAuditLog(jsonLines: true) })
         }
         .sheet(isPresented: $showFiltersSheet) {
             NavigationStack {
@@ -3723,6 +3724,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
 
     /// A3: the sheet's choices drive the run.
     private func startImport(_ choices: ImportChoices) {
+        guard OrgPolicy.confirmAllowed(.importMail) else { return }   // enterprise role (OrgPolicy)
         // Free input allowance (owner, 2026-10-01): decided BEFORE anything is
         // queued or spun up, with the cumulative figure from the store. A
         // denied import does nothing and says why; the paywall opens on
@@ -3948,7 +3950,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
 
     private func exportFilteredEmailsAsCSV() {
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "mailin_export_emails.csv"
         panel.canCreateDirectories = true
         panel.allowedContentTypes = [.commaSeparatedText]
@@ -3974,7 +3976,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
     // MARK: - Forensic Exports
     private func exportBulkForensicCSV() {
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "forensic_export_\(forensicManager.caseNumber.isEmpty ? "emails" : forensicManager.caseNumber).csv"
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -3999,7 +4001,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
 
     private func exportConcordanceDAT() {
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "forensic_\(forensicManager.caseNumber.isEmpty ? "emails" : forensicManager.caseNumber).dat"
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -4045,7 +4047,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             return
         }
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         let caseName = forensicManager.caseNumber.isEmpty ? "case" : forensicManager.caseNumber
         panel.nameFieldStringValue = "\(caseName).\(CaseBundleService.fileExtension)"
         panel.canCreateDirectories = true
@@ -4122,7 +4124,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             return
         }
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "tagged_\(forensicManager.caseNumber.isEmpty ? "emails" : forensicManager.caseNumber).csv"
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -4147,7 +4149,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
 
     private func exportVCard() {
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "contacts.vcf"
         panel.allowedContentTypes = [.vCard]
         panel.canCreateDirectories = true
@@ -4171,7 +4173,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
 
     private func exportICS() {
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "events.ics"
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -4194,7 +4196,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
 
     private func exportHashManifest() {
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "hash_manifest_\(forensicManager.caseNumber.isEmpty ? "emails" : forensicManager.caseNumber).csv"
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -4218,7 +4220,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
 
     private func batchPrintFiltered() {
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "batch_print_emails.txt"
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -4315,7 +4317,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             return
         }
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         let casePart = forensicManager.caseNumber.isEmpty ? "mailin" : forensicManager.caseNumber
         panel.nameFieldStringValue = "review_state_\(casePart).mailinreview"
         panel.canCreateDirectories = true
@@ -4389,7 +4391,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
     private func exportMSG() {
         let scope = filteredScope
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.title = "Export as MSG"
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = "msg_export"
@@ -4428,7 +4430,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
     private func exportPST() {
         let scope = filteredScope
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.title = "Export as PST"
         panel.allowedContentTypes = [.data]
         panel.nameFieldStringValue = "export.pst"
@@ -4485,7 +4487,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
         let custodian = CustodianManager.shared.defaultCustodian
         let caseNumber = forensicManager.caseNumber
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.title = "Export Relativity Load File"
         panel.allowedContentTypes = [.commaSeparatedText]
         panel.nameFieldStringValue = "relativity_loadfile.csv"
@@ -4734,22 +4736,24 @@ private func handleMultipleFiles(_ urls: [URL]) {
     }
     #endif
 
-    private func exportAuditLog() {
-        Task { @MainActor in
-            _ = await DocumentRegistry.post(
-                .export, summary: "Audit trail exported — \(forensicManager.auditLog.count) entries")
-        }
+    private func exportAuditLog(jsonLines: Bool = false) {
+        let ext = jsonLines ? "jsonl" : "txt"
         #if os(macOS)
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = "audit_log_\(forensicManager.caseNumber.isEmpty ? "mailin" : forensicManager.caseNumber).txt"
+        let panel = ManagedSavePanel()
+        panel.nameFieldStringValue = "audit_log_\(forensicManager.caseNumber.isEmpty ? "mailin" : forensicManager.caseNumber).\(ext)"
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
         #else
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("audit_log.txt")
+        guard OrgPolicy.confirmAllowed(.export) else { return }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("audit_log.\(ext)")
         #endif
         Task { @MainActor in
             do {
-                let total = try await forensicManager.exportAuditLogStreamed(to: url)
+                let total = jsonLines
+                    ? try await forensicManager.exportAuditLogJSONLines(to: url)
+                    : try await forensicManager.exportAuditLogStreamed(to: url)
+                // Rule 5: posted only after the file was written.
+                _ = await DocumentRegistry.post(.export, summary: "Audit trail exported — \(total) entries (\(ext))")
                 viewModel.statusMessage = "Exported audit log with \(total) entries."
                 viewModel.statusColor = .green
                 #if os(iOS)
@@ -4773,7 +4777,7 @@ private func handleMultipleFiles(_ urls: [URL]) {
             return
         }
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "privilege_log_\(forensicManager.caseNumber.isEmpty ? "mailin" : forensicManager.caseNumber).txt"
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }

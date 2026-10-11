@@ -373,7 +373,7 @@ struct PIIReportView: View {
         Task { await DocumentRegistry.capture(.report,
             summary: "PII report — \(piiCount) finding\(piiCount == 1 ? "" : "s")", body: csv) }
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "mailin_pii_report.csv"
         panel.allowedContentTypes = [.commaSeparatedText]
         panel.canCreateDirectories = true

@@ -117,3 +117,24 @@ public enum ArchiveSnapshotError: LocalizedError, Equatable {
         }
     }
 }
+
+/// Enterprise authorisation at the archive itself (ENTERPRISE_TODO.md A-2):
+/// permanent deletion and legal-hold changes are refused here, whichever
+/// screen, engine or rule asks. The app installs `check` from the person's
+/// managed role; nil (unmanaged, or no app) allows everything, as before.
+public enum StorePolicyAction: Sendable { case deleteEmails, placeHold, releaseHold }
+
+public enum StorePolicyGate {
+    nonisolated(unsafe) public static var check: (@Sendable (StorePolicyAction) -> String?)?
+
+    static func enforce(_ action: StorePolicyAction) throws {
+        if let why = check?(action) { throw StorePolicyError.denied(why) }
+    }
+}
+
+public enum StorePolicyError: LocalizedError, Equatable {
+    case denied(String)
+    public var errorDescription: String? {
+        switch self { case .denied(let why): return why }
+    }
+}

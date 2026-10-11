@@ -1263,7 +1263,7 @@ struct InvestigationReportConfigSheet: View {
                             Button("Generate Another") { resetForNewReport() }
                                 .buttonStyle(SecondaryButtonStyle())
                             Button {
-                                showFileExporter = true
+                                if OrgPolicy.confirmAllowed(.export) { showFileExporter = true }
                             } label: {
                                 HStack(spacing: Spacing.xSmall) {
                                     Image(systemName: "square.and.arrow.down")
@@ -1279,7 +1279,7 @@ struct InvestigationReportConfigSheet: View {
                             Button("Generate Another") { resetForNewReport() }
                                 .buttonStyle(SecondaryButtonStyle())
                             Button {
-                                showFileExporter = true
+                                if OrgPolicy.confirmAllowed(.export) { showFileExporter = true }
                             } label: {
                                 HStack(spacing: Spacing.xSmall) {
                                     Image(systemName: "square.and.arrow.down")

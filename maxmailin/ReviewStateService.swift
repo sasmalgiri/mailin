@@ -84,7 +84,15 @@ final class ReviewStateService: ObservableObject {
 
     // MARK: - Flag mutations (optimistic window + durable write-through)
 
+    /// Enterprise: Viewers read only. Refused writes say why on the status line.
+    private func reviewAllowed() -> Bool {
+        guard let why = OrgPolicy.denial(.review) else { return true }
+        lastError = why
+        return false
+    }
+
     func setFlag(_ flag: SQLiteEmailStore.ReviewFlag, ids: [UUID], value: Bool) {
+        guard reviewAllowed() else { return }
         hydrationToken += 1   // M4a: invalidate any pre-mutation snapshot
         for id in ids {
             var row = windowStates[id] ?? .init()
@@ -137,6 +145,7 @@ final class ReviewStateService: ObservableObject {
     // MARK: - Tags / annotations
 
     func addTag(_ tag: String, to ids: [UUID]) {
+        guard reviewAllowed() else { return }
         let cleaned = tag.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { return }
         hydrationToken += 1
@@ -146,18 +155,21 @@ final class ReviewStateService: ObservableObject {
     }
 
     func removeTag(_ tag: String, from ids: [UUID]) {
+        guard reviewAllowed() else { return }
         hydrationToken += 1
         for id in ids { windowTags[id]?.remove(tag) }
         persist("tag remove") { [store] in try await store.userTagRemove(tag, ids: ids) }
     }
 
     func clearAllTags(for ids: [UUID]) {
+        guard reviewAllowed() else { return }
         hydrationToken += 1
         for id in ids { windowTags[id] = nil }
         persist("tag clear") { [store] in try await store.userTagsClear(ids: ids) }
     }
 
     func setAnnotation(_ text: String, for id: UUID) {
+        guard reviewAllowed() else { return }
         hydrationToken += 1
         if text.isEmpty { windowAnnotations[id] = nil } else { windowAnnotations[id] = text }
         persist("annotation") { [store] in try await store.annotationSet(text.isEmpty ? nil : text, id: id) }

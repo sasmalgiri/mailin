@@ -299,6 +299,7 @@ struct ArchiveLocationView: View {
     }
 
     private func relocate(_ plan: RelocationPlan) async {
+        guard OrgPolicy.confirmAllowed(.relocateArchive) else { return }   // enterprise role (OrgPolicy)
         isRelocating = true
         relocationError = nil
         relocationProgress = (0, plan.archiveBytes)

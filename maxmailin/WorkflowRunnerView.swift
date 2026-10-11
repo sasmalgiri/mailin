@@ -1268,6 +1268,7 @@ struct WorkflowRunnerView: View {
     private func printSummary() { printText(renderSummary(), monospace: false) }
 
     private func printText(_ text: String, monospace: Bool) {
+        guard OrgPolicy.confirmAllowed(.print) else { return }   // enterprise policy (OrgPolicy)
         let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 468, height: 648))
         textView.string = text
         textView.font = monospace

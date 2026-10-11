@@ -570,6 +570,10 @@ final class ModuleRegistry {
         if case .unavailable(let reason) = activation(module) {
             throw Failure.unavailable(module, reason: reason)
         }
+        // Enterprise: only Administrators change modules (OrgPolicy).
+        if let why = OrgPolicy.denial(.manageModules) {
+            throw Failure.unavailable(module, reason: why)
+        }
         guard !state.isEnabled(module) else { syncLegacyAIFlag(); return }
         state.set(module, enabled: true)
         store.save(state)

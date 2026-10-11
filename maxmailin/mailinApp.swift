@@ -74,6 +74,9 @@ struct mailinApp: App {
         _ = EngineGuard.launchDate
         SafeMode.recordLaunchStart()
         CapabilityWiring.applyStoreLevelEarly()
+        // Enterprise: the person's role guards permanent deletion and legal
+        // holds in the archive itself (OrgPolicy).
+        OrgPolicy.installStoreGate()
         DiagnosticsCenter.start()
         // §3-S4: the continued-processing handler must be registered exactly
         // once, before launch finishes (a second registration terminates).

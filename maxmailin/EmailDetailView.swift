@@ -1537,7 +1537,7 @@ struct EmailDetailView: View {
     // Save one file
     private func saveAttachmentToUserFolder(fileURL: URL, suggestedName: String) {
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = suggestedName
         panel.canCreateDirectories = true
         let result = panel.runModal()
@@ -1642,7 +1642,7 @@ struct EmailDetailView: View {
         """
 
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = fileName
         panel.canCreateDirectories = true
         if panel.runModal() == .OK, let url = panel.url {
@@ -1682,7 +1682,7 @@ struct EmailDetailView: View {
         exportText += emailBody
 
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = fileName
         panel.canCreateDirectories = true
 
@@ -1725,7 +1725,7 @@ struct EmailDetailView: View {
         let csvContent = csvHeaders + csvRow
 
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = fileName
         panel.canCreateDirectories = true
 
@@ -1749,6 +1749,7 @@ struct EmailDetailView: View {
     }
 
     private func exportAsPDF() {
+        guard OrgPolicy.confirmAllowed(.export) else { return }   // enterprise policy (OrgPolicy)
         let headerText = """
         Subject: \(subjectLine)
         From: \(header("From"))
@@ -1800,7 +1801,7 @@ struct EmailDetailView: View {
             height: printInfo.paperSize.height - printInfo.topMargin - printInfo.bottomMargin))
         textView.textStorage?.setAttributedString(attrString)
 
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         let safeName = subjectLine.replacingOccurrences(of: "[^A-Za-z0-9 ]", with: "_", options: .regularExpression)
         panel.nameFieldStringValue = "\(safeName).pdf"
         panel.canCreateDirectories = true
@@ -1867,7 +1868,7 @@ struct EmailDetailView: View {
         let safeName = subjectLine.replacingOccurrences(of: "[^A-Za-z0-9 ]", with: "_", options: .regularExpression)
 
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "\(batesNumber)_\(safeName).pdf"
         panel.canCreateDirectories = true
         panel.allowedContentTypes = [.pdf]
@@ -1905,6 +1906,7 @@ struct EmailDetailView: View {
     #endif
 
     private func printEmail() {
+        guard OrgPolicy.confirmAllowed(.print) else { return }   // enterprise policy (OrgPolicy)
         let headerText = """
         Subject: \(subjectLine)
         From: \(header("From"))
@@ -2053,7 +2055,7 @@ struct EmailDetailView: View {
         let fileName = "forensic_\(batesNum)_\(safeName).txt"
 
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = fileName
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -2084,7 +2086,7 @@ struct EmailDetailView: View {
         let fileName = "redacted_\(safeName).txt"
 
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = fileName
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -2123,7 +2125,7 @@ struct EmailDetailView: View {
         let fileName = "\(safeName).tiff"
 
         #if os(macOS)
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = fileName
         panel.canCreateDirectories = true
         panel.allowedContentTypes = [.tiff]

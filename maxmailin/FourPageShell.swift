@@ -139,6 +139,8 @@ struct FourPageShell: View {
             SafeMode.shared.evaluateAtLaunch(registry: modules)
             EngineTripCenter.shared.checkAtLaunch(registry: modules)
             SnapshotLocation.restoreAtLaunch()
+            // Enterprise: report version, licence, role and config problems to the MDM.
+            ManagedConfig.publishFeedback(license: storeManager.license)
             // §3-M5: TestFlight builds run the 3.0 engines by default.
             Task { @MainActor in
                 if await BetaEnvironment.detect() { CapabilityWiring.applyAll(modules) }

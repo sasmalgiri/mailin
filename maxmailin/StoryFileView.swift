@@ -126,7 +126,7 @@ struct StoryFileView: View {
 
     #if os(macOS)
     private func saveMarkdown() {
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = (title.isEmpty ? "story_file" : title.replacingOccurrences(of: " ", with: "_")) + ".md"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let savedTitle = title

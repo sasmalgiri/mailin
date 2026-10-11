@@ -931,7 +931,7 @@ struct SettingsView: View {
                 Toggle("Enable AI features", isOn: Binding(
                     get: { modules.isEnabled(.aiInsights) },
                     set: { on in
-                        if on { try? modules.enable(.aiInsights) } else { modules.disable(.aiInsights) }
+                        if on { try? modules.enable(.aiInsights) } else if OrgPolicy.confirmAllowed(.manageModules) { modules.disable(.aiInsights) }
                         enableAIFeatures = modules.isEnabled(.aiInsights)
                     }
                 ))

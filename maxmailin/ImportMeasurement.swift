@@ -315,7 +315,7 @@ struct ImportMeasurementView: View {
 
     #if os(macOS)
     private func saveJSON(_ measurement: FileImportMeasurement) {
-        let panel = NSSavePanel()
+        let panel = ManagedSavePanel()
         panel.nameFieldStringValue = "mailin-import-measurement.json"
         panel.allowedContentTypes = [.json]
         guard panel.runModal() == .OK, let url = panel.url else { return }

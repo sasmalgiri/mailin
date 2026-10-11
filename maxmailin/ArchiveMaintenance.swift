@@ -136,6 +136,7 @@ enum ArchiveSnapshots {
     /// User-initiated restore of the newest snapshot, after confirmation.
     /// Returns a one-line status for the screen that asked.
     static func restoreLatestInteractively() async -> String {
+        if let why = OrgPolicy.denial(.restoreSnapshot) { return why }   // enterprise role (OrgPolicy)
         guard let snap = latest() else { return String(localized: "There is no snapshot to restore.") }
         #if os(macOS)
         let alert = NSAlert()
