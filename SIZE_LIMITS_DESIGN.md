@@ -6,6 +6,24 @@ were wrong.
 
 ---
 
+## Status in 3.0 (2026-10-11): the real limits only
+
+This note is the research behind the size work. Current state of every limit it found:
+
+| Limit | Real or ours? | Status in 3.0 |
+|---|---|---|
+| SQLite row / BLOB size, 1 GB (`SQLITE_MAX_LENGTH`) | Real (SQLite) | Messages above the inline threshold (8 MiB) store their raw MIME in the content-addressed blob tier (S3b). No message size is refused. |
+| PST import "50 GB" | **Was ours** | Not a refusal any more (S1). Above 50 GB the app warns that it is untested there, imports, and reconciles in the receipt. |
+| ANSI (pre-2003) PST, 2 GB | Real (format) | Stated when such a file is opened. |
+| PST **export** 50 GB per file | Real (Outlook) | 3.0 splits large exports into parts below 50 GB, and below 4 GB on FAT32 drives (H9). |
+| FAT32, 4 GB per file | Real (file system) | Export parts are sized to the destination drive. |
+| Tools working on "the newest 2,000 / 5,000 / 500" | **Was ours** | With each 3.0 engine on, the tool covers every email in scope in batches: flat memory, progress, Cancel, resume. With an engine off, the previous window applies and is stated on screen. |
+| Text-reading analyses (trends, topics learned, languages, AI context) | Ours, stated | An evenly spaced sample (5,000; 500 for AI) across the whole archive, always shown as "based on N of M". Counts stay exact. |
+| Meaning-based (semantic) search | Ours, stated | Exact brute-force search, so time grows with archive size (`SEMANTIC_SEARCH_DECISION.md`). |
+| Memory | Device | Batches adapt to free memory (`os_proc_available_memory` on iPhone/iPad); a job slows down under pressure, it is not killed. |
+
+The full table of formats and limits is `SUPPORTED_FORMATS_AND_LIMITS.md`.
+
 ## 1. What the sources actually say
 
 ### SQLite — the binding storage constraint nobody had checked

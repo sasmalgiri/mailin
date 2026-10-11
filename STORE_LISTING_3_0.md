@@ -27,6 +27,11 @@ searchable, private archive that never leaves your Mac.
   resumes from its receipt.
 - Move your archive to an external disk as a verified copy, and get it back if the disk is away.
 
+> **Hold until M5 (do not paste before the 3.0 engines are promoted and V1 is published):**
+> *Whole-archive tools.* Legal, analysis and AI tools work on every email in your archive in
+> batches, with progress, Cancel and resume after an interruption, and a receipt that proves which
+> emails were covered. Analyses that read message text say "based on N of M emails".
+
 **No built-in size limit.** Import streams from disk, so archive size is bounded by your storage,
 not by mailin. Verified on real mail up to 1.5 GB; larger archives have not been tested.
 

@@ -1046,7 +1046,7 @@ extension FeatureTutorial {
         steps: [
             TutorialStep(title: String(localized: "Scan the Current Filter"), icon: "magnifyingglass", color: .blue,
                 what: String(localized: "The report covers exactly what the list shows."),
-                how: "Whatever filter is active (a sender, a date range, a search) defines the scan. Up to 2,000 emails are scanned per run — the report says so plainly if your filter is larger.",
+                how: String(localized: "Whatever filter is active (a sender, a date range, a search) defines the scan. With the whole-archive PII engine on (Settings ▸ Modules ▸ 3.0 engines) every email in the filter is scanned; otherwise up to 2,000 per run, and the report says so plainly if your filter is larger."),
                 tip: "Narrow the filter first to scan a specific person or period."),
             TutorialStep(title: String(localized: "Read the Findings"), icon: "list.bullet", color: .purple,
                 what: String(localized: "Grouped by type, riskiest first."),
