@@ -780,4 +780,26 @@ final class V3CompatibilityTests: XCTestCase {
         XCTAssertTrue(Capability.defaultOn(maturity: .stable, isEngine: false, beta: false))
         XCTAssertFalse(BetaEnvironment.isBeta, "tests always see the shipping defaults")
     }
+
+    // MARK: - List window memory budget
+
+    /// A window of large messages keeps bodies and headers but not every raw
+    /// source: the total stays within the budget and anything over the
+    /// blob-tier size is dropped, with its true size kept.
+    func testListWindow_rawSourcesStayWithinTheBudget() {
+        let big = String(repeating: "A", count: 3_000)
+        let emails = (0..<10).map { i -> MBOXParser.RawEmail in
+            var e = makeEmail(i, from: "a@a.com", tag: "wb")
+            e.rawSource = i == 0 ? String(repeating: "B", count: 20_000) : big
+            return e
+        }
+        let r = ParsedEmailListViewModel.applyMemoryBudget(emails, budget: 10_000, large: 10_000)
+        let kept = r.emails.reduce(0) { $0 + $1.rawSource.utf8.count }
+        XCTAssertLessThanOrEqual(kept, 10_000, "raw sources in memory stay within the budget")
+        XCTAssertTrue(r.emails[0].rawSource.isEmpty, "a message over the size threshold is never held")
+        XCTAssertEqual(r.deferred[emails[0].id], 20_000, "its true size is kept for the Large filter")
+        XCTAssertEqual(r.emails.count, 10, "no email leaves the window")
+        XCTAssertEqual(r.emails.map(\.plainBody), emails.map(\.plainBody), "bodies stay")
+        XCTAssertEqual(r.deferred.count, 10 - 3, "three 3,000-byte sources fit in 10,000")
+    }
 }

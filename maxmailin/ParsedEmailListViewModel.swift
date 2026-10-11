@@ -310,6 +310,50 @@ class ParsedEmailListViewModel: ObservableObject {
     /// `pager.maxRetained` (a few hundred), never the corpus.
     @Published private(set) var residentEmails: [MBOXParser.RawEmail] = []
 
+    // MARK: Window memory budget
+    //
+    // The window holds up to 500 full emails. Their raw sources include every
+    // attachment, so a window of large messages could reach gigabytes (fatal
+    // on iPhone). Raw sources are kept up to a byte budget; past it — and for
+    // any message over the blob-tier threshold — the raw source is dropped
+    // from memory and read from the archive when the email is opened
+    // (EmailDetailView) or its source is shown. Bodies and headers stay.
+
+    #if os(iOS)
+    nonisolated static let windowRawBudgetBytes = 96 * 1_048_576
+    #else
+    nonisolated static let windowRawBudgetBytes = 512 * 1_048_576
+    #endif
+    nonisolated static let largeRawBytes = 8 * 1_048_576
+
+    /// True byte counts of window emails whose raw source is not in memory.
+    private(set) var deferredRawBytes: [UUID: Int] = [:]
+
+    /// The email's raw size, whether or not its raw source is in memory.
+    func rawByteCount(_ email: MBOXParser.RawEmail) -> Int {
+        deferredRawBytes[email.id] ?? email.rawSource.utf8.count
+    }
+
+    nonisolated static func applyMemoryBudget(_ emails: [MBOXParser.RawEmail],
+                                              budget: Int = windowRawBudgetBytes,
+                                              large: Int = largeRawBytes) -> (emails: [MBOXParser.RawEmail], deferred: [UUID: Int]) {
+        var used = 0
+        var deferred: [UUID: Int] = [:]
+        let kept = emails.map { email -> MBOXParser.RawEmail in
+            let size = email.rawSource.utf8.count
+            if size <= large && used + size <= budget {
+                used += size
+                return email
+            }
+            var light = email
+            light.rawSource = ""
+            light.mimeRoot = nil
+            deferred[email.id] = size
+            return light
+        }
+        return (kept, deferred)
+    }
+
     /// The resident window after in-window refinements (review state, smart
     /// tags, operators, quick pickers) and sorting. What the list renders.
     @Published private(set) var visibleEmails: [MBOXParser.RawEmail] = []
@@ -699,7 +743,9 @@ class ParsedEmailListViewModel: ObservableObject {
         var byID: [UUID: MBOXParser.RawEmail] = [:]
         byID.reserveCapacity(fetched.count)
         for email in fetched { byID[email.id] = email }
-        residentEmails = ids.compactMap { byID[$0] }
+        let budgeted = Self.applyMemoryBudget(ids.compactMap { byID[$0] })
+        deferredRawBytes = budgeted.deferred
+        residentEmails = budgeted.emails
         emailCount = residentEmails.count
         queryTotalCount = pager.totalCount
         // §19: review state for exactly this window (bounded read).

@@ -23,6 +23,13 @@ struct EmailDetailView: View {
     private let attachmentCache = AttachmentHydrator.Cache()
 
     let email: MBOXParser.RawEmail
+    /// The list window may hold an email without its raw source (it keeps a
+    /// memory budget); the full email is read from the archive when opened.
+    @State private var fullEmail: MBOXParser.RawEmail?
+    private var shown: MBOXParser.RawEmail {
+        if let full = fullEmail, full.id == email.id { return full }
+        return email
+    }
     /// Part G: prev/next navigation needs only the ORDERED VISIBLE IDS of the
     /// current filtered list (the list's loaded page state), never the corpus.
     /// The caller hydrates the neighbor by id when `onNavigate` fires.
@@ -75,7 +82,7 @@ struct EmailDetailView: View {
     @State private var showTranslation = false
 
     private var currentIndex: Int? {
-        orderedIDs.firstIndex(of: email.id)
+        orderedIDs.firstIndex(of: shown.id)
     }
     private var hasPrev: Bool {
         guard let idx = currentIndex else { return false }
@@ -102,6 +109,17 @@ struct EmailDetailView: View {
 
 
     var body: some View {
+        detailBody
+            .task(id: email.id) {
+                guard email.rawSource.isEmpty else { return }
+                if let full = try? await ArchiveDataService.shared.fullEmails(ids: [email.id]).first, !full.rawSource.isEmpty {
+                    fullEmail = full
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var detailBody: some View {
         VStack(spacing: 0) {
             topBar
             Divider()
@@ -135,12 +153,12 @@ struct EmailDetailView: View {
         .navigationTitle("Email Detail")
         .onAppear {
             // Compute HTML sanitization and mark ready for rendering
-            safeHTML = sanitizedHTMLBody(from: email)
+            safeHTML = sanitizedHTMLBody(from: shown)
             isHTMLReady = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .tagCurrentEmail)) { notification in
             if let tag = notification.object as? ForensicManager.EvidenceTag {
-                forensicManager.tag(email.id, as: tag)
+                forensicManager.tag(shown.id, as: tag)
                 if autoAdvanceAfterTag && tag != .none {
                     advanceToNextUnreviewed()
                 }
@@ -151,13 +169,13 @@ struct EmailDetailView: View {
         }
         .animation(AnimationTiming.normal, value: showCleanView)
         .sheet(isPresented: $showThreadStory) {
-            ThreadStoryView(email: email) { id in
+            ThreadStoryView(email: shown) { id in
                 onNavigate?(id)
             }
         }
         #if os(iOS)
         .sheet(isPresented: $showHistory) {
-            EmailHistoryView(email: email)
+            EmailHistoryView(email: shown)
                 .presentationDetents([.large])
         }
         #endif
@@ -180,11 +198,11 @@ struct EmailDetailView: View {
                     actions: [
                         ("trash", "Trash",
                          "Move to Trash — get it back with the Trash filter, never a permanent delete", {
-                            NotificationCenter.default.post(name: .deleteCurrentEmail, object: email.id)
+                            NotificationCenter.default.post(name: .deleteCurrentEmail, object: shown.id)
                         }),
                         ("archivebox", "Archive",
                          "Archive — hides it from the main list; find it again with the Archived filter", {
-                            NotificationCenter.default.post(name: .archiveCurrentEmail, object: email.id)
+                            NotificationCenter.default.post(name: .archiveCurrentEmail, object: shown.id)
                         }),
                     ]
                 )
@@ -195,11 +213,11 @@ struct EmailDetailView: View {
                     actions: [
                         ("envelope.badge.fill", "Read",
                          "Toggle read/unread — unread emails show with a highlighted row", {
-                            NotificationCenter.default.post(name: .toggleReadCurrentEmail, object: email.id)
+                            NotificationCenter.default.post(name: .toggleReadCurrentEmail, object: shown.id)
                         }),
                         ("flag.fill", "Pin",
                          "Pin/flag this email — pinned emails surface with the Pinned filter and stay marked across restarts", {
-                            NotificationCenter.default.post(name: .togglePinEmail, object: email.id)
+                            NotificationCenter.default.post(name: .togglePinEmail, object: shown.id)
                         }),
                     ]
                 )
@@ -223,7 +241,7 @@ struct EmailDetailView: View {
                     }
                     mailIconButton(icon: "clock.arrow.circlepath", tooltip: String(localized: "History — everything that happened to this email: when it arrived, from which file, every action taken, and its current labels and holds"), color: AppColors.primary) {
                         #if os(macOS)
-                        let historyEmail = email
+                        let historyEmail = shown
                         ToolWindowPresenter.shared.open(title: String(localized: "Email History")) {
                             AnyView(EmailHistoryView(
                                 email: historyEmail,
@@ -238,7 +256,7 @@ struct EmailDetailView: View {
                     }
                     .translationPresentation(
                         isPresented: $showTranslation,
-                        text: !email.plainBody.isEmpty ? email.plainBody : email.htmlBody.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+                        text: !shown.plainBody.isEmpty ? shown.plainBody : shown.htmlBody.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
                     )
                     mailIconButton(icon: "printer", tooltip: String(localized: "Print this email with its headers (⌘P)"), color: AppColors.secondary) {
                         printEmail()
@@ -249,16 +267,16 @@ struct EmailDetailView: View {
                 Spacer()
 
                 Menu {
-                    Button { NotificationCenter.default.post(name: .toggleReadCurrentEmail, object: email.id) } label: {
+                    Button { NotificationCenter.default.post(name: .toggleReadCurrentEmail, object: shown.id) } label: {
                         Label("Mark Read/Unread", systemImage: "envelope.badge.fill")
                     }
-                    Button { NotificationCenter.default.post(name: .togglePinEmail, object: email.id) } label: {
+                    Button { NotificationCenter.default.post(name: .togglePinEmail, object: shown.id) } label: {
                         Label("Flag", systemImage: "flag.fill")
                     }
-                    Button { NotificationCenter.default.post(name: .deleteCurrentEmail, object: email.id) } label: {
+                    Button { NotificationCenter.default.post(name: .deleteCurrentEmail, object: shown.id) } label: {
                         Label("Delete", systemImage: "trash")
                     }
-                    Button { NotificationCenter.default.post(name: .archiveCurrentEmail, object: email.id) } label: {
+                    Button { NotificationCenter.default.post(name: .archiveCurrentEmail, object: shown.id) } label: {
                         Label("Archive", systemImage: "archivebox")
                     }
                     Divider()
@@ -451,7 +469,7 @@ struct EmailDetailView: View {
                 #endif
                 .emailBoxStyle()
             }
-        } else if email.htmlBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        } else if shown.htmlBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             EmptyStateView(
                 icon: "doc.text",
                 title: String(localized: "No Email Body"),
@@ -463,7 +481,7 @@ struct EmailDetailView: View {
     }
     @ViewBuilder
     private var htmlBodyView: some View {
-        let trimmedHTML = email.htmlBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedHTML = shown.htmlBody.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedHTML.isEmpty {
             VStack(alignment: .leading, spacing: Spacing.xSmall) {
                 Label("HTML View", systemImage: "globe")
@@ -482,7 +500,7 @@ struct EmailDetailView: View {
                     .padding(.leading, Spacing.xSmall)
                     .accessibilityLabel("HTML view height")
 
-                    EmailHTMLView(html: trimmedHTML, minHeight: htmlMinHeight, attachments: email.attachments)
+                    EmailHTMLView(html: trimmedHTML, minHeight: htmlMinHeight, attachments: shown.attachments)
                         .padding(Spacing.small)
                         .frame(maxWidth: .infinity, minHeight: htmlMinHeight)
                         .emailBoxStyle()
@@ -503,7 +521,7 @@ struct EmailDetailView: View {
 
     @ViewBuilder
     private var rtfBodyView: some View {
-        if let rtfPart = email.attachments.first(where: {
+        if let rtfPart = shown.attachments.first(where: {
             $0.mimeType.lowercased().contains("rtf") || $0.filename.lowercased().hasSuffix(".rtf")
         }), let data = attachmentData(for: rtfPart),
            let attributed = try? NSAttributedString(data: data, options: [.documentType: NSAttributedString.DocumentType.rtf], documentAttributes: nil) {
@@ -533,7 +551,7 @@ struct EmailDetailView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    ForEach(Array(email.tags), id: \.self) { tag in
+                    ForEach(Array(shown.tags), id: \.self) { tag in
                         Text(tag)
                             .font(.caption)
                             .padding(.horizontal, 8)
@@ -548,7 +566,7 @@ struct EmailDetailView: View {
                             .onSubmit {
                                 let tag = newTagText.trimmingCharacters(in: .whitespaces)
                                 if !tag.isEmpty {
-                                    NotificationCenter.default.post(name: .addTagToEmail, object: (email.id, tag))
+                                    NotificationCenter.default.post(name: .addTagToEmail, object: (shown.id, tag))
                                     newTagText = ""
                                 }
                             }
@@ -565,7 +583,7 @@ struct EmailDetailView: View {
     private var hexViewerSection: some View {
         Divider()
         DisclosureGroup(isExpanded: $showHexViewer) {
-            HexViewerView(rawSource: email.rawSource.isEmpty ? email.plainBody : email.rawSource)
+            HexViewerView(rawSource: shown.rawSource.isEmpty ? shown.plainBody : shown.rawSource)
                 .frame(minHeight: 200, maxHeight: 400)
         } label: {
             Label("Hex Viewer", systemImage: "rectangle.and.text.magnifyingglass")
@@ -576,9 +594,9 @@ struct EmailDetailView: View {
     // MARK: - Attachments Section
     private var attachmentsSection: some View {
         Group {
-            if !email.attachments.isEmpty {
+            if !shown.attachments.isEmpty {
                 Divider()
-                Label("Attachments (\(email.attachments.count))", systemImage: "paperclip")
+                Label("Attachments (\(shown.attachments.count))", systemImage: "paperclip")
                     .font(Typography.headline)
 
                 Button {
@@ -590,10 +608,10 @@ struct EmailDetailView: View {
                 }
                 .buttonStyle(PrimaryButtonStyle())
                 .padding(.vertical, Spacing.xxSmall)
-                .accessibilityLabel("Download all \(email.attachments.count) attachments")
+                .accessibilityLabel("Download all \(shown.attachments.count) attachments")
                 .accessibilityHint("Save all attachments to a folder")
 
-                ForEach(Array(email.attachments.enumerated()), id: \.offset) { _, att in
+                ForEach(Array(shown.attachments.enumerated()), id: \.offset) { _, att in
                     VStack(alignment: .leading, spacing: Spacing.xxSmall) {
                         HStack(spacing: Spacing.xSmall) {
                             Image(systemName: attachmentIcon(for: att.mimeType))
@@ -664,7 +682,7 @@ struct EmailDetailView: View {
                 // unified formats over THIS email (the persona buttons above
                 // already provide single-email Word/CSV/PDF/TIFF/plain text).
                 UnifiedExportSections(
-                    scope: { .explicit([email.id]) },
+                    scope: { .explicit([shown.id]) },
                     gate: { storeManager.requirePremium() },
                     omit: [.word, .csv, .pdfFiles, .tiffFiles, .printText],
                     emailCount: 1,
@@ -741,7 +759,7 @@ struct EmailDetailView: View {
 
             ForEach(ForensicManager.EvidenceTag.allCases, id: \.self) { tag in
                 Button {
-                    forensicManager.tag(email.id, as: tag)
+                    forensicManager.tag(shown.id, as: tag)
                     if autoAdvanceAfterTag && tag != .none {
                         advanceToNextUnreviewed()
                     }
@@ -754,12 +772,12 @@ struct EmailDetailView: View {
                     }
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
-                    .background(forensicManager.tagForEmail(email.id) == tag ? tag.color.opacity(0.2) : Color.clear)
-                    .foregroundColor(forensicManager.tagForEmail(email.id) == tag ? tag.color : .secondary)
+                    .background(forensicManager.tagForEmail(shown.id) == tag ? tag.color.opacity(0.2) : Color.clear)
+                    .foregroundColor(forensicManager.tagForEmail(shown.id) == tag ? tag.color : .secondary)
                     .cornerRadius(CornerRadius.small)
                     .overlay(
                         RoundedRectangle(cornerRadius: CornerRadius.small)
-                            .stroke(forensicManager.tagForEmail(email.id) == tag ? tag.color.opacity(0.5) : Color.clear, lineWidth: 1)
+                            .stroke(forensicManager.tagForEmail(shown.id) == tag ? tag.color.opacity(0.5) : Color.clear, lineWidth: 1)
                     )
                 }
                 .buttonStyle(.plain)
@@ -776,7 +794,7 @@ struct EmailDetailView: View {
     // MARK: - Risk Score Badge
     @ViewBuilder
     private var riskScoreBadge: some View {
-        let risk = ForensicManager.assessRisk(for: email)
+        let risk = ForensicManager.assessRisk(for: shown)
         if risk.score > 0 {
             HStack(spacing: Spacing.small) {
                 Image(systemName: risk.level.icon)
@@ -861,7 +879,7 @@ struct EmailDetailView: View {
 
     @ViewBuilder
     private var spoofBadge: some View {
-        let indicators = ForensicManager.detectSpoofingIndicators(email)
+        let indicators = ForensicManager.detectSpoofingIndicators(shown)
         let highCount = indicators.filter { $0.severity == .high }.count
         if highCount > 0 {
             HStack(spacing: 2) {
@@ -887,7 +905,7 @@ struct EmailDetailView: View {
     }
 
     private var spoofIndicatorsView: some View {
-        let indicators = ForensicManager.detectSpoofingIndicators(email)
+        let indicators = ForensicManager.detectSpoofingIndicators(shown)
         return VStack(alignment: .leading, spacing: Spacing.xxSmall) {
             Text("Spoofing Analysis")
                 .font(Typography.callout)
@@ -933,7 +951,7 @@ struct EmailDetailView: View {
     }
 
     private var mimeTreeView: some View {
-        let tree = ForensicManager.buildMIMETree(email)
+        let tree = ForensicManager.buildMIMETree(shown)
         return VStack(alignment: .leading, spacing: Spacing.xxSmall) {
             Text("MIME Structure")
                 .font(Typography.callout)
@@ -984,7 +1002,7 @@ struct EmailDetailView: View {
                 .font(Typography.callout)
                 .fontWeight(.semibold)
 
-            if let existing = forensicManager.annotationFor(email.id) {
+            if let existing = forensicManager.annotationFor(shown.id) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(existing.text)
                         .font(Typography.caption1)
@@ -1004,7 +1022,7 @@ struct EmailDetailView: View {
                     .font(Typography.caption1)
                 Button("Save") {
                     guard !annotationText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-                    forensicManager.annotate(email.id, text: annotationText)
+                    forensicManager.annotate(shown.id, text: annotationText)
                     annotationText = ""
                 }
                 .buttonStyle(.bordered)
@@ -1014,12 +1032,12 @@ struct EmailDetailView: View {
             }
         }
         .onAppear {
-            annotationText = forensicManager.annotationFor(email.id)?.text ?? ""
+            annotationText = forensicManager.annotationFor(shown.id)?.text ?? ""
         }
     }
 
     private var authResultsView: some View {
-        let auth = ForensicManager.extractAuthResults(email)
+        let auth = ForensicManager.extractAuthResults(shown)
         return VStack(alignment: .leading, spacing: Spacing.xxSmall) {
             Text("Authentication")
                 .font(Typography.callout)
@@ -1051,7 +1069,7 @@ struct EmailDetailView: View {
     }
 
     private var receivedChainView: some View {
-        let hops = ForensicManager.parseReceivedChain(email)
+        let hops = ForensicManager.parseReceivedChain(shown)
         return VStack(alignment: .leading, spacing: Spacing.xxSmall) {
             Text("Received Chain (\(hops.count) hops)")
                 .font(Typography.callout)
@@ -1109,7 +1127,7 @@ struct EmailDetailView: View {
     }
 
     private func computeHashes() {
-        let rawData = email.rawSource.data(using: .utf8) ?? Data()
+        let rawData = shown.rawSource.data(using: .utf8) ?? Data()
         cachedSHA256 = SHA256.hash(data: rawData).map { String(format: "%02x", $0) }.joined()
         cachedMD5 = Insecure.MD5.hash(data: rawData).map { String(format: "%02x", $0) }.joined()
     }
@@ -1158,7 +1176,7 @@ struct EmailDetailView: View {
                     .help("Copy MD5 hash")
                     .accessibilityLabel("Copy MD5 hash to clipboard")
                 }
-                Text("Raw source: \(email.rawSource.utf8.count) bytes")
+                Text("Raw source: \(shown.rawSource.utf8.count) bytes")
                     .font(.system(.caption2, design: .monospaced))
                     .foregroundColor(.secondary)
             }
@@ -1196,11 +1214,11 @@ struct EmailDetailView: View {
                     Text("Replying to:")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
-                    Text(email.headers["Subject"] ?? "(No Subject)")
+                    Text(shown.headers["Subject"] ?? "(No Subject)")
                         .font(Typography.subheadline)
                         .fontWeight(.semibold)
                         .lineLimit(2)
-                    Text("From: \(email.headers["From"] ?? "Unknown")")
+                    Text("From: \(shown.headers["From"] ?? "Unknown")")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
                 }
@@ -1299,7 +1317,7 @@ struct EmailDetailView: View {
             let tone = tones.indices.contains(selectedReplyTone) ? tones[selectedReplyTone] : .professional
             replyGenerationTask = Task { @MainActor in
                 do {
-                    let _ = try await FoundationModelEngine.suggestReply(to: email, tone: tone) { text in
+                    let _ = try await FoundationModelEngine.suggestReply(to: shown, tone: tone) { text in
                         guard !Task.isCancelled else { return }
                         replyText = text
                     }
@@ -1327,9 +1345,9 @@ struct EmailDetailView: View {
     }
 
     private var emailBody: String {
-        guard !email.plainBody.isEmpty else { return String(localized: "(No Body Content Found)") }
-        let cleaned = showCleanView ? cleanText(email.plainBody) : email.plainBody
-        return cleaned.isEmpty ? email.plainBody : cleaned
+        guard !shown.plainBody.isEmpty else { return String(localized: "(No Body Content Found)") }
+        let cleaned = showCleanView ? cleanText(shown.plainBody) : shown.plainBody
+        return cleaned.isEmpty ? shown.plainBody : cleaned
     }
 
     private func highlightedBody(_ text: String) -> AttributedString {
@@ -1459,8 +1477,8 @@ struct EmailDetailView: View {
     /// there, which is what makes Open/Save work on an archived message rather
     /// than only on one just parsed this session.
     private func attachmentData(for att: AttachmentMetadata) -> Data? {
-        let index = email.attachments.firstIndex { $0.filename == att.filename } ?? 0
-        return AttachmentHydrator.data(for: att, index: index, email: email,
+        let index = shown.attachments.firstIndex { $0.filename == att.filename } ?? 0
+        return AttachmentHydrator.data(for: att, index: index, email: shown,
                                        cache: attachmentCache)
     }
 
@@ -1473,7 +1491,7 @@ struct EmailDetailView: View {
     private func header(_ key: String) -> String {
         let tryKeys = [key, key.lowercased(), key.capitalized]
         for k in tryKeys {
-            if let val = email.headers[k], !val.isEmpty {
+            if let val = shown.headers[k], !val.isEmpty {
                 return decodeMIMEHeader(val)
             }
         }
@@ -1564,7 +1582,7 @@ struct EmailDetailView: View {
 
     private func saveAllAttachments(to folderURL: URL) {
         var usedNames = Set<String>()
-        for att in email.attachments {
+        for att in shown.attachments {
             guard let fileURL = att.fileURL else { continue }
             var filename = att.filename
             var counter = 1
@@ -1601,9 +1619,9 @@ struct EmailDetailView: View {
                 .replacingOccurrences(of: "<", with: "&lt;")
                 .replacingOccurrences(of: ">", with: "&gt;")
         }
-        let bodyHTML = email.htmlBody.isEmpty
+        let bodyHTML = shown.htmlBody.isEmpty
             ? "<p>" + htmlEscape(emailBody).replacingOccurrences(of: "\n", with: "<br>") + "</p>"
-            : email.htmlBody
+            : shown.htmlBody
         var headerRows = ""
         for (label, key) in [("Subject", "Subject"), ("From", "From"), ("To", "To"),
                              ("Cc", "Cc"), ("Date", "Date"), ("Message-ID", "Message-ID")] {
@@ -1740,7 +1758,7 @@ struct EmailDetailView: View {
         """
 
         let htmlContent: String
-        let trimmedHTML = email.htmlBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedHTML = shown.htmlBody.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedHTML.isEmpty {
             htmlContent = """
             <html><body style="font-family: -apple-system, Helvetica, sans-serif; font-size: 13px;">
@@ -1824,8 +1842,8 @@ struct EmailDetailView: View {
         let batesNumber = ForensicManager.batesNumber(prefix: batesPrefix, index: 1)
         let examiner = forensicManager.isEnabled ? forensicManager.examinerName : ""
         let caseNum = forensicManager.isEnabled ? forensicManager.caseNumber : ""
-        let tag = forensicManager.tagForEmail(email.id)
-        let emailHash = forensicManager.perEmailHashes[email.id]
+        let tag = forensicManager.tagForEmail(shown.id)
+        let emailHash = forensicManager.perEmailHashes[shown.id]
 
         var lines: [String] = []
         lines.append("Subject: \(subjectLine)")
@@ -1896,7 +1914,7 @@ struct EmailDetailView: View {
 
         #if os(macOS)
         let htmlContent: String
-        let trimmedHTML = email.htmlBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedHTML = shown.htmlBody.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedHTML.isEmpty {
             htmlContent = """
             <html><body style="font-family: -apple-system, Helvetica, sans-serif; font-size: 13px;">
@@ -1945,7 +1963,7 @@ struct EmailDetailView: View {
 
     // MARK: - Forensic Report Export
     private func exportForensicReport() {
-        let rawData = email.rawSource.data(using: .utf8) ?? Data()
+        let rawData = shown.rawSource.data(using: .utf8) ?? Data()
         let sha256 = SHA256.hash(data: rawData).map { String(format: "%02x", $0) }.joined()
         let md5 = Insecure.MD5.hash(data: rawData).map { String(format: "%02x", $0) }.joined()
 
@@ -1954,7 +1972,7 @@ struct EmailDetailView: View {
         let exportDate = dateFormatter.string(from: Date())
 
         let batesNum = ForensicManager.batesNumber(prefix: "MAIL", index: (currentIndex ?? 0) + 1)
-        let evidenceTag = forensicManager.tagForEmail(email.id)
+        let evidenceTag = forensicManager.tagForEmail(shown.id)
 
         var report = "FORENSIC EMAIL REPORT\n"
         report += "Chain of Custody Document\n"
@@ -1975,14 +1993,14 @@ struct EmailDetailView: View {
         report += "MD5: \(md5)\n"
         report += "Raw Source Size: \(rawData.count) bytes\n\n"
 
-        let auth = ForensicManager.extractAuthResults(email)
+        let auth = ForensicManager.extractAuthResults(shown)
         report += "AUTHENTICATION RESULTS\n"
         report += String(repeating: "-", count: 70) + "\n"
         report += "SPF: \(auth.spf)\n"
         report += "DKIM: \(auth.dkim)\n"
         report += "DMARC: \(auth.dmarc)\n"
 
-        let hops = ForensicManager.parseReceivedChain(email)
+        let hops = ForensicManager.parseReceivedChain(shown)
         if !hops.isEmpty {
             report += "\nRECEIVED CHAIN (\(hops.count) hops)\n"
             report += String(repeating: "-", count: 70) + "\n"
@@ -1997,32 +2015,32 @@ struct EmailDetailView: View {
 
         report += "\nCOMPLETE HEADERS\n"
         report += String(repeating: "-", count: 70) + "\n"
-        for (key, value) in email.headers.sorted(by: { $0.key < $1.key }) {
+        for (key, value) in shown.headers.sorted(by: { $0.key < $1.key }) {
             report += "\(key): \(value)\n"
         }
 
         report += "\n\nMESSAGE METADATA\n"
         report += String(repeating: "-", count: 70) + "\n"
-        report += "Message-ID: \(email.headers["Message-ID"] ?? email.headers["Message-Id"] ?? "N/A")\n"
-        report += "Thread-ID: \(email.threadID ?? "N/A")\n"
-        report += "In-Reply-To: \(email.inReplyTo ?? "N/A")\n"
-        report += "References: \(email.references?.joined(separator: " ") ?? "N/A")\n"
-        report += "Message Type: \(email.messageType)\n"
-        report += "Domains: \(email.domains.joined(separator: ", "))\n"
-        report += "Tags: \(email.tags.joined(separator: ", "))\n"
-        report += "Anomalies: \(email.anomalies.isEmpty ? "None" : email.anomalies.joined(separator: "; "))\n"
+        report += "Message-ID: \(shown.headers["Message-ID"] ?? shown.headers["Message-Id"] ?? "N/A")\n"
+        report += "Thread-ID: \(shown.threadID ?? "N/A")\n"
+        report += "In-Reply-To: \(shown.inReplyTo ?? "N/A")\n"
+        report += "References: \(shown.references?.joined(separator: " ") ?? "N/A")\n"
+        report += "Message Type: \(shown.messageType)\n"
+        report += "Domains: \(shown.domains.joined(separator: ", "))\n"
+        report += "Tags: \(shown.tags.joined(separator: ", "))\n"
+        report += "Anomalies: \(shown.anomalies.isEmpty ? "None" : shown.anomalies.joined(separator: "; "))\n"
 
-        if !email.attachments.isEmpty {
+        if !shown.attachments.isEmpty {
             report += "\n\nATTACHMENTS\n"
             report += String(repeating: "-", count: 70) + "\n"
-            for (i, att) in email.attachments.enumerated() {
+            for (i, att) in shown.attachments.enumerated() {
                 report += "\(i + 1). \(att.filename) (\(att.mimeType), \(att.size) bytes)\n"
             }
         }
 
         report += "\n\nPLAIN TEXT BODY\n"
         report += String(repeating: "-", count: 70) + "\n"
-        report += email.plainBody
+        report += shown.plainBody
 
         report += "\n\n" + String(repeating: "=", count: 70) + "\n"
         report += "END OF FORENSIC REPORT\n"
@@ -2096,7 +2114,7 @@ struct EmailDetailView: View {
 
     // MARK: - TIFF Export
     private func exportAsTIFF() {
-        guard let tiffData = ExportManager.exportAsTIFF(email: email) else {
+        guard let tiffData = ExportManager.exportAsTIFF(email: shown) else {
             exportError = "Failed to generate TIFF image."
             return
         }
@@ -2198,8 +2216,8 @@ struct EmailDetailView: View {
         if !storeManager.isPremium {
             EmptyView()
         } else {
-        let sigResult = SMIMEHandler.verifySignature(of: email)
-        let isEncrypted = SMIMEHandler.isEncrypted(email)
+        let sigResult = SMIMEHandler.verifySignature(of: shown)
+        let isEncrypted = SMIMEHandler.isEncrypted(shown)
         if sigResult.status != .notSigned || isEncrypted {
             HStack(spacing: Spacing.small) {
                 if sigResult.status != .notSigned {
@@ -2268,7 +2286,7 @@ struct EmailDetailView: View {
     private func hasHeader(_ key: String) -> Bool {
         let tryKeys = [key, key.lowercased(), key.capitalized]
         for k in tryKeys {
-            if let val = email.headers[k], !val.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if let val = shown.headers[k], !val.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return true
             }
         }

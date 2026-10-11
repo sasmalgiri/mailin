@@ -25,6 +25,21 @@ struct ParsedEmailListView: View {
     /// The raw-source display text. Migrated archives may have NO stored raw
     /// MIME — never show a silent blank panel: reconstruct a readable RFC-822
     /// view from the saved headers + body and say so (`reconstructed`).
+    /// Shows an email's source. A window email may not hold its raw source
+    /// (memory budget): it is read from the archive first, so the real source
+    /// is shown rather than a reconstruction.
+    private func showRawSource(_ email: MBOXParser.RawEmail) {
+        Task { @MainActor in
+            var source = email
+            if email.rawSource.isEmpty,
+               let full = try? await ArchiveDataService.shared.fullEmails(ids: [email.id]).first {
+                source = full
+            }
+            let display = rawSourceDisplay(for: source)
+            activeSheet = .rawSource(display.text, reconstructed: display.reconstructed)
+        }
+    }
+
     private func rawSourceDisplay(for email: MBOXParser.RawEmail) -> (text: String, reconstructed: Bool) {
         let rawData = email.rawSource.data(using: .utf8) ?? Data()
         let kit = SwiftEmailMessage(rawSource: rawData)
@@ -134,7 +149,7 @@ struct ParsedEmailListView: View {
                 if tag != .none { return false }
             }
             if quickFilterLargeEmails {
-                let size = email.rawSource.utf8.count
+                let size = model.rawByteCount(email)
                 if size < 100_000 { return false }
             }
             if quickFilterPrivileged {
@@ -2011,8 +2026,7 @@ struct ParsedEmailListView: View {
         }
         .contextMenu {
             Button {
-                let display = rawSourceDisplay(for: email)
-                activeSheet = .rawSource(display.text, reconstructed: display.reconstructed)
+                showRawSource(email)
             } label: {
                 Label("View Raw Source", systemImage: "doc.plaintext")
             }
@@ -2432,8 +2446,7 @@ struct ParsedEmailListView: View {
             .contentShape(Rectangle())
             .contextMenu {
                 Button {
-                        let display = rawSourceDisplay(for: email)
-                    activeSheet = .rawSource(display.text, reconstructed: display.reconstructed)
+                        showRawSource(email)
                 } label: {
                     Label("View Raw Source", systemImage: "doc.plaintext")
                 }
@@ -2570,8 +2583,7 @@ struct ParsedEmailListView: View {
             emailTagPills(for: email)
 
             Button {
-                let display = rawSourceDisplay(for: email)
-                activeSheet = .rawSource(display.text, reconstructed: display.reconstructed)
+                showRawSource(email)
             } label: {
                 Image(systemName: "doc.plaintext")
                     .foregroundColor(AppColors.secondary)
@@ -2609,8 +2621,7 @@ struct ParsedEmailListView: View {
             #endif
 
             Button {
-                let display = rawSourceDisplay(for: email)
-                activeSheet = .rawSource(display.text, reconstructed: display.reconstructed)
+                showRawSource(email)
             } label: {
                 Label("View Raw Source", systemImage: "doc.plaintext")
             }
