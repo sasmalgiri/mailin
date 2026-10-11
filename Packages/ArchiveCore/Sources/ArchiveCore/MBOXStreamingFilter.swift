@@ -19,6 +19,11 @@
 
 import Foundation
 
+// §3-P2 (strict memory safety): the byte-level scanning in this file reads raw
+// buffers (`withUTF8`, `withUnsafeBytes`) for speed on large archives. Every
+// such read is marked `unsafe`. SAFETY: each buffer is used only inside its
+// closure, and every index is checked against the buffer's count before it is read.
+
 extension MBOXRecordBuilder {
 
     enum FromLineFilterMode: Sendable {
@@ -58,13 +63,13 @@ extension MBOXRecordBuilder {
             guard enabled, !chunk.isEmpty else { remember(chunk); return chunk }
             var out = [UInt8]()
             out.reserveCapacity(chunk.count + 8)
-            chunk.withUnsafeBytes { raw in
-                let bytes = raw.bindMemory(to: UInt8.self)
+            unsafe chunk.withUnsafeBytes { raw in
+                let bytes = unsafe raw.bindMemory(to: UInt8.self)
                 var i = 0
                 let n = bytes.count
                 while i < n {
                     if atLineStart || scanningPrefix {
-                        let b = bytes[i]
+                        let b = unsafe bytes[i]
                         i += 1
                         atLineStart = false
                         if fromMatched == 0, b == Self.gt {
@@ -87,10 +92,10 @@ extension MBOXRecordBuilder {
                     }
                     // Pass-through to the end of the line, one append.
                     var j = i
-                    while j < n, bytes[j] != MBOXRecordBuilder.lf, bytes[j] != MBOXRecordBuilder.cr { j += 1 }
-                    out.append(contentsOf: UnsafeBufferPointer(rebasing: bytes[i..<j]))
+                    while j < n, unsafe bytes[j] != MBOXRecordBuilder.lf, unsafe bytes[j] != MBOXRecordBuilder.cr { j += 1 }
+                    unsafe out.append(contentsOf: UnsafeBufferPointer(rebasing: bytes[i..<j]))
                     if j < n {
-                        out.append(bytes[j])
+                        unsafe out.append(bytes[j])
                         atLineStart = true
                         j += 1
                     }

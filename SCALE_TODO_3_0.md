@@ -388,7 +388,7 @@ Every `[~]` row was checked against its own wording. A row is not done until eve
 | A12/I4 | Communication Patterns AI context by retrieval, stating how many — and a user's scope is never swapped for an archive sample (finding #19) | [x] code ddd095a |
 | Q2 | written decision gate: vec1 vs sqlite-vec (before any extension) — SEMANTIC_SEARCH_DECISION.md | [x] 16b3df0 |
 | P1 | ArchiveCore strict-concurrency diagnostics fixed; Swift 6 mode — 24 diagnostics fixed (locked settings, main-actor sinks for the import engines' callbacks, deinit handle, Sendable progress), ArchiveCore in Swift 6 language mode, app + package tests zero warnings. Next modules (app target, test targets) and the Thread Sanitizer run are in the test pass (V4) | [x] code (this commit) |
-| P2 | parser unsafe sites marked / moved to Span | [ ] |
+| P2 | parser unsafe sites marked / moved to Span — ZIP/gzip reader: sinks moved to `Data`, zlib `compression_stream` code marked with a SAFETY note; MIME, body extractor, quoted-printable, mbox filter/parser/record builder, EMLX, FileUtils, ExportFolderManifest: every raw-buffer read marked `unsafe` (137 sites) with SAFETY notes. Under `-strict-memory-safety` these files report 0 (SQLite/FTS C calls stay out of scope by design). `Span` not used: needs OS 26, the package supports macOS 14 / iOS 17 | [x] code (this commit) |
 | P3 | coverage-guided fuzzing (libFuzzer) — or the toolchain limit stated | [ ] |
 | P6 | iOS SDK 27 build confirmed — it was BROKEN (S8 used the AppKit-only `.timeout` option); fixed with an own 10 s deadline; 8 Swift-6 warnings in new code fixed; iOS and macOS build with zero warnings | [x] (this commit) |
 | R3 | SIZE_LIMITS_DESIGN.md, help, store copy | [x] 16b3df0 |

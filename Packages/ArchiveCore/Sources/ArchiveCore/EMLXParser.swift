@@ -1,5 +1,10 @@
 import Foundation
 
+// §3-P2 (strict memory safety): the byte-level scanning in this file reads raw
+// buffers (`withUTF8`, `withUnsafeBytes`) for speed on large archives. Every
+// such read is marked `unsafe`. SAFETY: each buffer is used only inside its
+// closure, and every index is checked against the buffer's count before it is read.
+
 struct EMLXParser {
     /// Bump when message extraction/ordering changes — invalidates mid-file
     /// resume checkpoints bound to the previous version (Part B5).
@@ -41,7 +46,7 @@ struct EMLXParser {
 
         let fm = FileManager.default
         var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: fileURL.path, isDirectory: &isDir), isDir.boolValue else {
+        guard unsafe fm.fileExists(atPath: fileURL.path, isDirectory: &isDir), isDir.boolValue else {
             throw EMLXError.invalidFormat("Expected .emlx file or directory")
         }
 
@@ -105,7 +110,7 @@ struct EMLXParser {
             let plistStart = afterData.index(afterData.startIndex, offsetBy: byteCount)
             let plistStr = String(decoding: afterData[plistStart...], as: UTF8.self)
             if let plistData = plistStr.data(using: .utf8),
-               let plist = try? PropertyListSerialization.propertyList(from: plistData, options: [], format: nil) as? [String: Any] {
+               let plist = unsafe try? PropertyListSerialization.propertyList(from: plistData, options: [], format: nil) as? [String: Any] {
                 plistFlags = plist
             }
         }

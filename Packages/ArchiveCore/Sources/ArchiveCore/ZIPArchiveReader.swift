@@ -255,13 +255,13 @@ struct ZIPArchiveReader {
 
         var crc = CRC32()
         var written: Int64 = 0
-        func sink(_ chunk: UnsafeRawBufferPointer) throws {
+        func sink(_ chunk: Data) throws {
             written += Int64(chunk.count)
             if written > member.uncompressedSize {
                 throw ReadError.sizeMismatch(member: member.name, declared: member.uncompressedSize, actual: written)
             }
             crc.update(chunk)
-            try out.write(contentsOf: Data(chunk))
+            try out.write(contentsOf: chunk)
         }
 
         if member.method == 0 {
@@ -348,7 +348,7 @@ struct ZIPArchiveReader {
         try inflate(from: handle, count: compressedLength, member: url.lastPathComponent) { chunk in
             written += Int64(chunk.count)
             crc.update(chunk)
-            try out.write(contentsOf: Data(chunk))
+            try out.write(contentsOf: chunk)
         }
         guard UInt32(truncatingIfNeeded: written) == expectedSizeMod else {
             throw ReadError.sizeMismatch(member: url.lastPathComponent, declared: Int64(expectedSizeMod), actual: written)
@@ -360,51 +360,59 @@ struct ZIPArchiveReader {
     // MARK: - Streaming primitives
 
     private static func copyStored(from handle: FileHandle, count: Int64, member: String,
-                                   sink: (UnsafeRawBufferPointer) throws -> Void) throws {
+                                   sink: (Data) throws -> Void) throws {
         var remaining = count
         while remaining > 0 {
             let chunk = try handle.read(upToCount: Int(min(Int64(windowSize), remaining))) ?? Data()
             guard !chunk.isEmpty else { throw ReadError.truncated("\(member): stored data") }
             remaining -= Int64(chunk.count)
-            try chunk.withUnsafeBytes { try sink($0) }
+            try sink(chunk)
         }
     }
 
     /// Raw DEFLATE through a `compression_stream`, `count` compressed bytes
     /// from the handle's current offset, output delivered in windows.
+    ///
+    /// §3-P2: `compression_stream` is a C API that needs raw pointers; this is
+    /// the only pointer code in the ZIP/gzip path. SAFETY: `source` and
+    /// `output` are each `windowSize` bytes; a chunk read is at most
+    /// `windowSize` (`upToCount:`), so `copyBytes(to:count:)` stays inside
+    /// `source`; the decoder writes at most `dst_size` = `windowSize` bytes
+    /// into `output`, and `produced` = `windowSize - dst_size` is therefore
+    /// within `output`. All three allocations are freed by the `defer`s.
     private static func inflate(from handle: FileHandle, count: Int64, member: String,
-                                sink: (UnsafeRawBufferPointer) throws -> Void) throws {
+                                sink: (Data) throws -> Void) throws {
         let streamPointer = UnsafeMutablePointer<compression_stream>.allocate(capacity: 1)
-        defer { streamPointer.deallocate() }
-        guard compression_stream_init(streamPointer, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB) == COMPRESSION_STATUS_OK else {
+        defer { unsafe streamPointer.deallocate() }
+        guard unsafe compression_stream_init(streamPointer, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB) == COMPRESSION_STATUS_OK else {
             throw ReadError.malformed("\(member): decoder could not start")
         }
-        defer { compression_stream_destroy(streamPointer) }
+        defer { unsafe compression_stream_destroy(streamPointer) }
 
         let source = UnsafeMutablePointer<UInt8>.allocate(capacity: windowSize)
         let output = UnsafeMutablePointer<UInt8>.allocate(capacity: windowSize)
-        defer { source.deallocate(); output.deallocate() }
+        defer { unsafe source.deallocate(); unsafe output.deallocate() }
 
         var remaining = count
-        streamPointer.pointee.src_size = 0
+        unsafe streamPointer.pointee.src_size = 0
         var status = COMPRESSION_STATUS_OK
 
         while status == COMPRESSION_STATUS_OK {
-            if streamPointer.pointee.src_size == 0 && remaining > 0 {
+            if unsafe streamPointer.pointee.src_size == 0 && remaining > 0 {
                 let chunk = try handle.read(upToCount: Int(min(Int64(windowSize), remaining))) ?? Data()
                 guard !chunk.isEmpty else { throw ReadError.truncated("\(member): compressed data") }
-                chunk.copyBytes(to: source, count: chunk.count)
+                unsafe chunk.copyBytes(to: source, count: chunk.count)
                 remaining -= Int64(chunk.count)
-                streamPointer.pointee.src_ptr = UnsafePointer(source)
-                streamPointer.pointee.src_size = chunk.count
+                unsafe streamPointer.pointee.src_ptr = UnsafePointer(source)
+                unsafe streamPointer.pointee.src_size = chunk.count
             }
             let flags = remaining == 0 ? Int32(COMPRESSION_STREAM_FINALIZE.rawValue) : 0
-            streamPointer.pointee.dst_ptr = output
-            streamPointer.pointee.dst_size = windowSize
-            status = compression_stream_process(streamPointer, flags)
-            let produced = windowSize - streamPointer.pointee.dst_size
+            unsafe streamPointer.pointee.dst_ptr = output
+            unsafe streamPointer.pointee.dst_size = windowSize
+            status = unsafe compression_stream_process(streamPointer, flags)
+            let produced = windowSize - (unsafe streamPointer.pointee.dst_size)
             if produced > 0 {
-                try sink(UnsafeRawBufferPointer(start: output, count: produced))
+                try sink(unsafe Data(bytes: output, count: produced))
             }
             if status == COMPRESSION_STATUS_ERROR {
                 throw ReadError.malformed("\(member): deflate stream is corrupt")
@@ -412,7 +420,7 @@ struct ZIPArchiveReader {
             // Input exhausted with FINALIZE sent and nothing more produced:
             // the stream ended without signalling END — treat as truncated.
             if status == COMPRESSION_STATUS_OK, remaining == 0,
-               streamPointer.pointee.src_size == 0, produced == 0 {
+               unsafe streamPointer.pointee.src_size == 0, produced == 0 {
                 throw ReadError.truncated("\(member): deflate stream ended early")
             }
         }
@@ -474,12 +482,14 @@ struct ZIPArchiveReader {
 
         var value: UInt32 { state ^ 0xFFFF_FFFF }
 
-        mutating func update(_ bytes: UnsafeRawBufferPointer) {
-            for b in bytes { state = Self.table[Int((state ^ UInt32(b)) & 0xFF)] ^ (state >> 8) }
-        }
-
+        /// SAFETY (§3-P2): the buffer is valid inside the closure and the
+        /// loop reads exactly its `count` bytes.
         mutating func update(_ data: Data) {
-            data.withUnsafeBytes { update($0) }
+            var s = state
+            unsafe data.withUnsafeBytes { bytes in
+                for unsafe b in unsafe bytes { s = Self.table[Int((s ^ UInt32(b)) & 0xFF)] ^ (s >> 8) }
+            }
+            state = s
         }
 
         static func checksum(_ data: Data) -> UInt32 {

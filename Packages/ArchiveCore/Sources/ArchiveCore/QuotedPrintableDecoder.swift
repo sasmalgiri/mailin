@@ -1,5 +1,10 @@
 import Foundation
 
+// §3-P2 (strict memory safety): the byte-level scanning in this file reads raw
+// buffers (`withUTF8`, `withUnsafeBytes`) for speed on large archives. Every
+// such read is marked `unsafe`. SAFETY: each buffer is used only inside its
+// closure, and every index is checked against the buffer's count before it is read.
+
 public struct QuotedPrintableDecoder {
     /// RFC 2045 §6.7 quoted-printable, decoded over UTF-8 BYTES. The previous
     /// version walked the text Character by Character with
@@ -17,7 +22,7 @@ public struct QuotedPrintableDecoder {
         }
         #endif
         var input = input
-        let output: [UInt8] = input.withUTF8 { bytes in decodeBytes(bytes, isHeader: isHeader) }
+        let output: [UInt8] = input.withUTF8 { bytes in unsafe decodeBytes(bytes, isHeader: isHeader) }
         let data = Data(output)
         if let charset = charset?.lowercased(), charset != "utf-8",
            let str = String(data: data, encoding: stringEncoding(for: charset)) {
@@ -34,8 +39,8 @@ public struct QuotedPrintableDecoder {
     /// part through `decode(_:)` turned every byte ≥ 0x80 into its two-byte
     /// UTF-8 spelling (`FF 00 80` → `C3 BF 00 C2 80`).
     public static func decodeBytes(_ data: Data, isHeader: Bool = false) -> Data {
-        data.withUnsafeBytes { raw -> Data in
-            Data(decodeBytes(raw.bindMemory(to: UInt8.self), isHeader: isHeader))
+        unsafe data.withUnsafeBytes { raw -> Data in
+            unsafe Data(decodeBytes(raw.bindMemory(to: UInt8.self), isHeader: isHeader))
         }
     }
 
@@ -45,12 +50,12 @@ public struct QuotedPrintableDecoder {
         let count = bytes.count
         var i = 0
         while i < count {
-            let byte = bytes[i]
+            let byte = unsafe bytes[i]
             if byte == UInt8(ascii: "=") {
                 // Soft line break: "=\r\n" or "=\n".
-                if i + 2 < count, bytes[i + 1] == 0x0D, bytes[i + 2] == 0x0A { i += 3; continue }
-                if i + 1 < count, bytes[i + 1] == 0x0A { i += 2; continue }
-                if i + 2 < count, let hi = hexValue(bytes[i + 1]), let lo = hexValue(bytes[i + 2]) {
+                if i + 2 < count, unsafe bytes[i + 1] == 0x0D, unsafe bytes[i + 2] == 0x0A { i += 3; continue }
+                if i + 1 < count, unsafe bytes[i + 1] == 0x0A { i += 2; continue }
+                if i + 2 < count, let hi = unsafe hexValue(bytes[i + 1]), let lo = unsafe hexValue(bytes[i + 2]) {
                     out.append(hi << 4 | lo)
                     i += 3
                     continue

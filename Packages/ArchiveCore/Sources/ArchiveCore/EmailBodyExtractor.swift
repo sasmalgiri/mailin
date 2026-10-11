@@ -1,5 +1,10 @@
 import Foundation
 
+// §3-P2 (strict memory safety): the byte-level scanning in this file reads raw
+// buffers (`withUTF8`, `withUnsafeBytes`) for speed on large archives. Every
+// such read is marked `unsafe`. SAFETY: each buffer is used only inside its
+// closure, and every index is checked against the buffer's count before it is read.
+
 // MARK: - AttachmentMetadata
 
 public struct AttachmentMetadata: Codable, Sendable {
@@ -182,7 +187,7 @@ public class EmailBodyExtractor {
     static func isBlank(_ text: String) -> Bool {
         var text = text
         let verdict: Bool? = text.withUTF8 { bytes in
-            for b in bytes {
+            for unsafe b in unsafe bytes {
                 if b >= 0x80 { return nil }
                 if b != 0x20 && b != 0x09 && b != 0x0A && b != 0x0D && b != 0x0B && b != 0x0C { return false }
             }
@@ -242,9 +247,9 @@ public class EmailBodyExtractor {
     nonisolated(unsafe) private static var paramRegexes: [String: NSRegularExpression] = [:]
     private static func paramRegex(_ pattern: String) -> NSRegularExpression? {
         paramRegexLock.lock(); defer { paramRegexLock.unlock() }
-        if let cached = paramRegexes[pattern] { return cached }
+        if let cached = unsafe paramRegexes[pattern] { return cached }
         guard let made = try? NSRegularExpression(pattern: pattern) else { return nil }
-        paramRegexes[pattern] = made
+        unsafe paramRegexes[pattern] = made
         return made
     }
 
@@ -329,17 +334,17 @@ public class AttachmentSaver {
             let count = bytes.count
             while lineStart < count {
                 var lineEnd = lineStart
-                while lineEnd < count, bytes[lineEnd] != 0x0A { lineEnd += 1 }
+                while lineEnd < count, unsafe bytes[lineEnd] != 0x0A { lineEnd += 1 }
                 // Trim ASCII whitespace at both ends of the line.
                 var first = lineStart, last = lineEnd
-                while first < last, bytes[first] == 0x20 || bytes[first] == 0x09 || bytes[first] == 0x0D { first += 1 }
-                while last > first, bytes[last - 1] == 0x20 || bytes[last - 1] == 0x09 || bytes[last - 1] == 0x0D { last -= 1 }
-                let line = UnsafeBufferPointer(rebasing: bytes[first..<last])
-                let skip = line.isEmpty
+                while first < last, unsafe bytes[first] == 0x20 || bytes[first] == 0x09 || bytes[first] == 0x0D { first += 1 }
+                while last > first, unsafe bytes[last - 1] == 0x20 || bytes[last - 1] == 0x09 || bytes[last - 1] == 0x0D { last -= 1 }
+                let line = unsafe UnsafeBufferPointer(rebasing: bytes[first..<last])
+                let skip = unsafe line.isEmpty
                     || (line.count >= 2 && line[0] == UInt8(ascii: "-") && line[1] == UInt8(ascii: "-"))
                     || Self.contains(line, boundary)
                 if !skip {
-                    for byte in line where base64Alphabet[Int(byte)] { out.append(byte) }
+                    for unsafe byte in unsafe line where base64Alphabet[Int(byte)] { out.append(byte) }
                 }
                 lineStart = lineEnd + 1
             }
@@ -352,9 +357,9 @@ public class AttachmentSaver {
         var i = 0
         let limit = haystack.count - needle.count
         while i <= limit {
-            if haystack[i] == needle[0] {
+            if unsafe haystack[i] == needle[0] {
                 var j = 1
-                while j < needle.count, haystack[i + j] == needle[j] { j += 1 }
+                while j < needle.count, unsafe haystack[i + j] == needle[j] { j += 1 }
                 if j == needle.count { return true }
             }
             i += 1

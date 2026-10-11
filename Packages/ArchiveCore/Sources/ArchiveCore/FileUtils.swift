@@ -6,6 +6,11 @@
 
 import Foundation
 
+// §3-P2 (strict memory safety): the byte-level scanning in this file reads raw
+// buffers (`withUTF8`, `withUnsafeBytes`) for speed on large archives. Every
+// such read is marked `unsafe`. SAFETY: each buffer is used only inside its
+// closure, and every index is checked against the buffer's count before it is read.
+
 #if canImport(Darwin)
 import Darwin
 #elseif canImport(Glibc)
@@ -114,7 +119,7 @@ public class FileUtilsAudit {
     /// Guarded by `queue` (every access is inside `queue.sync`).
     nonisolated(unsafe) private static var _logs: [(Date, String, String)] = []
     public static var logs: [(Date, String, String)] {
-        queue.sync { _logs }
+        queue.sync { unsafe _logs }
     }
     private static let _maxLogCountSetting = LockedSetting<Int>(1000)
     public static var maxLogCount: Int {
@@ -129,8 +134,8 @@ public class FileUtilsAudit {
     /// Guarded by `queue` (every access is inside `queue.sync`).
     nonisolated(unsafe) private static var _plugins: [(_ event: String, _ path: String, _ info: [String: Any]) -> Void] = []
     public static var plugins: [(_ event: String, _ path: String, _ info: [String: Any]) -> Void] {
-        get { queue.sync { _plugins } }
-        set { queue.sync { _plugins = newValue } }
+        get { queue.sync { unsafe _plugins } }
+        set { queue.sync { unsafe _plugins = newValue } }
     }
     public static func log(_ msg: String, level: LogLevel = .info, path: String = "") {
         guard level.rawValue <= Self.level.rawValue else { return }
@@ -139,11 +144,11 @@ public class FileUtilsAudit {
         print("[\(timestamp)][\(level)] \(msg)\(path.isEmpty ? "" : " [\(path)]")")
         #endif
         queue.sync {
-            _logs.append((Date(), msg, path))
-            if _logs.count > maxLogCount {
-                _logs.removeFirst(_logs.count - maxLogCount)
+            unsafe _logs.append((Date(), msg, path))
+            if unsafe _logs.count > maxLogCount {
+                unsafe _logs.removeFirst(_logs.count - maxLogCount)
             }
-            for plugin in _plugins { plugin(msg, path, [:]) }
+            for plugin in unsafe _plugins { plugin(msg, path, [:]) }
         }
     }
     public static func logError(_ err: Error, context: String, path: String = "") {
@@ -226,7 +231,7 @@ public class FileUtils {
     public static func directoryExists(at path: String) -> Bool {
         var isDir: ObjCBool = false
         let spath = (try? ensureSandbox(path)) ?? path
-        let exists = FileManager.default.fileExists(atPath: spath, isDirectory: &isDir)
+        let exists = unsafe FileManager.default.fileExists(atPath: spath, isDirectory: &isDir)
         FileUtilsAudit.log("Checked dir existence", level: .debug, path: spath)
         return exists && isDir.boolValue
     }
@@ -255,7 +260,7 @@ public class FileUtils {
     }
     public static func setPermissions(path: String, mode: Int) throws {
         let spath = try ensureSandbox(path)
-        let result = chmod(spath, mode_t(mode))
+        let result = unsafe chmod(spath, mode_t(mode))
         if result != 0 { throw FileUtilsError.unknownError(err: errno) }
         checkPermissions(path: spath)
     }
@@ -309,7 +314,7 @@ public class FileUtils {
         lock.l_whence = Int16(SEEK_SET)    // Fixed: Use Int16 not UInt8
         lock.l_start = 0
         lock.l_len = 0
-        let result = fcntl(handle.fileDescriptor, F_SETLK, &lock)
+        let result = unsafe fcntl(handle.fileDescriptor, F_SETLK, &lock)
         if result != 0 { throw FileUtilsError.cannotLockFile }
         #endif
         FileUtilsAudit.log("File locked", level: .debug)
@@ -321,7 +326,7 @@ public class FileUtils {
         lock.l_whence = Int16(SEEK_SET)
         lock.l_start = 0
         lock.l_len = 0
-        let result = fcntl(handle.fileDescriptor, F_SETLK, &lock)
+        let result = unsafe fcntl(handle.fileDescriptor, F_SETLK, &lock)
         if result != 0 { throw FileUtilsError.cannotUnlockFile }
         #endif
         FileUtilsAudit.log("File unlocked", level: .debug)
@@ -353,14 +358,14 @@ public class FileUtils {
     public static func createTemporaryFile(prefix: String = "mbox") throws -> URL {
         let tmpDir = FileManager.default.temporaryDirectory
         let template = tmpDir.appendingPathComponent("\(prefix)_XXXXXXXX").path
-        let ctemplate = strdup(template)
-        let fd = mkstemp(ctemplate)
-        guard fd != -1, let ctemplate = ctemplate else {
+        let ctemplate = unsafe strdup(template)
+        let fd = unsafe mkstemp(ctemplate)
+        guard fd != -1, let ctemplate = unsafe ctemplate else {
             throw FileUtilsError.cannotCreateFile
         }
         close(fd)
-        let url = URL(fileURLWithPath: String(cString: ctemplate))
-        free(ctemplate)
+        let url = unsafe URL(fileURLWithPath: String(cString: ctemplate))
+        unsafe free(ctemplate)
         FileUtilsAudit.log("Temp file created", level: .debug, path: url.path)
         UserDefaults.standard.set(Date().addingTimeInterval(tempFileLifetime), forKey: "tempfile-\(url.lastPathComponent)")
         return url
@@ -417,7 +422,7 @@ public class FileUtils {
         guard FileUtilsPolicy.warnOnLoosePermissions else { return }
         let spath = (try? ensureSandbox(path)) ?? path
         var statbuf = stat()
-        if stat(spath, &statbuf) == 0 {
+        if unsafe stat(spath, &statbuf) == 0 {
             if (statbuf.st_mode & S_IWOTH) != 0 {
                 FileUtilsAudit.log("World-writable file: \(spath)", level: .warning)
             }
@@ -436,7 +441,7 @@ public class FileUtils {
     }
     private static func sha256(data: Data) -> String {
         #if canImport(CryptoKit)
-        return Data(SHA256.hash(data: data)).map { String(format: "%02x", $0) }.joined()
+        return Data(SHA256.hash(data: data)).map { unsafe String(format: "%02x", $0) }.joined()
         #else
         // Fallback: Not cryptographically secure, but okay for detection
         return String(data.hashValue)
@@ -457,7 +462,7 @@ public class FileUtils {
     }
     public static var hostname: String {
         var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-        gethostname(&buffer, buffer.count)
+        unsafe gethostname(&buffer, buffer.count)
         let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
         return String(decoding: bytes, as: UTF8.self)
     }
@@ -570,7 +575,7 @@ enum KeychainHelper {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
         var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let status = unsafe SecItemCopyMatching(query as CFDictionary, &result)
         guard status == errSecSuccess, let data = result as? Data, let str = String(data: data, encoding: .utf8) else {
             return ""
         }

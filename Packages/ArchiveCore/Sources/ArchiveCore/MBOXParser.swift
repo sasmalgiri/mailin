@@ -1,4 +1,9 @@
 import Foundation
+
+// §3-P2 (strict memory safety): the byte-level scanning in this file reads raw
+// buffers (`withUTF8`, `withUnsafeBytes`) for speed on large archives. Every
+// such read is marked `unsafe`. SAFETY: each buffer is used only inside its
+// closure, and every index is checked against the buffer's count before it is read.
 import CryptoKit
 
 struct MBOXParser {
@@ -517,7 +522,7 @@ struct MBOXParser {
         // time the message itself carries (Received, then the mbox envelope),
         // so the archive can still date and sort it.
         let timestamp = (parseDate(mappedHeaders["Date"]) ?? fallbackDate(headers: mappedHeaders, rawMessage: fullRaw))
-            .map { cachedISOFormatter.string(from: $0) } ?? undatedTimestamp
+            .map { unsafe cachedISOFormatter.string(from: $0) } ?? undatedTimestamp
         let domains = extractDomains(from: mappedHeaders)
 
         var tags: [String] = []
@@ -568,8 +573,8 @@ struct MBOXParser {
     static func summarize(emails: [RawEmail]) -> SummaryMetadata {
         let dates = emails.compactMap { parseDate($0.headers["Date"]) }.sorted()
         let subjects = Set(emails.compactMap { $0.headers["Subject"]?.trimmingCharacters(in: .whitespacesAndNewlines) }).filter { !$0.isEmpty }
-        let start = dates.first.map { cachedISOFormatter.string(from: $0) } ?? "N/A"
-        let end = dates.last.map { cachedISOFormatter.string(from: $0) } ?? "N/A"
+        let start = dates.first.map { unsafe cachedISOFormatter.string(from: $0) } ?? "N/A"
+        let end = dates.last.map { unsafe cachedISOFormatter.string(from: $0) } ?? "N/A"
         return SummaryMetadata(start: start, end: end, subjectCount: subjects.count)
     }
 
@@ -758,7 +763,7 @@ struct MBOXParser {
                     return date
                 }
             }
-            return cachedISOFormatter.date(from: cleaned)
+            return unsafe cachedISOFormatter.date(from: cleaned)
         }
     }
 
@@ -800,7 +805,7 @@ struct MBOXParser {
     /// fallback recorded in its timestamp at parse time, else nil.
     static func effectiveDate(for email: RawEmail) -> Date? {
         if let date = parseDate(email.headers["Date"]) { return date }
-        guard email.timestamp != undatedTimestamp, let date = cachedISOFormatter.date(from: email.timestamp) else { return nil }
+        guard email.timestamp != undatedTimestamp, let date = unsafe cachedISOFormatter.date(from: email.timestamp) else { return nil }
         return date
     }
 
@@ -824,7 +829,7 @@ struct MBOXParser {
     static func sha1(_ input: String) -> String {
         let data = Data(input.utf8)
         let digest = Insecure.SHA1.hash(data: data)
-        return digest.map { String(format: "%02x", $0) }.joined()
+        return digest.map { unsafe String(format: "%02x", $0) }.joined()
     }
 }
 

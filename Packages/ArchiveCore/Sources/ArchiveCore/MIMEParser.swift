@@ -1,5 +1,10 @@
 import Foundation
 
+// §3-P2 (strict memory safety): the byte-level scanning in this file reads raw
+// buffers (`withUTF8`, `withUnsafeBytes`) for speed on large archives. Every
+// such read is marked `unsafe`. SAFETY: each buffer is used only inside its
+// closure, and every index is checked against the buffer's count before it is read.
+
 public class MIMEParser {
     public static func parseEmail(rawEmail: String, depth: Int = 0) -> (headers: [String: String], parts: [MIMEPart]) {
         #if canImport(SwiftEmailKit)
@@ -307,10 +312,10 @@ enum ByteSplit {
         var text = text
         return text.withUTF8 { bytes -> (String, String)? in
             let separator: [UInt8]
-            if firstIndex(of: crlfcrlf, in: bytes, from: 0) != nil { separator = crlfcrlf } else { separator = lflf }
-            guard let at = firstIndex(of: separator, in: bytes, from: 0) else { return nil }
-            let head = String(decoding: UnsafeBufferPointer(rebasing: bytes[0..<at]), as: UTF8.self)
-            let rest = String(decoding: UnsafeBufferPointer(rebasing: bytes[(at + separator.count)...]), as: UTF8.self)
+            if unsafe firstIndex(of: crlfcrlf, in: bytes, from: 0) != nil { separator = crlfcrlf } else { separator = lflf }
+            guard let at = unsafe firstIndex(of: separator, in: bytes, from: 0) else { return nil }
+            let head = unsafe String(decoding: UnsafeBufferPointer(rebasing: bytes[0..<at]), as: UTF8.self)
+            let rest = unsafe String(decoding: UnsafeBufferPointer(rebasing: bytes[(at + separator.count)...]), as: UTF8.self)
             return (head, rest)
         }
     }
@@ -325,11 +330,11 @@ enum ByteSplit {
         return text.withUTF8 { bytes -> [String] in
             var out: [String] = []
             var start = 0
-            while let at = firstIndex(of: needle, in: bytes, from: start) {
-                out.append(String(decoding: UnsafeBufferPointer(rebasing: bytes[start..<at]), as: UTF8.self))
+            while let at = unsafe firstIndex(of: needle, in: bytes, from: start) {
+                unsafe out.append(String(decoding: UnsafeBufferPointer(rebasing: bytes[start..<at]), as: UTF8.self))
                 start = at + needle.count
             }
-            out.append(String(decoding: UnsafeBufferPointer(rebasing: bytes[start...]), as: UTF8.self))
+            unsafe out.append(String(decoding: UnsafeBufferPointer(rebasing: bytes[start...]), as: UTF8.self))
             return out
         }
     }
@@ -344,18 +349,18 @@ enum ByteSplit {
         var trimmed = segment
         var edgeIsNonASCII = false
         trimmed.withUTF8 { bytes in
-            if let f = bytes.first, f >= 0x80 { edgeIsNonASCII = true }
-            if let l = bytes.last, l >= 0x80 { edgeIsNonASCII = true }
+            if let f = unsafe bytes.first, f >= 0x80 { edgeIsNonASCII = true }
+            if let l = unsafe bytes.last, l >= 0x80 { edgeIsNonASCII = true }
         }
         if edgeIsNonASCII {
             trimmed = segment.trimmingCharacters(in: .whitespacesAndNewlines)
         } else {
             trimmed = trimmed.withUTF8 { bytes -> String in
                 var first = 0, last = bytes.count
-                while first < last, isSpace(bytes[first]) { first += 1 }
-                while last > first, isSpace(bytes[last - 1]) { last -= 1 }
+                while first < last, unsafe isSpace(bytes[first]) { first += 1 }
+                while last > first, unsafe isSpace(bytes[last - 1]) { last -= 1 }
                 if first == 0, last == bytes.count { return segment }
-                return String(decoding: UnsafeBufferPointer(rebasing: bytes[first..<last]), as: UTF8.self)
+                return unsafe String(decoding: UnsafeBufferPointer(rebasing: bytes[first..<last]), as: UTF8.self)
             }
         }
         if trimmed.isEmpty || trimmed.hasPrefix("--") { return nil }
@@ -375,9 +380,9 @@ enum ByteSplit {
         var i = start
         let limit = h - n
         while i <= limit {
-            if haystack[i] == first {
+            if unsafe haystack[i] == first {
                 var j = 1
-                while j < n, haystack[i + j] == needle[j] { j += 1 }
+                while j < n, unsafe haystack[i + j] == needle[j] { j += 1 }
                 if j == n { return i }
             }
             i += 1

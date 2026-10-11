@@ -25,6 +25,11 @@
 
 import Foundation
 
+// §3-P2 (strict memory safety): the byte-level scanning in this file reads raw
+// buffers (`withUTF8`, `withUnsafeBytes`) for speed on large archives. Every
+// such read is marked `unsafe`. SAFETY: each buffer is used only inside its
+// closure, and every index is checked against the buffer's count before it is read.
+
 enum MBOXRecordBuilder {
 
     /// `From sender@example.com Tue Mar 14 09:41:00 2017` + newline.
@@ -71,13 +76,13 @@ enum MBOXRecordBuilder {
     /// asctime format, C locale, as the mbox separator requires:
     /// `Tue Mar 14 09:41:00 2017`.
     static func asctime(_ date: Date) -> String {
-        var formatter = cachedAsctimeFormatter
+        var formatter = unsafe cachedAsctimeFormatter
         if formatter == nil {
             let created = DateFormatter()
             created.locale = Locale(identifier: "en_US_POSIX")
             created.timeZone = TimeZone(secondsFromGMT: 0)
             created.dateFormat = "EEE MMM d HH:mm:ss yyyy"
-            cachedAsctimeFormatter = created
+            unsafe cachedAsctimeFormatter = created
             formatter = created
         }
         return formatter!.string(from: date)

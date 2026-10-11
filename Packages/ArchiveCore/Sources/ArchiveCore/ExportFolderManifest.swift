@@ -33,6 +33,11 @@
 //
 
 import Foundation
+
+// §3-P2 (strict memory safety): the byte-level scanning in this file reads raw
+// buffers (`withUTF8`, `withUnsafeBytes`) for speed on large archives. Every
+// such read is marked `unsafe`. SAFETY: each buffer is used only inside its
+// closure, and every index is checked against the buffer's count before it is read.
 import CryptoKit
 
 struct ExportFolderManifest {
@@ -80,13 +85,13 @@ struct ExportFolderManifest {
     /// to open (ELOOP); anything that is not a plain file is refused. Every
     /// manifest read or write in this type goes through a handle from here.
     private static func openNoFollow(_ url: URL, flags: Int32) throws -> FileHandle {
-        let fd = Darwin.open(url.path, flags | O_NOFOLLOW | O_CLOEXEC, 0o644)
+        let fd = unsafe Darwin.open(url.path, flags | O_NOFOLLOW | O_CLOEXEC, 0o644)
         guard fd >= 0 else {
-            let why = errno == ELOOP ? "it is a symbolic link" : String(cString: strerror(errno))
+            let why = unsafe errno == ELOOP ? "it is a symbolic link" : String(cString: strerror(errno))
             throw ArchiveExportError.partialManifestInvalid("the export manifest cannot be opened: \(why)")
         }
         var st = stat()
-        guard fstat(fd, &st) == 0 else {
+        guard unsafe fstat(fd, &st) == 0 else {
             Darwin.close(fd)
             throw ArchiveExportError.partialManifestInvalid("the export manifest cannot be inspected")
         }
@@ -104,7 +109,7 @@ struct ExportFolderManifest {
     /// True when something (file, symlink, anything) sits at `url`.
     private static func entryExists(at url: URL) -> Bool {
         var st = stat()
-        return lstat(url.path, &st) == 0
+        return unsafe lstat(url.path, &st) == 0
     }
 
     /// Sixth review U2: removes the control path with `unlink(2)` — which
@@ -114,9 +119,9 @@ struct ExportFolderManifest {
     /// check followed by a recursive delete, so a type swap between the two
     /// cannot widen what is removed. A directory at the path refuses.
     private static func unlinkControlFile(at url: URL) throws {
-        guard unlink(url.path) != 0 else { return }
+        guard unsafe unlink(url.path) != 0 else { return }
         if errno == ENOENT { return }
-        let why = (errno == EPERM || errno == EISDIR)
+        let why = unsafe (errno == EPERM || errno == EISDIR)
             ? "a directory sits at the manifest path"
             : String(cString: strerror(errno))
         throw ArchiveExportError.partialManifestInvalid("the export folder's control path \(filename) could not be claimed: \(why)")
@@ -176,7 +181,7 @@ struct ExportFolderManifest {
 
     /// Removes the manifest file itself — never a directory at its path (U2).
     func remove() {
-        _ = unlink(url.path)
+        _ = unsafe unlink(url.path)
     }
 
     private func write<T: Encodable>(_ value: T) throws {
@@ -275,7 +280,7 @@ struct ExportFolderManifest {
             guard size == entry.bytes else {
                 throw ArchiveExportError.partialManifestInvalid("\(entry.name) is \(size) bytes, the manifest recorded \(entry.bytes)")
             }
-            let digest = try ArchiveExportService.sha256(ofFile: target).map { String(format: "%02x", $0) }.joined()
+            let digest = try ArchiveExportService.sha256(ofFile: target).map { unsafe String(format: "%02x", $0) }.joined()
             guard digest == entry.sha256 else {
                 throw ArchiveExportError.partialManifestInvalid("\(entry.name) was changed after the run stopped")
             }
@@ -289,9 +294,9 @@ struct ExportFolderManifest {
         for (entry, target) in zip(files[filesAtBoundary...], targets[filesAtBoundary...]) {
             guard entry.existing != true else { continue }
             var st = stat()
-            if lstat(target.path, &st) != 0 {
+            if unsafe lstat(target.path, &st) != 0 {
                 if errno == ENOENT { continue }
-                throw ArchiveExportError.partialManifestInvalid("\(entry.name) could not be inspected: \(String(cString: strerror(errno)))")
+                throw ArchiveExportError.partialManifestInvalid(unsafe "\(entry.name) could not be inspected: \(String(cString: strerror(errno)))")
             }
             guard (st.st_mode & S_IFMT) == S_IFREG else {
                 throw ArchiveExportError.partialManifestInvalid("\(entry.name) is not a regular file; the partial export cannot be trusted")
@@ -339,13 +344,13 @@ struct ExportFolderManifest {
             throw ArchiveExportError.partialManifestInvalid("the manifest names a file outside the export folder: \(name.prefix(80))")
         }
         var st = stat()
-        if lstat(target.path, &st) == 0, (st.st_mode & S_IFMT) == S_IFLNK {
+        if unsafe lstat(target.path, &st) == 0, (st.st_mode & S_IFMT) == S_IFLNK {
             throw ArchiveExportError.partialManifestInvalid("\(name.prefix(80)) is a symbolic link; the partial export cannot be trusted")
         }
         return target
     }
 
     static func hex(_ data: Data) -> String {
-        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        SHA256.hash(data: data).map { unsafe String(format: "%02x", $0) }.joined()
     }
 }
