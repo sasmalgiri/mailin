@@ -3685,6 +3685,34 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 binds.append(.text(ex.value))
             case .attachments:
                 sql.append("e.has_attach = 0")
+            case .source:
+                sql.append("""
+                    coalesce(e.source_hash, '') NOT IN (
+                        SELECT sha256 FROM sources WHERE instr(lower(filename), lower(?)) > 0
+                        UNION
+                        SELECT sha256 FROM forensic_source_hashes WHERE instr(lower(filename), lower(?)) > 0)
+                    """)
+                binds.append(.text(ex.value))
+                binds.append(.text(ex.value))
+            case .evidence:
+                sql.append("NOT EXISTS (SELECT 1 FROM forensic_evidence_tags ftx WHERE ftx.email_id = e.id AND ftx.tag = ?)")
+                binds.append(.text(ex.value))
+            case .type:
+                sql.append("coalesce(e.message_type, '') <> ?")
+                binds.append(.text(ex.value))
+            case .filename:
+                sql.append("NOT EXISTS (SELECT 1 FROM attachments atx WHERE atx.email_id = e.id AND instr(lower(atx.filename), lower(?)) > 0)")
+                binds.append(.text(ex.value))
+            case .before:
+                // NOT (date < X): on or after the bound.
+                sql.append("e.date >= ?")
+                binds.append(.int(Int64(ex.value) ?? 0))
+            case .after:
+                // NOT (date >= X): strictly before the bound.
+                sql.append("e.date < ?")
+                binds.append(.int(Int64(ex.value) ?? 0))
+            case .pinned:
+                sql.append("NOT EXISTS (SELECT 1 FROM email_review_state rvx WHERE rvx.email_id = e.id AND rvx.pinned = 1)")
             }
         }
         return (sql, binds)

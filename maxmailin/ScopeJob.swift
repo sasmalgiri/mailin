@@ -537,6 +537,17 @@ enum ScopeJob {
         if let a = q.afterDate { parts.append("after \(ISO8601DateFormatter().string(from: a))") }
         if let b = q.beforeDate { parts.append("before \(ISO8601DateFormatter().string(from: b))") }
         if let f = q.sourceFileName { parts.append("source \(f)") }
+        // §3-Q4: what was left out is part of the scope.
+        for ex in q.exclusions ?? [] {
+            switch ex.field {
+            case .attachments: parts.append("not with attachments")
+            case .pinned: parts.append("not pinned")
+            case .before, .after:
+                let d = Date(timeIntervalSince1970: TimeInterval(Int64(ex.value) ?? 0))
+                parts.append("not \(ex.field.rawValue) \(ISO8601DateFormatter().string(from: d))")
+            default: parts.append("not \(ex.field.rawValue) \(ex.value)")
+            }
+        }
         return parts.isEmpty ? "whole archive" : parts.joined(separator: ", ")
     }
 

@@ -253685,6 +253685,7 @@
       }
     },
     "Search can exclude as well as include: -from:, -to:, -tag:, -label:, -domain:, -subject:, -has:attachment and NOT before any of them." : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {
@@ -253747,6 +253748,9 @@
           }
         }
       }
+    },
+    "Search can exclude as well as include: put - or NOT before any filter (from:, to:, subject:, domain:, tag:, source:, type:, evidence:, filename:, before:, after:, has:attachment, is:pinned)." : {
+
     },
     "Search commands..." : {
       "localizations" : {

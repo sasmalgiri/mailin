@@ -85,7 +85,7 @@ struct EngineSpec: Sendable {
         case .v3SearchOperators:
             return EngineSpec(.archive,
                 name: String(localized: "Search exclusions (3.0)"),
-                detail: String(localized: "Search can exclude as well as include: -from:, -to:, -tag:, -label:, -domain:, -subject:, -has:attachment and NOT before any of them."))
+                detail: String(localized: "Search can exclude as well as include: put - or NOT before any filter (from:, to:, subject:, domain:, tag:, source:, type:, evidence:, filename:, before:, after:, has:attachment, is:pinned)."))
 
         // MARK: AI Insights (Page 2)
         case .v3AnalysisQueries:

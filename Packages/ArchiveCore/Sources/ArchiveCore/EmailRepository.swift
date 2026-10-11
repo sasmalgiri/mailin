@@ -141,7 +141,12 @@ struct EmailQuery: Sendable, Equatable, Codable {
 
 /// One excluded filter (§3-Q4).
 struct EmailExclusion: Sendable, Equatable, Codable {
-    enum Field: String, Sendable, Codable { case sender, recipient, subject, domain, tag, attachments }
+    /// `before`/`after` carry the bound as whole epoch seconds: `-before:X`
+    /// keeps emails on or after X, `-after:X` keeps emails before X.
+    enum Field: String, Sendable, Codable {
+        case sender, recipient, subject, domain, tag, attachments
+        case source, evidence, type, filename, before, after, pinned
+    }
     var field: Field
     var value: String
 }

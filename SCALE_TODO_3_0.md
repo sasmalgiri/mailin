@@ -213,7 +213,7 @@ loops, the current AI context building. Deleted only in a later release after a 
 | Q1 | **Core Spotlight custom index** (protection class set) + **`SpotlightSearchTool`** for natural-language search inside the AI layer — configured with a `focused` guide and compact format for the on-device model; its default PCC mode is online → off unless the toggle is on | [~] |
 | Q2 | **Semantic search**: NaturalLanguage sentence embeddings stored in F6; vector search in SQLite (evaluate sqlite.org **vec1** ANN vs `sqlite-vec`, which is pre-1.0) — decision gate before adopting an extension | [~] |
 | Q3 | **EDRM MIH** in load files and duplicate matching (cross-party, cross-matter dedup) | [~] |
-| Q4 | Search operators: "has-not" label/tag, and negation for every filter (ePADD feature) | [~] |
+| Q4 | Search operators: "has-not" label/tag, and negation for every filter (ePADD feature) | every filter negates (from, to, subject, domain, tag/label, source, type, evidence, filename, before, after, has:attachment, is:pinned); receipts state what was left out; tests `testExclusions_*` — [~] until the test pass |
 
 ### E — Evidence and defensibility
 | ID | Item | Status |

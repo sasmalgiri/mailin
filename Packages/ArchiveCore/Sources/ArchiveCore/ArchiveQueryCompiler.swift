@@ -37,6 +37,17 @@ enum ArchiveQueryCompiler {
         case "has":
             let v = value.lowercased()
             return (v == "attachment" || v == "attachments") ? EmailExclusion(field: .attachments, value: "") : nil
+        case "source": return value.isEmpty ? nil : EmailExclusion(field: .source, value: value)
+        case "evidence": return value.isEmpty ? nil : EmailExclusion(field: .evidence, value: value)
+        case "type": return value.isEmpty ? nil : EmailExclusion(field: .type, value: value.lowercased())
+        case "filename", "attachment": return value.isEmpty ? nil : EmailExclusion(field: .filename, value: value)
+        case "before", "after":
+            guard let date = parseDate(value) else { return nil }
+            let epoch = String(Int64(date.timeIntervalSince1970.rounded()))
+            return EmailExclusion(field: key == "before" ? .before : .after, value: epoch)
+        case "is":
+            let v = value.lowercased()
+            return (v == "pinned" || v == "starred") ? EmailExclusion(field: .pinned, value: "") : nil
         default: return nil
         }
     }

@@ -292,11 +292,45 @@ final class V3FoundationTests: XCTestCase {
     /// A negated operator that has no exclusion form must not turn into the
     /// matching INCLUDE filter (it used to: "-source:x" kept only source x).
     func testExclusions_unsupportedNegationIsNeverAnInclude() {
-        let q = ArchiveQueryCompiler.compile("-source:inbox.mbox", exclusions: true)
-        XCTAssertNil(q.sourceFileName)
-        XCTAssertEqual(q.text, "-source:inbox.mbox", "kept as literal text, like any unrecognised operator")
-        let n = ArchiveQueryCompiler.compile("NOT before:2020-01-01", exclusions: true)
+        let q = ArchiveQueryCompiler.compile("-sort:oldest", exclusions: true)
+        XCTAssertEqual(q.sort, .dateDesc)
+        XCTAssertEqual(q.text, "-sort:oldest", "kept as literal text, like any unrecognised operator")
+        let n = ArchiveQueryCompiler.compile("NOT before:someday", exclusions: true)
         XCTAssertNil(n.beforeDate)
+        XCTAssertNil(n.exclusions, "a date that does not parse is never a bound")
+    }
+
+    /// §3-Q4 "negation for every filter": source, type, file name, evidence,
+    /// pinned and both date bounds negate too — each the exact complement.
+    func testExclusions_everyFilterNegates_overTheWholeArchive() async throws {
+        let env = makeEnv()
+        try await env.store.insertBatch((0..<10).map { makeEmail($0) }, batchSize: 100)   // 2024-01-01 … 01-10
+        func count(_ s: String) async throws -> Int {
+            try await env.archive.count(query: ArchiveQueryCompiler.compile(s, exclusions: true))
+        }
+        let v1 = try await count("-before:2024-01-04")
+        XCTAssertEqual(v1, 7, "NOT before X = on or after X")
+        let v2 = try await count("NOT after:2024-01-04")
+        XCTAssertEqual(v2, 3, "NOT after X = before X")
+        let v3 = try await count("after:2024-01-02 -after:2024-01-05")
+        XCTAssertEqual(v3, 3, "an include and an excluded bound combine")
+        let v4 = try await count("-type:email")
+        XCTAssertEqual(v4, 0)
+        let v5 = try await count("-filename:pdf")
+        XCTAssertEqual(v5, 10, "no email has a pdf, so none is left out (the include would give 0)")
+        let v6 = try await count("-source:nothing.mbox")
+        XCTAssertEqual(v6, 10)
+        let v7 = try await count("-evidence:Privileged")
+        XCTAssertEqual(v7, 10)
+        let v8 = try await count("-is:pinned")
+        XCTAssertEqual(v8, 10)
+        let q = ArchiveQueryCompiler.compile("-source:a.mbox -type:sent", exclusions: true)
+        XCTAssertNil(q.sourceFileName)
+        XCTAssertNil(q.messageType)
+        XCTAssertEqual(q.exclusions?.map(\.field), [.source, .type])
+        let described = ScopeJob.describe(ArchiveQueryCompiler.compile("-before:2024-01-04 -type:sent", exclusions: true))
+        XCTAssertTrue(described.contains("not before 2024-01-04") && described.contains("not type sent"),
+                      "receipts state what was left out: \(described)")
     }
 
     /// Queries saved before 3.0 (no `exclusions` key) still decode.
