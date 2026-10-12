@@ -50,6 +50,7 @@ struct ScriptsView: View {
                     Text("Limits: a script is stopped when one email takes more than \(Int(ScriptPolicy.perEmailSeconds)) seconds or the app's memory passes \(ScriptPolicy.memoryCeiling / 1_073_741_824) GB.")
                         .font(.caption).foregroundStyle(.secondary)
                     if let status { Text(status).font(.callout) }
+                    if let err = library.saveError { Text(err).font(.callout).foregroundStyle(.red) }
                 }
                 .padding()
             }

@@ -262,7 +262,7 @@ enum IssuedPacks {
 
 @MainActor
 enum ReviewPackBuilder {
-    static let defaultCodes = ["Relevant", "Not relevant", "Privileged", "Needs second look"]
+    nonisolated static let defaultCodes = ["Relevant", "Not relevant", "Privileged", "Needs second look"]
 
     /// Writes every email in `scope` to `url` (streamed), signs it and records it as issued.
     static func build(scope: ArchiveScope, title: String, codes: [String], instructions: String,

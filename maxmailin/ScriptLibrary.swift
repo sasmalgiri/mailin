@@ -48,9 +48,17 @@ final class ScriptLibraryStore {
         }
     }
 
+    /// Set when the library could not be written; shown on the Scripts screen.
+    private(set) var saveError: String?
+
     private func save() {
         let saved = Saved(scripts: userScripts, importBuiltIns: Array(importEnabledBuiltIns))
-        try? JSONEncoder().encode(saved).write(to: url, options: .atomic)
+        do {
+            try JSONEncoder().encode(saved).write(to: url, options: .atomic)
+            saveError = nil
+        } catch {
+            saveError = String(localized: "Your scripts could not be saved: \(error.localizedDescription)")
+        }
     }
 
     func upsert(_ s: MailinScript) {
