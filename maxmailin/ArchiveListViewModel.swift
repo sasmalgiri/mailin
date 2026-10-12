@@ -150,6 +150,7 @@ final class ArchiveListViewModel: ObservableObject {
             hasMore = next != nil
             hasPrevious = false
             isLoading = false
+            LaunchTiming.firstPageShown(archiveCount: count)
             #if DEBUG
             _debugOnAppend?(batch)
             #endif

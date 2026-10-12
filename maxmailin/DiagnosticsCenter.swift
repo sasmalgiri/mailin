@@ -11,6 +11,7 @@
 //
 
 import Foundation
+import os
 #if canImport(MetricKit)
 import MetricKit
 #endif
@@ -101,3 +102,21 @@ extension DiagnosticsCenter: MXMetricManagerSubscriber {
     #endif
 }
 #endif
+
+// MARK: - Launch time (V7)
+
+/// One log line per launch: seconds from app start to the first page of the
+/// archive list on screen, with the archive's size — read by
+/// `Scripts/launch-time.sh` and visible in Console ("mailin" › launch).
+@MainActor
+enum LaunchTiming {
+    private static var reported = false
+    private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "mailin", category: "launch")
+
+    static func firstPageShown(archiveCount: Int) {
+        guard !reported else { return }
+        reported = true
+        let seconds = Date().timeIntervalSince(EngineGuard.launchDate)
+        log.notice("first page shown after \(seconds, format: .fixed(precision: 2), privacy: .public) s; archive \(archiveCount, privacy: .public) emails")
+    }
+}

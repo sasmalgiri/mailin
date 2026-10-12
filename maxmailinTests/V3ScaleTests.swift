@@ -245,6 +245,37 @@ final class V3ScaleTests: XCTestCase {
         }
     }
 
+    /// V7 helper (opt-in): writes a searchable archive of the tier's size in
+    /// the app's layout (`sqlite/`, `fts5/`) into `MAILIN_SCALE_KEEP`, and
+    /// keeps it — for timing a Release launch on a disposable simulator
+    /// (`~/mailin-loc-work/launch-1m.sh`). Never the owner's archive.
+    func testBuildKeptArchiveForLaunchMeasurement() async throws {
+        // From the environment, or a request file "<count> <folder>" at
+        // /tmp/mailin-scale-keep (for runners that cannot pass variables).
+        var keep = ProcessInfo.processInfo.environment["MAILIN_SCALE_KEEP"] ?? ""
+        var n = tier.count
+        if keep.isEmpty, let request = try? String(contentsOfFile: "/tmp/mailin-scale-keep", encoding: .utf8) {
+            let parts = request.split(whereSeparator: \.isWhitespace)
+            if parts.count == 2, let count = Int(parts[0]) { n = count; keep = String(parts[1]) }
+        }
+        guard !keep.isEmpty else { throw XCTSkip("set MAILIN_SCALE_KEEP to build a kept archive") }
+        // A bare name means the test host's own temporary folder (the host is
+        // sandboxed: it can read /tmp but not write there).
+        let root = keep.hasPrefix("/") ? URL(fileURLWithPath: keep, isDirectory: true)
+            : FileManager.default.temporaryDirectory.appendingPathComponent(keep, isDirectory: true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.path), "refuses to write into an existing folder")
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("sqlite", isDirectory: true))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts5", isDirectory: true))
+        for start in stride(from: 0, to: n, by: 5_000) {
+            let emails = (start..<min(start + 5_000, n)).map { Self.email($0, headersOnly: false) }
+            try await store.insertBatch(emails, batchSize: 5_000)
+            try await fts.indexBatch(emails)
+        }
+        let stored = try await ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts)).count(query: .all)
+        XCTAssertEqual(stored, n)
+        print("SCALE kept archive at \(root.path): \(stored) emails")
+    }
+
     /// 10M headers-only rows: the store, counts and keyset paging stay fast
     /// and flat (bodies are not part of this tier).
     func testScaleTier10M_storeCountsAndPaging() async throws {
