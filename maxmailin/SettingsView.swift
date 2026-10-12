@@ -165,6 +165,14 @@ struct SettingsView: View {
                     Label("Health", systemImage: "heart.text.square")
                 }
 
+            // 3.1 R10: deleted-email recovery (only while the switch is on).
+            if modules.isOn(.v31Recovery) {
+                NavigationStack { RecoveryCenterView() }
+                    .tabItem {
+                        Label("Recovery", systemImage: "arrow.counterclockwise.circle")
+                    }
+            }
+
             profileSettings
                 .tabItem {
                     Label("Profile", systemImage: personaManager.selectedPersona.icon)

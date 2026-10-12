@@ -266,3 +266,20 @@ Real limits that remain, by design:
 - Lists show a page at a time with "N of M" and Load more; nothing is dropped.
 - Per-type PII findings shown on screen: 200 per type; Export CSV writes every finding.
 - The analysis index (needed by near-duplicates, analysis queries) builds in the background and pauses on low battery, heat or Safe Mode; coverage is shown in Settings ▸ Health.
+
+## Deleted-email recovery (3.1, preview — off by default)
+
+With **Settings ▸ Modules ▸ Recovery** on, imports mark mail the files show as deleted; recovered mail appears under **Recovered** in the sidebar and with `is:recovered` / `recovery:<kind>`, and each recovered email shows how it was found.
+
+| Source | What is recovered | Limit |
+|---|---|---|
+| Thunderbird mbox | `X-Mozilla-Status` bit 0x0008 (deleted, not yet purged) | Compacting the folder removes such mail for good |
+| mbox (mutt / pine) | `X-Status` containing `D` | — |
+| Gmail Takeout | Trash / Bin labels | Mail emptied from Trash is not in Takeout |
+| Apple Mail EMLX | Deleted flag (0x02); Deleted Messages / Trash mailboxes | — |
+| PST / OST | Deleted Items, Recoverable Items and other deleted-items folders; messages in no folder (orphans) | Outlook 2016 and later rarely leave orphans |
+| PST deep recovery (separate switch) | Property contexts found in unallocated space, marked carved and partial, with byte offsets | Best effort; overwritten space cannot be read |
+| Any file (carving, deep recovery switch) | RFC 5322 messages with a sender and a date or Message-ID | Best effort; candidates that do not verify are counted as rejected, never imported |
+| Lotus Notes NSF | **Not supported yet**: deletion stubs are not listed | Needs a full NSF note-table reader |
+
+Mail files do not record when a message was deleted, so deletion analysis counts recovered emails against legal-hold dates only.

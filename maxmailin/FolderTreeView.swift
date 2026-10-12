@@ -24,6 +24,8 @@ struct FolderTreeView: View {
     @State private var attachmentTotal = 0
     @State private var labelBuckets: [AggregateBucket] = []
     @State private var sourceBuckets: [AggregateBucket] = []
+    /// 3.1 R2: recovered mail by kind (empty when recovery is off or nothing was found).
+    @State private var recovery = RecoveryCounts()
     @State private var isLoaded = false
 
     /// Bounded label subtree, matching v1's most-used-first ordering.
@@ -138,6 +140,7 @@ struct FolderTreeView: View {
         attachmentTotal = (try? await store.attachmentCount()) ?? 0
         labelBuckets = (try? await store.parserTagCounts(limit: Self.maxLabels)) ?? []
         sourceBuckets = (try? await store.sourceFileCounts(limit: Self.maxSourceFiles)) ?? []
+        recovery = RecoveryPolicy.isEnabled ? ((try? await store.recoveryCounts()) ?? RecoveryCounts()) : RecoveryCounts()
     }
 
     private func flattenTree(_ nodes: [FolderNode], depth: Int = 0) -> [FlatRow] {
@@ -186,6 +189,26 @@ struct FolderTreeView: View {
             // (labels overlap, so this can exceed the email count).
             nodes.append(FolderNode(name: String(localized: "Labels"), icon: "tag.fill", children: labelChildren,
                                     emailCount: labelChildren.reduce(0) { $0 + $1.emailCount }, filterValue: ""))
+        }
+
+        // 3.1 R2: Recovered ▸ one row per kind, like Intella's <RECOVERED> /
+        // <ORPHAN ITEMS>, but by how each email was found.
+        if recovery.recovered > 0 {
+            let kinds: [(RecoveryState, String, String)] = [
+                (.deletedFolder, String(localized: "In deleted folders"), "trash"),
+                (.flaggedDeleted, String(localized: "Flagged deleted"), "flag.slash"),
+                (.unpurged, String(localized: "Unpurged"), "arrow.uturn.backward.circle"),
+                (.orphan, String(localized: "Orphaned"), "questionmark.folder"),
+                (.carved, String(localized: "Carved"), "scissors"),
+                (.deletionStub, String(localized: "Deletion stubs"), "doc.badge.ellipsis"),
+            ]
+            let children = kinds.compactMap { kind -> FolderNode? in
+                let n = recovery[kind.0]
+                return n > 0 ? FolderNode(name: kind.1, icon: kind.2, children: [], emailCount: n,
+                                          filterValue: "recovery:\(kind.0.rawValue)") : nil
+            }
+            nodes.append(FolderNode(name: String(localized: "Recovered"), icon: "arrow.counterclockwise.circle",
+                                    children: children, emailCount: recovery.recovered, filterValue: "is:recovered"))
         }
 
         if sourceBuckets.count > 1 {

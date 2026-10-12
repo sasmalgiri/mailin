@@ -181,7 +181,7 @@ extension SQLiteEmailStore {
     }
 
     /// Records (or replaces) the recovery state of existing emails.
-    func recoveryUpsert(_ rows: [UUID: RecoveryInfo]) throws {
+    public func recoveryUpsert(_ rows: [UUID: RecoveryInfo]) throws {
         guard !rows.isEmpty else { return }
         let db = try ensureDB()
         try exec(db, SQLiteHygiene.beginWrite)
@@ -201,7 +201,7 @@ extension SQLiteEmailStore {
     }
 
     /// Recovery records for the given emails (live emails have none).
-    func recovery(for ids: [UUID]) throws -> [UUID: RecoveryInfo] {
+    public func recovery(for ids: [UUID]) throws -> [UUID: RecoveryInfo] {
         guard !ids.isEmpty else { return [:] }
         let db = try ensureDB()
         var out: [UUID: RecoveryInfo] = [:]
@@ -223,7 +223,7 @@ extension SQLiteEmailStore {
     }
 
     /// Totals per recovery kind over the whole archive (live = everything else).
-    func recoveryCounts() throws -> RecoveryCounts {
+    public func recoveryCounts() throws -> RecoveryCounts {
         let db = try ensureDB()
         var c = RecoveryCounts()
         let stmt = try prepare(db, "SELECT state, COUNT(*), SUM(partial) FROM email_recovery WHERE email_id IN (SELECT id FROM emails) GROUP BY state;")
@@ -242,7 +242,7 @@ extension SQLiteEmailStore {
     }
 
     /// Ids of every email in one recovery state (or any recovered state).
-    func recoveryIDs(state: RecoveryState?) throws -> [UUID] {
+    public func recoveryIDs(state: RecoveryState?) throws -> [UUID] {
         let db = try ensureDB()
         let sql = state == nil
             ? "SELECT email_id FROM email_recovery WHERE email_id IN (SELECT id FROM emails);"
@@ -257,7 +257,7 @@ extension SQLiteEmailStore {
 
     // MARK: Custom values (S5)
 
-    func customValuesSet(_ values: [UUID: [String: String]], setBy: String) throws {
+    public func customValuesSet(_ values: [UUID: [String: String]], setBy: String) throws {
         guard !values.isEmpty else { return }
         let db = try ensureDB()
         let stmt = try prepare(db, "INSERT OR REPLACE INTO email_custom_values(email_id, key, value, set_by) VALUES (?,?,?,?);")
@@ -275,7 +275,7 @@ extension SQLiteEmailStore {
         } catch { try? exec(db, "ROLLBACK;"); throw error }
     }
 
-    func customValues(for ids: [UUID]) throws -> [UUID: [String: String]] {
+    public func customValues(for ids: [UUID]) throws -> [UUID: [String: String]] {
         guard !ids.isEmpty else { return [:] }
         let db = try ensureDB()
         var out: [UUID: [String: String]] = [:]
@@ -308,7 +308,7 @@ extension SQLiteEmailStore {
         }
     }
 
-    func scriptRunRecord(_ r: ScriptRunRow) throws {
+    public func scriptRunRecord(_ r: ScriptRunRow) throws {
         let db = try ensureDB()
         let stmt = try prepare(db, """
             INSERT OR REPLACE INTO script_runs(run_id, script_name, script_sha, script_ver, scope_json, fingerprint,
@@ -323,7 +323,7 @@ extension SQLiteEmailStore {
         guard sqlite3_step(stmt) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
     }
 
-    func scriptRuns(limit: Int = 200) throws -> [ScriptRunRow] {
+    public func scriptRuns(limit: Int = 200) throws -> [ScriptRunRow] {
         let db = try ensureDB()
         let stmt = try prepare(db, "SELECT run_id, script_name, script_sha, script_ver, scope_json, fingerprint, processed, changes_json, started_at, finished_at, started_by FROM script_runs ORDER BY started_at DESC LIMIT ?;")
         defer { sqlite3_finalize(stmt) }

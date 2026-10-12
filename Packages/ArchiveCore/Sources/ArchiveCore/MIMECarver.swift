@@ -48,10 +48,12 @@ public struct CarvingTemplate: Codable, Sendable, Equatable, Identifiable {
 }
 
 public struct CarvingResult: Sendable {
-    public var emails: [MBOXParser.RawEmail]
+    var emails: [MBOXParser.RawEmail]
     public var candidates: Int
     public var rejected: Int
     public var bytesScanned: Int64
+    /// Messages verified and kept (emitted or in `emails`).
+    public var kept = 0
 }
 
 public enum MIMECarver {
@@ -62,9 +64,14 @@ public enum MIMECarver {
     static let window = 4 * 1_048_576
 
     /// Carves every verifiable message from `url`. `templates` add custom start markers.
-    public static func carve(url: URL, templates: [CarvingTemplate] = [],
+    /// With `emit`, messages are handed over in batches of `batchSize` and not
+    /// kept (memory stays flat); `result.emails` then holds none and
+    /// `result.kept` counts them.
+    static func carve(url: URL, templates: [CarvingTemplate] = [],
                              senderEmail: String = "",
-                             progress: ((Int64, Int64) -> Void)? = nil) throws -> CarvingResult {
+                             batchSize: Int = 200,
+                             emit: (([MBOXParser.RawEmail]) async throws -> Void)? = nil,
+                             progress: ((Int64, Int64) -> Void)? = nil) async throws -> CarvingResult {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         let size = Int64((try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0)
@@ -113,7 +120,14 @@ public enum MIMECarver {
                 let offset = bufferStart + Int64(m.start)
                 if let email = verify(bytes, offset: offset, template: m.template?.name, senderEmail: senderEmail) {
                     let key = (email.headers["Message-ID"] ?? "") + "|" + (email.headers["Date"] ?? "") + "|" + (email.headers["Subject"] ?? "")
-                    if seen.insert(key).inserted { result.emails.append(email) }
+                    if seen.insert(key).inserted {
+                        result.kept += 1
+                        result.emails.append(email)
+                        if let emit, result.emails.count >= batchSize {
+                            try await emit(result.emails)
+                            result.emails.removeAll(keepingCapacity: true)
+                        }
+                    }
                     i = m.end
                     continue
                 } else {
@@ -121,7 +135,14 @@ public enum MIMECarver {
                 }
             }
             i += 1
-            if i % 1_048_576 == 0 { progress?(bufferStart + Int64(i), size) }
+            if i % 1_048_576 == 0 {
+                progress?(bufferStart + Int64(i), size)
+                try Task.checkCancellation()
+            }
+        }
+        if let emit, !result.emails.isEmpty {
+            try await emit(result.emails)
+            result.emails.removeAll()
         }
         result.bytesScanned = bufferStart + Int64(buffer.count)
         progress?(result.bytesScanned, size)

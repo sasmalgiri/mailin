@@ -127,6 +127,7 @@ struct EmailDetailView: View {
                 VStack(alignment: .leading, spacing: Spacing.medium) {
                     subjectView
                     riskScoreBadge
+                    RecoveryBadgeView(emailID: shown.id)
                     if forensicManager.isEnabled || personaManager.selectedPersona == .legal || (showAdvancedFeatures && personaManager.selectedPersona == .forensic) {
                         evidenceTagBar
                     }

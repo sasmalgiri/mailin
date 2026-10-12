@@ -203,7 +203,7 @@ enum ArchiveQueryCompiler {
         case "unpurged", "expunged": return RecoveryState.unpurged.rawValue
         case "orphan", "orphans": return RecoveryState.orphan.rawValue
         case "carved": return RecoveryState.carved.rawValue
-        case "stub", "stubs": return RecoveryState.deletionStub.rawValue
+        case "stub", "stubs", "deletionstub": return RecoveryState.deletionStub.rawValue
         case "any", "all": return "any"
         default: return nil
         }
