@@ -1137,6 +1137,11 @@ struct StoreKitPurchaseFlowTests {
     private func freshSession() throws -> SKTestSession {
         let session = try SKTestSession(contentsOf: Self.configURL)
         session.resetToDefaultState()
+        // A subscription an earlier test left auto-renewing (accelerated
+        // time) could renew after its test cleared it and leak a live
+        // Personal entitlement into the next test — expire every one first.
+        session.timeRate = .realTime
+        for id in StoreManager.subscriptionProductIDs { try? session.expireSubscription(productIdentifier: id) }
         session.clearTransactions()
         session.disableDialogs = true
         session.askToBuyEnabled = false
