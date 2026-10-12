@@ -265,13 +265,25 @@ private struct PageSwitcher: View {
         // Compact widths (iPhone): the three names do not fit side by side at
         // heading size, and a wrapped "Professio-nal Workflow-s" is worse than
         // a scroll. Names never wrap; the strip scrolls sideways if it must.
-        ScrollView(.horizontal, showsIndicators: false) {
-            switcherRow
+        // First choice: full names; then short names (first word — "AI",
+        // "Professional"); only if even those do not fit, a sideways scroll.
+        // A clipped name failed the accessibility audit on iPhone.
+        ViewThatFits(in: .horizontal) {
+            switcherRow(short: false)
+            switcherRow(short: true)
+            ScrollView(.horizontal, showsIndicators: false) {
+                switcherRow(short: true)
+            }
+            .scrollBounceBehavior(.basedOnSize)
         }
-        .scrollBounceBehavior(.basedOnSize)
     }
 
-    private var switcherRow: some View {
+    private func name(_ page: AppModule, short: Bool) -> String {
+        guard short else { return page.displayName }
+        return page.displayName.split(separator: " ").first.map(String.init) ?? page.displayName
+    }
+
+    private func switcherRow(short: Bool) -> some View {
         HStack(spacing: Spacing.xxSmall) {
             ForEach(pages, id: \.rawValue) { page in
                 // Owner, 2026-09-30: these are the PAGE names, so they read
@@ -284,15 +296,17 @@ private struct PageSwitcher: View {
                     onSelect(page)
                 } label: {
                     HStack(spacing: 6) {
+                        // Text styles, not fixed points: the names grow with
+                        // the reader's text size (Dynamic Type).
                         Image(systemName: icon(page))
-                            .font(.system(size: 15, weight: .semibold))
-                        Text(page.displayName)
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(.subheadline.weight(.semibold))
+                        Text(name(page, short: short))
+                            .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                         if isLocked(page) {
                             Image(systemName: "lock.fill")
-                                .font(.system(size: 11))
+                                .font(.caption2)
                         } else if on {
                             Circle()
                                 .fill(Color.green)
@@ -300,13 +314,16 @@ private struct PageSwitcher: View {
                                 .accessibilityLabel("On")
                         } else {
                             Text("Off")
-                                .font(.system(size: 10, weight: .semibold))
+                                .font(.caption2.weight(.semibold))
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 1)
                                 .background(AppColors.secondary.opacity(0.15), in: Capsule())
                         }
                     }
-                    .foregroundColor(on ? (current ? .accentColor : .primary) : AppColors.secondary.opacity(0.8))
+                    // Full-contrast text; the current page is marked by its
+                    // tint and an accent outline (accent text on an accent
+                    // tint failed the contrast audit).
+                    .foregroundColor(on ? .primary : AppColors.secondary)
                     .padding(.horizontal, Spacing.small)
                     .padding(.vertical, 7)
                     .background(
@@ -317,14 +334,16 @@ private struct PageSwitcher: View {
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 8)
-                            .strokeBorder(on ? Color.clear : AppColors.secondary.opacity(0.25),
-                                          style: StrokeStyle(lineWidth: 1, dash: on ? [] : [3, 3]))
+                            .strokeBorder(current ? Color.accentColor : (on ? Color.clear : AppColors.secondary.opacity(0.25)),
+                                          style: StrokeStyle(lineWidth: current ? 1.5 : 1, dash: on ? [] : [3, 3]))
                     )
                 }
                 .buttonStyle(.plain)
                 .help(isEnabled(page)
                       ? page.displayName
                       : "\(page.displayName) is off — click to see what it includes")
+                .accessibilityLabel(page.displayName)
+                .accessibilityValue(on ? String(localized: "On") : String(localized: "Off"))
                 .accessibilityAddTraits(page == selection ? [.isSelected] : [])
                 .accessibilityHint(isEnabled(page) ? "" : String(localized: "Off. Opens a summary before turning it on."))
             }

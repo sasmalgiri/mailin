@@ -98,11 +98,20 @@ final class SafeMode {
     /// Call at the very start of the app (before UI): counts launches that
     /// have not yet "settled" (stayed up for `settleDelay`), and decides Safe
     /// Mode: two earlier launches that never settled, plus this one.
+    /// A launch by the unit-test host or by a UI test.
+    nonisolated static func isTestLaunch(environment: [String: String], arguments: [String]) -> Bool {
+        environment["XCTestConfigurationFilePath"] != nil || arguments.contains("--uitest")
+    }
+
     nonisolated static func recordLaunchStart() {
         // The unit-test host is this app: test runs start and stop it in
         // seconds, which is not a crash, and must not leave the user's next
         // launch in Safe Mode.
-        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else {
+        // UI tests (`--uitest`) end the app abruptly after each test — also not
+        // a crash (two of them put the iPhone simulator in Safe Mode, whose
+        // banner then moved the very buttons the next test looked for).
+        guard !isTestLaunch(environment: ProcessInfo.processInfo.environment,
+                            arguments: ProcessInfo.processInfo.arguments) else {
             decidedAtLaunch = false
             return
         }

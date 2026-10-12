@@ -888,6 +888,14 @@ final class V3CompatibilityTests: XCTestCase {
     /// Quitting normally (or iOS moving the app to the background) settles the
     /// launch however short it was: two quick quit-and-reopens must not put
     /// the next launch in read-only Safe Mode.
+    /// Test launches (unit-test host, `--uitest`) never count toward Safe Mode;
+    /// a normal launch does.
+    func testSafeMode_testLaunchesAreNotCounted() {
+        XCTAssertTrue(SafeMode.isTestLaunch(environment: [:], arguments: ["mailin", "--uitest"]))
+        XCTAssertTrue(SafeMode.isTestLaunch(environment: ["XCTestConfigurationFilePath": "/x"], arguments: ["mailin"]))
+        XCTAssertFalse(SafeMode.isTestLaunch(environment: [:], arguments: ["mailin"]))
+    }
+
     func testSafeMode_aNormalQuitSettlesTheLaunch() {
         let key = "safeMode.unsettledLaunches"
         let saved = UserDefaults.standard.integer(forKey: key)

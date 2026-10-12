@@ -1018,6 +1018,13 @@ final class MailinClickThroughUITests: XCTestCase {
     private func exportThroughReceipt(_ menuTitle: String) -> String {
         _ = openPage("Archive")
         let menu = app.buttons["Export filtered emails"].firstMatch
+        #if os(iOS)
+        // iPhone: a narrow toolbar folds the menu into its "More" overflow.
+        if !menu.waitForExistence(timeout: 5) {
+            let more = app.buttons["More"].firstMatch
+            if more.waitForExistence(timeout: 3) { more.tap(); Thread.sleep(forTimeInterval: 0.8) }
+        }
+        #endif
         guard menu.waitForExistence(timeout: 10) else { return "FAIL: no Export menu" }
         var swipes = 0
         func menuOnScreen() -> Bool {
