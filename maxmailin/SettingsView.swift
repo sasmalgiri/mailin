@@ -189,6 +189,14 @@ struct SettingsView: View {
                     }
             }
 
+            // 3.1/3.2 T1+: team review on a shared case folder.
+            if modules.isOn(.v31TeamCase) {
+                NavigationStack { TeamCaseView() }
+                    .tabItem {
+                        Label("Team", systemImage: "person.3")
+                    }
+            }
+
             profileSettings
                 .tabItem {
                     Label("Profile", systemImage: personaManager.selectedPersona.icon)
