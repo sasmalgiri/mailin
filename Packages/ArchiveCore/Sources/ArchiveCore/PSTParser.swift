@@ -223,8 +223,10 @@ struct PSTReader {
                     if let path = folderPath(of: node.parentNid, in: folders) {
                         msg.folderPath = path
                         msg.recovery = RecoveryDetector.fromFolder(path, method: "pst-folder")
-                    } else {
-                        // In the node tree but in no folder: an orphan (libpff's term).
+                    } else if node.parentNid != 0 {
+                        // Its recorded parent folder no longer exists: an
+                        // orphan (libpff's term). A parent of 0 says nothing
+                        // (older writers left it unset), so no claim is made.
                         msg.recovery = RecoveryInfo(state: .orphan, method: "pst-orphan",
                                                     evidence: String(format: "node 0x%08X, parent 0x%08X not a folder", node.nid, node.parentNid))
                     }

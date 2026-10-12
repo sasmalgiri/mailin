@@ -205,3 +205,60 @@ final class RecoveryTests: XCTestCase {
         XCTAssertEqual(CarvingTemplate.bytes("ab"), [0x61, 0x62])
     }
 }
+
+// MARK: - R5/R6 PST folder tree and orphans (fixture written by PSTStreamWriter)
+
+final class PSTRecoveryTests: XCTestCase {
+    private var was = false
+    override func setUp() { super.setUp(); was = RecoveryPolicy.isEnabled; RecoveryPolicy.isEnabled = true }
+    override func tearDown() { RecoveryPolicy.isEnabled = was; super.tearDown() }
+
+    private func email(_ n: Int) throws -> MBOXParser.RawEmail {
+        try MBOXParser.processRawMessage("""
+            From: s\(n)@example.com
+            To: r@example.org
+            Subject: PST \(n)
+            Date: Mon, 6 Jan 2025 10:00:00 +0000
+            Message-ID: <pst\(n)@example.com>
+            Content-Type: text/plain
+
+            body \(n)
+            """, senderEmail: "")
+    }
+
+    func testFolderPaths_deletedItems_andOrphans_matchTheFixture() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("recovery-\(UUID().uuidString).pst")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let w = try PSTStreamWriter(url: url)
+        let inbox = w.appendFolder(name: "Inbox")
+        let deleted = w.appendFolder(name: "Deleted Items")
+        let purges = w.appendFolder(name: "Purges", parent: w.appendFolder(name: "Recoverable Items"))
+        try w.append(email: try email(1), folder: inbox)
+        try w.append(email: try email(2), folder: inbox)
+        try w.append(email: try email(3), folder: deleted)
+        try w.append(email: try email(4), folder: purges)
+        try w.append(email: try email(5), folder: (0x7777 << 5) | 0x02)   // its folder is gone
+        try w.finalize()
+
+        let emails = try PSTParser.parse(fileURL: url, senderEmail: "")
+        let bySubject = Dictionary(uniqueKeysWithValues: emails.compactMap { e in e.headers["Subject"].map { ($0, e) } })
+        XCTAssertEqual(emails.count, 5)
+        XCTAssertNil(bySubject["PST 1"]?.recovery, "Inbox mail is live")
+        XCTAssertEqual(bySubject["PST 3"]?.recovery?.state, .deletedFolder)
+        XCTAssertEqual(bySubject["PST 3"]?.recovery?.folder, "Top of Personal Folders/Deleted Items")
+        XCTAssertEqual(bySubject["PST 4"]?.recovery?.state, .deletedFolder, "Recoverable Items/Purges counts as deleted")
+        XCTAssertEqual(bySubject["PST 5"]?.recovery?.state, .orphan)
+    }
+
+    func testOldStylePST_withoutParents_claimsNothing() throws {
+        // A PST whose messages carry nidParent 0 (as written before 3.1) is not called orphaned.
+        RecoveryPolicy.isEnabled = false
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("plain-\(UUID().uuidString).pst")
+        defer { try? FileManager.default.removeItem(at: url) }
+        _ = try PSTWriter.write(emails: [try email(9)], to: url)
+        RecoveryPolicy.isEnabled = true
+        let emails = try PSTParser.parse(fileURL: url, senderEmail: "")
+        XCTAssertEqual(emails.count, 1)
+        XCTAssertNil(emails.first?.recovery, "messages in the root folder are live")
+    }
+}

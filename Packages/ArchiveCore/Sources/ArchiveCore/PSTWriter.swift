@@ -105,7 +105,7 @@ final class PSTStreamWriter {
 
     // MARK: - Bookkeeping (the only per-message state kept in RAM)
 
-    private struct NRef { let nid: UInt32, dataBid: UInt64, subBid: UInt64 }
+    private struct NRef { let nid: UInt32, dataBid: UInt64, subBid: UInt64; var parent: UInt32 = 0 }
     private struct BRef { let bid: UInt64, offset: UInt64, size: UInt16 }
 
     private let handle: FileHandle
@@ -113,6 +113,11 @@ final class PSTStreamWriter {
     private var nodes: [NRef] = []
     private var bRefs: [BRef] = []
     private var messageNids: [UInt32] = []
+    /// [MS-PST] NBTENTRY nidParent: every message names its folder; the root
+    /// folder names itself. (Before 3.1 the writer left it 0.)
+    static let rootFolderNid: UInt32 = (UInt32(0x20) << 5) | 0x02
+    /// 3.1 fixtures: sub-folders (name, parent) written at finalize.
+    private var subfolders: [(nid: UInt32, name: String, parent: UInt32)] = []
     private var nextBid: UInt64 = 4
     private var nextIdx: UInt32 = 0x21   // 0x20 is reserved for the root folder
     private var offset: UInt64 = 4096    // data starts at first page after header
@@ -145,7 +150,14 @@ final class PSTStreamWriter {
 
     // MARK: - Append one message
 
-    func append(email: MBOXParser.RawEmail) throws {
+    /// Adds a sub-folder (3.1 recovery fixtures: Deleted Items etc.); returns its nid.
+    func appendFolder(name: String, parent: UInt32 = PSTStreamWriter.rootFolderNid) -> UInt32 {
+        let nid = (allocIdx() << 5) | Self.nidFolder
+        subfolders.append((nid, name, parent))
+        return nid
+    }
+
+    func append(email: MBOXParser.RawEmail, folder: UInt32 = PSTStreamWriter.rootFolderNid) throws {
         guard !finished else { throw PSTWriter.WriterError.ioFailure("Writer already finalized") }
 
         let mi = allocIdx()
@@ -188,7 +200,7 @@ final class PSTStreamWriter {
             sub = try emitNodeData(sn)
         }
 
-        nodes.append(NRef(nid: mNid, dataBid: mBid, subBid: sub))
+        nodes.append(NRef(nid: mNid, dataBid: mBid, subBid: sub, parent: folder))
         messageNids.append(mNid)
 
         if messageCount % 500 == 0 {
@@ -212,7 +224,11 @@ final class PSTStreamWriter {
         // Root folder + contents table (nids listed for every message).
         let rootNid = (UInt32(0x20) << 5) | Self.nidFolder
         let rootBid = try emitNodeData(folderPC(name: "Top of Personal Folders", count: messageCount))
-        nodes.insert(NRef(nid: rootNid, dataBid: rootBid, subBid: 0), at: 0)
+        nodes.insert(NRef(nid: rootNid, dataBid: rootBid, subBid: 0, parent: rootNid), at: 0)
+        for f in subfolders {
+            let bid = try emitNodeData(folderPC(name: f.name, count: nodes.filter { $0.parent == f.nid }.count))
+            nodes.append(NRef(nid: f.nid, dataBid: bid, subBid: 0, parent: f.parent))
+        }
 
         var ct = Data()
         Self.appendU32(&ct, UInt32(messageCount))
@@ -320,7 +336,7 @@ final class PSTStreamWriter {
         Self.appendU32(&e, 0)
         Self.appendU64(&e, r.dataBid)
         Self.appendU64(&e, r.subBid)
-        Self.appendU32(&e, 0)   // parent nid
+        Self.appendU32(&e, r.parent)   // parent nid
         Self.appendU32(&e, 0)   // padding
         return e
     }
