@@ -170,23 +170,37 @@ public enum MIMECarver {
     }
 
     /// End of a message: next mbox separator, next header run after a blank
-    /// line, or the ceiling.
+    /// line, a run of control bytes (mail is text; NUL or C0 other than tab /
+    /// CR / LF / form feed means other data has begun), or the ceiling.
+    /// One forward pass — cost is the message's own length.
     static func messageEnd(_ b: [UInt8], from start: Int) -> Int {
         let limit = min(b.count, start + maxMessage)
-        var p = start + 1
-        while p < limit {
-            guard let nl = find(b, [0x0A], from: p, to: limit) else { return limit }
-            let next = nl + 1
-            if next >= limit { return limit }
-            if startsWith(b, at: next, Array("From ".utf8)) { return nl + 1 }
-            // A blank line followed by a fresh header run starts the next message.
-            if nl > 0, b[nl - 1] == 0x0A || (nl > 1 && b[nl - 1] == 0x0D && b[nl - 2] == 0x0A) {
-                if isHeaderRun(b, at: next), openers.prefix(5).contains(where: { startsWith(b, at: next, $0) }),
-                   next - start > 200 {
+        let fromSep = Array("From ".utf8)
+        var run = 0
+        var q = start
+        var lineStart = start
+        while q < limit {
+            let c = b[q]
+            if c == 0 || (c < 0x20 && c != 0x09 && c != 0x0A && c != 0x0D && c != 0x0C) {
+                run += 1
+                if run >= 4 { return q - 3 }
+                q += 1
+                continue
+            }
+            run = 0
+            if c == 0x0A {
+                let next = q + 1
+                if next >= limit { return limit }
+                if next > start + 1, startsWith(b, at: next, fromSep) { return next }
+                // A blank line followed by a fresh header run starts the next message.
+                let blank = q == lineStart || (q == lineStart + 1 && b[lineStart] == 0x0D)
+                if blank, next - start > 200, openers.prefix(5).contains(where: { startsWith(b, at: next, $0) }),
+                   isHeaderRun(b, at: next) {
                     return next
                 }
+                lineStart = next
             }
-            p = next
+            q += 1
         }
         return limit
     }

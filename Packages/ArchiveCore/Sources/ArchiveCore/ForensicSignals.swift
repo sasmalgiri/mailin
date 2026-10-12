@@ -290,7 +290,7 @@ public enum DKIMVerifier {
         var sigLine = hCanon == "relaxed"
             ? relaxedHeader(sigField.name, String(sigNoB.drop(while: { $0 != ":" }).dropFirst()))
             : sigNoB
-        if sigLine.hasSuffix("\r\n") { sigLine.removeLast(2) }
+        if sigLine.hasSuffix("\r\n") { sigLine.removeLast() }   // "\r\n" is one Character
         data += sigLine
         guard let sig = Data(base64Encoded: b.filter { !$0.isWhitespace }) else { return .fail("signature is not base64") }
         let message = Data(data.utf8)
@@ -343,7 +343,7 @@ public enum DKIMVerifier {
 
     static func simpleBody(_ body: String) -> String {
         var b = body
-        while b.hasSuffix("\r\n\r\n") { b.removeLast(2) }
+        while b.hasSuffix("\r\n\r\n") { b.removeLast() }   // "\r\n" is one Character
         if b.isEmpty || !b.hasSuffix("\r\n") { b += "\r\n" }
         return b
     }
