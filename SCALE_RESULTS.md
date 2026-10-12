@@ -37,6 +37,7 @@ ceiling; the run now also fails any tool slower than 120 s per 100,000 emails.
 | Verify & seal | 30.7 | 2 |
 | Load file (Concordance DAT) | 15.7 | 0 |
 | Legal hold / release | 24.3 / 2.0 | 261 / 0 |
+| Legal hold straight into the database (F4, one call) | 0.7 | 11 |
 | Custodians (assign all) | 0.2 | 0 |
 | Privilege scan | 16.6 | 0 |
 | Automation rules | 11.0 | 27 |

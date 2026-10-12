@@ -209,6 +209,14 @@ final class V3ScaleTests: XCTestCase {
             let (released, _) = try await measured("release hold") { try await EDiscoveryEngine.releaseHold(scope: .wholeArchive) }
             XCTAssertEqual(released.released, n)
 
+            // F4: holds straight into the database, the whole archive in one call.
+            var allIDs: [UUID] = []
+            for try await page in env.archive.streamSummaries(query: .all, batchSize: 5_000) { allIDs += page.map(\.id) }
+            let (dbHeld, _) = try await measured("legal hold (database)") { try await env.store.legalHoldsAdd(allIDs) }
+            XCTAssertEqual(dbHeld, n)
+            let heldInDB = try await env.store.legalHoldIDs().count
+            XCTAssertEqual(heldInDB, n)
+
             let (assigned, _) = try await measured("custodians") { try await CustodianEngine.assign("Ann", group: nil) }
             XCTAssertEqual(assigned, n)
 

@@ -767,4 +767,40 @@ final class V3FoundationTests: XCTestCase {
         }
         XCTAssertNil(ContentViewModel.committedBatchWork(forensic: false, preserve: false, hash: { _ in }, hold: { _ in }))
     }
+
+    // MARK: - F1: Cancel
+
+    /// Cancel stops the job at the next batch: the receipt says "stopped
+    /// after X of Y", the checkpoint is kept, and a second run resumes and
+    /// finishes with each email exactly once.
+    func testScopeJob_cancelStopsAtTheNextBatch_saysXofY_andResumes() async throws {
+        let env = makeEnv()
+        try await env.store.insertBatch((0..<120).map { makeEmail($0, tag: "cx") }, batchSize: 120)
+        try await ScopeJobEnvironment.$current.withValue(env.job) {
+            let (first, receipt) = try await ScopeJob.run(
+                key: "test.cancel", title: "Cancel", capability: .v3ScopeEngine,
+                query: .all, batchSize: 20, initialState: [UUID]()
+            ) { seen, batch in
+                seen += batch.map(\.id)
+                if seen.count >= 40 { ScopeJobCenter.shared.cancel("test.cancel") }
+            }
+            XCTAssertTrue(receipt.cancelled)
+            XCTAssertEqual(receipt.processed, first.count)
+            XCTAssertLessThan(receipt.processed, 120, "stopped before the end")
+            XCTAssertEqual(receipt.totalInScope, 120)
+            XCTAssertTrue(receipt.coverageLine.contains("\(receipt.processed)") && receipt.coverageLine.contains("120"))
+
+            let (rest, finished) = try await ScopeJob.run(
+                key: "test.cancel", title: "Cancel", capability: .v3ScopeEngine,
+                query: .all, batchSize: 20, initialState: [UUID]()
+            ) { seen, batch in seen += batch.map(\.id) }
+            XCTAssertTrue(finished.resumed)
+            XCTAssertFalse(finished.cancelled)
+            XCTAssertEqual(finished.processed, 120)
+            // The resumed run carries the stopped run's state forward.
+            XCTAssertEqual(rest.count, 120, "each email once across the two runs")
+            XCTAssertEqual(Set(rest).count, 120)
+            XCTAssertEqual(Array(rest.prefix(first.count)), first, "picked up where it stopped")
+        }
+    }
 }
