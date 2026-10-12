@@ -804,3 +804,294 @@ final class V3FoundationTests: XCTestCase {
         }
     }
 }
+
+// MARK: - 3.1 test pass: Scripts (S6–S11)
+
+@MainActor
+final class V31ScriptTests: XCTestCase {
+    private func makeEmail(_ subject: String = "Contract terminate notice", body: String = "We will terminate the contract today.",
+                       extra: String = "") throws -> MBOXParser.RawEmail {
+        try MBOXParser.processRawMessage("""
+            From: A <a@example.com>
+            To: b@example.org
+            Subject: \(subject)
+            Date: Mon, 6 Jan 2025 10:00:00 +0000
+            Message-ID: <s1@example.com>
+            \(extra)Content-Type: text/plain
+
+            \(body)
+            """, senderEmail: "")
+    }
+
+    func testInstrument_guardsWhileAndFor_leavesStringsAndForOf() {
+        let src = #"var s = "while (true)"; while (x < 3) { x++; } for (var i = 0; i < 9; i++) {} for (;;) {} for (const k of a) {}"#
+        let out = ScriptSandbox.instrument(src)
+        XCTAssertTrue(out.contains(#""while (true)""#), "strings are untouched")
+        XCTAssertTrue(out.contains("while (__mailinTick() && (x < 3))"))
+        XCTAssertTrue(out.contains("for (var i = 0; __mailinTick() && (i < 9);  i++)"))
+        XCTAssertTrue(out.contains("for (; __mailinTick() && (true); )"))
+        XCTAssertTrue(out.contains("for (const k of a)"))
+    }
+
+    func testRuntime_proposesChanges_andReports() throws {
+        let s = MailinScript(name: "t", source: """
+            function process(email) {
+              if (email.subject.indexOf("Contract") >= 0) mailin.tag("contract");
+              mailin.column("len", String(email.body.length));
+              mailin.report(email.subject);
+            }
+            """)
+        let rt = try ScriptRuntime(s)
+        let r = try rt.run(try makeEmail(), userTags: [])
+        XCTAssertEqual(r.changes.map(\.kind), [.tag, .column])
+        XCTAssertEqual(r.changes.first?.key, "contract")
+        XCTAssertEqual(r.report, ["Contract terminate notice"])
+    }
+
+    func testRuntime_noNetwork_noEval_noFunctionConstructor() throws {
+        let s = MailinScript(name: "probe", source: """
+            function process(email) {
+              mailin.report(typeof fetch + "," + typeof XMLHttpRequest + "," + typeof WebSocket + "," + typeof setTimeout + "," + typeof eval);
+              try { (function(){}).constructor("return 1")(); mailin.report("ctor-ok"); } catch (e) { mailin.report("ctor-blocked"); }
+            }
+            """)
+        let r = try ScriptRuntime(s).run(try makeEmail(), userTags: [])
+        XCTAssertEqual(r.report.first, "undefined,undefined,undefined,undefined,undefined")
+        XCTAssertEqual(r.report.last, "ctor-blocked")
+    }
+
+    func testRuntime_infiniteLoop_isStoppedByTheWatchdog() throws {
+        let rt = try ScriptRuntime(MailinScript(name: "loop", source: "function process(email) { while (true) {} }"))
+        let start = Date()
+        XCTAssertThrowsError(try rt.run(try makeEmail(), userTags: [])) { error in
+            guard case ScriptError.watchdog = error else { return XCTFail("expected the watchdog, got \(error)") }
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(start), ScriptPolicy.perEmailSeconds + 3)
+    }
+
+    func testRuntime_compileErrors_areReported() {
+        XCTAssertThrowsError(try ScriptRuntime(MailinScript(name: "bad", source: "function process(email) {"))) {
+            guard case ScriptError.compile = $0 else { return XCTFail("\($0)") }
+        }
+        XCTAssertThrowsError(try ScriptRuntime(MailinScript(name: "none", source: "var x = 1;"))) {
+            XCTAssertEqual($0 as? ScriptError, .noProcessFunction)
+        }
+    }
+
+    func testEveryBundledScript_compiles_andRunsWithoutErrors() throws {
+        let sample = try makeEmail(extra: "Received: from a (a [10.0.0.1]) by b; Mon, 6 Jan 2025 10:00:00 +0000\n")
+        for s in BundledScripts.all {
+            let rt = try ScriptRuntime(s)
+            XCTAssertNoThrow(try rt.run(sample, userTags: []), s.name)
+        }
+        XCTAssertEqual(Set(BundledScripts.all.map(\.id)).count, BundledScripts.all.count, "stable unique ids")
+    }
+
+    func testKeywordProximityScript_tagsOnlyNearWords() throws {
+        let s = try XCTUnwrap(BundledScripts.all.first { $0.name == "Keyword proximity" })
+        let rt = try ScriptRuntime(s)
+        XCTAssertEqual(try rt.run(try makeEmail(), userTags: []).changes.first?.key, "near:contract+terminate")
+        XCTAssertTrue(try rt.run(try makeEmail(body: "contract " + String(repeating: "word ", count: 30) + "terminate"), userTags: []).changes.isEmpty)
+    }
+
+    func testRecipe_generatesCodeThatCompiles_andMatches() throws {
+        var r = ScriptRecipe()
+        r.conditions = [.init(field: .subject, op: .contains, value: "contract"),
+                        .init(field: .body, op: .matches, value: "termin\\w+")]
+        r.actions = [.init(kind: .tag, value: "recipe-hit"), .init(kind: .column, value: "why", value2: "it's \"quoted\"")]
+        let rt = try ScriptRuntime(MailinScript(name: r.name, source: r.source))
+        let hit = try rt.run(try makeEmail(), userTags: [])
+        XCTAssertEqual(hit.changes.map(\.key), ["recipe-hit", "why"])
+        XCTAssertEqual(hit.changes.last?.value, "it's \"quoted\"", "values are escaped, not spliced")
+        let lunch = try makeEmail("Lunch")
+        XCTAssertTrue(try rt.run(lunch, userTags: []).changes.isEmpty)
+    }
+
+    func testScriptFile_roundTrip_andTamperRefused() throws {
+        let s = MailinScript(name: "share me", version: "3", source: "function process(email) { mailin.tag('x'); }", runsAtImport: true)
+        let data = try ScriptFile.export(s)
+        let back = try ScriptFile.importScript(data)
+        XCTAssertEqual(back.source, s.source)
+        XCTAssertEqual(back.version, "3")
+        XCTAssertFalse(back.runsAtImport, "an imported script never runs at import until the user says so")
+        XCTAssertNotEqual(back.id, s.id)
+        let tampered = String(decoding: data, as: UTF8.self).replacingOccurrences(of: "mailin.tag('x')", with: "mailin.tag('y')")
+        XCTAssertThrowsError(try ScriptFile.importScript(Data(tampered.utf8)))
+    }
+}
+
+// MARK: - 3.1 test pass: Review Pack files (T0) and team case fold (T2–T7)
+
+final class V31ReviewTests: XCTestCase {
+    private var dir: URL!
+    override func setUp() {
+        super.setUp()
+        dir = FileManager.default.temporaryDirectory.appendingPathComponent("V31ReviewTests-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
+    override func tearDown() { try? FileManager.default.removeItem(at: dir); super.tearDown() }
+
+    private func writePack(key: Curve25519.Signing.PrivateKey, emails n: Int) throws -> URL {
+        let url = dir.appendingPathComponent("p.mailinpack")
+        let w = try SignedLineWriter(url: url)
+        try w.write(ReviewPackHeader(packID: UUID(), title: "T", createdAt: Date(), createdBy: "E",
+                                     examinerKey: key.publicKey.rawRepresentation.base64EncodedString(),
+                                     emailCount: n, codes: ReviewPackBuilder.defaultCodes, instructions: "", scope: "all"))
+        for i in 0..<n {
+            try w.write(ReviewPackEmail(id: UUID(), date: "d", from: "f\(i)", to: "t", cc: "", subject: "S\(i)",
+                                        body: "body \(i)", attachments: [], sourceSHA256: "x"))
+        }
+        try w.finish(signingWith: key)
+        return url
+    }
+
+    func testPack_opens_readsBodiesLazily_andResponseIsSigned() throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let url = try writePack(key: key, emails: 25)
+        let pack = try OpenedReviewPack.open(url)
+        XCTAssertEqual(pack.index.count, 25)
+        XCTAssertEqual(try pack.email(at: 17).subject, "S17")
+
+        let id = pack.index[3].id
+        let out = dir.appendingPathComponent("r.mailinresponse")
+        // writeResponse signs with the device key; verify the file with its own header key.
+        do {
+            try pack.writeResponse([id: ReviewDecision(emailID: id, code: "Privileged", tags: ["a"], note: "n", decidedAt: Date())],
+                                   reviewer: "R", to: out)
+        } catch ReviewPackError.keyUnavailable {
+            throw XCTSkip("no Keychain in this test host")
+        }
+        var header: ReviewResponseHeader?
+        let sha = try SignedLineReader.verify(url: out) { first in
+            header = try SignedLineReader.decoder().decode(ReviewResponseHeader.self, from: first)
+            return header!.reviewerKey
+        }
+        XCTAssertFalse(sha.isEmpty)
+        XCTAssertEqual(header?.packSHA256, pack.sha256)
+    }
+
+    func testPack_anyChangedByte_isRefused() throws {
+        let url = try writePack(key: Curve25519.Signing.PrivateKey(), emails: 3)
+        var text = try String(contentsOf: url, encoding: .utf8)
+        text = text.replacingOccurrences(of: "body 1", with: "body X")
+        try Data(text.utf8).write(to: url)
+        XCTAssertThrowsError(try OpenedReviewPack.open(url)) { XCTAssertEqual($0 as? ReviewPackError, .badSignature) }
+    }
+
+    // Team fold
+
+    private struct Author { let key = Curve25519.Signing.PrivateKey(); let name: String
+        var pub: String { key.publicKey.rawRepresentation.base64EncodedString() } }
+
+    private func entries(_ a: Author, _ ops: [(TeamLogEntry.Op, UUID?, String, Int)]) throws -> [TeamLogEntry] {
+        var out: [TeamLogEntry] = []
+        for (i, op) in ops.enumerated() {
+            var e = TeamLogEntry(seq: i, lamport: op.3, author: a.pub, authorName: a.name, role: "reviewer", at: Date(),
+                                 op: op.0, emailID: op.1, batch: nil, value: op.2, prevHash: out.last?.hash ?? "")
+            e.signature = try a.key.signature(for: try e.signedBytes()).base64EncodedString()
+            out.append(e)
+        }
+        return out
+    }
+
+    private func manifest(lead: Author) -> TeamCaseManifest {
+        TeamCaseManifest(caseID: UUID(), title: "c", createdAt: Date(), createdBy: "L", leadKey: lead.pub,
+                         codes: ReviewPackBuilder.defaultCodes, batches: [], qcPercent: 10)
+    }
+
+    func testFold_isTheSameForAnyInterleaving_andConflictsKeepBothDecisions() throws {
+        let lead = Author(name: "Lead"), r1 = Author(name: "Ann"), r2 = Author(name: "Bo")
+        let e1 = UUID(), e2 = UUID()
+        var all = try entries(r1, [(.code, e1, "Relevant", 1), (.tagAdd, e1, "hot", 2), (.code, e2, "Privileged", 3)])
+        all += try entries(r2, [(.code, e1, "Not relevant", 2), (.tagAdd, e1, "hot", 3), (.tagRemove, e1, "hot", 4)])
+        let m = manifest(lead: lead)
+        let reference = TeamCase.fold(all, manifest: m)
+        for _ in 0..<20 { XCTAssertEqual(TeamCase.fold(all.shuffled(), manifest: m), reference) }
+
+        XCTAssertEqual(reference.conflicts.count, 1)
+        XCTAssertEqual(Set(reference.conflicts[0].decisions.values), ["Relevant", "Not relevant"])
+        XCTAssertEqual(reference.emails[e1]?.tags["hot"]?.count, 1, "the tag stays while Ann still holds it")
+        XCTAssertEqual(reference.code(e2), "Privileged")
+
+        // Only the lead's resolution counts.
+        let fake = try entries(r1, [(.resolve, e1, "Relevant", 9)])
+        XCTAssertEqual(TeamCase.fold(all + fake, manifest: m).conflicts.count, 1)
+        let real = try entries(lead, [(.resolve, e1, "Not relevant", 9)])
+        let resolved = TeamCase.fold(all + real, manifest: m)
+        XCTAssertTrue(resolved.conflicts.isEmpty)
+        XCTAssertEqual(resolved.code(e1), "Not relevant")
+    }
+
+    func testLog_tamperedEntryStopsTheLog_tornLastLineIsIgnored() throws {
+        let a = Author(name: "Ann")
+        let es = try entries(a, [(.code, UUID(), "Relevant", 1), (.code, UUID(), "Privileged", 2), (.code, UUID(), "Relevant", 3)])
+        func file(_ list: [TeamLogEntry], tail: String = "") throws -> URL {
+            var d = Data()
+            for e in list { d.append(try TeamCaseIO.encoder.encode(e)); d.append(0x0A) }
+            d.append(Data(tail.utf8))
+            let url = dir.appendingPathComponent(UUID().uuidString + ".jsonl")
+            try d.write(to: url)
+            return url
+        }
+        XCTAssertEqual(TeamCase.readLog(try file(es)).0.count, 3)
+
+        let torn = TeamCase.readLog(try file(es, tail: "{\"seq\":3,\"lam"))
+        XCTAssertEqual(torn.0.count, 3)
+        XCTAssertTrue(torn.1.first?.contains("interrupted") ?? false)
+
+        var changed = es
+        changed[1].value = "Not relevant"     // signature no longer matches
+        let tampered = TeamCase.readLog(try file(changed))
+        XCTAssertEqual(tampered.0.count, 1, "entries after a tampered one are not used")
+        XCTAssertTrue(tampered.1.first?.contains("tampered") ?? false)
+    }
+
+    func testQCStats_overturnRate_andWilsonInterval() throws {
+        let lead = Author(name: "Lead"), r1 = Author(name: "Ann"), qc = Author(name: "Q")
+        var all: [TeamLogEntry] = []
+        var ann: [(TeamLogEntry.Op, UUID?, String, Int)] = []
+        var q: [(TeamLogEntry.Op, UUID?, String, Int)] = []
+        for i in 0..<10 {
+            let id = UUID()
+            ann.append((.code, id, "Relevant", i + 1))
+            q.append((.qcCode, id, i < 2 ? "Not relevant" : "Relevant", i + 20))
+        }
+        all += try entries(r1, ann)
+        all += try entries(qc, q)
+        let s = TeamCase.fold(all, manifest: manifest(lead: lead))
+        let stat = try XCTUnwrap(s.qcStats().first)
+        XCTAssertEqual(stat.checked, 10)
+        XCTAssertEqual(stat.overturned, 2)
+        XCTAssertEqual(stat.rate, 0.2, accuracy: 1e-9)
+        // Wilson 95 % for 2/10: 0.0567 – 0.5098.
+        XCTAssertEqual(stat.low, 0.0567, accuracy: 0.001)
+        XCTAssertEqual(stat.high, 0.5098, accuracy: 0.001)
+    }
+}
+
+// MARK: - 3.1 test pass: Shortcuts (S0–S1)
+
+final class V31ShortcutsTests: XCTestCase {
+    func testSearchSummary_saysTheExactTotal() {
+        XCTAssertEqual(SearchEmailsIntent.summary(total: 25, shown: 10, query: "x"), "Found 25 emails matching “x”; showing the first 10.")
+        XCTAssertEqual(SearchEmailsIntent.summary(total: 3, shown: 3, query: "x"), "Found 3 emails matching “x”.")
+    }
+
+    func testFindClauses_mapOntoTheArchiveQuery() {
+        var q = EmailQuery()
+        for c: EmailEntityClause in [.sender("anna"), .subject("budget"), .hasAttachments(true), .recovered(false)] { c.apply(to: &q) }
+        XCTAssertEqual(q.sender, "anna")
+        XCTAssertEqual(q.subjectContains, "budget")
+        XCTAssertEqual(q.hasAttachments, true)
+        XCTAssertEqual(q.exclusions?.first?.field, .recovered)
+        var r = EmailQuery(); EmailEntityClause.recovered(true).apply(to: &r)
+        XCTAssertEqual(r.recovery, "any")
+    }
+
+    func testActionsRefuseWhileTheSwitchIsOff() {
+        let was = ShortcutsPolicy.actionsEnabled
+        ShortcutsPolicy.actionsEnabled = false
+        defer { ShortcutsPolicy.actionsEnabled = was }
+        XCTAssertThrowsError(try ShortcutsPolicy.requireEnabled())
+    }
+}

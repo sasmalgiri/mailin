@@ -319,7 +319,8 @@ final class V3CompatibilityTests: XCTestCase {
     // MARK: - M1 / M5: every 3.0 engine is a switch, promoted (on by default)
 
     func testEveryEngine_hasAMatrixEntry_andIsOnByDefaultAfterPromotion() {
-        let engines = Capability.allCases.filter { $0.rawValue.hasPrefix("v3") }
+        // 3.1 engines (v31…) are previews, off by default — see the next test.
+        let engines = Capability.allCases.filter { $0.rawValue.hasPrefix("v3") && !$0.rawValue.hasPrefix("v31") }
         XCTAssertGreaterThanOrEqual(engines.count, 35, "the L/A/I/Q/S engines")
         for capability in engines {
             let spec = EngineSpec.of(capability)
@@ -330,6 +331,19 @@ final class V3CompatibilityTests: XCTestCase {
             XCTAssertTrue(Capability.defaultOn(maturity: capability.maturity, isEngine: true, beta: false),
                           "\(capability) is on by default in App Store builds")
         }
+    }
+
+    func test31Engines_arePreviews_offByDefault_withMatrixEntries() {
+        let previews = Capability.allCases.filter { $0.rawValue.hasPrefix("v31") }
+        XCTAssertEqual(Set(previews), [.v31Recovery, .v31DeepRecovery, .v31ShortcutsActions, .v31Scripts,
+                                       .v31ReviewPack, .v31TeamCase, .v31ForensicTimestamps])
+        for c in previews {
+            XCTAssertNotNil(EngineSpec.of(c), "\(c) has a matrix entry")
+            XCTAssertEqual(c.maturity, .preview, "\(c) stays a preview until its gate passes (rule 15)")
+            XCTAssertFalse(Capability.defaultOn(maturity: c.maturity, isEngine: true, beta: false), "\(c) is off in App Store builds")
+        }
+        XCTAssertTrue(Capability.v31DeepRecovery.requires.contains(.v31Recovery))
+        XCTAssertTrue(Capability.v31TeamCase.requires.contains(.v31ReviewPack))
     }
 
     // MARK: - M2: the app stopped inside an engine → off at the next launch
