@@ -39,7 +39,10 @@ final class AccessibilityAuditUITests: XCTestCase {
         var issues: [String] = []
         do {
             try app.performAccessibilityAudit(for: .all) { issue in
-                let element = issue.element.map { "\($0.elementType.rawValue) “\($0.label)” id=\($0.identifier)" } ?? "—"
+                let element = issue.element.map { e in
+                    let f = e.frame
+                    return "\(e.elementType.rawValue) “\(e.label)” id=\(e.identifier) at \(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))×\(Int(f.height))"
+                } ?? "—"
                 // "Contrast nearly passed" is the audit's advisory for the
                 // system secondary-text style, which the app uses and which
                 // darkens with Increase Contrast (ACCESSIBILITY_3_0.md): it

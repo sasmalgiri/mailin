@@ -1161,8 +1161,14 @@ struct ContentView: View {
                 leftSidebar
             }
             .frame(minWidth: 200, idealWidth: 260, maxWidth: 360)
+            // Each pane is announced by name (the Mac audit found three
+            // unnamed groups, 2026-10-12).
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(String(localized: "Filters"))
             ParsedEmailListView(model: modelVM, selectedEmailIDs: $selectedEmailIDs)
                 .frame(minWidth: 280, idealWidth: 400)
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(String(localized: "Email list"))
             VStack(spacing: 0) {
                 detailContentView
                 if appState.dockedBottomPanel != nil && modelVM.isParsed {
@@ -1170,7 +1176,11 @@ struct ContentView: View {
                 }
             }
             .frame(minWidth: 300)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(String(localized: "Email"))
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(String(localized: "Archive"))
     }
     #else
     private var emailInboxDestination: some View {
@@ -2338,31 +2348,31 @@ struct ContentView: View {
                     HStack(spacing: Spacing.xSmall) {
                         // §3.3 R1: AI icon only when Page 2 is on.
                         if modules.isEnabled(.aiInsights) {
-                            compactToolIcon("sparkles", color: .purple) { appState.showAIAssistant = true }
+                            compactToolIcon("sparkles", color: .purple, label: String(localized: "AI Assistant")) { appState.showAIAssistant = true }
                         }
                         if modules.isEnabled(.aiInsights) {
-                            compactToolIcon("chart.bar", color: .blue) { appState.showAnalytics = true }
+                            compactToolIcon("chart.bar", color: .blue, label: String(localized: "Analytics")) { appState.showAnalytics = true }
                         }
                         if modules.isEnabled(.aiInsights) {
-                            compactToolIcon("circle.grid.3x3", color: .teal) {
+                            compactToolIcon("circle.grid.3x3", color: .teal, label: String(localized: "Topic Clusters")) {
                                 withAnimation { appState.dockedBottomPanel = appState.dockedBottomPanel == .topics ? .subjects : .topics }
                             }
                         }
-                        compactToolIcon("list.bullet.rectangle.portrait", color: .orange) {
+                        compactToolIcon("list.bullet.rectangle.portrait", color: .orange, label: String(localized: "Subjects")) {
                             withAnimation { appState.dockedBottomPanel = .subjects }
                         }
-                        compactToolIcon("doc.on.doc", color: .indigo) { if storeManager.requirePremium() { appState.showDuplicateManager = true } }
+                        compactToolIcon("doc.on.doc", color: .indigo, label: String(localized: "Duplicates")) { if storeManager.requirePremium() { appState.showDuplicateManager = true } }
                         if isForensicPersona && modules.isEnabled(.aiInsights) {
-                            compactToolIcon("brain", color: .pink) { appState.showPredictiveCoding = true }
+                            compactToolIcon("brain", color: .pink, label: String(localized: "Predictive Coding")) { appState.showPredictiveCoding = true }
                         }
                         if isForensicPersona && modules.isEnabled(.professional) {
-                            compactToolIcon("person.badge.key", color: .cyan) { appState.showCustodianPanel = true }
-                            compactToolIcon("doc.text.magnifyingglass", color: .red) { appState.showInvestigationReport = true }
-                            compactToolIcon("clock.arrow.circlepath", color: .orange) { appState.showAuditTrail = true }
-                            compactToolIcon("exclamationmark.shield", color: .red) { appState.showIOCExtractor = true }
-                            compactToolIcon("checklist", color: .blue) { appState.showEDiscovery = true }
+                            compactToolIcon("person.badge.key", color: .cyan, label: String(localized: "Custodians")) { appState.showCustodianPanel = true }
+                            compactToolIcon("doc.text.magnifyingglass", color: .red, label: String(localized: "Investigation Report")) { appState.showInvestigationReport = true }
+                            compactToolIcon("clock.arrow.circlepath", color: .orange, label: String(localized: "Audit Trail")) { appState.showAuditTrail = true }
+                            compactToolIcon("exclamationmark.shield", color: .red, label: String(localized: "IOC Extractor")) { appState.showIOCExtractor = true }
+                            compactToolIcon("checklist", color: .blue, label: String(localized: "E-Discovery")) { appState.showEDiscovery = true }
                         }
-                        compactToolIcon("square.and.arrow.up", color: .brown) { exportFilteredEmailsAsEML() }
+                        compactToolIcon("square.and.arrow.up", color: .brown, label: String(localized: "Export filtered emails as EML")) { exportFilteredEmailsAsEML() }
                     }
                     .padding(.trailing, Spacing.small)
                 }
@@ -2372,7 +2382,10 @@ struct ContentView: View {
         }
     }
 
-    private func compactToolIcon(_ icon: String, color: Color, action: @escaping () -> Void) -> some View {
+    /// An icon-only tool button. The label is required: without it VoiceOver
+    /// read the symbol name ("square.and.arrow.up") — found by the Mac
+    /// accessibility audit, 2026-10-12.
+    private func compactToolIcon(_ icon: String, color: Color, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
                 .font(.system(size: 14))
@@ -2382,6 +2395,8 @@ struct ContentView: View {
                 .cornerRadius(CornerRadius.small)
         }
         .buttonStyle(.plain)
+        .help(label)
+        .accessibilityLabel(label)
     }
 
     private var isForensicPersona: Bool {

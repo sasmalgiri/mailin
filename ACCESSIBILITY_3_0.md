@@ -64,3 +64,14 @@ Reported but not failed (advisories, listed in each run's report):
 - **Text clipped** — list previews are cut to two lines with an ellipsis by design (the whole email opens on
   tap), and the last list row meets the screen edge until scrolled.
 
+## Automated audit (Mac, 2026-10-12) — open
+
+Fixed: the compact tool buttons beside the email detail had no label (VoiceOver read "square.and.arrow.up");
+every one now has a name and a tooltip. Main-window panes are named (Filters / Email list / Email).
+
+Still reported by the Mac audit (the test fails on purpose until they are resolved or confirmed harmless with
+VoiceOver): 5 "no description" groups and 2 outlines — the panes of SwiftUI's split view, whose AppKit
+containers do not take the SwiftUI label; 3 "action is missing" on SwiftUI menu buttons (sort, export) that
+VoiceOver opens with its menu action; the menu bar; 1 small text failing contrast in the sidebar (6×13 pt). A
+short VoiceOver pass on the Mac decides whether any of these needs code.
+
