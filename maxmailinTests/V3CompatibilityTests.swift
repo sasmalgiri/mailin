@@ -316,17 +316,19 @@ final class V3CompatibilityTests: XCTestCase {
         }
     }
 
-    // MARK: - M1: every 3.0 engine is a switch, off in App Store builds
+    // MARK: - M1 / M5: every 3.0 engine is a switch, promoted (on by default)
 
-    func testEveryEngine_hasAMatrixEntry_andIsOffInAppStoreBuilds() {
+    func testEveryEngine_hasAMatrixEntry_andIsOnByDefaultAfterPromotion() {
         let engines = Capability.allCases.filter { $0.rawValue.hasPrefix("v3") }
         XCTAssertGreaterThanOrEqual(engines.count, 35, "the L/A/I/Q/S engines")
         for capability in engines {
             let spec = EngineSpec.of(capability)
             XCTAssertNotNil(spec, "\(capability) has a matrix entry")
             XCTAssertFalse(spec?.name.isEmpty ?? true)
-            XCTAssertFalse(Capability.defaultOn(maturity: capability.maturity, isEngine: true, beta: false),
-                           "\(capability) must be off by default until promoted (M5)")
+            // M5 (owner, 2026-10-12): promoted — on in App Store builds too.
+            XCTAssertEqual(capability.maturity, .stable, "\(capability) promoted")
+            XCTAssertTrue(Capability.defaultOn(maturity: capability.maturity, isEngine: true, beta: false),
+                          "\(capability) is on by default in App Store builds")
         }
     }
 

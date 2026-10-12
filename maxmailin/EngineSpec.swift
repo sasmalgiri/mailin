@@ -30,7 +30,11 @@ struct EngineSpec: Sendable {
     let detail: String
     let warning: String?
 
-    init(_ owner: AppModule, requires: [Capability] = [], maturity: Capability.Maturity = .preview,
+    // M5 (owner, 2026-10-12): every 3.0 engine is promoted — on by default in
+    // every build. Each stays a switch in the matrix (the previous engine one
+    // switch away), and an engine the app stops inside still switches itself
+    // off at the next launch (M2).
+    init(_ owner: AppModule, requires: [Capability] = [], maturity: Capability.Maturity = .stable,
          name: String, detail: String, warning: String? = nil) {
         self.owner = owner
         self.maturity = maturity
