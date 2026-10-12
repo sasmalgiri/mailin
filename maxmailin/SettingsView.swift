@@ -173,6 +173,14 @@ struct SettingsView: View {
                     }
             }
 
+            // 3.1 T0: Review Pack (send a scope for review, merge responses).
+            if modules.isOn(.v31ReviewPack) {
+                NavigationStack { ReviewPackView() }
+                    .tabItem {
+                        Label("Review Pack", systemImage: "shippingbox")
+                    }
+            }
+
             profileSettings
                 .tabItem {
                     Label("Profile", systemImage: personaManager.selectedPersona.icon)
