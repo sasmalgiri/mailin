@@ -43,6 +43,9 @@ enum CapabilityWiring {
             RecoveryPolicy.isEnabled = isOn
         case .v31DeepRecovery:
             RecoveryPolicy.deepRecoveryEnabled = isOn
+        case .v31ShortcutsActions:
+            // S1–S4: intents run without a view, so they read a pushed flag.
+            ShortcutsPolicy.actionsEnabled = isOn
         case .v3AlertsAnomalies:
             // §3-A1: background findings over the whole archive.
             BackgroundAnalysisManager.wholeArchiveEnabled = isOn
@@ -166,7 +169,7 @@ enum CapabilityWiring {
              .v3LegalReview,
              .v3EvidenceDesks,
              .v3PreservationExport,
-             .v31ShortcutsActions, .v31Scripts, .v31ReviewPack, .v31TeamCase, .v31ForensicTimestamps:
+             .v31Scripts, .v31ReviewPack, .v31TeamCase, .v31ForensicTimestamps:
             // Gated at the point of use — the surface asks the registry. No
             // pushed flag to keep in step, which is the preferable shape;
             // these cases are listed explicitly rather than behind `default`
