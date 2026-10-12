@@ -532,6 +532,7 @@ enum ScopeJob {
     nonisolated static func describe(_ q: EmailQuery) -> String {
         var parts: [String] = []
         if let t = q.text, !t.isEmpty { parts.append("search “\(t)”") }
+        if let r = q.recovery { parts.append(r == "any" ? "recovered" : "recovery \(r)") }
         if let s = q.sender { parts.append("from \(s)") }
         if let r = q.recipient { parts.append("to \(r)") }
         if let d = q.domain { parts.append("domain \(d)") }

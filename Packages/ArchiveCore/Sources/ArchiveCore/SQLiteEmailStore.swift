@@ -514,7 +514,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     // MARK: - Open / schema
 
-    private func ensureDB() throws -> OpaquePointer {
+    func ensureDB() throws -> OpaquePointer {
         if let db { return db }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         // W3: the canonical store is read by background analysis/reconcile
@@ -779,7 +779,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     ///   v14 = raw-MIME blob tier (S3b)
     ///   v15 = message locators (S4/S5)
     ///   v19 = 3.0 legal state, fingerprint tree, feature index (additive)
-    static let currentSchemaVersion = 19
+    static let currentSchemaVersion = 20
 
     private func migrateSchema(_ handle: OpaquePointer) throws {
         var v = try scalarInt(handle, "PRAGMA user_version;")
@@ -1209,6 +1209,16 @@ actor SQLiteEmailStore: EmailArchiveStore {
             }
             v = 19
         }
+        if v < 20 {
+            // v20 (3.1 R1/S5/S7): additive only — recovery records, script
+            // custom values and script runs in new tables. Snapshot first as
+            // for every upgrade (ensureDB).
+            try inExclusiveTransaction(handle) {
+                try createSchemaV20(handle)
+                try exec(handle, "PRAGMA user_version = 20;")
+            }
+            v = 20
+        }
     }
 
     /// v19 tables. Every statement is IF NOT EXISTS.
@@ -1520,7 +1530,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
         """)
     }
 
-    private func inExclusiveTransaction(_ handle: OpaquePointer, _ body: () throws -> Void) throws {
+    func inExclusiveTransaction(_ handle: OpaquePointer, _ body: () throws -> Void) throws {
         try exec(handle, "BEGIN EXCLUSIVE TRANSACTION;")
         do { try body(); try exec(handle, "COMMIT;") }
         catch { try? exec(handle, "ROLLBACK;"); throw error }
@@ -2578,6 +2588,10 @@ actor SQLiteEmailStore: EmailArchiveStore {
                                     throw SQLiteStoreError.step(lastError(db))
                                 }
                             }
+                        }
+                        // 3.1 R1: how the email was found (only non-live is stored).
+                        if let recovery = email.recovery {
+                            try insertRecovery(db, emailID: idStr, info: recovery)
                         }
                         for tag in email.tags where !tag.isEmpty {
                             sqlite3_reset(insertTag); sqlite3_clear_bindings(insertTag)
@@ -3662,6 +3676,14 @@ actor SQLiteEmailStore: EmailArchiveStore {
         if let hasAttach = q.hasAttachments {
             sql.append("e.has_attach = \(hasAttach ? 1 : 0)")
         }
+        if let rec = q.recovery, !rec.isEmpty {
+            if rec == "any" {
+                sql.append("EXISTS (SELECT 1 FROM email_recovery rc WHERE rc.email_id = e.id)")
+            } else {
+                sql.append("EXISTS (SELECT 1 FROM email_recovery rc WHERE rc.email_id = e.id AND rc.state = ?)")
+                binds.append(.text(rec))
+            }
+        }
         if let name = q.attachmentFilename?.trimmingCharacters(in: .whitespaces), !name.isEmpty {
             // A7 `filename:`. A bare extension ("pdf") matches the suffix as
             // well as a substring, so "filename:pdf" finds report.PDF.
@@ -3736,6 +3758,13 @@ actor SQLiteEmailStore: EmailArchiveStore {
                 binds.append(.int(Int64(ex.value) ?? 0))
             case .pinned:
                 sql.append("NOT EXISTS (SELECT 1 FROM email_review_state rvx WHERE rvx.email_id = e.id AND rvx.pinned = 1)")
+            case .recovered:
+                if ex.value.isEmpty || ex.value == "any" {
+                    sql.append("NOT EXISTS (SELECT 1 FROM email_recovery rcx WHERE rcx.email_id = e.id)")
+                } else {
+                    sql.append("NOT EXISTS (SELECT 1 FROM email_recovery rcx WHERE rcx.email_id = e.id AND rcx.state = ?)")
+                    binds.append(.text(ex.value))
+                }
             }
         }
         return (sql, binds)
@@ -5586,7 +5615,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     // MARK: - SQLite helpers
 
-    private func exec(_ db: OpaquePointer, _ sql: String) throws {
+    func exec(_ db: OpaquePointer, _ sql: String) throws {
         var err: UnsafeMutablePointer<CChar>?
         let rc = sqlite3_exec(db, sql, nil, nil, &err)
         if rc != SQLITE_OK {
@@ -5596,7 +5625,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
         }
     }
 
-    private func prepare(_ db: OpaquePointer, _ sql: String) throws -> OpaquePointer? {
+    func prepare(_ db: OpaquePointer, _ sql: String) throws -> OpaquePointer? {
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             throw SQLiteStoreError.prepare(lastError(db))
@@ -5604,7 +5633,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return stmt
     }
 
-    private func scalarInt(_ db: OpaquePointer, _ sql: String) throws -> Int {
+    func scalarInt(_ db: OpaquePointer, _ sql: String) throws -> Int {
         let stmt = try prepare(db, sql)
         defer { sqlite3_finalize(stmt) }
         guard try stepRow(stmt, db) else { return 0 }
@@ -5615,7 +5644,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// any error (disk full, I/O, interrupt) instead of letting the caller's
     /// `while == SQLITE_ROW` loop silently mistake a failure for end-of-rows —
     /// which would return a partial result set as if it were complete.
-    private func stepRow(_ stmt: OpaquePointer?, _ db: OpaquePointer) throws -> Bool {
+    func stepRow(_ stmt: OpaquePointer?, _ db: OpaquePointer) throws -> Bool {
         switch sqlite3_step(stmt) {
         case SQLITE_ROW:  return true
         case SQLITE_DONE: return false
@@ -5630,21 +5659,21 @@ actor SQLiteEmailStore: EmailArchiveStore {
     nonisolated static let staticSQLiteTransient =
         unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-    private func bindText(_ stmt: OpaquePointer?, _ index: Int32, _ value: String) {
+    func bindText(_ stmt: OpaquePointer?, _ index: Int32, _ value: String) {
         sqlite3_bind_text(stmt, index, value, -1, sqliteTransient)
     }
-    private func bindTextOrNull(_ stmt: OpaquePointer?, _ index: Int32, _ value: String?) {
+    func bindTextOrNull(_ stmt: OpaquePointer?, _ index: Int32, _ value: String?) {
         if let value { sqlite3_bind_text(stmt, index, value, -1, sqliteTransient) }
         else { sqlite3_bind_null(stmt, index) }
     }
-    private func bindBlob(_ stmt: OpaquePointer?, _ index: Int32, _ data: Data?) {
+    func bindBlob(_ stmt: OpaquePointer?, _ index: Int32, _ data: Data?) {
         guard let data, !data.isEmpty else { sqlite3_bind_null(stmt, index); return }
         data.withUnsafeBytes { raw in
             _ = sqlite3_bind_blob(stmt, index, raw.baseAddress, Int32(data.count), sqliteTransient)
         }
     }
 
-    private func columnText(_ stmt: OpaquePointer?, _ index: Int32) -> String {
+    func columnText(_ stmt: OpaquePointer?, _ index: Int32) -> String {
         guard let c = sqlite3_column_text(stmt, index) else { return "" }
         return String(cString: c)
     }
@@ -5653,7 +5682,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
               let c = sqlite3_column_text(stmt, index) else { return nil }
         return String(cString: c)
     }
-    private func columnUUID(_ stmt: OpaquePointer?, _ index: Int32) -> UUID? {
+    func columnUUID(_ stmt: OpaquePointer?, _ index: Int32) -> UUID? {
         guard let c = sqlite3_column_text(stmt, index) else { return nil }
         return UUID(uuidString: String(cString: c))
     }
@@ -5668,7 +5697,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
         columnBlobData(stmt, index).flatMap { String(data: $0, encoding: .utf8) }
     }
 
-    private func lastError(_ db: OpaquePointer) -> String {
+    func lastError(_ db: OpaquePointer) -> String {
         guard let c = sqlite3_errmsg(db) else { return "unknown error" }
         return String(cString: c)
     }

@@ -120,6 +120,9 @@ struct EmailQuery: Sendable, Equatable, Codable {
     /// §3-Q4: filters that EXCLUDE (−from:, NOT tag:, −has:attachment …).
     /// Optional so queries saved before 3.0 still decode.
     var exclusions: [EmailExclusion]? = nil
+    /// 3.1 R2: "any" = every recovered email, or one `RecoveryState` raw value.
+    /// Optional so saved queries from earlier versions still decode.
+    var recovery: String? = nil
 
     static let all = EmailQuery()
 
@@ -132,6 +135,7 @@ struct EmailQuery: Sendable, Equatable, Codable {
             || !domains.isEmpty || !tags.isEmpty
             || minPriority != nil || phishingOnly || sentimentBelow != nil || !classifications.isEmpty
             || minSenderMessages != nil || newestLimit != nil || !(exclusions ?? []).isEmpty
+            || recovery != nil
     }
 
     var isEmpty: Bool {
@@ -146,6 +150,8 @@ struct EmailExclusion: Sendable, Equatable, Codable {
     enum Field: String, Sendable, Codable {
         case sender, recipient, subject, domain, tag, attachments
         case source, evidence, type, filename, before, after, pinned
+        /// 3.1: `-is:recovered` (value empty) or `-recovery:unpurged`.
+        case recovered
     }
     var field: Field
     var value: String

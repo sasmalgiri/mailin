@@ -47,7 +47,10 @@ enum ArchiveQueryCompiler {
             return EmailExclusion(field: key == "before" ? .before : .after, value: epoch)
         case "is":
             let v = value.lowercased()
+            if v == "recovered" || v == "deleted" { return EmailExclusion(field: .recovered, value: "") }
             return (v == "pinned" || v == "starred") ? EmailExclusion(field: .pinned, value: "") : nil
+        case "recovery":
+            return recoveryState(value).map { EmailExclusion(field: .recovered, value: $0) }
         default: return nil
         }
     }
@@ -126,8 +129,11 @@ enum ArchiveQueryCompiler {
             case "is":
                 switch value.lowercased() {
                 case "pinned", "starred": query.pinnedOnly = true
+                case "recovered", "deleted": query.recovery = "any"   // 3.1 R2
                 default: freeText.append(token)
                 }
+            case "recovery":
+                if let state = recoveryState(value) { query.recovery = state } else { freeText.append(token) }
             case "in":
                 if value.lowercased() == "trash" { query.includeTrashed = true }
                 else { freeText.append(token) }
@@ -185,6 +191,20 @@ enum ArchiveQueryCompiler {
         case "subject", "az": return .subjectAZ
         case "size", "largest": return .sizeDesc
         case "priority": return .priorityDesc
+        default: return nil
+        }
+    }
+
+    /// `recovery:unpurged`, `recovery:orphan`, `recovery:deleted` (deleted folder) …
+    static func recoveryState(_ value: String) -> String? {
+        switch value.lowercased() {
+        case "deleted", "deletedfolder", "trash": return RecoveryState.deletedFolder.rawValue
+        case "flagged", "flaggeddeleted": return RecoveryState.flaggedDeleted.rawValue
+        case "unpurged", "expunged": return RecoveryState.unpurged.rawValue
+        case "orphan", "orphans": return RecoveryState.orphan.rawValue
+        case "carved": return RecoveryState.carved.rawValue
+        case "stub", "stubs": return RecoveryState.deletionStub.rawValue
+        case "any", "all": return "any"
         default: return nil
         }
     }

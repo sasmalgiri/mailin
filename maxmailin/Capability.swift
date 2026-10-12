@@ -150,6 +150,14 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
     case v3EvidenceDesks
     case v3EvidenceReceipts
     case v3PreservationExport
+    // 3.1 (TODO_3_1_RECOVERY_SCRIPTING_TEAM.md) — preview, off until tested.
+    case v31Recovery
+    case v31DeepRecovery
+    case v31ShortcutsActions
+    case v31Scripts
+    case v31ReviewPack
+    case v31TeamCase
+    case v31ForensicTimestamps
 
     var id: String { rawValue }
 

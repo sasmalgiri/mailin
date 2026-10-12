@@ -124,6 +124,11 @@ struct EMLXParser {
             if flags & 0x10 != 0 { email.tags.append("Flagged") }
             if flags & 0x80 != 0 { email.tags.append("Draft") }
         }
+        // 3.1 R4: deleted flag → a recovery state (the "Deleted" tag stays for 3.0 compatibility).
+        if let r = RecoveryDetector.fromEMLX(flags: plistFlags["flags"] as? Int,
+                                               mailboxPath: fileURL.pathComponents.last(where: { $0.hasSuffix(".mbox") }).map { String($0.dropLast(5)) }) {
+            email.recovery = r
+        }
 
         return email
     }

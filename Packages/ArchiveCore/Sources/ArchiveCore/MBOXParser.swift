@@ -34,6 +34,8 @@ struct MBOXParser {
         var anomalies: [String] = []
         var isBodyCompacted: Bool = false
         var bodyPreview: String = ""
+        /// 3.1 R1: how the parser found this message (nil = an ordinary, live email).
+        var recovery: RecoveryInfo? = nil
 
         var bodyLines: [String] {
             (plainBody.isEmpty ? htmlBody : plainBody).components(separatedBy: .newlines)
@@ -48,7 +50,7 @@ struct MBOXParser {
             case id, headers, rawSource, messageType, attachments, timestamp
             case domains, plainBody, htmlBody, mimeRoot, mimeSummary
             case mimeDiagnostics, threadID, inReplyTo, references, tags, anomalies
-            case bodyLines, fullText, isBodyCompacted, bodyPreview
+            case bodyLines, fullText, isBodyCompacted, bodyPreview, recovery
         }
 
         init(id: UUID = UUID(), headers: [String: String], bodyLines: [String] = [], rawSource: String, messageType: String, attachments: [AttachmentMetadata], timestamp: String, fullText: String = "", domains: [String], plainBody: String, htmlBody: String, mimeRoot: MIMEPart? = nil, mimeSummary: String? = nil, mimeDiagnostics: [String] = [], threadID: String? = nil, inReplyTo: String? = nil, references: [String]? = nil, tags: [String] = [], anomalies: [String] = []) {
@@ -92,6 +94,7 @@ struct MBOXParser {
             anomalies = try container.decodeIfPresent([String].self, forKey: .anomalies) ?? []
             isBodyCompacted = try container.decodeIfPresent(Bool.self, forKey: .isBodyCompacted) ?? false
             bodyPreview = try container.decodeIfPresent(String.self, forKey: .bodyPreview) ?? ""
+            recovery = try container.decodeIfPresent(RecoveryInfo.self, forKey: .recovery)
         }
 
         func encode(to encoder: Encoder) throws {
@@ -115,6 +118,7 @@ struct MBOXParser {
             try container.encode(anomalies, forKey: .anomalies)
             try container.encode(isBodyCompacted, forKey: .isBodyCompacted)
             try container.encode(bodyPreview, forKey: .bodyPreview)
+            try container.encodeIfPresent(recovery, forKey: .recovery)
         }
 
         mutating func compact() {
@@ -542,7 +546,7 @@ struct MBOXParser {
             }
         let retainedRoot = retainAttachmentBytes ? rootPart : nil
 
-        return RawEmail(
+        var email = RawEmail(
             id: UUID(),
             headers: mappedHeaders,
             rawSource: fullRaw,
@@ -561,6 +565,9 @@ struct MBOXParser {
             tags: tags,
             anomalies: findAnomalies(headers: mappedHeaders, body: extraction.plainBody, attachments: extraction.attachments)
         )
+        // 3.1 R3: deleted-but-present mail (Thunderbird expunged, X-Status D, Gmail Trash).
+        email.recovery = RecoveryDetector.fromHeaders(mappedHeaders, labels: tags)
+        return email
     }
 
     /// `Name:` at the start of a line, RFC 5322 field-name grammar (printable

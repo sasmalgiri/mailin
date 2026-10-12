@@ -100,7 +100,7 @@ struct PSTParser {
                 references: headers["References"]?.components(separatedBy: .whitespaces).filter { !$0.isEmpty },
                 tags: msg.folderPath.isEmpty ? [] : [msg.folderPath],
                 anomalies: MBOXParser.findAnomalies(headers: headers, body: msg.bodyText, attachments: msg.attachments)
-            )
+            ).withRecovery(msg.recovery)
         }
     }
 
@@ -158,6 +158,8 @@ struct PSTReader {
         var creationTime: Date?
         var lastModificationTime: Date?
         var folderPath: String = ""
+        /// 3.1 R5/R6/R7: deleted folder, orphan or carved.
+        var recovery: RecoveryInfo?
         var attachments: [AttachmentMetadata] = []
         var hasAttachments: Bool = false
         var messageSize: Int = 0
@@ -205,6 +207,9 @@ struct PSTReader {
         let blockEntries = try readBlockBTree()
 
         let messageNodes = nodeEntries.filter { ($0.nid & 0x1F) == 0x0C }
+        // 3.1 R5/R6: the folder tree (folders are NID type 0x02; each names
+        // itself in PidTagDisplayName 0x3001 and points at its parent).
+        let folders = RecoveryPolicy.isEnabled ? folderTree(nodeEntries, blockEntries: blockEntries) : [:]
 
         var messages: [PSTMessage] = []
         let total = Double(max(messageNodes.count, 1))
@@ -214,6 +219,16 @@ struct PSTReader {
             do {
                 var msg = try readMessage(node: node, blockEntries: blockEntries)
                 msg = try extractAttachments(for: node, blockEntries: blockEntries, message: msg)
+                if RecoveryPolicy.isEnabled {
+                    if let path = folderPath(of: node.parentNid, in: folders) {
+                        msg.folderPath = path
+                        msg.recovery = RecoveryDetector.fromFolder(path, method: "pst-folder")
+                    } else {
+                        // In the node tree but in no folder: an orphan (libpff's term).
+                        msg.recovery = RecoveryInfo(state: .orphan, method: "pst-orphan",
+                                                    evidence: String(format: "node 0x%08X, parent 0x%08X not a folder", node.nid, node.parentNid))
+                    }
+                }
                 messages.append(msg)
             } catch {
                 recoveryErrors += 1
@@ -222,7 +237,96 @@ struct PSTReader {
             onProgress?(Double(idx + 1) / total)
         }
 
+        // 3.1 R7: messages left in unallocated space (deep recovery switch).
+        if RecoveryPolicy.isEnabled && RecoveryPolicy.deepRecoveryEnabled {
+            messages.append(contentsOf: carveUnallocated(blockEntries: blockEntries))
+        }
         return messages
+    }
+
+    // MARK: - 3.1 Folder tree and deep recovery
+
+    struct FolderNode { let name: String; let parent: UInt32 }
+
+    /// Every normal folder (NID type 0x02) with its display name and parent.
+    private func folderTree(_ nodes: [NodeEntry], blockEntries: [UInt64: BlockEntry]) -> [UInt32: FolderNode] {
+        var out: [UInt32: FolderNode] = [:]
+        for node in nodes where (node.nid & 0x1F) == 0x02 {
+            guard blockEntries[node.dataBid] != nil else { continue }
+            let pc = parsePropertyContext(readNodeData(bid: node.dataBid, blockEntries: blockEntries))
+            out[node.nid] = FolderNode(name: pc.strings[0x3001] ?? "", parent: node.parentNid)
+        }
+        return out
+    }
+
+    /// "Top of Personal Folders/Deleted Items"; nil when `nid` is not a folder.
+    private func folderPath(of nid: UInt32, in folders: [UInt32: FolderNode]) -> String? {
+        guard folders[nid] != nil else { return nil }
+        var parts: [String] = []
+        var current = nid
+        var guardCount = 0
+        while let f = folders[current], guardCount < 64 {
+            if !f.name.isEmpty { parts.append(f.name) }
+            if f.parent == current { break }       // the root points at itself
+            current = f.parent
+            guardCount += 1
+        }
+        return parts.reversed().joined(separator: "/")
+    }
+
+    /// Scans the file at 64-byte steps outside every allocated block for
+    /// heap-on-node property contexts ([MS-PST] HNHDR bSig 0xEC, bClientSig
+    /// 0xBC) — data blocks are permutation-encoded in default files, so each
+    /// candidate is tried raw and decoded. A context with a subject or body is
+    /// returned as a carved, partial message with its byte offset.
+    private func carveUnallocated(blockEntries: [UInt64: BlockEntry]) -> [PSTMessage] {
+        // Allocated byte ranges (block data + 16-byte trailer), sorted.
+        var allocated = blockEntries.values.map { (Int($0.offset), Int($0.offset) + Int($0.size) + 16) }
+        allocated.sort { $0.0 < $1.0 }
+        var out: [PSTMessage] = []
+        var seen = Set<String>()
+        var rangeIndex = 0
+        var pos = 4096
+        let limit = data.count - 64
+        while pos < limit {
+            while rangeIndex < allocated.count && allocated[rangeIndex].1 <= pos { rangeIndex += 1 }
+            if rangeIndex < allocated.count && allocated[rangeIndex].0 <= pos {
+                pos = (allocated[rangeIndex].1 + 63) & ~63
+                continue
+            }
+            let b2 = data[pos + 2], b3 = data[pos + 3]
+            let rawHit = b2 == 0xEC && b3 == 0xBC
+            let decodedHit = encType == 0x01 && decodePermute(b2) == 0xEC && decodePermute(b3) == 0xBC
+            if rawHit || decodedHit {
+                let end = min(data.count, pos + 8192)
+                var chunk = Data(data[pos..<end])
+                if decodedHit && !rawHit { chunk = Data(chunk.map { decodePermute($0) }) }
+                let pc = parsePropertyContext(chunk)
+                let subject = pc.strings[0x0037] ?? ""
+                let body = pc.strings[0x1000] ?? ""
+                if !subject.isEmpty || !body.isEmpty {
+                    var msg = PSTMessage()
+                    msg.subject = subject
+                    msg.bodyText = body
+                    msg.senderName = pc.strings[0x0C1A] ?? pc.strings[0x0042] ?? ""
+                    msg.senderEmail = pc.strings[0x0C1F] ?? pc.strings[0x0065] ?? ""
+                    msg.displayTo = pc.strings[0x0E04] ?? ""
+                    msg.internetMessageId = pc.strings[0x1035]
+                    msg.deliveryTime = pc.dates[0x0E06]
+                    msg.creationTime = pc.dates[0x3007]
+                    msg.transportHeaders = pc.strings[0x007D] ?? ""
+                    let key = "\(subject)|\(msg.internetMessageId ?? "")|\(body.prefix(64))"
+                    if seen.insert(key).inserted {
+                        msg.recovery = RecoveryInfo(state: .carved, method: "pst-amap-scan",
+                                                    evidence: "property context in unallocated space at byte \(pos)",
+                                                    offset: Int64(pos), partial: true)
+                        out.append(msg)
+                    }
+                }
+            }
+            pos += 64
+        }
+        return out
     }
 
     // MARK: - NDB Layer
@@ -231,6 +335,8 @@ struct PSTReader {
         let nid: UInt32
         let dataBid: UInt64
         let subBid: UInt64
+        /// [MS-PST] NBTENTRY nidParent: the folder of a message, the parent of a folder.
+        var parentNid: UInt32 = 0
     }
 
     struct BlockEntry {
@@ -278,12 +384,14 @@ struct PSTReader {
                     let nid = pstReadUInt32(data, offset: base)
                     let dataBid = pstReadUInt64(data, offset: base + 8)
                     let subBid = pstReadUInt64(data, offset: base + 16)
-                    entries.append(NodeEntry(nid: nid, dataBid: dataBid, subBid: subBid))
+                    let parent = pstReadUInt32(data, offset: base + 24)
+                    entries.append(NodeEntry(nid: nid, dataBid: dataBid, subBid: subBid, parentNid: parent))
                 } else {
                     let nid = pstReadUInt32(data, offset: base)
                     let dataBid = UInt64(pstReadUInt32(data, offset: base + 4))
                     let subBid = UInt64(pstReadUInt32(data, offset: base + 8))
-                    entries.append(NodeEntry(nid: nid, dataBid: dataBid, subBid: subBid))
+                    let parent = pstReadUInt32(data, offset: base + 12)
+                    entries.append(NodeEntry(nid: nid, dataBid: dataBid, subBid: subBid, parentNid: parent))
                 }
             }
             return entries
