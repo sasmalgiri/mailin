@@ -1,7 +1,7 @@
 # mailin 3.1+ — Deleted-email recovery · Scripting & automation · Team review
 
-Plan written 2026-10-13 after the owner asked to add the three features a competitor comparison showed missing
-(Aid4Mail Investigator, Metaspike, Intella, Relativity, Everlaw). The 3.0 rules in `CLAUDE.md` apply unchanged:
+Plan written 2026-10-13, revised the same day after studying how Aid4Mail Investigator, Metaspike (FEC/FEI),
+Magnet AXIOM and Intella (Investigator / Connect) solve each feature. The 3.0 rules in `CLAUDE.md` apply unchanged:
 offline-first, never destroy data, counts before whole-archive actions, honest receipts, no hidden caps, new
 engines behind switches (off until tested), 10 languages, a test that fails without each change.
 
@@ -9,56 +9,74 @@ Status key: `[ ]` to do · `[~]` implemented, untested · `[x]` done (commit).
 
 ---
 
-## 0. What exists today (code inventory, 2026-10-13)
+## 0. What we may and may not reuse (legal)
+
+| Source | Licence | How we use it |
+|---|---|---|
+| Aid4Mail, Metaspike, Magnet AXIOM, Intella **products** | proprietary | **Never copy code, binaries, databases or text.** We learn from their *public* manuals, feature pages and blogs, and build our own design |
+| **[MS-PST]** — Microsoft's published PST/OST file-format specification (Open Specifications Promise) | free to implement | **The authoritative source** for folder tables, allocation maps, heap-on-node and property contexts used by R5–R7 |
+| **libpff** and its format notes (libyal) | LGPL-3.0 (library) | Reference reading only. **Not linked into the app**: LGPL relinking terms conflict with App Store distribution |
+| **vound-software/intella-crawler-scripts** sample scripts | **MIT** | Their *logic* may be ported to our bundled scripts (S7) with attribution in `THIRD_PARTY_NOTICES.md` |
+| **pst-testgen** | MIT | Its answer-key idea (manifest of expected counts) shapes R0; the tool itself needs Windows + Outlook, so we build our own fixtures |
+| Thunderbird `X-Mozilla-Status` flag meanings | public documentation | Implemented from the documented bit values |
+
+## 1. What exists in mailin today (code inventory, 2026-10-13)
 
 | Area | What is there | Gap |
 |---|---|---|
-| **Recovery — PST/OST** | `PSTParser.readAllMessages` walks every message node in the node B-tree (`nid & 0x1F == 0x0C`), so Deleted Items and still-listed soft-deleted messages are imported | Nothing is **marked** as deleted; `folderPath` is never filled (no folder tree); data left in unallocated blocks is not recovered |
-| **Recovery — mbox** | Gmail Takeout `X-Gmail-Labels` (incl. Trash) kept as tags | Thunderbird `X-Mozilla-Status & 0x0008` (expunged, still in file until Compact) is imported as an ordinary email — not marked |
-| **Recovery — EMLX** | Apple Mail flag `0x02` → tag "Deleted" | Not a recovery state, not filterable as such, not on the receipt |
-| **Recovery — carving** | none | No carving of MIME messages from damaged files or raw images |
-| **Scripting — Shortcuts** | 8 App Intents (open, import, search, stats, sentiment, ask AI, security report, digest) | Return text only (no entities, not chainable); **Search stops at 10 and says "Found 10"** (a hidden cap); no actions for tag / hold / Bates / export / verify / jobs |
-| **Scripting — rules & jobs** | Automation Rules (if-then), guided jobs with "Save as Variant", command palette | Not callable from outside the app |
-| **Scripting — plugins** | `MailinPlugin` protocol, sandboxed runner with deadline | **No plugin is registered anywhere** — the system ships empty; plugins are compiled-in Swift, users cannot add their own |
-| **Team — exchange** | `CollaborationManager`: shared folder, each examiner exports a `.mailinreview` file, others import | Merge rule is "local wins unless local is empty": disagreements are silently dropped, not recorded; covers evidence tags + notes only (not coding, batches, holds) |
-| **Team — sessions** | `CollaborativeReviewActivity` (SharePlay) | Needs FaceTime/network — dormant in 3.0 Private |
-| **Team — batches** | `ReviewBatchManager` | Local only; no assignee, no check-out, no QC |
-| **Team — roles** | `OrgPolicy` roles from MDM, role in every audit entry, JSONL audit export | Per device only; no merged team audit |
+| **Recovery — PST/OST** | `PSTParser.readAllMessages` walks every message node in the node B-tree, so Deleted Items and still-listed soft-deleted messages are imported | Nothing is **marked** deleted; `folderPath` is never filled (no folder tree); unallocated data not recovered |
+| **Recovery — mbox** | Gmail Takeout `X-Gmail-Labels` (incl. Trash) kept as tags | Thunderbird `X-Mozilla-Status & 0x0008` (expunged, still in the file until Compact) imported as an ordinary email |
+| **Recovery — EMLX** | Apple Mail flag `0x02` → tag "Deleted" | Not a recovery state; not on the receipt |
+| **Recovery — NSF / carving** | none | No Notes deletion stubs; no carving |
+| **Scripting — Shortcuts** | 8 App Intents | Text results only (not chainable); **Search stops at 10 and says "Found 10"**; no tag / hold / Bates / export / verify actions |
+| **Scripting — rules & jobs** | Automation Rules (if-then), guided jobs with "Save as Variant", command palette | Not callable from outside the app; no import-time hooks |
+| **Scripting — plugins** | `MailinPlugin` protocol + sandboxed runner | **No plugin is registered** — ships empty; compiled-in only |
+| **Team — exchange** | `CollaborationManager` shared-folder `.mailinreview` files | Merge = "local wins unless empty": disagreements silently dropped; tags + notes only |
+| **Team — sessions** | `CollaborativeReviewActivity` (SharePlay) | Network — dormant in 3.0 Private |
+| **Team — batches** | `ReviewBatchManager` | Local only; no assignee, status, check-out or QC |
 
-## 1. How the leaders solve it (research summary)
+## 2. How the leaders solve it (public documentation)
 
-- **Recovery.** Aid4Mail "unpurged mail": messages flagged deleted but still in the file until compaction; a
-  filter `Type:Unpurged`; recovery from PST/OST without Outlook, from mbox, IMAP; plus **MIME carving** from disk
-  images and corrupted mailboxes. libpff distinguishes **orphan items** (node still in the PST, no longer linked into
-  the folder tree) and **recovered items** (rebuilt from unallocated index entries / 64-byte-aligned unallocated
-  blocks). Honest limit: Outlook 2016+ drops Shift+Deleted items from the indexes at once — nothing to recover
-  (test with 1,800 deletions found none). Thunderbird: `X-Mozilla-Status` bit `0x0008` = expunged, data stays until
-  Compact. Forensic practice: hash the source, work on a copy, re-hash at the end; never run repair tools first;
-  test against files with a known answer (pst-testgen).
-- **Scripting.** Aid4Mail 6.2: Python filter/modifier scripts at a fixed pipeline stage, 10 bundled ready-to-run
-  scripts (attachment risk scoring, integrity verification, entity catalogue, relationship mapper …), scripts can
-  read AI classification results, and a (cloud) ChatGPT script generator. Apple platform: App Intents
-  `AppEntity` + `EntityPropertyQuery` give Shortcuts an automatic **Find** action over the app's data and let
-  actions chain; macOS `shortcuts run` gives a command line for free; JavaScriptCore runs sandboxed scripts with
-  no network APIs.
-- **Team review.** Relativity/Everlaw: batches or queues with **check-out/check-in**, review criteria that define
-  "done", **QC / second-level review** by a separate group on a sample, **overturn tracking** and per-reviewer
-  error rate with a confidence measure, mutually exclusive codes, AI-vs-human disagreement as a QC queue,
-  privilege review as its own pass, a decision log.
+### Deleted-email recovery
+| Product | Approach |
+|---|---|
+| **Aid4Mail Investigator** | "Unpurged mail" (deleted but still in the file/server until compaction/expunge) restored automatically; filter `Type:Unpurged`; PST/OST without Outlook (6.1.4+), mbox, IMAP \Deleted, Exchange Recoverable Items; **MIME carving** from disk images and corrupted mailboxes |
+| **Intella** | Optional "Recover deleted emails, files and Notes deletion stubs" (**off by default** since 2.7.1 — slow, can time out); recovered items go to a **`<RECOVERED>`** folder, items outside the root to **`<ORPHAN ITEMS>`**; a **"Recovered" facet**; PST, OST, EDB, NSF stubs, NTFS images; file carving via PhotoRec on E01/DD images |
+| **Magnet AXIOM** | Recovers from the whole evidence image (deleted files, unallocated space); header/footer **carving templates**; app-specific carvers (e.g. Gmail on Android) |
+| **Metaspike FEC** | Collects Exchange/M365 **Recoverable Items** (deletions, purges) and server history records that show *when* a message was deleted or marked unread (needs a live mailbox) |
+| **libpff / [MS-PST]** | *Orphans* (node present, not linked into the folder tree) vs *recovered* (rebuilt from unallocated, 64-byte-aligned blocks). Outlook 2016+ drops Shift-deleted items at once — often nothing to recover |
 
-## 2. Our angle (what makes it better, not just equal)
+### Scripting & automation
+| Product | Approach |
+|---|---|
+| **Aid4Mail** | Python at a fixed stage of a **5-stage pipeline** (source folders → pre-acquisition filter → post-acquisition filter → **script filter/modifier** → AI filter); scripts can rename outputs, redact content, OCR images, and **read the AI's classifications**; **10 bundled scripts** with PDF guides, configurable without code; a public ChatGPT script generator |
+| **Intella** | **Crawler scripts** (Python, Groovy, Java) run *during indexing* with hooks `itemFound` / `itemProcessed` returning *include / exclude*, adding custom columns, enriching data; samples (MIT) for hash/IP/type/size/date/domain filters, SHA-256 columns, IP/MAC extraction |
+| **Magnet AXIOM** | **Custom artifacts** in **XML templates (no code)** or Python; a **Custom Artifact Generator** (no-code); a community **Artifact Exchange** |
+| **Apple platform** | App Intents `AppEntity` + `EntityPropertyQuery` → automatic **Find** action in Shortcuts; macOS `shortcuts run` gives a command line; JavaScriptCore runs scripts with no network objects |
 
-1. **Recovery you can defend.** Every recovered email carries *how* it was found (flag value, folder, file
-   offset, method) and the receipt counts each kind — "312 live, 41 in Deleted Items, 9 unpurged, 3 carved
-   (partial)". Competitors recover; we also *prove* where it came from.
-2. **Deletion analysis.** Deleted mail plotted on the timeline against key dates (legal hold, custodian notice):
-   a cluster of deletions just before a hold is a spoliation signal no consumer or mid-market tool shows.
-3. **Automation that stays offline and provable.** Scripts and Shortcuts run on the device; every scripted change
-   is audited with the script's hash and the email-set fingerprint, so a run can be re-done and proven.
-   An on-device AI writes a first draft of a script from a plain sentence (Aid4Mail uses public ChatGPT).
-4. **Team review with no server.** A shared folder (office NAS, file server, USB) is enough. Each reviewer writes
-   a signed, append-only log; the case is the deterministic merge of all logs. Disagreements become a visible
-   conflict queue, never a silent overwrite. Works with the network unplugged.
+### Team review
+| Product | Approach |
+|---|---|
+| **Intella Connect** | Web server for 10/25 concurrent users; batches with statuses **IN_PROGRESS / IDLE / COMPLETED / ARCHIVED**, assignment permission, **read-only** when the batch is someone else's or completed, **"Review later"**, coding layouts guarded by rules, mutually exclusive fields flagged as **conflicts**, multi-user tags, **redaction profiles**, AI tasks that tag batches |
+| **Magnet AXIOM** | **Portable Case**: export a subset to stakeholders who need **no licence**, they tag/comment, the examiner **merges tags and comments back**; cloud Magnet Review for live collaboration |
+| **Relativity / Everlaw** | Check-out/check-in, review criteria define "done", **QC / second-level review** by a separate group on a sample, **overturn tracking** and per-reviewer error rate with a confidence measure, privilege pass, AI-vs-human disagreement queue |
+
+## 3. Our angle — better, not just equal
+
+1. **Recovery you can defend.** Every recovered email records *how* it was found (flag value, folder, byte offset,
+   method, intact or partial) and each receipt counts each kind. Intella puts items in a folder; we also prove where
+   each came from.
+2. **Deletion analysis.** Deletions on the timeline against hold and custodian-notice dates — a burst before a hold
+   is a spoliation signal; none of the four shows this as a ready report.
+3. **One recovery switch per source, with a time estimate** (Intella's lesson: recovery is slow) — the import
+   preview says "deep recovery adds about N minutes for this 4 GB PST".
+4. **Scripts that are offline, sandboxed and provable** — every scripted change carries the script's SHA-256 and the
+   email-set fingerprint ("re-run and prove"). A **no-code recipe builder** (AXIOM's XML-template lesson) for
+   people who do not program, an **on-device** script assistant (Aid4Mail uses public ChatGPT).
+5. **Team review with no server and no extra licence.** Step one is a **Review Pack** (AXIOM Portable Case lesson):
+   send a subset to a lawyer or translator who opens it in the **free** tier, codes it, sends it back, and the codes
+   merge with a record of who decided what. Step two is a full shared-folder case with signed per-reviewer logs and
+   a visible conflict queue — Intella-Connect-class review without a web server.
 
 ---
 
@@ -66,94 +84,115 @@ Status key: `[ ]` to do · `[~]` implemented, untested · `[x]` done (commit).
 
 | ID | Item | Done means | Status |
 |---|---|---|---|
-| R0 | **Ground-truth corpora**: PST with Deleted Items + orphaned nodes + freed blocks (built with our `PSTWriter`, then nodes unlinked/freed programmatically), Thunderbird mbox with `X-Mozilla-Status` 0x0008/0x0009/0x000b, Apple Mail EMLX with flag 0x02 in a Deleted Messages mailbox, Gmail Takeout with Trash label, a damaged mbox and a raw image with embedded MIME | Each fixture has a manifest of expected live/deleted/recovered counts; fixtures in tests, generated, not real mail | [ ] |
-| R1 | **Recovery provenance model**: per email `recoveryState` ∈ {live, deletedFolder, flaggedDeleted, unpurged, orphan, carved} + `recoveryEvidence` (folder path, flag value, byte offset, method, partial yes/no). Schema bump with snapshot first (rule 2); old rows default `live` | Migration test (snapshot, one-for-one); existing archives unchanged | [ ] |
-| R2 | **Search and filters**: `is:recovered`, `recovery:unpurged` etc., a "Recovered" smart folder, negation (`-is:recovered`), counts in the sidebar | Golden test: each filter equals the manifest | [ ] |
-| R3 | **mbox**: Thunderbird `X-Mozilla-Status & 0x0008` → unpurged (flag kept as evidence); mutt/pine `Status`/`X-Status` containing `D` → flaggedDeleted; Gmail `Trash` label → deletedFolder | Fixture counts match; nothing previously imported is dropped | [ ] |
-| R4 | **EMLX**: flag 0x02 and the Deleted Messages / Trash mailbox → recovery states instead of a plain tag (tag kept for compatibility, rule 16) | Fixture counts match; old tag still present | [ ] |
-| R5 | **PST/OST folder tree**: parse the hierarchy table so every message gets its real `folderPath` (also improves normal imports); identify Deleted Items, Recoverable Items (Deletions, Purges, Versions) and Junk | Folder paths equal the fixture; existing import tests unchanged | [ ] |
-| R6 | **PST orphans**: message nodes present in the node B-tree but in no folder's contents table → `orphan` | Fixture orphans found exactly | [ ] |
-| R7 | **PST deep recovery** (switch, preview): walk allocation-map (AMap) free regions at 64-byte alignment for heap-on-node / property-context signatures; rebuild what is intact; anything incomplete is `carved` + `partial`, with the offset. Never modifies the source; runs on a read-only copy | Fixture freed messages recovered or reported partial; fuzzed (P3 harness) — no crash on hostile input; memory flat on a 1 GB PST | [ ] |
-| R8 | **MIME carving** (switch, preview): stream any file (damaged mbox, unknown blob, disk-image extract) for RFC 5322 header runs; each candidate verified (parsable headers + body boundary) before it counts | Raw-image fixture: every embedded message found, no false positives on random data; 1 GB stream memory flat | [ ] |
-| R9 | **Recovery report and receipt**: per source "X live, Y deleted-folder, Z unpurged, N orphan, M carved (K partial)"; source SHA-256 before and after (unchanged); exported with the chain of custody | Receipt fields round-trip; report numbers equal the manifest | [ ] |
-| R10 | **Deletion analysis** (innovative): recovered/deleted mail on the timeline, overlaid with legal-hold and custodian dates; "deleted within N days before the hold" count; included in the investigation report | Golden: planted deletions before a hold date are counted exactly | [ ] |
-| R11 | **UI**: "Recovered" badge in the list and detail with the evidence line ("unpurged — X-Mozilla-Status 0009 at byte 1,204,331"); import preview states that recovery will run and its limits ("Outlook 2016+ removes Shift-deleted items; nothing to recover there") | V5-style UI check; strings in 10 languages | [ ] |
-| R12 | **Honest limits on screen and in docs**: compaction destroys unpurged mail; modern Outlook leaves no orphans; carving is best-effort and marked partial | Text present; SUPPORTED_FORMATS_AND_LIMITS.md updated | [ ] |
+| R0 | **Ground-truth fixtures + manifests** (pst-testgen idea): PST/OST with Deleted Items, Recoverable Items, orphaned nodes and freed blocks — built with our `PSTWriter` and then unlinked/freed per [MS-PST]; Thunderbird mbox with `X-Mozilla-Status` 0x0008 / 0x0009 / 0x000b; mutt/pine `Status`/`X-Status: D`; Apple Mail EMLX flag 0x02 in Deleted Messages; Gmail Takeout Trash; NSF with deletion stubs; a damaged mbox; a raw blob with embedded MIME | Each fixture's manifest lists expected live / deleted-folder / unpurged / orphan / carved counts; generated, never real mail | [ ] |
+| R1 | **Recovery provenance model**: per email `recoveryState` ∈ {live, deletedFolder, flaggedDeleted, unpurged, orphan, carved, deletionStub} + `recoveryEvidence` (folder path, flag value, byte offset, method, intact/partial). Schema bump with snapshot first (rule 2); old rows = live | Migration verified one-for-one; old archives unchanged | [ ] |
+| R2 | **Find them**: sidebar **Recovered ▸ Deleted folders · Unpurged · Orphans · Carved · Deletion stubs** with counts (Intella's `<RECOVERED>` / `<ORPHAN ITEMS>`, but by *kind*); filters `is:recovered`, `recovery:unpurged` …, negation, AI and Shortcuts can use them | Golden: each filter equals the manifest | [ ] |
+| R3 | **mbox**: Thunderbird `X-Mozilla-Status & 0x0008` → unpurged (flag value kept as evidence); `Status`/`X-Status` with `D` → flaggedDeleted; Gmail `Trash`/`Deleted` labels → deletedFolder | Fixture counts match; nothing previously imported is dropped | [ ] |
+| R4 | **EMLX**: flag 0x02 and Deleted Messages / Trash mailboxes → recovery states (old "Deleted" tag kept, rule 16) | Fixture counts match | [ ] |
+| R5 | **PST/OST folder tree** per [MS-PST] hierarchy tables: every message gets its real `folderPath` (benefits every PST import); Deleted Items, **Recoverable Items (Deletions / Purges / Versions)**, Junk identified | Folder paths equal the fixture | [ ] |
+| R6 | **PST orphans**: message nodes in the node B-tree but in no folder's contents table → orphan | Fixture orphans exact | [ ] |
+| R7 | **PST deep recovery** (switch, preview, **off by default per source** with a time estimate): walk allocation-map free regions at 64-byte alignment for heap-on-node / property-context signatures; rebuild intact items; incomplete ones → carved + partial with offsets. Source opened read-only; SHA-256 before = after | Freed fixture items recovered or reported partial; fuzzed (P3 harness); 1 GB PST memory-flat | [ ] |
+| R8 | **NSF deletion stubs**: Notes stubs listed (they hold no body — said so) | Fixture stubs listed | [ ] |
+| R9 | **Carving** (switch, preview): stream any file for RFC 5322 header runs, plus **user-defined header/footer carving templates** (AXIOM lesson) for odd formats; each candidate verified (parsable headers + body boundary) before it counts | Blob fixture: every embedded message found; zero false positives on 1 GB of random data; memory flat | [ ] |
+| R10 | **Recovery report and receipt**: per source "X live · Y deleted-folder · Z unpurged · N orphan · M carved (K partial) · S stubs"; source hash before/after; time spent; exported with the chain of custody | Receipt round-trips; numbers equal the manifest | [ ] |
+| R11 | **Deletion analysis** (innovative): deleted/recovered mail on the timeline with hold / custodian-notice dates; "deleted within N days before the hold"; per-custodian deletion bursts; section in the investigation report | Golden: planted deletions before a hold counted exactly | [ ] |
+| R12 | **UI and limits**: "Recovered" badge with the evidence line ("unpurged — X-Mozilla-Status 0009 at byte 1,204,331"); import preview shows the recovery switch and its time estimate; limits stated (compaction destroys unpurged mail; Outlook 2016+ leaves no orphans; carving is best-effort) | UI check; 10 languages; SUPPORTED_FORMATS_AND_LIMITS.md updated | [ ] |
 
 ## S. Scripting & automation (target 3.1)
 
 | ID | Item | Done means | Status |
 |---|---|---|---|
-| S0 | **Bug fix now**: "Search Emails" Shortcuts action stops at 10 and reports "Found 10" — return the exact total ("Found 1,284; showing the first 10") | Test: archive of 25 matches → says 25 | [ ] |
-| S1 | **App entities**: `EmailEntity`, `MatterEntity`, `DocumentEntity` (numbered WF/RPT/EXP records), `TagEntity`; `EntityPropertyQuery` for emails (sender, recipient, subject, date range, tag, has attachment, recovered) — Shortcuts gets an automatic **Find Emails** action over the whole archive, paged | Find returns the exact SQL count; 100k archive stays memory-flat | [ ] |
-| S2 | **Action intents**, each through `OrgPolicy` and the count-before-action rule (rule 4): Import files (no UI), Run saved search, Add/remove tag, Place/release legal hold, Assign Bates, Export (CSV, PDF, mbox, EML, PST, load file) to a chosen folder, Verify integrity, Run a guided job, Build investigation report, Export audit trail. Results returned as files/entities so actions chain | Each intent: unit test on a disposable archive; refused for a role that may not; audit entry written only after the action happened | [ ] |
-| S3 | **Long runs from Shortcuts** go through the scope engine (progress, cancel, resume, receipt); Mac folder-watch automation documented ("when a file is added to Intake, import it and run Keyword Sweep") | Interrupted run resumes; receipt says "started by Shortcuts" | [ ] |
-| S4 | **Command line for free**: document `shortcuts run "mailin Export"` with input/output files — no extra binary, stays sandboxed | Doc + one scripted example verified on the Mac | [ ] |
-| S5 | **mailin Scripts** (switch, preview): user-written JavaScript run in JavaScriptCore with a small, read-mostly API (`archive.find(query)`, `email.fields`, `tag()`, `note()`, `report.add()`); no network objects exist in the context; CPU/time/memory limits with a watchdog; every write is a proposal shown with counts before it applies (dry run first) | Hostile scripts (infinite loop, huge allocation, network attempts) are stopped and reported; a script cannot touch files outside its output | [ ] |
-| S6 | **Provable script runs** (innovative): each run records the script's SHA-256, its version, the email-set fingerprint and the changes; "Re-run and prove" reproduces it | Same script + same archive → same fingerprint and same changes | [ ] |
-| S7 | **10 bundled scripts** (match Aid4Mail's set, offline): attachment risk score, integrity verification, entity catalogue, relationship map, keyword proximity sweep, date-gap / silence detector, sender-domain report, privilege screen, PII redaction rules, custodian summary | Each has a golden test and a one-page help | [ ] |
-| S8 | **On-device script assistant** (innovative): describe the goal in a sentence → Foundation Models drafts the script → shown for review, never run unseen | Draft compiles for the 10 bundled goals; nothing runs without the user's OK | [ ] |
-| S9 | **Plugins**: the empty compiled-in plugin system becomes "script packages" (S5) or is retired behind its switch; no dead UI | No visible plugin screen with nothing in it | [ ] |
-| S10 | **App Review note**: scripts are written by the user, stored locally, never downloaded; the capability is described in review notes (guideline 2.5.2) | Note text in the submission checklist | [ ] |
+| S0 | **Bug fix now**: Shortcuts "Search Emails" returns the exact total ("Found 1,284; showing the first 10") | Test: 25 matches → says 25 | [ ] |
+| S1 | **App entities**: `EmailEntity`, `MatterEntity`, `DocumentEntity`, `TagEntity`; `EntityPropertyQuery` over the whole archive (sender, recipient, subject, dates, tag, attachment, **recovered**) → automatic **Find Emails** in Shortcuts, paged | Find equals SQL count; 100k memory-flat | [ ] |
+| S2 | **Action intents** through `OrgPolicy` and count-before-action: import files (no UI), run saved search, tag/untag, place/release hold, assign Bates, export (CSV, PDF, mbox, EML, PST, load file) to a folder, verify integrity, run a guided job, build investigation report, export audit trail; results as files/entities so actions chain | Each intent tested on a disposable archive; refused for a role that may not; audited only after it happened | [ ] |
+| S3 | **Long runs from Shortcuts** via the scope engine (progress, cancel, resume, receipt "started by Shortcuts"); Mac folder-watch automation documented | Interrupted run resumes | [ ] |
+| S4 | **Command line for free**: `shortcuts run "mailin Export" -i … -o …` documented | Verified example | [ ] |
+| S5 | **Pipeline stages** (Aid4Mail + Intella lesson): scripts can run **at import** (`itemFound` before storing → include/exclude; `itemProcessed` after parsing → enrich, add custom columns, tag) or **on demand** over a scope; one run order shown to the user: source filter → script → AI → store | Import-time exclusion recorded in the receipt ("12 excluded by script X v3"); nothing silently dropped | [ ] |
+| S6 | **mailin Scripts** (switch, preview): JavaScript in JavaScriptCore with a small API (`archive.find`, `email.fields`, `email.ai` — the AI classification, `tag`, `note`, `column`, `report.add`); no network objects; CPU/time/memory watchdog; writes are proposals shown with counts (dry run first) | Hostile scripts (loop, huge allocation, network attempt) stopped and reported | [ ] |
+| S7 | **Provable runs**: script SHA-256 + version + email-set fingerprint + changes recorded; "Re-run and prove" | Same script + archive → same fingerprint and changes | [ ] |
+| S8 | **Bundled script library** (offline): ported from the MIT Intella samples — hash list exclude, IP filter, type/size filter, date filter, domain filter, SHA-1/256/512 columns, IP extraction; plus Aid4Mail-class scripts — attachment risk score, integrity verification, entity catalogue, relationship map, keyword proximity, silence / date-gap detector, privilege screen, PII redaction rules, custodian summary. Each configurable without code | Golden test + one-page help per script; attributions in THIRD_PARTY_NOTICES.md | [ ] |
+| S9 | **No-code recipe builder** (AXIOM XML-template lesson): pick a stage, conditions and actions from menus → saved as a script; the generated code is viewable | Every bundled script can be rebuilt as a recipe | [ ] |
+| S10 | **On-device script assistant**: a sentence → Foundation Models drafts a script → shown for review, never run unseen | Drafts compile for the bundled goals | [ ] |
+| S11 | **Script files** `.mailinscript` export/import (hash-verified) for sharing inside a team — no online exchange (offline rule) | Tampered file refused | [ ] |
+| S12 | **Plugins**: the empty compiled-in system becomes script packages or is retired behind its switch; no dead screen | No empty plugin UI | [ ] |
+| S13 | **App Review note**: scripts are user-authored, local, never downloaded (guideline 2.5.2) | Text in the submission checklist | [ ] |
 
-## T. Team review without a server (target 3.2 / 4.0)
+## T. Team review without a server
 
 | ID | Item | Done means | Status |
 |---|---|---|---|
-| T1 | **Shared case folder**: a case lives in a folder on a NAS, file server, external drive or (online, opt-in) iCloud Drive: read-only evidence copy + manifest + one append-only log per reviewer. No server, works with the network unplugged | Two app instances on one shared folder reach the same state | [ ] |
-| T2 | **Reviewer identity**: examiner name + a per-device Ed25519 key (Keychain); role from MDM where managed; each log entry signed and hash-chained | Tampered or unsigned entry is rejected and reported | [ ] |
-| T3 | **Operation log + deterministic merge**: tag add/remove, coding field set, note, batch check-out/in, QC decision — each with a Lamport clock; the case state is the fold of all logs, identical on every machine; nothing is ever overwritten (rule 1) | Property test: any interleaving of the same logs → the same state | [ ] |
-| T4 | **Conflict queue** (innovative vs. the current silent merge): two reviewers coding one email differently → a conflict item with both decisions, resolved by a lead; history keeps both; mutually exclusive code sets enforced | Planted disagreements all appear; resolution recorded | [ ] |
-| T5 | **Batches with check-out**: lead creates batches; a reviewer checks one out (lease file with expiry in the shared folder), checks it in; "done" = review criteria met (Everlaw-style) | Two reviewers can never hold one batch; an expired lease is reclaimable | [ ] |
-| T6 | **QC / second-level review**: random sample % per reviewer into a QC queue for a different reviewer group; **overturn tracking** and per-reviewer error rate with a confidence interval | Planted overturns counted exactly; interval matches the formula | [ ] |
-| T7 | **AI-vs-human disagreement queue**: predictive-coding score strongly against the human code → QC candidate | Fixture disagreements surface | [ ] |
-| T8 | **Privilege pass**: privileged-coded emails form their own review pass; privilege log built from the merged, resolved state | Log equals the resolved decisions | [ ] |
-| T9 | **Team dashboard**: progress per batch, per-reviewer throughput, open conflicts, overturn rate | Numbers equal the logs | [ ] |
-| T10 | **Merged team audit trail**: every operation with reviewer, role and time; JSONL export for a SIEM (extends the 3.0 export) | Export round-trips; chain verifies | [ ] |
-| T11 | **Robust on shared drives**: atomic file writes, partial-write detection, offline queueing (keep working when the share disappears, sync when it returns), clock skew tolerated | Fault tests: share unplugged mid-write, two writers at once, skewed clocks | [ ] |
-| T12 | **Production stays with the lead**: Bates and productions only by Examiner+ on the merged state; reviewers cannot produce | Role test | [ ] |
-| T13 | **Migration from 3.0 review files**: existing `.mailinreview` exchanges import as log entries; the old exchange stays one switch away (rule 14) | Old files import with nothing lost | [ ] |
+| T0 | **Review Pack** (target 3.1 — AXIOM Portable Case lesson, smallest useful step): export a scope + chosen coding fields as a sealed `.mailinpack`; the recipient opens it in **any** mailin, including the **free tier, with no licence**; codes, tags, notes; returns a signed response file; the examiner merges it — every decision recorded with who and when; disagreements with existing codes go to a conflict list | Round trip on two installs; tampered pack or response refused; nothing overwritten | [ ] |
+| T1 | **Shared case folder** (3.2): NAS / file server / external drive; read-only evidence copy + manifest + one append-only log per reviewer; works with the network unplugged | Two instances on one share reach the same state | [ ] |
+| T2 | **Reviewer identity**: examiner name + per-device Ed25519 key; MDM role where managed; entries signed and hash-chained | Tampered entry rejected and reported | [ ] |
+| T3 | **Operation log + deterministic merge** (Lamport clocks): tags, coding, notes, batch actions, QC — the case is the fold of all logs; nothing overwritten (rule 1); multi-user tag semantics as in Intella (a tag stays while any reviewer holds it, history shows each) | Property test: any interleaving → same state | [ ] |
+| T4 | **Conflict queue**: different codes on one email, or mutually exclusive fields both set → conflict with both decisions; a lead resolves; history keeps both | Planted disagreements all appear | [ ] |
+| T5 | **Batches** (Intella lesson): statuses in progress / idle / completed / archived; assign permission by role; check-out lease file with expiry; **read-only** when the batch is someone else's or completed; **"Review later"**; reopening jumps to the first uncoded item; "done" = coding rules met | Two reviewers can never hold one batch; expired lease reclaimable | [ ] |
+| T6 | **Coding layouts with rules**: fields, required choices, mutually exclusive sets per matter | Invalid coding cannot be saved | [ ] |
+| T7 | **QC / second-level review**: sample % per reviewer into a QC queue for a different group; **overturn tracking**, per-reviewer error rate with a confidence interval | Planted overturns exact; interval matches the formula | [ ] |
+| T8 | **AI-vs-human disagreement queue**: predictive-coding score strongly against the human code → QC candidate | Fixture disagreements surface | [ ] |
+| T9 | **Privilege pass** and privilege log from the merged, resolved state; **redaction profiles** shared across the team | Log equals resolved decisions | [ ] |
+| T10 | **Team dashboard**: batches, throughput, open conflicts, overturn rate | Numbers equal the logs | [ ] |
+| T11 | **Merged team audit trail** with reviewer + role; JSONL export (extends 3.0) | Chain verifies | [ ] |
+| T12 | **Robust on shared drives**: atomic writes, partial-write detection, offline queueing, clock skew | Fault tests: share unplugged mid-write, two writers, skewed clocks | [ ] |
+| T13 | **Production stays with the lead** (Examiner+ on the merged state) | Role test | [ ] |
+| T14 | **Migration**: old `.mailinreview` files import as log entries; old exchange one switch away (rule 14) | Nothing lost | [ ] |
+
+## F. Also worth adopting (from Metaspike FEI — forensic analysis, offline)
+
+| ID | Item | Done means | Status |
+|---|---|---|---|
+| F1 | **Hidden timestamps** decoded from MIME boundaries, Message-IDs (incl. historical Gmail formats) and Outlook **Thread-Index**; one timeline of every timestamp with its source and UTC value | Fixture timestamps decoded exactly | [ ] |
+| F2 | **Missing-DKIM detector**: a bundled table of when major providers began DKIM signing; a message from such a provider after that date without a signature is flagged | Planted cases flagged, others not | [ ] |
+| F3 | **Offline DKIM / ARC verification** against a **key cache** the examiner imports (or captured at collection); never a live DNS lookup unless an online toggle is on | Known-good and tampered fixtures verify / fail correctly | [ ] |
+| F4 | **Removed-attachment and tampering signals** folded into the existing risk score; **Received-header trace view** | Fixture signals raised | [ ] |
 
 ---
 
-## 3. Order and gates
+## 4. Order and gates
 
-1. **S0** (bug fix, ships in a 3.0.x update).
-2. **R0 → R1 → R3/R4 → R5/R6 → R9 → R2 → R11/R12** — gate: every fixture's manifest matches; 1 GB rows memory-flat.
-3. **R7, R8, R10** (preview switches) — gate: fuzzing clean, no false positives on random data.
-4. **S1 → S2 → S3/S4** — gate: every intent role-checked and audited; Find equals SQL counts.
-5. **S5 → S6 → S7 → S8 → S9/S10** — gate: hostile-script tests green.
-6. **T1 → T2 → T3 → T4 → T5 → T6 … T13** — gate: merge property tests and shared-drive fault tests green.
+1. **S0** (bug fix, 3.0.x update).
+2. **R0 → R1 → R3/R4 → R5/R6 → R10 → R2 → R12** — gate: every manifest matches; 1 GB rows memory-flat.
+3. **S1 → S2 → S3/S4** — gate: every intent role-checked and audited; Find equals SQL counts.
+4. **T0 Review Pack** — gate: round trip, tamper tests.
+5. **R7, R8, R9, R11** (preview switches) — gate: fuzzing clean, zero false positives on random data.
+6. **S5 → S6 → S7 → S8 → S9 → S10 → S11–S13** — gate: hostile-script tests.
+7. **F1–F4**.
+8. **T1 → T14** (3.2 / 4.0) — gate: merge property tests and shared-drive fault tests.
 
 Every item: new code in new files, behind a capability switch (off until its gate passes), strings in 10
 languages, a failing-without test, zero warnings, committed separately.
 
-## 4. Rough size
-
-| Track | Size | Notes |
-|---|---|---|
-| R (recovery) | large — PST deep recovery and carving are the hard parts | R1–R6 + R9 are the high-value core |
-| S (scripting) | medium — App Intents is mostly wiring; the JS runner needs careful limits | |
-| T (team) | very large — new data model, merge, sync, QC | 3.2 / 4.0 |
-
 ## 5. Decisions for the owner
 
-1. **JavaScript scripts (S5)** — user-written scripts inside the app. App Review allows user-authored local code,
-   but it is a judgement call; the alternative is Shortcuts-only automation (S1–S4) with no scripting language.
-2. **Team review storage (T1)** — shared folder only (fully offline), or shared folder plus optional iCloud Drive
-   (online, off by default).
+1. **JavaScript scripts (S6)** inside the app — recommended, behind an off-by-default switch; alternative is
+   Shortcuts + recipes only.
+2. **Team storage (T1)** — shared folder only (recommended, fully offline), or plus optional iCloud Drive (online,
+   off by default).
 
-Sources: [Aid4Mail email recovery](https://www.aid4mail.com/features/email-recovery),
-[What is unpurged mail](https://www.aid4mail.com/support/solutions/articles/what-is-unpurged-mail),
-[Aid4Mail 6.2 Python scripting](https://www.aid4mail.com/blog/aid4mail-6-2-python-scripting),
-[Aid4Mail filtering guide](https://www.aid4mail.com/docs/filtering-guide),
-[libpff recovery API](https://manpages.ubuntu.com/manpages/resolute/man3/libpff.3.html),
-[PFF format](https://github.com/libyal/libpff/blob/main/documentation/Personal%20Folder%20File%20(PFF)%20format.asciidoc),
-[email-date-range (orphan vs recovered; Outlook 2024 test)](https://github.com/oblomsky42-dev/email-date-range),
-[pst-testgen](https://github.com/oblomsky42-dev/pst-testgen),
-[X-Mozilla-Status flags](https://vincent.bernat.ch/en/x-mozilla-status),
-[Everlaw assignment workflow](https://support.everlaw.com/hc/en-us/articles/210330166-Sample-Assignment-Workflow-Responsiveness-and-Privilege-Review),
-[Everlaw reviewer analytics](https://support.everlaw.com/hc/en-us/articles/360001037171-Evaluate-Your-Reviewers-Using-Project-Analytics),
-[Relativity Case Metrics (overturns)](https://help.relativity.com/RelativityOne/Content/Relativity/Case_Metrics/Case_Metrics.htm),
-[Lexitas review best practices](https://www.lexitaslegal.com/resources/document-review-people-processes-and-technology),
-Apple App Intents (entity queries, Find actions) and JavaScriptCore documentation.
+## Sources
+
+Aid4Mail: [email recovery](https://www.aid4mail.com/features/email-recovery) ·
+[unpurged mail](https://www.aid4mail.com/support/solutions/articles/what-is-unpurged-mail) ·
+[6.2 Python scripting](https://www.aid4mail.com/blog/aid4mail-6-2-python-scripting) ·
+[filtering guide](https://www.aid4mail.com/docs/filtering-guide).
+Intella: [crawler scripts (MIT samples)](https://github.com/vound-software/intella-crawler-scripts) ·
+[file recovery FAQ](https://support.vound-software.com/help/en-us/3-faq/103-file-recovery-in-intella-how-it-works-and-what-to-expect) ·
+[Connect reviewer manual 3.0](https://connect.vound-software.com/docs/connect/3.0/Intella%20Connect%20Reviewer%20Manual.html) ·
+[Connect editions](https://www.vound-software.com/connect).
+Magnet AXIOM: [Portable Case](https://www.magnetforensics.com/blog/deep-dive-portable-case-part-one/) ·
+[open a portable case](https://docs.magnetforensics.com/docs/axiom/html/Content/en-us/sharing-evidence/portable-case/open-portable-case.htm) ·
+[custom artifacts & Python](https://www.magnetforensics.com/blog/magnet-axioms-custom-artifacts-now-supports-python-development/) ·
+[Artifact Exchange](https://www.magnetforensics.com/resources/getting-started-with-magnet-artifact-exchange/).
+Metaspike: [FEI](https://www.metaspike.com/forensic-email-intelligence/) ·
+[timestamps](https://www.metaspike.com/timestamps-forensic-email-examination/) ·
+[DKIM in forensics](https://www.metaspike.com/leveraging-dkim-email-forensics/) ·
+[FEC](https://www.metaspike.com/forensic-email-collector/).
+Formats & tests: [libpff (LGPL)](https://github.com/libyal/libpff) ·
+[PFF format notes](https://github.com/libyal/libpff/blob/main/documentation/Personal%20Folder%20File%20(PFF)%20format.asciidoc) ·
+[pst-testgen (MIT)](https://github.com/oblomsky42-dev/pst-testgen) ·
+[email-date-range](https://github.com/oblomsky42-dev/email-date-range) ·
+[X-Mozilla-Status flags](https://vincent.bernat.ch/en/x-mozilla-status).
+Review practice: [Everlaw assignments](https://support.everlaw.com/hc/en-us/articles/210330166-Sample-Assignment-Workflow-Responsiveness-and-Privilege-Review) ·
+[Everlaw reviewer analytics](https://support.everlaw.com/hc/en-us/articles/360001037171-Evaluate-Your-Reviewers-Using-Project-Analytics) ·
+[Relativity Case Metrics](https://help.relativity.com/RelativityOne/Content/Relativity/Case_Metrics/Case_Metrics.htm).
+Apple: App Intents (entity queries, Find actions) and JavaScriptCore documentation.
