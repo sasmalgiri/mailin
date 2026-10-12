@@ -141,10 +141,10 @@ Status key: `[ ]` to do · `[~]` implemented, untested · `[x]` done (commit).
 
 | ID | Item | Done means | Status |
 |---|---|---|---|
-| F1 | **Hidden timestamps** decoded from MIME boundaries, Message-IDs (incl. historical Gmail formats) and Outlook **Thread-Index**; one timeline of every timestamp with its source and UTC value | Fixture timestamps decoded exactly | [ ] |
-| F2 | **Missing-DKIM detector**: a bundled table of when major providers began DKIM signing; a message from such a provider after that date without a signature is flagged | Planted cases flagged, others not | [ ] |
-| F3 | **Offline DKIM / ARC verification** against a **key cache** the examiner imports (or captured at collection); never a live DNS lookup unless an online toggle is on | Known-good and tampered fixtures verify / fail correctly | [ ] |
-| F4 | **Removed-attachment and tampering signals** folded into the existing risk score; **Received-header trace view** | Fixture signals raised | [ ] |
+| F1 | **Hidden timestamps** decoded from MIME boundaries, Message-IDs (incl. historical Gmail formats) and Outlook **Thread-Index**; one timeline of every timestamp with its source and UTC value | Fixture timestamps decoded exactly | [~] ForensicSignals.swift (Thread-Index, Outlook/JavaMail boundaries, Message-ID epochs, Received, Date); historical Gmail Message-ID formats not decoded; untested |
+| F2 | **Missing-DKIM detector**: a bundled table of when major providers began DKIM signing; a message from such a provider after that date without a signature is flagged | Planted cases flagged, others not | [~] DKIMExpectations table (conservative dates, to be checked against sources in the test pass); in the risk score when on; untested |
+| F3 | **Offline DKIM / ARC verification** against a **key cache** the examiner imports (or captured at collection); never a live DNS lookup unless an online toggle is on | Known-good and tampered fixtures verify / fail correctly | [~] DKIMVerifier rsa-sha256 / ed25519-sha256, simple/relaxed, key cache imported from a text file; ARC not yet; untested |
+| F4 | **Removed-attachment and tampering signals** folded into the existing risk score; **Received-header trace view** | Fixture signals raised | [~] TamperingSignals + Received trace view in ForensicSignalsView; untested |
 
 ---
 

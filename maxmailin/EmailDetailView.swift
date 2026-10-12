@@ -135,6 +135,7 @@ struct EmailDetailView: View {
                     if personaManager.config.showTechnicalHeaders || (showAdvancedFeatures && forensicManager.isEnabled) {
                         forensicHeaderSection
                     }
+                    ForensicSignalsView(email: shown)
                     Divider()
                     cleanToggle
                     emailBodyView

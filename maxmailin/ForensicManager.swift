@@ -1111,6 +1111,14 @@ class ForensicManager: ObservableObject {
         if auth.spf == "fail" { score += 15; factors.append("SPF authentication failed") }
         if auth.dkim == "fail" { score += 15; factors.append("DKIM reported fail (per receiving server)") }
         if auth.dmarc == "fail" { score += 15; factors.append("DMARC policy failed") }
+        // 3.1 F2/F4 (switch v31ForensicTimestamps): missing DKIM and tampering signals.
+        if ForensicSignalsPolicy.isEnabled {
+            let date = email.headers["Date"].flatMap(RFC5322Date.parse)
+            if let why = DKIMExpectations.missingSignature(headers: email.headers, date: date) { score += 15; factors.append(why) }
+            for why in TamperingSignals.find(headers: email.headers, rawSource: email.rawSource, attachmentCount: email.attachments.count) {
+                score += 10; factors.append(why)
+            }
+        }
 
         let piiFindings = EmailNLPEngine.detectPII(in: [email])
         let ssnCount = piiFindings.filter { $0.type == .ssnPattern }.count
