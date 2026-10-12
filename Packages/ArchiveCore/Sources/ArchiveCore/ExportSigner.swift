@@ -68,8 +68,18 @@ final class ExportSigner {
     /// Atomic write with the strongest available file-protection class (the
     /// same rule as the app's `PrivacyHardening.write`; on macOS the
     /// protection class is a harmless no-op under FileVault).
+    /// A signature / digest is public, so file protection is defence in depth
+    /// only: when the system refuses the protected write (seen on macOS with a
+    /// re-signed host, 2026-10-12: "no permission to save load.dat.sig" while
+    /// the export beside it was written), it is written plainly rather than
+    /// failing the whole signed export.
     private func protectedWrite(_ data: Data, to url: URL) throws {
-        try data.write(to: url, options: [.atomic, .completeFileProtection])
+        do {
+            try data.write(to: url, options: [.atomic, .completeFileProtection])
+        } catch let error as CocoaError where error.code == .fileWriteNoPermission {
+            logger.notice("protected write refused for \(url.lastPathComponent, privacy: .public); writing without file protection")
+            try data.write(to: url, options: .atomic)
+        }
     }
 
     /// Sign arbitrary bytes. Returns 64-byte Ed25519 signature.
