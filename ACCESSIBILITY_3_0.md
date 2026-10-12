@@ -51,3 +51,16 @@ Enter the same answers for **iPhone, iPad and Mac** (App Store Connect ▸ App �
 | Audio Descriptions | No — the app has no video content |
 
 Accessibility URL (optional field): leave empty, or point it to the support page once one exists.
+
+## Automated audit (iPhone 18 Pro simulator, 2026-10-12)
+
+Fixed by the audit: page-switcher contrast (accent text on an accent tint), page names in fixed point sizes
+(now text styles, so they follow Dynamic Type), clipped page names on iPhone (now full → short → scroll),
+unlabelled "…" list-actions and filter buttons.
+
+Reported but not failed (advisories, listed in each run's report):
+- **Contrast nearly passed** — secondary text uses the system secondary style, which darkens with Increase
+  Contrast.
+- **Text clipped** — list previews are cut to two lines with an ellipsis by design (the whole email opens on
+  tap), and the last list row meets the screen edge until scrolled.
+

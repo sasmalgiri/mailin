@@ -1018,13 +1018,24 @@ final class MailinClickThroughUITests: XCTestCase {
     private func exportThroughReceipt(_ menuTitle: String) -> String {
         _ = openPage("Archive")
         let menu = app.buttons["Export filtered emails"].firstMatch
+        var pickedFromActions = false
         #if os(iOS)
-        // iPhone: a narrow toolbar folds the menu into its "More" overflow.
+        // iPhone: export lives in the list's actions menu (beside the search
+        // field) as "Export…".
         if !menu.waitForExistence(timeout: 5) {
-            let more = app.buttons["More"].firstMatch
-            if more.waitForExistence(timeout: 3) { more.tap(); Thread.sleep(forTimeInterval: 0.8) }
+            let actions = app.buttons["List actions"].firstMatch
+            guard actions.waitForExistence(timeout: 5) else { return "FAIL: no Export menu (no List actions menu)" }
+            actions.tap()
+            let export = app.buttons["Export…"].firstMatch
+            guard export.waitForExistence(timeout: 5) else { return "FAIL: List actions has no Export…" }
+            export.tap()
+            let item = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", menuTitle)).firstMatch
+            guard item.waitForExistence(timeout: 5) else { return "FAIL: Export… has no \(menuTitle)" }
+            item.tap()
+            pickedFromActions = true
         }
         #endif
+        if !pickedFromActions {
         guard menu.waitForExistence(timeout: 10) else { return "FAIL: no Export menu" }
         var swipes = 0
         func menuOnScreen() -> Bool {
@@ -1046,6 +1057,7 @@ final class MailinClickThroughUITests: XCTestCase {
         let item = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", menuTitle)).firstMatch
         guard item.waitForExistence(timeout: 5) else { return "FAIL: menu has no \(menuTitle)" }
         item.tap()
+        }
         // iOS does not expose the button's identifier inside the sheet; its
         // label ("Start") is what VoiceOver and the test both see.
         let byID = app.buttons["export.preflight.start"].firstMatch
@@ -1475,6 +1487,9 @@ final class MailinClickThroughUITests: XCTestCase {
     /// Buy Personal monthly, and let the person at the Mac sign the sandbox
     /// tester in on Apple's sheet; then relaunch on real entitlements.
     func testPurchase0_sandboxBootstrap() throws {
+        #if os(iOS)
+        throw XCTSkip("Mac only: Apple's sandbox with a person signing in (iOS purchases run on the local StoreKit test store)")
+        #endif
         _ = try storeSession(clear: false)
         relaunch(["-mailinSimulateTier", "free"])
         var rows: [String] = ["Launched with the tier displayed as Free: badge “\(planBadge())”"]
@@ -1501,6 +1516,9 @@ final class MailinClickThroughUITests: XCTestCase {
     /// must move forward at least once and the plan must drop to Free on
     /// its own — no relaunch, no click on Restore.
     func testPurchaseWatch_renewalThenExpiry() throws {
+        #if os(iOS)
+        throw XCTSkip("Mac only: Apple's sandbox with a person signing in (iOS purchases run on the local StoreKit test store)")
+        #endif
         _ = try storeSession(clear: false)
         relaunch(["-mailinRealStore"])
         var rows: [String] = []

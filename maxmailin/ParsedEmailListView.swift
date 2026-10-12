@@ -333,6 +333,8 @@ struct ParsedEmailListView: View {
                     .font(.title3)
                     .foregroundColor(hasAnyQuickFilterActive ? .accentColor : .secondary)
             }
+            .accessibilityLabel(String(localized: "Filters"))
+            .accessibilityValue(hasAnyQuickFilterActive ? String(localized: "On") : String(localized: "Off"))
 
             Menu {
                 // Natural-language search is an AI Insights feature; the
@@ -384,6 +386,9 @@ struct ParsedEmailListView: View {
                     .font(.title3)
                     .foregroundColor(.secondary)
             }
+            // Read aloud as what it holds, not as "ellipsis circle".
+            .accessibilityLabel(String(localized: "List actions"))
+            .accessibilityHint(String(localized: "Sort, group, export and reports for the emails in the list."))
         }
 
         // Part P: user-visible search caveats — never silently truncated.
