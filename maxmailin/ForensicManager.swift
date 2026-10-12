@@ -30,7 +30,33 @@ class ForensicManager: ObservableObject {
     @Published var evidenceTags: [UUID: EvidenceTag] = [:]
     @Published var tagTimestamps: [UUID: Date] = [:]
     @Published var annotations: [UUID: Annotation] = [:]
-    @Published var perEmailHashes: [UUID: EmailHash] = [:]
+    /// Not @Published: whole-scope jobs replace this cache once per batch,
+    /// and a change notice per batch redrew every screen observing the
+    /// forensic manager (verify & seal: 317 s on 100k emails, nearly all of
+    /// it main-thread redraws). Changes notify at most once a second, with a
+    /// trailing notice so the screens always show the final state.
+    var perEmailHashes: [UUID: EmailHash] = [:] {
+        willSet { noteHashCacheChange() }
+    }
+    private var lastHashNotice = Date.distantPast
+    private var hashNoticePending = false
+
+    private func noteHashCacheChange() {
+        let now = Date()
+        if now.timeIntervalSince(lastHashNotice) >= 1 {
+            lastHashNotice = now
+            objectWillChange.send()
+        } else if !hashNoticePending {
+            hashNoticePending = true
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(1))
+                guard let self else { return }
+                self.hashNoticePending = false
+                self.lastHashNotice = Date()
+                self.objectWillChange.send()
+            }
+        }
+    }
     @Published var integrityStatus: IntegrityStatus = .unknown
 
     static let auditDisplayLimit = 500
@@ -321,36 +347,50 @@ class ForensicManager: ObservableObject {
     func prefetchForensicWindow(ids: [UUID]) async {
         guard !ids.isEmpty else { return }
         do {
+            // Each @Published dictionary is updated in ONE assignment: a
+            // per-entry subscript write copies the whole cache and notifies
+            // every view (verify & seal took 326 s on 100k emails).
             let hashes = try await store.forensicHashes(ids: ids)
+            var hashCache = perEmailHashes
             for (id, h) in hashes {
-                perEmailHashes[id] = EmailHash(md5: h.md5, sha1: h.sha1, sha256: h.sha256, byteCount: h.byteCount)
+                hashCache[id] = EmailHash(md5: h.md5, sha1: h.sha1, sha256: h.sha256, byteCount: h.byteCount)
             }
-            trimHashWindow(keeping: ids)
+            Self.trimWindow(&hashCache, keeping: ids, cap: Self.hashWindowCap)
+            perEmailHashes = hashCache
             let tags = try await store.forensicTags(ids: ids)
-            for (id, t) in tags {
-                if let tag = EvidenceTag(rawValue: t.tag) {
-                    evidenceTags[id] = tag
-                    tagTimestamps[id] = t.taggedAt
+            if !tags.isEmpty {
+                var tagCache = evidenceTags, stamps = tagTimestamps
+                for (id, t) in tags {
+                    if let tag = EvidenceTag(rawValue: t.tag) {
+                        tagCache[id] = tag
+                        stamps[id] = t.taggedAt
+                    }
                 }
+                evidenceTags = tagCache
+                tagTimestamps = stamps
             }
             let notes = try await store.forensicAnnotations(ids: ids)
-            for (id, n) in notes {
-                annotations[id] = Annotation(text: n.note, examiner: n.examiner, timestamp: n.createdAt)
+            if !notes.isEmpty {
+                var noteCache = annotations
+                for (id, n) in notes {
+                    noteCache[id] = Annotation(text: n.note, examiner: n.examiner, timestamp: n.createdAt)
+                }
+                annotations = noteCache
             }
             // v2.1 backlog #11: the tag/annotation display caches used to grow
             // for the whole session in a heavily-tagged archive. Same rule as
             // the hashes — the bootstrap hydration cap is the ceiling, and the
             // current window is always kept. SQL remains the exact source.
-            Self.trimWindow(&evidenceTags, keeping: ids, cap: Self.tagHydrationCap)
-            Self.trimWindow(&tagTimestamps, keeping: ids, cap: Self.tagHydrationCap)
-            Self.trimWindow(&annotations, keeping: ids, cap: Self.tagHydrationCap)
+            // Only when over the cap: passing a @Published property `inout`
+            // writes it back — and redraws every observing screen — even
+            // when nothing is removed (three redraws per verify batch).
+            let cap = Self.tagHydrationCap
+            if evidenceTags.count > cap { Self.trimWindow(&evidenceTags, keeping: ids, cap: cap) }
+            if tagTimestamps.count > cap { Self.trimWindow(&tagTimestamps, keeping: ids, cap: cap) }
+            if annotations.count > cap { Self.trimWindow(&annotations, keeping: ids, cap: cap) }
         } catch {
             forensicLog.error("forensic window prefetch failed: \(error.localizedDescription, privacy: .public)")
         }
-    }
-
-    private func trimHashWindow(keeping recent: [UUID]) {
-        Self.trimWindow(&perEmailHashes, keeping: recent, cap: Self.hashWindowCap)
     }
 
     /// Evicts entries outside `recent` until the cache is back under `cap`.
@@ -689,13 +729,15 @@ class ForensicManager: ObservableObject {
 
     func storeEmailHashes(_ emails: [MBOXParser.RawEmail]) {
         var batch: [UUID: SQLiteEmailStore.ForensicEmailHashRow] = [:]
+        var cache = perEmailHashes   // one @Published write per batch, not per email
         for email in emails {
-            let hash = perEmailHashes[email.id] ?? Self.computeEmailHash(rawSource: email.rawSource)
-            perEmailHashes[email.id] = hash
+            let hash = cache[email.id] ?? Self.computeEmailHash(rawSource: email.rawSource)
+            cache[email.id] = hash
             batch[email.id] = SQLiteEmailStore.ForensicEmailHashRow(
                 md5: hash.md5, sha1: hash.sha1, sha256: hash.sha256, byteCount: hash.byteCount)
         }
-        trimHashWindow(keeping: emails.map(\.id))
+        Self.trimWindow(&cache, keeping: emails.map(\.id), cap: Self.hashWindowCap)
+        perEmailHashes = cache
         persistToStore("email hashes") { [store, batch] in try await store.forensicHashUpsert(batch) }
     }
 

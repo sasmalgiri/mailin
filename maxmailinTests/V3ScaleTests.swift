@@ -77,7 +77,12 @@ final class V3ScaleTests: XCTestCase {
         let root: URL
         let store: SQLiteEmailStore
         let archive: ArchiveDataService
-        var job: ScopeJobEnvironment { ScopeJobEnvironment(archive: archive, store: store, root: root) }
+        /// Legal files of this archive only (never the app's).
+        let custodians: CustodianManager
+        let legal: LegalStateMirror
+        var job: ScopeJobEnvironment {
+            ScopeJobEnvironment(archive: archive, store: store, root: root, custodian: custodians, legal: legal)
+        }
     }
 
     /// Footprint growth over the baseline; 0 when memory fell below it (the
@@ -97,7 +102,11 @@ final class V3ScaleTests: XCTestCase {
             try await store.insertBatch(emails, batchSize: batch)
             peak = max(peak, Self.growth(currentFootprintBytes(), over: base))
         }
-        return (Env(root: root, store: store, archive: ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))), peak)
+        let custodians = CustodianManager(directory: root.appendingPathComponent("legal", isDirectory: true))
+        let legal = LegalStateMirror(manager: custodians)
+        legal.enabledOverride = false
+        return (Env(root: root, store: store, archive: ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts)),
+                    custodians: custodians, legal: legal), peak)
     }
 
     /// Runs `body`, sampling the footprint every 250 ms; returns growth peak.
@@ -118,6 +127,11 @@ final class V3ScaleTests: XCTestCase {
         print(String(format: "SCALE tier=%@ tool=%@ seconds=%.1f peakGrowthMB=%.0f", tier.rawValue, label,
                      Date().timeIntervalSince(started), Double(peak) / 1_048_576))
         XCTAssertLessThan(peak, Self.footprintCeilingBytes, "\(label): memory stays flat at \(tier.rawValue)")
+        // Linear work: 120 s per 100,000 emails at most. Catches per-email
+        // whole-file rewrites (custodians took 3,691 s, verify & seal 326 s
+        // on 100k before 2026-10-12).
+        let limit = 120.0 * Double(max(tier.count, 100_000)) / 100_000
+        XCTAssertLessThan(Date().timeIntervalSince(started), limit, "\(label): too slow for \(tier.rawValue)")
         return (value, peak)
     }
 
@@ -162,6 +176,64 @@ final class V3ScaleTests: XCTestCase {
                 return try await env.store.fingerprintTree().leaves
             }
             XCTAssertEqual(leaves, n)
+
+            // Every L row at scale (§4 gate 5): the answer is exact and memory stays flat.
+            ForensicManager.testStoreOverride = env.store
+            defer { ForensicManager.testStoreOverride = nil }
+            let ann3 = Self.expected(n) { $0 % 3 == 0 }
+
+            let (found, _) = try await measured("E-Discovery search") {
+                try await EDiscoveryEngine.identify(scope: .wholeArchive, custodians: ["ann@"], start: nil, end: nil)
+            }
+            XCTAssertEqual(found.matching, ann3)
+
+            let (classes, _) = try await measured("NLP classification") { try await EDiscoveryEngine.classify(scope: .wholeArchive) }
+            XCTAssertEqual(classes.0.reduce(0) { $0 + $1.count }, n)
+
+            let (plan, _) = try await measured("review batches plan") { try await EDiscoveryEngine.planReviewBatches(scope: .wholeArchive) }
+            XCTAssertEqual(plan.ordered.count, n)
+
+            let (sealed, _) = try await measured("verify & seal") { try await EDiscoveryEngine.verifyCollection(scope: .wholeArchive) }
+            XCTAssertEqual(sealed.0.newlySealed + sealed.0.passed, n)
+            XCTAssertEqual(sealed.0.failed, 0)
+
+            let dat = env.root.appendingPathComponent("load.dat")
+            let (loadFile, _) = try await measured("load file") {
+                try await ArchiveExportService(archive: env.archive).exportConcordanceDAT(scope: .query(.all, exclusions: []), to: dat)
+            }
+            XCTAssertEqual(loadFile.recordsWritten, n)
+            try? FileManager.default.removeItem(at: dat)
+
+            let (held, _) = try await measured("legal hold") { try await EDiscoveryEngine.applyHold(scope: .wholeArchive) }
+            XCTAssertEqual(held.held, n)
+            let (released, _) = try await measured("release hold") { try await EDiscoveryEngine.releaseHold(scope: .wholeArchive) }
+            XCTAssertEqual(released.released, n)
+
+            let (assigned, _) = try await measured("custodians") { try await CustodianEngine.assign("Ann", group: nil) }
+            XCTAssertEqual(assigned, n)
+
+            let forensic = ForensicManager.shared
+            let savedFlags = forensic.privilegeFlags
+            defer { forensic.privilegeFlags = savedFlags }
+            let (_, _) = try await measured("privilege scan") { try await PrivilegeScanEngine.scan(query: .all) }
+
+            let rules = AutomationRulesEngine(rules: [AutomationRule(name: "Ann", conditions: [.senderContains("ann@")], actions: [.flagForReview])])
+            let (auto, _) = try await measured("automation rules") { try await AutomationRulesRunEngine.run(scope: .wholeArchive, engine: rules) }
+            XCTAssertEqual(auto.results.count, ann3)
+
+            let (tagged, _) = try await measured("batch tag") { try await BatchOperationsEngine.apply(.add("s"), scope: .wholeArchive, loaded: []) }
+            XCTAssertEqual(tagged.count, n)
+
+            let (report, _) = try await measured("investigation report") {
+                try await InvestigationReportEngine.build(scope: .wholeArchive, title: "Scale", investigator: "Test")
+            }
+            XCTAssertEqual(report.receipt.processed, n)
+
+            let (iocs, _) = try await measured("IOC extractor") { try await IOCEngine.extract(scope: .wholeArchive) }
+            XCTAssertEqual(iocs.1.processed, n)
+
+            let (dups, _) = try await measured("exact duplicates") { try await DuplicatesEngine.exactGroups() }
+            XCTAssertTrue(dups.0.isEmpty, "every synthetic email is distinct")
         }
     }
 

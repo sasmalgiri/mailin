@@ -23,6 +23,44 @@ exercises byte volume, attachment decoding, FTS sharding across years and
 the store at 1.5 GB, but its vocabulary and sender population are those of
 one mailbox.
 
+## Executed 2026-10-12 — every Legal (L) tool at 100,000 emails (§4 gate 5)
+
+`V3ScaleTests.testScaleTier_everyToolAnswersExactly_memoryFlat`, Debug, on this Mac, synthetic archive
+with planted rates. Every answer equals the arithmetic expectation; memory growth stays under the 700 MB
+ceiling; the run now also fails any tool slower than 120 s per 100,000 emails.
+
+| Tool | Seconds | Peak growth (MB) |
+|---|---|---|
+| E-Discovery search | 12.7 | 0 |
+| NLP classification | 15.5 | 0 |
+| Review batches (plan) | 20.8 | 8 |
+| Verify & seal | 30.7 | 2 |
+| Load file (Concordance DAT) | 15.7 | 0 |
+| Legal hold / release | 24.3 / 2.0 | 261 / 0 |
+| Custodians (assign all) | 0.2 | 0 |
+| Privilege scan | 16.6 | 0 |
+| Automation rules | 11.0 | 27 |
+| Batch tag | 0.9 | 5 |
+| Investigation report | 41.9 | 1 |
+| PII report | 19.7 | 1 |
+| IOC extractor | 18.5 | 1 |
+| Keyword sweep | 11.6 | 8 |
+| Exact duplicates | 29.3 | 32 |
+| Bates numbering | 1.2 | 35 |
+| Fingerprint tree | 5.0 | 27 |
+| IT stats | 11.5 | 0 |
+
+Found and fixed by this run (the first run took over an hour):
+
+- **Custodians ▸ Assign to all: 3,691 s → 0.2 s.** With the legal-data engine off, the archive-wide assign
+  set each email's custodian one by one, and each write rewrote the whole custodian file (quadratic). Every
+  bulk custodian and legal-hold path now writes once.
+- **Verify & seal: 317 s → 30.7 s; legal hold 67 s → 24 s.** Each batch re-published the forensic caches
+  (the hash cache once, the tag/annotation caches three times through an `inout` trim that changed
+  nothing), and every publish redrew every screen observing the forensic manager — the job's time was
+  main-thread redraws, not work. The hash cache now notifies at most once a second (with a trailing
+  notice), and the trims run only when a cache is over its cap.
+
 ## Executed 2026-10-11 — 3.0 whole-archive engines at 1,000,000 emails (V1)
 
 Test: `V3ScaleTests.testScaleTier_everyToolAnswersExactly_memoryFlat`, `MAILIN_SCALE_TIER=1m`, Debug,

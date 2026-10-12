@@ -46,7 +46,6 @@ class CustodianManager: ObservableObject {
 
     /// One assignment per collection, so the files are written once and the
     /// database mirror gets one coalesced diff (v3 bulk path).
-    private var batching: Bool { legalMirror.isOn }
 
     /// Pulls rows written directly into the database by a whole-scope action
     /// (§3-F4) into memory and therefore into the files. `nil` = unchanged.
@@ -146,15 +145,12 @@ class CustodianManager: ObservableObject {
     }
 
     func assignCustodian(_ name: String, to emailIDs: [UUID]) {
-        if batching {
-            var next = custodians
-            for id in emailIDs { next[id] = name }
-            custodians = next
-        } else {
-            for id in emailIDs {
-                custodians[id] = name
-            }
-        }
+        // One assignment: the file is written once. Assigning id by id
+        // rewrote the whole custodian file per email — 100,000 emails took
+        // over an hour (found by the 100k scale tier, 2026-10-12).
+        var next = custodians
+        for id in emailIDs { next[id] = name }
+        custodians = next
         ForensicManager.shared.logAction("Custodian Assigned", detail: "\(name) assigned to \(emailIDs.count) emails")
     }
 
@@ -202,26 +198,13 @@ class CustodianManager: ObservableObject {
 
     func placeLegalHold(on emailIDs: [UUID]) {
         guard OrgPolicy.confirmAllowed(.placeHold) else { return }   // enterprise role (OrgPolicy)
-        if batching {
-            legalHolds = legalHolds.union(emailIDs)
-        } else {
-            for id in emailIDs {
-                legalHolds.insert(id)
-            }
-        }
+        legalHolds = legalHolds.union(emailIDs)   // one write (per-id inserts rewrote the file each time)
         ForensicManager.shared.logAction("Legal Hold Placed", detail: "Legal hold placed on \(emailIDs.count) emails")
     }
 
     func placeLegalHold(on emails: [MBOXParser.RawEmail]) {
         guard OrgPolicy.confirmAllowed(.placeHold) else { return }   // enterprise role (OrgPolicy)
-        if batching {
-            holdAndSealBatched(emails)
-        } else {
-            for email in emails {
-                legalHolds.insert(email.id)
-                sealEvidence(email)
-            }
-        }
+        holdAndSealBatched(emails)   // one write; same set-once seals as sealEvidence
         ForensicManager.shared.logAction("Legal Hold Placed", detail: "Legal hold placed on \(emails.count) emails with evidence seals")
     }
 
@@ -231,27 +214,13 @@ class CustodianManager: ObservableObject {
         guard OrgPolicy.confirmAllowed(.placeHold) else { return }   // enterprise role (OrgPolicy)
         let matching = emails.filter { ($0.headers["X-Source-Format"] ?? "").lowercased() == sourceFormat.lowercased() ||
             $0.rawSource.lowercased().contains(sourceFormat.lowercased()) }
-        if batching {
-            holdAndSealBatched(matching)
-        } else {
-            for email in matching {
-                legalHolds.insert(email.id)
-                sealEvidence(email)
-            }
-        }
+        holdAndSealBatched(matching)   // one write; same set-once seals as sealEvidence
         ForensicManager.shared.logAction("Bulk Legal Hold by Source", detail: "Legal hold placed on \(matching.count) emails from source: \(sourceFormat)")
     }
 
     func placeLegalHoldOnAll(_ emails: [MBOXParser.RawEmail]) {
         guard OrgPolicy.confirmAllowed(.placeHold) else { return }   // enterprise role (OrgPolicy)
-        if batching {
-            holdAndSealBatched(emails)
-        } else {
-            for email in emails {
-                legalHolds.insert(email.id)
-                sealEvidence(email)
-            }
-        }
+        holdAndSealBatched(emails)   // one write; same set-once seals as sealEvidence
         ForensicManager.shared.logAction("Bulk Legal Hold All", detail: "Legal hold placed on all \(emails.count) emails with evidence seals")
     }
 
