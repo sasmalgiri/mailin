@@ -844,6 +844,10 @@ final class BulkImportCoordinator {
                             await MainActor.run { callbacks.onPreviewBatch?(slice) }
                         }
                         await MainActor.run { callbacks.onCommittedBatch?(pending) }
+                        // 3.1 S5: import-time scripts see committed rows only.
+                        if let scriptHook = ImportScriptHook.handler, !toIndex.isEmpty {
+                            await scriptHook(toIndex, sourceName)
+                        }
 
                         // S4/S5: the locators were written INSIDE the insert
                         // transaction above (F02). What remains is the count:

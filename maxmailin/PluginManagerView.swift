@@ -89,6 +89,13 @@ struct PluginManagerView: View {
             .background(RoundedRectangle(cornerRadius: CornerRadius.large).fill(AppColors.backgroundSecondary))
             .frame(maxWidth: 400)
 
+            // 3.1 S12: with Scripts on, extending mailin means writing a script.
+            if v3Modules?.isOn(.v31Scripts) == true {
+                Text("To add your own analysis, use Settings ▸ Scripts: a dozen ready scripts, a no-code recipe builder, and your own JavaScript.")
+                    .font(.callout)
+                    .multilineTextAlignment(.center).frame(maxWidth: 420)
+            }
+
             Spacer()
         }
         .padding(Spacing.large)

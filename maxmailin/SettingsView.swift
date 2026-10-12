@@ -181,6 +181,14 @@ struct SettingsView: View {
                     }
             }
 
+            // 3.1 S6: mailin Scripts.
+            if modules.isOn(.v31Scripts) {
+                ScriptsView()
+                    .tabItem {
+                        Label("Scripts", systemImage: "curlybraces")
+                    }
+            }
+
             profileSettings
                 .tabItem {
                     Label("Profile", systemImage: personaManager.selectedPersona.icon)
