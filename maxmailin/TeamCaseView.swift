@@ -28,6 +28,7 @@ struct TeamCaseView: View {
     @State private var progress: Double = 0
     // Review
     @State private var activeBatch: Int?
+    @State private var showLegacyPicker = false
 
     var body: some View {
         Form {
@@ -66,6 +67,16 @@ struct TeamCaseView: View {
         .fileImporter(isPresented: $showOpenPicker, allowedContentTypes: [.folder]) { result in
             guard case .success(let url) = result else { return }
             open(url)
+        }
+        .fileImporter(isPresented: $showLegacyPicker, allowedContentTypes: [.data, .json, .item]) { result in
+            guard case .success(let url) = result, let c = teamCase else { return }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            do {
+                let n = try c.importLegacyReview(try Data(contentsOf: url), state: state)
+                reload()
+                status = String(localized: "\(n) decisions and notes from \(url.lastPathComponent) added to your log.")
+            } catch { status = error.localizedDescription }
         }
         .sheet(item: Binding(get: { activeBatch.map(BatchRef.init) }, set: { activeBatch = $0?.id })) { ref in
             if let c = teamCase {
@@ -150,6 +161,14 @@ struct TeamCaseView: View {
                 status = PlatformExport.save(data: c.mergedAudit(), suggestedName: "\(c.manifest.title) audit.jsonl")
                     .message(String(localized: "Audit trail"))
             }
+            Button(String(localized: "Export privilege log (CSV)…")) {
+                do {
+                    let r = try c.privilegeLogCSV(state: state)
+                    status = PlatformExport.save(data: Data(r.csv.utf8), suggestedName: "\(c.manifest.title) privilege log.csv")
+                        .message(String(localized: "Privilege log (\(r.rows) emails)"))
+                } catch { status = error.localizedDescription }
+            }
+            Button(String(localized: "Import a 3.0 review file (.mailinreview)…")) { showLegacyPicker = true }
             if isLead {
                 Button(String(localized: "Apply resolved codes and tags to my archive")) {
                     Task {

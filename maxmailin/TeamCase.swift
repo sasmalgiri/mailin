@@ -394,6 +394,59 @@ final class TeamCase: @unchecked Sendable {
         }.sorted { $0.uuidString < $1.uuidString }
     }
 
+    // MARK: Privilege log (T9)
+
+    /// One row per email whose standing (agreed or resolved) code is Privileged.
+    func privilegeLogCSV(state: TeamCaseState) throws -> (csv: String, rows: Int) {
+        var text = csvRow(["Email ID", "Date", "From", "To", "Subject", "Decided by", "Basis (notes)"])
+        var rows = 0
+        for (i, entry) in evidence.index.enumerated() where state.code(entry.id) == "Privileged" {
+            let e = try evidence.email(at: i)
+            let em = state.emails[entry.id]
+            let by = em.map { s in s.resolved != nil ? String(localized: "lead (resolved)") : s.codes.keys.map(state.name).sorted().joined(separator: ", ") } ?? ""
+            text += csvRow([e.id.uuidString, e.date, e.from, e.to, e.subject, by, em?.notes.joined(separator: " | ") ?? ""])
+            rows += 1
+        }
+        return (text, rows)
+    }
+
+    // MARK: Migration (T14)
+
+    /// Brings a 3.0 `.mailinreview` exchange file into the case as entries in
+    /// this device's log (each marked as imported). Only emails in the case
+    /// are taken; the file itself is not changed.
+    func importLegacyReview(_ data: Data, state: TeamCaseState) throws -> Int {
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        let pkg = try dec.decode(ExportManager.ReviewStatePackage.self, from: data)
+        let inCase = Set(evidence.index.map(\.id))
+        var current = state
+        var n = 0
+        for (idStr, tag) in pkg.evidenceTags.sorted(by: { $0.key < $1.key }) {
+            guard let id = UUID(uuidString: idStr), inCase.contains(id) else { continue }
+            let code: String?
+            switch ForensicManager.EvidenceTag(rawValue: tag) {
+            case .relevant: code = "Relevant"
+            case .irrelevant: code = "Not relevant"
+            case .privileged: code = "Privileged"
+            case .flagged, .suspicious: code = "Needs second look"
+            default: code = nil
+            }
+            guard let code else { continue }
+            try append(.code, emailID: id, value: code, state: current)
+            try append(.note, emailID: id, value: String(localized: "imported from a review file by \(pkg.exportedBy) (\(pkg.exportDate.formatted()))"), state: current)
+            current.maxLamport += 2
+            n += 1
+        }
+        for (idStr, a) in pkg.annotations.sorted(by: { $0.key < $1.key }) {
+            guard let id = UUID(uuidString: idStr), inCase.contains(id) else { continue }
+            try append(.note, emailID: id, value: "[\(a.examiner)] \(a.text)", state: current)
+            current.maxLamport += 1
+            n += 1
+        }
+        return n
+    }
+
     // MARK: Audit (T11) and production (T13)
 
     /// Every verified entry of every log, in fold order, as JSON Lines.

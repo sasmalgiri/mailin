@@ -130,12 +130,12 @@ Status key: `[ ]` to do · `[~]` implemented, untested · `[x]` done (commit).
 | T6 | **Coding layouts with rules**: fields, required choices, mutually exclusive sets per matter | Invalid coding cannot be saved | [ ] only single-choice codes from the manifest; layouts with required fields not built |
 | T7 | **QC / second-level review**: sample % per reviewer into a QC queue for a different group; **overturn tracking**, per-reviewer error rate with a confidence interval | Planted overturns exact; interval matches the formula | [~] deterministic QC sample, qcCode op, overturn rate + Wilson 95 % interval; QC-group restriction and QC coding UI open |
 | T8 | **AI-vs-human disagreement queue**: predictive-coding score strongly against the human code → QC candidate | Fixture disagreements surface | [ ] not built (needs predictive-coding scores in the case) |
-| T9 | **Privilege pass** and privilege log from the merged, resolved state; **redaction profiles** shared across the team | Log equals resolved decisions | [ ] not built |
+| T9 | **Privilege pass** and privilege log from the merged, resolved state; **redaction profiles** shared across the team | Log equals resolved decisions | [~] privilege log CSV from the standing (agreed/resolved) codes; shared redaction profiles open |
 | T10 | **Team dashboard**: batches, throughput, open conflicts, overturn rate | Numbers equal the logs | [~] dashboard in TeamCaseView (coded, conflicts, team, batches, QC); throughput over time open |
 | T11 | **Merged team audit trail** with reviewer + role; JSONL export (extends 3.0) | Chain verifies | [~] merged audit JSON Lines export of verified entries |
 | T12 | **Robust on shared drives**: atomic writes, partial-write detection, offline queueing, clock skew | Fault tests: share unplugged mid-write, two writers, skewed clocks | [~] atomic manifest/lease writes, torn-last-line detection, tamper stops a log; fault tests open |
 | T13 | **Production stays with the lead** (Examiner+ on the merged state) | Role test | [~] apply-to-archive lead-only + OrgPolicy .produce; existing codes never replaced |
-| T14 | **Migration**: old `.mailinreview` files import as log entries; old exchange one switch away (rule 14) | Nothing lost | [ ] .mailinreview migration not built; old exchange untouched (rule 14) |
+| T14 | **Migration**: old `.mailinreview` files import as log entries; old exchange one switch away (rule 14) | Nothing lost | [~] .mailinreview import into the case as marked entries in your own log; old exchange untouched (rule 14); untested |
 
 ## F. Also worth adopting (from Metaspike FEI — forensic analysis, offline)
 
