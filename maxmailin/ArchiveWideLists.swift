@@ -67,6 +67,7 @@ struct ArchiveAttachmentIndexView: View {
                     .onAppear { Task { await loadMore() } }
                 }
             }
+            .accessibilityLabel(String(localized: "Attachments"))
         }
         .task(id: search) {
             rows = []
@@ -190,6 +191,7 @@ struct ArchiveSubjectGroupsView: View {
                         .onAppear { Task { await loadMore() } }
                 }
             }
+            .accessibilityLabel(String(localized: "Subjects"))
         }
         .task { if rows.isEmpty { await loadMore() } }
     }

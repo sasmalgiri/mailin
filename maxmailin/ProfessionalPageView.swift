@@ -108,12 +108,12 @@ struct ProfessionalPageView: View {
                 let studios = Self.studios.filter { Self.isRelevant($0.destination, to: profession) }
                 let tools = Self.tools.filter { Self.isRelevant($0.destination, to: profession) }
                 if !studios.isEmpty {
-                    Text("Studios").font(.caption).foregroundStyle(.secondary)
+                    Text("Studios").font(.caption.weight(.semibold)).foregroundStyle(.primary)
                     ForEach(studios) { tool in toolButton(tool) }
                     Divider().frame(height: 18)
                 }
                 if !tools.isEmpty {
-                    Text("Tools").font(.caption).foregroundStyle(.secondary)
+                    Text("Tools").font(.caption.weight(.semibold)).foregroundStyle(.primary)
                     ForEach(tools) { tool in toolButton(tool) }
                 }
                 if Self.showsProduction(for: profession) {
@@ -167,28 +167,23 @@ struct ProfessionalPageView: View {
         profession == nil || profession == .legal || profession == .forensic
     }
 
+    /// A menu-style picker that reads "Profession" and its value. A custom
+    /// accessibility label on the control hid its press action from
+    /// assistive tools ("Action is missing", audit 2026-10-13).
     private var professionPicker: some View {
-        Menu {
+        Picker(selection: Binding(get: { profession?.rawValue ?? "all" }, set: { professionRaw = $0 })) {
             ForEach(Self.professions, id: \.self) { p in
-                Button {
-                    professionRaw = p.rawValue
-                } label: {
-                    if profession == p { Label(p.displayName, systemImage: "checkmark") } else { Label(p.displayName, systemImage: p.icon) }
-                }
+                Label(p.displayName, systemImage: p.icon).tag(p.rawValue)
             }
             Divider()
-            Button {
-                professionRaw = "all"
-            } label: {
-                if profession == nil { Label("All tools", systemImage: "checkmark") } else { Label("All tools", systemImage: "square.grid.2x2") }
-            }
+            Label("All tools", systemImage: "square.grid.2x2").tag("all")
         } label: {
-            Label(profession?.displayName ?? String(localized: "All tools"),
-                  systemImage: profession?.icon ?? "square.grid.2x2")
+            Text("Profession")
         }
+        .pickerStyle(.menu)
+        .labelsHidden()
         .fixedSize()
         .help("Show only the tools for one profession")
-        .accessibilityLabel(String(localized: "Profession: \(profession?.displayName ?? String(localized: "All tools"))"))
         .accessibilityIdentifier("professional.profession")
     }
 

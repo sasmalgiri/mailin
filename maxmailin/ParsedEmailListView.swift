@@ -241,6 +241,10 @@ struct ParsedEmailListView: View {
         iOSBody
         #else
         macOSBody
+            // Named here, on the list's own container: a label on the pane
+            // outside did not reach it (accessibility audit, 2026-10-13).
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(String(localized: "Email list"))
         #endif
     }
 
@@ -1492,6 +1496,7 @@ struct ParsedEmailListView: View {
                         }
                         pageWindowFooter
                     }
+                    .accessibilityLabel(String(localized: "Emails"))
                     // Keyboard-first browsing (v2.1 backlog #15): J/K move the
                     // selection, Return opens the selection in its own window,
                     // "/" focuses search, and typing a letter starts a search
@@ -1686,6 +1691,7 @@ struct ParsedEmailListView: View {
                 forensicTableRow(for: email)
                     .tag(email.id)
             }
+            .accessibilityLabel(String(localized: "Emails"))
             .listStyle(.plain)
             .environment(\.defaultMinListRowHeight, 28)
             .onKeyPress(.init("1")) { tagAndAdvance(.relevant, in: sorted); return .handled }
@@ -2368,6 +2374,7 @@ struct ParsedEmailListView: View {
         List(selection: $selectedEmailIDs) {
             threadedListContent
         }
+        .accessibilityLabel(String(localized: "Emails"))
         #endif
     }
 

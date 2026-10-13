@@ -75,3 +75,24 @@ containers do not take the SwiftUI label; 3 "action is missing" on SwiftUI menu 
 VoiceOver opens with its menu action; the menu bar; 1 small text failing contrast in the sidebar (6×13 pt). A
 short VoiceOver pass on the Mac decides whether any of these needs code.
 
+
+## Audit pass, 2026-10-13 (D1)
+
+`AccessibilityAuditUITests` now audits the **Archive page, the Professional page and Settings ▸ Modules by name** (it used to audit whatever page the window was left on, which hid every Archive-page finding).
+
+Fixed in the app:
+- Contrast: green/orange status captions on Settings ▸ Modules (now a coloured dot beside secondary text); "Studios"/"Tools" captions; the faded "Click any email in the list…" hint; the date-range "–" is decorative and hidden.
+- Labels: the email lists ("Emails"), the Email list pane, the subjects and attachments lists, the four tool grids in the empty email pane, the window roots ("mailin", "Settings").
+- Sender / recipient filters read "Filter: Ann Lee, ann@x.org" instead of `"Ann Lee" <ann@x.org>` (symbols read aloud).
+- The profession filter is a menu-style Picker; List section headers carry the header trait.
+
+Reported, not failed (each reason is printed in the report):
+- **System elements**: the empty Touch Bar; the Settings toolbar's own "more toolbar items" overflow button.
+- **SwiftUI-generated containers** no app modifier reaches (tried: labelling the window root, each pane, each List section header/footer): the window's content root group; List section row wrappers; an unnamed group occupying exactly the same area as a pane the app has named.
+- **"Action is missing" on SwiftUI `Menu` and menu-style `Picker`** that have a name (a stock Picker in place of a Menu is reported the same way).
+- **Contrast of text clipped by its scroll view** (accessibility frames ignore clipping, so the audit samples whatever is drawn there), and the audit's own issues that are attached to no element.
+- Another window behind the one in front is drawn inactive (dimmed); the Settings pass judges only the Settings window.
+
+Anything the app draws still fails the test.
+
+**Status:** the last completed run (2026-10-13 23:48) left one finding — the email list's inner container, now covered by the "same area as a named pane" rule. Later runs could not start: macOS asks to approve UI automation ("Timed out while enabling automation mode"), which needs the owner at the Mac. **Re-run `AccessibilityAuditUITests` with the owner present** to confirm green.

@@ -250,6 +250,8 @@ struct SettingsView: View {
         // hosts its own paywall, so Upgrade works here without returning to
         // the main window's current page.
         .purchasePresenter(target: .settings)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(String(localized: "Settings"))
     }
 
     // MARK: - Profile / Persona Settings

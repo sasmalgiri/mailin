@@ -228,9 +228,17 @@ private struct ModuleCard: View {
                 // Archive's control already reads "Always on"; repeating it in
                 // the status line says nothing.
                 if module.isOptional {
-                    Text(statusLabel)
-                        .font(Typography.caption2)
-                        .foregroundColor(statusColor)
+                    // The colour is a dot beside the words; green or orange
+                    // caption text failed the contrast audit (2026-10-13).
+                    HStack(spacing: 3) {
+                        Image(systemName: "circle.fill")
+                            .font(.system(size: 6))
+                            .foregroundColor(statusColor)
+                            .accessibilityHidden(true)
+                        Text(statusLabel)
+                            .font(Typography.caption2)
+                            .foregroundColor(AppColors.secondary)
+                    }
                 }
                 if runningJobs > 0 {
                     Text("· \(runningJobs) running")

@@ -2231,7 +2231,7 @@ final class MailinClickThroughUITests: XCTestCase {
         _ = openPage("Professional Workflows")
         // The strip remembers the last profession chosen (another test may
         // have picked one without Redaction): show all tools first.
-        let profession = app.menuButtons["professional.profession"].firstMatch
+        let profession = app.popUpButtons["professional.profession"].firstMatch
         if profession.waitForExistence(timeout: 5) {
             profession.click()
             let all = app.menuItems["All tools"].firstMatch

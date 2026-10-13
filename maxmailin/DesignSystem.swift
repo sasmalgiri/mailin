@@ -1011,6 +1011,16 @@ extension View {
         #endif
     }
 
+    /// A List section header or footer as a named element: on macOS the
+    /// List otherwise wraps it in a full-width group with no description
+    /// (accessibility audit, 2026-10-13).
+    func listSectionAccessibility(_ label: Text, isHeader: Bool = true) -> some View {
+        frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(label)
+            .accessibilityAddTraits(isHeader ? .isHeader : [])
+    }
+
     /// A sheet's working minimum on macOS. No-op on iOS, where a minimum
     /// wider than an iPhone screen would push content off both edges.
     func macSheetFrame(minWidth: CGFloat, minHeight: CGFloat) -> some View {

@@ -284,9 +284,11 @@ struct WorkCenterView: View {
                 }
             } header: {
                 Text("\(intakeRows.count) source file(s) — newest first")
+                .listSectionAccessibility(Text("\(intakeRows.count) source file(s) — newest first"))
             } footer: {
                 Text("The register answers the auditor's first question: what entered this archive, when, and from where. Fingerprints let anyone verify a source file hasn't changed.")
                     .font(Typography.caption2)
+                .listSectionAccessibility(Text("The register answers the auditor's first question: what entered this archive, when, and from where. Fingerprints let anyone verify a source file hasn't changed."), isHeader: false)
             }
         }
     }
@@ -295,7 +297,7 @@ struct WorkCenterView: View {
 
     private var jobsTab: some View {
         List {
-            Section("Background jobs") {
+            Section {
                 jobRow(
                     icon: "sparkles", title: String(localized: "AI analysis"),
                     status: analysisStatus,
@@ -318,7 +320,7 @@ struct WorkCenterView: View {
                         ? "Summarizes saved-search activity once a week."
                         : "Enable in Settings ▸ Notifications for a weekly saved-search summary.",
                     action: nil)
-            }
+            } header: { Text("Background jobs").listSectionAccessibility(Text("Background jobs")) }
         }
     }
 
@@ -422,12 +424,14 @@ struct WorkCenterView: View {
                 }
             } header: {
                 Text("Start a workflow")
+                .listSectionAccessibility(Text("Start a workflow"))
             } footer: {
                 Text("A workflow is a saved recipe for a job. Running one creates a numbered record (WF-…) you confirm step by step; each step posts the document it produces.")
                     .font(Typography.caption2)
+                .listSectionAccessibility(Text("A workflow is a saved recipe for a job. Running one creates a numbered record (WF-…) you confirm step by step; each step posts the document it produces."), isHeader: false)
             }
 
-            Section("Resume open runs") {
+            Section {
                 if openRuns.isEmpty {
                     Text("No runs in progress.").foregroundColor(AppColors.secondary)
                 }
@@ -452,7 +456,7 @@ struct WorkCenterView: View {
                     .buttonStyle(.plain)
                     .help("Resume this run where you left off")
                 }
-            }
+            } header: { Text("Resume open runs").listSectionAccessibility(Text("Resume open runs")) }
         }
         .sheet(item: $runnerDef) { def in
             WorkflowRunnerView(definition: def, resumeWF: resumeWF, startVariant: startVariant,

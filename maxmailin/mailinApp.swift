@@ -367,6 +367,9 @@ struct mailinApp: App {
                         .transition(.opacity)
                 }
             }
+            // The window's content is announced by name (audit, 2026-10-13).
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(Text(verbatim: "mailin"))
         }
         #if os(macOS)
         .windowResizability(.contentMinSize)

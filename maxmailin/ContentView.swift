@@ -1167,8 +1167,6 @@ struct ContentView: View {
             .accessibilityLabel(String(localized: "Filters"))
             ParsedEmailListView(model: modelVM, selectedEmailIDs: $selectedEmailIDs)
                 .frame(minWidth: 280, idealWidth: 400)
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel(String(localized: "Email list"))
             VStack(spacing: 0) {
                 detailContentView
                 if appState.dockedBottomPanel != nil && modelVM.isParsed {
@@ -2420,7 +2418,7 @@ struct ContentView: View {
                         .foregroundColor(AppColors.secondary)
                     Text("Click any email in the list, or use arrow keys to navigate")
                         .font(.footnote)
-                        .foregroundColor(AppColors.secondary.opacity(0.6))
+                        .foregroundColor(AppColors.secondary)
                 }
 
                 if modelVM.isParsed {
@@ -2470,6 +2468,8 @@ struct ContentView: View {
                                 exportFilteredEmailsAsEML()
                             }
                         }
+                        .accessibilityElement(children: .contain)
+                        .accessibilityLabel(String(localized: "Tools"))
                         .padding(.horizontal, Spacing.xxLarge)
                     }
 
@@ -2551,6 +2551,8 @@ struct ContentView: View {
                                     storeManager.showPaywall = true
                                 }
                             }
+                            .accessibilityElement(children: .contain)
+                            .accessibilityLabel(String(localized: "Forensic & Investigation"))
                             .padding(.horizontal, Spacing.xxLarge)
                         }
                     }
@@ -2575,6 +2577,8 @@ struct ContentView: View {
                                 personaButton(persona)
                             }
                         }
+                        .accessibilityElement(children: .contain)
+                        .accessibilityLabel(String(localized: "Persona"))
                         .padding(.horizontal, Spacing.xxLarge)
                     }
                 }
@@ -2604,6 +2608,8 @@ struct ContentView: View {
                             appState.showCommandPalette = true
                         }
                     }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel(String(localized: "Settings"))
                     .padding(.horizontal, Spacing.xxLarge)
                 }
 
@@ -2906,6 +2912,7 @@ struct ContentView: View {
                     Text("–")
                         .font(Typography.caption1)
                         .foregroundColor(AppColors.secondary)
+                        .accessibilityHidden(true)   // decorative; both dates are labelled
                     ModernDateField(label: String(localized: "End date — hide emails newer than this (click for calendar)"), date: $modelVM.endDate)
                         .onChange(of: modelVM.endDate) { _, _ in modelVM.dateBoundsChanged() }
                     Spacer()
@@ -3437,6 +3444,19 @@ struct ContentView: View {
         .accessibilityLabel("Step \(number): \(title)\(subtitle.map { ". \($0)" } ?? "")")
     }
 
+    /// `"Ann Lee" <ann@x.org>` → "Ann Lee, ann@x.org"; `<ann@x.org>` → "ann@x.org".
+    /// Quotes and angle brackets read aloud as symbols (audit: "Label not
+    /// human-readable", 2026-10-13).
+    static func spokenAddress(_ raw: String) -> String {
+        let s = raw.trimmingCharacters(in: .whitespaces)
+        guard let lt = s.lastIndex(of: "<"), let gt = s.lastIndex(of: ">"), lt < gt else {
+            return s.trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
+        }
+        let address = String(s[s.index(after: lt)..<gt]).trimmingCharacters(in: .whitespaces)
+        let name = String(s[..<lt]).trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
+        return name.isEmpty || name == address ? address : "\(name), \(address)"
+    }
+
     private func multiToggleList(items: [String], selection: Binding<[String]>,
                                  helpVerb: String = "matching") -> some View {
         ScrollView {
@@ -3455,6 +3475,7 @@ struct ContentView: View {
                     )) {
                         Text(item.prefix(38)).font(Typography.caption1)
                     }
+                    .accessibilityLabel(String(localized: "Filter: \(Self.spokenAddress(item))"))
                     .help("Show only emails \(helpVerb) \(item) — check several to include all of them; searches the whole archive")
                 }
             }

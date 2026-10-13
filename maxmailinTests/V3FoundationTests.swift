@@ -1376,6 +1376,14 @@ final class V3NewFeatureGatingTests: XCTestCase {
         XCTAssertEqual(TierAccess.Feature.joinTeamCase.tier, .free)
     }
 
+    /// Audit 2026-10-13: sender filters read "<a@x.org>" aloud as symbols.
+    func testSpokenAddress_isHumanReadable() {
+        XCTAssertEqual(ContentView.spokenAddress("<sasmal@example.com>"), "sasmal@example.com")
+        XCTAssertEqual(ContentView.spokenAddress("\"Ann Lee\" <ann@x.org>"), "Ann Lee, ann@x.org")
+        XCTAssertEqual(ContentView.spokenAddress("ann@x.org"), "ann@x.org")
+        XCTAssertEqual(ContentView.spokenAddress("ann@x.org <ann@x.org>"), "ann@x.org")
+    }
+
     /// Found on the iPhone/iPad pass: with Professional granted (enterprise
     /// licence, TestFlight) the welcome screen still offered the upgrade.
     func testUpgradeButton_followsTheGrantedTier() {
@@ -1410,7 +1418,9 @@ final class V3NewFeatureGatingTests: XCTestCase {
         defer { ForensicSignalsPolicy.isEnabled = was.0; TierAccess.tier = was.1 }
         ForensicSignalsPolicy.isEnabled = true
         let email = MBOXParser.RawEmail(headers: ["From": "a@gmail.com", "Date": "Tue, 14 Nov 2023 22:13:20 +0000"],
-                                       rawSource: "From: a@gmail.com\n\nx", messageType: "email", attachments: [],
+                                       // Delivered by Gmail to an outside server, so its missing signature counts (C7).
+                                       rawSource: "Received: from mail-qy0-f173.google.com (mail-qy0-f173.google.com [209.85.216.173]) by mx.example.org; Tue, 14 Nov 2023 22:13:21 +0000\nFrom: a@gmail.com\n\nx",
+                                       messageType: "email", attachments: [],
                                        timestamp: "", domains: [], plainBody: "x", htmlBody: "")
         TierAccess.tier = .free
         let free = ForensicManager.assessRisk(for: email).factors
