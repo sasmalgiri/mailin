@@ -993,10 +993,10 @@ final class V31ReviewTests: XCTestCase {
     private struct Author { let key = Curve25519.Signing.PrivateKey(); let name: String
         var pub: String { key.publicKey.rawRepresentation.base64EncodedString() } }
 
-    private func entries(_ a: Author, _ ops: [(TeamLogEntry.Op, UUID?, String, Int)]) throws -> [TeamLogEntry] {
+    private func entries(_ a: Author, _ ops: [(TeamLogEntry.Op, UUID?, String, Int)], role: String = "reviewer") throws -> [TeamLogEntry] {
         var out: [TeamLogEntry] = []
         for (i, op) in ops.enumerated() {
-            var e = TeamLogEntry(seq: i, lamport: op.3, author: a.pub, authorName: a.name, role: "reviewer", at: Date(),
+            var e = TeamLogEntry(seq: i, lamport: op.3, author: a.pub, authorName: a.name, role: role, at: Date(),
                                  op: op.0, emailID: op.1, batch: nil, value: op.2, prevHash: out.last?.hash ?? "")
             e.signature = try a.key.signature(for: try e.signedBytes()).base64EncodedString()
             out.append(e)
@@ -1030,6 +1030,25 @@ final class V31ReviewTests: XCTestCase {
         let resolved = TeamCase.fold(all + real, manifest: m)
         XCTAssertTrue(resolved.conflicts.isEmpty)
         XCTAssertEqual(resolved.code(e1), "Not relevant")
+    }
+
+    func testCodingLayout_rules() {
+        let l = CodingLayout.standard
+        XCTAssertFalse(l.problems(code: "Relevant", values: [:]).isEmpty, "Confidentiality is required")
+        XCTAssertTrue(l.problems(code: "Relevant", values: ["Confidentiality": ["Public"], "Issues": ["Contract", "Financial"]]).isEmpty)
+        XCTAssertFalse(l.problems(code: "Relevant", values: ["Confidentiality": ["Public", "Confidential"]]).isEmpty, "single choice")
+        XCTAssertFalse(l.problems(code: "Privileged", values: ["Confidentiality": ["Public"]]).isEmpty, "exclusive set")
+        XCTAssertFalse(l.problems(code: "Relevant", values: ["Confidentiality": ["Secret"]]).isEmpty, "unknown choice")
+        XCTAssertEqual(CodingLayout.decode(CodingLayout.encode("Issues", ["a", "b"]))?.1, ["a", "b"])
+    }
+
+    func testFold_fieldsAndThroughput() throws {
+        let lead = Author(name: "Lead"), a = Author(name: "Ann")
+        let id = UUID()
+        let es = try entries(a, [(.code, id, "Relevant", 1), (.field, id, "Issues=Contract|Other", 2), (.code, id, "Not relevant", 3)])
+        let s = TeamCase.fold(es, manifest: manifest(lead: lead))
+        XCTAssertEqual(s.emails[id]?.fields[a.pub]?["Issues"], ["Contract", "Other"])
+        XCTAssertEqual(s.codedPerDay[a.pub]?.values.reduce(0, +), 1, "a recode is not a second email coded")
     }
 
     func testLog_tamperedEntryStopsTheLog_tornLastLineIsIgnored() throws {
@@ -1067,7 +1086,9 @@ final class V31ReviewTests: XCTestCase {
             q.append((.qcCode, id, i < 2 ? "Not relevant" : "Relevant", i + 20))
         }
         all += try entries(r1, ann)
-        all += try entries(qc, q)
+        // A reviewer cannot do QC (T5): their QC entries are not counted.
+        XCTAssertTrue(TeamCase.fold(all + (try entries(qc, q)), manifest: manifest(lead: lead)).qcStats().isEmpty)
+        all += try entries(qc, q, role: "examiner")
         let s = TeamCase.fold(all, manifest: manifest(lead: lead))
         let stat = try XCTUnwrap(s.qcStats().first)
         XCTAssertEqual(stat.checked, 10)

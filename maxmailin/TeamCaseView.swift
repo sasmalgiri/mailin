@@ -29,6 +29,8 @@ struct TeamCaseView: View {
     // Review
     @State private var activeBatch: Int?
     @State private var showLegacyPicker = false
+    @State private var showQC = false
+    @State private var aiDisagreements: [(id: UUID, code: String, score: Double)] = []
 
     var body: some View {
         Form {
@@ -77,6 +79,11 @@ struct TeamCaseView: View {
                 reload()
                 status = String(localized: "\(n) decisions and notes from \(url.lastPathComponent) added to your log.")
             } catch { status = error.localizedDescription }
+        }
+        .sheet(isPresented: $showQC) {
+            if let c = teamCase {
+                TeamQCView(teamCase: c, state: $state).frame(minWidth: 640, minHeight: 480)
+            }
         }
         .sheet(item: Binding(get: { activeBatch.map(BatchRef.init) }, set: { activeBatch = $0?.id })) { ref in
             if let c = teamCase {
@@ -150,11 +157,36 @@ struct TeamCaseView: View {
         let qc = c.qcQueue(state: state)
         Section {
             Text("\(qc.count) emails waiting for second-level review.")
+            if TeamCase.mayQC(OrgPolicy.role), !qc.isEmpty {
+                Button(String(localized: "Start second-level review")) { showQC = true }
+            }
             ForEach(state.qcStats(), id: \.reviewer) { r in
                 Text("\(r.reviewer): \(r.overturned) of \(r.checked) overturned (\(Int(r.rate * 100)) %, 95 % interval \(Int(r.low * 100))–\(Int(r.high * 100)) %)")
                     .font(.caption)
             }
         } header: { Text("Quality control") }
+
+        Section {
+            ForEach(state.codedPerDay.keys.sorted(), id: \.self) { key in
+                let days = state.codedPerDay[key] ?? [:]
+                let last7 = days.keys.sorted().suffix(7).reduce(0) { $0 + (days[$1] ?? 0) }
+                LabeledContent(state.name(key), value: String(localized: "\(days.values.reduce(0, +)) coded · \(last7) on the last 7 days with coding"))
+            }
+            if isLead {
+                if aiDisagreements.isEmpty {
+                    Text("No email's stored relevance score strongly disagrees with its code.").font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("\(aiDisagreements.count) emails where the relevance score strongly disagrees with the code — candidates for QC:")
+                    ForEach(aiDisagreements.prefix(50), id: \.id) { d in
+                        Text("\(c.evidence.index.first { $0.id == d.id }?.subject ?? d.id.uuidString): \(d.code), score \(Int(d.score * 100)) %")
+                            .font(.caption)
+                    }
+                    if aiDisagreements.count > 50 {
+                        Text("Showing 50 of \(aiDisagreements.count).").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        } header: { Text("Throughput and AI checks") }
 
         Section {
             Button(String(localized: "Export merged audit trail (JSON Lines)…")) {
@@ -185,6 +217,15 @@ struct TeamCaseView: View {
     private func reload() {
         guard let c = teamCase else { return }
         state = c.load()
+        // T8: only the lead's archive holds the relevance scores.
+        if c.myKey == c.manifest.leadKey {
+            let ids = c.evidence.index.map(\.id)
+            let current = state
+            Task {
+                let analysis = (try? await SQLiteEmailStore.shared.storedAnalysis(for: ids)) ?? [:]
+                aiDisagreements = c.aiDisagreements(state: current, analysis: analysis)
+            }
+        }
     }
 
     private func open(_ url: URL) {
@@ -228,6 +269,9 @@ struct TeamBatchReviewView: View {
     @State private var tagText = ""
     @State private var noteText = ""
     @State private var error: String?
+    // T6: the coding form for the email on screen.
+    @State private var chosenCode: String?
+    @State private var values: [String: [String]] = [:]
 
     private var ids: [UUID] { teamCase.manifest.batches[batch] }
 
@@ -253,9 +297,28 @@ struct TeamBatchReviewView: View {
                     ScrollView { Text(e.body).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
                     HStack {
                         ForEach(teamCase.manifest.codes, id: \.self) { code in
-                            Button(code) { write(.code, e.id, code); advance() }.buttonStyle(.bordered)
+                            Button(code) {
+                                if teamCase.manifest.layout == nil { write(.code, e.id, code); advance() } else { chosenCode = code }
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(chosenCode == code ? .accentColor : .secondary)
                         }
                         Button(String(localized: "Review later")) { write(.reviewLater, e.id, "on"); advance() }
+                    }
+                    if let layout = teamCase.manifest.layout {
+                        ForEach(layout.fields) { f in
+                            HStack {
+                                Text(f.name + (f.required ? " *" : "")).font(.callout)
+                                ForEach(f.choices, id: \.self) { choice in
+                                    let on = values[f.name]?.contains(choice) ?? false
+                                    Button(choice) { toggle(f, choice) }
+                                        .buttonStyle(.bordered)
+                                        .tint(on ? .accentColor : .secondary)
+                                }
+                            }
+                        }
+                        Button(String(localized: "Save coding")) { save(e.id) }
+                            .keyboardShortcut(.defaultAction)
                     }
                     HStack {
                         TextField(String(localized: "Tag"), text: $tagText).onSubmit { write(.tagAdd, e.id, tagText); tagText = "" }
@@ -264,8 +327,8 @@ struct TeamBatchReviewView: View {
                 }
                 if let error { Text(error).foregroundStyle(.red).font(.callout) }
                 HStack {
-                    Button(String(localized: "Release batch")) { try? teamCase.release(batch, done: false, state: state); dismiss() }
-                    Button(String(localized: "Mark batch done")) { try? teamCase.release(batch, done: true, state: state); state = teamCase.load(); dismiss() }
+                    Button(String(localized: "Release batch")) { finish(done: false) }
+                    Button(String(localized: "Mark batch done")) { finish(done: true) }
                         .disabled(!teamCase.batchComplete(batch, state: state))
                 }
             }
@@ -275,7 +338,41 @@ struct TeamBatchReviewView: View {
         .onChange(of: selection) { _, id in
             guard let id, let i = teamCase.evidence.index.firstIndex(where: { $0.id == id }) else { current = nil; return }
             current = try? teamCase.evidence.email(at: i)
+            chosenCode = state.emails[id]?.codes[teamCase.myKey]
+            values = state.emails[id]?.fields[teamCase.myKey] ?? [:]
         }
+    }
+
+    private func toggle(_ f: CodingLayout.Field, _ choice: String) {
+        var v = values[f.name] ?? []
+        if v.contains(choice) { v.removeAll { $0 == choice } } else { v = f.multiple ? v + [choice] : [choice] }
+        values[f.name] = v
+    }
+
+    private func save(_ id: UUID) {
+        guard teamCase.lease(batch)?.holder == teamCase.myKey, !state.batchDone.contains(batch) else {
+            error = String(localized: "This batch is no longer checked out to you; it is read-only.")
+            return
+        }
+        guard let code = chosenCode else { error = String(localized: "Choose a code."); return }
+        do {
+            let problems = try teamCase.saveCoding(id, code: code, values: values, state: state)
+            if problems.isEmpty {
+                error = nil
+                state = teamCase.load()
+                advance()
+            } else {
+                error = problems.joined(separator: " ")
+            }
+        } catch { self.error = error.localizedDescription }
+    }
+
+    private func finish(done: Bool) {
+        do {
+            try teamCase.release(batch, done: done, state: state)
+            state = teamCase.load()
+            dismiss()
+        } catch { self.error = error.localizedDescription }
     }
 
     private func write(_ op: TeamLogEntry.Op, _ id: UUID, _ value: String) {
@@ -295,5 +392,55 @@ struct TeamBatchReviewView: View {
 
     private func advance() {
         selection = teamCase.firstUncoded(batch, state: state) ?? selection
+    }
+}
+
+/// T7: second-level review — a different reviewer re-codes a sample; the
+/// overturn rate per first reviewer is on the dashboard.
+struct TeamQCView: View {
+    let teamCase: TeamCase
+    @Binding var state: TeamCaseState
+    @Environment(\.dismiss) private var dismiss
+    @State private var queue: [UUID] = []
+    @State private var index = 0
+    @State private var current: ReviewPackEmail?
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.small) {
+            Text("\(min(index, queue.count)) of \(queue.count) checked").font(.caption)
+            if index < queue.count, let e = current {
+                Text(e.subject).font(.headline)
+                Text("From \(e.from) · \(e.date)").font(.caption)
+                ScrollView { Text(e.body).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
+                Text("The first reviewer's code is hidden until you decide.").font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    ForEach(teamCase.manifest.codes, id: \.self) { code in
+                        Button(code) { decide(code) }.buttonStyle(.bordered)
+                    }
+                }
+            } else {
+                Text("Second-level review is done for now.")
+            }
+            if let error { Text(error).foregroundStyle(.red).font(.callout) }
+            Button(String(localized: "Close")) { dismiss() }
+        }
+        .padding()
+        .onAppear { queue = teamCase.qcQueue(state: state); load() }
+    }
+
+    private func load() {
+        guard index < queue.count, let i = teamCase.evidence.index.firstIndex(where: { $0.id == queue[index] }) else { current = nil; return }
+        current = try? teamCase.evidence.email(at: i)
+    }
+
+    private func decide(_ code: String) {
+        guard index < queue.count else { return }
+        do {
+            try teamCase.append(.qcCode, emailID: queue[index], value: code, state: state)
+            state = teamCase.load()
+            index += 1
+            load()
+        } catch { self.error = error.localizedDescription }
     }
 }
