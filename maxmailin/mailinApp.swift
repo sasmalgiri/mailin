@@ -328,17 +328,25 @@ struct mailinApp: App {
                     .onOpenURL { url in
                         handleIncomingURL(url)
                     }
+                    .onContinueUserActivity(CSSearchableItemActionType) { activity in
+                        if let emailID = SpotlightIndexer.shared.handleSpotlightActivity(activity) {
+                            NotificationCenter.default.post(name: .spotlightEmailSelected, object: emailID)
+                        }
+                    }
+
+                // 3.1: opened .mailinpack / .mailinresponse / .mailinscript. Its own
+                // host view, so it never stacks a second sheet on the shell
+                // (the shell's launch flow presents exactly one sheet).
+                Color.clear
+                    .frame(width: 0, height: 0)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
                     .sheet(item: $incomingDocument) { doc in
                         IncomingDocumentView(document: doc)
                             .environment(modules)
                             #if os(macOS)
                             .frame(minWidth: 680, minHeight: 520)
                             #endif
-                    }
-                    .onContinueUserActivity(CSSearchableItemActionType) { activity in
-                        if let emailID = SpotlightIndexer.shared.handleSpotlightActivity(activity) {
-                            NotificationCenter.default.post(name: .spotlightEmailSelected, object: emailID)
-                        }
                     }
 
                 if showLaunchAnimation {

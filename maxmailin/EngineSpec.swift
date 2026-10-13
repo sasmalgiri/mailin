@@ -221,7 +221,9 @@ struct EngineSpec: Sendable {
                 name: String(localized: "Review Pack (3.1)"),
                 detail: String(localized: "Sends a set of emails to a reviewer who codes them in any copy of mailin, even the free one, and merges their decisions back with who decided what."))
         case .v31TeamCase:
-            return EngineSpec(.professional, requires: [.v31ReviewPack], maturity: .preview,
+            // Archive page like Review Pack: any reviewer can join a case;
+            // starting a case and applying it to an archive need Professional.
+            return EngineSpec(.archive, requires: [.v31ReviewPack], maturity: .preview,
                 name: String(localized: "Team case on a shared folder (3.1)"),
                 detail: String(localized: "Several reviewers work on one case kept on a shared drive, with signed logs, batches, a conflict list and quality control. No server needed."))
         case .v31ForensicTimestamps:

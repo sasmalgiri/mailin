@@ -13,6 +13,7 @@ import UniformTypeIdentifiers
 @testable import ArchiveCore
 
 struct TeamCaseView: View {
+    @Environment(ModuleRegistry.self) private var modules
     @AppStorage("forensicExaminerName") private var myName = ""
     @State private var teamCase: TeamCase?
     @State private var state = TeamCaseState()
@@ -44,6 +45,7 @@ struct TeamCaseView: View {
                     } label: { Label("Open a case folder…", systemImage: "folder") }
                     .disabled(myName.trimmingCharacters(in: .whitespaces).isEmpty)
                 } header: { Text("Join a case") }
+                if modules.isEnabled(.professional) {
                 Section {
                     TextField(String(localized: "Case title"), text: $title)
                     TextField(String(localized: "Search (empty = whole archive)"), text: $search)
@@ -56,6 +58,7 @@ struct TeamCaseView: View {
                     .disabled(title.isEmpty || myName.isEmpty || creating)
                 } header: { Text("Start a case (lead)") } footer: {
                     Text("The case folder can live on a file server, NAS or external drive. Everyone works offline; each person's work is a signed log in the folder, and every copy of mailin reading the folder shows the same result.")
+                }
                 }
             }
             if let status { Section { Text(status).textSelection(.enabled) } }
@@ -201,7 +204,7 @@ struct TeamCaseView: View {
                 } catch { status = error.localizedDescription }
             }
             Button(String(localized: "Import a 3.0 review file (.mailinreview)…")) { showLegacyPicker = true }
-            if isLead {
+            if isLead && modules.isEnabled(.professional) {
                 Button(String(localized: "Apply resolved codes and tags to my archive")) {
                     Task {
                         do {
