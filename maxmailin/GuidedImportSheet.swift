@@ -132,6 +132,7 @@ struct GuidedImportSheet: View {
                         whatItIs(plan)
                         allowance
                         choices
+                        recoveryNote(plan)
                         whatItCosts(plan)
                         whatMayBeLost(plan)
                         whatHappensNext(plan)
@@ -194,6 +195,26 @@ struct GuidedImportSheet: View {
         }
         .pickerStyle(.menu)
         .controlSize(.small)
+    }
+
+    /// R12: what recovery will do in this run, said before Start.
+    @ViewBuilder
+    private func recoveryNote(_ plan: ImportPlan) -> some View {
+        if RecoveryPolicy.isEnabled && TierAccess.allows(.recovery) {
+            section(String(localized: "Deleted mail"), systemImage: "arrow.counterclockwise.circle") {
+                Text("Recovery is on: mail the files still hold as deleted (deleted folders, deletion flags, unpurged mail, items in no folder) is imported and marked Recovered.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if RecoveryPolicy.deepRecoveryEnabled && TierAccess.allows(.deepRecovery) {
+                    let pstBytes = plan.supported.filter { ["pst", "ost"].contains($0.url.pathExtension.lowercased()) }.reduce(Int64(0)) { $0 + $1.sizeBytes }
+                    if pstBytes > 0 {
+                        // Measured carving speed: about 1 GB per second (SCALE_RESULTS, 2026-10-13); stated as a range.
+                        let seconds = max(1, Int(Double(pstBytes) / 1_000_000_000))
+                        Text("Deep recovery also scans the unused space of \(ByteCountFormatter.string(fromByteCount: pstBytes, countStyle: .file)) of PST/OST data — about \(seconds)–\(seconds * 4) s more.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
     }
 
     private var header: some View {

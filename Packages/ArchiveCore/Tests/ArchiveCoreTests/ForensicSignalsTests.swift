@@ -183,3 +183,126 @@ final class DKIMMultiSignatureTests: XCTestCase {
         XCTAssertEqual(DKIMVerifier.verify(rawSource: arc, keys: keys), .noSignature)
     }
 }
+
+
+final class GmailTimestampTests: XCTestCase {
+    private func utc(_ d: Date) -> String {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"; return f.string(from: d)
+    }
+
+    func testPublishedGmailBoundaryExample() throws {
+        let t = try XCTUnwrap(HiddenTimestamps.gmailBoundary("000000000000b6809105a0ae7b18"))
+        XCTAssertEqual(utc(t.date), "2020-03-12 20:49:03.864")
+        XCTAssertNil(HiddenTimestamps.gmailBoundary("----=_Part_1_2.3"))
+        XCTAssertNil(HiddenTimestamps.gmailBoundary("Apple-Mail=_0D7F3F3A-3B1E-4B5A-9C0A-1A2B3C4D5E6F"))
+    }
+
+    func testPublishedGmailMessageIDExample_hexAndDecimal() throws {
+        let hex = try XCTUnwrap(HiddenTimestamps.gmailInternalID("172ed79b0337c14f", source: "x"))
+        XCTAssertEqual(utc(hex.date), "2020-06-25 21:54:34.675")
+        let decimal = String(UInt64("172ed79b0337c14f", radix: 16)!)
+        XCTAssertEqual(try XCTUnwrap(HiddenTimestamps.gmailInternalID(decimal, source: "x")).date, hex.date, "Takeout writes it in decimal")
+    }
+
+    func testUUIDv1_isDated_v4IsNot() throws {
+        // RFC 4122 v1 for 2020-01-01T00:00:00Z: ticks = (1577836800 + 12219292800) * 1e7.
+        let ticks = UInt64(1_577_836_800 + 12_219_292_800) * 10_000_000
+        let low = ticks & 0xFFFF_FFFF, mid = (ticks >> 32) & 0xFFFF, hi = (ticks >> 48) & 0x0FFF
+        let uuid = String(format: "%08llx-%04llx-1%03llx-8000-00aabbccddee", low, mid, hi)
+        let t = try XCTUnwrap(HiddenTimestamps.uuidV1(in: "<\(uuid)@host>"))
+        XCTAssertEqual(t.date.timeIntervalSince1970, 1_577_836_800, accuracy: 0.001)
+        XCTAssertNil(HiddenTimestamps.uuidV1(in: "<\(UUID().uuidString)@host>"), "v4 UUIDs carry no time")
+    }
+
+    func testAll_collectsGmailSources() {
+        let raw = "Content-Type: multipart/alternative; boundary=\"000000000000b6809105a0ae7b18\"\n\nbody"
+        let stamps = HiddenTimestamps.all(headers: ["X-GM-THRID": String(UInt64("172ed79b0337c14f", radix: 16)!)], rawSource: raw)
+        XCTAssertTrue(stamps.contains { $0.source == "MIME boundary (Gmail)" })
+        XCTAssertTrue(stamps.contains { $0.source.hasPrefix("Gmail thread id") })
+    }
+}
+
+
+final class ARCChainTests: XCTestCase {
+    private let key = Curve25519.Signing.PrivateKey()
+    private var keys: DKIMKeyCache { DKIMKeyCache(records: ["arc._domainkey.relay.example": "v=DKIM1; k=ed25519; p=\(key.publicKey.rawRepresentation.base64EncodedString())"]) }
+
+    private func sign(_ s: String) throws -> String {
+        try key.signature(for: Data(SHA256.hash(data: Data(s.utf8)))).base64EncodedString()
+    }
+
+    /// Builds a message carrying `hops` ARC sets, hand-canonicalized per RFC 8617.
+    private func message(hops: Int, cvOverride: [Int: String] = [:]) throws -> String {
+        let body = "hello\r\n"
+        let bh = Data(SHA256.hash(data: Data(body.utf8))).base64EncodedString()
+        var setsCanon = ""     // relaxed text of every earlier complete set
+        var headers: [String] = []
+        for i in 1...hops {
+            let aarValue = "i=\(i); relay.example; spf=pass"
+            let amsTags = "i=\(i); a=ed25519-sha256; c=relaxed/relaxed; d=relay.example; s=arc; h=from; bh=\(bh); b="
+            let amsSig = try sign("from:a@example.com\r\narc-message-signature:\(amsTags)")
+            let cv = cvOverride[i] ?? (i == 1 ? "none" : "pass")
+            let sealTags = "i=\(i); a=ed25519-sha256; cv=\(cv); d=relay.example; s=arc; b="
+            let sealInput = setsCanon + "arc-authentication-results:\(aarValue)\r\n" + "arc-message-signature:\(amsTags)\(amsSig)\r\n" + "arc-seal:\(sealTags)"
+            let sealSig = try sign(sealInput)
+            setsCanon += "arc-authentication-results:\(aarValue)\r\narc-message-signature:\(amsTags)\(amsSig)\r\narc-seal:\(sealTags)\(sealSig)\r\n"
+            headers.insert(contentsOf: ["ARC-Seal: \(sealTags)\(sealSig)", "ARC-Message-Signature: \(amsTags)\(amsSig)", "ARC-Authentication-Results: \(aarValue)"], at: 0)
+        }
+        return headers.joined(separator: "\r\n") + "\r\nFrom: a@example.com\r\n\r\n" + body
+    }
+
+    func testOneAndThreeHopChainsPass() throws {
+        XCTAssertEqual(DKIMVerifier.verifyARCChain(rawSource: try message(hops: 1), keys: keys), .pass(instances: 1))
+        XCTAssertEqual(DKIMVerifier.verifyARCChain(rawSource: try message(hops: 3), keys: keys), .pass(instances: 3))
+    }
+
+    func testChangedEarlierResults_failAtTheRightSeal() throws {
+        let raw = try message(hops: 3).replacingOccurrences(of: "i=1; relay.example; spf=pass", with: "i=1; relay.example; spf=fail")
+        guard case .fail(let i, _) = DKIMVerifier.verifyARCChain(rawSource: raw, keys: keys) else { return XCTFail("must fail") }
+        XCTAssertEqual(i, 1, "seal 1 covers set 1")
+    }
+
+    func testCvRules_andMissingSet() throws {
+        guard case .fail(2, _) = DKIMVerifier.verifyARCChain(rawSource: try message(hops: 2, cvOverride: [2: "fail"]), keys: keys) else { return XCTFail() }
+        guard case .fail(1, _) = DKIMVerifier.verifyARCChain(rawSource: try message(hops: 2, cvOverride: [1: "pass"]), keys: keys) else { return XCTFail() }
+        let gap = try message(hops: 2).components(separatedBy: "\r\n").filter { !$0.hasPrefix("ARC-Authentication-Results: i=1") }.joined(separator: "\r\n")
+        guard case .fail(1, _) = DKIMVerifier.verifyARCChain(rawSource: gap, keys: keys) else { return XCTFail("missing set") }
+        XCTAssertEqual(DKIMVerifier.verifyARCChain(rawSource: "From: a\r\n\r\nb", keys: keys), .none)
+        guard case .noKey = DKIMVerifier.verifyARCChain(rawSource: try message(hops: 1), keys: DKIMKeyCache()) else { return XCTFail() }
+    }
+}
+
+/// The open-source ARC validation suite (ValiMail, MIT — Fixtures/arc/LICENSE.txt),
+/// written against the ARC drafts; known disagreements with RFC 8617 are listed.
+final class ARCOpenSuiteTests: XCTestCase {
+    struct Case: Decodable { let name: String; let message: String; let cv: String; let txt: [String: String] }
+
+    func testValiMailValidationSuite() throws {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/arc/arc-validation.json")
+        let cases = try JSONDecoder().decode([Case].self, from: Data(contentsOf: url))
+        var agree = 0, total = 0
+        var mismatches: [String] = []
+        for c in cases where ["Pass", "Fail", "None"].contains(c.cv) {
+            total += 1
+            let r = DKIMVerifier.verifyARCChain(rawSource: c.message, keys: DKIMKeyCache(records: c.txt.reduce(into: [:]) { $0[$1.key.lowercased()] = $1.value }))
+            let got: String
+            switch r {
+            case .pass: got = "Pass"
+            case .none: got = "None"
+            case .fail, .noKey: got = "Fail"
+            }
+            if got == c.cv { agree += 1 } else { mismatches.append("\(c.name): expected \(c.cv), got \(got) (\(r))") }
+        }
+        print("ARC-SUITE \(agree)/\(total)\n" + mismatches.joined(separator: "\n"))
+        XCTAssertGreaterThan(total, 100)
+        // The two cases where the draft-era suite and RFC 8617 / RFC 6376 disagree
+        // (mailauth reports the same two): an AMS without c= (RFC: simple/simple,
+        // the suite assumed relaxed) and an AMS with an empty h= (RFC 6376: h= must
+        // list at least From). We follow the RFCs.
+        let knownRFCDifferences: Set<String> = ["ams_fields_c_na", "ams_fields_h_empty"]
+        let unexpected = mismatches.filter { m in !knownRFCDifferences.contains(where: { m.hasPrefix($0 + ":") }) }
+        XCTAssertTrue(unexpected.isEmpty, unexpected.joined(separator: "\n"))
+        XCTAssertEqual(agree, total - knownRFCDifferences.count)
+    }
+}

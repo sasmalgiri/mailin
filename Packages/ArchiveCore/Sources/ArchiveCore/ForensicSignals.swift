@@ -91,6 +91,48 @@ public enum HiddenTimestamps {
         return nil
     }
 
+    /// Gmail MIME boundary: 28 hex digits, `000000000000` + A(6) + B(8) + 2;
+    /// B followed by A is a Unix time in microseconds (Metaspike, "Dates in
+    /// Hiding" part 2: `000000000000b6809105a0ae7b18` → 2020-03-12 20:49:03.864 UTC).
+    public static func gmailBoundary(_ boundary: String) -> ForensicTimestamp? {
+        let b = boundary.lowercased()
+        guard b.count == 28, b.hasPrefix("000000000000"), b.allSatisfy(\.isHexDigit) else { return nil }
+        let chars = Array(b)
+        let a = String(chars[12..<18]), bPart = String(chars[18..<26])
+        guard let micros = UInt64(bPart + a, radix: 16) else { return nil }
+        let secs = Double(micros / 1_000) / 1_000   // millisecond precision, as published
+        guard secs > 946_684_800, secs < Date().timeIntervalSince1970 + 366 * 86_400 else { return nil }
+        return ForensicTimestamp(source: "MIME boundary (Gmail)", date: Date(timeIntervalSince1970: secs), raw: boundary)
+    }
+
+    /// Gmail's internal message / thread id (X-GM-MSGID, X-GM-THRID; decimal
+    /// in Takeout, hex in the API): without its last 5 hex digits it is Unix
+    /// time in milliseconds (Metaspike part 3: 172ed79b0337c14f → 2020-06-25
+    /// 21:54:34.675 UTC).
+    public static func gmailInternalID(_ value: String, source: String) -> ForensicTimestamp? {
+        let v = value.trimmingCharacters(in: .whitespaces)
+        let hex: String
+        if v.allSatisfy(\.isNumber), let n = UInt64(v) { hex = String(n, radix: 16) }
+        else if v.allSatisfy(\.isHexDigit) { hex = v.lowercased() } else { return nil }
+        guard hex.count > 5, let ms = UInt64(hex.dropLast(5), radix: 16) else { return nil }
+        let secs = Double(ms) / 1000
+        guard secs > 1_099_000_000, secs < Date().timeIntervalSince1970 + 366 * 86_400 else { return nil }   // Gmail began 2004
+        return ForensicTimestamp(source: source, date: Date(timeIntervalSince1970: secs), raw: value)
+    }
+
+    /// Version-1 UUIDs (RFC 4122) carry their creation time: 100-ns ticks since 1582-10-15.
+    public static func uuidV1(in token: String) -> ForensicTimestamp? {
+        guard let r = token.range(of: #"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-1[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}"#,
+                                  options: .regularExpression) else { return nil }
+        let parts = token[r].split(separator: "-")
+        guard parts.count == 5, let low = UInt64(parts[0], radix: 16), let mid = UInt64(parts[1], radix: 16),
+              let hi = UInt64(parts[2], radix: 16) else { return nil }
+        let ticks = ((hi & 0x0FFF) << 48) | (mid << 32) | low
+        let secs = Double(ticks) / 10_000_000 - 12_219_292_800
+        guard secs > 631_152_000, secs < Date().timeIntervalSince1970 + 366 * 86_400 else { return nil }
+        return ForensicTimestamp(source: "Message-ID (version-1 UUID)", date: Date(timeIntervalSince1970: secs), raw: String(token[r]))
+    }
+
     /// Every timestamp the message carries, oldest first.
     public static func all(headers: [String: String], rawSource: String) -> [ForensicTimestamp] {
         var out: [ForensicTimestamp] = []
@@ -98,12 +140,19 @@ public enum HiddenTimestamps {
             out.append(ForensicTimestamp(source: "Date header", date: date, raw: d))
         }
         if let ti = headers["Thread-Index"] { out += threadIndex(ti) }
-        if let mid = headers["Message-ID"], let t = epoch(in: mid, source: "Message-ID (Unix time)") { out.append(t) }
+        if let mid = headers["Message-ID"] {
+            if let t = epoch(in: mid, source: "Message-ID (Unix time)") { out.append(t) }
+            if let t = uuidV1(in: mid) { out.append(t) }
+        }
+        if let id = RecoveryDetector.value(headers, "X-GM-MSGID"), let t = gmailInternalID(id, source: "Gmail message id") { out.append(t) }
+        if let id = RecoveryDetector.value(headers, "X-GM-THRID"), let t = gmailInternalID(id, source: "Gmail thread id (conversation start)") { out.append(t) }
         for hop in ReceivedTrace.hops(rawSource: rawSource) {
             if let d = hop.date { out.append(ForensicTimestamp(source: "Received (\(hop.by.isEmpty ? "hop \(hop.index)" : hop.by))", date: d, raw: hop.raw)) }
         }
         for b in boundaries(rawSource) {
-            if let t = outlookBoundary(b) { out.append(t) } else if let t = epoch(in: b, source: "MIME boundary (Unix time)") { out.append(t) }
+            if let t = gmailBoundary(b) { out.append(t) }
+            else if let t = outlookBoundary(b) { out.append(t) }
+            else if let t = epoch(in: b, source: "MIME boundary (Unix time)") { out.append(t) }
         }
         return out.sorted { $0.date < $1.date }
     }
@@ -271,14 +320,20 @@ public enum DKIMVerifier {
     }
 
     static func verifyOne(_ sigField: Field, fields: [Field], body: String, keys: DKIMKeyCache) -> DKIMResult {
-        let tags = parseTags(sigField.value)
-        guard let d = tags["d"], let s = tags["s"], let b = tags["b"], let bh = tags["bh"], let h = tags["h"] else {
-            return .fail("DKIM-Signature is missing a required tag")
+        guard let tags = strictTags(sigField.value) else { return .fail("the signature's tag list is malformed") }
+        guard let d = tags["d"], let s = tags["s"], let b = tags["b"], let bh = tags["bh"], let h = tags["h"], !h.isEmpty else {
+            return .fail("the signature is missing a required tag")
         }
-        let alg = (tags["a"] ?? "rsa-sha256").lowercased()
+        guard let alg = tags["a"]?.lowercased(), !alg.isEmpty else { return .fail("the signature names no algorithm") }
+        if sigField.name.lowercased() == "arc-message-signature",
+           h.lowercased().split(separator: ":").contains(where: { $0.trimmingCharacters(in: .whitespaces) == "arc-seal" }) {
+            return .fail("an ARC-Message-Signature may not sign ARC-Seal headers")
+        }
         let canon = (tags["c"] ?? "simple/simple").lowercased().split(separator: "/").map(String.init)
         let hCanon = canon.first ?? "simple", bCanon = canon.count > 1 ? canon[1] : "simple"
-        guard alg == "rsa-sha256" || alg == "ed25519-sha256" else { return .unsupported("algorithm \(alg)") }
+        guard algorithms.contains(alg) else {
+            return sigField.name.lowercased() == "dkim-signature" ? .unsupported("algorithm \(alg)") : .fail("unknown algorithm \(alg)")
+        }
         guard let txt = keys.record(selector: s, domain: d) else { return .noKey(domain: d, selector: s) }
         let keyTags = parseTags(txt)
         guard let p = keyTags["p"], !p.isEmpty, let keyData = Data(base64Encoded: p.filter { !$0.isWhitespace }) else {
@@ -309,22 +364,125 @@ public enum DKIMVerifier {
         if sigLine.hasSuffix("\r\n") { sigLine.removeLast() }   // "\r\n" is one Character
         data += sigLine
         guard let sig = Data(base64Encoded: b.filter { !$0.isWhitespace }) else { return .fail("signature is not base64") }
-        let message = Data(data.utf8)
+        if let why = keyProblem(alg: alg, keyData: keyData) { return .fail(why) }
+        return verifySignature(alg: alg, keyData: keyData, message: Data(data.utf8), signature: sig)
+            ? .pass(domain: d, selector: s) : .fail("signature does not verify: a signed header was changed")
+    }
 
-        if alg == "ed25519-sha256" {
-            guard let key = try? Curve25519.Signing.PublicKey(rawRepresentation: keyData) else { return .fail("bad ed25519 key") }
-            let digest = Data(SHA256.hash(data: message))
-            return key.isValidSignature(sig, for: digest) ? .pass(domain: d, selector: s) : .fail("signature does not verify: a signed header was changed")
-        }
+    /// RFC 8301: RSA keys shorter than 1024 bits must not be trusted.
+    static func keyProblem(alg: String, keyData: Data) -> String? {
+        guard alg == "rsa-sha256" else { return nil }
         guard let pkcs1 = rsaPublicKeyPKCS1(fromSPKI: keyData),
               let key = SecKeyCreateWithData(pkcs1 as CFData, [kSecAttrKeyType: kSecAttrKeyTypeRSA, kSecAttrKeyClass: kSecAttrKeyClassPublic] as CFDictionary, nil) else {
-            return .fail("bad RSA key")
+            return "bad RSA key"
         }
-        let ok = SecKeyVerifySignature(key, .rsaSignatureMessagePKCS1v15SHA256, message as CFData, sig as CFData, nil)
-        return ok ? .pass(domain: d, selector: s) : .fail("signature does not verify: a signed header was changed")
+        let bits = SecKeyGetBlockSize(key) * 8
+        return bits < 1024 ? "the RSA key has \(bits) bits; at least 1024 are required (RFC 8301)" : nil
     }
 
     struct Field { var name: String; var value: String; var raw: String }
+
+    /// Verifies `message` with the key published for `s`/`d` (rsa-sha256 or ed25519-sha256).
+    static func verifySignature(alg: String, keyData: Data, message: Data, signature: Data) -> Bool {
+        if alg == "ed25519-sha256" {
+            guard let key = try? Curve25519.Signing.PublicKey(rawRepresentation: keyData) else { return false }
+            return key.isValidSignature(signature, for: Data(SHA256.hash(data: message)))
+        }
+        guard let pkcs1 = rsaPublicKeyPKCS1(fromSPKI: keyData),
+              let key = SecKeyCreateWithData(pkcs1 as CFData, [kSecAttrKeyType: kSecAttrKeyTypeRSA, kSecAttrKeyClass: kSecAttrKeyClassPublic] as CFDictionary, nil) else {
+            return false
+        }
+        return SecKeyVerifySignature(key, .rsaSignatureMessagePKCS1v15SHA256, message as CFData, signature as CFData, nil)
+    }
+
+    // MARK: ARC chain (RFC 8617)
+
+    public enum ARCResult: Sendable, Equatable {
+        case none
+        case pass(instances: Int)
+        case fail(instance: Int, why: String)
+        case noKey(instance: Int, domain: String, selector: String)
+    }
+
+    /// RFC 8617 §5.2: every set 1…n present once; ARC-Seal 1 says cv=none, every
+    /// later one cv=pass; each ARC-Seal verifies over the sets 1…i (relaxed,
+    /// in the order AAR, AMS, AS, its own b= emptied); the newest ARC-Message-
+    /// Signature verifies like DKIM.
+    public static func verifyARCChain(rawSource: String, keys: DKIMKeyCache) -> ARCResult {
+        let raw = rawSource.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\n", with: "\r\n")
+        guard let split = raw.range(of: "\r\n\r\n") else { return .none }
+        let fields = unfoldFields(String(raw[..<split.lowerBound]) + "\r\n")
+        let body = String(raw[split.upperBound...])
+        func instance(_ f: Field) -> Int? { parseTags(f.value)["i"].flatMap { Int($0) } }
+        var sets: [Int: (aar: Field?, ams: Field?, seal: Field?)] = [:]
+        for f in fields {
+            let n = f.name.lowercased()
+            guard ["arc-authentication-results", "arc-message-signature", "arc-seal"].contains(n) else { continue }
+            // AAR's instance tag is "i=N;" at the start of its value.
+            guard let i = instance(f) ?? f.value.range(of: #"i\s*=\s*(\d+)"#, options: .regularExpression)
+                    .flatMap({ Int(f.value[$0].filter(\.isNumber)) }) else { return .fail(instance: 0, why: "an ARC header has no instance") }
+            var set = sets[i] ?? (nil, nil, nil)
+            switch n {
+            case "arc-authentication-results": if set.aar != nil { return .fail(instance: i, why: "two ARC-Authentication-Results") }; set.aar = f
+            case "arc-message-signature": if set.ams != nil { return .fail(instance: i, why: "two ARC-Message-Signatures") }; set.ams = f
+            default: if set.seal != nil { return .fail(instance: i, why: "two ARC-Seals") }; set.seal = f
+            }
+            sets[i] = set
+        }
+        guard let n = sets.keys.max() else { return .none }
+        guard n <= 50 else { return .fail(instance: n, why: "more than 50 ARC sets") }   // RFC 8617 §4.2.1
+        for i in 1...n {
+            guard let set = sets[i], set.aar != nil, set.ams != nil, set.seal != nil else {
+                return .fail(instance: i, why: "ARC set \(i) is incomplete or missing")
+            }
+            let cv = parseTags(set.seal!.value)["cv"]?.lowercased() ?? ""
+            if i == 1 && cv != "none" { return .fail(instance: 1, why: "the first ARC-Seal must say cv=none") }
+            if i > 1 && cv != "pass" { return .fail(instance: i, why: "ARC-Seal \(i) says cv=\(cv)") }
+        }
+        // Newest message signature, checked like DKIM.
+        switch verifyOne(sets[n]!.ams!, fields: fields, body: body, keys: keys) {
+        case .pass: break
+        case .noKey(let d, let s): return .noKey(instance: n, domain: d, selector: s)
+        case .fail(let why): return .fail(instance: n, why: "ARC-Message-Signature: " + why)
+        default: return .fail(instance: n, why: "ARC-Message-Signature cannot be checked")
+        }
+        // Every seal over the sets up to and including its own.
+        for i in 1...n {
+            let seal = sets[i]!.seal!
+            guard let tags = strictTags(seal.value) else { return .fail(instance: i, why: "ARC-Seal tag list is malformed") }
+            guard let d = tags["d"], let s = tags["s"], let b = tags["b"], tags["i"] != nil, tags["cv"] != nil,
+                  let sig = Data(base64Encoded: b.filter { !$0.isWhitespace }) else {
+                return .fail(instance: i, why: "ARC-Seal is missing a required tag")
+            }
+            if tags["h"] != nil { return .fail(instance: i, why: "an ARC-Seal may not carry h=") }
+            guard let alg = tags["a"]?.lowercased(), algorithms.contains(alg) else {
+                return .fail(instance: i, why: "ARC-Seal names no known algorithm")
+            }
+            guard let txt = keys.record(selector: s, domain: d) else { return .noKey(instance: i, domain: d, selector: s) }
+            guard let p = parseTags(txt)["p"], !p.isEmpty, let keyData = Data(base64Encoded: p.filter { !$0.isWhitespace }) else {
+                return .fail(instance: i, why: "the key for \(s)._domainkey.\(d) is revoked or unreadable")
+            }
+            var data = ""
+            for j in 1...i {
+                let set = sets[j]!
+                data += relaxedHeader(set.aar!.name, set.aar!.value)
+                data += relaxedHeader(set.ams!.name, set.ams!.value)
+                if j < i {
+                    data += relaxedHeader(set.seal!.name, set.seal!.value)
+                } else {
+                    let noB = seal.value.replacingOccurrences(of: #"(\bb\s*=)[^;]*"#, with: "$1", options: .regularExpression)
+                    var line = relaxedHeader(seal.name, noB)
+                    if line.hasSuffix("\r\n") { line.removeLast() }   // "\r\n" is one Character
+                    data += line
+                }
+            }
+            if let why = keyProblem(alg: alg, keyData: keyData) { return .fail(instance: i, why: why) }
+            guard verifySignature(alg: alg, keyData: keyData, message: Data(data.utf8), signature: sig) else {
+                return .fail(instance: i, why: "ARC-Seal \(i) does not verify: an earlier hop's headers were changed")
+            }
+        }
+        return .pass(instances: n)
+    }
 
     static func unfoldFields(_ block: String) -> [Field] {
         var out: [Field] = []
@@ -338,6 +496,26 @@ public enum DKIMVerifier {
         }
         return out
     }
+
+    /// RFC 6376 §3.2 tag-list, strictly: names are case-sensitive, start with a
+    /// letter and hold only letters, digits and "_"; no name twice; no empty
+    /// element except one trailing ";". nil when the list is malformed.
+    static func strictTags(_ s: String) -> [String: String]? {
+        var parts = s.replacingOccurrences(of: "\r\n", with: "").components(separatedBy: ";")
+        if let last = parts.last, last.trimmingCharacters(in: .whitespaces).isEmpty { parts.removeLast() }
+        var out: [String: String] = [:]
+        for part in parts {
+            guard let eq = part.firstIndex(of: "=") else { return nil }
+            let name = part[..<eq].trimmingCharacters(in: .whitespaces)
+            guard let first = name.first, first.isASCII, first.isLetter,
+                  name.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") }),
+                  out[name] == nil else { return nil }
+            out[name] = part[part.index(after: eq)...].trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return out
+    }
+
+    static let algorithms: Set<String> = ["rsa-sha256", "ed25519-sha256"]
 
     static func parseTags(_ s: String) -> [String: String] {
         var out: [String: String] = [:]

@@ -39,6 +39,7 @@ struct ForensicSignalsView: View {
     @State private var expanded = false
     @State private var dkim: DKIMResult?
     @State private var arc: DKIMResult?
+    @State private var arcChain: DKIMVerifier.ARCResult?
     @State private var showKeyImport = false
     @State private var keyStatus: String?
 
@@ -117,16 +118,28 @@ struct ForensicSignalsView: View {
                     dkim = DKIMVerifier.verify(rawSource: email.rawSource, keys: keys)
                     let a = DKIMVerifier.verify(rawSource: email.rawSource, keys: keys, signatureHeader: "ARC-Message-Signature")
                     arc = a == .noSignature ? nil : a
+                    let chain = DKIMVerifier.verifyARCChain(rawSource: email.rawSource, keys: keys)
+                    arcChain = chain == .none ? nil : chain
                 }
                 Button(String(localized: "Import DKIM keys…")) { showKeyImport = true }
             }
             if let dkim { Text(Self.describe(dkim)).font(.callout) }
             if let arc { Text(String(localized: "ARC message signature: ") + Self.describe(arc)).font(.callout) }
+            if let arcChain { Text(Self.describe(arcChain)).font(.callout) }
             if let keyStatus { Text(keyStatus).font(.caption) }
             Text("mailin never looks keys up online. Import the domain's DKIM records (captured at collection, or from the sender's DNS) as a text file: one `selector._domainkey.domain  \"v=DKIM1; k=rsa; p=…\"` per line.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .textSelection(.enabled)
+    }
+
+    static func describe(_ r: DKIMVerifier.ARCResult) -> String {
+        switch r {
+        case .none: return ""
+        case .pass(let n): return String(localized: "ARC chain: pass — \(n) forwarding hops, every seal verifies.")
+        case .fail(let i, let why): return String(localized: "ARC chain: fail at hop \(i) — \(why).")
+        case .noKey(let i, let d, let s): return String(localized: "ARC chain: no key for \(s)._domainkey.\(d) (hop \(i)). Import it to check the chain.")
+        }
     }
 
     static func describe(_ r: DKIMResult) -> String {
