@@ -310,7 +310,11 @@ struct OffsetImportEngine: Sendable {
             imported message \(locator.ordinal) header-only \
             (\(locator.byteCount) bytes) — previously it would have been skipped as oversized
             """)
-        return Imported(email: email, locator: locator, bodyWasDecoded: false)
+        // 3.1 R3: the deletion flags are in the headers, so a header-only
+        // message is still classified.
+        let labels = (mapped["X-Gmail-Labels"] ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        let classified = email.withRecovery(RecoveryDetector.fromHeaders(mapped, labels: labels))
+        return Imported(email: classified, locator: locator, bodyWasDecoded: false)
     }
 
     private static func domains(in headers: [String: String]) -> [String] {
