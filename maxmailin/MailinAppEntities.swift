@@ -28,11 +28,13 @@ enum ShortcutsPolicy {
 
     static func requireEnabled() throws {
         guard actionsEnabled else { throw ShortcutsActionError.switchedOff }
+        guard TierAccess.allows(.shortcutsActions) else { throw ShortcutsActionError.needsPurchase }
     }
 }
 
 enum ShortcutsActionError: Error, CustomLocalizedStringResourceConvertible {
     case switchedOff
+    case needsPurchase
     case notReady
     case denied(String)
     case failed(String)
@@ -40,6 +42,7 @@ enum ShortcutsActionError: Error, CustomLocalizedStringResourceConvertible {
     var localizedStringResource: LocalizedStringResource {
         switch self {
         case .switchedOff: return "Shortcuts actions are off. Turn them on in mailin ▸ Settings ▸ Modules."
+        case .needsPurchase: return "Shortcuts actions are part of mailin Professional."
         case .notReady: return "mailin's archive isn't ready yet. Open mailin once, then try again."
         case .denied(let why): return "\(why)"
         case .failed(let why): return "\(why)"

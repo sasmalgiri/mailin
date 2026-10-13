@@ -335,6 +335,7 @@ class StoreManager: ObservableObject {
     func publishAccessScope() {
         guard Self.live === self || Self.live == nil else { return }   // test fixtures never reach the live data
         ArchiveDataService.shared.accessLimit = isPremium ? nil : Self.freeEmailLimit
+        TierAccess.tier = effectiveTier
     }
 
     /// The single tier every purchase gate consults. Enterprise: everything is

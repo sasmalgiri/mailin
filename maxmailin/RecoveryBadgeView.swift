@@ -42,7 +42,7 @@ struct RecoveryBadgeView: View {
             }
         }
         .task(id: emailID) {
-            guard RecoveryPolicy.isEnabled else { info = nil; return }
+            guard RecoveryPolicy.isEnabled, TierAccess.allows(.recovery) else { info = nil; return }
             info = (try? await SQLiteEmailStore.shared.recovery(for: [emailID]))?[emailID]
         }
     }

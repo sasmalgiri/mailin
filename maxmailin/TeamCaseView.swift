@@ -14,6 +14,8 @@ import UniformTypeIdentifiers
 
 struct TeamCaseView: View {
     @Environment(ModuleRegistry.self) private var modules
+    @EnvironmentObject private var storeManager: StoreManager
+    private var mayLead: Bool { modules.isEnabled(.professional) && storeManager.effectiveTier >= TierAccess.Feature.startTeamCase.tier }
     @AppStorage("forensicExaminerName") private var myName = ""
     @State private var teamCase: TeamCase?
     @State private var state = TeamCaseState()
@@ -45,7 +47,7 @@ struct TeamCaseView: View {
                     } label: { Label("Open a case folder…", systemImage: "folder") }
                     .disabled(myName.trimmingCharacters(in: .whitespaces).isEmpty)
                 } header: { Text("Join a case") }
-                if modules.isEnabled(.professional) {
+                if mayLead {
                 Section {
                     TextField(String(localized: "Case title"), text: $title)
                     TextField(String(localized: "Search (empty = whole archive)"), text: $search)
@@ -204,7 +206,7 @@ struct TeamCaseView: View {
                 } catch { status = error.localizedDescription }
             }
             Button(String(localized: "Import a 3.0 review file (.mailinreview)…")) { showLegacyPicker = true }
-            if isLead && modules.isEnabled(.professional) {
+            if isLead && mayLead {
                 Button(String(localized: "Apply resolved codes and tags to my archive")) {
                     Task {
                         do {

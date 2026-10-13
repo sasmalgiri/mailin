@@ -167,7 +167,7 @@ struct SettingsView: View {
 
             // 3.1 R10: deleted-email recovery (only while the switch is on).
             if modules.isOn(.v31Recovery) {
-                NavigationStack { RecoveryCenterView() }
+                TierGate(feature: .recovery) { NavigationStack { RecoveryCenterView() } }
                     .tabItem {
                         Label("Recovery", systemImage: "arrow.counterclockwise.circle")
                     }
@@ -183,7 +183,7 @@ struct SettingsView: View {
 
             // 3.1 S6: mailin Scripts.
             if modules.isOn(.v31Scripts) {
-                ScriptsView()
+                TierGate(feature: .scripts) { ScriptsView() }
                     .tabItem {
                         Label("Scripts", systemImage: "curlybraces")
                     }

@@ -43,7 +43,7 @@ struct ForensicSignalsView: View {
     @State private var keyStatus: String?
 
     var body: some View {
-        if ForensicSignalsPolicy.isEnabled {
+        if ForensicSignalsPolicy.isEnabled && TierAccess.allows(.forensicSignals) {
             DisclosureGroup(isExpanded: $expanded) {
                 content
             } label: {

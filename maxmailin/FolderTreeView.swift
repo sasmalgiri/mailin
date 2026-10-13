@@ -140,7 +140,8 @@ struct FolderTreeView: View {
         attachmentTotal = (try? await store.attachmentCount()) ?? 0
         labelBuckets = (try? await store.parserTagCounts(limit: Self.maxLabels)) ?? []
         sourceBuckets = (try? await store.sourceFileCounts(limit: Self.maxSourceFiles)) ?? []
-        recovery = RecoveryPolicy.isEnabled ? ((try? await store.recoveryCounts()) ?? RecoveryCounts()) : RecoveryCounts()
+        recovery = RecoveryPolicy.isEnabled && TierAccess.allows(.recovery)
+            ? ((try? await store.recoveryCounts()) ?? RecoveryCounts()) : RecoveryCounts()
     }
 
     private func flattenTree(_ nodes: [FolderNode], depth: Int = 0) -> [FlatRow] {

@@ -12,6 +12,7 @@ import UniformTypeIdentifiers
 
 struct ReviewPackView: View {
     @Environment(ModuleRegistry.self) private var modules
+    @EnvironmentObject private var storeManager: StoreManager
     @State private var search = ""
     @State private var title = ""
     @State private var instructions = ""
@@ -26,7 +27,15 @@ struct ReviewPackView: View {
 
     var body: some View {
         Form {
-            if modules.isEnabled(.professional) {
+            if !(modules.isEnabled(.professional) && storeManager.effectiveTier >= TierAccess.Feature.sendReviewPack.tier) {
+                Section {
+                    Text("Sending packs and merging responses are part of Professional. Reviewing a pack you received needs no purchase.")
+                        .foregroundStyle(.secondary)
+                    Button(String(localized: "Unlock Professional")) {
+                        storeManager.requestPurchase(.professional, feature: TierAccess.Feature.sendReviewPack.name, target: .settings)
+                    }
+                }
+            } else {
             Section {
                 TextField(String(localized: "Search (empty = whole archive)"), text: $search)
                     .onSubmit { Task { await countScope() } }

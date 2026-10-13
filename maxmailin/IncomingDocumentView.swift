@@ -38,7 +38,7 @@ struct IncomingDocumentView: View {
                     if let response {
                         Text("Review response from \(response.header.reviewer)").font(.headline)
                         Text("\(response.decisions) decisions, made \(response.header.createdAt.formatted()).")
-                        if modules.isEnabled(.professional) {
+                        if modules.isEnabled(.professional) && TierAccess.allows(.sendReviewPack) {
                             Button(working ? String(localized: "Merging…") : String(localized: "Merge \(response.decisions) decisions into my archive")) {
                                 Task { await merge() }
                             }
@@ -46,19 +46,19 @@ struct IncomingDocumentView: View {
                             Text("Codes you have already set are never replaced; disagreements go to the conflict list.")
                                 .font(.caption).foregroundStyle(.secondary)
                         } else {
-                            Text("Merging responses needs the Professional page.").foregroundStyle(.secondary)
+                            Text("Merging responses is part of Professional.").foregroundStyle(.secondary)
                         }
                     } else if let script {
                         Text(script.label).font(.headline)
                         Text(script.summary)
                         ScrollView { Text(script.source).font(.caption.monospaced()).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
-                        if modules.isOn(.v31Scripts) {
+                        if modules.isOn(.v31Scripts) && TierAccess.allows(.scripts) {
                             Button(String(localized: "Add to my scripts")) {
                                 ScriptLibraryStore.shared.upsert(script)
                                 status = String(localized: "Imported \(script.label). Read it before you run it.")
                             }
                         } else {
-                            Text("Turn on mailin Scripts in Settings ▸ Modules to add this script.").foregroundStyle(.secondary)
+                            Text("mailin Scripts are part of Professional; turn them on in Settings ▸ Modules.").foregroundStyle(.secondary)
                         }
                     }
                     if let status { Text(status).textSelection(.enabled) }

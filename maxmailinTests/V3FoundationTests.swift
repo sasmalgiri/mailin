@@ -1254,9 +1254,10 @@ final class V31ScriptRunTests: XCTestCase {
     private func run(_ n: Int) async throws -> (dry: ScriptRunSummary, applied: ScriptRunSummary, store: SQLiteEmailStore, proof: String) {
         let env = makeEnv()
         try await env.store.insertBatch(emails(n), batchSize: 1_000)
-        let was = ScriptPolicy.isEnabled
+        let was = ScriptPolicy.isEnabled, wasTier = TierAccess.tier
         ScriptPolicy.isEnabled = true
-        defer { ScriptPolicy.isEnabled = was }
+        TierAccess.tier = .professional
+        defer { ScriptPolicy.isEnabled = was; TierAccess.tier = wasTier }
         return try await ScopeJobEnvironment.$current.withValue(env.job) {
             let before = ScriptSandbox.footprint()
             var peak = before
@@ -1293,5 +1294,56 @@ final class V31ScriptRunTests: XCTestCase {
         let r = try await run(100_000)
         print("SCRIPT-100K: \(Int(Date().timeIntervalSince(start))) s, \(r.applied.processed) processed")
         XCTAssertEqual(r.applied.processed, 100_000)
+    }
+}
+
+
+// MARK: - 3.0 purchase gating for the recovery / scripting / team features
+
+@MainActor
+final class V3NewFeatureGatingTests: XCTestCase {
+    func testEveryNewFeatureHasItsTier() {
+        XCTAssertEqual(TierAccess.Feature.recovery.tier, .personal)
+        for f: TierAccess.Feature in [.deepRecovery, .scripts, .shortcutsActions, .forensicSignals, .sendReviewPack, .startTeamCase] {
+            XCTAssertEqual(f.tier, .professional, "\(f)")
+        }
+        XCTAssertEqual(TierAccess.Feature.reviewReceivedPack.tier, .free, "a reviewer needs no licence")
+        XCTAssertEqual(TierAccess.Feature.joinTeamCase.tier, .free)
+    }
+
+    func testFreeAndPersonalTiersAreRefused_whereProfessionalIsNeeded() async throws {
+        let wasTier = TierAccess.tier, wasShortcuts = ShortcutsPolicy.actionsEnabled, wasScripts = ScriptPolicy.isEnabled
+        defer { TierAccess.tier = wasTier; ShortcutsPolicy.actionsEnabled = wasShortcuts; ScriptPolicy.isEnabled = wasScripts }
+        ShortcutsPolicy.actionsEnabled = true
+        ScriptPolicy.isEnabled = true
+        for tier: PurchaseTier in [.free, .personal] {
+            TierAccess.tier = tier
+            XCTAssertThrowsError(try ShortcutsPolicy.requireEnabled(), "Shortcuts actions refused for \(tier)")
+            do {
+                _ = try await ScriptEngine.run(MailinScript(name: "x", source: "function process(e) {}"), query: .all, apply: false) { _, _ in }
+                XCTFail("scripts must be refused for \(tier)")
+            } catch {}
+            XCTAssertFalse(TierAccess.allows(.forensicSignals))
+        }
+        TierAccess.tier = .personal
+        XCTAssertTrue(TierAccess.allows(.recovery))
+        XCTAssertFalse(TierAccess.allows(.deepRecovery))
+        TierAccess.tier = .professional
+        XCTAssertNoThrow(try ShortcutsPolicy.requireEnabled())
+    }
+
+    func testRiskScoreSignals_onlyForProfessional() {
+        let was = (ForensicSignalsPolicy.isEnabled, TierAccess.tier)
+        defer { ForensicSignalsPolicy.isEnabled = was.0; TierAccess.tier = was.1 }
+        ForensicSignalsPolicy.isEnabled = true
+        let email = MBOXParser.RawEmail(headers: ["From": "a@gmail.com", "Date": "Tue, 14 Nov 2023 22:13:20 +0000"],
+                                       rawSource: "From: a@gmail.com\n\nx", messageType: "email", attachments: [],
+                                       timestamp: "", domains: [], plainBody: "x", htmlBody: "")
+        TierAccess.tier = .free
+        let free = ForensicManager.assessRisk(for: email).factors
+        TierAccess.tier = .professional
+        let pro = ForensicManager.assessRisk(for: email).factors
+        XCTAssertFalse(free.contains { $0.contains("DKIM-Signature") })
+        XCTAssertTrue(pro.contains { $0.contains("DKIM-Signature") })
     }
 }

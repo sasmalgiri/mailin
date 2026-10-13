@@ -199,36 +199,36 @@ struct EngineSpec: Sendable {
         // MARK: 3.1 — preview (off until each passes its tests)
         case .v31Recovery:
             return EngineSpec(.archive, maturity: .preview,
-                name: String(localized: "Deleted-email recovery (3.1)"),
+                name: String(localized: "Deleted-email recovery"),
                 detail: String(localized: "Marks mail that was deleted but is still in the file — deleted folders, unpurged Thunderbird mail, Apple Mail deleted flags, PST orphans — and records how each was found."))
         case .v31DeepRecovery:
             return EngineSpec(.archive, requires: [.v31Recovery], maturity: .preview,
-                name: String(localized: "Deep recovery and carving (3.1)"),
+                name: String(localized: "Deep recovery and carving"),
                 detail: String(localized: "Scans the unused space of PST files and any damaged file for messages that are no longer listed. Slow on large files; recovered messages are marked partial when incomplete."))
         case .v31ShortcutsActions:
             return EngineSpec(.archive, maturity: .preview,
-                name: String(localized: "Shortcuts actions (3.1)"),
+                name: String(localized: "Shortcuts actions"),
                 detail: String(localized: "Lets Shortcuts find emails and tag, hold, number, export and verify them — every action checks your role and is recorded."))
         case .v31Scripts:
             return EngineSpec(.professional, maturity: .preview,
-                name: String(localized: "mailin Scripts (3.1)"),
+                name: String(localized: "mailin Scripts"),
                 detail: String(localized: "Runs your own JavaScript over the archive on this device, with no network access. Changes are shown before they apply and every run is recorded."))
         case .v31ReviewPack:
             // Archive page (free tier): a reviewer needs no licence to code a
             // pack they received. Sending packs and merging responses stay
             // Professional, checked where those actions are offered.
             return EngineSpec(.archive, maturity: .preview,
-                name: String(localized: "Review Pack (3.1)"),
+                name: String(localized: "Review Pack"),
                 detail: String(localized: "Sends a set of emails to a reviewer who codes them in any copy of mailin, even the free one, and merges their decisions back with who decided what."))
         case .v31TeamCase:
             // Archive page like Review Pack: any reviewer can join a case;
             // starting a case and applying it to an archive need Professional.
             return EngineSpec(.archive, requires: [.v31ReviewPack], maturity: .preview,
-                name: String(localized: "Team case on a shared folder (3.1)"),
+                name: String(localized: "Team case on a shared folder"),
                 detail: String(localized: "Several reviewers work on one case kept on a shared drive, with signed logs, batches, a conflict list and quality control. No server needed."))
         case .v31ForensicTimestamps:
             return EngineSpec(.professional, maturity: .preview,
-                name: String(localized: "Hidden timestamps and signature checks (3.1)"),
+                name: String(localized: "Hidden timestamps and signature checks"),
                 detail: String(localized: "Decodes timestamps hidden in Message-IDs, MIME boundaries and Thread-Index, and flags messages that should carry a DKIM signature but do not."))
         default:
             return nil

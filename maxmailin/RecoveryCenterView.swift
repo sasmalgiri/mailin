@@ -77,8 +77,10 @@ struct RecoveryCenterView: View {
                     } label: {
                         Label("Carve a file for emails…", systemImage: "scissors")
                     }
-                    .disabled(!modules.isOn(.v31DeepRecovery))
-                    if !modules.isOn(.v31DeepRecovery) {
+                    .disabled(!modules.isOn(.v31DeepRecovery) || !TierAccess.allows(.deepRecovery))
+                    if !TierAccess.allows(.deepRecovery) {
+                        Text("Carving is part of Professional.").font(.caption).foregroundStyle(.secondary)
+                    } else if !modules.isOn(.v31DeepRecovery) {
                         Text("Turn on Deep recovery in Settings ▸ Modules to carve files.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
