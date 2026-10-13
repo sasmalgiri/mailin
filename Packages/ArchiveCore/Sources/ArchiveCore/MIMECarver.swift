@@ -72,8 +72,12 @@ public enum MIMECarver {
                              batchSize: Int = 200,
                              emit: (([MBOXParser.RawEmail]) async throws -> Void)? = nil,
                              progress: ((Int64, Int64) -> Void)? = nil) async throws -> CarvingResult {
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
+        // POSIX read into one reused buffer: no per-chunk Data objects, so
+        // memory stays at the window size however large the file is.
+        let fd = open(url.path, O_RDONLY)
+        guard fd >= 0 else { throw CocoaError(.fileReadNoPermission, userInfo: [NSFilePathErrorKey: url.path]) }
+        defer { close(fd) }
+        var scratch = [UInt8](repeating: 0, count: window)
         let size = Int64((try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0)
         var result = CarvingResult(emails: [], candidates: 0, rejected: 0, bytesScanned: 0)
         var buffer: [UInt8] = []
@@ -83,61 +87,59 @@ public enum MIMECarver {
 
         func refill() throws {
             if eof { return }
-            let chunk = try autoreleasepool(invoking: { try handle.read(upToCount: window) }) ?? Data()
-            if chunk.isEmpty { eof = true; return }
-            buffer.append(contentsOf: chunk)
+            let n = scratch.withUnsafeMutableBytes { read(fd, $0.baseAddress, window) }
+            if n < 0 { throw CocoaError(.fileReadUnknown, userInfo: [NSFilePathErrorKey: url.path]) }
+            if n == 0 { eof = true; return }
+            buffer.append(contentsOf: scratch[0..<n])
         }
 
         try refill()
         var i = 0
+        var nextProgress = 1_048_576
         while true {
             // Keep at least one full message ahead of the cursor.
-            if !eof && buffer.count - i < maxMessage + 1024 {
+            if !eof && buffer.count - i <= maxMessage + 1024 {
                 if i > 0 {
                     buffer.removeFirst(i)
                     bufferStart += Int64(i)
+                    nextProgress -= i
                     i = 0
                 }
                 try refill()
                 continue
             }
             if i >= buffer.count { break }
-            var matched: (start: Int, end: Int, template: CarvingTemplate?)?
-            if let t = templates.first(where: { startsWith(buffer, at: i, $0.headerBytes) }) {
-                let limit = min(buffer.count, i + t.maxLength)
-                var end = limit
-                if let footer = t.footerBytes, let f = find(buffer, footer, from: i + t.headerBytes.count, to: limit) {
-                    end = f + footer.count
-                }
-                matched = (i, end, t)
-            } else if (i == 0 || buffer[i - 1] == 0x0A), isHeaderRun(buffer, at: i) {
-                let end = messageEnd(buffer, from: i)
-                matched = (i, end, nil)
-            }
-            if let m = matched, m.end > m.start {
-                result.candidates += 1
-                let bytes = Array(buffer[m.start..<m.end])
-                let offset = bufferStart + Int64(m.start)
-                if let email = verify(bytes, offset: offset, template: m.template?.name, senderEmail: senderEmail) {
-                    let key = (email.headers["Message-ID"] ?? "") + "|" + (email.headers["Date"] ?? "") + "|" + (email.headers["Subject"] ?? "")
-                    if seen.insert(key).inserted {
-                        result.kept += 1
-                        result.emails.append(email)
-                        if let emit, result.emails.count >= batchSize {
-                            try await emit(result.emails)
-                            result.emails.removeAll(keepingCapacity: true)
-                        }
-                    }
-                    i = m.end
-                    continue
-                } else {
-                    result.rejected += 1
-                }
-            }
-            i += 1
-            if i % 1_048_576 == 0 {
+            // Scan synchronously, in steps of at most 1 MB, up to the point
+            // where the window must be refilled.
+            let refillPoint = eof ? buffer.count : buffer.count - maxMessage - 1024
+            let stop = max(i + 1, min(refillPoint, nextProgress))
+            let step = autoreleasepool { scanNext(buffer, from: i, until: stop, templates: templates) }
+            i = step.pos
+            if i >= nextProgress {
                 progress?(bufferStart + Int64(i), size)
                 try Task.checkCancellation()
+                nextProgress = i + 1_048_576
+            }
+            guard let m = step.match, m.end > m.start else { continue }
+            result.candidates += 1
+            let offset = bufferStart + Int64(m.start)
+            let email = autoreleasepool {
+                verify(Array(buffer[m.start..<m.end]), offset: offset, template: m.template?.name, senderEmail: senderEmail)
+            }
+            if let email {
+                let key = (email.headers["Message-ID"] ?? "") + "|" + (email.headers["Date"] ?? "") + "|" + (email.headers["Subject"] ?? "")
+                if seen.insert(key).inserted {
+                    result.kept += 1
+                    result.emails.append(email)
+                    if let emit, result.emails.count >= batchSize {
+                        try await emit(result.emails)
+                        result.emails.removeAll(keepingCapacity: true)
+                    }
+                }
+                i = m.end
+            } else {
+                result.rejected += 1
+                i = m.start + 1
             }
         }
         if let emit, !result.emails.isEmpty {
@@ -147,6 +149,29 @@ public enum MIMECarver {
         result.bytesScanned = bufferStart + Int64(buffer.count)
         progress?(result.bytesScanned, size)
         return result
+    }
+
+    /// The next candidate at or after `start` and before `stop` (template
+    /// marker, or a header run at a line start); `pos` is where it starts, or
+    /// `stop` when there is none.
+    static func scanNext(_ b: [UInt8], from start: Int, until stop: Int,
+                         templates: [CarvingTemplate]) -> (pos: Int, match: (start: Int, end: Int, template: CarvingTemplate?)?) {
+        var i = start
+        while i < stop {
+            for t in templates where startsWith(b, at: i, t.headerBytes) {
+                let limit = min(b.count, i + t.maxLength)
+                var end = limit
+                if let footer = t.footerBytes, let f = find(b, footer, from: i + t.headerBytes.count, to: limit) {
+                    end = f + footer.count
+                }
+                return (i, (i, end, t))
+            }
+            if i == 0 || b[i - 1] == 0x0A, isHeaderRun(b, at: i) {
+                return (i, (i, messageEnd(b, from: i), nil))
+            }
+            i += 1
+        }
+        return (stop, nil)
     }
 
     /// At least two consecutive "Name: value" lines, one of them an opener.

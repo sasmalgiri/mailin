@@ -157,6 +157,16 @@ final class PSTStreamWriter {
         return nid
     }
 
+    /// 3.1 R7 fixtures: writes a message's data and then "frees" it — no
+    /// node or block-index entry points at it, as when Outlook deletes and
+    /// the space is not yet reused.
+    func appendFreed(email: MBOXParser.RawEmail) throws {
+        let data = try messagePC(email: email)
+        try writeBytes(data, at: offset)
+        let aligned = (data.count + Self.blockAlign - 1) / Self.blockAlign * Self.blockAlign
+        offset += UInt64(max(aligned, Self.blockAlign))
+    }
+
     func append(email: MBOXParser.RawEmail, folder: UInt32 = PSTStreamWriter.rootFolderNid) throws {
         guard !finished else { throw PSTWriter.WriterError.ioFailure("Writer already finalized") }
 

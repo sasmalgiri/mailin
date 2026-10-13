@@ -320,3 +320,35 @@ final class RecoveryReceiptTests: XCTestCase {
         XCTAssertFalse(bo.isBurst)
     }
 }
+
+// MARK: - R7 deep recovery: freed PST space
+
+final class PSTDeepRecoveryTests: XCTestCase {
+    func testFreedMessage_isCarvedAsPartial_onlyWithDeepRecoveryOn() throws {
+        let was = (RecoveryPolicy.isEnabled, RecoveryPolicy.deepRecoveryEnabled)
+        defer { RecoveryPolicy.isEnabled = was.0; RecoveryPolicy.deepRecoveryEnabled = was.1 }
+        func email(_ s: String) throws -> MBOXParser.RawEmail {
+            try MBOXParser.processRawMessage("From: a@example.com\nSubject: \(s)\nDate: Mon, 6 Jan 2025 10:00:00 +0000\nMessage-ID: <\(s)@x>\n\nbody of \(s)\n", senderEmail: "")
+        }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("freed-\(UUID().uuidString).pst")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let w = try PSTStreamWriter(url: url)
+        try w.append(email: try email("kept one"))
+        try w.appendFreed(email: try email("deleted secret"))
+        try w.append(email: try email("kept two"))
+        try w.finalize()
+
+        RecoveryPolicy.isEnabled = true
+        RecoveryPolicy.deepRecoveryEnabled = false
+        XCTAssertEqual(try PSTParser.parse(fileURL: url, senderEmail: "").count, 2, "a freed message is not listed")
+
+        RecoveryPolicy.deepRecoveryEnabled = true
+        let all = try PSTParser.parse(fileURL: url, senderEmail: "")
+        let carved = all.filter { $0.recovery?.state == .carved }
+        XCTAssertEqual(carved.count, 1)
+        XCTAssertEqual(carved.first?.headers["Subject"], "deleted secret")
+        XCTAssertEqual(carved.first?.recovery?.partial, true)
+        XCTAssertGreaterThan(carved.first?.recovery?.offset ?? 0, 4096)
+        XCTAssertEqual(all.filter { $0.recovery?.state != .carved }.count, 2, "listed messages are not carved twice")
+    }
+}

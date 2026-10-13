@@ -297,7 +297,9 @@ struct PSTReader {
                 continue
             }
             let b2 = data[pos + 2], b3 = data[pos + 3]
-            let rawHit = b2 == 0xEC && b3 == 0xBC
+            // [MS-PST] heap-on-node property context (0xEC 0xBC), or the
+            // simplified context mailin's own PST export writes (0x0C 0x7C).
+            let rawHit = (b2 == 0xEC && b3 == 0xBC) || (b2 == 0x0C && b3 == 0x7C)
             let decodedHit = encType == 0x01 && decodePermute(b2) == 0xEC && decodePermute(b3) == 0xBC
             if rawHit || decodedHit {
                 let end = min(data.count, pos + 8192)
