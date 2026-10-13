@@ -291,7 +291,8 @@ Mail files do not record when a message was deleted, so deletion analysis counts
 | Feature | Real limit | Why |
 |---|---|---|
 | Scripts | A script is stopped when one email takes more than 5 s, or the app's memory passes 2 GB | JavaScriptCore has no public time limit; every loop is guarded instead |
-| Scripts | No network, no timers, no `eval` / `Function` | Offline-first; scripts may only tag, untag, note, add columns, set aside (Trash) and report |
+| Scripts | Arrays, strings and buffers up to 50,000,000 items per native call; tags, notes and column values up to 64 KB | Stops runaway allocation before it reaches the system |
+| Scripts | No network, no timers, no `eval` and no code built from any function constructor (plain, async, generator) | Offline-first; scripts may only tag, untag, note, add columns, set aside (Trash) and report |
 | Shortcuts Find Emails | 10,000 emails per Find | A Shortcuts list is held in memory; Count Emails gives the exact total |
 | Review Pack | Text and attachment names only (no attachment bytes) | The reviewer codes, they do not produce |
 | Team case | One log file per reviewer device; any folder the devices can all reach (file server, NAS, external drive) | No server; nothing goes online |

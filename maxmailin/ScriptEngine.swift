@@ -34,6 +34,10 @@ enum ScriptPolicy {
     nonisolated(unsafe) static var isEnabled = false
     static let perEmailSeconds: Double = 5
     static let memoryCeiling: UInt64 = 2 * 1_073_741_824
+    /// Largest array, string or buffer a script may build in one native call.
+    static let maxElements = 50_000_000
+    /// Largest tag, note or column value a script may write.
+    static let maxValueBytes = 65_536
 }
 
 // MARK: - Model
@@ -282,9 +286,16 @@ final class ScriptRuntime: @unchecked Sendable {
         context = ctx
         ctx.name = script.label
 
+        var ticks = 0
         let tick: @convention(block) () -> Bool = { [unowned self] in
             if Date() > self.deadline {
                 self.context.exception = JSValue(newErrorFromMessage: "__mailin_watchdog__", in: self.context)
+                return false
+            }
+            // Memory, checked every 1,024 loop turns (a loop that keeps doubling a string).
+            ticks &+= 1
+            if ticks & 1023 == 0, ScriptSandbox.footprint() > ScriptPolicy.memoryCeiling {
+                self.context.exception = JSValue(newErrorFromMessage: "__mailin_memory__", in: self.context)
                 return false
             }
             return true
@@ -296,6 +307,11 @@ final class ScriptRuntime: @unchecked Sendable {
             return { [unowned self] a, b in
                 let key = a.isUndefined ? "" : a.toString() ?? ""
                 let value = b.isUndefined ? "" : b.toString() ?? ""
+                // Stated limit: tags, notes and column values up to 64 KB each.
+                guard key.utf8.count <= ScriptPolicy.maxValueBytes, value.utf8.count <= ScriptPolicy.maxValueBytes else {
+                    self.context.exception = JSValue(newErrorFromMessage: "__mailin_value__", in: self.context)
+                    return
+                }
                 self.pending.append(ScriptChange(emailID: self.currentID, kind: kind, key: key, value: value))
             }
         }
@@ -322,9 +338,36 @@ final class ScriptRuntime: @unchecked Sendable {
 
         // No run-time code construction.
         ctx.evaluateScript("""
-            delete globalThis.eval;
-            Object.defineProperty(Function.prototype, 'constructor', { value: undefined });
-            globalThis.Function = undefined;
+            (function () {
+              'use strict';
+              // No run-time code construction, through any function kind.
+              for (const f of [function(){}, async function(){}, function*(){}, async function*(){}]) {
+                Object.defineProperty(Object.getPrototypeOf(f), 'constructor', { value: undefined });
+              }
+              delete globalThis.eval;
+              globalThis.Function = undefined;
+              // Allocation guards for the native calls a loop guard cannot see.
+              const MAX = \(ScriptPolicy.maxElements);
+              const limit = (n) => { if (typeof n === 'number' && n > MAX) throw new RangeError('__mailin_limit__'); };
+              const wrap = (proto, name, size) => {
+                const orig = proto[name];
+                Object.defineProperty(proto, name, { value: function (...a) { limit(size(this, a)); return orig.apply(this, a); } });
+              };
+              wrap(Array.prototype, 'fill', (t) => t.length);
+              wrap(Array.prototype, 'join', (t) => t.length);
+              wrap(String.prototype, 'repeat', (t, a) => t.length * (Number(a[0]) || 0));
+              wrap(String.prototype, 'padStart', (t, a) => Number(a[0]) || 0);
+              wrap(String.prototype, 'padEnd', (t, a) => Number(a[0]) || 0);
+              const from = Array.from;
+              Array.from = function (src, ...a) { limit(src && src.length); return from.call(this, src, ...a); };
+              for (const name of ['ArrayBuffer','SharedArrayBuffer','Int8Array','Uint8Array','Uint8ClampedArray','Int16Array','Uint16Array',
+                                  'Int32Array','Uint32Array','Float32Array','Float64Array','BigInt64Array','BigUint64Array']) {
+                const T = globalThis[name];
+                if (!T) continue;
+                globalThis[name] = new Proxy(T, { construct(target, args) { limit(args[0]); return Reflect.construct(target, args); } });
+              }
+              Object.freeze(globalThis.mailin);
+            })();
             """)
         ctx.exception = nil
         // Top-level code is held to the same per-email time limit.
@@ -365,6 +408,18 @@ final class ScriptRuntime: @unchecked Sendable {
         if let ex = context.exception {
             let msg = ex.toString() ?? "error"
             context.exception = nil
+            if msg.contains("__mailin_memory__") {
+                throw ScriptError.watchdog(String(localized: "the app's memory passed \(ScriptPolicy.memoryCeiling / 1_073_741_824) GB"))
+            }
+            if msg.contains("__mailin_limit__") || msg.contains("Out of memory") || msg.contains("Invalid array length") || msg.contains("Invalid string length") {
+                throw ScriptError.watchdog(String(localized: "the script tried to build a value larger than \(ScriptPolicy.maxElements) items"))
+            }
+            if msg.contains("__mailin_value__") {
+                throw ScriptError.runtime(String(localized: "a tag, note or column value is larger than 64 KB"))
+            }
+            if msg.contains("Maximum call stack") {
+                throw ScriptError.runtime(String(localized: "the script called itself too deeply"))
+            }
             if msg.contains("__mailin_watchdog__") {
                 throw ScriptError.watchdog(String(localized: "one email took longer than \(Int(ScriptPolicy.perEmailSeconds)) seconds"))
             }

@@ -879,6 +879,30 @@ final class V31ScriptTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(start), ScriptPolicy.perEmailSeconds + 3)
     }
 
+    func testHostileScripts_areStopped_andTheAppStaysUp() throws {
+        func outcome(_ src: String) -> String {
+            do {
+                let rt = try ScriptRuntime(MailinScript(name: "h", source: src))
+                _ = try rt.run(try makeEmail(), userTags: [])
+                return "ran"
+            } catch ScriptError.watchdog(let why) { return "watchdog: " + why }
+            catch ScriptError.runtime(let why) { return "runtime: " + why }
+            catch { return "other: \(error)" }
+        }
+        XCTAssertTrue(outcome("function process(e) { new Array(2**31 - 1).fill(0); }").hasPrefix("watchdog"))
+        XCTAssertTrue(outcome("function process(e) { 'x'.repeat(2**30); }").hasPrefix("watchdog"))
+        XCTAssertTrue(outcome("function process(e) { new Uint8Array(2**31); }").hasPrefix("watchdog"))
+        XCTAssertTrue(outcome("function process(e) { Array.from({length: 2**31}); }").hasPrefix("watchdog"))
+        XCTAssertTrue(outcome("function f(n) { return f(n + 1); } function process(e) { f(0); }").hasPrefix("runtime"))
+        XCTAssertTrue(outcome("function process(e) { mailin.column('big', 'x'.repeat(70000)); }").hasPrefix("runtime"))
+        XCTAssertTrue(outcome("function process(e) { (async function(){}).constructor('return 1'); }").hasPrefix("runtime"), "no code from an async function's constructor")
+        XCTAssertTrue(outcome("function process(e) { (function*(){}).constructor('return 1'); }").hasPrefix("runtime"))
+        XCTAssertTrue(outcome("function process(e) { mailin.tag = null; }").hasPrefix("ran") ||
+                      outcome("function process(e) { 'use strict'; mailin.tag = null; }").hasPrefix("runtime"), "the API cannot be replaced")
+        // Ordinary work still runs.
+        XCTAssertEqual(outcome("function process(e) { var a = new Array(1000).fill(1); mailin.tag('ok' + a.length); }"), "ran")
+    }
+
     func testRuntime_compileErrors_areReported() {
         XCTAssertThrowsError(try ScriptRuntime(MailinScript(name: "bad", source: "function process(email) {"))) {
             guard case ScriptError.compile = $0 else { return XCTFail("\($0)") }

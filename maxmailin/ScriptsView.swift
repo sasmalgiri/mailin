@@ -47,7 +47,7 @@ struct ScriptsView: View {
             } else {
                 VStack(alignment: .leading, spacing: Spacing.small) {
                     Text("Scripts run on this device only and never reach the network. Choose a script to run it over a search, or add your own.")
-                    Text("Limits: a script is stopped when one email takes more than \(Int(ScriptPolicy.perEmailSeconds)) seconds or the app's memory passes \(ScriptPolicy.memoryCeiling / 1_073_741_824) GB.")
+                    Text("Limits: a script is stopped when one email takes more than \(Int(ScriptPolicy.perEmailSeconds)) seconds, the app's memory passes \(ScriptPolicy.memoryCeiling / 1_073_741_824) GB, or it builds an array or string of more than \(ScriptPolicy.maxElements) items. Tags, notes and column values can be up to 64 KB each.")
                         .font(.caption).foregroundStyle(.secondary)
                     if let status { Text(status).font(.callout) }
                     if let err = library.saveError { Text(err).font(.callout).foregroundStyle(.red) }
