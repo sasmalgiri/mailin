@@ -12,5 +12,6 @@
 import Foundation
 
 enum ImportScriptHook {
-    nonisolated(unsafe) static var handler: (@Sendable ([MBOXParser.RawEmail], String) async -> Void)?
+    /// Returns what the scripts did to the batch: script label → change kind → count.
+    nonisolated(unsafe) static var handler: (@Sendable ([MBOXParser.RawEmail], String) async -> [String: [String: Int]])?
 }

@@ -64,6 +64,7 @@ struct ImportReceiptView: View {
                 sourcesSection
                 accountingSection
                 collectionSection
+                recoveryAndScriptsSection
                 coverageSection
                 if !receipt.fileFailures.isEmpty || !receipt.warnings.isEmpty {
                     problemsSection
@@ -207,6 +208,24 @@ struct ImportReceiptView: View {
                 ForEach((receipt.collectionSettings ?? [:]).sorted(by: { $0.key < $1.key }), id: \.key) { setting in
                     row(setting.key, text: setting.value)
                 }
+            }
+        }
+    }
+
+    /// 3.1 R10 / S5: what recovery found and what import-time scripts did.
+    @ViewBuilder
+    private var recoveryAndScriptsSection: some View {
+        if let rec = receipt.recovery {
+            section(String(localized: "Recovered")) {
+                ForEach(RecoveryState.allCases.filter { $0.isRecovered && rec[$0] > 0 }, id: \.self) { s in
+                    row(RecoveryBadgeView.title(s), rec[s])
+                }
+                if rec.partial > 0 { row(String(localized: "Partly recovered"), rec.partial) }
+            }
+        }
+        if let lines = receipt.scriptActions, !lines.isEmpty {
+            section(String(localized: "Import scripts")) {
+                ForEach(lines, id: \.self) { Text($0).font(.callout).textSelection(.enabled) }
             }
         }
     }

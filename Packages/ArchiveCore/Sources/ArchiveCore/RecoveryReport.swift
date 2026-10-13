@@ -37,6 +37,20 @@ public struct DeletionAnalysis: Sendable, Equatable {
     public var matters: [Matter] = []
     /// Recovered emails per month of their Date header ("2024-03" → n).
     public var byMonth: [String: Int] = [:]
+
+    /// R11: recovered mail per custodian and the week that holds most of it.
+    public struct Custodian: Sendable, Equatable {
+        public var custodian: String
+        public var recovered: Int
+        /// ISO year-week ("2024-09") of the busiest week and its count.
+        public var busiestWeek: String
+        public var busiestWeekCount: Int
+        /// A burst: the busiest week holds at least half of this custodian's
+        /// recovered mail, and at least `burstMinimum` emails.
+        public var isBurst: Bool
+    }
+    public static let burstMinimum = 10
+    public var custodians: [Custodian] = []
 }
 
 extension SQLiteEmailStore {
@@ -118,6 +132,27 @@ extension SQLiteEmailStore {
             """)
         defer { sqlite3_finalize(t) }
         while try stepRow(t, db) { a.byMonth[columnText(t, 0)] = Int(sqlite3_column_int64(t, 1)) }
+
+        let w = try prepare(db, """
+            SELECT c.custodian, strftime('%Y-%W', e.date, 'unixepoch') AS wk, COUNT(*)
+            FROM email_recovery r JOIN emails e ON e.id = r.email_id
+            JOIN custodian_assignments c ON c.email_id = r.email_id
+            GROUP BY c.custodian, wk ORDER BY c.custodian, wk;
+            """)
+        defer { sqlite3_finalize(w) }
+        var per: [String: (total: Int, week: String, top: Int)] = [:]
+        while try stepRow(w, db) {
+            let name = columnText(w, 0), week = columnText(w, 1), n = Int(sqlite3_column_int64(w, 2))
+            var v = per[name] ?? (0, week, 0)
+            v.total += n
+            if n > v.top { v.top = n; v.week = week }
+            per[name] = v
+        }
+        a.custodians = per.keys.sorted().map { k in
+            let v = per[k]!
+            return .init(custodian: k, recovered: v.total, busiestWeek: v.week, busiestWeekCount: v.top,
+                         isBurst: v.top >= DeletionAnalysis.burstMinimum && v.top * 2 >= v.total)
+        }
         return a
     }
 }

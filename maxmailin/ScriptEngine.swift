@@ -125,6 +125,12 @@ enum ScriptSandbox {
                 if i < s.count { out.append("*/"); i += 2 }
                 continue
             }
+            // Regular-expression literals (a quote inside one must not
+            // start a "string" that hides the code after it).
+            if c == "/", let end = regexEnd(s, i) {
+                out += String(s[i..<end]); i = end
+                continue
+            }
             // Strings and template literals
             if c == "\"" || c == "'" || c == "`" {
                 out.append(c); i += 1
@@ -169,12 +175,44 @@ enum ScriptSandbox {
         return out
     }
 
+    /// If a regular-expression literal starts at `i` (a `/` where an
+    /// expression may begin), the index just past its flags; else nil.
+    static func regexEnd(_ s: [Character], _ i: Int) -> Int? {
+        guard i < s.count, s[i] == "/", i + 1 < s.count, s[i + 1] != "/", s[i + 1] != "*" else { return nil }
+        var p = i - 1
+        while p >= 0, s[p].isWhitespace { p -= 1 }
+        if p >= 0 {
+            let prev = s[p]
+            if prev.isLetter || prev.isNumber || prev == "_" || prev == "$" || prev == ")" || prev == "]" || prev == "}" {
+                // After a value it is division — unless the word is a keyword.
+                var w = p
+                while w >= 0, s[w].isLetter { w -= 1 }
+                let word = String(s[(w + 1)...p])
+                guard ["return", "typeof", "case", "in", "of", "delete", "void", "throw", "new", "else", "do"].contains(word) else { return nil }
+            }
+        }
+        var j = i + 1
+        var inClass = false
+        while j < s.count {
+            let c = s[j]
+            if c == "\n" { return nil }
+            if c == "\\" { j += 2; continue }
+            if c == "[" { inClass = true } else if c == "]" { inClass = false } else if c == "/", !inClass { break }
+            j += 1
+        }
+        guard j < s.count else { return nil }
+        j += 1
+        while j < s.count, s[j].isLetter { j += 1 }
+        return j
+    }
+
     static func matchParen(_ s: [Character], _ open: Int) -> Int? {
         var depth = 0
         var i = open
         var quote: Character?
         while i < s.count {
             let c = s[i]
+            if quote == nil, c == "/", let end = regexEnd(s, i) { i = end; continue }
             if let q = quote {
                 if c == "\\" { i += 2; continue }
                 if c == q { quote = nil }
@@ -191,27 +229,28 @@ enum ScriptSandbox {
         return nil
     }
 
-    static func splitTopLevelSemicolons(_ s: String) -> [String] {
+    static func splitTopLevelSemicolons(_ str: String) -> [String] {
+        let s = Array(str)
         var parts: [String] = []
-        var cur = ""
+        var start = 0
         var depth = 0
-        var quote: Character?
-        var escaped = false
-        for c in s {
-            if let q = quote {
-                cur.append(c)
-                if escaped { escaped = false } else if c == "\\" { escaped = true } else if c == q { quote = nil }
-                continue
-            }
+        var i = 0
+        while i < s.count {
+            let c = s[i]
+            if c == "/", let end = regexEnd(s, i) { i = end; continue }
             switch c {
-            case "\"", "'", "`": quote = c; cur.append(c)
-            case "(", "[", "{": depth += 1; cur.append(c)
-            case ")", "]", "}": depth -= 1; cur.append(c)
-            case ";" where depth == 0: parts.append(cur); cur = ""
-            default: cur.append(c)
+            case "\"", "'", "`":
+                i += 1
+                while i < s.count, s[i] != c { if s[i] == "\\" { i += 1 }; i += 1 }
+            case "(", "[", "{": depth += 1
+            case ")", "]", "}": depth -= 1
+            case ";" where depth == 0:
+                parts.append(String(s[start..<i])); start = i + 1
+            default: break
             }
+            i += 1
         }
-        parts.append(cur)
+        parts.append(String(s[min(start, s.count)...]))
         return parts
     }
 
@@ -298,7 +337,7 @@ final class ScriptRuntime: @unchecked Sendable {
     }
 
     /// Runs `process(email)` for one email; returns its proposed changes and report lines.
-    func run(_ e: MBOXParser.RawEmail, userTags: [String]) throws -> (changes: [ScriptChange], report: [String]) {
+    func run(_ e: MBOXParser.RawEmail, userTags: [String], ai: StoredAnalysis? = nil) throws -> (changes: [ScriptChange], report: [String]) {
         pending.removeAll(keepingCapacity: true)
         report.removeAll(keepingCapacity: true)
         currentID = e.id
@@ -318,6 +357,8 @@ final class ScriptRuntime: @unchecked Sendable {
             "tags": userTags,
             "size": e.rawSource.utf8.count,
             "recovered": e.recovery?.state.rawValue ?? "live",
+            // What the archive's analysis stored for this email (empty when not analysed).
+            "ai": ai?.dictionary ?? [:],
         ]
         let fn = context.objectForKeyedSubscript("process")
         _ = fn?.call(withArguments: [obj])
@@ -359,11 +400,12 @@ enum ScriptEngine {
                 summary.stoppedReason = String(localized: "the app's memory passed \(ScriptPolicy.memoryCeiling / 1_073_741_824) GB"); break
             }
             let tags = (try? await store.userTags(ids: batch.map(\.id))) ?? [:]
+            let analysis = (try? await store.storedAnalysis(for: batch.map(\.id))) ?? [:]
             var batchChanges: [ScriptChange] = []
             var stop = false
             for e in batch {
                 do {
-                    let r = try runtime.run(e, userTags: Array(tags[e.id] ?? []).sorted())
+                    let r = try runtime.run(e, userTags: Array(tags[e.id] ?? []).sorted(), ai: analysis[e.id])
                     batchChanges += r.changes
                     if summary.report.count < 10_000 { summary.report += r.report }
                 } catch let err as ScriptError {
@@ -466,28 +508,43 @@ final class ScriptImportRunner {
 
     nonisolated static func install(_ on: Bool) {
         guard on else { ImportScriptHook.handler = nil; return }
-        let hook: @Sendable ([MBOXParser.RawEmail], String) async -> Void = { emails, source in
+        let hook: @Sendable ([MBOXParser.RawEmail], String) async -> [String: [String: Int]] = { emails, source in
             await ScriptImportRunner.shared.handle(emails, source: source)
         }
         ImportScriptHook.handler = hook
     }
 
-    func handle(_ emails: [MBOXParser.RawEmail], source: String) async {
+    /// Returns what each script did to this batch (for the import receipt).
+    func handle(_ emails: [MBOXParser.RawEmail], source: String) async -> [String: [String: Int]] {
         let scripts = ScriptLibraryStore.shared.scripts.filter(\.runsAtImport)
-        guard ScriptPolicy.isEnabled, !scripts.isEmpty else { return }
+        guard ScriptPolicy.isEnabled, !scripts.isEmpty else { return [:] }
+        var batchCounts: [String: [String: Int]] = [:]
         for script in scripts {
-            guard let runtime = try? ScriptRuntime(script) else { continue }
+            guard let runtime = try? ScriptRuntime(script) else {
+                batchCounts[script.label, default: [:]]["not run (script error)", default: 0] += emails.count
+                continue
+            }
             let key = script.id.uuidString + "|" + source
             var entry = totals[key] ?? (ScriptRunSummary(), EmailSetFingerprint(), Date())
             var changes: [ScriptChange] = []
+            var failed = 0
             for e in emails {
-                if let r = try? runtime.run(e, userTags: e.tags) { changes += r.changes }
+                do { changes += try runtime.run(e, userTags: e.tags).changes } catch { failed += 1 }
                 entry.fp.add(e.id)
                 entry.summary.processed += 1
             }
-            for c in changes { entry.summary.counts[c.kind, default: 0] += 1 }
+            if failed > 0 { batchCounts[script.label, default: [:]]["errors", default: 0] += failed }
             entry.summary.total = entry.summary.processed
-            try? await ScriptApplier.apply(changes, by: script)
+            // Counted only once written: a receipt never claims a change that did not happen.
+            do {
+                try await ScriptApplier.apply(changes, by: script)
+                for c in changes {
+                    entry.summary.counts[c.kind, default: 0] += 1
+                    batchCounts[script.label, default: [:]][c.kind.rawValue, default: 0] += 1
+                }
+            } catch {
+                batchCounts[script.label, default: [:]]["changes not written", default: 0] += changes.count
+            }
             totals[key] = entry
             let counts = entry.summary.counts.map { "\"\($0.key.rawValue)\":\($0.value)" }.joined(separator: ",")
             try? await SQLiteEmailStore.shared.scriptRunRecord(.init(
@@ -495,11 +552,12 @@ final class ScriptImportRunner {
                 scopeJSON: "{\"import\":\"\(source.replacingOccurrences(of: "\"", with: "'"))\"}", fingerprint: entry.fp.hex,
                 processed: entry.summary.processed, changesJSON: "{\"applied\":true,\"counts\":{\(counts)}}",
                 startedAt: entry.started, finishedAt: Date(), startedBy: "import"))
-            if let n = entry.summary.counts[.exclude], n > 0 {
+            if let n = batchCounts[script.label]?[ScriptChange.Kind.exclude.rawValue], n > 0 {
                 ForensicManager.shared.logAction("Import script set emails aside",
                                                  detail: "\(n) emails from \(source) moved to Trash by \(script.label)")
             }
         }
+        return batchCounts
     }
 
     /// "12 set aside by Script X v3" lines for the import receipt.

@@ -262,3 +262,61 @@ final class PSTRecoveryTests: XCTestCase {
         XCTAssertNil(emails.first?.recovery, "messages in the root folder are live")
     }
 }
+
+// MARK: - R10/S5 receipt fields, R11 custodian bursts
+
+final class RecoveryReceiptTests: XCTestCase {
+    func testReceipt_recoveryScriptsAndHeaderOnlyCount_surviveSaveAndVerify() throws {
+        var r = ImportReceipt(startedAt: Date(timeIntervalSince1970: 1_700_000_000), completedAt: Date(timeIntervalSince1970: 1_700_000_100))
+        var rec = RecoveryCounts()
+        rec.byState = [.unpurged: 3, .carved: 2, .deletedFolder: 5]
+        rec.partial = 1
+        r.recovery = rec
+        r.scriptActions = ["Date filter v1: 12 exclude"]
+        r.bodiesNotDecoded = 4
+        try r.finalize()
+        // Encoding is stable (the dictionary is a sorted JSON object), so the
+        // hash is the same every time.
+        let enc = JSONEncoder(); enc.dateEncodingStrategy = .secondsSince1970
+        let dec = JSONDecoder(); dec.dateDecodingStrategy = .secondsSince1970
+        for _ in 0..<5 {
+            let back = try dec.decode(ImportReceipt.self, from: try enc.encode(r))
+            XCTAssertEqual(back.recovery, rec)
+            XCTAssertEqual(back.scriptActions, ["Date filter v1: 12 exclude"])
+            XCTAssertEqual(back.bodiesNotDecoded, 4, "was dropped on decode before 3.1")
+            XCTAssertTrue(back.verify(), "a reloaded receipt still verifies")
+        }
+    }
+
+    func testCustodianBurst() async throws {
+        let was = RecoveryPolicy.isEnabled
+        RecoveryPolicy.isEnabled = true
+        defer { RecoveryPolicy.isEnabled = was }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("burst-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = SQLiteEmailStore(directory: dir)
+        var emails: [MBOXParser.RawEmail] = []
+        // Ann: 12 deleted in one week (burst) + 2 spread out. Bo: 3 spread out.
+        func make(_ n: Int, _ date: String) throws -> MBOXParser.RawEmail {
+            try MBOXParser.processRawMessage("From: x\(n)@example.com\nSubject: m\(n)\nDate: \(date)\nMessage-ID: <b\(n)@x>\nX-Mozilla-Status: 0009\n\nb\n", senderEmail: "")
+        }
+        for i in 0..<12 { emails.append(try make(i, "Tue, \(4 + i % 3) Jun 2024 10:00:00 +0000")) }
+        emails.append(try make(20, "Mon, 5 Feb 2024 10:00:00 +0000"))
+        emails.append(try make(21, "Mon, 7 Oct 2024 10:00:00 +0000"))
+        for i in 30..<33 { emails.append(try make(i, "Mon, \(i - 28) Jan 2024 10:00:00 +0000")) }
+        _ = try await store.insertBatch(emails, sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil,
+                                        dedupPolicy: .messageID, batchSize: 100, progress: nil)
+        var map: [UUID: String] = [:]
+        for e in emails.prefix(14) { map[e.id] = "Ann" }
+        for e in emails.suffix(3) { map[e.id] = "Bo" }
+        _ = try await store.custodiansAssign(map)
+        let a = try await store.deletionAnalysis()
+        let ann = try XCTUnwrap(a.custodians.first { $0.custodian == "Ann" })
+        XCTAssertEqual(ann.recovered, 14)
+        XCTAssertEqual(ann.busiestWeekCount, 12)
+        XCTAssertTrue(ann.isBurst)
+        let bo = try XCTUnwrap(a.custodians.first { $0.custodian == "Bo" })
+        XCTAssertFalse(bo.isBurst)
+    }
+}

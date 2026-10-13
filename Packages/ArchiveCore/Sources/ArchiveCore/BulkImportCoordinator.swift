@@ -204,6 +204,10 @@ final class BulkImportCoordinator {
         /// Emails skipped because the user previously deleted them (tombstone).
         var blockedByTombstone = 0
         var attachmentsSeen = 0
+        /// 3.1 R10: recovery kinds among committed rows (recovery switch on).
+        var recovery = RecoveryCounts()
+        /// 3.1 S5: import-time script actions, "script label" → kind → count.
+        var scriptActions: [String: [String: Int]] = [:]
         /// S4: committed messages whose body was never decoded (header-only
         /// import). These pass every other accounting check, so they need
         /// their own counter or the verdict reports Complete for an import
@@ -845,8 +849,12 @@ final class BulkImportCoordinator {
                         }
                         await MainActor.run { callbacks.onCommittedBatch?(pending) }
                         // 3.1 S5: import-time scripts see committed rows only.
+                        if RecoveryPolicy.isEnabled { for e in toIndex { summary.recovery.add(e.recovery) } }
                         if let scriptHook = ImportScriptHook.handler, !toIndex.isEmpty {
-                            await scriptHook(toIndex, sourceName)
+                            let counts = await scriptHook(toIndex, sourceName)
+                            for (script, kinds) in counts {
+                                summary.scriptActions[script, default: [:]].merge(kinds, uniquingKeysWith: +)
+                            }
                         }
 
                         // S4/S5: the locators were written INSIDE the insert
@@ -1044,6 +1052,13 @@ final class BulkImportCoordinator {
         receipt.storeCountAfter = storeAfter
         receipt.ftsRowCount = ftsCount
         receipt.warnings = summary.warnings
+        if summary.recovery.recovered > 0 { receipt.recovery = summary.recovery }
+        if !summary.scriptActions.isEmpty {
+            receipt.scriptActions = summary.scriptActions.keys.sorted().map { script in
+                let kinds = summary.scriptActions[script] ?? [:]
+                return script + ": " + kinds.keys.sorted().map { "\(kinds[$0] ?? 0) \($0)" }.joined(separator: ", ")
+            }
+        }
         do {
             try receipt.finalize()
         } catch {

@@ -833,6 +833,16 @@ final class V31ScriptTests: XCTestCase {
         XCTAssertTrue(out.contains("for (const k of a)"))
     }
 
+    func testInstrument_regexLiteralWithAQuote_doesNotHideTheLoop() throws {
+        let src = #"function process(email) { var r = /"/; while (r.test("x") || true) {} }"#
+        XCTAssertTrue(ScriptSandbox.instrument(src).contains("while (__mailinTick() && ("), "the loop after a regex with a quote is guarded")
+        XCTAssertTrue(ScriptSandbox.instrument("var x = a / b; while (y) {}").contains("__mailinTick()"), "division is not a regex")
+        let rt = try ScriptRuntime(MailinScript(name: "re", source: src))
+        XCTAssertThrowsError(try rt.run(try makeEmail(), userTags: [])) {
+            guard case ScriptError.watchdog = $0 else { return XCTFail("\($0)") }
+        }
+    }
+
     func testRuntime_proposesChanges_andReports() throws {
         let s = MailinScript(name: "t", source: """
             function process(email) {

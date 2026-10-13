@@ -320,7 +320,8 @@ enum ScriptAssistant {
             Reply with JavaScript only, no explanation, no markdown fences. \
             Define exactly: function process(email) { ... } \
             email has: subject, from, to, cc, date (string), body (plain text), messageID, headers (object), \
-            attachments (array of {name, type, size}), tags (array), size (bytes). \
+            attachments (array of {name, type, size}), tags (array), size (bytes), \
+            ai (object, may be empty: classification, sentiment, priority, phishing, topic, predictive). \
             Available calls: mailin.tag(name), mailin.untag(name), mailin.note(text), mailin.column(key, value), \
             mailin.exclude(reason), mailin.report(line), mailin.hash(text, "sha256"|"sha1"|"sha512"). \
             No network, no timers, no eval, no require, no import.

@@ -54,6 +54,13 @@ struct RecoveryCenterView: View {
                         Text("\(m.recoveredBeforeHold) dated before the hold of \(m.holdPlacedAt.formatted(date: .abbreviated, time: .omitted))")
                     }
                 }
+                ForEach(analysis.custodians, id: \.custodian) { c in
+                    LabeledContent(c.custodian) {
+                        Text(c.isBurst
+                             ? String(localized: "\(c.recovered) recovered; \(c.busiestWeekCount) in week \(c.busiestWeek) — a burst")
+                             : String(localized: "\(c.recovered) recovered; most in week \(c.busiestWeek) (\(c.busiestWeekCount))"))
+                    }
+                }
             } header: {
                 Text("Deletion analysis")
             } footer: {
@@ -114,6 +121,9 @@ struct RecoveryCenterView: View {
         defer { isCarving = false }
         var added = 0
         var skipped = 0
+        let started = Date()
+        // R10: the source is only read; its SHA-256 before and after proves it.
+        let shaBefore = await Task.detached { PlatformExport.fileSHA256(url) }.value ?? "unreadable"
         do {
             let result = try await MIMECarver.carve(url: url, emit: { batch in
                 let r = try await SQLiteEmailStore.shared.insertBatch(
@@ -128,10 +138,15 @@ struct RecoveryCenterView: View {
                 Task { @MainActor in carveProgress = fraction }
             })
             if added > 0 { _ = try? await ArchiveCorpusRevision.shared.bump() }
-            let line = String(localized: "Carved \(url.lastPathComponent): \(result.kept) messages found, \(added) added, \(skipped) already in the archive, \(result.rejected) candidates rejected.")
+            let shaAfter = await Task.detached { PlatformExport.fileSHA256(url) }.value ?? "unreadable"
+            let seconds = Int(Date().timeIntervalSince(started))
+            var line = String(localized: "Carved \(url.lastPathComponent): \(result.kept) messages found, \(added) added, \(skipped) already in the archive, \(result.rejected) candidates rejected.")
+            line += " " + (shaBefore == shaAfter
+                ? String(localized: "Source unchanged (SHA-256 \(String(shaBefore.prefix(16)))…); \(seconds) s.")
+                : String(localized: "Warning: the source changed while it was read (SHA-256 before \(String(shaBefore.prefix(16))), after \(String(shaAfter.prefix(16)))); \(seconds) s."))
             status = line
             if added > 0 {
-                ForensicManager.shared.logAction("Recovery carve", detail: line)
+                ForensicManager.shared.logAction("Recovery carve", detail: line + " SHA-256 " + shaBefore)
                 NotificationCenter.default.post(name: .parsingFinished, object: nil)
             }
         } catch is CancellationError {

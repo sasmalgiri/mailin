@@ -188,6 +188,10 @@ struct ImportReceipt: Codable, Sendable, Equatable {
     var signature: String = ""
     /// Fingerprint of the signing key (`ReceiptSigner.keyFingerprint`).
     var signingKeyID: String = ""
+    /// 3.1 R10: what recovery found in this run (nil = recovery off or nothing found).
+    var recovery: RecoveryCounts? = nil
+    /// 3.1 S5: import-time scripts, one line each ("Date filter v1: 12 exclude").
+    var scriptActions: [String]? = nil
 
     init(startedAt: Date, completedAt: Date) {
         self.startedAt = startedAt
@@ -289,6 +293,11 @@ struct ImportReceipt: Codable, Sendable, Equatable {
         custodian = try c.decodeIfPresent(String.self, forKey: .custodian)
         collectingTool = try c.decodeIfPresent(String.self, forKey: .collectingTool)
         collectionSettings = try c.decodeIfPresent([String: String].self, forKey: .collectionSettings)
+        // S4 (fix 3.1): was missing here, so a reloaded receipt with header-only
+        // bodies re-hashed with 0 and read as tampered.
+        bodiesNotDecoded = try c.decodeIfPresent(Int.self, forKey: .bodiesNotDecoded) ?? 0
+        recovery = try c.decodeIfPresent(RecoveryCounts.self, forKey: .recovery)
+        scriptActions = try c.decodeIfPresent([String].self, forKey: .scriptActions)
     }
 }
 

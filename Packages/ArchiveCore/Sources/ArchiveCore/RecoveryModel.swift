@@ -80,6 +80,10 @@ public enum DeletedFolderNames {
 }
 
 /// Per-kind totals for a receipt or the sidebar.
+/// String keys, so `[RecoveryState: Int]` encodes as a JSON object (sorted,
+/// stable) — receipts hash their canonical JSON.
+extension RecoveryState: CodingKeyRepresentable {}
+
 public struct RecoveryCounts: Codable, Sendable, Equatable {
     public var byState: [RecoveryState: Int] = [:]
     public var partial = 0
