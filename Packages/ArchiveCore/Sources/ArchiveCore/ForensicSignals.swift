@@ -235,33 +235,63 @@ public enum ReceivedTrace {
 // MARK: - F2 Missing DKIM
 
 public enum DKIMExpectations {
-    /// Providers that sign all outgoing mail, with a conservative date from
-    /// which every message should carry a signature.
-    public static let providers: [(domains: [String], since: String)] = [
-        (["gmail.com", "googlemail.com"], "2009-01-01"),
-        (["yahoo.com", "ymail.com", "rocketmail.com"], "2009-01-01"),
-        (["outlook.com", "hotmail.com", "live.com", "msn.com"], "2014-01-01"),
-        (["icloud.com", "me.com", "mac.com"], "2014-01-01"),
-        (["aol.com"], "2015-01-01"),
-        (["protonmail.com", "proton.me"], "2016-01-01"),
-        (["fastmail.com"], "2012-01-01"),
-        (["gmx.com", "gmx.net", "gmx.de", "web.de"], "2016-01-01"),
-        (["yandex.com", "yandex.ru"], "2012-01-01"),
-        (["zoho.com"], "2012-01-01"),
+    public struct Provider: Sendable {
+        public let domains: [String]
+        /// Host-name suffixes of the provider's own outbound servers.
+        public let hosts: [String]
+        public let since: String
+        public let source: String
+    }
+
+    /// Providers that sign all mail they hand to other servers, each with a
+    /// date from a stated source. Providers without one are left out (2026-10-13:
+    /// hotmail.com, live.com, msn.com, iCloud, AOL, Proton, GMX, Yandex, Zoho —
+    /// no announcement or reproducible evidence of a start date was found).
+    public static let providers: [Provider] = [
+        // No dated announcement from Google. Google says it has supported DomainKeys
+        // and DKIM since 2004 (Gmail blog, July 2008); in the Digital Corpora
+        // "filetypes1" Thunderbird set, every gmail.com message from 2009–2011 that
+        // reached a recipient carries a DKIM signature.
+        Provider(domains: ["gmail.com", "googlemail.com"], hosts: ["google.com", "googlemail.com"],
+                 since: "2010-01-01", source: "Gmail blog 2008-07; observed in the Digital Corpora filetypes1 mail"),
+        // DomainKeys signing switched on 2004-11-14 (VentureBeat, "Yahoo flips the
+        // switch on DomainKeys"); by 2005 Yahoo Mail "signs all outgoing mail"
+        // (Datamation) and >350 M signed messages a day (Yahoo/Cisco, 2005-06-01).
+        Provider(domains: ["yahoo.com"], hosts: ["yahoo.com", "yahoo.net", "yahoodns.net"],
+                 since: "2006-01-01", source: "Yahoo/Cisco announcement 2005-06-01"),
+        // Microsoft (T. Zink, 2016-01-25 and 2016-04-13): signing of outlook.com
+        // finished in April 2016, for mail to external recipients only.
+        Provider(domains: ["outlook.com"], hosts: ["outlook.com", "hotmail.com", "protection.outlook.com"],
+                 since: "2016-05-01", source: "Microsoft, \"Outlook.com DKIM signing done\", 2016-04-13"),
+        // Fastmail, Oct 2011: "We've been DKIM signing all email sent via FastMail
+        // for the last 2 years" (d=messagingengine.com).
+        Provider(domains: ["fastmail.com", "fastmail.fm"], hosts: ["messagingengine.com", "fastmail.com", "fastmail.fm"],
+                 since: "2010-01-01", source: "Fastmail blog, 2011"),
     ]
 
-    /// A reason string when the message should be signed but is not.
-    public static func missingSignature(headers: [String: String], date: Date?) -> String? {
-        guard headers.keys.first(where: { $0.lowercased() == "dkim-signature" }) == nil else { return nil }
+    /// A reason string when the message should be signed but is not. Only a
+    /// message the provider handed to an outside server is judged: copies kept
+    /// in Sent or All Mail are stored before signing and are never signed
+    /// (seen in the public corpus), so they must not be flagged.
+    public static func missingSignature(headers: [String: String], rawSource: String, date: Date?) -> String? {
+        let names = Set(headers.keys.map { $0.lowercased() })
+        guard !names.contains("dkim-signature"), !names.contains("domainkey-signature") else { return nil }
+        let normalized = rawSource.replacingOccurrences(of: "\r\n", with: "\n")
+        let headerPart = normalized.range(of: "\n\n").map { normalized[..<$0.lowerBound] } ?? normalized[...]
+        if headerPart.range(of: #"(?im)^(dkim|domainkey)-signature:"#, options: .regularExpression) != nil { return nil }
         let from = (headers["From"] ?? "").lowercased()
         guard let at = from.range(of: #"@([a-z0-9.-]+)"#, options: .regularExpression) else { return nil }
         let domain = String(from[at].dropFirst())
+        guard let p = providers.first(where: { $0.domains.contains(domain) }) else { return nil }
         let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"
-        for p in providers where p.domains.contains(domain) {
-            guard let since = f.date(from: p.since), let date, date >= since else { return nil }
-            return "From \(domain), dated \(f.string(from: date)), but no DKIM-Signature (\(domain) signs all mail since \(p.since))"
+        guard let since = f.date(from: p.since), let date, date >= since else { return nil }
+        func own(_ host: String) -> Bool {
+            let h = host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]."))
+            return p.hosts.contains { h == $0 || h.hasSuffix("." + $0) }
         }
-        return nil
+        let handedOut = ReceivedTrace.hops(rawSource: rawSource).contains { own($0.from) && !$0.by.isEmpty && !own($0.by) }
+        guard handedOut else { return nil }
+        return "From \(domain), dated \(f.string(from: date)), but no DKIM-Signature although \(domain)'s servers handed it on (\(domain) signs such mail since \(p.since); source: \(p.source))"
     }
 }
 

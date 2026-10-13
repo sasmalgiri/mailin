@@ -182,6 +182,28 @@ final class RealDataRecoveryTests: XCTestCase {
         XCTAssertTrue(report.isEmpty, report.joined(separator: "\n"))
     }
 
+    /// Real Gmail and Yahoo mail (2009–2011): no message in the public set is
+    /// flagged as missing a DKIM signature — Sent and All Mail copies are
+    /// unsigned by nature and must not count as evidence against the sender.
+    func testMissingDKIM_onRealThunderbirdMail_flagsNothing() throws {
+        let dir = root!.appendingPathComponent("Tbird/Tbird")
+        let files = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.fileSizeKey])
+            .filter { $0.pathExtension != "msf" }
+        var judged = 0, flagged: [String] = []
+        for url in files {
+            guard let emails = try? MBOXParser.parse(fileURL: url, senderEmail: "") else { continue }
+            for e in emails where (e.headers["From"] ?? "").lowercased().contains("@gmail.com") || (e.headers["From"] ?? "").lowercased().contains("@yahoo.com") {
+                judged += 1
+                let date = e.headers["Date"].flatMap(RFC5322Date.parse)
+                if let why = DKIMExpectations.missingSignature(headers: e.headers, rawSource: e.rawSource, date: date) {
+                    flagged.append("\(url.lastPathComponent): \(why)")
+                }
+            }
+        }
+        XCTAssertGreaterThan(judged, 200)
+        XCTAssertTrue(flagged.isEmpty, flagged.prefix(5).joined(separator: "\n"))
+    }
+
     /// No public PST uses cyclic encoding (bCryptMethod 2), so each real
     /// permute-encoded file is re-encoded block by block with [MS-PST] 5.2
     /// CryptCyclic and its method byte set to 2. The reader must read back

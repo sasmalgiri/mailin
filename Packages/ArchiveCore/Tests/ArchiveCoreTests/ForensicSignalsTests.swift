@@ -83,10 +83,28 @@ final class ForensicSignalsTests: XCTestCase {
 
     func testMissingDKIM_onlyForSigningProvidersAfterTheirDate() {
         let date = RFC5322Date.parse("Tue, 14 Nov 2023 22:13:20 +0000")
-        XCTAssertNotNil(DKIMExpectations.missingSignature(headers: ["From": "A <a@gmail.com>"], date: date))
-        XCTAssertNil(DKIMExpectations.missingSignature(headers: ["From": "a@gmail.com", "DKIM-Signature": "v=1"], date: date))
-        XCTAssertNil(DKIMExpectations.missingSignature(headers: ["From": "a@small-company.example"], date: date))
-        XCTAssertNil(DKIMExpectations.missingSignature(headers: ["From": "a@gmail.com"], date: RFC5322Date.parse("Mon, 3 Jan 2005 10:00:00 +0000")))
+        // Gmail handed the message to an outside server.
+        let delivered = "Received: from mail-qy0-f173.google.com (mail-qy0-f173.google.com [209.85.216.173]) by mx.example.org with ESMTP id x; Tue, 14 Nov 2023 22:13:21 +0000\nFrom: a@gmail.com\n\nbody"
+        XCTAssertNotNil(DKIMExpectations.missingSignature(headers: ["From": "A <a@gmail.com>"], rawSource: delivered, date: date))
+        XCTAssertNil(DKIMExpectations.missingSignature(headers: ["From": "a@gmail.com", "DKIM-Signature": "v=1"], rawSource: delivered, date: date))
+        XCTAssertNil(DKIMExpectations.missingSignature(headers: ["From": "a@small-company.example"], rawSource: delivered, date: date))
+        XCTAssertNil(DKIMExpectations.missingSignature(headers: ["From": "a@gmail.com"], rawSource: delivered, date: RFC5322Date.parse("Mon, 3 Jan 2005 10:00:00 +0000")))
+    }
+
+    /// The copy Gmail keeps in Sent / All Mail is stored before signing: its
+    /// only hop is the submission from the user's own machine, so it is not judged.
+    func testMissingDKIM_sentCopiesAndUnsourcedProvidersAreNotFlagged() {
+        let date = RFC5322Date.parse("Tue, 14 Nov 2023 22:13:20 +0000")
+        let sentCopy = "Received: from [192.168.1.20] (c-24-0-0-1.hsd1.comcast.net [24.0.0.1]) by mx.google.com with ESMTPS id y; Tue, 14 Nov 2023 22:13:20 +0000\nFrom: a@gmail.com\n\nbody"
+        XCTAssertNil(DKIMExpectations.missingSignature(headers: ["From": "a@gmail.com"], rawSource: sentCopy, date: date))
+        // Yahoo's older DomainKey-Signature counts as a signature.
+        let yahoo = "DomainKey-Signature: a=rsa-sha1; q=dns; c=nofws; s=s1024; d=yahoo.com; b=x\nReceived: from web1.mail.yahoo.com (web1.mail.yahoo.com [1.2.3.4]) by mx.example.org; Tue, 14 Nov 2023 22:13:21 +0000\nFrom: a@yahoo.com\n\nbody"
+        XCTAssertNil(DKIMExpectations.missingSignature(headers: ["From": "a@yahoo.com"], rawSource: yahoo, date: date))
+        // No sourced start date for hotmail.com: never judged.
+        let hotmail = "Received: from mail1.hotmail.com (mail1.hotmail.com [1.2.3.4]) by mx.example.org; Tue, 14 Nov 2023 22:13:21 +0000\nFrom: a@hotmail.com\n\nbody"
+        XCTAssertNil(DKIMExpectations.missingSignature(headers: ["From": "a@hotmail.com"], rawSource: hotmail, date: date))
+        // Every remaining provider names its source.
+        XCTAssertTrue(DKIMExpectations.providers.allSatisfy { !$0.source.isEmpty && !$0.hosts.isEmpty })
     }
 
     // MARK: F3 offline DKIM

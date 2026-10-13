@@ -1114,7 +1114,7 @@ class ForensicManager: ObservableObject {
         // 3.1 F2/F4 (switch v31ForensicTimestamps): missing DKIM and tampering signals.
         if ForensicSignalsPolicy.isEnabled && TierAccess.allows(.forensicSignals) {
             let date = email.headers["Date"].flatMap(RFC5322Date.parse)
-            if let why = DKIMExpectations.missingSignature(headers: email.headers, date: date) { score += 15; factors.append(why) }
+            if let why = DKIMExpectations.missingSignature(headers: email.headers, rawSource: email.rawSource, date: date) { score += 15; factors.append(why) }
             for why in TamperingSignals.find(headers: email.headers, rawSource: email.rawSource, attachmentCount: email.attachments.count) {
                 score += 10; factors.append(why)
             }

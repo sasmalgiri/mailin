@@ -70,7 +70,7 @@ struct ForensicSignalsView: View {
         let stamps = HiddenTimestamps.all(headers: email.headers, rawSource: email.rawSource)
         let hops = ReceivedTrace.hops(rawSource: email.rawSource)
         let date = email.headers["Date"].flatMap(RFC5322Date.parse)
-        let missing = DKIMExpectations.missingSignature(headers: email.headers, date: date)
+        let missing = DKIMExpectations.missingSignature(headers: email.headers, rawSource: email.rawSource, date: date)
         let tamper = TamperingSignals.find(headers: email.headers, rawSource: email.rawSource, attachmentCount: email.attachments.count)
 
         VStack(alignment: .leading, spacing: Spacing.small) {
