@@ -117,6 +117,7 @@ struct WorkCenterView: View {
                     .tabItem { Label("Reports", systemImage: "tablecells") }
                     .tag(5)
             }
+            .accessibilityLabel(String(localized: "Work center"))
             .navigationSection(historyPage, current: String(selectedTab)) { section in
                 if let section, let tab = Int(section) { selectedTab = tab }
             }

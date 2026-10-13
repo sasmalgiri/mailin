@@ -2229,6 +2229,14 @@ final class MailinClickThroughUITests: XCTestCase {
         recoverIfNeeded()
         let outDir = ProcessInfo.processInfo.environment["REDACT_OUT_DIR"] ?? "/tmp/mailin-redact"
         _ = openPage("Professional Workflows")
+        // The strip remembers the last profession chosen (another test may
+        // have picked one without Redaction): show all tools first.
+        let profession = app.menuButtons["professional.profession"].firstMatch
+        if profession.waitForExistence(timeout: 5) {
+            profession.click()
+            let all = app.menuItems["All tools"].firstMatch
+            if all.waitForExistence(timeout: 3) { all.click() } else { app.typeKey(.escape, modifierFlags: []) }
+        }
         let tool = app.buttons.matching(NSPredicate(format: "label == 'Redaction' OR label BEGINSWITH 'Redaction,'")).firstMatch
         XCTAssertTrue(tool.waitForExistence(timeout: 10), "Redaction tool on the Professional page")
         tool.click()

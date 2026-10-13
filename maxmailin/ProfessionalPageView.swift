@@ -188,6 +188,7 @@ struct ProfessionalPageView: View {
         }
         .fixedSize()
         .help("Show only the tools for one profession")
+        .accessibilityLabel(String(localized: "Profession: \(profession?.displayName ?? String(localized: "All tools"))"))
         .accessibilityIdentifier("professional.profession")
     }
 
