@@ -296,7 +296,7 @@ final class TeamCase: @unchecked Sendable {
         try TeamCaseIO.atomicWrite(try TeamCaseIO.encoder.encode(manifest), to: folder.appendingPathComponent("manifest.json"))
         // The evidence copy is read-only for everyone (rule 1).
         try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: packURL.path)
-        ForensicManager.shared.logAction("Team case created", detail: "\(title): \(ids.count) emails in \(batches.count) batches at \(folder.path)")
+        ScopeJobEnvironment.logAction("Team case created", detail: "\(title): \(ids.count) emails in \(batches.count) batches at \(folder.path)")
         return folder
     }
 
@@ -639,10 +639,10 @@ final class TeamCase: @unchecked Sendable {
                 else if forensic.tagForEmail(id) != t { skipped += 1 }
             }
             for tag in e.tags.keys {
-                try await SQLiteEmailStore.shared.userTagAdd(tag, ids: [id]); tags += 1
+                try await ScopeJobEnvironment.store.userTagAdd(tag, ids: [id]); tags += 1
             }
         }
-        forensic.logAction("Team case applied", detail: "\(manifest.title): \(codes) codes, \(tags) tags applied; \(skipped) kept the archive's existing code")
+        ScopeJobEnvironment.logAction("Team case applied", detail: "\(manifest.title): \(codes) codes, \(tags) tags applied; \(skipped) kept the archive's existing code")
         return (codes, tags, skipped)
     }
 }

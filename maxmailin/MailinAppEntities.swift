@@ -131,8 +131,8 @@ struct EmailEntityQuery: EntityPropertyQuery {
 
     func entities(for identifiers: [UUID]) async throws -> [EmailEntity] {
         try ShortcutsPolicy.requireEnabled()
-        let found = try await ArchiveDataService.shared.summaries(ids: identifiers)
-        let rec = (try? await SQLiteEmailStore.shared.recovery(for: identifiers)) ?? [:]
+        let found = try await ScopeJobEnvironment.archive.summaries(ids: identifiers)
+        let rec = (try? await ScopeJobEnvironment.store.recovery(for: identifiers)) ?? [:]
         return found.map { EmailEntity(summary: $0, recovered: rec[$0.id] != nil) }
     }
 
@@ -161,9 +161,9 @@ struct EmailEntityQuery: EntityPropertyQuery {
         var seen = Set<UUID>()
         var out: [EmailEntity] = []
         for q in queries {
-            for try await page in await ArchiveDataService.shared.streamSummaries(query: q, batchSize: 500) {
+            for try await page in await ScopeJobEnvironment.archive.streamSummaries(query: q, batchSize: 500) {
                 let fresh = page.filter { seen.insert($0.id).inserted }
-                let rec = (try? await SQLiteEmailStore.shared.recovery(for: fresh.map(\.id))) ?? [:]
+                let rec = (try? await ScopeJobEnvironment.store.recovery(for: fresh.map(\.id))) ?? [:]
                 out.append(contentsOf: fresh.map { EmailEntity(summary: $0, recovered: rec[$0.id] != nil) })
                 if out.count >= limit { return Array(out.prefix(limit)) }
             }
@@ -180,7 +180,7 @@ enum ShortcutsActionSupport {
         try ShortcutsPolicy.requireEnabled()
         guard await StorageActivationCoordinator.shared.activate() == .active else { throw ShortcutsActionError.notReady }
         let q = ArchiveQueryCompiler.compile(search)
-        let n = try await ArchiveDataService.shared.count(query: q)
+        let n = try await ScopeJobEnvironment.archive.count(query: q)
         return (ArchiveScope(query: q, total: n, loaded: nil), n)
     }
 
@@ -275,7 +275,7 @@ struct ExportEmailsCSVIntent: AppIntent {
         try handle.write(contentsOf: Data(csvRow(["Email ID", "Date", "From", "Subject", "Attachments", "Preview"]).utf8))
         var written = 0
         // Streamed page by page: memory stays flat at any archive size.
-        for try await page in await ArchiveDataService.shared.streamSummaries(query: scope.query, batchSize: 1_000) {
+        for try await page in await ScopeJobEnvironment.archive.streamSummaries(query: scope.query, batchSize: 1_000) {
             var chunk = ""
             for s in page {
                 chunk += csvRow([s.id.uuidString, s.date.ISO8601Format(), s.from, s.subject,

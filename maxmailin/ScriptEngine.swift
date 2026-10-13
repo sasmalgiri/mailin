@@ -386,15 +386,15 @@ enum ScriptEngine {
         guard ScriptPolicy.isEnabled else { throw ScriptError.runtime(String(localized: "Scripts are off in Settings ▸ Modules.")) }
         if apply, let why = OrgPolicy.denial(.review) { throw ScriptError.runtime(why) }
         let runtime = try ScriptRuntime(script)
-        let store = SQLiteEmailStore.shared
+        let store = ScopeJobEnvironment.store
         var summary = ScriptRunSummary()
-        summary.total = try await ArchiveDataService.shared.count(query: query)
+        summary.total = try await ScopeJobEnvironment.archive.count(query: query)
         let started = Date()
         var fingerprint = EmailSetFingerprint()
         var digest = SHA256()
         var changedEmails = Set<UUID>()
 
-        for try await batch in ArchiveDataService.shared.streamFullEmails(query: query, batchSize: 200) {
+        for try await batch in ScopeJobEnvironment.archive.streamFullEmails(query: query, batchSize: 200) {
             if Task.isCancelled { summary.stoppedReason = String(localized: "cancelled"); break }
             if ScriptSandbox.footprint() > ScriptPolicy.memoryCeiling {
                 summary.stoppedReason = String(localized: "the app's memory passed \(ScriptPolicy.memoryCeiling / 1_073_741_824) GB"); break
@@ -437,7 +437,7 @@ enum ScriptEngine {
             changesJSON: "{\"applied\":\(apply),\"digest\":\"\(summary.changesDigest)\",\"counts\":\(countsJSON)}",
             startedAt: started, finishedAt: Date(), startedBy: startedBy))
         if apply, summary.emailsChanged > 0 {
-            ForensicManager.shared.logAction("Script applied",
+            ScopeJobEnvironment.logAction("Script applied",
                 detail: "\(script.label) (SHA-256 \(script.sha256.prefix(16))…): \(summary.line) — scope: \(ScopeJob.describe(query))")
         }
         return summary
@@ -471,7 +471,7 @@ enum ScriptEngine {
 enum ScriptApplier {
     static func apply(_ changes: [ScriptChange], by script: MailinScript) async throws {
         guard !changes.isEmpty else { return }
-        let store = SQLiteEmailStore.shared
+        let store = ScopeJobEnvironment.store
         var tagAdds: [String: [UUID]] = [:], tagRemoves: [String: [UUID]] = [:]
         var columns: [UUID: [String: String]] = [:]
         var excluded: [UUID] = []
@@ -548,13 +548,13 @@ final class ScriptImportRunner {
             }
             totals[key] = entry
             let counts = entry.summary.counts.map { "\"\($0.key.rawValue)\":\($0.value)" }.joined(separator: ",")
-            try? await SQLiteEmailStore.shared.scriptRunRecord(.init(
+            try? await ScopeJobEnvironment.store.scriptRunRecord(.init(
                 runID: "import-" + key, name: script.name, sha256: script.sha256, version: script.version,
                 scopeJSON: "{\"import\":\"\(source.replacingOccurrences(of: "\"", with: "'"))\"}", fingerprint: entry.fp.hex,
                 processed: entry.summary.processed, changesJSON: "{\"applied\":true,\"counts\":{\(counts)}}",
                 startedAt: entry.started, finishedAt: Date(), startedBy: "import"))
             if let n = batchCounts[script.label]?[ScriptChange.Kind.exclude.rawValue], n > 0 {
-                ForensicManager.shared.logAction("Import script set emails aside",
+                ScopeJobEnvironment.logAction("Import script set emails aside",
                                                  detail: "\(n) emails from \(source) moved to Trash by \(script.label)")
             }
         }

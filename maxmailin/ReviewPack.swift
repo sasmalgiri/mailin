@@ -279,7 +279,7 @@ enum ReviewPackBuilder {
     static func build(scope: ArchiveScope, title: String, codes: [String], instructions: String,
                       to url: URL, progress: (Int, Int) -> Void) async throws -> IssuedPacks.Entry {
         let key = try ReviewSigningKey.privateKey()
-        let total = try await ArchiveDataService.shared.count(query: scope.query)
+        let total = try await ScopeJobEnvironment.archive.count(query: scope.query)
         let packID = UUID()
         let writer = try SignedLineWriter(url: url)
         let examiner = ForensicManager.shared.examinerName.isEmpty ? String(localized: "Examiner") : ForensicManager.shared.examinerName
@@ -288,7 +288,7 @@ enum ReviewPackBuilder {
                                           emailCount: total, codes: codes, instructions: instructions,
                                           scope: ScopeJob.describe(scope.query)))
         var written = 0
-        for try await batch in ArchiveDataService.shared.streamFullEmails(query: scope.query, batchSize: 200) {
+        for try await batch in ScopeJobEnvironment.archive.streamFullEmails(query: scope.query, batchSize: 200) {
             try autoreleasepool { for e in batch {
                 try writer.write(ReviewPackEmail(
                     id: e.id, date: e.headers["Date"] ?? e.timestamp, from: e.headers["From"] ?? "",
@@ -310,7 +310,7 @@ enum ReviewPackBuilder {
         }
         let entry = IssuedPacks.Entry(packID: packID, sha256: sha, title: title, createdAt: Date(), emailCount: written)
         try IssuedPacks.add(entry)
-        ForensicManager.shared.logAction("Review Pack created", detail: "\(title): \(written) emails — scope: \(ScopeJob.describe(scope.query)); SHA-256 \(sha)")
+        ScopeJobEnvironment.logAction("Review Pack created", detail: "\(title): \(written) emails — scope: \(ScopeJob.describe(scope.query)); SHA-256 \(sha)")
         return entry
     }
 }
@@ -360,10 +360,10 @@ enum ReviewResponseMerger {
 
         var result = ReviewMergeResult(reviewer: header.reviewer, decisions: decisions.count)
         let forensic = ForensicManager.shared
-        let store = SQLiteEmailStore.shared
+        let store = ScopeJobEnvironment.store
         for chunk in stride(from: 0, to: decisions.count, by: 500).map({ Array(decisions[$0..<min($0 + 500, decisions.count)]) }) {
             let ids = chunk.map(\.emailID)
-            let present = Set(try await ArchiveDataService.shared.summaries(ids: ids).map(\.id))
+            let present = Set(try await ScopeJobEnvironment.archive.summaries(ids: ids).map(\.id))
             let tags = (try? await store.userTags(ids: ids)) ?? [:]
             for d in chunk {
                 guard present.contains(d.emailID) else { result.notInArchive += 1; continue }
@@ -399,7 +399,7 @@ enum ReviewResponseMerger {
             }
         }
         try ReviewMergeLog.append(header: header, result: result, file: url.lastPathComponent)
-        forensic.logAction("Review response merged",
+        ScopeJobEnvironment.logAction("Review response merged",
                            detail: "\(header.reviewer): \(result.decisions) decisions — \(result.codesApplied) codes, \(result.tagsAdded) tags, \(result.notesAdded) notes applied; \(result.conflicts.count) conflicts; \(result.notInArchive) not in this archive")
         return result
     }

@@ -106,7 +106,7 @@ struct RecoveryCenterView: View {
     }
 
     private func reload() async {
-        let store = SQLiteEmailStore.shared
+        let store = ScopeJobEnvironment.store
         counts = (try? await store.recoveryCounts()) ?? RecoveryCounts()
         analysis = (try? await store.deletionAnalysis()) ?? DeletionAnalysis()
     }
@@ -126,7 +126,7 @@ struct RecoveryCenterView: View {
         let shaBefore = await Task.detached { PlatformExport.fileSHA256(url) }.value ?? "unreadable"
         do {
             let result = try await MIMECarver.carve(url: url, emit: { batch in
-                let r = try await SQLiteEmailStore.shared.insertBatch(
+                let r = try await ScopeJobEnvironment.store.insertBatch(
                     batch, sourceFileHash: nil, accountID: nil, sourceID: nil, firstOrdinal: nil,
                     dedupPolicy: .messageID, batchSize: 200, progress: nil)
                 try await FTSSearchIndex.shared.indexBatch(batch)
@@ -146,12 +146,12 @@ struct RecoveryCenterView: View {
                 : String(localized: "Warning: the source changed while it was read (SHA-256 before \(String(shaBefore.prefix(16))), after \(String(shaAfter.prefix(16)))); \(seconds) s."))
             status = line
             if added > 0 {
-                ForensicManager.shared.logAction("Recovery carve", detail: line + " SHA-256 " + shaBefore)
+                ScopeJobEnvironment.logAction("Recovery carve", detail: line + " SHA-256 " + shaBefore)
                 NotificationCenter.default.post(name: .parsingFinished, object: nil)
             }
         } catch is CancellationError {
             status = String(localized: "Carving stopped: \(added) messages were added before it stopped.")
-            if added > 0 { ForensicManager.shared.logAction("Recovery carve (stopped)", detail: status ?? "") }
+            if added > 0 { ScopeJobEnvironment.logAction("Recovery carve (stopped)", detail: status ?? "") }
         } catch {
             status = String(localized: "Carving failed after adding \(added) messages: \(error.localizedDescription)")
         }
@@ -181,7 +181,7 @@ struct RecoveryCenterView: View {
         let outcome = PlatformExport.save(data: Data(text.utf8), suggestedName: "Recovery Report.csv")
         status = outcome.message(String(localized: "Recovery report (\(rows) emails)"))
         if outcome.succeeded {
-            ForensicManager.shared.logAction("Recovery report", detail: "\(rows) recovered emails")
+            ScopeJobEnvironment.logAction("Recovery report", detail: "\(rows) recovered emails")
         }
     }
 
@@ -189,7 +189,7 @@ struct RecoveryCenterView: View {
         var pages: [[RecoveryReportRow]] = []
         var cursor: (date: Int64, id: String)?
         while true {
-            let page = try await SQLiteEmailStore.shared.recoveryReportPage(state: nil, after: cursor)
+            let page = try await ScopeJobEnvironment.store.recoveryReportPage(state: nil, after: cursor)
             if page.isEmpty { break }
             pages.append(page)
             guard let last = page.last, page.count == 1_000 else { break }

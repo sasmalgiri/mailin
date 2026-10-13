@@ -1221,3 +1221,77 @@ final class V31SharedFolderTests: XCTestCase {
         XCTAssertLessThan(seconds, 60, "500 codes, each followed by a reload")
     }
 }
+
+// MARK: - 3.1 scripts end to end on a disposable archive (S6/S7) and at scale
+
+@MainActor
+final class V31ScriptRunTests: XCTestCase {
+    private func makeEnv() -> (root: URL, store: SQLiteEmailStore, job: ScopeJobEnvironment) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("v31run-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store", isDirectory: true))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts", isDirectory: true))
+        let archive = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+        return (root, store, ScopeJobEnvironment(archive: archive, store: store, root: root))
+    }
+
+    private func emails(_ n: Int) -> [MBOXParser.RawEmail] {
+        (0..<n).map { i in
+            let subj = i % 3 == 0 ? "Contract \(i)" : "Note \(i)"
+            return MBOXParser.RawEmail(
+                headers: ["Message-ID": "<s\(i)@t>", "Subject": subj, "From": "a@example.com", "Date": "Mon, 6 Jan 2025 10:00:00 +0000"],
+                rawSource: "Subject: \(subj)\n\nbody \(i)", messageType: "email", attachments: [],
+                timestamp: "2025-01-06T10:00:00Z", domains: ["example.com"], plainBody: "body \(i)", htmlBody: "")
+        }
+    }
+
+    private let script = MailinScript(name: "contracts", source: """
+        function process(email) {
+          if (email.subject.indexOf("Contract") === 0) { mailin.tag("contract"); mailin.column("kind", "contract"); }
+        }
+        """)
+
+    private func run(_ n: Int) async throws -> (dry: ScriptRunSummary, applied: ScriptRunSummary, store: SQLiteEmailStore, proof: String) {
+        let env = makeEnv()
+        try await env.store.insertBatch(emails(n), batchSize: 1_000)
+        let was = ScriptPolicy.isEnabled
+        ScriptPolicy.isEnabled = true
+        defer { ScriptPolicy.isEnabled = was }
+        return try await ScopeJobEnvironment.$current.withValue(env.job) {
+            let before = ScriptSandbox.footprint()
+            var peak = before
+            let dry = try await ScriptEngine.run(script, query: .all, apply: false) { _, _ in peak = max(peak, ScriptSandbox.footprint()) }
+            print("SCRIPT-MEM peak +\((peak - before) / 1_048_576) MB over \(n) emails")
+            if n >= 100_000 { XCTAssertLessThan(peak - before, 300 * 1_048_576, "memory stays flat") }
+            let tagged0 = try await env.store.filteredCount(ArchiveQueryCompiler.compile("tag:contract"))
+            XCTAssertEqual(tagged0, 0, "a dry run writes nothing")
+            let applied = try await ScriptEngine.run(script, query: .all, apply: true) { _, _ in }
+            let runs = try await env.store.scriptRuns()
+            let row = try XCTUnwrap(runs.first { $0.runID == applied.runID })
+            let proof = try await ScriptEngine.prove(row, script: script)
+            return (dry, applied, env.store, proof)
+        }
+    }
+
+    func testDryRunThenApply_recordsTheRun_andProves() async throws {
+        let n = 300
+        let r = try await run(n)
+        let expected = (0..<n).filter { $0 % 3 == 0 }.count
+        XCTAssertEqual(r.dry.counts[.tag], expected)
+        XCTAssertEqual(r.dry.emailsChanged, expected)
+        XCTAssertEqual(r.applied.changesDigest, r.dry.changesDigest, "apply does exactly what the dry run showed")
+        let tagged = try await r.store.filteredCount(ArchiveQueryCompiler.compile("tag:contract"))
+        XCTAssertEqual(tagged, expected)
+        // Re-run and prove after applying: the emails now carry the tag, but the
+        // script proposes the same changes, so the proof holds.
+        XCTAssertTrue(r.proof.hasPrefix("Proved"), r.proof)
+    }
+
+    func testHundredThousandEmails_memoryAndTime() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["MAILIN_SCALE"] == "1", "opt-in: MAILIN_SCALE=1")
+        let start = Date()
+        let r = try await run(100_000)
+        print("SCRIPT-100K: \(Int(Date().timeIntervalSince(start))) s, \(r.applied.processed) processed")
+        XCTAssertEqual(r.applied.processed, 100_000)
+    }
+}

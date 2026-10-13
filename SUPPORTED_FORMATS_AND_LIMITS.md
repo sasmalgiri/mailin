@@ -282,4 +282,19 @@ With **Settings ▸ Modules ▸ Recovery** on, imports mark mail the files show 
 | Any file (carving, deep recovery switch) | RFC 5322 messages with a sender and a date or Message-ID | Best effort; candidates that do not verify are counted as rejected, never imported |
 | Lotus Notes NSF | **Not supported yet**: deletion stubs are not listed | Needs a full NSF note-table reader |
 
+Measured (2026-10-13, Release, this Mac): carving 1 GB of random data with 100 planted messages found all 100 and nothing else in about 1 s, peak memory +37 MB. Golden fixtures (Thunderbird, mutt, Gmail Takeout, PST folders, orphans, freed PST space) are imported through the real importer — both engines and header-only messages — and must equal their manifest.
+
 Mail files do not record when a message was deleted, so deletion analysis counts recovered emails against legal-hold dates only.
+
+## Scripts, Shortcuts and team review (3.1, preview — off by default)
+
+| Feature | Real limit | Why |
+|---|---|---|
+| Scripts | A script is stopped when one email takes more than 5 s, or the app's memory passes 2 GB | JavaScriptCore has no public time limit; every loop is guarded instead |
+| Scripts | No network, no timers, no `eval` / `Function` | Offline-first; scripts may only tag, untag, note, add columns, set aside (Trash) and report |
+| Shortcuts Find Emails | 10,000 emails per Find | A Shortcuts list is held in memory; Count Emails gives the exact total |
+| Review Pack | Text and attachment names only (no attachment bytes) | The reviewer codes, they do not produce |
+| Team case | One log file per reviewer device; any folder the devices can all reach (file server, NAS, external drive) | No server; nothing goes online |
+| Team case | Responses and log entries are signed by the device key; they prove integrity, not who held the device | Identity is the device; MDM-managed roles are recorded with each entry |
+| DKIM / ARC | Checked against keys you import; the ARC-Seal chain is not checked, only ARC message signatures | No DNS lookups (offline) |
+| Hidden timestamps | Thread-Index, Outlook and JavaMail boundaries, Unix times in Message-IDs; other Message-ID formats (e.g. historical Gmail) are not decoded | Only documented encodings are decoded |
