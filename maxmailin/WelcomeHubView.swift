@@ -136,13 +136,13 @@ struct WelcomeHubView: View {
 
             // Discoverable upgrade entry — the paywall was previously only
             // reachable via Settings, which App Review (and users) missed.
-            if storeManager.currentTier < .professional {
+            if let upgradeTitle = Self.upgradeTitle(for: storeManager.effectiveTier) {
                 Button {
                     storeManager.showPaywall = true
                 } label: {
                     HStack(spacing: Spacing.xxSmall) {
                         Image(systemName: "sparkles")
-                        Text(storeManager.effectiveTier == .free ? String(localized: "See Plans") : String(localized: "Upgrade to Professional"))
+                        Text(upgradeTitle)
                     }
                     .font(Typography.caption1.weight(.semibold))
                     .foregroundStyle(.white)
@@ -580,5 +580,17 @@ struct WelcomeHubView: View {
             FeatureItem(icon: "globe", name: String(localized: "Translation"), tagline: String(localized: "Detect and translate languages"), color: .cyan),
             FeatureItem(icon: "wand.and.stars", name: String(localized: "Custom AI Experts"), tagline: String(localized: "Define your own specialists"), color: .mint),
         ])
+    }
+
+    /// The upgrade button's title, or nil when nothing is left to buy. Decided
+    /// from the tier the app actually grants: checking the purchased tier
+    /// showed "Upgrade to Professional" to people who already have it through
+    /// an enterprise licence or a TestFlight build.
+    static func upgradeTitle(for tier: PurchaseTier) -> String? {
+        switch tier {
+        case .free: return String(localized: "See Plans")
+        case .personal: return String(localized: "Upgrade to Professional")
+        case .professional: return nil
+        }
     }
 }

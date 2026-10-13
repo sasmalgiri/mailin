@@ -1335,6 +1335,14 @@ final class V3NewFeatureGatingTests: XCTestCase {
         XCTAssertEqual(TierAccess.Feature.joinTeamCase.tier, .free)
     }
 
+    /// Found on the iPhone/iPad pass: with Professional granted (enterprise
+    /// licence, TestFlight) the welcome screen still offered the upgrade.
+    func testUpgradeButton_followsTheGrantedTier() {
+        XCTAssertNil(WelcomeHubView.upgradeTitle(for: .professional))
+        XCTAssertNotNil(WelcomeHubView.upgradeTitle(for: .personal))
+        XCTAssertNotNil(WelcomeHubView.upgradeTitle(for: .free))
+    }
+
     func testFreeAndPersonalTiersAreRefused_whereProfessionalIsNeeded() async throws {
         let wasTier = TierAccess.tier, wasShortcuts = ShortcutsPolicy.actionsEnabled, wasScripts = ScriptPolicy.isEnabled
         defer { TierAccess.tier = wasTier; ShortcutsPolicy.actionsEnabled = wasShortcuts; ScriptPolicy.isEnabled = wasScripts }
